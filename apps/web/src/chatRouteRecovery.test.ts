@@ -102,4 +102,20 @@ describe("refreshMissingThreadSnapshots", () => {
     expect(storeMocks.syncServerShellSnapshot).not.toHaveBeenCalled();
     expect(storeMocks.syncServerReadModel).not.toHaveBeenCalled();
   });
+
+  it("ignores soft-deleted-only full snapshots and does not sync or latch success", async () => {
+    const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
+    const snapshot = readModel({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-deleted", deletedAt: "2026-07-01T00:00:00.000Z" }],
+    });
+    const repaired = readModel({ projects: [{ id: "project-1" }] });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+
+    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(false);
+
+    expect(orchestration.repairState).not.toHaveBeenCalled();
+    expect(storeMocks.syncServerShellSnapshot).not.toHaveBeenCalled();
+    expect(storeMocks.syncServerReadModel).not.toHaveBeenCalled();
+  });
 });
