@@ -115,7 +115,7 @@ import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
-import { refreshEmptyRouteRestoreSnapshot } from "../chatRouteRecovery";
+import { refreshMissingThreadSnapshots } from "../chatRouteRecovery";
 import {
   registerEmptyRouteRestoreRefresh,
   runEmptyRouteRestoreRefresh,
@@ -2383,7 +2383,8 @@ function DesktopProjectBootstrap() {
 
     const projectIds = new Set(projects.map((project) => project.id));
     const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
-    // #282: project-only hydration can stick on home/sidebar (route recovery never runs).
+    // #282: project-only hydration can stick on home/sidebar. Light refresh only
+    // (shell → snapshot); never repairState here (that rebuilds projects, not threads).
     const hasProjectsWithoutThreads = projects.length > 0 && threads.length === 0;
     if (projects.length > 0 && !hasThreadWithoutProject && !hasProjectsWithoutThreads) {
       return;
@@ -2394,7 +2395,7 @@ function DesktopProjectBootstrap() {
     const ownsAttempt = () => !disposed && attempt.isCurrent();
 
     if (hasProjectsWithoutThreads) {
-      void refreshEmptyRouteRestoreSnapshot(api).catch(() => {
+      void refreshMissingThreadSnapshots(api).catch(() => {
         attempt.release();
       });
       return;
