@@ -2364,26 +2364,32 @@ function DesktopProjectBootstrap() {
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
         if (!needsRepair) {
-          const applied = tryApplyShellSnapshot(snapshot);
+          const snapshotApplied = tryApplyShellSnapshot(snapshot);
+          const recovered =
+            snapshotApplied &&
+            classifyDesktopHydrationRecovery(useStore.getState()) !== "repair-projects";
           return {
-            applied,
+            applied: recovered,
             shellThreadCount: snapshot.threads.length,
-            reason: applied ? "ok" : "stale",
+            reason: recovered ? "ok" : snapshotApplied ? "empty" : "stale",
           };
         }
         const repaired = await api.orchestration.repairState();
         const liveProjects = repaired.projects.filter((project) => project.deletedAt == null);
         const liveThreads = repaired.threads.filter((thread) => thread.deletedAt == null);
-        const applied = tryApplyShellSnapshot({
+        const snapshotApplied = tryApplyShellSnapshot({
           snapshotSequence: repaired.snapshotSequence,
           updatedAt: repaired.updatedAt,
           projects: liveProjects,
           threads: liveThreads,
         });
+        const recovered =
+          snapshotApplied &&
+          classifyDesktopHydrationRecovery(useStore.getState()) !== "repair-projects";
         return {
-          applied,
+          applied: recovered,
           shellThreadCount: liveThreads.length,
-          reason: applied ? "ok" : "stale",
+          reason: recovered ? "ok" : snapshotApplied ? "empty" : "stale",
         };
       },
     });

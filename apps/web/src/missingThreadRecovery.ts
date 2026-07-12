@@ -72,7 +72,9 @@ export function createMissingThreadRecoveryController(input: {
 
     input.onAttempt?.({ attempt, result });
 
-    if (result.applied || !input.isStillNeeded()) {
+    // Success is "no longer needed", not applied:true — an empty repair can
+    // write a snapshot while the store stays in repair-projects.
+    if (!input.isStillNeeded()) {
       return;
     }
 

@@ -290,15 +290,17 @@ describe("createMissingThreadRecoveryController", () => {
 
   it("retries after refresh errors without needing an unrelated render", async () => {
     const timers: Array<{ fn: () => void; ms: number }> = [];
+    let needed = true;
     let calls = 0;
 
     const controller = createMissingThreadRecoveryController({
-      isStillNeeded: () => true,
+      isStillNeeded: () => needed,
       refresh: async () => {
         calls += 1;
         if (calls === 1) {
           throw new Error("rpc failed");
         }
+        needed = false;
         return { applied: true, shellThreadCount: 1, reason: "ok" };
       },
       schedule: (fn, ms) => {
@@ -311,6 +313,32 @@ describe("createMissingThreadRecoveryController", () => {
 
     controller.start();
     await vi.waitFor(() => expect(calls).toBe(1));
+    timers[0]?.fn();
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(timers).toHaveLength(1);
+  });
+
+  it("keeps retrying when applied is true but recovery is still needed", async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    let calls = 0;
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => true,
+      refresh: async () => {
+        calls += 1;
+        return { applied: true, shellThreadCount: 0, reason: "empty" };
+      },
+      schedule: (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearSchedule: vi.fn(),
+      maxAttempts: 3,
+    });
+
+    controller.start();
+    await vi.waitFor(() => expect(calls).toBe(1));
+    expect(timers).toHaveLength(1);
     timers[0]?.fn();
     await vi.waitFor(() => expect(calls).toBe(2));
   });
