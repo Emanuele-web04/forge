@@ -2383,9 +2383,7 @@ function DesktopProjectBootstrap() {
 
     const projectIds = new Set(projects.map((project) => project.id));
     const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
-    // Projects visible with zero threads is also a stuck-hydration case (#282):
-    // the empty-shell path can mark threadsHydrated without ever fetching threads,
-    // and route-only recovery never runs on the home/sidebar surface.
+    // #282: project-only hydration can stick on home/sidebar (route recovery never runs).
     const hasProjectsWithoutThreads = projects.length > 0 && threads.length === 0;
     if (projects.length > 0 && !hasThreadWithoutProject && !hasProjectsWithoutThreads) {
       return;
