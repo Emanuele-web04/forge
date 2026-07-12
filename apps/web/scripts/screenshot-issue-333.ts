@@ -5,14 +5,18 @@ import { chromium } from "playwright";
 
 // Local-only output (gitignored via .synara-*/).
 const outDir = Path.resolve("../../.synara-pr/issue-333");
-const before = JSON.parse(FS.readFileSync(Path.join(outDir, "before-catalog.json"), "utf8")) as Array<{
+const before = JSON.parse(
+  FS.readFileSync(Path.join(outDir, "before-catalog.json"), "utf8"),
+) as Array<{
   slug: string;
   name: string;
   upstreamProviderId?: string;
   upstreamProviderName?: string;
   supportedReasoningEfforts?: Array<{ value: string }>;
 }>;
-const after = JSON.parse(FS.readFileSync(Path.join(outDir, "after-catalog.json"), "utf8")) as typeof before;
+const after = JSON.parse(
+  FS.readFileSync(Path.join(outDir, "after-catalog.json"), "utf8"),
+) as typeof before;
 
 function groupByProvider(models: typeof before) {
   const groups = new Map<string, typeof before>();
@@ -79,7 +83,10 @@ function pageHtml(title: string, xaiOnly: boolean) {
 </body></html>`;
 }
 
-FS.writeFileSync(Path.join(outDir, "compare-xai.html"), pageHtml("Issue #333 — xAI / Grok (live cursor-agent)", true));
+FS.writeFileSync(
+  Path.join(outDir, "compare-xai.html"),
+  pageHtml("Issue #333 — xAI / Grok (live cursor-agent)", true),
+);
 FS.writeFileSync(
   Path.join(outDir, "compare-full.html"),
   pageHtml("Issue #333 — full Cursor catalog (live cursor-agent)", false),

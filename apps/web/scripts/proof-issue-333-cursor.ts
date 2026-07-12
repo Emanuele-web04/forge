@@ -38,7 +38,13 @@ function parseCursorCliModels(stdout: string): ProviderModelDescriptor[] {
     if (lower.includes("grok") || lower.includes("xai")) {
       upstreamProviderId = "xai";
       upstreamProviderName = "xAI";
-    } else if (lower.includes("claude") || lower.includes("opus") || lower.includes("sonnet") || lower.includes("fable") || lower.includes("haiku")) {
+    } else if (
+      lower.includes("claude") ||
+      lower.includes("opus") ||
+      lower.includes("sonnet") ||
+      lower.includes("fable") ||
+      lower.includes("haiku")
+    ) {
       upstreamProviderId = "anthropic";
       upstreamProviderName = "Anthropic";
     } else if (lower.includes("gpt") || lower.includes("codex") || lower.includes("composer")) {
@@ -126,7 +132,10 @@ const report = [
       upstreamProviderId: m.upstreamProviderId,
       upstreamProviderName: m.upstreamProviderName,
     })),
-  ).flatMap((g) => [`  [${g.label ?? g.key}]`, ...g.options.map((o) => `    ${o.slug} (${o.name})`)]),
+  ).flatMap((g) => [
+    `  [${g.label ?? g.key}]`,
+    ...g.options.map((o) => `    ${o.slug} (${o.name})`),
+  ]),
   "",
   "AFTER xAI group options:",
   ...groupProviderModelOptions(
@@ -136,7 +145,10 @@ const report = [
       upstreamProviderId: m.upstreamProviderId,
       upstreamProviderName: m.upstreamProviderName,
     })),
-  ).flatMap((g) => [`  [${g.label ?? g.key}]`, ...g.options.map((o) => `    ${o.slug} (${o.name})`)]),
+  ).flatMap((g) => [
+    `  [${g.label ?? g.key}]`,
+    ...g.options.map((o) => `    ${o.slug} (${o.name})`),
+  ]),
   "",
   xaiBefore.length > xaiAfter.length && xaiAfter.length === 1
     ? "RESULT: PASS — xAI Grok collapsed from multiple effort rows to one base model."
