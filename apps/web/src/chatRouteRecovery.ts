@@ -10,6 +10,7 @@ import type {
 } from "@synara/contracts";
 
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
+import { requestShellRefresh } from "./shellRefreshCoordinator";
 import { useStore } from "./store";
 
 function shellSnapshotHasProjectsOrThreads(snapshot: OrchestrationShellSnapshot): boolean {
@@ -35,30 +36,39 @@ export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
 }
 
 /**
+ * Fetch-only ladder for projects-present / threads-empty.
+ * Does not write the store — EventRouter applies via requestShellRefresh.
+ */
+export async function fetchMissingThreadSnapshots(
+  api: NativeApi,
+): Promise<
+  | { kind: "shell"; snapshot: OrchestrationShellSnapshot }
+  | { kind: "readModel"; snapshot: OrchestrationReadModel }
+  | { kind: "none" }
+> {
+  const shellSnapshot = await api.orchestration.getShellSnapshot();
+  if (shellSnapshotHasThreads(shellSnapshot)) {
+    return { kind: "shell", snapshot: shellSnapshot };
+  }
+
+  const readModel = await api.orchestration.getSnapshot();
+  if (readModelHasLiveThreads(readModel)) {
+    return { kind: "readModel", snapshot: readModel };
+  }
+
+  return { kind: "none" };
+}
+
+/**
  * Home/sidebar stuck case: projects hydrated, threads empty.
- * Only pulls shell + full snapshot; never repairState (projects-only rebuild).
- * Only syncs payloads that actually include live threads, so a project-only or
- * soft-deleted-only response cannot wipe a concurrent thread upsert or latch
- * recovery as successful.
+ * Routes through EventRouter's sequence-aware refresh (never repairState).
  */
 export async function refreshMissingThreadSnapshots(api: NativeApi | undefined): Promise<boolean> {
   if (!api) {
     return false;
   }
-
-  const shellSnapshot = await api.orchestration.getShellSnapshot();
-  if (shellSnapshotHasThreads(shellSnapshot)) {
-    useStore.getState().syncServerShellSnapshot(shellSnapshot);
-    return true;
-  }
-
-  const readModel = await api.orchestration.getSnapshot();
-  if (readModelHasLiveThreads(readModel)) {
-    useStore.getState().syncServerReadModel(readModel);
-    return true;
-  }
-
-  return false;
+  const result = await requestShellRefresh({ includeReadModel: true });
+  return result.applied;
 }
 
 // Empty shell snapshots can arrive before desktop projection startup catches up.
@@ -101,3 +111,5 @@ export async function refreshEmptyRouteRestoreSnapshot(
 
   return false;
 }
+
+export { readModelHasLiveThreads, shellSnapshotHasThreads };

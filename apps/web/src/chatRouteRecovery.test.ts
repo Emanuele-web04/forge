@@ -1,31 +1,122 @@
-import type { NativeApi } from "@synara/contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  NativeApi,
+  OrchestrationReadModel,
+  OrchestrationShellSnapshot,
+} from "@synara/contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const storeMocks = vi.hoisted(() => ({
+  syncServerReadModel: vi.fn(),
+  syncServerShellSnapshot: vi.fn(),
+}));
+
+const shellRefreshMocks = vi.hoisted(() => ({
+  requestShellRefresh: vi.fn(),
+}));
+
+vi.mock("./store", () => ({
+  useStore: {
+    getState: () => storeMocks,
+  },
+}));
+
+vi.mock("./shellRefreshCoordinator", async () => {
+  const actual = await vi.importActual<typeof import("./shellRefreshCoordinator")>(
+    "./shellRefreshCoordinator",
+  );
+  return {
+    ...actual,
+    requestShellRefresh: shellRefreshMocks.requestShellRefresh,
+  };
+});
 
 import {
+  fetchMissingThreadSnapshots,
   refreshEmptyRouteRestoreSnapshot,
   refreshMissingThreadSnapshots,
 } from "./chatRouteRecovery";
-import { registerEmptyRouteRestoreRefresh } from "./routeRestoreRefreshCoordinator";
+import {
+  createMissingThreadRecoveryController,
+  MISSING_THREAD_RECOVERY_MAX_ATTEMPTS,
+} from "./missingThreadRecovery";
+import { shouldAcceptShellSnapshotSequence } from "./shellRefreshCoordinator";
 
-let unregister: (() => void) | undefined;
+function shellSnapshot(input: {
+  projects?: unknown[];
+  threads?: unknown[];
+  snapshotSequence?: number;
+}): OrchestrationShellSnapshot {
+  return {
+    projects: input.projects ?? [],
+    threads: input.threads ?? [],
+    snapshotSequence: input.snapshotSequence ?? 1,
+  } as unknown as OrchestrationShellSnapshot;
+}
 
-afterEach(() => {
-  unregister?.();
-  unregister = undefined;
-});
+function readModel(input: {
+  projects?: unknown[];
+  threads?: unknown[];
+  snapshotSequence?: number;
+}): OrchestrationReadModel {
+  return {
+    projects: input.projects ?? [],
+    threads: input.threads ?? [],
+    snapshotSequence: input.snapshotSequence ?? 1,
+  } as unknown as OrchestrationReadModel;
+}
+
+function makeApi(input: {
+  shell: OrchestrationShellSnapshot;
+  snapshot: OrchestrationReadModel;
+  repaired: OrchestrationReadModel;
+}) {
+  const orchestration = {
+    getShellSnapshot: vi.fn().mockResolvedValue(input.shell),
+    getSnapshot: vi.fn().mockResolvedValue(input.snapshot),
+    repairState: vi.fn().mockResolvedValue(input.repaired),
+  };
+
+  return {
+    api: { orchestration } as unknown as NativeApi,
+    orchestration,
+  };
+}
 
 describe("refreshEmptyRouteRestoreSnapshot", () => {
-  it("returns false when the backend is unavailable", async () => {
-    await expect(refreshEmptyRouteRestoreSnapshot(undefined)).resolves.toBe(false);
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("delegates snapshot recovery to EventRouter's registered coordinator", async () => {
-    const refresh = vi.fn().mockResolvedValue(true);
-    unregister = registerEmptyRouteRestoreRefresh(refresh);
+  it("continues to repair when shell and full snapshots only contain projects", async () => {
+    const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
+    const snapshot = readModel({ projects: [{ id: "project-1" }] });
+    const repaired = readModel({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-1" }],
+    });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
-    await expect(refreshEmptyRouteRestoreSnapshot({} as NativeApi)).resolves.toBe(true);
+    await expect(refreshEmptyRouteRestoreSnapshot(api)).resolves.toBe(true);
 
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(orchestration.repairState).toHaveBeenCalledTimes(1);
+    expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(repaired);
+  });
+
+  it("stops at the shell when the full snapshot is only projects", async () => {
+    const shell = shellSnapshot({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-1" }],
+    });
+    const snapshot = readModel({ projects: [{ id: "project-1" }] });
+    const repaired = readModel({ projects: [{ id: "project-1" }] });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+
+    await expect(refreshEmptyRouteRestoreSnapshot(api)).resolves.toBe(true);
+
+    expect(orchestration.repairState).toHaveBeenCalledTimes(1);
+    expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(snapshot);
   });
 
   it("escalates past a project-only shell when full snapshot already has threads", async () => {
@@ -49,13 +140,8 @@ describe("refreshEmptyRouteRestoreSnapshot", () => {
   });
 });
 
-describe("refreshMissingThreadSnapshots", () => {
-  beforeEach(() => {
-    storeMocks.syncServerReadModel.mockClear();
-    storeMocks.syncServerShellSnapshot.mockClear();
-  });
-
-  it("syncs shell when it already has threads and never repairs", async () => {
+describe("fetchMissingThreadSnapshots", () => {
+  it("returns shell when it already has threads", async () => {
     const shell = shellSnapshot({
       projects: [{ id: "project-1" }],
       threads: [{ id: "thread-1" }],
@@ -64,14 +150,15 @@ describe("refreshMissingThreadSnapshots", () => {
     const repaired = readModel({ projects: [{ id: "project-1" }] });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
-    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(true);
-
+    await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({
+      kind: "shell",
+      snapshot: shell,
+    });
     expect(orchestration.getSnapshot).not.toHaveBeenCalled();
     expect(orchestration.repairState).not.toHaveBeenCalled();
-    expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
   });
 
-  it("escalates to full snapshot for threads without applying project-only shell", async () => {
+  it("escalates to full snapshot for threads without returning project-only shell", async () => {
     const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
     const snapshot = readModel({
       projects: [{ id: "project-1" }],
@@ -80,14 +167,14 @@ describe("refreshMissingThreadSnapshots", () => {
     const repaired = readModel({ projects: [{ id: "project-1" }] });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
-    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(true);
-
+    await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({
+      kind: "readModel",
+      snapshot,
+    });
     expect(orchestration.repairState).not.toHaveBeenCalled();
-    expect(storeMocks.syncServerShellSnapshot).not.toHaveBeenCalled();
-    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(snapshot);
   });
 
-  it("returns false without repair when both reads stay project-only", async () => {
+  it("returns none when both reads stay project-only", async () => {
     const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
     const snapshot = readModel({ projects: [{ id: "project-1" }] });
     const repaired = readModel({
@@ -96,14 +183,11 @@ describe("refreshMissingThreadSnapshots", () => {
     });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
-    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(false);
-
+    await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({ kind: "none" });
     expect(orchestration.repairState).not.toHaveBeenCalled();
-    expect(storeMocks.syncServerShellSnapshot).not.toHaveBeenCalled();
-    expect(storeMocks.syncServerReadModel).not.toHaveBeenCalled();
   });
 
-  it("ignores soft-deleted-only full snapshots and does not sync or latch success", async () => {
+  it("ignores soft-deleted-only full snapshots", async () => {
     const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
     const snapshot = readModel({
       projects: [{ id: "project-1" }],
@@ -112,10 +196,191 @@ describe("refreshMissingThreadSnapshots", () => {
     const repaired = readModel({ projects: [{ id: "project-1" }] });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
-    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(false);
-
+    await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({ kind: "none" });
     expect(orchestration.repairState).not.toHaveBeenCalled();
-    expect(storeMocks.syncServerShellSnapshot).not.toHaveBeenCalled();
-    expect(storeMocks.syncServerReadModel).not.toHaveBeenCalled();
+  });
+});
+
+describe("refreshMissingThreadSnapshots", () => {
+  beforeEach(() => {
+    shellRefreshMocks.requestShellRefresh.mockReset();
+  });
+
+  it("delegates to sequence-aware shell refresh and never repairs", async () => {
+    shellRefreshMocks.requestShellRefresh.mockResolvedValue({
+      applied: true,
+      shellThreadCount: 1,
+      reason: "ok",
+    });
+    const { api, orchestration } = makeApi({
+      shell: shellSnapshot({ projects: [{ id: "project-1" }] }),
+      snapshot: readModel({ projects: [{ id: "project-1" }] }),
+      repaired: readModel({ projects: [{ id: "project-1" }] }),
+    });
+
+    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(true);
+
+    expect(shellRefreshMocks.requestShellRefresh).toHaveBeenCalledWith({
+      includeReadModel: true,
+    });
+    expect(orchestration.repairState).not.toHaveBeenCalled();
+  });
+});
+
+describe("shouldAcceptShellSnapshotSequence", () => {
+  it("accepts any snapshot before the fence is established", () => {
+    expect(shouldAcceptShellSnapshotSequence(-1, 0)).toBe(true);
+  });
+
+  it("rejects snapshots older than the applied fence", () => {
+    expect(shouldAcceptShellSnapshotSequence(5, 4)).toBe(false);
+    expect(shouldAcceptShellSnapshotSequence(5, 5)).toBe(true);
+    expect(shouldAcceptShellSnapshotSequence(5, 6)).toBe(true);
+  });
+});
+
+describe("createMissingThreadRecoveryController", () => {
+  it("retries after false until threads appear, then stops", async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    let needed = true;
+    let calls = 0;
+    const onAttempt = vi.fn();
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => needed,
+      refresh: async () => {
+        calls += 1;
+        if (calls >= 2) {
+          needed = false;
+          return { applied: true, shellThreadCount: 1, reason: "ok" };
+        }
+        return { applied: false, shellThreadCount: 0, reason: "empty" };
+      },
+      schedule: (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearSchedule: vi.fn(),
+      onAttempt,
+    });
+
+    controller.start();
+    await vi.waitFor(() => expect(calls).toBe(1));
+    expect(timers).toHaveLength(1);
+    expect(timers[0]?.ms).toBe(1_500);
+
+    timers[0]?.fn();
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(timers).toHaveLength(1);
+  });
+
+  it("retries after refresh errors without needing an unrelated render", async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    let calls = 0;
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => true,
+      refresh: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("rpc failed");
+        }
+        return { applied: true, shellThreadCount: 1, reason: "ok" };
+      },
+      schedule: (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearSchedule: vi.fn(),
+      maxAttempts: 3,
+    });
+
+    controller.start();
+    await vi.waitFor(() => expect(calls).toBe(1));
+    timers[0]?.fn();
+    await vi.waitFor(() => expect(calls).toBe(2));
+  });
+
+  it("cancels delayed retries on unmount", async () => {
+    const clearSchedule = vi.fn();
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    let calls = 0;
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => true,
+      refresh: async () => {
+        calls += 1;
+        return { applied: false, shellThreadCount: 0, reason: "empty" };
+      },
+      schedule: (fn, ms) => {
+        timers.push({ fn, ms });
+        return 42 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearSchedule,
+    });
+
+    controller.start();
+    await vi.waitFor(() => expect(calls).toBe(1));
+    controller.cancel();
+    expect(clearSchedule).toHaveBeenCalledWith(42);
+    timers[0]?.fn();
+    await Promise.resolve();
+    expect(calls).toBe(1);
+  });
+
+  it("does not poll forever for a legitimate project-only workspace", async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    let calls = 0;
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => true,
+      refresh: async () => {
+        calls += 1;
+        return { applied: false, shellThreadCount: 0, reason: "empty" };
+      },
+      schedule: (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearSchedule: vi.fn(),
+    });
+
+    controller.start();
+    for (let i = 0; i < MISSING_THREAD_RECOVERY_MAX_ATTEMPTS + 2; i += 1) {
+      await vi.waitFor(() => expect(calls).toBe(Math.min(i + 1, MISSING_THREAD_RECOVERY_MAX_ATTEMPTS)));
+      const next = timers[timers.length - 1];
+      if (!next || calls >= MISSING_THREAD_RECOVERY_MAX_ATTEMPTS) {
+        break;
+      }
+      next.fn();
+    }
+
+    expect(calls).toBe(MISSING_THREAD_RECOVERY_MAX_ATTEMPTS);
+  });
+
+  it("stops immediately when threads arrive through the shell stream", async () => {
+    let needed = true;
+    let calls = 0;
+    const timers: Array<{ fn: () => void }> = [];
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => needed,
+      refresh: async () => {
+        calls += 1;
+        return { applied: false, shellThreadCount: 0, reason: "empty" };
+      },
+      schedule: (fn) => {
+        timers.push({ fn });
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearSchedule: vi.fn(),
+    });
+
+    controller.start();
+    await vi.waitFor(() => expect(calls).toBe(1));
+    needed = false;
+    timers[0]?.fn();
+    await Promise.resolve();
+    expect(calls).toBe(1);
   });
 });

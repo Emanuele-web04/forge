@@ -20,7 +20,15 @@ import {
   useParams,
   useRouterState,
 } from "@tanstack/react-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
@@ -115,11 +123,17 @@ import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
-import { refreshMissingThreadSnapshots } from "../chatRouteRecovery";
+import { fetchMissingThreadSnapshots } from "../chatRouteRecovery";
+import { createMissingThreadRecoveryController } from "../missingThreadRecovery";
 import {
-  registerEmptyRouteRestoreRefresh,
-  runEmptyRouteRestoreRefresh,
-} from "../routeRestoreRefreshCoordinator";
+  bumpShellRefreshEpoch,
+  getShellRefreshEpoch,
+  registerShellRefreshRequest,
+  requestShellRefresh,
+  shouldAcceptShellSnapshotSequence,
+  subscribeShellRefreshEpoch,
+  type ShellRefreshResult,
+} from "../shellRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
@@ -152,7 +166,6 @@ import {
 } from "./-rootEventInvalidation";
 import { createDesktopProjectRecoveryAttemptGate } from "./-desktopProjectRecoveryAttempt";
 
-const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
 const THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS = 4_500;
 /** First terminal-fence reconcile runs quickly so post-settle finals are not left hanging. */
@@ -1129,9 +1142,8 @@ function EventRouter() {
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
-    let shellSubscriptionGeneration = 0;
-    let shellSnapshotReceivedGeneration = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
+    let shellRefreshGeneration = 0;
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
@@ -1324,6 +1336,81 @@ function EventRouter() {
       }
     };
 
+    const applyShellSnapshot = (snapshot: OrchestrationShellSnapshot): boolean => {
+      if (disposed) {
+        return false;
+      }
+      if (!shouldAcceptShellSnapshotSequence(shellSnapshotSequence, snapshot.snapshotSequence)) {
+        return false;
+      }
+      shellSnapshotSequence = snapshot.snapshotSequence;
+      syncServerShellSnapshot(snapshot);
+      reconcilePromotedDraftsFromShellThreads(snapshot.threads);
+      removeOrphanedTerminalsForCurrentState();
+      flushShellBuffer(snapshot.snapshotSequence);
+      return true;
+    };
+
+    const performShellRefresh = async (options?: {
+      includeReadModel?: boolean;
+    }): Promise<ShellRefreshResult> => {
+      const generation = ++shellRefreshGeneration;
+      try {
+        const fetched = await fetchMissingThreadSnapshots(api);
+        if (disposed || generation !== shellRefreshGeneration) {
+          return { applied: false, shellThreadCount: 0, reason: "stale" };
+        }
+
+        if (fetched.kind === "shell") {
+          const applied = applyShellSnapshot(fetched.snapshot);
+          if (!applied) {
+            return {
+              applied: false,
+              shellThreadCount: fetched.snapshot.threads.length,
+              reason: "stale",
+            };
+          }
+          return {
+            applied: true,
+            shellThreadCount: fetched.snapshot.threads.length,
+            reason: "ok",
+          };
+        }
+
+        if (fetched.kind === "readModel") {
+          if (options?.includeReadModel === false) {
+            return { applied: false, shellThreadCount: 0, reason: "empty" };
+          }
+          if (
+            !shouldAcceptShellSnapshotSequence(
+              shellSnapshotSequence,
+              fetched.snapshot.snapshotSequence,
+            )
+          ) {
+            return { applied: false, shellThreadCount: 0, reason: "stale" };
+          }
+          const appliedSequence = Math.max(
+            shellSnapshotSequence,
+            fetched.snapshot.snapshotSequence,
+          );
+          shellSnapshotSequence = appliedSequence;
+          useStore.getState().syncServerReadModel(fetched.snapshot);
+          flushShellBuffer(appliedSequence);
+          const liveCount = fetched.snapshot.threads.filter(
+            (thread) => thread.deletedAt == null,
+          ).length;
+          return { applied: true, shellThreadCount: liveCount, reason: "ok" };
+        }
+
+        return { applied: false, shellThreadCount: 0, reason: "empty" };
+      } catch {
+        return { applied: false, shellThreadCount: 0, reason: "error" };
+      }
+    };
+
+    registerShellRefreshRequest(performShellRefresh);
+    bumpShellRefreshEpoch();
+
     const reconcileThreadSubscriptions = async (threadIds: readonly ThreadId[]) => {
       const nextThreadIds = new Set(threadIds);
       const removals = [...subscribedThreadIds].filter((threadId) => !nextThreadIds.has(threadId));
@@ -1433,153 +1520,25 @@ function EventRouter() {
       );
     };
 
-    function collectSubscribedDraftsInShell(
-      threads: ReadonlyArray<OrchestrationShellSnapshot["threads"][number]>,
-    ): ThreadId[] {
-      const draftsByThreadId = useComposerDraftStore.getState().draftThreadsByThreadId;
-      return threads
-        .map((thread) => thread.id)
-        .filter((threadId) => subscribedThreadIds.has(threadId) && threadId in draftsByThreadId);
-    }
-
-    function reconcileMissingSubscribedThreadProjections(threadIds: readonly ThreadId[]) {
-      for (const threadId of threadIds) {
-        if (!threadSnapshotSequenceById.has(threadId)) {
-          void reconcileThreadProjection(threadId).catch(() => undefined);
-        }
-      }
-    }
-
-    const applyAuthoritativeShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
-      if (disposed) return false;
-      // A query can resolve after the live shell stream has already moved
-      // forward. Never roll the store back behind the EventRouter fence.
-      if (shellSnapshotSequence >= 0 && snapshot.snapshotSequence < shellSnapshotSequence) {
-        return false;
-      }
-      const promotedDraftThreadIds = collectSubscribedDraftsInShell(snapshot.threads);
-      shellSnapshotSequence = snapshot.snapshotSequence;
-      syncServerShellSnapshot(snapshot);
-      reconcilePromotedDraftsFromShellThreads(snapshot.threads);
-      removeOrphanedTerminalsForCurrentState();
-      flushShellBuffer(snapshot.snapshotSequence);
-      reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
-      return true;
-    };
-
-    const applyQueriedShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
-      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
-        return false;
-      }
-      return applyAuthoritativeShellSnapshot(snapshot);
-    };
-
-    // The live shell stream normally delivers the bootstrap snapshot. Only
-    // fall back until either the stream or a query has returned one. Collection
-    // emptiness is valid user state, so it cannot indicate whether bootstrap
-    // succeeded. Every extra request recomputes and ships the whole sidebar
-    // (about 1 MB per 600 threads) and queues behind the thread-detail snapshot
-    // on the server's single SQLite connection.
-    const needsBootstrapShellSnapshot = (generation: number) =>
-      shellSnapshotReceivedGeneration < generation;
-
-    const loadBootstrapShellSnapshotIfMissing = async (generation: number) => {
-      if (
-        disposed ||
-        generation !== shellSubscriptionGeneration ||
-        !needsBootstrapShellSnapshot(generation)
-      ) {
-        return;
-      }
+    const loadShellSnapshotOnce = async () => {
       const snapshot = await api.orchestration.getShellSnapshot();
-      if (
-        disposed ||
-        generation !== shellSubscriptionGeneration ||
-        !needsBootstrapShellSnapshot(generation)
-      ) {
+      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
-      if (applyAuthoritativeShellSnapshot(snapshot)) {
-        shellSnapshotReceivedGeneration = generation;
-      }
+      applyShellSnapshot(snapshot);
     };
 
-    // Each subscription generation owns one fallback timer. Deferring it gives
-    // the shell stream's snapshot time to land first, while replacing an older
-    // generation's timer keeps reconnect recovery tied to the current stream.
-    let shellSnapshotFallbackTimer: number | null = null;
-    const scheduleShellSnapshotFallback = (generation: number) => {
-      shellSnapshotFallbackTimer = window.setTimeout(() => {
-        shellSnapshotFallbackTimer = null;
-        void loadBootstrapShellSnapshotIfMissing(generation).catch(() => undefined);
-      }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
+    const ensureScopedSubscriptions = async () => {
+      shellSnapshotSequence = -1;
+      pendingShellEvents = [];
+      shellRefreshGeneration += 1;
+      subscribedThreadIds.clear();
+      threadSnapshotSequenceById.clear();
+      pendingThreadEventsById.clear();
+      threadReplayRequestInFlight.clear();
+      await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
+      await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
     };
-
-    const unregisterEmptyRouteRestoreRefresh = registerEmptyRouteRestoreRefresh(() =>
-      runEmptyRouteRestoreRefresh({
-        getShellSnapshot: () => api.orchestration.getShellSnapshot(),
-        getSnapshot: () => api.orchestration.getSnapshot(),
-        repairState: () => api.orchestration.repairState(),
-        applyShellSnapshot: applyQueriedShellSnapshot,
-        hasThreads: () => (useStore.getState().threadIds?.length ?? 0) > 0,
-      }),
-    );
-
-    let scopedSubscriptionRefresh: Promise<void> | null = null;
-    const ensureScopedSubscriptions = () => {
-      if (scopedSubscriptionRefresh) {
-        return scopedSubscriptionRefresh;
-      }
-      shellSubscriptionGeneration += 1;
-      const generation = shellSubscriptionGeneration;
-      if (shellSnapshotFallbackTimer !== null) {
-        window.clearTimeout(shellSnapshotFallbackTimer);
-        shellSnapshotFallbackTimer = null;
-      }
-      scheduleShellSnapshotFallback(generation);
-      const refresh = (async () => {
-        shellSnapshotSequence = -1;
-        pendingShellEvents = [];
-        await api.orchestration
-          .subscribeShell()
-          .catch(() => loadBootstrapShellSnapshotIfMissing(generation));
-        await enqueueThreadSubscriptionOperation(async () => {
-          threadSnapshotSequenceById.clear();
-          pendingThreadEventsById.clear();
-          threadSnapshotRequestInFlight.clear();
-          threadSnapshotRefreshPending.clear();
-          threadReplayRequestInFlight.clear();
-          threadProjectionReconcileInFlight.clear();
-          threadProjectionTerminalFencePending.clear();
-          threadProjectionTerminalFenceSequenceById.clear();
-          threadProjectionTerminalFenceArmedAtById.clear();
-          threadSubscriptionGenerationById.clear();
-          nextThreadProjectionReconcileAtById.clear();
-          threadCatchupBackoffById.clear();
-          const previousThreadIds = [...subscribedThreadIds];
-          subscribedThreadIds.clear();
-          // Reconnect drops every lease at once, so the reconcile below sees no
-          // removals to clean up. Free detail for threads that retention does not
-          // own and the reconcile will not re-lease, while leaving the threads it
-          // does re-lease untouched so a reconnect never blanks the open chat.
-          releaseOrphanedThreadDetail({
-            releasedThreadIds: previousThreadIds,
-            keptThreadIds: new Set(visibleThreadIdsRef.current),
-          });
-          await Promise.all(
-            previousThreadIds.map((threadId) =>
-              api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
-            ),
-          );
-          await reconcileThreadSubscriptions(visibleThreadIdsRef.current);
-        });
-      })().finally(() => {
-        if (scopedSubscriptionRefresh === refresh) {
-          scopedSubscriptionRefresh = null;
-        }
-      });
-      scopedSubscriptionRefresh = refresh;
-      return refresh;
     };
 
     const removeOrphanedTerminalsForCurrentState = () => {
@@ -1885,14 +1844,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
-        shellSnapshotReceivedGeneration = shellSubscriptionGeneration;
-        const promotedDraftThreadIds = collectSubscribedDraftsInShell(item.snapshot.threads);
-        shellSnapshotSequence = item.snapshot.snapshotSequence;
-        syncServerShellSnapshot(item.snapshot);
-        reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
-        removeOrphanedTerminalsForCurrentState();
-        flushShellBuffer(item.snapshot.snapshotSequence);
-        reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
+        applyShellSnapshot(item.snapshot);
         return;
       }
 
@@ -2294,10 +2246,9 @@ function EventRouter() {
     return () => {
       flushPendingDomainEvents();
       disposed = true;
-      if (shellSnapshotFallbackTimer !== null) {
-        window.clearTimeout(shellSnapshotFallbackTimer);
-        shellSnapshotFallbackTimer = null;
-      }
+      shellRefreshGeneration += 1;
+      registerShellRefreshRequest(null);
+      bumpShellRefreshEpoch();
       window.clearInterval(threadDetailCatchupInterval);
       needsProviderInvalidation = false;
       needsBroadGitInvalidation = false;
@@ -2312,7 +2263,6 @@ function EventRouter() {
       threadCatchupBackoffById.clear();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
-      unregisterEmptyRouteRestoreRefresh();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
       // only the visible threads. Keeping those avoids blanking the open chat, and
@@ -2373,6 +2323,16 @@ function DesktopProjectBootstrap() {
     recoveryAttemptGateRef.current = createDesktopProjectRecoveryAttemptGate();
   }
   const recoveryAttemptGate = recoveryAttemptGateRef.current;
+  const shellRefreshEpoch = useSyncExternalStore(
+    subscribeShellRefreshEpoch,
+    getShellRefreshEpoch,
+    getShellRefreshEpoch,
+  );
+  const attemptedOrphanRepairRef = useRef(false);
+
+  useEffect(() => {
+    attemptedOrphanRepairRef.current = false;
+  }, [shellRefreshEpoch]);
 
   useEffect(() => {
     let disposed = false;
@@ -2383,23 +2343,53 @@ function DesktopProjectBootstrap() {
 
     const projectIds = new Set(projects.map((project) => project.id));
     const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
-    // #282: project-only hydration can stick on home/sidebar. Light refresh only
-    // (shell → snapshot); never repairState here (that rebuilds projects, not threads).
+    // #282: project-only hydration can stick on home/sidebar. Sequence-aware
+    // refresh via EventRouter (shell → snapshot); never repairState here.
     const hasProjectsWithoutThreads = projects.length > 0 && threads.length === 0;
     if (projects.length > 0 && !hasThreadWithoutProject && !hasProjectsWithoutThreads) {
+      return;
+    }
+
+    if (hasProjectsWithoutThreads) {
+      const controller = createMissingThreadRecoveryController({
+        isStillNeeded: () => {
+          const state = useStore.getState();
+          return state.projects.length > 0 && state.threads.length === 0;
+        },
+        refresh: () => requestShellRefresh({ includeReadModel: true }),
+        onAttempt: ({ attempt, result }) => {
+          if (result == null) {
+            console.info("[synara] missing-thread recovery attempt", {
+              attempt,
+              projectCount: useStore.getState().projects.length,
+              threadCount: useStore.getState().threads.length,
+            });
+            return;
+          }
+          console.info("[synara] missing-thread recovery result", {
+            attempt,
+            applied: result.applied,
+            reason: result.reason,
+            shellThreadCount: result.shellThreadCount,
+            projectCount: useStore.getState().projects.length,
+            threadCount: useStore.getState().threads.length,
+          });
+        },
+      });
+      controller.start();
+      return () => {
+        controller.cancel();
+      };
+    }
+
+    if (attemptedOrphanRepairRef.current) {
       return;
     }
 
     const attempt = recoveryAttemptGate.begin();
     if (!attempt) return;
     const ownsAttempt = () => !disposed && attempt.isCurrent();
-
-    if (hasProjectsWithoutThreads) {
-      void refreshMissingThreadSnapshots(api).catch(() => {
-        attempt.release();
-      });
-      return;
-    }
+    attemptedOrphanRepairRef.current = true;
 
     // Shell subscriptions should normally hydrate the sidebar. If project rows
     // are missing while live threads exist, repair before accepting the snapshot.
@@ -2419,14 +2409,14 @@ function DesktopProjectBootstrap() {
         });
       })
       .catch(() => {
-        attempt.release();
+        attemptedOrphanRepairRef.current = false;
       });
 
     return () => {
       disposed = true;
       attempt.release();
     };
-  }, [projects, recoveryAttemptGate, syncServerReadModel, threads, threadsHydrated]);
+  }, [projects, shellRefreshEpoch, syncServerReadModel, threads, threadsHydrated]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;
