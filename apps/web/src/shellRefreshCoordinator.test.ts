@@ -40,11 +40,18 @@ describe("shouldAcceptShellSnapshotSequence", () => {
 });
 
 describe("shouldSkipShellThreadMutation", () => {
-  it("skips when detail fence is at least as new as the event", () => {
+  it("skips upsert when detail fence is at least as new as the event", () => {
     expect(shouldSkipShellThreadMutation(undefined, 3)).toBe(false);
     expect(shouldSkipShellThreadMutation(2, 3)).toBe(false);
     expect(shouldSkipShellThreadMutation(3, 3)).toBe(true);
     expect(shouldSkipShellThreadMutation(4, 3)).toBe(true);
+  });
+
+  it("skips removal only when detail fence is strictly newer than the event", () => {
+    expect(shouldSkipShellThreadMutation(undefined, 3, "thread-removed")).toBe(false);
+    expect(shouldSkipShellThreadMutation(2, 3, "thread-removed")).toBe(false);
+    expect(shouldSkipShellThreadMutation(3, 3, "thread-removed")).toBe(false);
+    expect(shouldSkipShellThreadMutation(4, 3, "thread-removed")).toBe(true);
   });
 });
 
@@ -56,7 +63,7 @@ describe("requestRepairState", () => {
     await expect(requestRepairState(api)).resolves.toBe(readModel);
   });
 
-  it("serializes concurrent callers so only one repairState is in flight at a time", async () => {
+  it("coalesces concurrent callers onto a single repairState", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
     let index = 0;
@@ -78,8 +85,8 @@ describe("requestRepairState", () => {
 
     expect(maxInFlight).toBe(1);
     expect(first.snapshotSequence).toBe(1);
-    expect(second.snapshotSequence).toBe(2);
-    expect(third.snapshotSequence).toBe(3);
+    expect(second.snapshotSequence).toBe(1);
+    expect(third.snapshotSequence).toBe(1);
   });
 
   it("does not start a queued repair when the first fails", async () => {
@@ -88,7 +95,7 @@ describe("requestRepairState", () => {
     await expect(requestRepairState(api)).rejects.toThrow("server error");
   });
 
-  it("queues a caller that arrives while a repair is already in flight", async () => {
+  it("coalesces a caller that arrives while a repair is already in flight", async () => {
     let calls = 0;
     const api = makeApi(async () => {
       calls += 1;
@@ -104,6 +111,21 @@ describe("requestRepairState", () => {
         }, 0);
       }),
     ]);
+
+    expect(first.snapshotSequence).toBe(1);
+    expect(second.snapshotSequence).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it("starts a fresh repair after the previous one completes", async () => {
+    let calls = 0;
+    const api = makeApi(async () => {
+      calls += 1;
+      return makeReadModel({ snapshotSequence: calls });
+    });
+
+    const first = await requestRepairState(api);
+    const second = await requestRepairState(api);
 
     expect(first.snapshotSequence).toBe(1);
     expect(second.snapshotSequence).toBe(2);

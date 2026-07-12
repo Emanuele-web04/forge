@@ -102,9 +102,10 @@ describe("refreshEmptyRouteRestoreSnapshot", () => {
 
     await expect(refreshEmptyRouteRestoreSnapshot(api)).resolves.toBe(true);
 
-    expect(orchestration.repairState).toHaveBeenCalledTimes(1);
+    expect(orchestration.getSnapshot).not.toHaveBeenCalled();
+    expect(orchestration.repairState).not.toHaveBeenCalled();
     expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
-    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(snapshot);
+    expect(storeMocks.syncServerReadModel).not.toHaveBeenCalled();
   });
 
   it("escalates past a project-only shell when full snapshot already has threads", async () => {
@@ -248,6 +249,11 @@ describe("shouldSkipShellThreadMutation", () => {
     expect(shouldSkipShellThreadMutation(2, 3)).toBe(false);
     expect(shouldSkipShellThreadMutation(3, 3)).toBe(true);
     expect(shouldSkipShellThreadMutation(4, 3)).toBe(true);
+  });
+
+  it("allows removal when detail fence is at the same sequence as the event", () => {
+    expect(shouldSkipShellThreadMutation(3, 3, "thread-removed")).toBe(false);
+    expect(shouldSkipShellThreadMutation(4, 3, "thread-removed")).toBe(true);
   });
 });
 

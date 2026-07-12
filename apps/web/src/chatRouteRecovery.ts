@@ -11,7 +11,12 @@ import type {
 
 import { hasLiveThreadsWithMissingProjects } from "./lib/desktopProjectRecovery";
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
-import { requestRepairState } from "./shellRefreshCoordinator";
+import {
+  getRecoveryMutationLease,
+  isShellSnapshotApplyRegistered,
+  requestRepairState,
+  tryApplyShellSnapshot,
+} from "./shellRefreshCoordinator";
 import { useStore } from "./store";
 
 function shellSnapshotHasProjectsOrThreads(snapshot: OrchestrationShellSnapshot): boolean {
@@ -68,8 +73,9 @@ export async function fetchMissingThreadSnapshots(
 
 // Empty shell snapshots can arrive before desktop projection startup catches up.
 // Try progressively stronger reads so route guards do not replace valid thread URLs.
-// EventRouter owns the live shell sequence fence. Route restore must request its
-// recovery path instead of applying backend snapshots directly to the store.
+// Route restores can race with DesktopProjectBootstrap recovery; if the recovery
+// lease is bumped while we're in flight, discard stale results so the recovery
+// retry path stays in control.
 export async function refreshEmptyRouteRestoreSnapshot(
   api: NativeApi | undefined,
 ): Promise<boolean> {
@@ -77,9 +83,17 @@ export async function refreshEmptyRouteRestoreSnapshot(
     return false;
   }
 
+  const lease = getRecoveryMutationLease();
   const shellSnapshot = await api.orchestration.getShellSnapshot();
+  if (lease !== getRecoveryMutationLease()) {
+    return false;
+  }
   if (shellSnapshotHasProjectsOrThreads(shellSnapshot)) {
-    useStore.getState().syncServerShellSnapshot(shellSnapshot);
+    if (isShellSnapshotApplyRegistered()) {
+      tryApplyShellSnapshot(shellSnapshot);
+    } else {
+      useStore.getState().syncServerShellSnapshot(shellSnapshot);
+    }
     if (shellSnapshotHasThreads(shellSnapshot)) {
       return true;
     }
@@ -88,6 +102,9 @@ export async function refreshEmptyRouteRestoreSnapshot(
   }
 
   const readModel = await api.orchestration.getSnapshot();
+  if (lease !== getRecoveryMutationLease()) {
+    return false;
+  }
   if (readModelHasProjectsOrThreads(readModel)) {
     useStore.getState().syncServerReadModel(readModel);
     if (readModelHasLiveThreads(readModel)) {
@@ -97,6 +114,9 @@ export async function refreshEmptyRouteRestoreSnapshot(
   }
 
   const repairedReadModel = await requestRepairState(api);
+  if (lease !== getRecoveryMutationLease()) {
+    return false;
+  }
   if (readModelHasProjectsOrThreads(repairedReadModel)) {
     useStore.getState().syncServerReadModel(repairedReadModel);
   }

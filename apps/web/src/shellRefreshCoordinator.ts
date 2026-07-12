@@ -48,6 +48,10 @@ export function tryApplyShellSnapshot(snapshot: OrchestrationShellSnapshot): boo
   return registeredApply?.(snapshot) ?? false;
 }
 
+export function isShellSnapshotApplyRegistered(): boolean {
+  return registeredApply !== null;
+}
+
 export function bumpShellRefreshEpoch(): void {
   epoch += 1;
   for (const listener of epochListeners) {
@@ -81,8 +85,14 @@ export function shouldAcceptShellSnapshotSequence(
 export function shouldSkipShellThreadMutation(
   detailSequence: number | undefined,
   eventSequence: number,
+  eventKind: "thread-upserted" | "thread-removed" = "thread-upserted",
 ): boolean {
-  return detailSequence !== undefined && detailSequence >= eventSequence;
+  if (detailSequence === undefined) {
+    return false;
+  }
+  return eventKind === "thread-removed"
+    ? detailSequence > eventSequence
+    : detailSequence >= eventSequence;
 }
 
 let mutationLease = 0;
@@ -98,12 +108,12 @@ export function getRecoveryMutationLease(): number {
 
 let inFlightRepair: Promise<OrchestrationReadModel> | null = null;
 
-/** Request a server-side repairState, serializing concurrent callers so only one
+/** Request a server-side repairState, coalescing concurrent callers so only one
  *  projection repair is in flight at a time. The RPC itself cannot be aborted once
  *  submitted; callers must still use the mutation lease to discard stale results. */
 export function requestRepairState(api: NativeApi): Promise<OrchestrationReadModel> {
   if (inFlightRepair) {
-    return inFlightRepair.then(() => requestRepairState(api));
+    return inFlightRepair;
   }
   const promise = api.orchestration.repairState().finally(() => {
     if (inFlightRepair === promise) {
