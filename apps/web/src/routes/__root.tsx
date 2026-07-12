@@ -1426,7 +1426,9 @@ function EventRouter() {
           }
           if (
             hasLiveThreadsWithMissingProjects({
-              ...repaired,
+              snapshotSequence: repaired.snapshotSequence,
+              updatedAt: repaired.updatedAt,
+              spaces: repaired.spaces,
               projects: liveProjects,
               threads: liveThreads,
             })
