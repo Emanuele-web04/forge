@@ -129,9 +129,11 @@ import {
   bumpShellRefreshEpoch,
   getShellRefreshEpoch,
   registerShellRefreshRequest,
+  registerShellSnapshotApply,
   requestShellRefresh,
   shouldAcceptShellSnapshotSequence,
   subscribeShellRefreshEpoch,
+  tryApplyShellSnapshot,
   type ShellRefreshResult,
 } from "../shellRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -1390,11 +1392,18 @@ function EventRouter() {
           );
           shellSnapshotSequence = appliedSequence;
           useStore.getState().syncServerReadModel(fetched.snapshot);
+          const liveThreads = fetched.snapshot.threads.filter((thread) => thread.deletedAt == null);
+          markPromotedDraftThreads(new Set(liveThreads.map((thread) => thread.id)));
+          finalizePromotedDraftThreads(
+            new Set(
+              liveThreads
+                .filter((thread) => detailThreadHasStarted(thread))
+                .map((thread) => thread.id),
+            ),
+          );
+          removeOrphanedTerminalsForCurrentState();
           flushShellBuffer(appliedSequence);
-          const liveCount = fetched.snapshot.threads.filter(
-            (thread) => thread.deletedAt == null,
-          ).length;
-          return { applied: true, shellThreadCount: liveCount, reason: "ok" };
+          return { applied: true, shellThreadCount: liveThreads.length, reason: "ok" };
         }
 
         return { applied: false, shellThreadCount: 0, reason: "empty" };
@@ -1404,6 +1413,7 @@ function EventRouter() {
     };
 
     registerShellRefreshRequest(performShellRefresh);
+    registerShellSnapshotApply(applyShellSnapshot);
     bumpShellRefreshEpoch();
 
     const reconcileThreadSubscriptions = async (threadIds: readonly ThreadId[]) => {
@@ -1527,6 +1537,7 @@ function EventRouter() {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
       shellRefreshGeneration += 1;
+      bumpShellRefreshEpoch();
       subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
@@ -2243,6 +2254,7 @@ function EventRouter() {
       disposed = true;
       shellRefreshGeneration += 1;
       registerShellRefreshRequest(null);
+      registerShellSnapshotApply(null);
       bumpShellRefreshEpoch();
       window.clearInterval(threadDetailCatchupInterval);
       needsProviderInvalidation = false;
@@ -2308,9 +2320,6 @@ function EventRouter() {
 
 function DesktopProjectBootstrap() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  const projects = useStore((store) => store.projects);
-  const threads = useStore(selectAllThreads);
-  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const recoveryAttemptGateRef = useRef<ReturnType<
     typeof createDesktopProjectRecoveryAttemptGate
   > | null>(null);
@@ -2318,6 +2327,18 @@ function DesktopProjectBootstrap() {
     recoveryAttemptGateRef.current = createDesktopProjectRecoveryAttemptGate();
   }
   const recoveryAttemptGate = recoveryAttemptGateRef.current;
+  // Boolean selectors keep the recovery machine stable across project upserts
+  // that leave threads empty — remounting would reset the attempt budget.
+  const needsMissingThreadRecovery = useStore(
+    (store) => store.threadsHydrated && store.projects.length > 0 && store.threads.length === 0,
+  );
+  const needsOrphanProjectRepair = useStore((store) => {
+    if (!store.threadsHydrated || store.projects.length === 0 || store.threads.length === 0) {
+      return false;
+    }
+    const projectIds = new Set(store.projects.map((project) => project.id));
+    return store.threads.some((thread) => !projectIds.has(thread.projectId));
+  });
   const shellRefreshEpoch = useSyncExternalStore(
     subscribeShellRefreshEpoch,
     getShellRefreshEpoch,
@@ -2330,46 +2351,27 @@ function DesktopProjectBootstrap() {
   }, [shellRefreshEpoch]);
 
   useEffect(() => {
+    if (!needsMissingThreadRecovery) {
+      return;
+    }
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => {
+        const state = useStore.getState();
+        return state.projects.length > 0 && state.threads.length === 0;
+      },
+      refresh: () => requestShellRefresh(),
+    });
+    controller.start();
+    return () => {
+      controller.cancel();
+    };
+  }, [needsMissingThreadRecovery, shellRefreshEpoch]);
+
+  useEffect(() => {
     let disposed = false;
     const api = readNativeApi();
-    if (!api || !threadsHydrated) {
-      return;
-    }
-
-    const projectIds = new Set(projects.map((project) => project.id));
-    const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
-    // #282: project-only hydration can stick on home/sidebar. Sequence-aware
-    // refresh via EventRouter (shell → snapshot); never repairState here.
-    const hasProjectsWithoutThreads = projects.length > 0 && threads.length === 0;
-    if (projects.length > 0 && !hasThreadWithoutProject && !hasProjectsWithoutThreads) {
-      return;
-    }
-
-    if (hasProjectsWithoutThreads) {
-      const controller = createMissingThreadRecoveryController({
-        isStillNeeded: () => {
-          const state = useStore.getState();
-          return state.projects.length > 0 && state.threads.length === 0;
-        },
-        refresh: () => requestShellRefresh(),
-        onAttempt: ({ attempt, result }) => {
-          console.info("[synara] missing-thread recovery", {
-            attempt,
-            applied: result?.applied ?? null,
-            reason: result?.reason ?? "start",
-            shellThreadCount: result?.shellThreadCount ?? null,
-            projectCount: useStore.getState().projects.length,
-            threadCount: useStore.getState().threads.length,
-          });
-        },
-      });
-      controller.start();
-      return () => {
-        controller.cancel();
-      };
-    }
-
-    if (attemptedOrphanRepairRef.current) {
+    if (!api || !needsOrphanProjectRepair || attemptedOrphanRepairRef.current) {
       return;
     }
 
@@ -2386,9 +2388,8 @@ function DesktopProjectBootstrap() {
         if (!ownsAttempt()) return;
         const needsRepair = shouldRepairDesktopProjectSnapshot(snapshot);
         if (!needsRepair) {
-          if (!ownsAttempt() || !attempt.complete()) return;
-          useStore.getState().syncServerShellSnapshot(snapshot);
-          return;
+          tryApplyShellSnapshot(snapshot);
+          return snapshot;
         }
         return api.orchestration.repairState().then((repairedSnapshot) => {
           if (!ownsAttempt() || !attempt.complete()) return;
@@ -2403,7 +2404,7 @@ function DesktopProjectBootstrap() {
       disposed = true;
       attempt.release();
     };
-  }, [projects, shellRefreshEpoch, syncServerReadModel, threads, threadsHydrated]);
+  }, [needsOrphanProjectRepair, shellRefreshEpoch, syncServerReadModel]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;

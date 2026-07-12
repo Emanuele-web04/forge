@@ -21,7 +21,12 @@ import {
   createMissingThreadRecoveryController,
   MISSING_THREAD_RECOVERY_MAX_ATTEMPTS,
 } from "./missingThreadRecovery";
-import { shouldAcceptShellSnapshotSequence } from "./shellRefreshCoordinator";
+import {
+  bumpShellRefreshEpoch,
+  getShellRefreshEpoch,
+  shouldAcceptShellSnapshotSequence,
+  subscribeShellRefreshEpoch,
+} from "./shellRefreshCoordinator";
 
 function shellSnapshot(input: {
   projects?: unknown[];
@@ -192,6 +197,20 @@ describe("shouldAcceptShellSnapshotSequence", () => {
     expect(shouldAcceptShellSnapshotSequence(5, 4)).toBe(false);
     expect(shouldAcceptShellSnapshotSequence(5, 5)).toBe(true);
     expect(shouldAcceptShellSnapshotSequence(5, 6)).toBe(true);
+  });
+});
+
+describe("shellRefreshEpoch", () => {
+  it("notifies subscribers when bumped so recovery can restart after reconnect", () => {
+    const seen: number[] = [];
+    const start = getShellRefreshEpoch();
+    const unsubscribe = subscribeShellRefreshEpoch(() => {
+      seen.push(getShellRefreshEpoch());
+    });
+    bumpShellRefreshEpoch();
+    bumpShellRefreshEpoch();
+    unsubscribe();
+    expect(seen).toEqual([start + 1, start + 2]);
   });
 });
 

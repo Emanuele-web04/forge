@@ -2,6 +2,8 @@
 // Purpose: Single sequence-aware shell refresh entry owned by EventRouter.
 // Layer: Client orchestration bridge
 
+import type { OrchestrationShellSnapshot } from "@synara/contracts";
+
 export type ShellRefreshResult = {
   applied: boolean;
   shellThreadCount: number;
@@ -27,6 +29,19 @@ export function requestShellRefresh(): Promise<ShellRefreshResult> {
     });
   }
   return registeredRefresh();
+}
+
+type ShellSnapshotApplyFn = (snapshot: OrchestrationShellSnapshot) => boolean;
+
+let registeredApply: ShellSnapshotApplyFn | null = null;
+
+export function registerShellSnapshotApply(fn: ShellSnapshotApplyFn | null): void {
+  registeredApply = fn;
+}
+
+/** Sequence-fenced apply owned by EventRouter; no-ops if unregistered. */
+export function tryApplyShellSnapshot(snapshot: OrchestrationShellSnapshot): boolean {
+  return registeredApply?.(snapshot) ?? false;
 }
 
 export function bumpShellRefreshEpoch(): void {
