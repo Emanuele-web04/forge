@@ -131,7 +131,7 @@ describe("fetchMissingThreadSnapshots", () => {
   it("returns shell when it already has threads", async () => {
     const shell = shellSnapshot({
       projects: [{ id: "project-1" }],
-      threads: [{ id: "thread-1" }],
+      threads: [{ id: "thread-1", projectId: "project-1" }],
     });
     const snapshot = readModel({ projects: [{ id: "project-1" }] });
     const repaired = readModel({ projects: [{ id: "project-1" }] });
@@ -149,7 +149,7 @@ describe("fetchMissingThreadSnapshots", () => {
     const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
     const snapshot = readModel({
       projects: [{ id: "project-1" }],
-      threads: [{ id: "thread-1" }],
+      threads: [{ id: "thread-1", projectId: "project-1", deletedAt: null }],
     });
     const repaired = readModel({ projects: [{ id: "project-1" }] });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
@@ -166,7 +166,7 @@ describe("fetchMissingThreadSnapshots", () => {
     const snapshot = readModel({ projects: [{ id: "project-1" }] });
     const repaired = readModel({
       projects: [{ id: "project-1" }],
-      threads: [{ id: "thread-1" }],
+      threads: [{ id: "thread-1", projectId: "project-1" }],
     });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
@@ -178,12 +178,51 @@ describe("fetchMissingThreadSnapshots", () => {
     const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
     const snapshot = readModel({
       projects: [{ id: "project-1" }],
-      threads: [{ id: "thread-deleted", deletedAt: "2026-07-01T00:00:00.000Z" }],
+      threads: [
+        { id: "thread-deleted", projectId: "project-1", deletedAt: "2026-07-01T00:00:00.000Z" },
+      ],
     });
     const repaired = readModel({ projects: [{ id: "project-1" }] });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
     await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({ kind: "none" });
+    expect(orchestration.repairState).not.toHaveBeenCalled();
+  });
+
+  it("escalates past shell threads that are missing projects", async () => {
+    const shell = shellSnapshot({
+      projects: [],
+      threads: [{ id: "thread-1", projectId: "project-1" }],
+    });
+    const snapshot = readModel({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-1", projectId: "project-1", deletedAt: null }],
+    });
+    const repaired = readModel({ projects: [{ id: "project-1" }] });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+
+    await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({
+      kind: "readModel",
+      snapshot,
+    });
+    expect(orchestration.getSnapshot).toHaveBeenCalledTimes(1);
+    expect(orchestration.repairState).not.toHaveBeenCalled();
+  });
+
+  it("returns none when readModel threads are also missing projects", async () => {
+    const shell = shellSnapshot({
+      projects: [],
+      threads: [{ id: "thread-1", projectId: "project-1" }],
+    });
+    const snapshot = readModel({
+      projects: [],
+      threads: [{ id: "thread-1", projectId: "project-1", deletedAt: null }],
+    });
+    const repaired = readModel({ projects: [{ id: "project-1" }] });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+
+    await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({ kind: "none" });
+    expect(orchestration.getSnapshot).toHaveBeenCalledTimes(1);
     expect(orchestration.repairState).not.toHaveBeenCalled();
   });
 });

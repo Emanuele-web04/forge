@@ -10,6 +10,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  classifyDesktopHydrationRecovery,
   hasLiveThreadsWithMissingProjects,
   shouldRepairDesktopProjectSnapshot,
 } from "./desktopProjectRecovery";
@@ -216,5 +217,67 @@ describe("desktopProjectRecovery", () => {
   it("accepts shell snapshots that do not carry deleted markers", () => {
     expect(hasLiveThreadsWithMissingProjects(makeShellSnapshot())).toBe(false);
     expect(hasLiveThreadsWithMissingProjects(makeShellSnapshot({ projects: [] }))).toBe(true);
+  });
+});
+
+describe("classifyDesktopHydrationRecovery", () => {
+  it("returns none before threads are hydrated", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: false,
+        projects: [{ id: "project-1" }],
+        threads: [],
+      }),
+    ).toBe("none");
+  });
+
+  it("returns missing-threads when projects exist without threads", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [{ id: "project-1" }],
+        threads: [],
+      }),
+    ).toBe("missing-threads");
+  });
+
+  it("returns repair-projects for a fully empty hydrated shell", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [],
+        threads: [],
+      }),
+    ).toBe("repair-projects");
+  });
+
+  it("returns repair-projects when threads exist without projects", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [],
+        threads: [{ projectId: "project-1" }],
+      }),
+    ).toBe("repair-projects");
+  });
+
+  it("returns repair-projects when a thread references a missing project", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [{ id: "project-1" }],
+        threads: [{ projectId: "project-missing" }],
+      }),
+    ).toBe("repair-projects");
+  });
+
+  it("returns none when projects and threads are consistent", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [{ id: "project-1" }],
+        threads: [{ projectId: "project-1" }],
+      }),
+    ).toBe("none");
   });
 });

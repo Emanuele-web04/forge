@@ -9,6 +9,7 @@ import type {
   OrchestrationShellSnapshot,
 } from "@synara/contracts";
 
+import { hasLiveThreadsWithMissingProjects } from "./lib/desktopProjectRecovery";
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
 import { useStore } from "./store";
 
@@ -37,6 +38,8 @@ export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
 /**
  * Fetch-only ladder for projects-present / threads-empty.
  * Does not write the store — EventRouter applies via requestShellRefresh.
+ * Incomplete shells (threads without projects) escalate; incomplete read models
+ * return none so project-repair owns that path.
  */
 export async function fetchMissingThreadSnapshots(
   api: NativeApi,
@@ -46,12 +49,15 @@ export async function fetchMissingThreadSnapshots(
   | { kind: "none" }
 > {
   const shellSnapshot = await api.orchestration.getShellSnapshot();
-  if (shellSnapshotHasThreads(shellSnapshot)) {
+  if (shellSnapshotHasThreads(shellSnapshot) && !hasLiveThreadsWithMissingProjects(shellSnapshot)) {
     return { kind: "shell", snapshot: shellSnapshot };
   }
 
   const readModel = await api.orchestration.getSnapshot();
   if (readModelHasLiveThreads(readModel)) {
+    if (hasLiveThreadsWithMissingProjects(readModel)) {
+      return { kind: "none" };
+    }
     return { kind: "readModel", snapshot: readModel };
   }
 
