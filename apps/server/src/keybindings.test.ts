@@ -431,10 +431,10 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           (entry) => entry.key === "mod+shift+\\" && entry.command === "terminal.split",
         ),
       );
-      assert.isFalse(persisted.some((entry) => entry.command === "preview.toggle"));
-      assert.isFalse(persisted.some((entry) => entry.command === "invalid.command"));
-      assert.isFalse(persisted.some((entry) => entry.command === "rightPanel.toggle"));
-      assert.isFalse(persisted.some((entry) => entry.command === "terminal.splitVertical"));
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "preview.toggle"));
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "invalid.command"));
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "rightPanel.toggle"));
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "terminal.splitVertical"));
 
       // Second load after rewrite stays clean (no recurring toast source).
       const secondLoad = yield* Effect.gen(function* () {

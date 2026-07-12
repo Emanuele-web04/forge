@@ -120,16 +120,17 @@ const program = Effect.gen(function* () {
   const afterState = yield* keybindings.loadConfigState;
   const afterPersisted = yield* Schema.decodeUnknownEffect(KeybindingsConfigJson)(afterRaw);
 
+  const interestingCommands = new Set([
+    "terminal.toggle",
+    "browser.toggle",
+    "terminal.split",
+    "rightPanel.toggle",
+    "terminal.splitVertical",
+    "preview.toggle",
+    "invalid.command",
+  ]);
   const interesting = afterPersisted.filter((entry) =>
-    [
-      "terminal.toggle",
-      "browser.toggle",
-      "terminal.split",
-      "rightPanel.toggle",
-      "terminal.splitVertical",
-      "preview.toggle",
-      "invalid.command",
-    ].includes(String(entry.command)),
+    interestingCommands.has(String(entry.command)),
   );
 
   const afterReport = [
@@ -172,14 +173,15 @@ const program = Effect.gen(function* () {
     "",
   ].join("\n");
 
+  const commandOf = (entry: { command: unknown }) => String(entry.command);
   const flags = {
-    terminalToggle: afterPersisted.some((e) => e.command === "terminal.toggle"),
-    browserToggle: afterPersisted.some((e) => e.command === "browser.toggle"),
-    terminalSplit: afterPersisted.some((e) => e.command === "terminal.split"),
-    rightPanel: afterPersisted.some((e) => e.command === "rightPanel.toggle"),
-    splitVertical: afterPersisted.some((e) => e.command === "terminal.splitVertical"),
-    preview: afterPersisted.some((e) => e.command === "preview.toggle"),
-    invalid: afterPersisted.some((e) => e.command === "invalid.command"),
+    terminalToggle: afterPersisted.some((e) => commandOf(e) === "terminal.toggle"),
+    browserToggle: afterPersisted.some((e) => commandOf(e) === "browser.toggle"),
+    terminalSplit: afterPersisted.some((e) => commandOf(e) === "terminal.split"),
+    rightPanel: afterPersisted.some((e) => commandOf(e) === "rightPanel.toggle"),
+    splitVertical: afterPersisted.some((e) => commandOf(e) === "terminal.splitVertical"),
+    preview: afterPersisted.some((e) => commandOf(e) === "preview.toggle"),
+    invalid: afterPersisted.some((e) => commandOf(e) === "invalid.command"),
   };
 
   const summary = [
