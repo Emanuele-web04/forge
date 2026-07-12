@@ -8,11 +8,7 @@ export type ShellRefreshResult = {
   reason: "ok" | "empty" | "stale" | "unavailable" | "error";
 };
 
-export type ShellRefreshOptions = {
-  includeReadModel?: boolean;
-};
-
-type ShellRefreshFn = (options?: ShellRefreshOptions) => Promise<ShellRefreshResult>;
+type ShellRefreshFn = () => Promise<ShellRefreshResult>;
 
 let registeredRefresh: ShellRefreshFn | null = null;
 let epoch = 0;
@@ -22,7 +18,7 @@ export function registerShellRefreshRequest(fn: ShellRefreshFn | null): void {
   registeredRefresh = fn;
 }
 
-export function requestShellRefresh(options?: ShellRefreshOptions): Promise<ShellRefreshResult> {
+export function requestShellRefresh(): Promise<ShellRefreshResult> {
   if (!registeredRefresh) {
     return Promise.resolve({
       applied: false,
@@ -30,7 +26,7 @@ export function requestShellRefresh(options?: ShellRefreshOptions): Promise<Shel
       reason: "unavailable",
     });
   }
-  return registeredRefresh(options);
+  return registeredRefresh();
 }
 
 export function bumpShellRefreshEpoch(): void {

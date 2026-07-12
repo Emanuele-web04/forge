@@ -10,31 +10,13 @@ const storeMocks = vi.hoisted(() => ({
   syncServerShellSnapshot: vi.fn(),
 }));
 
-const shellRefreshMocks = vi.hoisted(() => ({
-  requestShellRefresh: vi.fn(),
-}));
-
 vi.mock("./store", () => ({
   useStore: {
     getState: () => storeMocks,
   },
 }));
 
-vi.mock("./shellRefreshCoordinator", async () => {
-  const actual = await vi.importActual<typeof import("./shellRefreshCoordinator")>(
-    "./shellRefreshCoordinator",
-  );
-  return {
-    ...actual,
-    requestShellRefresh: shellRefreshMocks.requestShellRefresh,
-  };
-});
-
-import {
-  fetchMissingThreadSnapshots,
-  refreshEmptyRouteRestoreSnapshot,
-  refreshMissingThreadSnapshots,
-} from "./chatRouteRecovery";
+import { fetchMissingThreadSnapshots, refreshEmptyRouteRestoreSnapshot } from "./chatRouteRecovery";
 import {
   createMissingThreadRecoveryController,
   MISSING_THREAD_RECOVERY_MAX_ATTEMPTS,
@@ -197,32 +179,6 @@ describe("fetchMissingThreadSnapshots", () => {
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
     await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({ kind: "none" });
-    expect(orchestration.repairState).not.toHaveBeenCalled();
-  });
-});
-
-describe("refreshMissingThreadSnapshots", () => {
-  beforeEach(() => {
-    shellRefreshMocks.requestShellRefresh.mockReset();
-  });
-
-  it("delegates to sequence-aware shell refresh and never repairs", async () => {
-    shellRefreshMocks.requestShellRefresh.mockResolvedValue({
-      applied: true,
-      shellThreadCount: 1,
-      reason: "ok",
-    });
-    const { api, orchestration } = makeApi({
-      shell: shellSnapshot({ projects: [{ id: "project-1" }] }),
-      snapshot: readModel({ projects: [{ id: "project-1" }] }),
-      repaired: readModel({ projects: [{ id: "project-1" }] }),
-    });
-
-    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(true);
-
-    expect(shellRefreshMocks.requestShellRefresh).toHaveBeenCalledWith({
-      includeReadModel: true,
-    });
     expect(orchestration.repairState).not.toHaveBeenCalled();
   });
 });

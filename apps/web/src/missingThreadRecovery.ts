@@ -5,7 +5,8 @@
 import type { ShellRefreshResult } from "./shellRefreshCoordinator";
 
 export const MISSING_THREAD_RECOVERY_MAX_ATTEMPTS = 3;
-export const MISSING_THREAD_RECOVERY_BACKOFF_MS = [0, 1_500, 3_000] as const;
+/** Delays after failed attempt 1 and 2 before the next try. */
+export const MISSING_THREAD_RECOVERY_BACKOFF_MS = [1_500, 3_000] as const;
 
 export type MissingThreadRecoveryAttemptInfo = {
   attempt: number;
@@ -79,7 +80,7 @@ export function createMissingThreadRecoveryController(input: {
       return;
     }
 
-    const delay = backoffMs[Math.min(attempt, backoffMs.length - 1)] ?? 3_000;
+    const delay = backoffMs[Math.min(attempt - 1, backoffMs.length - 1)] ?? 3_000;
     timer = schedule(() => {
       timer = null;
       void run();

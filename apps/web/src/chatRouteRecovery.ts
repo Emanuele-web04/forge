@@ -10,7 +10,6 @@ import type {
 } from "@synara/contracts";
 
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
-import { requestShellRefresh } from "./shellRefreshCoordinator";
 import { useStore } from "./store";
 
 function shellSnapshotHasProjectsOrThreads(snapshot: OrchestrationShellSnapshot): boolean {
@@ -57,18 +56,6 @@ export async function fetchMissingThreadSnapshots(
   }
 
   return { kind: "none" };
-}
-
-/**
- * Home/sidebar stuck case: projects hydrated, threads empty.
- * Routes through EventRouter's sequence-aware refresh (never repairState).
- */
-export async function refreshMissingThreadSnapshots(api: NativeApi | undefined): Promise<boolean> {
-  if (!api) {
-    return false;
-  }
-  const result = await requestShellRefresh({ includeReadModel: true });
-  return result.applied;
 }
 
 // Empty shell snapshots can arrive before desktop projection startup catches up.
