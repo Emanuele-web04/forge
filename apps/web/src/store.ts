@@ -29,6 +29,7 @@ import {
   syncServerShellSnapshot,
   syncServerThreadDetail,
   syncServerThreadDetailHotPath,
+  type SyncServerShellSnapshotOptions,
 } from "./storeProjection";
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 import {
@@ -262,7 +263,10 @@ export function setThreadWorkspace(
 // ── Zustand store ────────────────────────────────────────────────────
 
 interface AppStore extends AppState {
-  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+  syncServerShellSnapshot: (
+    snapshot: OrchestrationShellSnapshot,
+    options?: SyncServerShellSnapshotOptions,
+  ) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
   syncServerThreadDetailHotPath: (thread: ReadModelThread) => void;
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
@@ -290,7 +294,8 @@ interface AppStore extends AppState {
 
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(initialState),
-  syncServerShellSnapshot: (snapshot) => set((state) => syncServerShellSnapshot(state, snapshot)),
+  syncServerShellSnapshot: (snapshot, options) =>
+    set((state) => syncServerShellSnapshot(state, snapshot, options)),
   syncServerThreadDetail: (thread) => set((state) => syncServerThreadDetail(state, thread)),
   syncServerThreadDetailHotPath: (thread) =>
     set((state) => syncServerThreadDetailHotPath(state, thread)),

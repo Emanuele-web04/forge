@@ -7,7 +7,7 @@ import type { OrchestrationShellSnapshot } from "@synara/contracts";
 export type ShellRefreshResult = {
   applied: boolean;
   shellThreadCount: number;
-  reason: "ok" | "empty" | "stale" | "unavailable" | "error";
+  reason: "ok" | "empty" | "stale" | "unavailable" | "error" | "confirmed-empty";
 };
 
 type ShellRefreshFn = () => Promise<ShellRefreshResult>;

@@ -38,6 +38,8 @@ export function shouldRepairDesktopProjectSnapshot(snapshot: ProjectRecoverySnap
       snapshot.threads.length === 0 &&
       requiresEmptyProjectShellRepair)
   );
+}
+
 export function classifyDesktopHydrationRecovery(state: {
   threadsHydrated: boolean;
   projects: ReadonlyArray<{ id: string }>;

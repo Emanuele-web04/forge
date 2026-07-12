@@ -73,8 +73,9 @@ export function createMissingThreadRecoveryController(input: {
     input.onAttempt?.({ attempt, result });
 
     // Success is "no longer needed", not applied:true — an empty repair can
-    // write a snapshot while the store stays in repair-projects.
-    if (!input.isStillNeeded()) {
+    // write a snapshot while the store stays in repair-projects. confirmed-empty
+    // is a terminal genuine-empty repair; stop even if the classifier still matches.
+    if (!input.isStillNeeded() || result.reason === "confirmed-empty") {
       return;
     }
 

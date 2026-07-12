@@ -209,7 +209,7 @@ describe("fetchMissingThreadSnapshots", () => {
     expect(orchestration.repairState).not.toHaveBeenCalled();
   });
 
-  it("returns none when readModel threads are also missing projects", async () => {
+  it("returns repair-projects when readModel threads are also missing projects", async () => {
     const shell = shellSnapshot({
       projects: [],
       threads: [{ id: "thread-1", projectId: "project-1" }],
@@ -221,7 +221,9 @@ describe("fetchMissingThreadSnapshots", () => {
     const repaired = readModel({ projects: [{ id: "project-1" }] });
     const { api, orchestration } = makeApi({ shell, snapshot, repaired });
 
-    await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({ kind: "none" });
+    await expect(fetchMissingThreadSnapshots(api)).resolves.toEqual({
+      kind: "repair-projects",
+    });
     expect(orchestration.getSnapshot).toHaveBeenCalledTimes(1);
     expect(orchestration.repairState).not.toHaveBeenCalled();
   });
@@ -316,6 +318,31 @@ describe("createMissingThreadRecoveryController", () => {
     timers[0]?.fn();
     await vi.waitFor(() => expect(calls).toBe(2));
     expect(timers).toHaveLength(1);
+  });
+
+  it("stops on confirmed-empty even when recovery is still classified as needed", async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    let calls = 0;
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => true,
+      refresh: async () => {
+        calls += 1;
+        return { applied: true, shellThreadCount: 0, reason: "confirmed-empty" };
+      },
+      schedule: (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearSchedule: vi.fn(),
+      maxAttempts: 3,
+    });
+
+    controller.start();
+    await vi.waitFor(() => expect(calls).toBe(1));
+    expect(timers).toHaveLength(0);
+    await Promise.resolve();
+    expect(calls).toBe(1);
   });
 
   it("keeps retrying when applied is true but recovery is still needed", async () => {

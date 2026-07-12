@@ -39,13 +39,14 @@ export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
  * Fetch-only ladder for projects-present / threads-empty.
  * Does not write the store — EventRouter applies via requestShellRefresh.
  * Incomplete shells (threads without projects) escalate; incomplete read models
- * return none so project-repair owns that path.
+ * return repair-projects so the refresh path repairs without installing them.
  */
 export async function fetchMissingThreadSnapshots(
   api: NativeApi,
 ): Promise<
   | { kind: "shell"; snapshot: OrchestrationShellSnapshot }
   | { kind: "readModel"; snapshot: OrchestrationReadModel }
+  | { kind: "repair-projects" }
   | { kind: "none" }
 > {
   const shellSnapshot = await api.orchestration.getShellSnapshot();
@@ -56,7 +57,7 @@ export async function fetchMissingThreadSnapshots(
   const readModel = await api.orchestration.getSnapshot();
   if (readModelHasLiveThreads(readModel)) {
     if (hasLiveThreadsWithMissingProjects(readModel)) {
-      return { kind: "none" };
+      return { kind: "repair-projects" };
     }
     return { kind: "readModel", snapshot: readModel };
   }

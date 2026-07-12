@@ -576,9 +576,19 @@ function writeThreadShellProjection(
  * without a session leaves no key behind. Reusing the previous object per entry is also what lets
  * the whole record be returned by reference when a snapshot changes nothing.
  */
+function toPreservedThreadIds(
+  ids?: ReadonlySet<ThreadId> | readonly ThreadId[] | null,
+): ReadonlySet<ThreadId> | null {
+  if (ids == null) {
+    return null;
+  }
+  return ids instanceof Set ? ids : new Set(ids);
+}
+
 function rebuildThreadShellRecords(
   state: AppState,
   snapshotThreads: readonly OrchestrationShellSnapshot["threads"][number][],
+  preserveDetailForThreadIds?: ReadonlySet<ThreadId> | readonly ThreadId[] | null,
 ): {
   threadShellById: Record<ThreadId, ThreadShell>;
   threadSessionById: Record<ThreadId, ThreadSession | null>;
@@ -592,21 +602,33 @@ function rebuildThreadShellRecords(
   const threadSessionById = {} as Record<ThreadId, ThreadSession | null>;
   const threadTurnStateById = {} as Record<ThreadId, ThreadTurnState>;
 
+  const preservedIds = toPreservedThreadIds(preserveDetailForThreadIds);
+
   for (const thread of snapshotThreads) {
     const next = normalizeThreadShellSnapshot(thread, getThreadFromState(state, thread.id));
     const threadId = next.shell.id;
 
     threadShellById[threadId] = resolveShellEntry(previousShellById[threadId], next.shell);
 
-    const session = resolveSessionEntry(previousSessionById[threadId], next.session);
-    if (session !== undefined) {
-      threadSessionById[threadId] = session;
+    const shouldPreserveDetail = preservedIds?.has(threadId) === true;
+    // A newer hot-path detail sync can outrank the older shell snapshot carried by the
+    // same recovery response, so keep the live session and turn state for those threads.
+    const previousSession = previousSessionById[threadId];
+    if (shouldPreserveDetail && previousSession !== undefined) {
+      threadSessionById[threadId] = previousSession;
+    } else {
+      const session = resolveSessionEntry(previousSession, next.session);
+      if (session !== undefined) {
+        threadSessionById[threadId] = session;
+      }
     }
 
-    threadTurnStateById[threadId] = resolveTurnStateEntry(
-      previousTurnStateById[threadId],
-      next.turnState,
-    );
+    const previousTurnState = previousTurnStateById[threadId];
+    if (shouldPreserveDetail && previousTurnState !== undefined) {
+      threadTurnStateById[threadId] = previousTurnState;
+    } else {
+      threadTurnStateById[threadId] = resolveTurnStateEntry(previousTurnState, next.turnState);
+    }
   }
 
   return {
@@ -1240,9 +1262,14 @@ export function applyThreadUpdate(
   });
 }
 
+export interface SyncServerShellSnapshotOptions {
+  preserveDetailForThreadIds?: ReadonlySet<ThreadId> | readonly ThreadId[];
+}
+
 export function syncServerShellSnapshot(
   state: AppState,
   snapshot: OrchestrationShellSnapshot,
+  options?: SyncServerShellSnapshotOptions,
 ): AppState {
   if (isStaleSnapshot(state, snapshot.snapshotSequence)) {
     return state;
@@ -1269,7 +1296,11 @@ export function syncServerShellSnapshot(
   const normalizedState: AppState = {
     ...state,
     threadIds: reuseThreadIdRegistry(state.threadIds, nextThreadIds),
-    ...rebuildThreadShellRecords(state, snapshotThreads),
+    ...rebuildThreadShellRecords(
+      state,
+      snapshotThreads,
+      toPreservedThreadIds(options?.preserveDetailForThreadIds),
+    ),
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     activityIdsByThreadId: retainThreadScopedRecord(state.activityIdsByThreadId, nextThreadIds),

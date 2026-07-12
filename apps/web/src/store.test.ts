@@ -2,6 +2,7 @@
 // Purpose: Exercises the public store facade, persistence, and simple UI actions.
 
 import {
+  MessageId,
   ProjectId,
   SpaceId,
   ThreadId,
@@ -23,6 +24,7 @@ import {
 } from "./store";
 import type { AppState } from "./storeState";
 import {
+  makeShellSnapshot,
   makeThread,
   makeState,
   makeProject,
@@ -31,6 +33,7 @@ import {
   makeReadModelProject,
   threadsOf,
 } from "./storeTestFixtures";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 describe("store facade", () => {
   it("frees a batch of thread details in a single store write", () => {
@@ -581,6 +584,95 @@ describe("store facade", () => {
       });
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+  it("forwards shell detail-preservation options through the facade", () => {
+    const threadId = ThreadId.makeUnsafe("thread-facade-preserve");
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const turnId = TurnId.makeUnsafe("turn-facade-preserve");
+    const initialState = useStore.getState();
+    useStore.setState(makeState(makeThread({ id: threadId, projectId })));
+    try {
+      useStore.getState().syncServerThreadDetailHotPath(
+        makeReadModelThread({
+          id: threadId,
+          projectId,
+          latestTurn: {
+            turnId,
+            state: "running",
+            requestedAt: "2026-02-27T00:00:00.000Z",
+            startedAt: "2026-02-27T00:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: MessageId.makeUnsafe("m-facade"),
+          },
+          updatedAt: "2026-02-27T00:00:02.000Z",
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-02-27T00:00:02.000Z",
+          },
+        }),
+      );
+      const before = useStore.getState();
+
+      useStore.getState().syncServerShellSnapshot(
+        {
+          ...makeShellSnapshot({
+            id: threadId,
+            projectId,
+            title: "Thread",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: DEFAULT_RUNTIME_MODE,
+            interactionMode: DEFAULT_INTERACTION_MODE,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            forkSourceThreadId: null,
+            sidechatSourceThreadId: null,
+            latestTurn: {
+              turnId,
+              state: "running",
+              requestedAt: "2026-02-27T00:00:00.000Z",
+              startedAt: "2026-02-27T00:00:00.000Z",
+              completedAt: null,
+              assistantMessageId: null,
+            },
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:00:01.000Z",
+            handoff: null,
+            session: {
+              threadId,
+              status: "idle",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-02-27T00:00:01.000Z",
+            },
+          }),
+          snapshotSequence: 2,
+        },
+        { preserveDetailForThreadIds: [threadId] },
+      );
+
+      const after = useStore.getState();
+      expect(after.threadSessionById?.[threadId]).toEqual(before.threadSessionById?.[threadId]);
+      expect(after.threadSessionById?.[threadId]?.updatedAt).toBe("2026-02-27T00:00:02.000Z");
+      expect(after.threadTurnStateById?.[threadId]).toEqual(
+        before.threadTurnStateById?.[threadId],
+      );
+      expect(after.threadTurnStateById?.[threadId]?.latestTurn?.assistantMessageId).toBe(
+        MessageId.makeUnsafe("m-facade"),
+      );
+    } finally {
+      useStore.setState(initialState);
     }
   });
 });

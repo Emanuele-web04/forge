@@ -10,6 +10,7 @@ import {
   ThreadMarkerId,
   TurnId,
   type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type ThreadMarker,
 } from "@synara/contracts";
@@ -1648,6 +1649,142 @@ describe("store projection", () => {
     expect(next.threadTurnStateById).toBe(hydratedState.threadTurnStateById);
     expect(next.sidebarThreadSummaryById).toBe(hydratedState.sidebarThreadSummaryById);
     expect(threadsOf(next)[0]).toBe(thread);
+  });
+});
+
+describe("shell snapshot detail preservation", () => {
+  const threadId = ThreadId.makeUnsafe("thread-1");
+  const projectId = ProjectId.makeUnsafe("project-1");
+  const turnId = TurnId.makeUnsafe("turn-preserve-detail");
+
+  function shellSnapshotWith(
+    sequence: number,
+    sessionUpdatedAt: string,
+    latestTurn: OrchestrationShellSnapshot["threads"][number]["latestTurn"],
+  ): OrchestrationShellSnapshot {
+    return {
+      ...makeShellSnapshot({
+        id: threadId,
+        projectId,
+        title: "Thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: sessionUpdatedAt,
+        handoff: null,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: sessionUpdatedAt,
+        },
+      }),
+      snapshotSequence: sequence,
+    };
+  }
+
+  it("keeps newer hot-path session and turn state when the shell snapshot is older", () => {
+    const runningTurn = {
+      turnId,
+      state: "running",
+      requestedAt: "2026-02-27T00:00:00.000Z",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    } as const;
+
+    const hotPathState = syncServerThreadDetailHotPath(
+      makeState(makeThread({ id: threadId, projectId })),
+      makeReadModelThread({
+        id: threadId,
+        projectId,
+        latestTurn: {
+          ...runningTurn,
+          assistantMessageId: MessageId.makeUnsafe("m-new"),
+        },
+        updatedAt: "2026-02-27T00:00:02.000Z",
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:02.000Z",
+        },
+      }),
+    );
+
+    const next = syncServerShellSnapshot(
+      hotPathState,
+      shellSnapshotWith(2, "2026-02-27T00:00:01.000Z", runningTurn),
+      { preserveDetailForThreadIds: [threadId] },
+    );
+
+    expect(threadsOf(next)).toHaveLength(1);
+    expect(next.threadSessionById?.[threadId]).toEqual(
+      hotPathState.threadSessionById?.[threadId],
+    );
+    expect(next.threadSessionById?.[threadId]?.updatedAt).toBe("2026-02-27T00:00:02.000Z");
+    expect(next.threadTurnStateById?.[threadId]).toEqual(
+      hotPathState.threadTurnStateById?.[threadId],
+    );
+    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.assistantMessageId).toBe(
+      MessageId.makeUnsafe("m-new"),
+    );
+  });
+
+  it("applies the shell session and turn state when no thread is preserved", () => {
+    const runningTurn = {
+      turnId,
+      state: "running",
+      requestedAt: "2026-02-27T00:00:00.000Z",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    } as const;
+    const hotPathState = syncServerThreadDetailHotPath(
+      makeState(makeThread({ id: threadId, projectId })),
+      makeReadModelThread({
+        id: threadId,
+        projectId,
+        latestTurn: {
+          ...runningTurn,
+          assistantMessageId: MessageId.makeUnsafe("m-new"),
+        },
+        updatedAt: "2026-02-27T00:00:02.000Z",
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:02.000Z",
+        },
+      }),
+    );
+
+    const next = syncServerShellSnapshot(
+      hotPathState,
+      shellSnapshotWith(2, "2026-02-27T00:00:01.000Z", runningTurn),
+    );
+
+    expect(next.threadSessionById?.[threadId]?.updatedAt).toBe("2026-02-27T00:00:01.000Z");
+    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.assistantMessageId).toBeNull();
   });
 });
 
