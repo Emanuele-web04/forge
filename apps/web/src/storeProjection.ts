@@ -1376,9 +1376,13 @@ export function syncServerShellSnapshot(
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
   };
 
-  const threads = getThreadsFromState(normalizedState);
+  // The normalized detail records below are the live evidence consumed by
+  // `hasClientLiveThreadEvidence`: a thread with shell/session/turn state but
+  // no snapshot row still counts, so an empty repair is rejected. The sidebar
+  // lists every known thread.
+  const allThreads = getThreadsFromState(normalizedState);
   const nextSidebarThreadSummaryById = Object.fromEntries(
-    threads.map((thread) => [
+    allThreads.map((thread) => [
       thread.id,
       buildSidebarThreadSummary(thread, state.sidebarThreadSummaryById[thread.id]),
     ]),

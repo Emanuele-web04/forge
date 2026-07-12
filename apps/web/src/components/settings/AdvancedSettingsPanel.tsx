@@ -17,6 +17,7 @@ import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { serverAuthSessionQueryOptions, serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { SETTINGS_INSET_LIST_CLASS_NAME } from "~/settingsPanelStyles";
+import { requestRepairState } from "~/shellRefreshCoordinator";
 import { useStore } from "~/store";
 import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "~/storeSelectors";
 import { useSettingsRestoreSignal } from "./SettingControls";
@@ -89,8 +90,7 @@ export function AdvancedSettingsPanel(props: {
     if (!confirmed) return;
 
     setIsRepairingLocalState(true);
-    await api.orchestration
-      .repairState()
+    await requestRepairState(api)
       .then((snapshot) => {
         syncServerReadModel(snapshot);
         toastManager.add({

@@ -126,6 +126,7 @@ import { fetchMissingThreadSnapshots } from "../chatRouteRecovery";
 import { createMissingThreadRecoveryController } from "../missingThreadRecovery";
 import {
   classifyDesktopHydrationRecovery,
+  hasClientLiveThreadEvidence,
   hasLiveThreadsWithMissingProjects,
   type DesktopHydrationRecoveryKind,
   resolveRepairedShellApplication,
@@ -137,6 +138,7 @@ import {
   getShellRefreshEpoch,
   registerShellRefreshRequest,
   registerShellSnapshotApply,
+  requestRepairState,
   requestShellRefresh,
   shouldAcceptShellSnapshotSequence,
   shouldSkipShellThreadMutation,
@@ -1358,6 +1360,14 @@ function EventRouter() {
     };
 
     const applyShellSnapshot = (snapshot: OrchestrationShellSnapshot): boolean => {
+      console.log(
+        "[applyShellSnapshot]",
+        snapshot.snapshotSequence,
+        snapshot.projects.length,
+        snapshot.threads.length,
+        "threadSnapshotSequenceById",
+        [...threadSnapshotSequenceById.entries()],
+      );
       if (disposed) {
         return false;
       }
@@ -1437,7 +1447,7 @@ function EventRouter() {
           ) {
             return { applied: false, shellThreadCount: 0, reason: "stale" };
           }
-          const repaired = await api.orchestration.repairState();
+          const repaired = await requestRepairState(api);
           if (
             lease !== getRecoveryMutationLease() ||
             disposed ||
@@ -1489,6 +1499,7 @@ function EventRouter() {
     bumpShellRefreshEpoch();
 
     const reconcileThreadSubscriptions = async (threadIds: readonly ThreadId[]) => {
+      console.log("[reconcileThreadSubscriptions]", threadIds);
       const nextThreadIds = new Set(threadIds);
       const removals = [...subscribedThreadIds].filter((threadId) => !nextThreadIds.has(threadId));
       const additions = [...nextThreadIds].filter((threadId) => !subscribedThreadIds.has(threadId));
@@ -1640,6 +1651,16 @@ function EventRouter() {
     };
 
     const flushPendingDomainEvents = () => {
+      console.log(
+        "[flushPendingDomainEvents]",
+        pendingDomainEvents.length,
+        pendingDomainEvents.map((event) => [
+          event.type,
+          event.sequence,
+          (event as { payload?: { messageId?: string; text?: string } }).payload?.messageId,
+          (event as { payload?: { text?: string } }).payload?.text,
+        ]),
+      );
       if (pendingDomainEvents.length > 0) {
         applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(pendingDomainEvents));
         pendingDomainEvents = [];
@@ -1704,6 +1725,13 @@ function EventRouter() {
     };
 
     const queueDomainEvent = (event: OrchestrationEvent) => {
+      console.log(
+        "[queueDomainEvent]",
+        event.type,
+        event.sequence,
+        (event as { payload?: { messageId?: string; text?: string } }).payload?.messageId,
+        (event as { payload?: { text?: string } }).payload?.text,
+      );
       pendingDomainEvents.push(event);
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
@@ -1970,8 +1998,26 @@ function EventRouter() {
       }
     });
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
+      console.log(
+        "[onThreadEvent]",
+        item.kind,
+        (
+          item as {
+            event?: {
+              sequence: number;
+              type: string;
+              payload?: { messageId?: string; text?: string };
+            };
+          }
+        ).event?.sequence,
+        (item as { event?: { payload?: { messageId?: string; text?: string } } }).event?.payload
+          ?.messageId,
+        (item as { event?: { payload?: { text?: string } } }).event?.payload?.text,
+      );
       if (item.kind === "snapshot") {
+        console.log("[onThreadEvent snapshot] snapshotSequence", item.snapshot.snapshotSequence);
         const threadId = item.snapshot.thread.id;
+
         threadSnapshotRequestInFlight.delete(threadId);
         // The lease can drop while its refreshed snapshot is in flight. Applying it
         // then would restore detail slices that no retention entry owns, and since
@@ -2010,6 +2056,14 @@ function EventRouter() {
 
       const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
       const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
+      console.log(
+        "[onThreadEvent event] threadId",
+        threadId,
+        "latestThreadSequence",
+        latestThreadSequence,
+        "eventSequence",
+        item.event.sequence,
+      );
       if (latestThreadSequence === undefined) {
         const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
         appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
@@ -2030,6 +2084,11 @@ function EventRouter() {
         return;
       }
       if (item.event.sequence <= latestThreadSequence) {
+        console.log(
+          "[onThreadEvent event] dropping sequence <= latest",
+          item.event.sequence,
+          latestThreadSequence,
+        );
         return;
       }
       if (!applyFencedThreadEvent(threadId, item.event)) {
@@ -2436,7 +2495,6 @@ function DesktopProjectBootstrap() {
         if (lease !== getRecoveryMutationLease()) {
           return { applied: false, shellThreadCount: 0, reason: "stale" };
         }
-        const store = useStore.getState();
         const needsRepair =
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
@@ -2445,6 +2503,7 @@ function DesktopProjectBootstrap() {
             return { applied: false, shellThreadCount: 0, reason: "stale" };
           }
           const snapshotApplied = tryApplyShellSnapshot(snapshot);
+          const recoveredState = useStore.getState();
           const recovered =
             snapshotApplied &&
             selectDesktopHydrationRecoveryKind(useStore.getState()) !== "repair-projects";
@@ -2457,15 +2516,23 @@ function DesktopProjectBootstrap() {
         if (lease !== getRecoveryMutationLease()) {
           return { applied: false, shellThreadCount: 0, reason: "stale" };
         }
-        const repaired = await api.orchestration.repairState();
+        const repaired = await requestRepairState(api);
         if (lease !== getRecoveryMutationLease()) {
           return { applied: false, shellThreadCount: 0, reason: "stale" };
         }
         const decision = resolveRepairedShellApplication({
           repaired,
           observedLiveThreadEvidence:
-            getThreadsFromState(store).length > 0 || snapshot.threads.length > 0,
+            hasClientLiveThreadEvidence(useStore.getState()) || snapshot.threads.length > 0,
         });
+        console.log(
+          "[repair-projects decision]",
+          decision.action,
+          "liveEvidence",
+          hasClientLiveThreadEvidence(useStore.getState()),
+          "snapshotThreads",
+          snapshot.threads.length,
+        );
         if (decision.action === "confirmed-empty") {
           return {
             applied: true,
@@ -2481,6 +2548,7 @@ function DesktopProjectBootstrap() {
           };
         }
         const snapshotApplied = tryApplyShellSnapshot(decision.shell);
+        const recoveredState = useStore.getState();
         const recovered =
           snapshotApplied &&
           selectDesktopHydrationRecoveryKind(useStore.getState()) !== "repair-projects";

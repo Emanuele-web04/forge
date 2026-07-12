@@ -28,6 +28,10 @@ import {
   syncServerThreadDetailHotPath,
 } from "./storeProjection";
 import {
+  hasClientLiveThreadEvidence,
+  resolveRepairedShellApplication,
+} from "./lib/desktopProjectRecovery";
+import {
   hasThreadDetailResumeCursor,
   resetThreadDetailResumeCursorsForTests,
   setThreadDetailResumeCursor,
@@ -2333,17 +2337,23 @@ describe("resume cursor lifecycle in projection transitions", () => {
     expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
   });
 });
-
 describe("shell mutations fenced against newer thread detail", () => {
-  const projectId = ProjectId.makeUnsafe("project-1");
-  const threadId = ThreadId.makeUnsafe("thread-preserve-detail");
+  const detailThreadId = ThreadId.makeUnsafe("thread-preserve-detail");
   const detailTurnId = TurnId.makeUnsafe("turn-preserve-detail");
-
+  function makeEmptyShellSnapshot(snapshotSequence: number) {
+    return {
+      snapshotSequence,
+      updatedAt: "2026-02-27T00:10:00.000Z",
+      spaces: [],
+      projects: [],
+      threads: [],
+    };
+  }
   function runningDetailRow() {
     return makeReadModelThread({
-      id: threadId,
-      projectId,
-      title: "Detail-newer title",
+      id: detailThreadId,
+      projectId: ProjectId.makeUnsafe("project-1"),
+      title: "Thread preserve detail",
       latestTurn: {
         turnId: detailTurnId,
         state: "running",
@@ -2354,51 +2364,42 @@ describe("shell mutations fenced against newer thread detail", () => {
       } as const,
       updatedAt: "2026-02-27T00:00:02.000Z",
       session: {
-        threadId,
+        threadId: detailThreadId,
         status: "running",
         providerName: "codex",
-        runtimeMode: "full-access",
+        runtimeMode: DEFAULT_RUNTIME_MODE,
         activeTurnId: detailTurnId,
         lastError: null,
         updatedAt: "2026-02-27T00:00:01.000Z",
       },
     });
   }
-
   it("keeps detail-newer threads omitted from an older recovery shell", () => {
     const withShell = syncServerReadModel(
-      makeState(makeThread({ id: threadId, projectId, title: "Detail-newer title" })),
+      makeState(makeThread({ id: ThreadId.makeUnsafe("thread-seed-1") })),
       makeReadModel(runningDetailRow()),
     );
     const withDetail = syncServerThreadDetailHotPath(withShell, runningDetailRow());
-
     const next = syncServerShellSnapshot(
       withDetail,
-      {
-        snapshotSequence: 1,
-        updatedAt: "2026-02-27T00:10:00.000Z",
-        spaces: [],
-        projects: [],
-        threads: [],
-      },
-      { preserveDetailForThreadIds: [threadId] },
+      makeEmptyShellSnapshot(1),
+      { preserveDetailForThreadIds: [detailThreadId] },
     );
-
-    expect(threadsOf(next).find((thread) => thread.id === threadId)?.title).toBe(
-      "Detail-newer title",
-    );
-    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
+    expect(next.threadIds).toContain(detailThreadId);
+    expect(next.threadShellById?.[detailThreadId]?.title).toBe("Thread preserve detail");
+    expect(threadsOf(next).some((thread) => thread.id === detailThreadId)).toBe(true);
+    expect(getThreadFromState(next, detailThreadId)?.latestTurn?.state).toBe("running");
   });
-
   it("keeps newer shell title when a preserved snapshot row is older", () => {
     const withDetail = syncServerThreadDetailHotPath(
-      makeState(makeThread({ id: threadId, title: "Newer local title" })),
-      makeReadModelThread({ id: threadId, title: "Newer local title" }),
+      makeState(makeThread({ id: detailThreadId, title: "Newer local title" })),
+      makeReadModelThread({ id: detailThreadId, title: "Newer local title" }),
     );
-    const snapshot = {
-      ...makeShellSnapshot({
-        id: threadId,
-        projectId,
+    const next = syncServerShellSnapshot(
+      withDetail,
+      makeShellSnapshot({
+        id: detailThreadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
         title: "Older shell title",
         modelSelection: { provider: "codex", model: "gpt-5.3-codex" },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -2414,15 +2415,52 @@ describe("shell mutations fenced against newer thread detail", () => {
         handoff: null,
         session: null,
       }),
-      snapshotSequence: 1,
-    };
-
-    const next = syncServerShellSnapshot(withDetail, snapshot, {
-      preserveDetailForThreadIds: [threadId],
-    });
-
-    expect(threadsOf(next).find((thread) => thread.id === threadId)?.title).toBe(
-      "Newer local title",
+      { preserveDetailForThreadIds: [detailThreadId] },
     );
+    expect(getThreadFromState(next, detailThreadId)?.title).toBe("Newer local title");
+  });
+  it("counts normalized hot-path thread state as live evidence and rejects empty repair", () => {
+    const threadId = ThreadId.makeUnsafe("thread-evidence-detail");
+    const turnId = TurnId.makeUnsafe("turn-evidence-detail");
+    const initialState = makeState(makeThread({ id: ThreadId.makeUnsafe("thread-seed-1") }));
+    const hotPathState = syncServerThreadDetailHotPath(
+      initialState,
+      makeReadModelThread({
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Thread evidence detail",
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        } as const,
+        updatedAt: "2026-02-27T00:00:02.000Z",
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:01.000Z",
+        },
+      }),
+    );
+    expect(hasClientLiveThreadEvidence(hotPathState)).toBe(true);
+    expect(
+      resolveRepairedShellApplication({
+        repaired: {
+          snapshotSequence: 1,
+          updatedAt: "2026-02-27T00:00:03.000Z",
+          spaces: [],
+          projects: [],
+          threads: [],
+        },
+        observedLiveThreadEvidence: hasClientLiveThreadEvidence(hotPathState),
+      }),
+    ).toEqual({ action: "inconsistent-empty", shellThreadCount: 0 });
   });
 });

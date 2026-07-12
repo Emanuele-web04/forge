@@ -2,7 +2,11 @@
 // Purpose: Single sequence-aware shell refresh entry owned by EventRouter.
 // Layer: Client orchestration bridge
 
-import type { OrchestrationShellSnapshot } from "@synara/contracts";
+import type {
+  NativeApi,
+  OrchestrationReadModel,
+  OrchestrationShellSnapshot,
+} from "@synara/contracts";
 
 export type ShellRefreshResult = {
   applied: boolean;
@@ -90,4 +94,22 @@ export function bumpRecoveryMutationLease(): void {
 
 export function getRecoveryMutationLease(): number {
   return mutationLease;
+}
+
+let inFlightRepair: Promise<OrchestrationReadModel> | null = null;
+
+/** Request a server-side repairState, serializing concurrent callers so only one
+ *  projection repair is in flight at a time. The RPC itself cannot be aborted once
+ *  submitted; callers must still use the mutation lease to discard stale results. */
+export function requestRepairState(api: NativeApi): Promise<OrchestrationReadModel> {
+  if (inFlightRepair) {
+    return inFlightRepair.then(() => requestRepairState(api));
+  }
+  const promise = api.orchestration.repairState().finally(() => {
+    if (inFlightRepair === promise) {
+      inFlightRepair = null;
+    }
+  });
+  inFlightRepair = promise;
+  return promise;
 }

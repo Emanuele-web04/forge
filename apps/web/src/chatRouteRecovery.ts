@@ -11,6 +11,7 @@ import type {
 
 import { hasLiveThreadsWithMissingProjects } from "./lib/desktopProjectRecovery";
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
+import { requestRepairState } from "./shellRefreshCoordinator";
 import { useStore } from "./store";
 
 function shellSnapshotHasProjectsOrThreads(snapshot: OrchestrationShellSnapshot): boolean {
@@ -95,7 +96,7 @@ export async function refreshEmptyRouteRestoreSnapshot(
     // A project-only read model can still be repaired into thread projections.
   }
 
-  const repairedReadModel = await api.orchestration.repairState();
+  const repairedReadModel = await requestRepairState(api);
   if (readModelHasProjectsOrThreads(repairedReadModel)) {
     useStore.getState().syncServerReadModel(repairedReadModel);
   }

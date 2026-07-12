@@ -212,6 +212,7 @@ function SettingsRouteView() {
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
   const platform = getNavigatorPlatform();
@@ -402,6 +403,7 @@ function SettingsRouteView() {
     await resetSettings();
     setResetEpoch((current) => current + 1);
   }
+
 
   // Shared on/off settings row: a labelled Switch bound to a boolean AppSettings
   // key, with the standard "reset to default" affordance shown only when changed.
