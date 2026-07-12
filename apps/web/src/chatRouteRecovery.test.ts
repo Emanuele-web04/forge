@@ -347,7 +347,9 @@ describe("createMissingThreadRecoveryController", () => {
 
     controller.start();
     for (let i = 0; i < MISSING_THREAD_RECOVERY_MAX_ATTEMPTS + 2; i += 1) {
-      await vi.waitFor(() => expect(calls).toBe(Math.min(i + 1, MISSING_THREAD_RECOVERY_MAX_ATTEMPTS)));
+      await vi.waitFor(() =>
+        expect(calls).toBe(Math.min(i + 1, MISSING_THREAD_RECOVERY_MAX_ATTEMPTS)),
+      );
       const next = timers[timers.length - 1];
       if (!next || calls >= MISSING_THREAD_RECOVERY_MAX_ATTEMPTS) {
         break;
