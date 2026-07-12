@@ -25,6 +25,7 @@ import {
   bumpShellRefreshEpoch,
   getShellRefreshEpoch,
   shouldAcceptShellSnapshotSequence,
+  shouldSkipShellThreadMutation,
   subscribeShellRefreshEpoch,
 } from "./shellRefreshCoordinator";
 
@@ -241,6 +242,15 @@ describe("shouldAcceptShellSnapshotSequence", () => {
   });
 });
 
+describe("shouldSkipShellThreadMutation", () => {
+  it("skips when detail fence is defined and at least as new as the event", () => {
+    expect(shouldSkipShellThreadMutation(undefined, 3)).toBe(false);
+    expect(shouldSkipShellThreadMutation(2, 3)).toBe(false);
+    expect(shouldSkipShellThreadMutation(3, 3)).toBe(true);
+    expect(shouldSkipShellThreadMutation(4, 3)).toBe(true);
+  });
+});
+
 describe("shellRefreshEpoch", () => {
   it("notifies subscribers when bumped so recovery can restart after reconnect", () => {
     const seen: number[] = [];
@@ -343,6 +353,31 @@ describe("createMissingThreadRecoveryController", () => {
     expect(timers).toHaveLength(0);
     await Promise.resolve();
     expect(calls).toBe(1);
+  });
+
+  it("retries inconsistent empty the same as ordinary empty", async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    let calls = 0;
+
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () => true,
+      refresh: async () => {
+        calls += 1;
+        return { applied: false, shellThreadCount: 0, reason: "empty" };
+      },
+      schedule: (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearSchedule: vi.fn(),
+      maxAttempts: 3,
+    });
+
+    controller.start();
+    await vi.waitFor(() => expect(calls).toBe(1));
+    expect(timers).toHaveLength(1);
+    timers[0]?.fn();
+    await vi.waitFor(() => expect(calls).toBe(2));
   });
 
   it("keeps retrying when applied is true but recovery is still needed", async () => {

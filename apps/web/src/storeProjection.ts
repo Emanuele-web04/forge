@@ -576,19 +576,17 @@ function writeThreadShellProjection(
  * without a session leaves no key behind. Reusing the previous object per entry is also what lets
  * the whole record be returned by reference when a snapshot changes nothing.
  */
-function toPreservedThreadIds(
-  ids?: ReadonlySet<ThreadId> | readonly ThreadId[] | null,
-): ReadonlySet<ThreadId> | null {
+function toPreservedThreadIds(ids?: readonly ThreadId[] | null): Set<ThreadId> | null {
   if (ids == null) {
     return null;
   }
-  return ids instanceof Set ? ids : new Set(ids);
+  return new Set(ids);
 }
 
 function rebuildThreadShellRecords(
   state: AppState,
   snapshotThreads: readonly OrchestrationShellSnapshot["threads"][number][],
-  preserveDetailForThreadIds?: ReadonlySet<ThreadId> | readonly ThreadId[] | null,
+  preservedIds: Set<ThreadId> | null,
 ): {
   threadShellById: Record<ThreadId, ThreadShell>;
   threadSessionById: Record<ThreadId, ThreadSession | null>;
@@ -601,36 +599,86 @@ function rebuildThreadShellRecords(
   const threadShellById = {} as Record<ThreadId, ThreadShell>;
   const threadSessionById = {} as Record<ThreadId, ThreadSession | null>;
   const threadTurnStateById = {} as Record<ThreadId, ThreadTurnState>;
-
-  const preservedIds = toPreservedThreadIds(preserveDetailForThreadIds);
-
+  const snapshotThreadById = new Map(
+    snapshotThreads.map((thread) => [thread.id, thread] as const),
+  );
+  const orderedThreadIds: ThreadId[] = [];
   for (const thread of snapshotThreads) {
-    const next = normalizeThreadShellSnapshot(thread, getThreadFromState(state, thread.id));
-    const threadId = next.shell.id;
-
-    threadShellById[threadId] = resolveShellEntry(previousShellById[threadId], next.shell);
-
-    const shouldPreserveDetail = preservedIds?.has(threadId) === true;
-    // A newer hot-path detail sync can outrank the older shell snapshot carried by the
-    // same recovery response, so keep the live session and turn state for those threads.
-    const previousSession = previousSessionById[threadId];
-    if (shouldPreserveDetail && previousSession !== undefined) {
-      threadSessionById[threadId] = previousSession;
-    } else {
-      const session = resolveSessionEntry(previousSession, next.session);
-      if (session !== undefined) {
-        threadSessionById[threadId] = session;
+    orderedThreadIds.push(thread.id);
+  }
+  if (preservedIds) {
+    for (const threadId of preservedIds) {
+      if (!snapshotThreadById.has(threadId)) {
+        orderedThreadIds.push(threadId);
       }
-    }
-
-    const previousTurnState = previousTurnStateById[threadId];
-    if (shouldPreserveDetail && previousTurnState !== undefined) {
-      threadTurnStateById[threadId] = previousTurnState;
-    } else {
-      threadTurnStateById[threadId] = resolveTurnStateEntry(previousTurnState, next.turnState);
     }
   }
 
+  for (const threadId of orderedThreadIds) {
+    const preserved = preservedIds?.has(threadId) === true;
+    const previousShell = previousShellById[threadId];
+    const previousSession = previousSessionById[threadId];
+    const previousTurnState = previousTurnStateById[threadId];
+    const snapshotThread = snapshotThreadById.get(threadId);
+
+    if (preserved && previousShell !== undefined) {
+      // A detail-newer thread keeps its full shell projection even when an
+      // older recovery shell omits it or carries a stale row for it.
+      threadShellById[threadId] = previousShell;
+      if (previousSession !== undefined) {
+        threadSessionById[threadId] = previousSession;
+      }
+      if (previousTurnState !== undefined) {
+        threadTurnStateById[threadId] = previousTurnState;
+      }
+      continue;
+    }
+
+    if (preserved && (previousSession !== undefined || previousTurnState !== undefined)) {
+      if (snapshotThread !== undefined) {
+        const next = normalizeThreadShellSnapshot(
+          snapshotThread,
+          getThreadFromState(state, threadId),
+        );
+        threadShellById[threadId] = resolveShellEntry(previousShell, next.shell);
+        const session = resolveSessionEntry(
+          previousSession ?? null,
+          previousSession ?? next.session,
+        );
+        if (session !== undefined) {
+          threadSessionById[threadId] = session;
+        }
+        threadTurnStateById[threadId] = previousTurnState ?? next.turnState;
+      } else {
+        if (previousSession !== undefined) {
+          threadSessionById[threadId] = previousSession;
+        }
+        if (previousTurnState !== undefined) {
+          threadTurnStateById[threadId] = previousTurnState;
+        }
+      }
+      continue;
+    }
+
+    if (snapshotThread === undefined) {
+      continue;
+    }
+    const next = normalizeThreadShellSnapshot(snapshotThread, getThreadFromState(state, threadId));
+    const nextThreadId = next.shell.id;
+
+    threadShellById[nextThreadId] = resolveShellEntry(previousShellById[nextThreadId], next.shell);
+
+    const session = resolveSessionEntry(previousSessionById[nextThreadId], next.session);
+    if (session !== undefined) {
+      threadSessionById[nextThreadId] = session;
+    }
+
+    threadTurnStateById[nextThreadId] = resolveTurnStateEntry(
+      previousTurnStateById[nextThreadId],
+      next.turnState,
+    );
+
+  }
   return {
     threadShellById: recordsShallowEqual(previousShellById, threadShellById)
       ? previousShellById
@@ -1261,9 +1309,8 @@ export function applyThreadUpdate(
     updateSidebarSummary: options?.updateSidebarSummary ?? true,
   });
 }
-
 export interface SyncServerShellSnapshotOptions {
-  preserveDetailForThreadIds?: ReadonlySet<ThreadId> | readonly ThreadId[];
+  preserveDetailForThreadIds?: readonly ThreadId[];
 }
 
 export function syncServerShellSnapshot(
@@ -1288,7 +1335,22 @@ export function syncServerShellSnapshot(
   );
   const spaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
   const projects = mapProjects(snapshotProjects, state.projects);
+  const preservedIds = toPreservedThreadIds(options?.preserveDetailForThreadIds);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
+  if (preservedIds) {
+    const previousSessions = state.threadSessionById ?? EMPTY_THREAD_SESSION_BY_ID;
+    const previousTurns = state.threadTurnStateById ?? EMPTY_THREAD_TURN_STATE_BY_ID;
+    for (const threadId of preservedIds) {
+      if (
+        state.threadShellById?.[threadId] !== undefined ||
+        Object.hasOwn(previousSessions, threadId) ||
+        Object.hasOwn(previousTurns, threadId) ||
+        getThreadFromState(state, threadId) !== undefined
+      ) {
+        nextThreadIds.add(threadId);
+      }
+    }
+  }
   // The retains below prune detail slices down to the snapshot's threads; any
   // resume cursor for a pruned thread must fall with its detail.
   retainThreadDetailResumeCursors(nextThreadIds);
@@ -1296,11 +1358,7 @@ export function syncServerShellSnapshot(
   const normalizedState: AppState = {
     ...state,
     threadIds: reuseThreadIdRegistry(state.threadIds, nextThreadIds),
-    ...rebuildThreadShellRecords(
-      state,
-      snapshotThreads,
-      toPreservedThreadIds(options?.preserveDetailForThreadIds),
-    ),
+    ...rebuildThreadShellRecords(state, snapshotThreads, preservedIds),
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     activityIdsByThreadId: retainThreadScopedRecord(state.activityIdsByThreadId, nextThreadIds),

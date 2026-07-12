@@ -284,31 +284,48 @@ describe("classifyDesktopHydrationRecovery", () => {
 });
 
 describe("resolveRepairedShellApplication", () => {
-  it("returns confirmed-empty for a fully empty repair result", () => {
+  it("returns confirmed-empty for a fully empty repair result without live evidence", () => {
     expect(
-      resolveRepairedShellApplication(
-        makeSnapshot({
+      resolveRepairedShellApplication({
+        repaired: makeSnapshot({
           projects: [],
           threads: [],
         }),
-      ),
+        observedLiveThreadEvidence: false,
+      }),
     ).toEqual({ action: "confirmed-empty" });
+  });
+
+  it("returns inconsistent-empty when empty repair contradicts observed live evidence", () => {
+    expect(
+      resolveRepairedShellApplication({
+        repaired: makeSnapshot({
+          projects: [],
+          threads: [],
+        }),
+        observedLiveThreadEvidence: true,
+      }),
+    ).toEqual({ action: "inconsistent-empty", shellThreadCount: 0 });
   });
 
   it("rejects incomplete repairs without producing an apply shell", () => {
     expect(
-      resolveRepairedShellApplication(
-        makeSnapshot({
+      resolveRepairedShellApplication({
+        repaired: makeSnapshot({
           projects: [],
           threads: [makeThread()],
         }),
-      ),
+        observedLiveThreadEvidence: true,
+      }),
     ).toEqual({ action: "reject-incomplete", shellThreadCount: 1 });
   });
 
   it("returns an apply shell when repair restores consistent live rows", () => {
     const snapshot = makeSnapshot();
-    const decision = resolveRepairedShellApplication(snapshot);
+    const decision = resolveRepairedShellApplication({
+      repaired: snapshot,
+      observedLiveThreadEvidence: true,
+    });
     expect(decision.action).toBe("apply");
     if (decision.action === "apply") {
       expect(decision.shell.projects).toHaveLength(1);

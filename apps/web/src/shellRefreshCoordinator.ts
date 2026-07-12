@@ -72,3 +72,22 @@ export function shouldAcceptShellSnapshotSequence(
   }
   return incomingSequence >= currentFence;
 }
+
+/** Skip shell thread upsert/remove when detail fence is at least as new as the event. */
+export function shouldSkipShellThreadMutation(
+  detailSequence: number | undefined,
+  eventSequence: number,
+): boolean {
+  return detailSequence !== undefined && detailSequence >= eventSequence;
+}
+
+let mutationLease = 0;
+
+/** Bump when recovery effects cancel so in-flight refresh awaits discard apply/repair. */
+export function bumpRecoveryMutationLease(): void {
+  mutationLease += 1;
+}
+
+export function getRecoveryMutationLease(): number {
+  return mutationLease;
+}

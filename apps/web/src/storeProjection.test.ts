@@ -2333,3 +2333,96 @@ describe("resume cursor lifecycle in projection transitions", () => {
     expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
   });
 });
+
+describe("shell mutations fenced against newer thread detail", () => {
+  const projectId = ProjectId.makeUnsafe("project-1");
+  const threadId = ThreadId.makeUnsafe("thread-preserve-detail");
+  const detailTurnId = TurnId.makeUnsafe("turn-preserve-detail");
+
+  function runningDetailRow() {
+    return makeReadModelThread({
+      id: threadId,
+      projectId,
+      title: "Detail-newer title",
+      latestTurn: {
+        turnId: detailTurnId,
+        state: "running",
+        requestedAt: "2026-02-27T00:00:00.000Z",
+        startedAt: "2026-02-27T00:00:00.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      } as const,
+      updatedAt: "2026-02-27T00:00:02.000Z",
+      session: {
+        threadId,
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: detailTurnId,
+        lastError: null,
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      },
+    });
+  }
+
+  it("keeps detail-newer threads omitted from an older recovery shell", () => {
+    const withShell = syncServerReadModel(
+      makeState(makeThread({ id: threadId, projectId, title: "Detail-newer title" })),
+      makeReadModel(runningDetailRow()),
+    );
+    const withDetail = syncServerThreadDetailHotPath(withShell, runningDetailRow());
+
+    const next = syncServerShellSnapshot(
+      withDetail,
+      {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:10:00.000Z",
+        spaces: [],
+        projects: [],
+        threads: [],
+      },
+      { preserveDetailForThreadIds: [threadId] },
+    );
+
+    expect(threadsOf(next).find((thread) => thread.id === threadId)?.title).toBe(
+      "Detail-newer title",
+    );
+    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
+  });
+
+  it("keeps newer shell title when a preserved snapshot row is older", () => {
+    const withDetail = syncServerThreadDetailHotPath(
+      makeState(makeThread({ id: threadId, title: "Newer local title" })),
+      makeReadModelThread({ id: threadId, title: "Newer local title" }),
+    );
+    const snapshot = {
+      ...makeShellSnapshot({
+        id: threadId,
+        projectId,
+        title: "Older shell title",
+        modelSelection: { provider: "codex", model: "gpt-5.3-codex" },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+        handoff: null,
+        session: null,
+      }),
+      snapshotSequence: 1,
+    };
+
+    const next = syncServerShellSnapshot(withDetail, snapshot, {
+      preserveDetailForThreadIds: [threadId],
+    });
+
+    expect(threadsOf(next).find((thread) => thread.id === threadId)?.title).toBe(
+      "Newer local title",
+    );
+  });
+});
