@@ -13,6 +13,7 @@ import {
   classifyDesktopHydrationRecovery,
   hasLiveThreadsWithMissingProjects,
   shouldRepairDesktopProjectSnapshot,
+  resolveRepairedShellApplication,
 } from "./desktopProjectRecovery";
 
 function makeProject(
@@ -279,5 +280,40 @@ describe("classifyDesktopHydrationRecovery", () => {
         threads: [{ projectId: "project-1" }],
       }),
     ).toBe("none");
+  });
+});
+
+describe("resolveRepairedShellApplication", () => {
+  it("returns confirmed-empty for a fully empty repair result", () => {
+    expect(
+      resolveRepairedShellApplication(
+        makeSnapshot({
+          projects: [],
+          threads: [],
+        }),
+      ),
+    ).toEqual({ action: "confirmed-empty" });
+  });
+
+  it("rejects incomplete repairs without producing an apply shell", () => {
+    expect(
+      resolveRepairedShellApplication(
+        makeSnapshot({
+          projects: [],
+          threads: [makeThread()],
+        }),
+      ),
+    ).toEqual({ action: "reject-incomplete", shellThreadCount: 1 });
+  });
+
+  it("returns an apply shell when repair restores consistent live rows", () => {
+    const snapshot = makeSnapshot();
+    const decision = resolveRepairedShellApplication(snapshot);
+    expect(decision.action).toBe("apply");
+    if (decision.action === "apply") {
+      expect(decision.shell.projects).toHaveLength(1);
+      expect(decision.shell.threads).toHaveLength(1);
+      expect(decision.shell.snapshotSequence).toBe(snapshot.snapshotSequence);
+    }
   });
 });

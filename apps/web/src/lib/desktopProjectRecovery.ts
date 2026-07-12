@@ -52,3 +52,39 @@ export function classifyDesktopHydrationRecovery(state: {
   if (state.projects.length === 0 || hasThreadWithoutProject) return "repair-projects";
   return "none";
 }
+
+export type RepairedShellDecision =
+  | { action: "confirmed-empty" }
+  | { action: "reject-incomplete"; shellThreadCount: number }
+  | {
+      action: "apply";
+      shell: {
+        snapshotSequence: OrchestrationReadModel["snapshotSequence"];
+        updatedAt: OrchestrationReadModel["updatedAt"];
+        spaces: OrchestrationReadModel["spaces"];
+        projects: OrchestrationReadModel["projects"];
+        threads: OrchestrationReadModel["threads"];
+      };
+    };
+
+/** Decide how to treat repairState output before any store write. */
+export function resolveRepairedShellApplication(
+  repaired: OrchestrationReadModel,
+): RepairedShellDecision {
+  const liveProjects = repaired.projects.filter((project) => project.deletedAt == null);
+  const liveThreads = repaired.threads.filter((thread) => thread.deletedAt == null);
+  if (liveProjects.length === 0 && liveThreads.length === 0) {
+    return { action: "confirmed-empty" };
+  }
+  const shell = {
+    snapshotSequence: repaired.snapshotSequence,
+    updatedAt: repaired.updatedAt,
+    spaces: repaired.spaces,
+    projects: liveProjects,
+    threads: liveThreads,
+  };
+  if (hasLiveThreadsWithMissingProjects(shell)) {
+    return { action: "reject-incomplete", shellThreadCount: liveThreads.length };
+  }
+  return { action: "apply", shell };
+}

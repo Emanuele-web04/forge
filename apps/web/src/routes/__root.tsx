@@ -128,6 +128,7 @@ import {
   classifyDesktopHydrationRecovery,
   hasLiveThreadsWithMissingProjects,
   type DesktopHydrationRecoveryKind,
+  resolveRepairedShellApplication,
 } from "../lib/desktopProjectRecovery";
 import {
   bumpShellRefreshEpoch,
@@ -1413,47 +1414,34 @@ function EventRouter() {
           if (disposed || generation !== shellRefreshGeneration) {
             return { applied: false, shellThreadCount: 0, reason: "stale" };
           }
-          const liveProjects = repaired.projects.filter((project) => project.deletedAt == null);
-          const liveThreads = repaired.threads.filter((thread) => thread.deletedAt == null);
-          // Empty repair confirms a genuine empty DB — do not wipe a project-only
-          // client shell just to flip classification into repair-projects.
-          if (liveProjects.length === 0 && liveThreads.length === 0) {
+          const decision = resolveRepairedShellApplication(repaired);
+          if (decision.action === "confirmed-empty") {
             return {
               applied: true,
               shellThreadCount: 0,
               reason: "confirmed-empty",
             };
           }
-          if (
-            hasLiveThreadsWithMissingProjects({
-              snapshotSequence: repaired.snapshotSequence,
-              updatedAt: repaired.updatedAt,
-              spaces: repaired.spaces,
-              projects: liveProjects,
-              threads: liveThreads,
-            })
-          ) {
+          if (decision.action === "reject-incomplete") {
             return {
               applied: false,
-              shellThreadCount: liveThreads.length,
+              shellThreadCount: decision.shellThreadCount,
               reason: "empty",
             };
           }
-          const applied = applyShellSnapshot({
-            snapshotSequence: repaired.snapshotSequence,
-            updatedAt: repaired.updatedAt,
-            spaces: repaired.spaces,
-            projects: liveProjects,
-            threads: liveThreads,
-          });
+          const applied = applyShellSnapshot(decision.shell);
           if (!applied) {
             return {
               applied: false,
-              shellThreadCount: liveThreads.length,
+              shellThreadCount: decision.shell.threads.length,
               reason: "stale",
             };
           }
-          return { applied: true, shellThreadCount: liveThreads.length, reason: "ok" };
+          return {
+            applied: true,
+            shellThreadCount: decision.shell.threads.length,
+            reason: "ok",
+          };
         }
 
         return { applied: false, shellThreadCount: 0, reason: "empty" };
@@ -2424,43 +2412,29 @@ function DesktopProjectBootstrap() {
           };
         }
         const repaired = await api.orchestration.repairState();
-        const liveProjects = repaired.projects.filter((project) => project.deletedAt == null);
-        const liveThreads = repaired.threads.filter((thread) => thread.deletedAt == null);
-        const snapshotApplied = tryApplyShellSnapshot({
-          snapshotSequence: repaired.snapshotSequence,
-          updatedAt: repaired.updatedAt,
-          spaces: repaired.spaces,
-          projects: liveProjects,
-          threads: liveThreads,
-        });
-        const recovered =
-          snapshotApplied &&
-          selectDesktopHydrationRecoveryKind(useStore.getState()) !== "repair-projects";
-        if (recovered) {
-          return {
-            applied: true,
-            shellThreadCount: liveThreads.length,
-            reason: "ok",
-          };
-        }
-        // Genuine empty after repair — stop retrying. Incomplete/non-empty
-        // repair-projects keeps the empty reason so the budget can retry.
-        if (
-          snapshotApplied &&
-          liveProjects.length === 0 &&
-          liveThreads.length === 0 &&
-          selectDesktopHydrationRecoveryKind(useStore.getState()) === "repair-projects"
-        ) {
+        const decision = resolveRepairedShellApplication(repaired);
+        if (decision.action === "confirmed-empty") {
           return {
             applied: true,
             shellThreadCount: 0,
             reason: "confirmed-empty",
           };
         }
+        if (decision.action === "reject-incomplete") {
+          return {
+            applied: false,
+            shellThreadCount: decision.shellThreadCount,
+            reason: "empty",
+          };
+        }
+        const snapshotApplied = tryApplyShellSnapshot(decision.shell);
+        const recovered =
+          snapshotApplied &&
+          selectDesktopHydrationRecoveryKind(useStore.getState()) !== "repair-projects";
         return {
-          applied: false,
-          shellThreadCount: liveThreads.length,
-          reason: snapshotApplied ? "empty" : "stale",
+          applied: recovered,
+          shellThreadCount: decision.shell.threads.length,
+          reason: recovered ? "ok" : snapshotApplied ? "empty" : "stale",
         };
       },
     });
