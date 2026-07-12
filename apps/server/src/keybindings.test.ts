@@ -413,9 +413,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           (entry) => entry.command === "browser.toggle" && entry.shortcut.key === "b",
         ),
       );
-      assert.isTrue(
-        afterSync.keybindings.some((entry) => entry.command === "terminal.split"),
-      );
+      assert.isTrue(afterSync.keybindings.some((entry) => entry.command === "terminal.split"));
       assert.isFalse(
         afterSync.keybindings.some((entry) => String(entry.command) === "preview.toggle"),
       );

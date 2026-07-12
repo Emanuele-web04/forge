@@ -203,12 +203,12 @@ const program = Effect.gen(function* () {
     `  has invalid.command:        ${flags.invalid}  (want false)`,
     "",
     beforeState.issues.length > 0 &&
-      afterState.issues.length === 0 &&
-      flags.browserToggle &&
-      flags.terminalSplit &&
-      !flags.rightPanel &&
-      !flags.preview &&
-      !flags.invalid
+    afterState.issues.length === 0 &&
+    flags.browserToggle &&
+    flags.terminalSplit &&
+    !flags.rightPanel &&
+    !flags.preview &&
+    !flags.invalid
       ? "OVERALL: PASS"
       : "OVERALL: FAIL",
     "",
