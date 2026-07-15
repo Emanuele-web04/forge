@@ -386,7 +386,8 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          # Include target so AppImage + deb (same platform/arch) do not collide.
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}
           path: release-publish/*
           if-no-files-found: error
 
