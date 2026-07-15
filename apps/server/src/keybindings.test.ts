@@ -380,6 +380,30 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  // Malformed whole-file JSON must not be rewritten on startup (#339 review): the cleaned
+  // path is an empty rule set, and writing it would erase the user's file.
+  it.effect("does not rewrite malformed keybindings config on startup sync", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      const malformed = "{ not-json";
+      yield* fs.writeFileString(keybindingsConfigPath, malformed);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      assert.equal(yield* fs.readFileString(keybindingsConfigPath), malformed);
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.equal(configState.issues[0]?.kind, "keybindings.malformed-config");
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   // Regression for #330: invalid/retired entries used to skip startup rewrite forever,
   // so the Invalid keybindings toast reappeared on every launch.
   it.effect("rewrites invalid and retired keybindings on startup so issues do not persist", () =>

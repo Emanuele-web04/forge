@@ -1051,10 +1051,28 @@ const makeKeybindings = Effect.gen(function* () {
       }
 
       const runtimeConfig = yield* loadRuntimeCustomKeybindingsConfig();
-      // Always continue from the cleaned/migrated rule set. Previously we bailed out when
-      // issues existed, which left invalid entries on disk and re-toasted every launch (#330).
+      // Malformed whole-file configs must not be rewritten: the cleaned path yields an empty
+      // rule set, and persisting that would erase the user's file. Only drop invalid *entries*.
+      const hasMalformedConfig = runtimeConfig.issues.some(
+        (issue) => issue.kind === "keybindings.malformed-config",
+      );
+      if (hasMalformedConfig) {
+        yield* Effect.logWarning(
+          "skipping startup keybindings default sync because config is malformed",
+          {
+            path: keybindingsConfigPath,
+            issues: runtimeConfig.issues,
+          },
+        );
+        yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
+        return;
+      }
+
+      // Always continue from the cleaned/migrated rule set for invalid entries / aliases (#330).
       const customConfig = runtimeConfig.keybindings;
-      const droppedInvalidCount = runtimeConfig.issues.length;
+      const droppedInvalidCount = runtimeConfig.issues.filter(
+        (issue) => issue.kind === "keybindings.invalid-entry",
+      ).length;
       if (droppedInvalidCount > 0) {
         yield* Effect.logWarning("dropping invalid keybinding entries from user config", {
           path: keybindingsConfigPath,
