@@ -2,10 +2,7 @@
 import { spawnSync } from "node:child_process";
 import * as FS from "node:fs";
 import * as Path from "node:path";
-import {
-  collapseCursorModelVariants,
-  mergeCursorModelVariantsWithBaseControls,
-} from "../src/cursorModelVariants.ts";
+import { collapseCursorModelVariants } from "../src/cursorModelVariants.ts";
 import type { ProviderModelDescriptor } from "@synara/contracts";
 import { groupProviderModelOptions } from "../src/providerModelOptions.ts";
 
@@ -90,7 +87,7 @@ if (result.status !== 0) {
 
 const rawModels = parseCursorCliModels(result.stdout || "");
 const before = mergeOldStyle(rawModels);
-const after = mergeCursorModelVariantsWithBaseControls(rawModels); // now collapse-only
+const after = collapseCursorModelVariants(rawModels);
 
 const xaiBefore = before.filter(
   (m) => m.upstreamProviderId === "xai" || /grok/i.test(m.slug) || /grok/i.test(m.name),

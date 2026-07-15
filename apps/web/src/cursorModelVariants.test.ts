@@ -15,6 +15,12 @@ describe("normalizeCursorModelVariantBaseId", () => {
       "claude-opus-4-6",
     );
     expect(normalizeCursorModelVariantBaseId("claude-5-sonnet-max-fast")).toBe("claude-sonnet-5");
+    // Live Cursor Agent CLI naming for xAI Grok (effort is a suffix, not a separate model).
+    expect(normalizeCursorModelVariantBaseId("cursor-grok-4.5-high")).toBe("cursor-grok-4.5");
+    expect(normalizeCursorModelVariantBaseId("cursor-grok-4.5-medium-fast")).toBe(
+      "cursor-grok-4.5",
+    );
+    expect(normalizeCursorModelVariantBaseId("cursor-grok-4.5-low")).toBe("cursor-grok-4.5");
   });
 });
 
@@ -51,6 +57,53 @@ describe("collapseCursorModelVariants", () => {
         supportsThinkingToggle: true,
       },
     ]);
+  });
+
+  // Live CLI lists effort as suffix rows (cursor-grok-4.5-high, …); picker must collapse to one base.
+  it("collapses live cursor-grok-4.5 effort rows into one xAI model with traits", () => {
+    const collapsed = collapseCursorModelVariants([
+      {
+        slug: "cursor-grok-4.5-high",
+        name: "Cursor Grok 4.5",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportedReasoningEfforts: [{ value: "high", label: "High" }],
+        defaultReasoningEffort: "high",
+      },
+      {
+        slug: "cursor-grok-4.5-medium",
+        name: "Cursor Grok 4.5 Medium",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportedReasoningEfforts: [{ value: "medium", label: "Medium" }],
+        defaultReasoningEffort: "medium",
+      },
+      {
+        slug: "cursor-grok-4.5-low-fast",
+        name: "Cursor Grok 4.5 Low Fast",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+        defaultReasoningEffort: "low",
+        supportsFastMode: true,
+      },
+    ]);
+
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0]).toMatchObject({
+      slug: "cursor-grok-4.5",
+      name: "Cursor Grok 4.5",
+      upstreamProviderId: "xai",
+      upstreamProviderName: "xAI",
+      supportedReasoningEfforts: [
+        { value: "high", label: "High", isDefault: true },
+        { value: "medium", label: "Medium" },
+        { value: "low", label: "Low" },
+      ],
+      defaultReasoningEffort: "high",
+      supportsFastMode: true,
+    });
+    expect(collapsed.some((model) => /-high$|-medium$|-low$/.test(model.slug))).toBe(false);
   });
 
   it("collapses Cursor CLI variants into one model with trait capabilities", () => {
