@@ -665,9 +665,7 @@ describe("store facade", () => {
       const after = useStore.getState();
       expect(after.threadSessionById?.[threadId]).toEqual(before.threadSessionById?.[threadId]);
       expect(after.threadSessionById?.[threadId]?.updatedAt).toBe("2026-02-27T00:00:02.000Z");
-      expect(after.threadTurnStateById?.[threadId]).toEqual(
-        before.threadTurnStateById?.[threadId],
-      );
+      expect(after.threadTurnStateById?.[threadId]).toEqual(before.threadTurnStateById?.[threadId]);
       expect(after.threadTurnStateById?.[threadId]?.latestTurn?.assistantMessageId).toBe(
         MessageId.makeUnsafe("m-facade"),
       );

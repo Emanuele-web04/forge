@@ -2067,5 +2067,4 @@ describe("EventRouter scoped orchestration sync", () => {
       await mounted.cleanup();
     }
   });
-
 });

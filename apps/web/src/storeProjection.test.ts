@@ -1739,9 +1739,7 @@ describe("shell snapshot detail preservation", () => {
     );
 
     expect(threadsOf(next)).toHaveLength(1);
-    expect(next.threadSessionById?.[threadId]).toEqual(
-      hotPathState.threadSessionById?.[threadId],
-    );
+    expect(next.threadSessionById?.[threadId]).toEqual(hotPathState.threadSessionById?.[threadId]);
     expect(next.threadSessionById?.[threadId]?.updatedAt).toBe("2026-02-27T00:00:02.000Z");
     expect(next.threadTurnStateById?.[threadId]).toEqual(
       hotPathState.threadTurnStateById?.[threadId],
@@ -2380,11 +2378,9 @@ describe("shell mutations fenced against newer thread detail", () => {
       makeReadModel(runningDetailRow()),
     );
     const withDetail = syncServerThreadDetailHotPath(withShell, runningDetailRow());
-    const next = syncServerShellSnapshot(
-      withDetail,
-      makeEmptyShellSnapshot(1),
-      { preserveDetailForThreadIds: [detailThreadId] },
-    );
+    const next = syncServerShellSnapshot(withDetail, makeEmptyShellSnapshot(1), {
+      preserveDetailForThreadIds: [detailThreadId],
+    });
     expect(next.threadIds).toContain(detailThreadId);
     expect(next.threadShellById?.[detailThreadId]?.title).toBe("Thread preserve detail");
     expect(threadsOf(next).some((thread) => thread.id === detailThreadId)).toBe(true);

@@ -599,9 +599,7 @@ function rebuildThreadShellRecords(
   const threadShellById = {} as Record<ThreadId, ThreadShell>;
   const threadSessionById = {} as Record<ThreadId, ThreadSession | null>;
   const threadTurnStateById = {} as Record<ThreadId, ThreadTurnState>;
-  const snapshotThreadById = new Map(
-    snapshotThreads.map((thread) => [thread.id, thread] as const),
-  );
+  const snapshotThreadById = new Map(snapshotThreads.map((thread) => [thread.id, thread] as const));
   const orderedThreadIds: ThreadId[] = [];
   for (const thread of snapshotThreads) {
     orderedThreadIds.push(thread.id);
@@ -677,7 +675,6 @@ function rebuildThreadShellRecords(
       previousTurnStateById[nextThreadId],
       next.turnState,
     );
-
   }
   return {
     threadShellById: recordsShallowEqual(previousShellById, threadShellById)
