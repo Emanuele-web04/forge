@@ -28,7 +28,39 @@ See the full schema for more details: [`packages/contracts/src/keybindings.ts`](
   { "key": "mod+shift+n", "command": "chat.newLocal", "when": "!terminalFocus" },
   { "key": "mod+shift+t", "command": "chat.newTerminal", "when": "!terminalFocus" },
   { "key": "cmd+l", "command": "composer.focus.toggle", "when": "!terminalFocus" },
-  { "key": "mod+o", "command": "editor.openFavorite" }
+  { "key": "mod+enter", "command": "thread.approval.accept", "when": "!terminalFocus || isMac" },
+  {
+    "key": "mod+shift+enter",
+    "command": "thread.approval.acceptForSession",
+    "when": "!terminalFocus || isMac"
+  },
+  {
+    "key": "mod+backspace",
+    "command": "thread.approval.decline",
+    "when": "!terminalFocus || isMac"
+  },
+  { "key": "mod+shift+p", "command": "thread.planMode.toggle", "when": "!terminalFocus || isMac" },
+  { "key": "mod+shift+f", "command": "thread.fastMode.toggle", "when": "!terminalFocus || isMac" },
+  { "key": "alt+shift+]", "command": "thread.effort.next", "when": "!terminalFocus" },
+  { "key": "alt+shift+[", "command": "thread.effort.previous", "when": "!terminalFocus" },
+  {
+    "key": "mod+shift+d",
+    "command": "composer.dictation.toggle",
+    "when": "!terminalFocus || isMac"
+  },
+  { "key": "mod+o", "command": "editor.openFavorite" },
+  { "key": "cmd+[", "command": "history.back", "when": "isElectron" },
+  { "key": "cmd+]", "command": "history.forward", "when": "isElectron" },
+  {
+    "key": "alt+arrowleft",
+    "command": "history.back",
+    "when": "isElectron && !isMac && !terminalFocus"
+  },
+  {
+    "key": "alt+arrowright",
+    "command": "history.forward",
+    "when": "isElectron && !isMac && !terminalFocus"
+  }
 ]
 ```
 
@@ -56,6 +88,16 @@ Invalid rules are ignored. Invalid config files are ignored. Warnings are logged
 - `chat.newLocal`: create a new chat thread for the active project in a new environment (local/worktree determined by app settings (default `local`))
 - `chat.newTerminal`: create a new terminal-first thread preserving the active thread's branch/worktree state
 - `composer.focus.toggle`: focus or blur the chat prompt composer
+- `composer.send`: send the composer contents to the active thread (no default binding)
+- `composer.dictation.toggle`: start or stop voice dictation in the composer
+- `thread.approval.accept`: accept the pending approval request in the active thread
+- `thread.approval.acceptForSession`: accept the pending approval request for the rest of the session
+- `thread.approval.decline`: decline the pending approval request in the active thread
+- `thread.planMode.toggle`: switch the composer between plan mode and the default interaction mode
+- `thread.fastMode.toggle`: enable/disable fast mode when the selected model supports it
+- `thread.effort.next` / `thread.effort.previous`: cycle the reasoning effort level for the selected model
+- `thread.fork`: fork the current thread from its latest state (no default binding)
+- `history.back` / `history.forward`: navigate the in-app view history (desktop app)
 - `editor.openFavorite`: open current project/worktree in the last-used editor
 - `script.{id}.run`: run a project script by id (for example `script.test.run`)
 
@@ -82,6 +124,9 @@ Currently available context keys:
 
 - `terminalFocus`
 - `terminalOpen`
+- `terminalWorkspaceOpen`
+- `isMac` (true when the app runs on macOS)
+- `isElectron` (true when running in the Synara desktop app)
 
 Supported operators:
 
