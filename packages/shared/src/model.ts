@@ -428,6 +428,16 @@ export function getModelCapabilities(
     // provider ladder even before runtime discovery has returned their descriptor.
     return MODEL_CAPABILITIES_INDEX.grok["grok-build"] ?? EMPTY_MODEL_CAPABILITIES;
   }
+  if (provider === "claudeAgent" && slug) {
+    // Custom / proxy Claude Code model slugs are not in the static catalog but
+    // still accept Claude Code effort (+ auto-compact) options in the CLI (#367).
+    // Inherit the flagship ladder so the traits picker stays available.
+    return (
+      MODEL_CAPABILITIES_INDEX.claudeAgent["claude-opus-4-8"] ??
+      MODEL_CAPABILITIES_INDEX.claudeAgent["claude-opus-4-7"] ??
+      EMPTY_MODEL_CAPABILITIES
+    );
+  }
   return EMPTY_MODEL_CAPABILITIES;
 }
 
