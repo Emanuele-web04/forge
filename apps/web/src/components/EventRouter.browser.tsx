@@ -1869,7 +1869,6 @@ describe("EventRouter scoped orchestration sync", () => {
           expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
             subscribeCountBeforeMaterialization,
           );
-
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },
@@ -2067,4 +2066,5 @@ describe("EventRouter scoped orchestration sync", () => {
       await mounted.cleanup();
     }
   });
+
 });
