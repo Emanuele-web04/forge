@@ -40,7 +40,7 @@ export function shouldRepairDesktopProjectSnapshot(snapshot: ProjectRecoverySnap
   );
 }
 
- /** True when any client-side normalized thread evidence exists.
+/** True when any client-side normalized thread evidence exists.
  *
  * Reads legacy `threads`, normalized `threadIds`, `threadShellById`,
  * `threadSessionById`, and `threadTurnStateById`. This prevents repair paths

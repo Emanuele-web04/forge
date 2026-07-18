@@ -85,11 +85,11 @@ const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
 const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
+let getShellSnapshotRequestCount = 0;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
-let getShellSnapshotRequestCount = 0;
 let getThreadDetailSnapshotRequestCount = 0;
 let delayNextThreadDetailSnapshotResponse = false;
 let pendingThreadDetailSnapshotResponse: {
@@ -494,6 +494,7 @@ describe("EventRouter scoped orchestration sync", () => {
     threadStreamRequestIdByThreadId.clear();
     threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
+    getShellSnapshotRequestCount = 0;
     localStorage.clear();
     useComposerDraftStore.setState({
       draftsByThreadId: {},
@@ -1597,16 +1598,16 @@ describe("EventRouter scoped orchestration sync", () => {
     try {
       await vi.waitFor(
         () => {
+          expect(getShellSnapshotRequestCount).toBeGreaterThanOrEqual(1);
           expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(1);
         },
         { timeout: 4_000, interval: 16 },
       );
+      const subscribeCountBeforePromotion = subscribeThreadRequestCountById.get(recoveryThreadId)!;
       sendThreadEventPush(bufferedEvent);
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 4_000, interval: 16 },
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+        subscribeCountBeforePromotion,
       );
       const subscribeCountBeforeMaterialization =
         subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
@@ -1798,6 +1799,7 @@ describe("EventRouter scoped orchestration sync", () => {
     try {
       await vi.waitFor(
         () => {
+          expect(getShellSnapshotRequestCount).toBeGreaterThanOrEqual(1);
           expect(
             subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
           ).toBeGreaterThanOrEqual(1);

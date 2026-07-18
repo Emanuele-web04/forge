@@ -1943,6 +1943,9 @@ function EventRouter() {
       if (item.sequence <= shellSnapshotSequence) {
         return;
       }
+      const isNewShellThread =
+        item.kind === "thread-upserted" &&
+        useStore.getState().threadShellById?.[item.thread.id] === undefined;
       shellSnapshotSequence = item.sequence;
       const mutationApplied = applyFencedShellEvent(item);
       if (mutationApplied && item.kind === "thread-upserted") {
