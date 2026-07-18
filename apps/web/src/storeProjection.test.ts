@@ -2445,6 +2445,7 @@ describe("shell mutations fenced against newer thread detail", () => {
         },
       }),
     );
+    expect(getThreadFromState(hotPathState, threadId)).toBeDefined();
     expect(hasClientLiveThreadEvidence(hotPathState)).toBe(true);
     expect(
       resolveRepairedShellApplication({

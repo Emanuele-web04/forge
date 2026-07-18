@@ -209,6 +209,7 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
 // newlines and skip math entirely (the composer chip plugin is appended per
 // render because it closes over the message's mention references).
 const USER_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [remarkGfm, remarkBreaks];
+
 const USER_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [];
 const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
 // `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used
