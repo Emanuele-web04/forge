@@ -52,6 +52,7 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { WorkItemServiceLive } from "./workItems/Layers/WorkItemService";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -182,6 +183,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
+  const workItemServiceLayer = WorkItemServiceLive.pipe(
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
 
   return Layer.mergeAll(
     agentGatewayCredentialsLayer,
@@ -199,6 +204,7 @@ export function makeServerRuntimeServicesLayer(
     providerHealthLayer,
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
+    workItemServiceLayer,
     orchestrationReactorLayer,
     providerCommandReactorLayer,
     threadDeletionReactorLayer,

@@ -89,6 +89,15 @@ import {
   PullRequestsListResult,
   PullRequestsUnavailableError,
 } from "./pullRequests";
+import {
+  WorkItemsAuthStatusInput,
+  WorkItemsAuthStatusResult,
+  WorkItemsGetInput,
+  WorkItemsGetResult,
+  WorkItemsSearchInput,
+  WorkItemsSearchResult,
+  WorkItemsUnavailableError,
+} from "./workItemReferences";
 import { KeybindingRule } from "./keybindings";
 import {
   ClientOrchestrationCommand,
@@ -537,6 +546,26 @@ export const WsPullRequestsSetPinnedRpc = Rpc.make(WS_METHODS.pullRequestsSetPin
   payload: PullRequestSetPinnedInput,
   success: PullRequestSetPinnedResult,
   error: WsRpcError,
+});
+
+const WorkItemsRpcError = Schema.Union([WorkItemsUnavailableError, WsRpcError]);
+
+export const WsWorkItemsSearchRpc = Rpc.make(WS_METHODS.workItemsSearch, {
+  payload: WorkItemsSearchInput,
+  success: WorkItemsSearchResult,
+  error: WorkItemsRpcError,
+});
+
+export const WsWorkItemsGetRpc = Rpc.make(WS_METHODS.workItemsGet, {
+  payload: WorkItemsGetInput,
+  success: WorkItemsGetResult,
+  error: WorkItemsRpcError,
+});
+
+export const WsWorkItemsAuthStatusRpc = Rpc.make(WS_METHODS.workItemsAuthStatus, {
+  payload: WorkItemsAuthStatusInput,
+  success: WorkItemsAuthStatusResult,
+  error: WorkItemsRpcError,
 });
 
 export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
@@ -1027,6 +1056,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsPullRequestsActionRpc,
   WsPullRequestsCommentRpc,
   WsPullRequestsSetPinnedRpc,
+  WsWorkItemsSearchRpc,
+  WsWorkItemsGetRpc,
+  WsWorkItemsAuthStatusRpc,
   WsGitListBranchesRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,

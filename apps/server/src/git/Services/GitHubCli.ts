@@ -119,6 +119,24 @@ export interface GitHubPullRequestDetailData {
   readonly commits: ReadonlyArray<PullRequestCommit>;
 }
 
+export interface GitHubIssueSummary {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly body: string;
+  readonly state: "OPEN" | "CLOSED";
+  readonly updatedAt: string;
+}
+
+export interface GitHubIssueDetail {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  readonly url: string;
+  readonly state: "OPEN" | "CLOSED";
+  readonly updatedAt: string;
+}
+
 /**
  * GitHubCliShape - Service API for executing GitHub CLI commands.
  */
@@ -176,6 +194,19 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly number: number;
   }) => Effect.Effect<GitHubPullRequestDetailData, GitHubCliError>;
+
+  readonly listRepositoryIssues: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly query?: string;
+    readonly limit?: number;
+  }) => Effect.Effect<ReadonlyArray<GitHubIssueSummary>, GitHubCliError>;
+
+  readonly getIssue: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+  }) => Effect.Effect<GitHubIssueDetail, GitHubCliError>;
 
   readonly getRepositoryMergeCapabilities: (input: {
     readonly cwd: string;

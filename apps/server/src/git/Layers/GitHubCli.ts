@@ -23,6 +23,8 @@ import { GitHubCliError } from "../Errors.ts";
 import {
   GitHubCli,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
+  type GitHubIssueDetail,
+  type GitHubIssueSummary,
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
   type GitHubPullRequestDetailData,
@@ -39,6 +41,17 @@ export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,additions,deletions,updatedAt,createdAt,reviewDecision,reviewRequests,labels,mergedAt,mergeable";
 export const PULL_REQUEST_DETAIL_JSON_FIELDS =
   "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
+export const ISSUE_LIST_JSON_FIELDS = "number,title,url,body,state,updatedAt";
+export const ISSUE_DETAIL_JSON_FIELDS = "number,title,url,body,state,updatedAt";
+
+const RawGitHubIssueSchema = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  url: Schema.String,
+  body: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  state: Schema.String,
+  updatedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
 
 function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown): GitHubCliError {
   if (error instanceof Error) {
@@ -719,7 +732,9 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "getPullRequestDetail"
     | "getPullRequestListItem"
     | "listReviewRequestedPullRequestNumbers"
-    | "getRepositoryMergeCapabilities",
+    | "getRepositoryMergeCapabilities"
+    | "listRepositoryIssues"
+    | "getIssue",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -1148,6 +1163,94 @@ const makeGitHubCli = Effect.sync(() => {
           ),
         ),
         Effect.map(normalizePullRequestDetail),
+      ),
+    listRepositoryIssues: (input) =>
+      validateRepository(input.repository, "listRepositoryIssues").pipe(
+        Effect.flatMap((repository) => {
+          const query = input.query?.trim() ?? "";
+          const searchArgs =
+            query.length > 0
+              ? query.match(/^\d+$/)
+                ? ["--search", `${query} in:title,body`]
+                : ["--search", query]
+              : [];
+          return execute({
+            cwd: input.cwd,
+            args: [
+              "issue",
+              "list",
+              "--repo",
+              repositorySelector(repository),
+              "--state",
+              "open",
+              "--limit",
+              String(input.limit ?? 20),
+              ...searchArgs,
+              "--json",
+              ISSUE_LIST_JSON_FIELDS,
+            ],
+          });
+        }),
+        Effect.flatMap((result) => {
+          const trimmed = result.stdout.trim();
+          if (trimmed.length === 0) {
+            return Effect.succeed([] as ReadonlyArray<GitHubIssueSummary>);
+          }
+          return decodeGitHubJson(
+            trimmed,
+            Schema.Array(RawGitHubIssueSchema),
+            "listRepositoryIssues",
+            "GitHub CLI returned invalid issue list JSON.",
+          ).pipe(
+            Effect.map((entries) =>
+              entries.map(
+                (entry): GitHubIssueSummary => ({
+                  number: entry.number,
+                  title: entry.title,
+                  url: entry.url,
+                  body: entry.body ?? "",
+                  state: entry.state.toUpperCase() === "CLOSED" ? "CLOSED" : "OPEN",
+                  updatedAt: entry.updatedAt ?? "",
+                }),
+              ),
+            ),
+          );
+        }),
+      ),
+    getIssue: (input) =>
+      validateRepository(input.repository, "getIssue").pipe(
+        Effect.flatMap((repository) =>
+          execute({
+            cwd: input.cwd,
+            args: [
+              "issue",
+              "view",
+              String(input.number),
+              "--repo",
+              repositorySelector(repository),
+              "--json",
+              ISSUE_DETAIL_JSON_FIELDS,
+            ],
+          }),
+        ),
+        Effect.flatMap((result) =>
+          decodeGitHubJson(
+            result.stdout.trim(),
+            RawGitHubIssueSchema,
+            "getIssue",
+            "GitHub CLI returned invalid issue detail JSON.",
+          ),
+        ),
+        Effect.map(
+          (entry): GitHubIssueDetail => ({
+            number: entry.number,
+            title: entry.title,
+            url: entry.url,
+            body: entry.body ?? "",
+            state: entry.state.toUpperCase() === "CLOSED" ? "CLOSED" : "OPEN",
+            updatedAt: entry.updatedAt ?? "",
+          }),
+        ),
       ),
     getRepositoryMergeCapabilities: (input) =>
       validateRepository(input.repository, "getRepositoryMergeCapabilities").pipe(
