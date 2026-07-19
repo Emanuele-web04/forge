@@ -35,6 +35,7 @@ import {
   IconFlask2,
   IconFolder,
   IconFolderOpen,
+  IconHash,
   IconHistory,
   IconInfoCircle,
   IconLayoutDistributeHorizontal,
@@ -148,6 +149,7 @@ export const DownloadIcon = adaptIcon(IconDownload);
 // Automations nav, slash command, created card, environment section), so it is
 // sourced from the Central icon set rather than the Tabler stroke icon.
 export const ClockIcon = centralIconWrapper("clock");
+export const HashIcon = adaptIcon(IconHash);
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);

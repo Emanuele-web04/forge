@@ -15,6 +15,7 @@ import {
   type ProviderStartOptions,
   type RuntimeMode,
   type ThreadId,
+  type WorkItemReference,
 } from "@synara/contracts";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
@@ -33,6 +34,11 @@ import {
   type FileCommentSelection,
   normalizeFileCommentSelection,
 } from "./lib/fileComments";
+import {
+  type WorkItemReferenceDraft,
+  createWorkItemReferenceDraft,
+  workItemReferenceDedupKey,
+} from "./lib/workItemReferences";
 import { type TerminalContextDraft, normalizeTerminalContextText } from "./lib/terminalContext";
 import {
   type ChatAssistantSelectionAttachment,
@@ -104,6 +110,7 @@ export interface ComposerPromptHistorySavedDraft {
   browserAnnotations: BrowserAnnotationDraft[];
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
+  workItemReferences: WorkItemReferenceDraft[];
   pastedTexts: PastedTextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
@@ -123,6 +130,7 @@ export interface QueuedComposerChatTurn {
   browserAnnotations: BrowserAnnotationDraft[];
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
+  workItemReferences: WorkItemReferenceDraft[];
   pastedTexts: PastedTextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
@@ -175,6 +183,7 @@ export interface ComposerThreadDraftState {
   browserAnnotations: BrowserAnnotationDraft[];
   terminalContexts: TerminalContextDraft[];
   fileComments: FileCommentDraft[];
+  workItemReferences: WorkItemReferenceDraft[];
   pastedTexts: PastedTextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
@@ -347,6 +356,9 @@ export interface ComposerDraftStoreState {
   addFileComment: (threadId: ThreadId, comment: FileCommentDraft) => boolean;
   removeFileComment: (threadId: ThreadId, commentId: string) => void;
   clearFileComments: (threadId: ThreadId) => void;
+  addWorkItemReference: (threadId: ThreadId, reference: WorkItemReference) => boolean;
+  removeWorkItemReference: (threadId: ThreadId, draftId: string) => void;
+  clearWorkItemReferences: (threadId: ThreadId) => void;
   addPastedTexts: (threadId: ThreadId, pastedTexts: PastedTextDraft[]) => void;
   removePastedText: (threadId: ThreadId, pastedTextId: string) => void;
   clearPastedTexts: (threadId: ThreadId) => void;
@@ -516,6 +528,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     browserAnnotations: [],
     terminalContexts: [],
     fileComments: [],
+    workItemReferences: [],
     pastedTexts: [],
     skills: [],
     mentions: [],
@@ -616,6 +629,53 @@ export function normalizeFileComments(
   }
 
   return normalizedComments;
+}
+
+export function normalizeWorkItemReference(
+  reference: WorkItemReferenceDraft | WorkItemReference,
+): WorkItemReferenceDraft | null {
+  const title = reference.title.trim();
+  const identifier = reference.identifier.trim();
+  const url = reference.url.trim();
+  const id = reference.id.trim();
+  if (!title || !identifier || !url || !id) {
+    return null;
+  }
+  const draftId =
+    "draftId" in reference && typeof reference.draftId === "string" && reference.draftId.length > 0
+      ? reference.draftId
+      : createWorkItemReferenceDraft(reference).draftId;
+  return {
+    draftId,
+    source: reference.source,
+    id,
+    url,
+    title,
+    identifier,
+    body: reference.body ?? "",
+    bodyPreview: reference.bodyPreview ?? "",
+    repository: reference.repository?.trim() || null,
+  };
+}
+
+export function normalizeWorkItemReferences(
+  references: ReadonlyArray<WorkItemReferenceDraft | WorkItemReference>,
+): WorkItemReferenceDraft[] {
+  const normalized: WorkItemReferenceDraft[] = [];
+  const existingDraftIds = new Set<string>();
+  const existingDedupKeys = new Set<string>();
+  for (const reference of references) {
+    const entry = normalizeWorkItemReference(reference);
+    if (!entry) continue;
+    const dedupKey = workItemReferenceDedupKey(entry);
+    if (existingDraftIds.has(entry.draftId) || existingDedupKeys.has(dedupKey)) {
+      continue;
+    }
+    normalized.push(entry);
+    existingDraftIds.add(entry.draftId);
+    existingDedupKeys.add(dedupKey);
+  }
+  return normalized;
 }
 
 function normalizePastedText(pasted: PastedTextDraft): PastedTextDraft | null {
@@ -723,6 +783,7 @@ export function captureComposerPromptHistorySavedDraft(input: {
     browserAnnotations: normalizeBrowserAnnotations(draft.browserAnnotations),
     terminalContexts: normalizeTerminalContextsForThread(threadId, draft.terminalContexts),
     fileComments: normalizeFileComments(draft.fileComments),
+    workItemReferences: normalizeWorkItemReferences(draft.workItemReferences),
     pastedTexts: normalizePastedTexts(draft.pastedTexts),
     skills: [...draft.skills],
     mentions: [...draft.mentions],
@@ -754,6 +815,7 @@ export function buildTransferredComposerDraft(input: {
       sourceDraft.terminalContexts,
     ),
     fileComments: normalizeFileComments(sourceDraft.fileComments),
+    workItemReferences: normalizeWorkItemReferences(sourceDraft.workItemReferences),
     pastedTexts: normalizePastedTexts(sourceDraft.pastedTexts),
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
@@ -797,6 +859,7 @@ function clonePromptHistorySavedDraft(
       savedDraft.terminalContexts,
     ),
     fileComments: normalizeFileComments(savedDraft.fileComments),
+    workItemReferences: normalizeWorkItemReferences(savedDraft.workItemReferences),
     pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
     skills: [...savedDraft.skills],
     mentions: [...savedDraft.mentions],
@@ -814,6 +877,7 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.browserAnnotations.length === 0 &&
     draft.terminalContexts.length === 0 &&
     draft.fileComments.length === 0 &&
+    draft.workItemReferences.length === 0 &&
     draft.pastedTexts.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
@@ -867,6 +931,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   browserAnnotations: EMPTY_BROWSER_ANNOTATIONS,
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
   fileComments: [],
+  workItemReferences: [],
   pastedTexts: EMPTY_PASTED_TEXTS,
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,

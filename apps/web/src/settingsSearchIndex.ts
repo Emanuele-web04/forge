@@ -282,6 +282,20 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Terminal close confirmation",
     keywords: "Ask before closing a terminal tab and clearing its history. safety confirm",
   },
+  {
+    id: "behavior:linear-api-key",
+    section: "behavior",
+    title: "Linear API key",
+    keywords:
+      "Attach Linear issues as composer references work item ticket integration linear.app API token",
+  },
+  {
+    id: "behavior:github-cli-references",
+    section: "behavior",
+    title: "GitHub CLI",
+    keywords:
+      "Attach GitHub issues and pull requests as composer references gh auth work item PR",
+  },
 
   // ── Keyboard Shortcuts ────────────────────────────────────────────────────────
   {

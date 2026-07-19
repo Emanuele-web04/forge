@@ -40,6 +40,8 @@ import {
   normalizeDraftThreadEntryPoint,
   normalizeFileComment,
   normalizeFileComments,
+  normalizeWorkItemReference,
+  normalizeWorkItemReferences,
   normalizePastedTexts,
   normalizeTerminalContextForThread,
   normalizeTerminalContextsForThread,
@@ -49,6 +51,7 @@ import {
   shouldRemoveDraft,
   terminalContextDedupKey,
 } from "./composerDraftDomain";
+import { createWorkItemReferenceDraft, workItemReferenceDedupKey } from "./lib/workItemReferences";
 import {
   COMPOSER_PROVIDER_KINDS,
   makeModelSelection,
@@ -590,6 +593,7 @@ export const createComposerDraftStoreState =
                 browserAnnotations: [],
                 terminalContexts: [],
                 fileComments: [],
+                workItemReferences: [],
                 pastedTexts: [],
                 skills: [],
                 mentions: [],
@@ -636,6 +640,7 @@ export const createComposerDraftStoreState =
             savedDraft.terminalContexts,
           ),
           fileComments: normalizeFileComments(savedDraft.fileComments),
+          workItemReferences: normalizeWorkItemReferences(savedDraft.workItemReferences),
           pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
           skills: [...savedDraft.skills],
           mentions: [...savedDraft.mentions],
@@ -1577,6 +1582,83 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    addWorkItemReference: (threadId, reference) => {
+      if (threadId.length === 0) {
+        return false;
+      }
+      let inserted = false;
+      set((state) => {
+        const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        const normalized = normalizeWorkItemReference(createWorkItemReferenceDraft(reference));
+        if (!normalized) {
+          return state;
+        }
+        const dedupKey = workItemReferenceDedupKey(normalized);
+        if (
+          existing.workItemReferences.some((entry) => entry.draftId === normalized.draftId) ||
+          existing.workItemReferences.some((entry) => workItemReferenceDedupKey(entry) === dedupKey)
+        ) {
+          return state;
+        }
+        inserted = true;
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: {
+              ...existing,
+              workItemReferences: [...existing.workItemReferences, normalized],
+            },
+          },
+        };
+      });
+      return inserted;
+    },
+    removeWorkItemReference: (threadId, draftId) => {
+      if (threadId.length === 0 || draftId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          workItemReferences: current.workItemReferences.filter(
+            (entry) => entry.draftId !== draftId,
+          ),
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    clearWorkItemReferences: (threadId) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current || current.workItemReferences.length === 0) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          workItemReferences: [],
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
     addPastedTexts: (threadId, pastedTexts) => {
       if (threadId.length === 0 || pastedTexts.length === 0) {
         return;
@@ -1872,6 +1954,7 @@ export const createComposerDraftStoreState =
           browserAnnotations: [],
           terminalContexts: [],
           fileComments: [],
+          workItemReferences: [],
           pastedTexts: [],
           skills: [],
           mentions: [],

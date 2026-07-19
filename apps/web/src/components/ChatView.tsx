@@ -299,6 +299,7 @@ import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import {
   ChevronDownIcon,
   ComposerSendArrowIcon,
+  HashIcon,
   LayoutSidebarIcon,
   RefreshCwIcon,
   TemporaryThreadIcon,
@@ -392,6 +393,11 @@ import {
   type FileCommentDraft,
 } from "../lib/fileComments";
 import {
+  appendWorkItemReferencesToPrompt,
+  formatWorkItemChipLabel,
+  type WorkItemReferenceDraft,
+} from "../lib/workItemReferences";
+import {
   deriveContextWindowSelectionStatus,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowSnapshot,
@@ -481,6 +487,7 @@ import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImageOverlay } from "./chat/ExpandedImageOverlay";
+import { WorkItemReferencePicker } from "./chat/WorkItemReferencePicker";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { useChatTerminalController } from "./chat/useChatTerminalController";
 import { useChatAutomationSetup } from "./chat/useChatAutomationSetup";
@@ -946,6 +953,7 @@ function buildQueuedComposerPreviewText(input: {
   browserAnnotations: ReadonlyArray<BrowserAnnotationDraft>;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   fileComments: ReadonlyArray<FileCommentDraft>;
+  workItemReferences: ReadonlyArray<WorkItemReferenceDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
 }): string {
   if (input.trimmedPrompt.length > 0) {
@@ -973,6 +981,10 @@ function buildQueuedComposerPreviewText(input: {
   const firstFileComment = input.fileComments[0];
   if (firstFileComment) {
     return formatFileCommentLabel(firstFileComment);
+  }
+  const firstWorkItem = input.workItemReferences[0];
+  if (firstWorkItem) {
+    return formatWorkItemChipLabel(firstWorkItem);
   }
   const pastedTitle = formatPastedTextTitleSeed(input.pastedTexts);
   if (pastedTitle) {
@@ -1194,6 +1206,7 @@ export default function ChatView({
   const composerAssistantSelections = composerDraft.assistantSelections;
   const composerBrowserAnnotations = composerDraft.browserAnnotations;
   const composerFileComments = composerDraft.fileComments;
+  const composerWorkItemReferences = composerDraft.workItemReferences;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const composerPastedTexts = composerDraft.pastedTexts;
   const composerSkills = composerDraft.skills;
@@ -1209,6 +1222,7 @@ export default function ChatView({
         assistantSelectionCount: composerAssistantSelections.length,
         browserAnnotationCount: composerBrowserAnnotations.length,
         fileCommentCount: composerFileComments.length,
+        workItemReferenceCount: composerWorkItemReferences.length,
         terminalContexts: composerTerminalContexts,
         pastedTexts: composerPastedTexts,
       }),
@@ -1216,6 +1230,7 @@ export default function ChatView({
       composerAssistantSelections.length,
       composerBrowserAnnotations.length,
       composerFileComments.length,
+      composerWorkItemReferences.length,
       composerFiles.length,
       composerImages.length,
       composerTerminalContexts,
@@ -1264,6 +1279,15 @@ export default function ChatView({
   );
   const addComposerDraftFileComment = useComposerDraftStore((store) => store.addFileComment);
   const clearComposerDraftFileComments = useComposerDraftStore((store) => store.clearFileComments);
+  const addComposerWorkItemReferenceToDraft = useComposerDraftStore(
+    (store) => store.addWorkItemReference,
+  );
+  const removeComposerWorkItemReferenceFromDraft = useComposerDraftStore(
+    (store) => store.removeWorkItemReference,
+  );
+  const clearComposerDraftWorkItemReferences = useComposerDraftStore(
+    (store) => store.clearWorkItemReferences,
+  );
   const insertComposerDraftTerminalContext = useComposerDraftStore(
     (store) => store.insertTerminalContext,
   );
@@ -1360,6 +1384,9 @@ export default function ChatView({
   );
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>(composerTerminalContexts);
   const composerFileCommentsRef = useRef<FileCommentDraft[]>(composerFileComments);
+  const composerWorkItemReferencesRef = useRef<WorkItemReferenceDraft[]>(
+    composerWorkItemReferences,
+  );
   const composerPastedTextsRef = useRef<PastedTextDraft[]>(composerPastedTexts);
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
@@ -1408,6 +1435,7 @@ export default function ChatView({
   // Used by "Implement in a new thread" to carry the sidebar-open intent across navigation.
   const planSidebarOpenOnNextThreadRef = useRef(false);
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
+  const [workItemReferencePickerOpen, setWorkItemReferencePickerOpen] = useState(false);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
   const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
@@ -1677,6 +1705,36 @@ export default function ChatView({
     discardPromptHistoryNavigationForComposerMutation();
     clearComposerDraftFileComments(threadId);
   }, [clearComposerDraftFileComments, discardPromptHistoryNavigationForComposerMutation, threadId]);
+  const addComposerWorkItemReferenceChip = useCallback(
+    (reference: Parameters<typeof addComposerWorkItemReferenceToDraft>[1]) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      addComposerWorkItemReferenceToDraft(threadId, reference);
+    },
+    [
+      addComposerWorkItemReferenceToDraft,
+      discardPromptHistoryNavigationForComposerMutation,
+      threadId,
+    ],
+  );
+  const clearComposerWorkItemReferencesFromDraft = useCallback(() => {
+    discardPromptHistoryNavigationForComposerMutation();
+    clearComposerDraftWorkItemReferences(threadId);
+  }, [
+    clearComposerDraftWorkItemReferences,
+    discardPromptHistoryNavigationForComposerMutation,
+    threadId,
+  ]);
+  const removeComposerWorkItemReferenceChip = useCallback(
+    (draftId: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      removeComposerWorkItemReferenceFromDraft(threadId, draftId);
+    },
+    [
+      discardPromptHistoryNavigationForComposerMutation,
+      removeComposerWorkItemReferenceFromDraft,
+      threadId,
+    ],
+  );
   const removeComposerTerminalContextFromDraft = useCallback(
     (contextId: string) => {
       discardPromptHistoryNavigationForComposerMutation();
@@ -5330,6 +5388,10 @@ export default function ChatView({
   }, [composerFileComments]);
 
   useEffect(() => {
+    composerWorkItemReferencesRef.current = composerWorkItemReferences;
+  }, [composerWorkItemReferences]);
+
+  useEffect(() => {
     composerPastedTextsRef.current = composerPastedTexts;
   }, [composerPastedTexts]);
 
@@ -6847,6 +6909,8 @@ export default function ChatView({
       const restoredBrowserAnnotations =
         queuedTurn.kind === "chat" ? queuedTurn.browserAnnotations : [];
       const restoredFileComments = queuedTurn.kind === "chat" ? queuedTurn.fileComments : [];
+      const restoredWorkItemReferences =
+        queuedTurn.kind === "chat" ? queuedTurn.workItemReferences : [];
       promptRef.current = nextPrompt;
       clearComposerDraftContent(activeThread.id);
       setComposerDraftPrompt(activeThread.id, nextPrompt);
@@ -6871,6 +6935,9 @@ export default function ChatView({
         }
         for (const comment of restoredFileComments) {
           addComposerFileCommentToDraft(comment);
+        }
+        for (const reference of restoredWorkItemReferences) {
+          addComposerWorkItemReferenceChip(reference);
         }
         if (queuedTurn.terminalContexts.length > 0) {
           addComposerTerminalContextsToDraft(queuedTurn.terminalContexts);
@@ -6906,6 +6973,7 @@ export default function ChatView({
       addComposerAssistantSelectionToDraft,
       addComposerDraftBrowserAnnotations,
       addComposerFileCommentToDraft,
+      addComposerWorkItemReferenceChip,
       addComposerFilesToDraft,
       addComposerImagesToDraft,
       addComposerTerminalContextsToDraft,
@@ -7027,6 +7095,8 @@ export default function ChatView({
     const composerBrowserAnnotationsForSend =
       queuedChatTurn?.browserAnnotations ?? composerBrowserAnnotations;
     const composerFileCommentsForSend = queuedChatTurn?.fileComments ?? composerFileComments;
+    const composerWorkItemReferencesForSend =
+      queuedChatTurn?.workItemReferences ?? composerWorkItemReferences;
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
     const composerPastedTextsForSend = queuedChatTurn?.pastedTexts ?? composerPastedTexts;
@@ -7057,6 +7127,7 @@ export default function ChatView({
       assistantSelectionCount: composerAssistantSelectionsForSend.length,
       browserAnnotationCount: composerBrowserAnnotationsForSend.length,
       fileCommentCount: composerFileCommentsForSend.length,
+      workItemReferenceCount: composerWorkItemReferencesForSend.length,
       terminalContexts: composerTerminalContextsForSend,
       pastedTexts: composerPastedTextsForSend,
     });
@@ -7081,6 +7152,7 @@ export default function ChatView({
       composerAssistantSelectionsForSend.length > 0 ||
       composerBrowserAnnotationsForSend.length > 0 ||
       composerFileCommentsForSend.length > 0 ||
+      composerWorkItemReferencesForSend.length > 0 ||
       sendableComposerTerminalContexts.length > 0 ||
       sendableComposerPastedTexts.length > 0;
     // Queued chat turns already captured their intended mode. Live plan follow-ups
@@ -7129,6 +7201,7 @@ export default function ChatView({
       composerAssistantSelectionsForSend.length === 0 &&
       composerBrowserAnnotationsForSend.length === 0 &&
       composerFileCommentsForSend.length === 0 &&
+      composerWorkItemReferencesForSend.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       sendableComposerPastedTexts.length === 0 &&
       // Provider mentions are structured turn metadata, and automation definitions persist text only.
@@ -7385,6 +7458,7 @@ export default function ChatView({
           browserAnnotations: composerBrowserAnnotationsForSend,
           terminalContexts: sendableComposerTerminalContexts,
           fileComments: composerFileCommentsForSend,
+          workItemReferences: composerWorkItemReferencesForSend,
           pastedTexts: sendableComposerPastedTexts,
         }),
         prompt: promptForSend,
@@ -7393,6 +7467,7 @@ export default function ChatView({
         assistantSelections: composerAssistantSelectionsForSend,
         browserAnnotations: composerBrowserAnnotationsForSend,
         fileComments: composerFileCommentsForSend,
+        workItemReferences: composerWorkItemReferencesForSend,
         terminalContexts: sendableComposerTerminalContexts,
         pastedTexts: sendableComposerPastedTexts,
         skills: selectedComposerSkillsForSend,
@@ -7430,6 +7505,8 @@ export default function ChatView({
         titleSeed = formatBrowserAnnotationLabel(composerBrowserAnnotationsForSend[0]!);
       } else if (sendableComposerTerminalContexts.length > 0) {
         titleSeed = formatTerminalContextLabel(sendableComposerTerminalContexts[0]!);
+      } else if (composerWorkItemReferencesForSend.length > 0) {
+        titleSeed = formatWorkItemChipLabel(composerWorkItemReferencesForSend[0]!);
       } else if (composerFileCommentsForSend.length > 0) {
         titleSeed = formatFileCommentTitleSeed(composerFileCommentsForSend.length);
       } else if (sendableComposerPastedTexts.length > 0) {
@@ -7618,22 +7695,26 @@ export default function ChatView({
       (annotation) => ({ ...annotation, source: { ...annotation.source } }),
     );
     const composerFileCommentsSnapshot = [...composerFileCommentsForSend];
+    const composerWorkItemReferencesSnapshot = [...composerWorkItemReferencesForSend];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerPastedTextsSnapshot = [...sendableComposerPastedTexts];
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
     // Trailing blocks are appended innermost-to-outermost: assistant selections,
-    // terminal contexts, file comments, pasted text, then browser annotations
-    // (outermost). The display
+    // terminal contexts, file comments, work item references, pasted text, then
+    // browser annotations (outermost). The display
     // extractors unwrap them in the reverse order.
     const messageTextForSend = appendBrowserAnnotationsToPrompt(
       appendPastedTextsToPrompt(
-        appendFileCommentsToPrompt(
-          appendTerminalContextsToPrompt(
-            appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
-            composerTerminalContextsSnapshot,
+        appendWorkItemReferencesToPrompt(
+          appendFileCommentsToPrompt(
+            appendTerminalContextsToPrompt(
+              appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
+              composerTerminalContextsSnapshot,
+            ),
+            composerFileCommentsSnapshot,
           ),
-          composerFileCommentsSnapshot,
+          composerWorkItemReferencesSnapshot,
         ),
         composerPastedTextsSnapshot,
       ),
@@ -8036,6 +8117,7 @@ export default function ChatView({
         composerAssistantSelectionsRef.current.length === 0 &&
         composerBrowserAnnotationsRef.current.length === 0 &&
         composerFileCommentsRef.current.length === 0 &&
+        composerWorkItemReferencesRef.current.length === 0 &&
         composerTerminalContextsRef.current.length === 0 &&
         composerPastedTextsRef.current.length === 0
       ) {
@@ -8065,6 +8147,9 @@ export default function ChatView({
         addComposerDraftBrowserAnnotations(threadIdForSend, composerBrowserAnnotationsSnapshot);
         for (const comment of composerFileCommentsSnapshot) {
           addComposerFileCommentToDraft(comment);
+        }
+        for (const reference of composerWorkItemReferencesSnapshot) {
+          addComposerWorkItemReferenceChip(reference);
         }
         addComposerTerminalContextsToDraft(composerTerminalContextsSnapshot);
         addComposerPastedTextsToDraft(composerPastedTextsSnapshot);
@@ -8624,6 +8709,7 @@ export default function ChatView({
       browserAnnotations: [],
       terminalContexts: [],
       fileComments: [],
+      workItemReferences: [],
       pastedTexts: [],
       skills: [],
       mentions: [],
@@ -10353,6 +10439,7 @@ export default function ChatView({
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddPhotos={addComposerImages}
+        onAddReference={() => setWorkItemReferencePickerOpen(true)}
         onToggleFastMode={toggleFastMode}
         onSetPlanMode={setPlanMode}
       />
@@ -10479,28 +10566,42 @@ export default function ChatView({
         ) : null}
       </div>
       {showEmptyLandingBranchToolbar ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-pressed={isThreadTemporary}
-          onClick={toggleDraftTemporary}
-          title={
-            isThreadTemporary
-              ? "Temporary chat — deleted when you leave. Click to keep it."
-              : "Make this a temporary chat (deleted when you leave)"
-          }
-          aria-label="Temporary chat"
-          className={cn(
-            "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors sm:px-2.5",
-            isThreadTemporary
-              ? "text-[var(--color-text-accent)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-accent)]"
-              : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
-          )}
-        >
-          <TemporaryThreadIcon className="size-3.5" />
-          <span className="sr-only sm:not-sr-only">Temporary</span>
-        </Button>
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setWorkItemReferencePickerOpen(true)}
+            title="Add Linear ticket, GitHub issue, or PR as a reference"
+            aria-label="Add reference"
+            className="shrink-0 gap-1.5 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-2.5"
+          >
+            <HashIcon className="size-3.5" />
+            <span className="sr-only sm:not-sr-only">Reference</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-pressed={isThreadTemporary}
+            onClick={toggleDraftTemporary}
+            title={
+              isThreadTemporary
+                ? "Temporary chat — deleted when you leave. Click to keep it."
+                : "Make this a temporary chat (deleted when you leave)"
+            }
+            aria-label="Temporary chat"
+            className={cn(
+              "shrink-0 gap-1.5 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors sm:px-2.5",
+              isThreadTemporary
+                ? "text-[var(--color-text-accent)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-accent)]"
+                : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+            )}
+          >
+            <TemporaryThreadIcon className="size-3.5" />
+            <span className="sr-only sm:not-sr-only">Temporary</span>
+          </Button>
+        </div>
       ) : null}
     </div>
   ) : null;
@@ -10777,6 +10878,7 @@ export default function ChatView({
                     (composerAssistantSelections.length > 0 ||
                       composerBrowserAnnotations.length > 0 ||
                       composerFileComments.length > 0 ||
+                      composerWorkItemReferences.length > 0 ||
                       composerPastedTexts.length > 0 ||
                       composerFiles.length > 0 ||
                       composerImages.length > 0) && (
@@ -10784,6 +10886,7 @@ export default function ChatView({
                         assistantSelections={composerAssistantSelections}
                         browserAnnotations={composerBrowserAnnotations}
                         fileComments={composerFileComments}
+                        workItemReferences={composerWorkItemReferences}
                         pastedTexts={composerPastedTexts}
                         files={composerFiles}
                         images={composerImages}
@@ -10792,6 +10895,7 @@ export default function ChatView({
                         onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
                         onRemoveBrowserAnnotation={removeComposerBrowserAnnotationFromDraft}
                         onRemoveFileComments={clearComposerFileCommentsFromDraft}
+                        onRemoveWorkItemReference={removeComposerWorkItemReferenceChip}
                         onRemovePastedText={removeComposerPastedTextFromDraft}
                         onShowPastedTextInField={showComposerPastedTextInField}
                         onRemoveFile={removeComposerFile}
@@ -11254,6 +11358,13 @@ export default function ChatView({
         currentTitle={activeThread.title}
         onOpenChange={setRenameDialogOpen}
         onSave={handleRenameActiveThread}
+      />
+      <WorkItemReferencePicker
+        open={workItemReferencePickerOpen}
+        onOpenChange={setWorkItemReferencePickerOpen}
+        cwd={threadWorkspaceCwd}
+        repository={githubRepositoryQuery.data?.repository ?? null}
+        onSelect={addComposerWorkItemReferenceChip}
       />
       {automationDraftForm ? (
         <AutomationDialog

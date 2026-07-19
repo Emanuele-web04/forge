@@ -79,6 +79,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { SelectItem } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
+import { IntegrationsSettingsSection } from "../components/settings/IntegrationsSettingsSection";
 import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
@@ -963,6 +964,8 @@ function SettingsRouteView() {
           ariaLabel: "Wrap diff lines by default",
         })}
       </SettingsSection>
+
+      <IntegrationsSettingsSection />
 
       <SettingsSection title="Safety confirmations">
         {renderBooleanSettingRow({
