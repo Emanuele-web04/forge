@@ -306,6 +306,93 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("completes two consecutive prompts on the same session", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+      expect(started.sessionId).toBe("mock-session-1");
+
+      const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 8)).pipe(
+        Effect.forkChild,
+      );
+      const first = yield* runtime.prompt({ prompt: [{ type: "text", text: "first" }] });
+      expect(first).toMatchObject({ stopReason: "end_turn" });
+
+      const enqueuedAfterFirst = yield* runtime.sessionUpdatesEnqueuedCount;
+      expect(enqueuedAfterFirst).toBeGreaterThan(0);
+
+      const second = yield* runtime.prompt({ prompt: [{ type: "text", text: "second" }] });
+      expect(second).toMatchObject({ stopReason: "end_turn" });
+
+      const enqueuedAfterSecond = yield* runtime.sessionUpdatesEnqueuedCount;
+      expect(enqueuedAfterSecond).toBeGreaterThan(enqueuedAfterFirst);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      expect(events.filter((event) => event._tag === "AssistantItemCompleted").length).toBe(2);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  runIt("resumes across a runtime restart and accepts a follow-up prompt", async () => {
+    const layerFor = (resumeSessionId?: string) =>
+      AcpSessionRuntime.layer({
+        spawn: {
+          command: bunExe,
+          args: [mockAgentPath],
+          env: { VITEST: "true", SYNARA_ACP_SUPPORT_SESSION_RESUME: "1" },
+        },
+        cwd: process.cwd(),
+        ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+        clientInfo: { name: "synara-test", version: "0.0.0" },
+        authMethodId: "test",
+      });
+
+    // First server lifetime: fresh session plus one completed turn.
+    const firstSessionId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        const started = yield* runtime.start();
+        const result = yield* runtime.prompt({ prompt: [{ type: "text", text: "before" }] });
+        expect(result).toMatchObject({ stopReason: "end_turn" });
+        return started.sessionId;
+      }).pipe(Effect.provide(layerFor()), Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    // Second server lifetime: resume from the persisted cursor and prompt again.
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        const started = yield* runtime.start();
+        expect(started.sessionSetupMethod).toBe("resume");
+        expect(started.sessionId).toBe(firstSessionId);
+        const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
+          Effect.forkChild,
+        );
+        const result = yield* runtime.prompt({ prompt: [{ type: "text", text: "after" }] });
+        expect(result).toMatchObject({ stopReason: "end_turn" });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        expect(events.some((event) => event._tag === "AssistantItemCompleted")).toBe(true);
+      }).pipe(
+        Effect.provide(layerFor(firstSessionId)),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+  });
+
   it.effect("prefers session/resume when the agent advertises it", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {
