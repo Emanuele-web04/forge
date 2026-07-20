@@ -83,6 +83,7 @@ import {
   readAcpUsdCost,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
+  waitForAcpQueuedTurnEventsDrained,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -136,6 +137,8 @@ const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   defaultMs: 10 * 60 * 1000,
 });
 const DEVIN_TURN_WATCHDOG_INTERVAL_MS = 5_000;
+const DEVIN_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
+const DEVIN_TURN_SETTLE_DRAIN_POLL_MS = 25;
 const DEVIN_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"] as const;
@@ -187,6 +190,9 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
   lastPlanFingerprint: string | undefined;
   lastTurnActivityAt: number | undefined;
+  // Compared against acp.sessionUpdatesEnqueuedCount to detect when queued
+  // session updates have been fully handled by the notification consumer.
+  sessionUpdatesProcessed: number;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
   gatewaySessionLease: AgentGatewaySessionLease | undefined;
@@ -898,6 +904,14 @@ export function makeDevinAdapter(
         });
       });
 
+    const waitForDevinQueuedTurnEventsDrained = (ctx: DevinSessionContext) =>
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: ctx.acp.sessionUpdatesEnqueuedCount,
+        sessionUpdatesProcessed: () => ctx.sessionUpdatesProcessed,
+        maxWaitMs: DEVIN_TURN_SETTLE_DRAIN_MAX_WAIT_MS,
+        pollMs: DEVIN_TURN_SETTLE_DRAIN_POLL_MS,
+      });
+
     const failDevinTurnAsTimedOut = (ctx: DevinSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
@@ -1221,6 +1235,7 @@ export function makeDevinAdapter(
             activePromptFiber: undefined,
             lastPlanFingerprint: undefined,
             lastTurnActivityAt: undefined,
+            sessionUpdatesProcessed: 0,
             latestSessionCostUsd: undefined,
             stopped: false,
             gatewaySessionLease,
@@ -1329,7 +1344,16 @@ export function makeDevinAdapter(
                     );
                     return;
                 }
-              }),
+              }).pipe(
+                // Bump the processed count only after the handler fully ran, so
+                // waitForDevinQueuedTurnEventsDrained cannot observe an event as
+                // consumed while its state updates are still being applied.
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    ctx.sessionUpdatesProcessed += 1;
+                  }),
+                ),
+              ),
             ),
           ).pipe(Effect.forkChild);
 
@@ -1436,6 +1460,7 @@ export function makeDevinAdapter(
           Effect.matchEffect({
             onFailure: (error) =>
               Effect.gen(function* () {
+                yield* waitForDevinQueuedTurnEventsDrained(ctx);
                 if (!clearDevinActiveTurn(ctx, turnId)) return;
                 const completedCost = finalizeDevinActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
@@ -1460,9 +1485,16 @@ export function makeDevinAdapter(
                     ...completedCost,
                   },
                 });
+                // Transport/prompt failures make the ACP child unusable. Remove
+                // it from routing immediately so ProviderService can recover on
+                // the next send instead of reusing a dead session forever.
+                yield* stopSessionInternal(ctx);
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
+                // Drain BEFORE snapshotting turn state: queued events may still
+                // set activeTurnFailedToolDetail or turn attribution.
+                yield* waitForDevinQueuedTurnEventsDrained(ctx);
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
                 if (!clearDevinActiveTurn(ctx, turnId)) return;
                 const completedCost = finalizeDevinActiveTurnCost(ctx);
