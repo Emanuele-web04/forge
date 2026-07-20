@@ -69,6 +69,10 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import {
+  ProviderHealth,
+  type ProviderHealthShape,
+} from "../../provider/Services/ProviderHealth.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -508,6 +512,14 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(
+        Layer.succeed(ProviderHealth, {
+          getStatuses: Effect.succeed([]),
+          refresh: Effect.succeed([]),
+          updateProvider: () => Effect.die("updateProvider unsupported in test"),
+          streamChanges: Stream.empty,
+        } as unknown as ProviderHealthShape),
+      ),
       Layer.provideMerge(Layer.succeed(StudioOutputReactor, studioOutputReactor)),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
