@@ -163,7 +163,7 @@ interface DevinAdapterLiveOptions {
 
 interface PendingApproval {
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
-  readonly kind: string | "unknown";
+  readonly kind: string;
 }
 
 interface PendingUserInput {
@@ -1704,7 +1704,7 @@ export function makeDevinAdapter(
           models,
           source: dynamicResult.models.length > 0 ? "devin.acp" : "devin.static",
           cached: false,
-          error: dynamicResult.error,
+          ...(dynamicResult.error !== undefined ? { error: dynamicResult.error } : {}),
         } satisfies ProviderListModelsResult;
       });
 
