@@ -778,6 +778,7 @@ const makeAcpSessionRuntime = (
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
     const eventQueue = yield* Queue.bounded<AcpParsedSessionEvent>(2_048);
+    const activeSessionIdRef = yield* Ref.make<Option.Option<string>>(Option.none());
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const availableCommandsRef = yield* Ref.make<ReadonlyArray<EffectAcpSchema.AvailableCommand>>(
       [],
@@ -803,11 +804,24 @@ const makeAcpSessionRuntime = (
     // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
     // writer per offer, and readers only need a monotonic snapshot.
     let sessionUpdatesEnqueued = 0;
-    const offerSessionEvent = (event: AcpParsedSessionEvent): Effect.Effect<void> =>
-      Effect.suspend(() => {
-        sessionUpdatesEnqueued += 1;
-        return Effect.asVoid(Queue.offer(eventQueue, event));
+    const PENDING_SESSION_ID = "__synara_acp_pending_session__";
+
+    const isActiveSession = (sessionId: string): Effect.Effect<boolean, never, never> =>
+      Effect.gen(function* () {
+        const active = yield* Ref.get(activeSessionIdRef);
+        if (Option.isNone(active)) return false;
+        return active.value === PENDING_SESSION_ID || active.value === sessionId;
       });
+
+    const offerSessionEvent = (event: AcpParsedSessionEvent): Effect.Effect<void> =>
+      Effect.suspend(() =>
+        Effect.gen(function* () {
+          const active = yield* Ref.get(activeSessionIdRef);
+          if (Option.isNone(active)) return;
+          sessionUpdatesEnqueued += 1;
+          yield* Queue.offer(eventQueue, event);
+        }),
+      );
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
@@ -899,37 +913,38 @@ const makeAcpSessionRuntime = (
       );
 
     yield* acp.handleSessionUpdate((notification) =>
-      Effect.suspend(() => {
+      Effect.gen(function* () {
+        if (!(yield* isActiveSession(notification.sessionId))) return;
+
         const update = notification.update;
-        const rememberCommands =
-          update.sessionUpdate === "available_commands_update"
-            ? Ref.set(availableCommandsRef, update.availableCommands)
-            : Effect.void;
-        const rememberConfigOptions =
-          update.sessionUpdate === "config_option_update"
-            ? Ref.set(configOptionsRef, update.configOptions).pipe(
-                Effect.andThen(resolveConfigOptionUpdateWaiters(update.configOptions)),
-              )
-            : Effect.void;
+        const rememberCommands = Effect.gen(function* () {
+          if (update.sessionUpdate !== "available_commands_update") return;
+          if (!(yield* isActiveSession(notification.sessionId))) return;
+          yield* Ref.set(availableCommandsRef, update.availableCommands);
+        });
+        const rememberConfigOptions = Effect.gen(function* () {
+          if (update.sessionUpdate !== "config_option_update") return;
+          if (!(yield* isActiveSession(notification.sessionId))) return;
+          yield* Ref.set(configOptionsRef, update.configOptions);
+          yield* resolveConfigOptionUpdateWaiters(update.configOptions);
+        });
         const rememberBoundedState = rememberCommands.pipe(Effect.andThen(rememberConfigOptions));
-        if (!acceptingSessionUpdates) {
-          // Command and configuration inventories are bounded state, not
-          // transcript replay; retain them even while historical session
-          // updates are being suppressed.
-          return rememberBoundedState;
-        }
-        return rememberBoundedState.pipe(
-          Effect.andThen(
-            handleSessionUpdate({
-              offer: offerSessionEvent,
-              modeStateRef,
-              toolCallsRef,
-              assistantSegmentRef,
-              runtimeInstanceId,
-              params: notification,
-            }),
-          ),
-        );
+
+        // Command and configuration inventories are bounded state, not
+        // transcript replay; retain them even while historical session
+        // updates are being suppressed.
+        yield* rememberBoundedState;
+        if (!acceptingSessionUpdates) return;
+        if (!(yield* isActiveSession(notification.sessionId))) return;
+
+        return yield* handleSessionUpdate({
+          offer: offerSessionEvent,
+          modeStateRef,
+          toolCallsRef,
+          assistantSegmentRef,
+          runtimeInstanceId,
+          params: notification,
+        });
       }),
     );
 
@@ -1167,6 +1182,32 @@ const makeAcpSessionRuntime = (
         yield* Ref.set(authenticatedRef, true);
       });
 
+      const cleanupDiscardedAcpSession = (discardedSessionId: string) =>
+        Effect.gen(function* () {
+          // Stop accepting new transcript updates and detach the discarded session id.
+          acceptingSessionUpdates = false;
+          yield* Ref.set(activeSessionIdRef, Option.none());
+
+          // Drain any events that were already enqueued for the discarded session.
+          const queued = Queue.sizeUnsafe(eventQueue);
+          for (let i = 0; i < queued; i++) {
+            yield* Queue.take(eventQueue);
+          }
+
+          // Reset bounded state derived from the discarded session so it cannot leak
+          // into the final authenticated session.
+          yield* Ref.set(availableCommandsRef, []);
+          yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(undefined));
+          yield* Ref.set(modeStateRef, undefined);
+
+          // Best-effort close so the agent does not keep the probe session alive.
+          const supportsClose =
+            initializeResult.agentCapabilities?.sessionCapabilities?.close != null;
+          if (supportsClose) {
+            yield* acp.agent.closeSession({ sessionId: discardedSessionId }).pipe(Effect.ignore);
+          }
+        });
+
       const runSessionSetup = Effect.gen(function* () {
         let sessionId: string;
         let sessionSetupResult:
@@ -1192,6 +1233,9 @@ const makeAcpSessionRuntime = (
                 "ACP agent cannot reopen the requested session because it advertises neither session/resume nor session/load.",
             });
           }
+          // Resumed/replayed updates are tied to the known session id even before the
+          // request returns, so bounded state stays coherent if notifications arrive early.
+          yield* Ref.set(activeSessionIdRef, Option.some(options.resumeSessionId));
           const resumed = yield* supportsResume
             ? runLoggedRequest(
                 "session/resume",
@@ -1220,6 +1264,7 @@ const makeAcpSessionRuntime = (
           // Fresh session: accept updates from before session/new so any early
           // agent output emitted while the request is in flight is buffered.
           acceptingSessionUpdates = true;
+          yield* Ref.set(activeSessionIdRef, Option.some(PENDING_SESSION_ID));
           const createPayload = {
             cwd: options.cwd,
             mcpServers,
@@ -1232,24 +1277,29 @@ const makeAcpSessionRuntime = (
           sessionId = created.sessionId;
           sessionSetupResult = created;
           sessionSetupMethod = "new";
-        }
 
-        // On-demand authentication: if the ACP agent returned an empty model
-        // list but advertised authentication methods, the session is not yet
-        // usable. Treat this as an auth-required failure so the caller can
-        // authenticate once and retry.
-        if (options.authPolicy === "on-demand" && !(yield* Ref.get(authenticatedRef))) {
-          const setupConfigOptions = sessionConfigOptionsFromSetup(sessionSetupResult);
-          const modelOption = findSessionConfigOption(setupConfigOptions, "model");
-          const availableModels = modelOption ? collectSessionConfigOptionValues(modelOption) : [];
-          if (availableModels.length === 0 && (initializeResult.authMethods?.length ?? 0) > 0) {
-            return yield* new EffectAcpErrors.AcpRequestError({
-              code: -32000,
-              errorMessage:
-                "Authentication required: ACP agent returned an empty model list; authenticate and retry session setup.",
-              data: { authMethods: initializeResult.authMethods ?? [] },
-            });
+          // On-demand authentication: if the ACP agent returned an empty model
+          // list but advertised authentication methods, the session is not yet
+          // usable. Close the probe session, discard its updates, then fail so
+          // the caller can authenticate and retry with a single live session.
+          if (options.authPolicy === "on-demand" && !(yield* Ref.get(authenticatedRef))) {
+            const setupConfigOptions = sessionConfigOptionsFromSetup(sessionSetupResult);
+            const modelOption = findSessionConfigOption(setupConfigOptions, "model");
+            const availableModels = modelOption
+              ? collectSessionConfigOptionValues(modelOption)
+              : [];
+            if (availableModels.length === 0 && (initializeResult.authMethods?.length ?? 0) > 0) {
+              yield* cleanupDiscardedAcpSession(created.sessionId);
+              return yield* new EffectAcpErrors.AcpRequestError({
+                code: -32000,
+                errorMessage:
+                  "Authentication required: ACP agent returned an empty model list; authenticate and retry session setup.",
+                data: { authMethods: initializeResult.authMethods ?? [] },
+              });
+            }
           }
+
+          yield* Ref.set(activeSessionIdRef, Option.some(created.sessionId));
         }
 
         return {

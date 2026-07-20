@@ -29,9 +29,13 @@ const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === 
 const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
+const advertiseAuthMethods = process.env.SYNARA_ACP_ADVERTISE_AUTH_METHODS === "1";
+const requireAuthForSession = process.env.SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION === "1";
+const emitOrphanUpdate = process.env.SYNARA_ACP_EMIT_ORPHAN_UPDATE === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
 const sessionId = "mock-session-1";
 
+let authenticated = false;
 let currentModeId = "ask";
 let currentModelId = "default";
 let parameterizedModelPicker = false;
@@ -282,12 +286,20 @@ app.onRequest(OfficialAcp.methods.agent.initialize, ({ params: request }) =>
             ...(supportsSessionFork ? { fork: {} } : {}),
           },
         },
+        authMethods: advertiseAuthMethods ? [{ id: "test-key", name: "Test Key" }] : [],
       };
     }),
   ),
 );
 
-app.onRequest(OfficialAcp.methods.agent.authenticate, () => ({}));
+app.onRequest(OfficialAcp.methods.agent.authenticate, () =>
+  runEffect(
+    Effect.sync(() => {
+      authenticated = true;
+      return {};
+    }),
+  ),
+);
 
 app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
   sessionNewAttempts += 1;
@@ -309,10 +321,25 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
           },
         });
       }
+      const isAuthenticated = !requireAuthForSession || authenticated;
+      if (emitOrphanUpdate && !isAuthenticated) {
+        yield* client.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "orphan" },
+          },
+        });
+      }
+      const configOptionsForSession = isAuthenticated
+        ? configOptions()
+        : configOptions().map((option) =>
+            option.id === "model" ? { ...option, options: [] } : option,
+          );
       return {
         sessionId,
         modes: modeState(),
-        configOptions: configOptions(),
+        configOptions: configOptionsForSession,
       };
     }),
   );
