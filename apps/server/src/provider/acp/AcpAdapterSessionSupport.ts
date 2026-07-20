@@ -185,6 +185,29 @@ export function finalizeAcpActiveTurnCost(context: { latestSessionCostUsd: numbe
     : {};
 }
 
+// Holds the active-turn window open until session/update events that were
+// already enqueued when the prompt response resolved have been fully handled
+// by the adapter's notification consumer, so they settle with their turn
+// attribution (and recorded failed-tool detail) intact. Snapshotting the
+// runtime's enqueued count and waiting for the adapter's processed count to
+// catch up is immune to stream chunk buffering and in-flight handlers, unlike
+// a queue-size probe. Returns immediately when the consumer kept up; bounded
+// so a chatty stream cannot stall settlement past the cap.
+export function waitForAcpQueuedTurnEventsDrained(input: {
+  readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
+  readonly sessionUpdatesProcessed: () => number;
+  readonly maxWaitMs: number;
+  readonly pollMs: number;
+}): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const target = yield* input.sessionUpdatesEnqueuedCount;
+    const startedAt = Date.now();
+    while (input.sessionUpdatesProcessed() < target && Date.now() - startedAt < input.maxWaitMs) {
+      yield* Effect.sleep(input.pollMs);
+    }
+  });
+}
+
 export function withAcpPlanModePrompt(input: {
   readonly text: string;
   readonly interactionMode?: ProviderInteractionMode;

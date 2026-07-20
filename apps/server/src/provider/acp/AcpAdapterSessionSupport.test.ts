@@ -1,4 +1,5 @@
 import { ThreadId, TurnId, type ProviderSession } from "@synara/contracts";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,6 +11,7 @@ import {
   resolveAcpTurnInteractionMode,
   scopeAcpRuntimeItemIdForTurn,
   scopeAcpToolCallStateForTurn,
+  waitForAcpQueuedTurnEventsDrained,
   withAcpPlanModePrompt,
 } from "./AcpAdapterSessionSupport.ts";
 
@@ -211,5 +213,49 @@ describe("ACP adapter session support", () => {
         homeDir: "/home/test",
       }),
     ).toBe("/server");
+  });
+
+  it("waits until the consumer catches up with enqueued session updates", async () => {
+    let processed = 0;
+    const drained = Effect.runPromise(
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: Effect.succeed(3),
+        sessionUpdatesProcessed: () => processed,
+        maxWaitMs: 1_000,
+        pollMs: 1,
+      }),
+    );
+    // Simulate the notification consumer handling queued events asynchronously,
+    // as happens across two consecutive turns whose trailing updates are still
+    // in flight when the prompt response resolves.
+    setTimeout(() => {
+      processed = 3;
+    }, 10);
+    await drained;
+    expect(processed).toBe(3);
+  });
+
+  it("returns immediately when the consumer already kept up", async () => {
+    const startedAt = Date.now();
+    await Effect.runPromise(
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: Effect.succeed(2),
+        sessionUpdatesProcessed: () => 2,
+        maxWaitMs: 1_000,
+        pollMs: 25,
+      }),
+    );
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("bounds the wait so a stalled consumer cannot block settlement", async () => {
+    await Effect.runPromise(
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: Effect.succeed(5),
+        sessionUpdatesProcessed: () => 0,
+        maxWaitMs: 20,
+        pollMs: 1,
+      }),
+    );
   });
 });
