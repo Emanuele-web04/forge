@@ -12,6 +12,7 @@ import {
   ApprovalRequestId,
   type DevinModelOptions,
   EventId,
+  MODEL_OPTIONS_BY_PROVIDER,
   type ProviderApprovalDecision,
   type ProviderComposerCapabilities,
   type ProviderInteractionMode,
@@ -21,20 +22,17 @@ import {
   type ProviderOptionDescriptor,
   type ProviderRuntimeEvent,
   type ProviderSession,
-  type ProviderThreadSnapshot,
-  type ProviderThreadTurnSnapshot,
   type ProviderUserInputAnswers,
   RuntimeRequestId,
   type RuntimeMode,
   type ThreadId,
-  type TurnId,
+  TurnId,
   type UserInputQuestion,
   type ChatAttachment,
 } from "@synara/contracts";
 import {
   getModelCapabilities,
   getProviderOptionDescriptors,
-  MODEL_OPTIONS_BY_PROVIDER,
   resolveModelSlug,
 } from "@synara/shared/model";
 import {
@@ -111,9 +109,17 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
+import {
+  elicitationQuestionsFromRequest,
+  elicitationResponseFromAnswers,
+} from "../acp/AcpElicitationSupport.ts";
 import { type DevinAcpRuntimeSettings, makeDevinAcpRuntime } from "../acp/DevinAcpSupport.ts";
 import { makeEventNdjsonLogger, type EventNdjsonLogger } from "../Layers/EventNdjsonLogger.ts";
-import { type ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import {
+  type ProviderAdapterShape,
+  type ProviderThreadSnapshot,
+  type ProviderThreadTurnSnapshot,
+} from "../Services/ProviderAdapter.ts";
 import { DevinAdapter, type DevinAdapterShape } from "../Services/DevinAdapter.ts";
 
 const PROVIDER = "devin" as const;
@@ -164,7 +170,7 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntimeShape;
-  notificationFiber: Fiber.RuntimeFiber<void, never> | undefined;
+  notificationFiber: Fiber.Fiber<void, never> | undefined;
   pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   turns: Array<ProviderThreadTurnSnapshot>;
@@ -172,7 +178,8 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
   activeTurnFailedToolDetail: string | undefined;
-  activePromptFiber: Fiber.RuntimeFiber<void, never> | undefined;
+  activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  lastPlanFingerprint: string | undefined;
   lastTurnActivityAt: number | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
@@ -418,151 +425,6 @@ function applyDevinSessionConfiguration(input: {
   });
 }
 
-function buildStringElicitationOptions(
-  property: Extract<EffectAcpSchema.ElicitationPropertySchema, { readonly type: "string" }>,
-): Array<ProviderOptionChoice> {
-  const options: Array<ProviderOptionChoice> = [];
-  if (property.enum) {
-    for (const value of property.enum) {
-      options.push({ id: value, label: value, description: value });
-    }
-  }
-  if (property.oneOf) {
-    for (const option of property.oneOf) {
-      options.push({
-        id: option.const,
-        label: option.title,
-        description: option.title,
-      });
-    }
-  }
-  return options;
-}
-
-function buildArrayElicitationOptions(
-  property: Extract<EffectAcpSchema.ElicitationPropertySchema, { readonly type: "array" }>,
-): Array<ProviderOptionChoice> {
-  const items = property.items;
-  if ("enum" in items && Array.isArray(items.enum)) {
-    return items.enum.map((value) => ({
-      id: value,
-      label: value,
-      description: value,
-    }));
-  }
-  if ("anyOf" in items && Array.isArray(items.anyOf)) {
-    return items.anyOf.map((option) => ({
-      id: option.const,
-      label: option.title,
-      description: option.title,
-    }));
-  }
-  return [];
-}
-
-function acpElicitationQuestionsFromSchema(
-  message: string,
-  requestedSchema: EffectAcpSchema.ElicitationRequest["requestedSchema"],
-): Array<UserInputQuestion> {
-  const properties = requestedSchema?.properties;
-  if (!properties || Object.keys(properties).length === 0) {
-    return [
-      {
-        id: "response",
-        header: message,
-        question: "Please provide the requested information.",
-        options: [],
-        multiSelect: false,
-      } satisfies UserInputQuestion,
-    ];
-  }
-
-  const questions: Array<UserInputQuestion> = [];
-  for (const [propertyId, property] of Object.entries(properties)) {
-    const header = requestedSchema?.title?.trim() || message;
-    const question = property.description?.trim() || property.title?.trim() || propertyId;
-
-    if (property.type === "boolean") {
-      questions.push({
-        id: propertyId,
-        header,
-        question,
-        options: [
-          { id: "true", label: "Yes", description: "Yes" },
-          { id: "false", label: "No", description: "No" },
-        ],
-        multiSelect: false,
-      });
-    } else if (property.type === "array") {
-      questions.push({
-        id: propertyId,
-        header,
-        question,
-        options: buildArrayElicitationOptions(property),
-        multiSelect: true,
-      });
-    } else {
-      questions.push({
-        id: propertyId,
-        header,
-        question,
-        options: property.type === "string" ? buildStringElicitationOptions(property) : [],
-        multiSelect: false,
-      });
-    }
-  }
-  return questions;
-}
-
-function acpElicitationContentFromAnswers(
-  requestedSchema: EffectAcpSchema.ElicitationRequest["requestedSchema"],
-  answers: ProviderUserInputAnswers,
-): Record<string, EffectAcpSchema.ElicitationContentValue> {
-  const properties = requestedSchema?.properties;
-  const content: Record<string, EffectAcpSchema.ElicitationContentValue> = {};
-  if (!properties) {
-    return content;
-  }
-
-  for (const [propertyId, property] of Object.entries(properties)) {
-    const answer = answers[propertyId];
-    if (answer === undefined || answer === null) {
-      continue;
-    }
-
-    if (property.type === "boolean") {
-      const str = Array.isArray(answer) ? answer[0] : answer;
-      if (typeof str === "string") {
-        content[propertyId] = str.toLowerCase() === "true";
-      }
-    } else if (property.type === "number" || property.type === "integer") {
-      const str = Array.isArray(answer) ? answer[0] : answer;
-      if (typeof str === "string") {
-        const parsed = Number(str);
-        if (Number.isFinite(parsed)) {
-          content[propertyId] = property.type === "integer" ? Math.trunc(parsed) : parsed;
-        }
-      }
-    } else if (property.type === "array") {
-      if (Array.isArray(answer)) {
-        content[propertyId] = answer;
-      } else if (typeof answer === "string") {
-        content[propertyId] = answer
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
-    } else {
-      if (typeof answer === "string") {
-        content[propertyId] = answer;
-      } else if (Array.isArray(answer)) {
-        content[propertyId] = answer;
-      }
-    }
-  }
-  return content;
-}
-
 function clearDevinActiveTurn(ctx: DevinSessionContext, turnId: TurnId): boolean {
   if (ctx.activeTurnId !== turnId) {
     return false;
@@ -691,21 +553,22 @@ function buildDevinProviderModelDescriptors(
 ): ReadonlyArray<ProviderModelDescriptor> {
   const modelOption = findModelConfigOption(configOptions);
   if (!modelOption || modelOption.type !== "select") {
-    return MODEL_OPTIONS_BY_PROVIDER.devin.map((modelDefinition) => ({
-      slug: modelDefinition.slug,
-      name: modelDefinition.name,
-      optionDescriptors: getProviderOptionDescriptors({
-        provider: PROVIDER,
-        caps: modelDefinition.capabilities,
-      }),
-      supportsFastMode: modelDefinition.capabilities.supportsFastMode,
-      supportsThinkingToggle: modelDefinition.capabilities.supportsThinkingToggle,
-      contextWindowOptions: modelDefinition.capabilities.contextWindowOptions,
-      supportedReasoningEfforts: modelDefinition.capabilities.reasoningEffortLevels,
-      defaultReasoningEffort: modelDefinition.capabilities.reasoningEffortLevels.find(
-        (o) => o.isDefault,
-      )?.value,
-    }));
+    return MODEL_OPTIONS_BY_PROVIDER.devin.map((modelDefinition) => {
+      const caps = getModelCapabilities(PROVIDER, modelDefinition.slug);
+      return {
+        slug: modelDefinition.slug,
+        name: modelDefinition.name,
+        optionDescriptors: getProviderOptionDescriptors({
+          provider: PROVIDER,
+          caps,
+        }),
+        supportsFastMode: caps.supportsFastMode,
+        supportsThinkingToggle: caps.supportsThinkingToggle,
+        contextWindowOptions: caps.contextWindowOptions,
+        supportedReasoningEfforts: caps.reasoningEffortLevels,
+        defaultReasoningEffort: caps.reasoningEffortLevels.find((o) => o.isDefault)?.value,
+      };
+    });
   }
 
   const nonModelOptions = configOptions!.filter((o) => o !== modelOption);
@@ -736,13 +599,13 @@ function buildDevinPromptParts(input: {
   readonly attachmentsDir: string;
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly fileSystem: FileSystem.FileSystem;
-}): Effect.Effect<Array<EffectAcpSchema.ContentBlock>> {
+}): Effect.Effect<Array<EffectAcpSchema.ContentBlock>, ProviderAdapterRequestError> {
   return Effect.gen(function* () {
     const promptText = appendFileAttachmentsPromptBlock({
       text: input.text
         ? withDevinPlanModePrompt({
             text: input.text.trim(),
-            interactionMode: input.interactionMode,
+            ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
           })
         : undefined,
       attachments: input.attachments,
@@ -1112,11 +975,7 @@ export function makeDevinAdapter(
                   } satisfies EffectAcpSchema.ElicitationResponse;
                 }
 
-                const requestedSchema = params.requestedSchema;
-                const questions = acpElicitationQuestionsFromSchema(
-                  params.message,
-                  requestedSchema,
-                );
+                const questions = elicitationQuestionsFromRequest(params);
                 const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
                 const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
                 const answers = yield* Deferred.make<ProviderUserInputAnswers>();
@@ -1155,12 +1014,9 @@ export function makeDevinAdapter(
                   },
                 });
 
-                const content = acpElicitationContentFromAnswers(requestedSchema, resolved);
-                return {
-                  action: { action: "accept", content },
-                } satisfies EffectAcpSchema.ElicitationResponse;
+                return elicitationResponseFromAnswers(params, resolved);
               }).pipe(
-                Effect.catchAllCause(() =>
+                Effect.catch(() =>
                   Effect.succeed({
                     action: { action: "decline" },
                   } as EffectAcpSchema.ElicitationResponse),
@@ -1215,6 +1071,7 @@ export function makeDevinAdapter(
             activeTurnId: undefined,
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            lastPlanFingerprint: undefined,
             lastTurnActivityAt: undefined,
             latestSessionCostUsd: undefined,
             stopped: false,
@@ -1353,7 +1210,7 @@ export function makeDevinAdapter(
           });
 
           return session;
-        }),
+        }).pipe(Effect.scoped),
       );
 
     const sendTurn: DevinAdapterShape["sendTurn"] = (input) =>
@@ -1607,7 +1464,7 @@ export function makeDevinAdapter(
         return {
           threadId,
           turns: ctx.turns,
-          cwd: ctx.session.cwd,
+          cwd: ctx.session.cwd ?? null,
         } satisfies ProviderThreadSnapshot;
       });
 
@@ -1659,7 +1516,7 @@ export function makeDevinAdapter(
 
         const discovery = Effect.gen(function* () {
           const runtime = yield* makeDevinAcpRuntime({
-            devinSettings: { binaryPath },
+            devinSettings: binaryPath ? { binaryPath } : undefined,
             childProcessSpawner,
             cwd,
             clientInfo: { name: "Synara", version: "0.0.0" },

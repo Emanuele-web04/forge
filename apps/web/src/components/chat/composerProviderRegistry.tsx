@@ -351,6 +351,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("cursor", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("cursor", input),
   },
+  devin: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("devin", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("devin", input),
+  },
   antigravity: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("antigravity", input),

@@ -855,6 +855,7 @@ describe("PROVIDER_OPTIONS", () => {
   it("lists available providers", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
+    const devin = PROVIDER_OPTIONS.find((option) => option.value === "devin");
     const grok = PROVIDER_OPTIONS.find((option) => option.value === "grok");
     const droid = PROVIDER_OPTIONS.find((option) => option.value === "droid");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
@@ -864,6 +865,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "cursor", label: "Cursor", available: true },
+      { value: "devin", label: "Devin", available: true },
       { value: "antigravity", label: "Antigravity", available: true },
       { value: "grok", label: "Grok", available: true },
       { value: "droid", label: "Droid", available: true },
@@ -880,6 +882,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(cursor).toEqual({
       value: "cursor",
       label: "Cursor",
+      available: true,
+    });
+    expect(devin).toEqual({
+      value: "devin",
+      label: "Devin",
       available: true,
     });
     expect(grok).toEqual({

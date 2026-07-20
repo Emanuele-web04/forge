@@ -2323,7 +2323,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             });
           }
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: getProviderBinaryPath(provider, settings),
+            binaryPath: getProviderBinaryPath(provider, settings) ?? null,
             env: providerCommandEnv(provider),
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));

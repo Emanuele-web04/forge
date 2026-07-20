@@ -122,6 +122,7 @@ type CustomModelSettingsKey =
   | "customAntigravityModels"
   | "customGrokModels"
   | "customDroidModels"
+  | "customDevinModels"
   | "customKiloModels"
   | "customOpenCodeModels"
   | "customPiModels"
