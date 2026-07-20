@@ -664,6 +664,7 @@ function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key:
 
 function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean {
   return (
+    hasOwn(patch, "devinBinaryPath") ||
     hasOwn(patch, "kiloBinaryPath") ||
     hasOwn(patch, "kiloServerPassword") ||
     hasOwn(patch, "kiloServerUrl") ||
@@ -733,6 +734,14 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       ...(hasOwn(patch, "cursorBinaryPath") ? { binaryPath: patch.cursorBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "customCursorModels")
         ? { customModels: patch.customCursorModels ?? [] }
+        : {}),
+    };
+  }
+  if (hasOwn(patch, "devinBinaryPath") || hasOwn(patch, "customDevinModels")) {
+    providers.devin = {
+      ...(hasOwn(patch, "devinBinaryPath") ? { binaryPath: patch.devinBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customDevinModels")
+        ? { customModels: patch.customDevinModels ?? [] }
         : {}),
     };
   }
@@ -842,6 +851,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
+    "devinBinaryPath",
     "antigravityBinaryPath",
     "grokBinaryPath",
     "droidBinaryPath",
@@ -876,6 +886,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customCodexModels",
     "customClaudeModels",
     "customCursorModels",
+    "customDevinModels",
     "customAntigravityModels",
     "customGrokModels",
     "customDroidModels",
