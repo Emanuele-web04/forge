@@ -23,6 +23,7 @@ import {
 export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
   interactionMode: ProviderInteractionMode;
   supportsFastMode: boolean;
+  supportsFileAttachments: boolean;
   fastModeEnabled: boolean;
   onAddAttachments: (files: File[]) => void;
   onToggleFastMode: () => void;

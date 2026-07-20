@@ -152,6 +152,7 @@ import {
 } from "../lib/devicePromptContext";
 import {
   buildComposerFileAttachmentsFromFiles,
+  providerSupportsGenericFileAttachments,
   stageUploadComposerAttachments,
   cloneComposerImageAttachment,
   effectiveComposerAttachmentCount,
@@ -6725,6 +6726,8 @@ export default function ChatView({
     [activeThreadId, addComposerFilesToDraft, pendingUserInputs.length, setThreadError],
   );
 
+  const composerAcceptsGenericFiles = providerSupportsGenericFileAttachments(selectedProvider);
+
   const addComposerAttachments = useCallback(
     (files: readonly File[]) => {
       const { imageFiles, genericFiles } = splitComposerDropzoneFiles(files);
@@ -11097,6 +11100,7 @@ export default function ChatView({
       <ComposerExtrasMenu
         interactionMode={interactionMode}
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
+        supportsFileAttachments={composerAcceptsGenericFiles}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddAttachments={addComposerAttachments}
         onToggleFastMode={toggleFastMode}

@@ -102,6 +102,11 @@ function collectComposerAttachmentFiles(input: {
   return { files, error };
 }
 
+// Providers whose adapters project non-image file attachments into the prompt.
+export function providerSupportsGenericFileAttachments(provider: ProviderKind): boolean {
+  return provider === "devin";
+}
+
 /**
  * Asynchronous image intake for every user-facing composer entry point. Count
  * checks happen before decoding, and accepted files are optimized one at a time
