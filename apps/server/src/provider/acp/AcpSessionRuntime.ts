@@ -672,12 +672,15 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         request(OfficialAcp.methods.agent.session.new, {
           ...payload,
           mcpServers: toOfficialMcpServers(payload.mcpServers),
-        }),
+        }).pipe(Effect.tap(() => fromPromise(awaitSessionUpdateDrain))),
       loadSession: (payload: EffectAcpSchema.LoadSessionRequest) =>
         request(OfficialAcp.methods.agent.session.load, {
           ...payload,
           mcpServers: toOfficialMcpServers(payload.mcpServers),
-        }).pipe(Effect.map((response) => response ?? {})),
+        }).pipe(
+          Effect.map((response) => response ?? {}),
+          Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
+        ),
       listSessions: (payload: EffectAcpSchema.ListSessionsRequest) =>
         request(OfficialAcp.methods.agent.session.list, payload),
       forkSession: (payload: EffectAcpSchema.ForkSessionRequest) =>
@@ -689,7 +692,7 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         request(OfficialAcp.methods.agent.session.resume, {
           ...payload,
           mcpServers: toOfficialMcpServers(payload.mcpServers),
-        }),
+        }).pipe(Effect.tap(() => fromPromise(awaitSessionUpdateDrain))),
       closeSession: (payload: EffectAcpSchema.CloseSessionRequest) =>
         request(OfficialAcp.methods.agent.session.close, payload).pipe(
           Effect.map((response) => response ?? {}),
@@ -802,6 +805,9 @@ const makeAcpSessionRuntime = (
     const pendingConfigOptionsRef = yield* Ref.make(
       new Map<string, ReadonlyArray<EffectAcpSchema.SessionConfigOption>>(),
     );
+    const pendingSessionUpdatesRef = yield* Ref.make(
+      new Map<string, ReadonlyArray<EffectAcpSchema.SessionNotification>>(),
+    );
     const configOptionUpdateWaitersRef = yield* Ref.make<ReadonlyArray<ConfigOptionUpdateWaiter>>(
       [],
     );
@@ -843,19 +849,47 @@ const makeAcpSessionRuntime = (
         }
       });
 
-    const setSessionEpoch = (sessionId: string): Effect.Effect<void> =>
+    const setSessionEpoch = (sessionId: string, openUpdateGate = false): Effect.Effect<void> =>
       Effect.gen(function* () {
         yield* commitPendingBoundedState(sessionId);
         yield* Ref.update(sessionEpochRef, (epoch) => ({
           generation: epoch.generation + 1,
           activeSessionId: Option.some(sessionId),
         }));
+        if (openUpdateGate) {
+          acceptingSessionUpdates = true;
+        }
+
+        // Replay buffered session updates that arrived before session/new returned.
+        // Only updates keyed by the final session id are committed; anything from a
+        // discarded probe session was cleared by cleanupDiscardedAcpSession.
+        const epoch = yield* getSessionEpoch();
+        const offer = offerSessionEvent(sessionId, epoch);
+        const pendingUpdates = yield* Ref.getAndUpdate(pendingSessionUpdatesRef, (map) => {
+          const next = new Map(map);
+          next.delete(sessionId);
+          return next;
+        });
+        for (const notification of pendingUpdates.get(sessionId) ?? []) {
+          yield* processSessionUpdate({
+            getSessionEpoch,
+            offer,
+            sessionId,
+            epoch,
+            modeStateRef,
+            toolCallsRef,
+            assistantSegmentRef,
+            runtimeInstanceId,
+            params: notification,
+          });
+        }
       });
 
     const clearSessionEpoch = (): Effect.Effect<void> =>
       Effect.gen(function* () {
         yield* Ref.set(pendingAvailableCommandsRef, new Map());
         yield* Ref.set(pendingConfigOptionsRef, new Map());
+        yield* Ref.set(pendingSessionUpdatesRef, new Map());
         yield* Ref.update(sessionEpochRef, (epoch) => ({
           generation: epoch.generation + 1,
           activeSessionId: Option.none(),
@@ -969,10 +1003,11 @@ const makeAcpSessionRuntime = (
         const update = notification.update;
 
         // While the authoritative session id is unknown (fresh session/new is
-        // still pending), only bounded-state notifications are accepted, and
-        // they are buffered keyed by the session id they claim. Once session/new
-        // returns, only the buffer matching the response id is committed;
-        // anything from a discarded probe session is discarded.
+        // still pending), all session/update notifications are buffered keyed by
+        // the session id they claim. Once session/new returns, only the buffer
+        // matching the response id is replayed; bounded state and transcript
+        // events from a discarded probe session are cleared by
+        // cleanupDiscardedAcpSession.
         if (Option.isNone(epoch.activeSessionId)) {
           if (update.sessionUpdate === "available_commands_update") {
             yield* Ref.update(pendingAvailableCommandsRef, (map) => {
@@ -990,6 +1025,12 @@ const makeAcpSessionRuntime = (
               return next;
             });
           }
+          yield* Ref.update(pendingSessionUpdatesRef, (map) => {
+            const next = new Map(map);
+            const list = next.get(sessionId) ?? [];
+            next.set(sessionId, [...list, notification]);
+            return next;
+          });
           return;
         }
 
@@ -1328,6 +1369,7 @@ const makeAcpSessionRuntime = (
           }
           // Resumed/replayed updates are tied to the known session id even before the
           // request returns, so bounded state stays coherent if notifications arrive early.
+          // The transcript gate stays closed until the consumer attaches via getEvents().
           yield* setSessionEpoch(options.resumeSessionId);
           const resumed = yield* supportsResume
             ? runLoggedRequest(
@@ -1395,8 +1437,7 @@ const makeAcpSessionRuntime = (
 
           // The final session id is now known. Install it and start accepting
           // session updates from this generation onward.
-          yield* setSessionEpoch(created.sessionId);
-          acceptingSessionUpdates = true;
+          yield* setSessionEpoch(created.sessionId, true);
         }
 
         return {
