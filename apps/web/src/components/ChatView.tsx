@@ -1421,10 +1421,13 @@ export default function ChatView({
   );
   const draftFallbackModelSelection = useMemo<ModelSelection>(() => {
     const projectDefault = fallbackDraftProject?.defaultModelSelection;
-    const preferredProvider = settings.defaultProvider === "pi" ? null : settings.defaultProvider;
-    const provider = preferredProvider ?? projectDefault?.provider ?? "codex";
+    const settingsProvider = settings.defaultProvider === "pi" ? null : settings.defaultProvider;
+    const provider = projectDefault?.provider ?? settingsProvider ?? "codex";
     const model =
       (provider === projectDefault?.provider ? projectDefault.model : null) ??
+      (provider === settingsProvider && settingsProvider !== null
+        ? getDefaultModel(settingsProvider)
+        : null) ??
       getDefaultModel(provider) ??
       DEFAULT_MODEL_BY_PROVIDER.codex;
     return buildModelSelection(provider, model);
