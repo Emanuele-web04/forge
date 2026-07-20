@@ -107,7 +107,7 @@ type AcpIncomingFrame =
   | { readonly _tag: "error"; readonly error: unknown }
   | { readonly _tag: "end" };
 
-type SessionEpoch = { generation: number; activeSessionId: Option.Option<string> };
+export type SessionEpoch = { generation: number; activeSessionId: Option.Option<string> };
 const isActiveSessionId = (sessionId: string, epoch: SessionEpoch): boolean =>
   Option.isSome(epoch.activeSessionId) && epoch.activeSessionId.value === sessionId;
 
@@ -240,6 +240,13 @@ export interface AcpSessionRuntimeOptions {
   };
   /** Test seam for the single shared ACP subprocess teardown owner. */
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+  /**
+   * Test seam signalled when setSessionEpoch has captured the pending buffer
+   * but has not yet installed the new epoch (the transition window).
+   */
+  readonly __testTransitionReached?: Effect.Effect<void>;
+  /** Test seam awaited inside the transition window before the epoch installs. */
+  readonly __testTransitionPause?: Effect.Effect<void>;
 }
 
 export interface AcpSessionRequestLogEvent {
@@ -324,6 +331,10 @@ export interface AcpSessionRuntimeShape {
   readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
   readonly supportsSessionFork: Effect.Effect<boolean, EffectAcpErrors.AcpError>;
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
+  /** @internal Exposed for tests: the current session epoch. */
+  readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
+  /** @internal Exposed for tests: total buffered pending session/update notifications. */
+  readonly getPendingSessionNotificationCount: () => Effect.Effect<number>;
   readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
   readonly getAvailableCommands: Effect.Effect<ReadonlyArray<EffectAcpSchema.AvailableCommand>>;
   readonly prompt: (
@@ -349,8 +360,6 @@ export interface AcpSessionRuntimeShape {
     method: string,
     payload: unknown,
   ) => Effect.Effect<void, EffectAcpErrors.AcpError>;
-  /** Resolves with the child process exit code when the ACP process exits (crash or normal). */
-  readonly exitCode: Effect.Effect<number | null, never, never>;
 }
 
 interface AcpStartedState extends AcpSessionRuntimeStartResult {}
@@ -810,78 +819,156 @@ export function makeStartupInteractionRegistry<Req, Res>(
   defaultResponse: Res,
 ): Effect.Effect<StartupInteraction<Req, Res>, never, never> {
   return Effect.gen(function* () {
-    const generationRef = yield* Ref.make(0);
-    const startedRef = yield* Ref.make(false);
-    const handlerRef = yield* Ref.make<
-      Option.Option<(req: Req) => Effect.Effect<Res, EffectAcpErrors.AcpError>>
-    >(Option.none());
-    const pendingRef = yield* Ref.make<
-      ReadonlyArray<{
-        readonly req: Req;
-        readonly deferred: Deferred.Deferred<Res, EffectAcpErrors.AcpError>;
-        readonly generation: number;
-      }>
-    >([]);
+    type Handler = (req: Req) => Effect.Effect<Res, EffectAcpErrors.AcpError>;
+    interface PendingItem {
+      readonly req: Req;
+      readonly deferred: Deferred.Deferred<Res, EffectAcpErrors.AcpError>;
+      readonly generation: number;
+    }
+    // Single atomic state machine (mirrors the pending-session state machine used
+    // by setSessionEpoch): every transition is one Ref.modify so a dispatch can
+    // never observe a partially applied begin/complete/register and end up
+    // stranded in the buffer or delivered twice.
+    interface RegistryState {
+      readonly generation: number;
+      readonly started: boolean;
+      readonly handler: Option.Option<Handler>;
+      readonly pending: ReadonlyArray<PendingItem>;
+    }
+    const stateRef = yield* Ref.make<RegistryState>({
+      generation: 0,
+      started: false,
+      handler: Option.none(),
+      pending: [],
+    });
 
-    const cancel = Effect.gen(function* () {
-      const pending = yield* Ref.getAndSet(pendingRef, []);
-      yield* Effect.forEach(
-        pending,
+    const cancelItems = (items: ReadonlyArray<PendingItem>) =>
+      Effect.forEach(
+        items,
         (item) => Deferred.complete(item.deferred, Effect.succeed(defaultResponse)),
         { discard: true },
       );
-    });
 
-    const flush = Effect.gen(function* () {
-      const handlerOption = yield* Ref.get(handlerRef);
-      if (Option.isNone(handlerOption)) return;
-      const pending = yield* Ref.getAndSet(pendingRef, []);
-      yield* Effect.forEach(
-        pending,
-        (item) => Deferred.complete(item.deferred, handlerOption.value(item.req)),
+    // Items from a stale generation are answered with the safe default instead of
+    // being replayed to the next session's handler.
+    const deliverItems = (
+      items: ReadonlyArray<PendingItem>,
+      handler: Handler,
+      generation: number,
+    ) =>
+      Effect.forEach(
+        items,
+        (item) =>
+          Deferred.complete(
+            item.deferred,
+            item.generation === generation ? handler(item.req) : Effect.succeed(defaultResponse),
+          ),
         { discard: true },
       );
-    });
+
+    type DispatchDecision =
+      | { readonly _tag: "deliver"; readonly handler: Handler }
+      | { readonly _tag: "overflow" }
+      | { readonly _tag: "buffered" };
 
     const dispatch = (req: Req) =>
       Effect.gen(function* () {
-        const generation = yield* Ref.get(generationRef);
-        const started = yield* Ref.get(startedRef);
-        const handlerOption = yield* Ref.get(handlerRef);
-        if (started && Option.isSome(handlerOption)) {
-          return yield* handlerOption.value(req);
-        }
-        const pending = yield* Ref.get(pendingRef);
-        if (pending.length >= ACP_MAX_STARTUP_INTERACTIONS) {
-          return yield* new EffectAcpErrors.AcpRequestError({
-            code: -32000,
-            errorMessage: "Startup interaction buffer overflow",
-          });
-        }
         const deferred = yield* Deferred.make<Res, EffectAcpErrors.AcpError>();
-        yield* Ref.set(pendingRef, pending.concat({ req, deferred, generation }));
-        return yield* Deferred.await(deferred);
-      });
-
-    const register = (handler: (req: Req) => Effect.Effect<Res, EffectAcpErrors.AcpError>) =>
-      Effect.gen(function* () {
-        yield* Ref.set(handlerRef, Option.some(handler));
-        const started = yield* Ref.get(startedRef);
-        if (started) {
-          yield* flush;
+        const decision = yield* Ref.modify(stateRef, (state): [DispatchDecision, RegistryState] => {
+          if (state.started && Option.isSome(state.handler)) {
+            return [{ _tag: "deliver", handler: state.handler.value }, state];
+          }
+          if (state.pending.length >= ACP_MAX_STARTUP_INTERACTIONS) {
+            return [{ _tag: "overflow" }, state];
+          }
+          return [
+            { _tag: "buffered" },
+            {
+              ...state,
+              pending: state.pending.concat({ req, deferred, generation: state.generation }),
+            },
+          ];
+        });
+        switch (decision._tag) {
+          case "deliver":
+            return yield* decision.handler(req);
+          case "overflow":
+            return yield* new EffectAcpErrors.AcpRequestError({
+              code: -32000,
+              errorMessage: "Startup interaction buffer overflow",
+            });
+          case "buffered":
+            return yield* Deferred.await(deferred);
         }
       });
 
-    const begin = Effect.gen(function* () {
-      yield* Ref.update(generationRef, (generation) => generation + 1);
-      yield* Ref.set(startedRef, false);
-      yield* cancel;
-    });
+    const register = (handler: Handler) =>
+      Ref.modify(
+        stateRef,
+        (
+          state,
+        ): [
+          { readonly items: ReadonlyArray<PendingItem>; readonly generation: number },
+          RegistryState,
+        ] => {
+          if (!state.started) {
+            return [
+              { items: [], generation: state.generation },
+              { ...state, handler: Option.some(handler) },
+            ];
+          }
+          return [
+            { items: state.pending, generation: state.generation },
+            { ...state, handler: Option.some(handler), pending: [] },
+          ];
+        },
+      ).pipe(Effect.flatMap(({ items, generation }) => deliverItems(items, handler, generation)));
 
-    const complete = Effect.gen(function* () {
-      yield* Ref.set(startedRef, true);
-      yield* flush;
-    });
+    const begin = Ref.modify(stateRef, (state): [ReadonlyArray<PendingItem>, RegistryState] => [
+      state.pending,
+      {
+        generation: state.generation + 1,
+        started: false,
+        handler: state.handler,
+        pending: [],
+      },
+    ]).pipe(Effect.flatMap(cancelItems));
+
+    type CompleteDecision =
+      | {
+          readonly _tag: "flush";
+          readonly handler: Handler;
+          readonly items: ReadonlyArray<PendingItem>;
+          readonly generation: number;
+        }
+      | { readonly _tag: "hold" };
+
+    const complete = Ref.modify(stateRef, (state): [CompleteDecision, RegistryState] => {
+      if (Option.isNone(state.handler)) {
+        // No handler yet: keep buffering; register will flush once it arrives.
+        return [{ _tag: "hold" }, { ...state, started: true }];
+      }
+      return [
+        {
+          _tag: "flush",
+          handler: state.handler.value,
+          items: state.pending,
+          generation: state.generation,
+        },
+        { ...state, started: true, pending: [] },
+      ];
+    }).pipe(
+      Effect.flatMap((decision) =>
+        decision._tag === "flush"
+          ? deliverItems(decision.items, decision.handler, decision.generation)
+          : Effect.void,
+      ),
+    );
+
+    const cancel = Ref.modify(stateRef, (state): [ReadonlyArray<PendingItem>, RegistryState] => [
+      state.pending,
+      { ...state, pending: [] },
+    ]).pipe(Effect.flatMap(cancelItems));
 
     return {
       dispatch,
@@ -903,6 +990,8 @@ const makeAcpSessionRuntime = (
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
+    const testTransitionReached = options.__testTransitionReached;
+    const testTransitionPause = options.__testTransitionPause;
     const eventQueue = yield* Queue.bounded<AcpParsedSessionEvent>(2_048);
     const sessionEpochRef = yield* Ref.make<{
       generation: number;
@@ -1023,6 +1112,13 @@ const makeAcpSessionRuntime = (
         const pending = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
         const sessionPending = pending.get(sessionId) ?? { notifications: [] };
 
+        if (testTransitionReached) {
+          yield* testTransitionReached;
+        }
+        if (testTransitionPause) {
+          yield* testTransitionPause;
+        }
+
         // Install the setup baseline first so early mode/config updates are replayed
         // on top of the authoritative response, not overwritten by it.
         yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
@@ -1046,8 +1142,8 @@ const makeAcpSessionRuntime = (
 
         const epoch = yield* getSessionEpoch();
         const offer = offerSessionEvent(sessionId, epoch);
-        for (const notification of sessionPending.notifications) {
-          yield* processSessionUpdate({
+        const apply = (notification: EffectAcpSchema.SessionNotification) =>
+          processSessionUpdate({
             getSessionEpoch,
             offer,
             sessionId,
@@ -1062,6 +1158,21 @@ const makeAcpSessionRuntime = (
             skipTranscriptEvents: replay === "bounded-only",
             params: notification,
           });
+        for (const notification of sessionPending.notifications) {
+          yield* apply(notification);
+        }
+
+        // Notifications can race into the pending buffer between the capture
+        // above and the epoch install. Drain the buffer until it is empty so
+        // every update that arrived during the transition window is applied
+        // exactly once and no pending state is left behind.
+        while (true) {
+          const raced = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
+          const racedPending = raced.get(sessionId);
+          if (!racedPending || racedPending.notifications.length === 0) break;
+          for (const notification of racedPending.notifications) {
+            yield* apply(notification);
+          }
         }
       });
 
@@ -1086,6 +1197,42 @@ const makeAcpSessionRuntime = (
             });
           }
         });
+
+    // Closes the buffering-path TOCTOU: a session/update handler may read a
+    // pre-transition epoch and buffer its notification after setSessionEpoch
+    // has already drained the pending buffer. Rechecking here guarantees the
+    // notification is applied exactly once by whichever side wins the
+    // atomic getAndSet, leaving no pending state behind.
+    const drainPendingForActiveSession = (): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        while (true) {
+          const epoch = yield* getSessionEpoch();
+          if (Option.isNone(epoch.activeSessionId)) return;
+          if (!(yield* Ref.get(acceptingSessionUpdatesRef))) return;
+          const sessionId = epoch.activeSessionId.value;
+          const raced = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
+          const racedPending = raced.get(sessionId);
+          if (!racedPending || racedPending.notifications.length === 0) return;
+          const offer = offerSessionEvent(sessionId, epoch);
+          for (const notification of racedPending.notifications) {
+            yield* processSessionUpdate({
+              getSessionEpoch,
+              offer,
+              sessionId,
+              epoch,
+              availableCommandsRef,
+              configOptionsRef,
+              modeStateRef,
+              toolCallsRef,
+              assistantSegmentRef,
+              runtimeInstanceId,
+              resolveConfigOptionUpdateWaiters,
+              skipTranscriptEvents: false,
+              params: notification,
+            });
+          }
+        }
+      });
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
@@ -1188,7 +1335,7 @@ const makeAcpSessionRuntime = (
           yield* Ref.update(pendingSessionStateRef, (map) =>
             appendPendingNotification(map, sessionId, notification),
           );
-          return;
+          return yield* drainPendingForActiveSession();
         }
 
         if (!isActiveSessionId(sessionId, epoch)) {
@@ -1701,6 +1848,17 @@ const makeAcpSessionRuntime = (
         ),
       sessionUpdatesEnqueuedCount: Effect.sync(() => sessionUpdatesEnqueued),
       getModeState: Ref.get(modeStateRef),
+      getSessionEpoch,
+      getPendingSessionNotificationCount: () =>
+        Ref.get(pendingSessionStateRef).pipe(
+          Effect.map((map) => {
+            let total = 0;
+            for (const state of map.values()) {
+              total += state.notifications.length;
+            }
+            return total;
+          }),
+        ),
       getConfigOptions: Ref.get(configOptionsRef),
       getAvailableCommands: Ref.get(availableCommandsRef),
       prompt: (payload) =>
@@ -1814,12 +1972,6 @@ const makeAcpSessionRuntime = (
       request: (method, payload) =>
         runLoggedRequest(method, payload, acp.raw.request(method, payload)),
       notify: acp.raw.notify,
-      exitCode: child.exitCode.pipe(
-        Effect.map((code) => (code == null ? null : Number(code))),
-        Effect.catchCause(() =>
-          Effect.logError("Failed to read child exit code").pipe(Effect.as(null)),
-        ),
-      ),
     } satisfies AcpSessionRuntimeShape;
   });
 
