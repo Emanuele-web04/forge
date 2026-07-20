@@ -1171,18 +1171,35 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : undefined;
     const requestedModelSelection = options?.modelSelection;
-    const threadProvider: ProviderKind = currentProvider ?? thread.modelSelection.provider;
+    const resolveActiveSession = (threadId: ThreadId) =>
+      providerService
+        .listSessions()
+        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+    const activeSession = yield* resolveActiveSession(threadId);
+    // A session row alone can be an optimistic placeholder written before the
+    // first turn; only treat the provider as an immutable binding when a real
+    // runtime session exists or the thread has actually run a turn.
+    const establishedProvider =
+      currentProvider !== undefined && (activeSession !== undefined || thread.latestTurn !== null)
+        ? currentProvider
+        : undefined;
     if (
+      establishedProvider !== undefined &&
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== threadProvider
+      requestedModelSelection.provider !== establishedProvider
     ) {
       return yield* new ProviderAdapterValidationError({
-        provider: threadProvider,
+        provider: establishedProvider,
         operation: "thread.turn.start",
-        issue: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+        issue: `Thread '${threadId}' is bound to provider '${establishedProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
       });
     }
-    const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
+    const threadProvider: ProviderKind =
+      establishedProvider ??
+      requestedModelSelection?.provider ??
+      currentProvider ??
+      thread.modelSelection.provider;
+    const preferredProvider: ProviderKind = threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const settingsSnapshot = yield* serverSettings.getSnapshot;
     if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
@@ -1214,11 +1231,6 @@ const make = Effect.gen(function* () {
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
     };
-
-    const resolveActiveSession = (threadId: ThreadId) =>
-      providerService
-        .listSessions()
-        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
 
     const startProviderSession = (resumeCursor?: unknown) =>
       providerService.startSession(threadId, {
@@ -2351,12 +2363,21 @@ const make = Effect.gen(function* () {
       // session's runtimeMode: ensureSessionForThread detects mode changes by
       // comparing against it, and adopting the requested mode here would mask
       // the restart.
+      // The pre-turn session row can be an optimistic placeholder carrying a
+      // stale provider; only defer to it for a real established binding, and
+      // otherwise honor the turn's explicit requested selection.
+      const sessionProviderEstablished =
+        thread.session != null &&
+        (thread.session.status === "running" ||
+          thread.session.status === "ready" ||
+          thread.latestTurn !== null);
       const turnStartSession = deriveTurnStartSession({
         threadId: event.payload.threadId,
         currentSession: thread.session,
-        providerName,
+        providerName: event.payload.modelSelection?.provider ?? providerName,
         requestedRuntimeMode: event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         requestedAt: event.payload.createdAt,
+        sessionProviderEstablished,
       });
       if (turnStartSession !== null) {
         yield* setThreadSession({
