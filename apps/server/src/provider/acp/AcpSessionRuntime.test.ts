@@ -292,6 +292,103 @@ describe("makeStartupInteractionRegistry", () => {
     await Effect.runPromise(program);
   });
 
+  it("does not lose concurrent dispatches buffered during startup", async () => {
+    const program = Effect.gen(function* () {
+      const registry = yield* makeStartupInteractionRegistry<string, string>("default");
+      const handled: string[] = [];
+
+      const fibers = yield* Effect.all(
+        Array.from({ length: 50 }, (_, i) => registry.dispatch(String(i)).pipe(Effect.forkChild)),
+      );
+      yield* Effect.yieldNow;
+
+      yield* registry.register((req) =>
+        Effect.sync(() => {
+          handled.push(req);
+          return `handled:${req}`;
+        }),
+      );
+      yield* registry.complete();
+
+      const results = yield* Effect.all(fibers.map((fiber) => Fiber.join(fiber)));
+      expect(handled).toHaveLength(50);
+      expect(results).toEqual(Array.from({ length: 50 }, (_, i) => `handled:${i}`));
+    });
+
+    await Effect.runPromise(program);
+  });
+
+  it("answers dispatches from a previous generation with the default instead of replaying them", async () => {
+    const program = Effect.gen(function* () {
+      const registry = yield* makeStartupInteractionRegistry<string, string>("cancelled");
+      const handled: string[] = [];
+
+      const staleFiber = yield* registry.dispatch("stale").pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* registry.begin();
+
+      yield* registry.register((req) =>
+        Effect.sync(() => {
+          handled.push(req);
+          return `handled:${req}`;
+        }),
+      );
+      yield* registry.complete();
+
+      const staleResult = yield* Fiber.join(staleFiber);
+      expect(staleResult).toBe("cancelled");
+      expect(handled).toEqual([]);
+
+      const fresh = yield* registry.dispatch("fresh");
+      expect(fresh).toBe("handled:fresh");
+      expect(handled).toEqual(["fresh"]);
+    });
+
+    await Effect.runPromise(program);
+  });
+
+  it("delivers each buffered dispatch exactly once when register races complete", async () => {
+    const program = Effect.gen(function* () {
+      const registry = yield* makeStartupInteractionRegistry<string, string>("default");
+      const handled: string[] = [];
+      const handler = (req: string) =>
+        Effect.sync(() => {
+          handled.push(req);
+          return `handled:${req}`;
+        });
+
+      const fiber = yield* registry.dispatch("a").pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+
+      // complete before any handler exists: the dispatch must stay buffered.
+      yield* registry.complete();
+      yield* registry.register(handler);
+      // A second register after the flush must not re-deliver.
+      yield* registry.register(handler);
+
+      const result = yield* Fiber.join(fiber);
+      expect(result).toBe("handled:a");
+      expect(handled).toEqual(["a"]);
+    });
+
+    await Effect.runPromise(program);
+  });
+
+  it("keeps the direct dispatch path intact after a post-complete cancel", async () => {
+    const program = Effect.gen(function* () {
+      const registry = yield* makeStartupInteractionRegistry<string, string>("default");
+
+      yield* registry.register((req) => Effect.succeed(`handled:${req}`));
+      yield* registry.complete();
+      yield* registry.cancel();
+
+      const result = yield* registry.dispatch("x");
+      expect(result).toBe("handled:x");
+    });
+
+    await Effect.runPromise(program);
+  });
+
   it("rejects dispatches once the buffer is exhausted", async () => {
     const program = Effect.gen(function* () {
       const registry = yield* makeStartupInteractionRegistry<string, string>("default");
