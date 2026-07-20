@@ -42,7 +42,7 @@ import {
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { respondingInteractionReclaimAt } from "@synara/shared/pendingInteractions";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
-import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
+import { getDefaultModel, getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import {
   resolveLatestTailUserMessageEditTarget,
   resolveTailUserMessageEditTarget,
@@ -1419,6 +1419,16 @@ export default function ChatView({
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
   );
+  const draftFallbackModelSelection = useMemo<ModelSelection>(() => {
+    const projectDefault = fallbackDraftProject?.defaultModelSelection;
+    const preferredProvider = settings.defaultProvider === "pi" ? null : settings.defaultProvider;
+    const provider = preferredProvider ?? projectDefault?.provider ?? "codex";
+    const model =
+      (provider === projectDefault?.provider ? projectDefault.model : null) ??
+      getDefaultModel(provider) ??
+      DEFAULT_MODEL_BY_PROVIDER.codex;
+    return buildModelSelection(provider, model);
+  }, [fallbackDraftProject?.defaultModelSelection, settings.defaultProvider]);
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
@@ -1834,17 +1844,9 @@ export default function ChatView({
   const localDraftThread = useMemo(
     () =>
       draftThread
-        ? buildLocalDraftThread(
-            threadId,
-            draftThread,
-            fallbackDraftProject?.defaultModelSelection ?? {
-              provider: "codex",
-              model: DEFAULT_MODEL_BY_PROVIDER.codex,
-            },
-            localDraftError,
-          )
+        ? buildLocalDraftThread(threadId, draftThread, draftFallbackModelSelection, localDraftError)
         : undefined,
-    [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
+    [draftThread, draftFallbackModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
   // Local threads reconcile their stored branch to the shared checkout as soon as the
@@ -7836,10 +7838,19 @@ export default function ChatView({
     // Keep an optimistically selected Space across the command/snapshot race. The server
     // validates this best-effort target and degrades genuinely stale/deleted ids to Void.
     const activeSpaceIdForSend = readActiveSpaceId();
+    const firstSendDefaultModelSelection = buildModelSelection(
+      selectedModelSelectionForSend.provider,
+      selectedModelSelectionForSend.model ||
+        selectedModelForSend ||
+        getDefaultModel(selectedModelSelectionForSend.provider) ||
+        DEFAULT_MODEL_BY_PROVIDER.codex,
+      selectedModelSelectionForSend.options,
+    );
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
       chatWorkspaceRoot,
       createdAt: firstSendCreatedAt,
+      defaultModelSelection: firstSendDefaultModelSelection,
       isFirstMessage,
       isHomeChatContainer,
       isStudioContainer,
@@ -8337,6 +8348,7 @@ export default function ChatView({
         selectedModelSelectionForSend.model ||
           selectedModelForSend ||
           targetProjectDefaultModelSelectionForSend?.model ||
+          getDefaultModel(selectedModelSelectionForSend.provider) ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
         selectedModelSelectionForSend.provider === "claudeAgent"
