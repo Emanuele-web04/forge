@@ -2368,9 +2368,7 @@ const make = Effect.gen(function* () {
       // otherwise honor the turn's explicit requested selection.
       const sessionProviderEstablished =
         thread.session != null &&
-        (thread.session.status === "running" ||
-          thread.session.status === "ready" ||
-          thread.latestTurn !== null);
+        (thread.session.status === "ready" || thread.latestTurn !== null);
       const turnStartSession = deriveTurnStartSession({
         threadId: event.payload.threadId,
         currentSession: thread.session,
