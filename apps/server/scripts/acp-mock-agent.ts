@@ -32,8 +32,11 @@ const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS ===
 const advertiseAuthMethods = process.env.SYNARA_ACP_ADVERTISE_AUTH_METHODS === "1";
 const requireAuthForSession = process.env.SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION === "1";
 const emitOrphanUpdate = process.env.SYNARA_ACP_EMIT_ORPHAN_UPDATE === "1";
+const orphanUpdateDelayMs = Number(process.env.SYNARA_ACP_ORPHAN_UPDATE_DELAY_MS || "0");
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
-const sessionId = "mock-session-1";
+const mainSessionId = "mock-session-1";
+const probeSessionId = "mock-session-probe";
+let sessionId = mainSessionId;
 
 let authenticated = false;
 let currentModeId = "ask";
@@ -312,6 +315,8 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
   const client = makeClient(context);
   return runEffect(
     Effect.gen(function* () {
+      const isAuthenticated = !requireAuthForSession || authenticated;
+      sessionId = isAuthenticated ? mainSessionId : probeSessionId;
       if (emitAvailableCommands) {
         yield* client.sessionUpdate({
           sessionId,
@@ -321,15 +326,21 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
           },
         });
       }
-      const isAuthenticated = !requireAuthForSession || authenticated;
       if (emitOrphanUpdate && !isAuthenticated) {
-        yield* client.sessionUpdate({
+        const orphan = {
           sessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
             content: { type: "text", text: "orphan" },
           },
-        });
+        } as const;
+        if (orphanUpdateDelayMs > 0) {
+          setTimeout(() => {
+            runEffect(client.sessionUpdate(orphan)).catch(() => {});
+          }, orphanUpdateDelayMs);
+        } else {
+          yield* client.sessionUpdate(orphan);
+        }
       }
       const configOptionsForSession = isAuthenticated
         ? configOptions()

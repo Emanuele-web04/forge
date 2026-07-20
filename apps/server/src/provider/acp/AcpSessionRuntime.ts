@@ -102,6 +102,13 @@ type AcpIncomingFrame =
   | { readonly _tag: "error"; readonly error: unknown }
   | { readonly _tag: "end" };
 
+type SessionEpoch = { generation: number; activeSessionId: Option.Option<string> };
+const PENDING_SESSION_ID = "__synara_acp_pending_session__";
+
+const isActiveSessionId = (sessionId: string, epoch: SessionEpoch): boolean =>
+  Option.isSome(epoch.activeSessionId) &&
+  (epoch.activeSessionId.value === PENDING_SESSION_ID || epoch.activeSessionId.value === sessionId);
+
 export function makeAcpIncomingFrameGuard(
   maxFrameBytes = ACP_MAX_INCOMING_FRAME_BYTES,
 ): (chunk: Uint8Array) => EffectAcpErrors.AcpTransportError | undefined {
@@ -778,7 +785,10 @@ const makeAcpSessionRuntime = (
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
     const eventQueue = yield* Queue.bounded<AcpParsedSessionEvent>(2_048);
-    const activeSessionIdRef = yield* Ref.make<Option.Option<string>>(Option.none());
+    const sessionEpochRef = yield* Ref.make<{
+      generation: number;
+      activeSessionId: Option.Option<string>;
+    }>({ generation: 0, activeSessionId: Option.none() });
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const availableCommandsRef = yield* Ref.make<ReadonlyArray<EffectAcpSchema.AvailableCommand>>(
       [],
@@ -804,24 +814,31 @@ const makeAcpSessionRuntime = (
     // sessionUpdatesEnqueuedCount on the shape). Plain mutable state: single
     // writer per offer, and readers only need a monotonic snapshot.
     let sessionUpdatesEnqueued = 0;
-    const PENDING_SESSION_ID = "__synara_acp_pending_session__";
 
-    const isActiveSession = (sessionId: string): Effect.Effect<boolean, never, never> =>
-      Effect.gen(function* () {
-        const active = yield* Ref.get(activeSessionIdRef);
-        if (Option.isNone(active)) return false;
-        return active.value === PENDING_SESSION_ID || active.value === sessionId;
-      });
+    const getSessionEpoch = (): Effect.Effect<SessionEpoch> => Ref.get(sessionEpochRef);
 
-    const offerSessionEvent = (event: AcpParsedSessionEvent): Effect.Effect<void> =>
-      Effect.suspend(() =>
+    const setSessionEpoch = (sessionId: string): Effect.Effect<void> =>
+      Ref.update(sessionEpochRef, (epoch) => ({
+        generation: epoch.generation + 1,
+        activeSessionId: Option.some(sessionId),
+      }));
+
+    const clearSessionEpoch = (): Effect.Effect<void> =>
+      Ref.update(sessionEpochRef, (epoch) => ({
+        generation: epoch.generation + 1,
+        activeSessionId: Option.none(),
+      }));
+
+    const offerSessionEvent =
+      (sessionId: string, epoch: SessionEpoch) =>
+      (event: AcpParsedSessionEvent): Effect.Effect<void> =>
         Effect.gen(function* () {
-          const active = yield* Ref.get(activeSessionIdRef);
-          if (Option.isNone(active)) return;
+          const current = yield* getSessionEpoch();
+          if (current.generation !== epoch.generation) return;
+          if (!isActiveSessionId(sessionId, current)) return;
           sessionUpdatesEnqueued += 1;
           yield* Queue.offer(eventQueue, event);
-        }),
-      );
+        });
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
@@ -914,17 +931,23 @@ const makeAcpSessionRuntime = (
 
     yield* acp.handleSessionUpdate((notification) =>
       Effect.gen(function* () {
-        if (!(yield* isActiveSession(notification.sessionId))) return;
+        const epoch = yield* getSessionEpoch();
+        const sessionId = notification.sessionId;
+        if (!isActiveSessionId(sessionId, epoch)) return;
 
         const update = notification.update;
         const rememberCommands = Effect.gen(function* () {
           if (update.sessionUpdate !== "available_commands_update") return;
-          if (!(yield* isActiveSession(notification.sessionId))) return;
+          const current = yield* getSessionEpoch();
+          if (current.generation !== epoch.generation) return;
+          if (!isActiveSessionId(sessionId, current)) return;
           yield* Ref.set(availableCommandsRef, update.availableCommands);
         });
         const rememberConfigOptions = Effect.gen(function* () {
           if (update.sessionUpdate !== "config_option_update") return;
-          if (!(yield* isActiveSession(notification.sessionId))) return;
+          const current = yield* getSessionEpoch();
+          if (current.generation !== epoch.generation) return;
+          if (!isActiveSessionId(sessionId, current)) return;
           yield* Ref.set(configOptionsRef, update.configOptions);
           yield* resolveConfigOptionUpdateWaiters(update.configOptions);
         });
@@ -935,10 +958,17 @@ const makeAcpSessionRuntime = (
         // updates are being suppressed.
         yield* rememberBoundedState;
         if (!acceptingSessionUpdates) return;
-        if (!(yield* isActiveSession(notification.sessionId))) return;
+        const current = yield* getSessionEpoch();
+        if (current.generation !== epoch.generation) return;
+        if (!isActiveSessionId(sessionId, current)) return;
 
-        return yield* handleSessionUpdate({
-          offer: offerSessionEvent,
+        const offer = offerSessionEvent(sessionId, epoch);
+
+        return yield* processSessionUpdate({
+          getSessionEpoch,
+          offer,
+          sessionId,
+          epoch,
           modeStateRef,
           toolCallsRef,
           assistantSegmentRef,
@@ -1184,9 +1214,11 @@ const makeAcpSessionRuntime = (
 
       const cleanupDiscardedAcpSession = (discardedSessionId: string) =>
         Effect.gen(function* () {
-          // Stop accepting new transcript updates and detach the discarded session id.
+          // Stop accepting new transcript updates and bump the session generation so
+          // any in-flight handlers that were admitted under the discarded epoch are
+          // rejected before they can mutate state or enqueue events.
           acceptingSessionUpdates = false;
-          yield* Ref.set(activeSessionIdRef, Option.none());
+          yield* clearSessionEpoch();
 
           // Drain any events that were already enqueued for the discarded session.
           const queued = Queue.sizeUnsafe(eventQueue);
@@ -1199,6 +1231,8 @@ const makeAcpSessionRuntime = (
           yield* Ref.set(availableCommandsRef, []);
           yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(undefined));
           yield* Ref.set(modeStateRef, undefined);
+          yield* Ref.set(toolCallsRef, new Map());
+          yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
 
           // Best-effort close so the agent does not keep the probe session alive.
           const supportsClose =
@@ -1235,7 +1269,7 @@ const makeAcpSessionRuntime = (
           }
           // Resumed/replayed updates are tied to the known session id even before the
           // request returns, so bounded state stays coherent if notifications arrive early.
-          yield* Ref.set(activeSessionIdRef, Option.some(options.resumeSessionId));
+          yield* setSessionEpoch(options.resumeSessionId);
           const resumed = yield* supportsResume
             ? runLoggedRequest(
                 "session/resume",
@@ -1264,7 +1298,7 @@ const makeAcpSessionRuntime = (
           // Fresh session: accept updates from before session/new so any early
           // agent output emitted while the request is in flight is buffered.
           acceptingSessionUpdates = true;
-          yield* Ref.set(activeSessionIdRef, Option.some(PENDING_SESSION_ID));
+          yield* setSessionEpoch(PENDING_SESSION_ID);
           const createPayload = {
             cwd: options.cwd,
             mcpServers,
@@ -1299,7 +1333,7 @@ const makeAcpSessionRuntime = (
             }
           }
 
-          yield* Ref.set(activeSessionIdRef, Option.some(created.sessionId));
+          yield* setSessionEpoch(created.sessionId);
         }
 
         return {
@@ -1444,30 +1478,41 @@ const makeAcpSessionRuntime = (
       getAvailableCommands: Ref.get(availableCommandsRef),
       prompt: (payload) =>
         getStartedState.pipe(
-          Effect.flatMap((started) => {
-            const requestPayload = {
-              sessionId: started.sessionId,
-              ...payload,
-            } satisfies EffectAcpSchema.PromptRequest;
-            return closeActiveAssistantSegment({
-              offer: offerSessionEvent,
-              assistantSegmentRef,
-            }).pipe(
-              Effect.andThen(
-                runLoggedRequest(
-                  "session/prompt",
-                  requestPayload,
-                  acp.agent.prompt(requestPayload),
-                ),
-              ),
-              Effect.tap(() =>
-                closeActiveAssistantSegment({
-                  offer: offerSessionEvent,
+          Effect.flatMap((started) =>
+            Ref.get(sessionEpochRef).pipe(
+              Effect.flatMap((epoch) => {
+                const offer = offerSessionEvent(started.sessionId, epoch);
+                const requestPayload = {
+                  sessionId: started.sessionId,
+                  ...payload,
+                } satisfies EffectAcpSchema.PromptRequest;
+                return closeActiveAssistantSegment({
+                  getSessionEpoch,
+                  offer,
+                  sessionId: started.sessionId,
+                  epoch,
                   assistantSegmentRef,
-                }),
-              ),
-            );
-          }),
+                }).pipe(
+                  Effect.andThen(
+                    runLoggedRequest(
+                      "session/prompt",
+                      requestPayload,
+                      acp.agent.prompt(requestPayload),
+                    ),
+                  ),
+                  Effect.tap(() =>
+                    closeActiveAssistantSegment({
+                      getSessionEpoch,
+                      offer,
+                      sessionId: started.sessionId,
+                      epoch,
+                      assistantSegmentRef,
+                    }),
+                  ),
+                );
+              }),
+            ),
+          ),
         ),
       cancel: getStartedState.pipe(
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
@@ -1615,15 +1660,21 @@ function isEmptyRecord(value: unknown): value is Record<string, never> {
   );
 }
 
-const handleSessionUpdate = ({
+const processSessionUpdate = ({
+  getSessionEpoch,
   offer,
+  sessionId,
+  epoch,
   modeStateRef,
   toolCallsRef,
   assistantSegmentRef,
   runtimeInstanceId,
   params,
 }: {
+  readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
   readonly offer: (event: AcpParsedSessionEvent) => Effect.Effect<void>;
+  readonly sessionId: string;
+  readonly epoch: SessionEpoch;
   readonly modeStateRef: Ref.Ref<AcpSessionModeState | undefined>;
   readonly toolCallsRef: Ref.Ref<Map<string, AcpToolCallState>>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
@@ -1633,14 +1684,23 @@ const handleSessionUpdate = ({
   Effect.gen(function* () {
     const parsed = parseSessionUpdateEvent(params);
     if (parsed.modeId) {
+      const current = yield* getSessionEpoch();
+      if (current.generation !== epoch.generation) return;
+      if (!isActiveSessionId(sessionId, current)) return;
       yield* Ref.update(modeStateRef, (current) =>
         current === undefined ? current : updateModeState(current, parsed.modeId!),
       );
     }
     for (const event of parsed.events) {
       if (event._tag === "ToolCallUpdated") {
+        const current = yield* getSessionEpoch();
+        if (current.generation !== epoch.generation) return;
+        if (!isActiveSessionId(sessionId, current)) return;
         yield* closeActiveAssistantSegment({
+          getSessionEpoch,
           offer,
+          sessionId,
+          epoch,
           assistantSegmentRef,
         });
         const { previous, merged } = yield* Ref.modify(toolCallsRef, (current) => {
@@ -1666,19 +1726,27 @@ const handleSessionUpdate = ({
       }
       if (event._tag === "ContentDelta") {
         if (event.streamKind === "reasoning_text") {
+          const current = yield* getSessionEpoch();
+          if (current.generation !== epoch.generation) return;
+          if (!isActiveSessionId(sessionId, current)) return;
           yield* offer(event);
           continue;
         }
         if (event.text.trim().length === 0) {
+          const current = yield* getSessionEpoch();
+          if (current.generation !== epoch.generation) return;
+          if (!isActiveSessionId(sessionId, current)) return;
           const assistantSegmentState = yield* Ref.get(assistantSegmentRef);
           if (!assistantSegmentState.activeItemId) {
             continue;
           }
         }
         const itemId = yield* ensureActiveAssistantSegment({
+          getSessionEpoch,
           offer,
           assistantSegmentRef,
-          sessionId: params.sessionId,
+          sessionId,
+          epoch,
           runtimeInstanceId,
           requestedItemId: event.itemId,
         });
@@ -1731,85 +1799,115 @@ export const assistantItemId = (
 ) => `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
+  getSessionEpoch,
   offer,
   assistantSegmentRef,
   sessionId,
+  epoch,
   runtimeInstanceId,
   requestedItemId,
 }: {
+  readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
   readonly offer: (event: AcpParsedSessionEvent) => Effect.Effect<void>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly sessionId: string;
+  readonly epoch: SessionEpoch;
   readonly runtimeInstanceId: string;
   readonly requestedItemId?: string | undefined;
 }) =>
-  Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
-    assistantSegmentRef,
-    (current) => {
-      if (current.activeItemId && current.activeItemId === requestedItemId) {
-        return [{ itemId: current.activeItemId }, current] as const;
-      }
-      if (current.activeItemId && requestedItemId === undefined) {
-        return [{ itemId: current.activeItemId }, current] as const;
-      }
-      // Cursor can provide stable message ids for chunks that resume after tool calls.
-      // Keep those ids so projection appends the pieces instead of displaying broken segments.
-      const itemId =
-        requestedItemId ?? assistantItemId(sessionId, runtimeInstanceId, current.nextSegmentIndex);
-      const completedEvent = current.activeItemId
-        ? ({
-            _tag: "AssistantItemCompleted",
-            itemId: current.activeItemId,
-          } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemCompleted" }>)
-        : undefined;
-      return [
-        {
-          itemId,
-          ...(completedEvent ? { completedEvent } : {}),
-          startedEvent: {
-            _tag: "AssistantItemStarted",
+  Effect.gen(function* () {
+    const currentEpoch = yield* getSessionEpoch();
+    if (currentEpoch.generation !== epoch.generation) {
+      return requestedItemId ?? assistantItemId(sessionId, runtimeInstanceId, 0);
+    }
+    if (!isActiveSessionId(sessionId, currentEpoch)) {
+      return requestedItemId ?? assistantItemId(sessionId, runtimeInstanceId, 0);
+    }
+    return yield* Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
+      assistantSegmentRef,
+      (current) => {
+        if (current.activeItemId && current.activeItemId === requestedItemId) {
+          return [{ itemId: current.activeItemId }, current] as const;
+        }
+        if (current.activeItemId && requestedItemId === undefined) {
+          return [{ itemId: current.activeItemId }, current] as const;
+        }
+        // Cursor can provide stable message ids for chunks that resume after tool calls.
+        // Keep those ids so projection appends the pieces instead of displaying broken segments.
+        const itemId =
+          requestedItemId ??
+          assistantItemId(sessionId, runtimeInstanceId, current.nextSegmentIndex);
+        const completedEvent = current.activeItemId
+          ? ({
+              _tag: "AssistantItemCompleted",
+              itemId: current.activeItemId,
+            } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemCompleted" }>)
+          : undefined;
+        return [
+          {
             itemId,
-          } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
-        },
-        {
-          nextSegmentIndex:
-            requestedItemId === undefined ? current.nextSegmentIndex + 1 : current.nextSegmentIndex,
-          activeItemId: itemId,
-        } satisfies AcpAssistantSegmentState,
-      ] as const;
-    },
-  ).pipe(
-    Effect.flatMap((result) =>
-      Effect.gen(function* () {
-        if (result.completedEvent) {
-          yield* offer(result.completedEvent);
-        }
-        if (result.startedEvent) {
-          yield* offer(result.startedEvent);
-        }
-        return result.itemId;
-      }),
-    ),
-  );
+            ...(completedEvent ? { completedEvent } : {}),
+            startedEvent: {
+              _tag: "AssistantItemStarted",
+              itemId,
+            } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
+          },
+          {
+            nextSegmentIndex:
+              requestedItemId === undefined
+                ? current.nextSegmentIndex + 1
+                : current.nextSegmentIndex,
+            activeItemId: itemId,
+          } satisfies AcpAssistantSegmentState,
+        ] as const;
+      },
+    ).pipe(
+      Effect.flatMap((result) =>
+        Effect.gen(function* () {
+          if (result.completedEvent) {
+            yield* offer(result.completedEvent);
+          }
+          if (result.startedEvent) {
+            yield* offer(result.startedEvent);
+          }
+          return result.itemId;
+        }),
+      ),
+    );
+  });
 
 const closeActiveAssistantSegment = ({
+  getSessionEpoch,
   offer,
+  sessionId,
+  epoch,
   assistantSegmentRef,
 }: {
+  readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
   readonly offer: (event: AcpParsedSessionEvent) => Effect.Effect<void>;
+  readonly sessionId: string;
+  readonly epoch: SessionEpoch;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
 }) =>
-  Ref.modify(assistantSegmentRef, (current) => {
-    if (!current.activeItemId) {
-      return [undefined, current] as const;
+  Effect.gen(function* () {
+    const current = yield* getSessionEpoch();
+    if (current.generation !== epoch.generation) return;
+    if (!isActiveSessionId(sessionId, current)) return;
+    const event = yield* Ref.modify(assistantSegmentRef, (current) => {
+      if (!current.activeItemId) {
+        return [undefined, current] as const;
+      }
+      return [
+        {
+          _tag: "AssistantItemCompleted",
+          itemId: current.activeItemId,
+        } satisfies AcpParsedSessionEvent,
+        {
+          nextSegmentIndex: current.nextSegmentIndex,
+        } satisfies AcpAssistantSegmentState,
+      ] as const;
+    });
+    if (event) {
+      yield* offer(event);
     }
-    return [
-      {
-        _tag: "AssistantItemCompleted",
-        itemId: current.activeItemId,
-      } satisfies AcpParsedSessionEvent,
-      {
-        nextSegmentIndex: current.nextSegmentIndex,
-      } satisfies AcpAssistantSegmentState,
-    ] as const;
-  }).pipe(Effect.flatMap((event) => (event ? offer(event) : Effect.void)));
+  });

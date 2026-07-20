@@ -194,6 +194,7 @@ describe("AcpSessionRuntime", () => {
                 SYNARA_ACP_ADVERTISE_AUTH_METHODS: "1",
                 SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION: "1",
                 SYNARA_ACP_EMIT_ORPHAN_UPDATE: "1",
+                SYNARA_ACP_ORPHAN_UPDATE_DELAY_MS: "50",
               },
             },
             cwd: process.cwd(),
