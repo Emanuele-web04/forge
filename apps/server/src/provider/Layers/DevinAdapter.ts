@@ -47,7 +47,7 @@ import {
   Stream,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import {
@@ -116,6 +116,7 @@ import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   elicitationQuestionsFromRequest,
   elicitationResponseFromAnswers,
+  isFormElicitationRequest,
 } from "../acp/AcpElicitationSupport.ts";
 import {
   type DevinAcpRuntimeSettings,
@@ -315,8 +316,8 @@ export function resolveRequestedModeId(input: {
 }
 
 export function findModelConfigOption(
-  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | undefined,
-): EffectAcpSchema.SessionConfigOption | undefined {
+  configOptions: ReadonlyArray<Acp.SessionConfigOption> | undefined,
+): Acp.SessionConfigOption | undefined {
   if (!configOptions) {
     return undefined;
   }
@@ -338,7 +339,7 @@ const DEVIN_OPTION_ALIASES: Record<keyof DevinModelOptions, ReadonlyArray<string
 };
 
 function optionIdOrCategoryMatchesAny(
-  option: EffectAcpSchema.SessionConfigOption,
+  option: Acp.SessionConfigOption,
   aliases: ReadonlyArray<string>,
 ): boolean {
   const normalize = (value: string) => value.trim().toLowerCase().replace(/[-_]/g, "");
@@ -351,9 +352,9 @@ function optionIdOrCategoryMatchesAny(
 }
 
 function findDevinConfigOption(
-  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | undefined,
+  configOptions: ReadonlyArray<Acp.SessionConfigOption> | undefined,
   key: keyof DevinModelOptions,
-): EffectAcpSchema.SessionConfigOption | undefined {
+): Acp.SessionConfigOption | undefined {
   if (!configOptions) {
     return undefined;
   }
@@ -364,7 +365,7 @@ function findDevinConfigOption(
 
 function normalizeDevinConfigOptionValue(
   value: unknown,
-  option: EffectAcpSchema.SessionConfigOption,
+  option: Acp.SessionConfigOption,
 ): string | boolean | undefined {
   if (option.type === "boolean") {
     if (typeof value === "boolean") {
@@ -392,7 +393,7 @@ function normalizeDevinConfigOptionValue(
 }
 
 function configOptionCurrentValueMatches(
-  configOption: EffectAcpSchema.SessionConfigOption,
+  configOption: Acp.SessionConfigOption,
   value: string | boolean,
 ): boolean {
   const currentValue = configOption.currentValue;
@@ -417,15 +418,11 @@ export function applyDevinSessionConfiguration(input: {
     | undefined;
 }): Effect.Effect<{ readonly model: string | undefined }, ProviderAdapterError> {
   return Effect.gen(function* () {
-    const readConfigOptions = (): Effect.Effect<
-      ReadonlyArray<EffectAcpSchema.SessionConfigOption>
-    > =>
+    const readConfigOptions = (): Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>> =>
       input.runtime.getConfigOptions.pipe(
         Effect.timeoutOption(5_000),
-        Effect.map(
-          Option.getOrElse(() => [] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
-        ),
-        Effect.orElseSucceed(() => [] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+        Effect.map(Option.getOrElse(() => [] as ReadonlyArray<Acp.SessionConfigOption>)),
+        Effect.orElseSucceed(() => [] as ReadonlyArray<Acp.SessionConfigOption>),
       );
 
     let configOptions = yield* readConfigOptions();
@@ -669,10 +666,7 @@ function completeDevinAssistantItemTurnId(
   return turnId;
 }
 
-function recordDevinSessionCost(
-  ctx: DevinSessionContext,
-  cost: EffectAcpSchema.Cost | null | undefined,
-): void {
+function recordDevinSessionCost(ctx: DevinSessionContext, cost: Acp.Cost | null | undefined): void {
   const sessionCostUsd = readAcpUsdCost(cost);
   if (sessionCostUsd === undefined) {
     return;
@@ -699,7 +693,7 @@ function withDevinPlanModePrompt(input: {
 }
 
 function findModelOptionName(
-  modelOption: EffectAcpSchema.SessionConfigOption & { type: "select" },
+  modelOption: Acp.SessionConfigOption & { type: "select" },
   value: string,
 ): string | undefined {
   return flattenSessionConfigSelectOptions(modelOption.options).find((o) => o.value === value)
@@ -707,7 +701,7 @@ function findModelOptionName(
 }
 
 export function buildDevinProviderModelDescriptors(
-  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | undefined,
+  configOptions: ReadonlyArray<Acp.SessionConfigOption> | undefined,
 ): ReadonlyArray<ProviderModelDescriptor> {
   const modelOption = findModelConfigOption(configOptions);
   if (!modelOption || modelOption.type !== "select") {
@@ -756,7 +750,7 @@ function buildDevinPromptParts(input: {
   readonly attachmentsDir: string;
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly fileSystem: FileSystem.FileSystem;
-}): Effect.Effect<Array<EffectAcpSchema.ContentBlock>, ProviderAdapterRequestError> {
+}): Effect.Effect<Array<Acp.ContentBlock>, ProviderAdapterRequestError> {
   return Effect.gen(function* () {
     const promptText = appendFileAttachmentsPromptBlock({
       text: input.text
@@ -770,7 +764,7 @@ function buildDevinPromptParts(input: {
       include: "all-files",
     });
 
-    const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+    const promptParts: Array<Acp.ContentBlock> = [];
     if (promptText) {
       promptParts.push({ type: "text", text: promptText });
     }
@@ -783,7 +777,7 @@ function buildDevinPromptParts(input: {
       readFile: input.fileSystem.readFile,
     });
 
-    promptParts.push(...(imageBlocks as Array<EffectAcpSchema.ContentBlock>));
+    promptParts.push(...(imageBlocks as Array<Acp.ContentBlock>));
     return promptParts;
   });
 }
@@ -1134,10 +1128,10 @@ export function makeDevinAdapter(
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/elicitation", params);
 
-                if (params.mode === "url") {
+                if (!isFormElicitationRequest(params)) {
                   return {
-                    action: { action: "decline" },
-                  } satisfies EffectAcpSchema.ElicitationResponse;
+                    action: "decline",
+                  } satisfies Acp.CreateElicitationResponse;
                 }
 
                 const questions = elicitationQuestionsFromRequest(params);
@@ -1183,8 +1177,8 @@ export function makeDevinAdapter(
               }).pipe(
                 Effect.catch(() =>
                   Effect.succeed({
-                    action: { action: "decline" },
-                  } as EffectAcpSchema.ElicitationResponse),
+                    action: "decline",
+                  } as Acp.CreateElicitationResponse),
                 ),
               ),
             );

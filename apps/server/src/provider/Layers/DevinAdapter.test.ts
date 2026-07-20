@@ -4,8 +4,8 @@
 // Layer: Provider adapter tests
 
 import { Effect, Option, type Stream } from "effect";
-import type * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
+import type * as AcpErrors from "../acp/AcpErrors.ts";
 import { describe, expect, it } from "vitest";
 
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
@@ -15,7 +15,7 @@ import {
   resolveRequestedModeId,
 } from "./DevinAdapter.ts";
 
-type MutableConfigOptions = Array<EffectAcpSchema.SessionConfigOption>;
+type MutableConfigOptions = Array<Acp.SessionConfigOption>;
 
 function makeFakeAcpRuntime(
   initialConfigOptions: MutableConfigOptions,
@@ -43,7 +43,7 @@ function makeFakeAcpRuntime(
     configOptions[idx] = {
       ...existing,
       currentValue: value,
-    } as EffectAcpSchema.SessionConfigOption;
+    } as Acp.SessionConfigOption;
   };
 
   const runtime = {
@@ -68,7 +68,7 @@ function makeFakeAcpRuntime(
     ),
     getConfigOptions: Effect.sync(() => configOptions),
     getAvailableCommands: Effect.succeed([]),
-    prompt: () => Effect.fail(null as unknown as EffectAcpErrors.AcpError),
+    prompt: () => Effect.fail(null as unknown as AcpErrors.AcpError),
     cancel: Effect.void,
     setMode: (modeId: string) =>
       Effect.sync(() => {
@@ -76,13 +76,13 @@ function makeFakeAcpRuntime(
         if (modeState) {
           modeState = { ...modeState, currentModeId: modeId };
         }
-        return {} as EffectAcpSchema.SetSessionModeResponse;
+        return {} as Acp.SetSessionModeResponse;
       }),
     setConfigOption: (id: string, value: string | boolean) =>
       Effect.sync(() => {
         record("setConfigOption", [id, value]);
         setOptionCurrentValue(id, value);
-        return { configOptions } as EffectAcpSchema.SetSessionConfigOptionResponse;
+        return { configOptions } as Acp.SetSessionConfigOptionResponse;
       }),
     setModel: (model: string) =>
       Effect.sync(() => {
@@ -94,8 +94,8 @@ function makeFakeAcpRuntime(
           setOptionCurrentValue(modelOption.id, model);
         }
       }),
-    forkSession: () => Effect.fail(null as unknown as EffectAcpErrors.AcpError),
-    request: () => Effect.fail(null as unknown as EffectAcpErrors.AcpError),
+    forkSession: () => Effect.fail(null as unknown as AcpErrors.AcpError),
+    request: () => Effect.fail(null as unknown as AcpErrors.AcpError),
     notify: () => Effect.void,
     exitCode: Effect.succeed(null),
   } as unknown as AcpSessionRuntimeShape;
@@ -106,7 +106,7 @@ function makeFakeAcpRuntime(
 function modelOption(
   currentValue: string,
   values: ReadonlyArray<{ value: string; name: string }>,
-): EffectAcpSchema.SessionConfigOption {
+): Acp.SessionConfigOption {
   return {
     id: "model",
     name: "Model",
@@ -117,11 +117,7 @@ function modelOption(
   };
 }
 
-function booleanOption(
-  id: string,
-  name: string,
-  currentValue: boolean,
-): EffectAcpSchema.SessionConfigOption {
+function booleanOption(id: string, name: string, currentValue: boolean): Acp.SessionConfigOption {
   return {
     id,
     name,
@@ -136,7 +132,7 @@ function selectOption(
   name: string,
   currentValue: string,
   values: ReadonlyArray<{ value: string; name: string }>,
-): EffectAcpSchema.SessionConfigOption {
+): Acp.SessionConfigOption {
   return {
     id,
     name,
