@@ -94,6 +94,11 @@ export function hasDevinApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean
   return getDevinApiKeyEnv(env) !== undefined;
 }
 
+export function resolveDevinBinaryPath(binaryPath?: string | null | undefined): string {
+  const trimmed = binaryPath?.trim();
+  return trimmed || "devin";
+}
+
 export function getDevinApiServerUrlEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
   for (const key of DEVIN_API_SERVER_URL_ENV_KEYS) {
     const value = env[key]?.trim();
