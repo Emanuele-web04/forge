@@ -470,6 +470,14 @@ export function buildModelSelection(
             options: options as CursorModelOptions,
           }
         : { provider, model };
+    case "devin":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as DevinModelOptions,
+          }
+        : { provider, model };
     case "grok":
       return options
         ? {

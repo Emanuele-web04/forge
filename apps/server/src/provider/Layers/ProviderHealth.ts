@@ -65,7 +65,7 @@ import {
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
-import { hasDevinApiKeyEnv } from "../acp/DevinAcpSupport";
+import { hasDevinApiKeyEnv, resolveDevinBinaryPath } from "../acp/DevinAcpSupport";
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
@@ -78,6 +78,7 @@ import {
   detailFromResult,
   extractAuthBoolean,
   extractAuthMethod,
+  isCommandMissingCause,
   nonEmptyTrimmed,
   PROVIDER_COMMAND_TIMEOUT_DETAIL,
   toTitleCaseWords,
@@ -133,6 +134,7 @@ const PROVIDERS = [
   ANTIGRAVITY_PROVIDER,
   GROK_PROVIDER,
   DROID_PROVIDER,
+  DEVIN_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
@@ -1332,91 +1334,6 @@ export const makeCheckGrokProviderStatus = (
 
 export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
 
-// ── Devin health check ─────────────────────────────────────────────
-
-const runDevinCommand = (args: ReadonlyArray<string>, executable = "devin") =>
-  runProviderCommand(executable, args, providerCommandEnv(DEVIN_PROVIDER)).pipe(
-    Effect.flatMap((result) =>
-      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
-        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
-        : Effect.succeed(result),
-    ),
-  );
-
-export const makeCheckDevinProviderStatus = (
-  binaryPath?: string,
-): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
-    const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "devin";
-
-    const versionProbe = yield* probeProviderCliVersion(
-      runDevinCommand(["--version"], executable),
-      DEFAULT_TIMEOUT_MS,
-    );
-
-    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
-      const error = versionProbe.cause;
-      return {
-        provider: DEVIN_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message:
-          versionProbe.outcome === "missing"
-            ? "Devin CLI (`devin`) is not installed or not on PATH."
-            : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      } satisfies ServerProviderStatus;
-    }
-
-    if (versionProbe.outcome === "timeout") {
-      return {
-        provider: DEVIN_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: "Devin CLI is installed but failed to run. Timed out while running command.",
-      } satisfies ServerProviderStatus;
-    }
-
-    if (versionProbe.outcome === "nonzero") {
-      const version = versionProbe.result;
-      const detail = detailFromResult(version);
-      return {
-        provider: DEVIN_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: detail
-          ? `Devin CLI is installed but failed to run. ${detail}`
-          : "Devin CLI is installed but failed to run.",
-      } satisfies ServerProviderStatus;
-    }
-    const version = versionProbe.result;
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-    const hasApiKey = hasDevinApiKeyEnv();
-
-    return {
-      provider: DEVIN_PROVIDER,
-      status: "ready" as const,
-      available: true,
-      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
-      version: parsedVersion,
-      checkedAt,
-      ...(hasApiKey
-        ? { authType: "apiKey" as const, authLabel: "Devin API Key" }
-        : {
-            message:
-              "Devin CLI is installed. Run `devin auth login` to authenticate locally, or set WINDSURF_API_KEY before starting a session.",
-          }),
-    } satisfies ServerProviderStatus;
-  });
-
-export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
-
 // ── Droid health check ─────────────────────────────────────────────
 
 const runDroidCommand = (args: ReadonlyArray<string>, executable = "droid") =>
@@ -2009,6 +1926,78 @@ export const makeCheckCursorProviderStatus = (
 
 export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
+// ── Devin health check ───────────────────────────────────────────────
+
+export const makeCheckDevinProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveDevinBinaryPath(binaryPath);
+    const env = buildProviderChildEnvironment({ provider: DEVIN_PROVIDER });
+
+    const probe = yield* runProviderCommand(executable, ["--version"], env).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(probe)) {
+      const error = probe.failure;
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Devin CLI (`devin`) is not installed or not on PATH."
+          : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(probe.success)) {
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Devin CLI is installed but `devin --version` timed out.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const versionResult = probe.success.value;
+    if (versionResult.code !== 0) {
+      const detail = detailFromResult(versionResult);
+      return {
+        provider: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Devin CLI is installed but failed to run. ${detail}`
+          : "Devin CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const parsedVersion = parseGenericCliVersion(
+      `${versionResult.stdout}\n${versionResult.stderr}`,
+    );
+    const authStatus: ServerProviderAuthStatus = hasDevinApiKeyEnv() ? "authenticated" : "unknown";
+
+    return {
+      provider: DEVIN_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus,
+      version: parsedVersion,
+      checkedAt,
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function comparableProviderVersionAdvisory(
@@ -2474,6 +2463,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   settings,
                   CURSOR_PROVIDER,
                   makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  DEVIN_PROVIDER,
+                  makeCheckDevinProviderStatus(settings.providers.devin?.binaryPath),
                 ),
                 checkProviderWhenEnabled(
                   settings,

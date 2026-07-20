@@ -237,9 +237,12 @@ const PROVIDER_TARGET_OPTION_RULES = {
     },
   }),
   devin: defineProviderOptionConfig<"devin">({
-    primaryOptionKey: "reasoningEffort",
+    primaryOptionKey: "variant",
     options: {
-      reasoningEffort: providerOptionRule("string", [], "model-discovery"),
+      variant: providerOptionRule("string", [], "model-discovery", {
+        validation: { kind: "non-empty-string" },
+        allowsCustomValue: true,
+      }),
       fastMode: providerOptionRule("boolean", [], "model-discovery", {
         advertised: false,
         validation: { kind: "boolean-capability", capability: "supportsFastMode" },
@@ -251,14 +254,6 @@ const PROVIDER_TARGET_OPTION_RULES = {
       contextWindow: providerOptionRule("string", [], "model-discovery", {
         advertised: false,
         validation: { kind: "context-window" },
-      }),
-      // Internal client-side resolution of an opaque Devin model UID. It is
-      // accepted for already-resolved targets but intentionally omitted from
-      // gateway construction guidance.
-      modelVariant: providerOptionRule("string", [], "model-discovery", {
-        advertised: false,
-        validation: { kind: "non-empty-string" },
-        allowsCustomValue: true,
       }),
     },
   }),

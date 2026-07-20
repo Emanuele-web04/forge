@@ -61,6 +61,8 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.claudeAgent, provider: "claudeAgent" };
     case "cursor":
       return { label: PROVIDER_DISPLAY_NAMES.cursor, provider: "cursor" };
+    case "devin":
+      return { label: PROVIDER_DISPLAY_NAMES.devin, provider: "devin" };
     case "antigravity":
       return { label: PROVIDER_DISPLAY_NAMES.antigravity, provider: "antigravity" };
     case "grok":

@@ -161,6 +161,38 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeCursorModelOptions(model, providerOptions, caps);
       break;
     }
+    case "devin": {
+      const providerOptions = modelOptions?.devin;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? rawEffort
+          : undefined;
+      const rawContextWindow = trimOrNull(providerOptions?.contextWindow);
+      const defaultContextWindow = getDefaultContextWindow(caps);
+      const contextWindow =
+        rawContextWindow &&
+        hasContextWindowOption(caps, rawContextWindow) &&
+        rawContextWindow !== defaultContextWindow
+          ? rawContextWindow
+          : undefined;
+      const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
+      const thinking =
+        caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
+          ? providerOptions.thinking
+          : undefined;
+      const variant = trimOrNull(providerOptions?.variant);
+      const nextOptions = {
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(fastModeEnabled ? { fastMode: true } : {}),
+        ...(thinking !== undefined ? { thinking } : {}),
+        ...(contextWindow ? { contextWindow } : {}),
+        ...(variant ? { variant } : {}),
+      };
+      normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+      break;
+    }
     case "antigravity": {
       const providerOptions = modelOptions?.antigravity;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);

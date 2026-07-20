@@ -28,8 +28,8 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
-  // Antigravity's built-in list is intentionally empty; its CLI supplies the live catalog.
   antigravity: new Set<ModelSlug>(),
+  devin: new Set(MODEL_OPTIONS_BY_PROVIDER.devin.map((option) => option.slug)),
   grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
   droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
@@ -285,7 +285,7 @@ function reasoningDescriptorId(provider: ProviderKind): string {
   if (provider === "claudeAgent") {
     return "effort";
   }
-  if (provider === "kilo" || provider === "opencode") {
+  if (provider === "kilo" || provider === "opencode" || provider === "devin") {
     return "variant";
   }
   if (provider === "pi") {
@@ -299,7 +299,7 @@ function legacyCapabilityDescriptors(
   caps: ModelCapabilities,
 ): ProviderOptionDescriptor[] {
   const primaryOptions =
-    provider === "kilo" || provider === "opencode"
+    provider === "kilo" || provider === "opencode" || provider === "devin"
       ? (caps.variantOptions ?? [])
       : caps.reasoningEffortLevels;
   const descriptors: ProviderOptionDescriptor[] = [];
@@ -307,7 +307,10 @@ function legacyCapabilityDescriptors(
     const defaultPrimaryOption = primaryOptions.find((option) => option.isDefault);
     descriptors.push({
       id: reasoningDescriptorId(provider),
-      label: provider === "kilo" || provider === "opencode" ? "Variant" : "Reasoning",
+      label:
+        provider === "kilo" || provider === "opencode" || provider === "devin"
+          ? "Variant"
+          : "Reasoning",
       type: "select",
       options: primaryOptions.map((option) => ({
         id: option.value,
@@ -495,10 +498,15 @@ export function normalizeModelSlug(
   }
 
   const providerScopedModel =
-    provider === "claudeAgent" ? trimmed.replace(/\[[^\]]+\]$/u, "") : trimmed;
+    provider === "claudeAgent"
+      ? trimmed.replace(/\[[^\]]+\]$/u, "")
+      : provider === "devin" && trimmed.toLowerCase().endsWith("-medium")
+        ? trimmed.toLowerCase().slice(0, -"-medium".length)
+        : trimmed;
   const aliases = MODEL_SLUG_ALIASES_BY_PROVIDER[provider] as Record<string, ModelSlug>;
-  const aliased = Object.prototype.hasOwnProperty.call(aliases, providerScopedModel)
-    ? aliases[providerScopedModel]
+  const aliasKey = providerScopedModel.toLowerCase();
+  const aliased = Object.prototype.hasOwnProperty.call(aliases, aliasKey)
+    ? aliases[aliasKey]
     : undefined;
   return typeof aliased === "string" ? aliased : (providerScopedModel as ModelSlug);
 }
@@ -541,7 +549,7 @@ export function resolveModelSlug(
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
   const normalized = normalizeModelSlug(model, provider);
-  if (provider === "pi") {
+  if (provider === "devin" || provider === "pi") {
     return normalized;
   }
   if (!normalized) {

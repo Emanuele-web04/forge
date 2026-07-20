@@ -40,6 +40,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* CodexAdapter,
             yield* ClaudeAdapter,
             yield* CursorAdapter,
+            yield* DevinAdapter,
             yield* AntigravityAdapter,
             yield* GrokAdapter,
             yield* DroidAdapter,

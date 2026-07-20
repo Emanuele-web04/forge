@@ -63,6 +63,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       codex: { ...provider, binaryPath: "codex", homePath: "" },
       claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
+      devin: { ...provider, binaryPath: "devin" },
       antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },
