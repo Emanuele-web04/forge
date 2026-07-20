@@ -52,6 +52,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
     return "pi";
   }
+  if (lowerLabel.includes("devin")) {
+    return "devin";
+  }
   if (lowerLabel.includes("opencode")) {
     return "opencode";
   }
@@ -103,6 +106,9 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
   if (provider === "gemini") {
     return "antigravity";
   }
+  if (typeof provider === "string" && provider.toLowerCase() === "devin") {
+    return "devin";
+  }
   if (typeof provider === "string") {
     const providerFromLabel = inferProviderFromLabel(provider);
     if (providerFromLabel !== undefined) {
@@ -123,6 +129,9 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
   }
   if (lowerModel.includes("grok")) {
     return "grok";
+  }
+  if (lowerModel.includes("devin")) {
+    return "devin";
   }
   return "codex";
 }

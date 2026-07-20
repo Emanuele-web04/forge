@@ -108,3 +108,17 @@ it("does not steal ambiguous provider-less Claude slugs from Claude Agent", () =
     model: "claude-opus-4-8",
   });
 });
+
+it("preserves canonical Devin model selections", () => {
+  assert.deepEqual(normalizePersistedModelSelection({ provider: "devin", model: "devin-core" }), {
+    provider: "devin",
+    model: "devin-core",
+  });
+});
+
+it("infers Devin from provider-less model slugs containing devin", () => {
+  assert.deepEqual(normalizePersistedModelSelection({ model: "devin-core" }), {
+    provider: "devin",
+    model: "devin-core",
+  });
+});
