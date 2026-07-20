@@ -103,11 +103,8 @@ type AcpIncomingFrame =
   | { readonly _tag: "end" };
 
 type SessionEpoch = { generation: number; activeSessionId: Option.Option<string> };
-const PENDING_SESSION_ID = "__synara_acp_pending_session__";
-
 const isActiveSessionId = (sessionId: string, epoch: SessionEpoch): boolean =>
-  Option.isSome(epoch.activeSessionId) &&
-  (epoch.activeSessionId.value === PENDING_SESSION_ID || epoch.activeSessionId.value === sessionId);
+  Option.isSome(epoch.activeSessionId) && epoch.activeSessionId.value === sessionId;
 
 export function makeAcpIncomingFrameGuard(
   maxFrameBytes = ACP_MAX_INCOMING_FRAME_BYTES,
@@ -793,12 +790,18 @@ const makeAcpSessionRuntime = (
     const availableCommandsRef = yield* Ref.make<ReadonlyArray<EffectAcpSchema.AvailableCommand>>(
       [],
     );
+    const pendingAvailableCommandsRef = yield* Ref.make(
+      new Map<string, ReadonlyArray<EffectAcpSchema.AvailableCommand>>(),
+    );
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
     // Unique per runtime instance so assistant message ids never collide across
     // server restarts or session resumes (segment index resets to 0 each time).
     const runtimeInstanceId = randomUUID().slice(0, 8);
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
+    const pendingConfigOptionsRef = yield* Ref.make(
+      new Map<string, ReadonlyArray<EffectAcpSchema.SessionConfigOption>>(),
+    );
     const configOptionUpdateWaitersRef = yield* Ref.make<ReadonlyArray<ConfigOptionUpdateWaiter>>(
       [],
     );
@@ -817,17 +820,47 @@ const makeAcpSessionRuntime = (
 
     const getSessionEpoch = (): Effect.Effect<SessionEpoch> => Ref.get(sessionEpochRef);
 
+    const commitPendingBoundedState = (sessionId: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const pendingAvailableCommands = yield* Ref.getAndUpdate(
+          pendingAvailableCommandsRef,
+          () => new Map(),
+        );
+        const pendingConfigOptions = yield* Ref.getAndUpdate(
+          pendingConfigOptionsRef,
+          () => new Map(),
+        );
+        const availableCommands = pendingAvailableCommands.get(sessionId);
+        if (availableCommands) {
+          yield* Ref.set(availableCommandsRef, availableCommands);
+        }
+        const configOptions = pendingConfigOptions.get(sessionId);
+        if (configOptions) {
+          yield* Ref.update(configOptionsRef, (current) =>
+            mergeSessionConfigOptions(current, configOptions),
+          );
+          yield* resolveConfigOptionUpdateWaiters(configOptions);
+        }
+      });
+
     const setSessionEpoch = (sessionId: string): Effect.Effect<void> =>
-      Ref.update(sessionEpochRef, (epoch) => ({
-        generation: epoch.generation + 1,
-        activeSessionId: Option.some(sessionId),
-      }));
+      Effect.gen(function* () {
+        yield* commitPendingBoundedState(sessionId);
+        yield* Ref.update(sessionEpochRef, (epoch) => ({
+          generation: epoch.generation + 1,
+          activeSessionId: Option.some(sessionId),
+        }));
+      });
 
     const clearSessionEpoch = (): Effect.Effect<void> =>
-      Ref.update(sessionEpochRef, (epoch) => ({
-        generation: epoch.generation + 1,
-        activeSessionId: Option.none(),
-      }));
+      Effect.gen(function* () {
+        yield* Ref.set(pendingAvailableCommandsRef, new Map());
+        yield* Ref.set(pendingConfigOptionsRef, new Map());
+        yield* Ref.update(sessionEpochRef, (epoch) => ({
+          generation: epoch.generation + 1,
+          activeSessionId: Option.none(),
+        }));
+      });
 
     const offerSessionEvent =
       (sessionId: string, epoch: SessionEpoch) =>
@@ -933,9 +966,35 @@ const makeAcpSessionRuntime = (
       Effect.gen(function* () {
         const epoch = yield* getSessionEpoch();
         const sessionId = notification.sessionId;
+        const update = notification.update;
+
+        // While the authoritative session id is unknown (fresh session/new is
+        // still pending), only bounded-state notifications are accepted, and
+        // they are buffered keyed by the session id they claim. Once session/new
+        // returns, only the buffer matching the response id is committed;
+        // anything from a discarded probe session is discarded.
+        if (Option.isNone(epoch.activeSessionId)) {
+          if (update.sessionUpdate === "available_commands_update") {
+            yield* Ref.update(pendingAvailableCommandsRef, (map) => {
+              const next = new Map(map);
+              next.set(sessionId, update.availableCommands);
+              return next;
+            });
+          } else if (update.sessionUpdate === "config_option_update") {
+            yield* Ref.update(pendingConfigOptionsRef, (map) => {
+              const next = new Map(map);
+              next.set(
+                sessionId,
+                mergeSessionConfigOptions(map.get(sessionId) ?? [], update.configOptions),
+              );
+              return next;
+            });
+          }
+          return;
+        }
+
         if (!isActiveSessionId(sessionId, epoch)) return;
 
-        const update = notification.update;
         const rememberCommands = Effect.gen(function* () {
           if (update.sessionUpdate !== "available_commands_update") return;
           const current = yield* getSessionEpoch();
@@ -1295,10 +1354,11 @@ const makeAcpSessionRuntime = (
           resumedExistingSession = true;
           sessionSetupMethod = supportsResume ? "resume" : "load";
         } else {
-          // Fresh session: accept updates from before session/new so any early
-          // agent output emitted while the request is in flight is buffered.
-          acceptingSessionUpdates = true;
-          yield* setSessionEpoch(PENDING_SESSION_ID);
+          // Fresh session: do not accept notifications until session/new has
+          // returned a concrete session id. This prevents notifications from a
+          // discarded probe session (e.g. on-demand auth) from being mistaken
+          // for the final authenticated session while the request is pending.
+          acceptingSessionUpdates = false;
           const createPayload = {
             cwd: options.cwd,
             mcpServers,
@@ -1333,7 +1393,10 @@ const makeAcpSessionRuntime = (
             }
           }
 
+          // The final session id is now known. Install it and start accepting
+          // session updates from this generation onward.
           yield* setSessionEpoch(created.sessionId);
+          acceptingSessionUpdates = true;
         }
 
         return {
@@ -1607,8 +1670,31 @@ export function sessionConfigOptionsFromSetup(
   return response?.configOptions ?? fallback;
 }
 
+function mergeSessionConfigOptions(
+  current: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+  update: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+): ReadonlyArray<EffectAcpSchema.SessionConfigOption> {
+  const byId = new Map(current.map((option) => [option.id, option]));
+  for (const option of update) {
+    byId.set(option.id, option);
+  }
+  const result: EffectAcpSchema.SessionConfigOption[] = [];
+  const seen = new Set<string>();
+  for (const option of current) {
+    result.push(byId.get(option.id) ?? option);
+    seen.add(option.id);
+  }
+  for (const option of update) {
+    if (!seen.has(option.id)) {
+      result.push(option);
+      seen.add(option.id);
+    }
+  }
+  return result;
+}
+
 // Flattens grouped ACP select options so semantic configuration lookup stays provider-agnostic.
-function flattenSessionConfigSelectOptions(
+export function flattenSessionConfigSelectOptions(
   options:
     | ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption>
     | ReadonlyArray<EffectAcpSchema.SessionConfigSelectGroup>,

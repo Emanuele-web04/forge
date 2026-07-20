@@ -174,6 +174,11 @@ describe("AcpSessionRuntime", () => {
         expect(newSessionStarts.length).toBe(2);
         expect(requestEvents.some((event) => event.method === "authenticate")).toBe(true);
 
+        // The final session's bounded state is present, but nothing from the
+        // discarded probe session leaked through.
+        const commands = yield* runtime.getAvailableCommands;
+        expect(commands).toEqual([{ name: "compact", description: "Compact the current context" }]);
+
         // Give any orphan update a moment to arrive, then consume the event stream.
         yield* Effect.sleep("200 millis");
         const eventsChunk = yield* Stream.runCollect(runtime.getEvents()).pipe(
@@ -194,7 +199,9 @@ describe("AcpSessionRuntime", () => {
                 SYNARA_ACP_ADVERTISE_AUTH_METHODS: "1",
                 SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION: "1",
                 SYNARA_ACP_EMIT_ORPHAN_UPDATE: "1",
+                SYNARA_ACP_EMIT_AVAILABLE_COMMANDS: "1",
                 SYNARA_ACP_ORPHAN_UPDATE_DELAY_MS: "50",
+                SYNARA_ACP_FINAL_SESSION_DELAY_MS: "150",
               },
             },
             cwd: process.cwd(),

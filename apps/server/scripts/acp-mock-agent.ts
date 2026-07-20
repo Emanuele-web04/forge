@@ -33,6 +33,7 @@ const advertiseAuthMethods = process.env.SYNARA_ACP_ADVERTISE_AUTH_METHODS === "
 const requireAuthForSession = process.env.SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION === "1";
 const emitOrphanUpdate = process.env.SYNARA_ACP_EMIT_ORPHAN_UPDATE === "1";
 const orphanUpdateDelayMs = Number(process.env.SYNARA_ACP_ORPHAN_UPDATE_DELAY_MS || "0");
+const finalSessionDelayMs = Number(process.env.SYNARA_ACP_FINAL_SESSION_DELAY_MS || "0");
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
 const mainSessionId = "mock-session-1";
 const probeSessionId = "mock-session-probe";
@@ -322,7 +323,9 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
           sessionId,
           update: {
             sessionUpdate: "available_commands_update",
-            availableCommands: [{ name: "compact", description: "Compact the current context" }],
+            availableCommands: isAuthenticated
+              ? [{ name: "compact", description: "Compact the current context" }]
+              : [{ name: "orphan-command", description: "Should not leak to final session" }],
           },
         });
       }
@@ -349,6 +352,9 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
               ? Object.assign({}, option, { options: [] as typeof option.options })
               : option,
           );
+      if (isAuthenticated && finalSessionDelayMs > 0) {
+        yield* Effect.sleep(finalSessionDelayMs);
+      }
       return {
         sessionId,
         modes: modeState(),
