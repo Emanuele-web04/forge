@@ -95,6 +95,34 @@ it("infers Pi from persisted instance labels", () => {
   );
 });
 
+it("preserves canonical Devin model selections", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "devin",
+      model: "swe-1-7",
+      options: { reasoningEffort: "high" },
+    }),
+    {
+      provider: "devin",
+      model: "swe-1-7",
+      options: { reasoningEffort: "high" },
+    },
+  );
+});
+
+it("infers Devin from persisted instance labels", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      instanceId: "Devin CLI",
+      model: "adaptive",
+    }),
+    {
+      provider: "devin",
+      model: "adaptive",
+    },
+  );
+});
+
 it("infers Droid only for Factory-exclusive provider-less model slugs", () => {
   assert.deepEqual(normalizePersistedModelSelection({ model: "minimax-m3" }), {
     provider: "droid",

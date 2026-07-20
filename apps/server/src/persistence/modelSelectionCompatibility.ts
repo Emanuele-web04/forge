@@ -82,6 +82,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
     return "droid";
   }
+  if (lowerLabel.includes("devin") || lowerLabel.includes("cognition")) {
+    return "devin";
+  }
   if (lowerLabel.includes("codex")) {
     return "codex";
   }
