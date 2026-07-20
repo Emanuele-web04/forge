@@ -18,7 +18,6 @@ import {
   type ProviderInteractionMode,
   type ProviderListModelsResult,
   type ProviderModelDescriptor,
-  type ProviderOptionChoice,
   type ProviderOptionDescriptor,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -67,6 +66,7 @@ import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
+  ProviderAdapterError,
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
@@ -103,9 +103,13 @@ import {
   collectSessionConfigOptionValues,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
-import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import {
+  type AcpSessionRuntimeShape,
+  flattenSessionConfigSelectOptions,
+} from "../acp/AcpSessionRuntime.ts";
 import {
   forkAcpTurnIdleWatchdog,
+  isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
@@ -113,7 +117,11 @@ import {
   elicitationQuestionsFromRequest,
   elicitationResponseFromAnswers,
 } from "../acp/AcpElicitationSupport.ts";
-import { type DevinAcpRuntimeSettings, makeDevinAcpRuntime } from "../acp/DevinAcpSupport.ts";
+import {
+  type DevinAcpRuntimeSettings,
+  makeDevinAcpRuntime,
+  resolveDevinAcpAuthMethodIdForDiscovery,
+} from "../acp/DevinAcpSupport.ts";
 import { makeEventNdjsonLogger, type EventNdjsonLogger } from "../Layers/EventNdjsonLogger.ts";
 import {
   type ProviderAdapterShape,
@@ -132,7 +140,7 @@ const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
 const DEVIN_TURN_WATCHDOG_INTERVAL_MS = 5_000;
 const DEVIN_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 
-const ACP_PLAN_MODE_ALIASES = ["plan"] as const;
+const ACP_PLAN_MODE_ALIASES = ["plan", "architect"] as const;
 const ACP_APPROVAL_MODE_ALIASES = ["ask", "approval", "confirm"] as const;
 const ACP_IMPLEMENT_MODE_ALIASES = [
   "code",
@@ -219,7 +227,7 @@ function parseDevinResume(resumeCursor: unknown): { readonly sessionId: string }
   return { sessionId: sessionId.trim() };
 }
 
-function findModeByAliases(
+function findModeByExactAliases(
   modes: ReadonlyArray<AcpSessionMode>,
   aliases: ReadonlyArray<string>,
 ): AcpSessionMode | undefined {
@@ -227,37 +235,67 @@ function findModeByAliases(
   return modes.find((mode) => {
     const idLower = mode.id.toLowerCase();
     const nameLower = mode.name.toLowerCase();
-    return [...aliasSet].some((alias) => idLower.includes(alias) || nameLower.includes(alias));
+    return aliasSet.has(idLower) || aliasSet.has(nameLower);
   });
 }
 
-function resolveRequestedModeId(input: {
+export function resolveRequestedModeId(input: {
   readonly modeState: AcpSessionModeState | undefined;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode | undefined;
-}): string | undefined {
-  if (!input.modeState) {
-    return undefined;
-  }
-  const { modeState, runtimeMode, interactionMode } = input;
-  const targetMode =
-    interactionMode === "plan"
-      ? findModeByAliases(modeState.availableModes, ACP_PLAN_MODE_ALIASES)
-      : runtimeMode === "approval-required"
-        ? findModeByAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES)
-        : findModeByAliases(modeState.availableModes, ACP_IMPLEMENT_MODE_ALIASES);
-  if (!targetMode) {
-    return undefined;
-  }
-  return targetMode.id === modeState.currentModeId ? undefined : targetMode.id;
+}): Effect.Effect<string | undefined, ProviderAdapterValidationError> {
+  return Effect.gen(function* () {
+    if (!input.modeState) {
+      return undefined;
+    }
+    const { modeState, runtimeMode, interactionMode } = input;
+    const aliases =
+      interactionMode === "plan"
+        ? ACP_PLAN_MODE_ALIASES
+        : runtimeMode === "approval-required"
+          ? ACP_APPROVAL_MODE_ALIASES
+          : ACP_IMPLEMENT_MODE_ALIASES;
+    const targetMode = findModeByExactAliases(modeState.availableModes, aliases);
+
+    if (!targetMode) {
+      const requiredBy =
+        interactionMode === "plan" ? "plan interaction mode" : `runtime mode "${runtimeMode}"`;
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "resolveRequestedModeId",
+        issue: `Requested ${requiredBy} does not match any available ACP mode. Available modes: ${modeState.availableModes
+          .map((mode) => `${mode.id} (${mode.name})`)
+          .join(", ")}`,
+      });
+    }
+
+    return targetMode.id === modeState.currentModeId ? undefined : targetMode.id;
+  });
 }
 
-function findModelConfigOption(
+export function findModelConfigOption(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | undefined,
 ): EffectAcpSchema.SessionConfigOption | undefined {
   return configOptions?.find(
     (option) => option.category === "model" || option.id.trim().toLowerCase() === "model",
   );
+}
+
+const DEVIN_OPTION_ALIASES: Record<keyof DevinModelOptions, ReadonlyArray<string>> = {
+  reasoningEffort: ["reasoning_effort", "reasoning", "reason", "thought_level"],
+  fastMode: ["fast_mode", "fast"],
+  thinking: ["thinking"],
+  contextWindow: ["context_window", "context"],
+  variant: ["variant"],
+};
+
+function optionIdOrCategoryMatchesAny(
+  option: EffectAcpSchema.SessionConfigOption,
+  aliases: ReadonlyArray<string>,
+): boolean {
+  const idLower = option.id.trim().toLowerCase();
+  const categoryLower = option.category?.trim().toLowerCase() ?? "";
+  return aliases.some((alias) => idLower === alias || categoryLower === alias);
 }
 
 function findDevinConfigOption(
@@ -267,50 +305,38 @@ function findDevinConfigOption(
   if (!configOptions) {
     return undefined;
   }
-  const keyLower = key.toLowerCase();
-  return configOptions.find((option) => {
-    const idLower = option.id.trim().toLowerCase();
-    const nameLower = option.name.trim().toLowerCase();
-    const categoryLower = option.category?.trim().toLowerCase() ?? "";
-
-    if (idLower === keyLower || nameLower === keyLower) {
-      return true;
-    }
-    if (key === "variant") {
-      return (
-        categoryLower === "thought_level" ||
-        idLower === "thought_level" ||
-        idLower.includes("variant")
-      );
-    }
-    if (key === "reasoningEffort") {
-      return (
-        categoryLower === "thought_level" ||
-        idLower.includes("reason") ||
-        idLower.includes("effort") ||
-        nameLower.includes("reason") ||
-        nameLower.includes("effort")
-      );
-    }
-    if (key === "fastMode") {
-      return idLower.includes("fast") || nameLower.includes("fast");
-    }
-    if (key === "thinking") {
-      return idLower.includes("think") || nameLower.includes("think");
-    }
-    if (key === "contextWindow") {
-      return (
-        idLower.includes("context") ||
-        idLower.includes("window") ||
-        nameLower.includes("context") ||
-        nameLower.includes("window")
-      );
-    }
-    return false;
-  });
+  return configOptions.find((option) =>
+    optionIdOrCategoryMatchesAny(option, DEVIN_OPTION_ALIASES[key]),
+  );
 }
 
-function applyDevinSessionConfiguration(input: {
+function normalizeDevinConfigOptionValue(
+  value: unknown,
+  option: EffectAcpSchema.SessionConfigOption,
+): string | boolean | undefined {
+  if (option.type === "boolean") {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (typeof value === "string") {
+      const lower = value.toLowerCase();
+      if (lower === "true" || lower === "1" || lower === "on") return true;
+      if (lower === "false" || lower === "0" || lower === "off") return false;
+    }
+    return undefined;
+  }
+  if (option.type === "select") {
+    if (typeof value === "boolean" || typeof value === "string") {
+      return String(value);
+    }
+    if (typeof value === "number") {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+export function applyDevinSessionConfiguration(input: {
   readonly runtime: AcpSessionRuntimeShape;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode | undefined;
@@ -320,82 +346,133 @@ function applyDevinSessionConfiguration(input: {
         readonly options?: DevinModelOptions | null | undefined;
       }
     | undefined;
-}): Effect.Effect<void> {
+}): Effect.Effect<{ readonly model: string | undefined }, ProviderAdapterError> {
   return Effect.gen(function* () {
-    const configOptions = yield* input.runtime.getConfigOptions.pipe(
-      Effect.timeoutOption(5_000),
-      Effect.map(Option.getOrElse(() => [] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>)),
-      Effect.orElseSucceed(() => [] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
-    );
+    const readConfigOptions = (): Effect.Effect<
+      ReadonlyArray<EffectAcpSchema.SessionConfigOption>
+    > =>
+      input.runtime.getConfigOptions.pipe(
+        Effect.timeoutOption(5_000),
+        Effect.map(
+          Option.getOrElse(() => [] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+        ),
+        Effect.orElseSucceed(() => [] as ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      );
+
+    let configOptions = yield* readConfigOptions();
+    let confirmedModel: string | undefined;
 
     if (input.modelSelection) {
       const modelOption = findModelConfigOption(configOptions);
       const allowedModels =
         modelOption?.type === "select" ? collectSessionConfigOptionValues(modelOption) : [];
-      const resolvedModel =
-        resolveModelSlug(input.modelSelection.model, PROVIDER) ?? input.modelSelection.model;
-      const targetModel =
-        allowedModels.length === 0 || allowedModels.includes(resolvedModel)
-          ? resolvedModel
-          : allowedModels.includes(input.modelSelection.model)
-            ? input.modelSelection.model
-            : undefined;
+      const requestedModel = input.modelSelection.model.trim();
+      const resolvedModel = resolveModelSlug(requestedModel, PROVIDER) ?? requestedModel;
 
-      if (targetModel) {
-        yield* input.runtime.setModel(targetModel).pipe(
-          Effect.matchEffect({
-            onFailure: (error) =>
-              Effect.logWarning("devin.set_model_failed", {
-                model: targetModel,
-                error: error.message,
-              }),
-            onSuccess: () => Effect.void,
-          }),
-        );
+      const isAllowed = (candidate: string): boolean =>
+        allowedModels.length === 0 ||
+        allowedModels.some((allowed) => allowed.toLowerCase() === candidate.toLowerCase());
+
+      const targetModel = isAllowed(resolvedModel)
+        ? resolvedModel
+        : isAllowed(requestedModel)
+          ? requestedModel
+          : undefined;
+
+      if (targetModel === undefined) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "applyDevinSessionConfiguration",
+          issue: `Model "${requestedModel}" is not available. Allowed models: ${allowedModels.join(", ")}`,
+        });
       }
+
+      yield* input.runtime.setModel(targetModel).pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "applyDevinSessionConfiguration",
+              issue: `setModel("${targetModel}") failed: ${error.message}`,
+            }),
+        ),
+      );
+
+      configOptions = yield* readConfigOptions();
 
       const options = input.modelSelection.options;
       if (options) {
-        for (const [key, value] of Object.entries(options) as Array<
-          [keyof DevinModelOptions, unknown]
-        >) {
-          if (value === undefined || value === null) {
+        const optionKeys = [
+          "contextWindow",
+          "fastMode",
+          "thinking",
+          "reasoningEffort",
+          "variant",
+        ] as Array<keyof DevinModelOptions>;
+        const appliedOptionIds = new Set<string>();
+
+        for (const key of optionKeys) {
+          const rawValue = options[key];
+          if (rawValue === undefined || rawValue === null) {
             continue;
           }
           const option = findDevinConfigOption(configOptions, key);
-          if (!option) {
+          if (option === undefined) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "applyDevinSessionConfiguration",
+              issue: `Trait "${key}" is not supported by the current Devin session.`,
+            });
+          }
+          if (appliedOptionIds.has(option.id)) {
             continue;
           }
+          const value = normalizeDevinConfigOptionValue(rawValue, option);
+          if (value === undefined) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "applyDevinSessionConfiguration",
+              issue: `Trait "${key}" value ${JSON.stringify(rawValue)} cannot be applied to option "${option.id}".`,
+            });
+          }
 
-          if (option.type === "boolean" && typeof value === "boolean") {
-            yield* input.runtime.setConfigOption(option.id, value).pipe(
-              Effect.matchEffect({
-                onFailure: (error) =>
-                  Effect.logWarning("devin.set_config_option_failed", {
-                    option: option.id,
-                    error: error.message,
-                  }),
-                onSuccess: () => Effect.void,
-              }),
-            );
-          } else if (option.type === "select") {
+          if (option.type === "select") {
             const allowed = collectSessionConfigOptionValues(option);
-            const strValue = String(value);
-            if (allowed.length === 0 || allowed.includes(strValue)) {
-              yield* input.runtime.setConfigOption(option.id, strValue).pipe(
-                Effect.matchEffect({
-                  onFailure: (error) =>
-                    Effect.logWarning("devin.set_config_option_failed", {
-                      option: option.id,
-                      error: error.message,
-                    }),
-                  onSuccess: () => Effect.void,
-                }),
-              );
+            if (
+              allowed.length > 0 &&
+              !allowed.some(
+                (allowedValue) =>
+                  String(allowedValue).toLowerCase() === String(value).toLowerCase(),
+              )
+            ) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "applyDevinSessionConfiguration",
+                issue: `Value "${String(value)}" is not allowed for "${option.id}". Allowed values: ${allowed.join(", ")}`,
+              });
             }
           }
+
+          const response = yield* input.runtime.setConfigOption(option.id, value).pipe(
+            Effect.mapError(
+              (error) =>
+                new ProviderAdapterValidationError({
+                  provider: PROVIDER,
+                  operation: "applyDevinSessionConfiguration",
+                  issue: `setConfigOption("${option.id}", ${JSON.stringify(value)}) failed: ${error.message}`,
+                }),
+            ),
+          );
+          appliedOptionIds.add(option.id);
+          configOptions = response.configOptions;
         }
       }
+
+      const finalModelOption = findModelConfigOption(configOptions);
+      confirmedModel =
+        finalModelOption?.currentValue !== undefined && finalModelOption.currentValue !== null
+          ? String(finalModelOption.currentValue)
+          : targetModel;
     }
 
     const modeState = yield* input.runtime.getModeState.pipe(
@@ -404,7 +481,7 @@ function applyDevinSessionConfiguration(input: {
       Effect.orElseSucceed(() => undefined),
     );
 
-    const requestedModeId = resolveRequestedModeId({
+    const requestedModeId = yield* resolveRequestedModeId({
       modeState,
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
@@ -412,16 +489,18 @@ function applyDevinSessionConfiguration(input: {
 
     if (requestedModeId) {
       yield* input.runtime.setMode(requestedModeId).pipe(
-        Effect.matchEffect({
-          onFailure: (error) =>
-            Effect.logWarning("devin.set_mode_failed", {
-              mode: requestedModeId,
-              error: error.message,
+        Effect.mapError(
+          (error) =>
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "applyDevinSessionConfiguration",
+              issue: `setMode("${requestedModeId}") failed: ${error.message}`,
             }),
-          onSuccess: () => Effect.void,
-        }),
+        ),
       );
     }
+
+    return { model: confirmedModel };
   });
 }
 
@@ -494,61 +573,15 @@ function withDevinPlanModePrompt(input: {
   return [DEVIN_PLAN_MODE_PROMPT_PREFIX, input.text].join("\n\n");
 }
 
-function sessionConfigOptionToProviderOptionDescriptor(
-  option: EffectAcpSchema.SessionConfigOption,
-): ProviderOptionDescriptor | undefined {
-  const base = {
-    id: option.id.trim(),
-    label: option.name.trim(),
-    ...(option.description?.trim() ? { description: option.description.trim() } : {}),
-  };
-
-  if (option.type === "boolean") {
-    return {
-      ...base,
-      type: "boolean",
-      currentValue: option.currentValue,
-    } satisfies ProviderOptionDescriptor;
-  }
-
-  if (option.type === "select") {
-    const choices: Array<ProviderOptionChoice> = [];
-    const first = option.options[0];
-    if (first && "value" in first) {
-      const flatOptions =
-        option.options as ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption>;
-      for (const o of flatOptions) {
-        choices.push({
-          id: o.value,
-          label: o.name,
-          ...(o.description?.trim() ? { description: o.description.trim() } : {}),
-        });
-      }
-    } else {
-      const groups = option.options as ReadonlyArray<EffectAcpSchema.SessionConfigSelectGroup>;
-      for (const g of groups) {
-        for (const o of g.options) {
-          choices.push({
-            id: o.value,
-            label: o.name,
-            description: g.name,
-          });
-        }
-      }
-    }
-
-    return {
-      ...base,
-      type: "select",
-      options: choices,
-      ...(option.currentValue ? { currentValue: option.currentValue } : {}),
-    } satisfies ProviderOptionDescriptor;
-  }
-
-  return undefined;
+function findModelOptionName(
+  modelOption: EffectAcpSchema.SessionConfigOption & { type: "select" },
+  value: string,
+): string | undefined {
+  return flattenSessionConfigSelectOptions(modelOption.options).find((o) => o.value === value)
+    ?.name;
 }
 
-function buildDevinProviderModelDescriptors(
+export function buildDevinProviderModelDescriptors(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | undefined,
 ): ReadonlyArray<ProviderModelDescriptor> {
   const modelOption = findModelConfigOption(configOptions);
@@ -571,10 +604,6 @@ function buildDevinProviderModelDescriptors(
     });
   }
 
-  const nonModelOptions = configOptions!.filter((o) => o !== modelOption);
-  const optionDescriptors = nonModelOptions
-    .map(sessionConfigOptionToProviderOptionDescriptor)
-    .filter((d): d is ProviderOptionDescriptor => d !== undefined);
   const modelValues = collectSessionConfigOptionValues(modelOption);
 
   return modelValues.map((slug) => {
@@ -582,8 +611,11 @@ function buildDevinProviderModelDescriptors(
     const caps = staticMatch ? staticMatch.capabilities : getModelCapabilities(PROVIDER, slug);
     return {
       slug,
-      name: staticMatch?.name ?? slug,
-      optionDescriptors,
+      name: staticMatch?.name ?? findModelOptionName(modelOption, slug) ?? slug,
+      optionDescriptors: getProviderOptionDescriptors({
+        provider: PROVIDER,
+        caps,
+      }),
       supportsFastMode: caps.supportsFastMode,
       supportsThinkingToggle: caps.supportsThinkingToggle,
       contextWindowOptions: caps.contextWindowOptions,
@@ -893,7 +925,7 @@ export function makeDevinAdapter(
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/request_permission", params);
 
-                if (input.runtimeMode === "full-access") {
+                if (input.runtimeMode === "full-access" && ctx?.activeInteractionMode !== "plan") {
                   const autoApprovedOptionId = selectAcpFullAccessPermissionOptionId(
                     params.options,
                   );
@@ -1027,7 +1059,7 @@ export function makeDevinAdapter(
             return yield* acp.start().pipe(Effect.mapError(acpToAdapterError));
           });
 
-          yield* applyDevinSessionConfiguration({
+          const { model: appliedModel } = yield* applyDevinSessionConfiguration({
             runtime: acp,
             runtimeMode: input.runtimeMode,
             interactionMode: undefined,
@@ -1037,16 +1069,13 @@ export function makeDevinAdapter(
           });
 
           const now = yield* nowIso;
-          const resolvedModel = devinModelSelection?.model
-            ? (resolveModelSlug(devinModelSelection.model, PROVIDER) ?? devinModelSelection.model)
-            : undefined;
 
           const session: ProviderSession = {
             provider: PROVIDER,
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            model: resolvedModel,
+            model: appliedModel,
             threadId: input.threadId,
             resumeCursor: {
               schemaVersion: DEVIN_RESUME_VERSION,
@@ -1081,7 +1110,9 @@ export function makeDevinAdapter(
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
-                ctx.lastTurnActivityAt = Date.now();
+                if (isAcpTurnProgressEventTag(event._tag)) {
+                  ctx.lastTurnActivityAt = Date.now();
+                }
 
                 switch (event._tag) {
                   case "ModeChanged":
@@ -1220,15 +1251,16 @@ export function makeDevinAdapter(
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         const model = turnModelSelection?.model ?? ctx.session.model;
-        const resolvedModel = model ? (resolveModelSlug(model, PROVIDER) ?? model) : undefined;
 
-        yield* applyDevinSessionConfiguration({
+        const { model: appliedModel } = yield* applyDevinSessionConfiguration({
           runtime: ctx.acp,
           runtimeMode: ctx.session.runtimeMode,
           interactionMode: input.interactionMode,
           modelSelection:
             model === undefined ? undefined : { model, options: turnModelSelection?.options },
         });
+
+        const resolvedModel = appliedModel ?? model;
 
         const promptParts = yield* buildDevinPromptParts({
           text: input.input,
@@ -1521,27 +1553,26 @@ export function makeDevinAdapter(
             cwd,
             clientInfo: { name: "Synara", version: "0.0.0" },
             clientCapabilities: { elicitation: { form: {} } },
+            resolveAuthMethodId: resolveDevinAcpAuthMethodIdForDiscovery,
           });
           yield* runtime.start();
           const configOptions = yield* runtime.getConfigOptions;
           return buildDevinProviderModelDescriptors(configOptions);
-        }).pipe(
-          Effect.scoped,
-          Effect.timeoutOption(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS),
-          Effect.map((maybeModels) =>
-            Option.match(maybeModels, {
-              onNone: () => buildDevinProviderModelDescriptors(undefined),
-              onSome: (models) =>
-                models.length === 0 ? buildDevinProviderModelDescriptors(undefined) : models,
-            }),
-          ),
-          Effect.orElseSucceed(() => buildDevinProviderModelDescriptors(undefined)),
+        }).pipe(Effect.scoped, Effect.timeout(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS));
+
+        const dynamicModels = yield* discovery.pipe(
+          Effect.match({
+            onFailure: () => [] as ReadonlyArray<ProviderModelDescriptor>,
+            onSuccess: (models) => models,
+          }),
         );
 
-        const models = yield* discovery;
+        const models =
+          dynamicModels.length > 0 ? dynamicModels : buildDevinProviderModelDescriptors(undefined);
+
         return {
           models,
-          source: "devin.acp",
+          source: dynamicModels.length > 0 ? "devin.acp" : "devin.static",
           cached: false,
         } satisfies ProviderListModelsResult;
       });
