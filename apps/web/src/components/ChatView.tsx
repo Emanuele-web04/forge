@@ -567,6 +567,7 @@ import {
   shouldStartActiveTurnLayoutGrace,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
+  resolveDraftFallbackModelSelection,
   DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
   DismissedProviderHealthBannersSchema,
   collectUserMessageBlobPreviewUrls,
@@ -1419,19 +1420,14 @@ export default function ChatView({
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
   );
-  const draftFallbackModelSelection = useMemo<ModelSelection>(() => {
-    const projectDefault = fallbackDraftProject?.defaultModelSelection;
-    const settingsProvider = settings.defaultProvider === "pi" ? null : settings.defaultProvider;
-    const provider = projectDefault?.provider ?? settingsProvider ?? "codex";
-    const model =
-      (provider === projectDefault?.provider ? projectDefault.model : null) ??
-      (provider === settingsProvider && settingsProvider !== null
-        ? getDefaultModel(settingsProvider)
-        : null) ??
-      getDefaultModel(provider) ??
-      DEFAULT_MODEL_BY_PROVIDER.codex;
-    return buildModelSelection(provider, model);
-  }, [fallbackDraftProject?.defaultModelSelection, settings.defaultProvider]);
+  const draftFallbackModelSelection = useMemo<ModelSelection>(
+    () =>
+      resolveDraftFallbackModelSelection({
+        projectDefault: fallbackDraftProject?.defaultModelSelection,
+        settingsDefaultProvider: settings.defaultProvider,
+      }),
+    [fallbackDraftProject?.defaultModelSelection, settings.defaultProvider],
+  );
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);

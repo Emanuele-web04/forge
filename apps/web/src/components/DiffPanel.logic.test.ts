@@ -118,7 +118,7 @@ describe("resolveDiffPanelThread", () => {
         threadId: THREAD_ID,
         serverThread: undefined,
         draftThread: null,
-        fallbackModelSelection: null,
+        fallbackModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
       }),
     ).toBeUndefined();
   });
