@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Option, Stream } from "effect";
-import { describe, expect } from "vitest";
+import { describe, expect, it as runIt } from "vitest";
 
 import {
   AcpSessionRuntime,
@@ -159,55 +159,60 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
-  it.effect("discards the first probe session and fences orphan updates for on-demand auth", () => {
-    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
-    return Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime;
-      const started = yield* runtime.start().pipe(Effect.timeout("2 seconds"));
-      expect(started.sessionId).toBe("mock-session-1");
+  runIt(
+    "discards the first probe session and fences orphan updates for on-demand auth",
+    async () => {
+      const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+      const program = Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        const started = yield* runtime.start().pipe(Effect.timeout("2 seconds"));
+        expect(started.sessionId).toBe("mock-session-1");
 
-      const newSessionStarts = requestEvents.filter(
-        (event) => event.method === "session/new" && event.status === "started",
-      );
-      expect(newSessionStarts.length).toBe(2);
-      expect(requestEvents.some((event) => event.method === "authenticate")).toBe(true);
+        const newSessionStarts = requestEvents.filter(
+          (event) => event.method === "session/new" && event.status === "started",
+        );
+        expect(newSessionStarts.length).toBe(2);
+        expect(requestEvents.some((event) => event.method === "authenticate")).toBe(true);
 
-      // Give any orphan update a moment to arrive, then consume the event stream.
-      yield* Effect.sleep("200 millis");
-      const maybeEvents = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 1)).pipe(
-        Effect.timeoutOption("500 millis"),
-      );
-      const events = Option.isSome(maybeEvents) ? Array.from(maybeEvents.value) : [];
-      expect(events.some((event) => event._tag === "ContentDelta" && event.text === "orphan")).toBe(
-        false,
-      );
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
-          spawn: {
-            command: bunExe,
-            args: [mockAgentPath],
-            env: {
-              VITEST: "true",
-              SYNARA_ACP_ADVERTISE_AUTH_METHODS: "1",
-              SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION: "1",
-              SYNARA_ACP_EMIT_ORPHAN_UPDATE: "1",
+        // Give any orphan update a moment to arrive, then consume the event stream.
+        yield* Effect.sleep("200 millis");
+        const eventsChunk = yield* Stream.runCollect(runtime.getEvents()).pipe(
+          Effect.timeoutOption("500 millis"),
+        );
+        const events = Option.isSome(eventsChunk) ? Array.from(eventsChunk.value) : [];
+        expect(
+          events.some((event) => event._tag === "ContentDelta" && event.text === "orphan"),
+        ).toBe(false);
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            spawn: {
+              command: bunExe,
+              args: [mockAgentPath],
+              env: {
+                VITEST: "true",
+                SYNARA_ACP_ADVERTISE_AUTH_METHODS: "1",
+                SYNARA_ACP_REQUIRE_AUTH_FOR_SESSION: "1",
+                SYNARA_ACP_EMIT_ORPHAN_UPDATE: "1",
+              },
             },
-          },
-          cwd: process.cwd(),
-          clientInfo: { name: "synara-test", version: "0.0.0" },
-          authMethodId: "test-key",
-          authPolicy: "on-demand",
-          requestLogger: (event) =>
-            Effect.sync(() => {
-              requestEvents.push(event);
-            }),
-        }),
-      ),
-      Effect.scoped,
-      Effect.provide(NodeServices.layer),
-    );
-  });
+            cwd: process.cwd(),
+            clientInfo: { name: "synara-test", version: "0.0.0" },
+            authMethodId: "test-key",
+            authPolicy: "on-demand",
+            requestLogger: (event) =>
+              Effect.sync(() => {
+                requestEvents.push(event);
+              }),
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      );
+
+      await Effect.runPromise(program);
+    },
+  );
 
   it.effect("loads a resumed session and still prompts normally", () =>
     Effect.gen(function* () {

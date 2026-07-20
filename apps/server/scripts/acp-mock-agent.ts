@@ -334,7 +334,9 @@ app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
       const configOptionsForSession = isAuthenticated
         ? configOptions()
         : configOptions().map((option) =>
-            option.id === "model" ? { ...option, options: [] } : option,
+            option.id === "model" && option.type === "select"
+              ? Object.assign({}, option, { options: [] as typeof option.options })
+              : option,
           );
       return {
         sessionId,
