@@ -27,6 +27,7 @@ function makeFakeAcpRuntime(
 } {
   const calls: Array<{ method: string; args: ReadonlyArray<unknown> }> = [];
   const configOptions = initialConfigOptions;
+  let modeState = initialModeState;
 
   const record = (method: string, args: ReadonlyArray<unknown>) => {
     calls.push({ method, args });
@@ -58,10 +59,10 @@ function makeFakeAcpRuntime(
     sessionUpdatesEnqueuedCount: Effect.succeed(0),
     supportsSessionFork: Effect.succeed(false),
     getModeState: Effect.sync(() =>
-      initialModeState
+      modeState
         ? {
-            currentModeId: initialModeState.currentModeId,
-            availableModes: initialModeState.availableModes,
+            currentModeId: modeState.currentModeId,
+            availableModes: modeState.availableModes,
           }
         : undefined,
     ),
@@ -72,6 +73,9 @@ function makeFakeAcpRuntime(
     setMode: (modeId: string) =>
       Effect.sync(() => {
         record("setMode", [modeId]);
+        if (modeState) {
+          modeState = { ...modeState, currentModeId: modeId };
+        }
         return {} as EffectAcpSchema.SetSessionModeResponse;
       }),
     setConfigOption: (id: string, value: string | boolean) =>

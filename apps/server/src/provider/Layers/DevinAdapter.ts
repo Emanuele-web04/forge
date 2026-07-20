@@ -18,7 +18,6 @@ import {
   type ProviderInteractionMode,
   type ProviderListModelsResult,
   type ProviderModelDescriptor,
-  type ProviderOptionDescriptor,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -26,7 +25,6 @@ import {
   type RuntimeMode,
   type ThreadId,
   TurnId,
-  type UserInputQuestion,
   type ChatAttachment,
 } from "@synara/contracts";
 import {
@@ -101,6 +99,7 @@ import {
   type AcpSessionMode,
   type AcpSessionModeState,
   collectSessionConfigOptionValues,
+  findSessionConfigOption,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
 import {
@@ -124,7 +123,6 @@ import {
 } from "../acp/DevinAcpSupport.ts";
 import { makeEventNdjsonLogger, type EventNdjsonLogger } from "../Layers/EventNdjsonLogger.ts";
 import {
-  type ProviderAdapterShape,
   type ProviderThreadSnapshot,
   type ProviderThreadTurnSnapshot,
 } from "../Services/ProviderAdapter.ts";
@@ -227,15 +225,35 @@ function parseDevinResume(resumeCursor: unknown): { readonly sessionId: string }
   return { sessionId: sessionId.trim() };
 }
 
-function findModeByExactAliases(
+function normalizeModeToken(value: string): string {
+  return value.toLowerCase().trim().replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function tokenizeMode(value: string): ReadonlyArray<string> {
+  const normalized = normalizeModeToken(value);
+  return normalized.length === 0 ? [] : normalized.split(" ");
+}
+
+function findModeByExactNormalizedAliases(
   modes: ReadonlyArray<AcpSessionMode>,
   aliases: ReadonlyArray<string>,
 ): AcpSessionMode | undefined {
-  const aliasSet = new Set(aliases.map((a) => a.toLowerCase()));
+  const normalizedAliases = aliases.map(normalizeModeToken);
   return modes.find((mode) => {
-    const idLower = mode.id.toLowerCase();
-    const nameLower = mode.name.toLowerCase();
-    return aliasSet.has(idLower) || aliasSet.has(nameLower);
+    const normalizedId = normalizeModeToken(mode.id);
+    const normalizedName = normalizeModeToken(mode.name);
+    return normalizedAliases.some((alias) => normalizedId === alias || normalizedName === alias);
+  });
+}
+
+function findModeByWholeTokenAliases(
+  modes: ReadonlyArray<AcpSessionMode>,
+  aliases: ReadonlyArray<string>,
+): AcpSessionMode | undefined {
+  const aliasTokens = aliases.flatMap(tokenizeMode);
+  return modes.find((mode) => {
+    const modeTokens = new Set([...tokenizeMode(mode.id), ...tokenizeMode(mode.name)]);
+    return aliasTokens.some((token) => modeTokens.has(token));
   });
 }
 
@@ -245,17 +263,34 @@ export function resolveRequestedModeId(input: {
   readonly interactionMode: ProviderInteractionMode | undefined;
 }): Effect.Effect<string | undefined, ProviderAdapterValidationError> {
   return Effect.gen(function* () {
-    if (!input.modeState) {
+    const { modeState, runtimeMode, interactionMode } = input;
+
+    if (interactionMode === "plan" && !modeState) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "resolveRequestedModeId",
+        issue: "Plan mode requires the ACP session to expose modes, but none were reported.",
+      });
+    }
+
+    if (!modeState) {
       return undefined;
     }
-    const { modeState, runtimeMode, interactionMode } = input;
+
     const aliases =
       interactionMode === "plan"
         ? ACP_PLAN_MODE_ALIASES
         : runtimeMode === "approval-required"
           ? ACP_APPROVAL_MODE_ALIASES
           : ACP_IMPLEMENT_MODE_ALIASES;
-    const targetMode = findModeByExactAliases(modeState.availableModes, aliases);
+
+    // For plan mode, only an exact normalized id or name match is considered a safe
+    // boundary; whole-token matching is too permissive for a fail-closed gate.
+    const targetMode =
+      interactionMode === "plan"
+        ? findModeByExactNormalizedAliases(modeState.availableModes, aliases)
+        : (findModeByExactNormalizedAliases(modeState.availableModes, aliases) ??
+          findModeByWholeTokenAliases(modeState.availableModes, aliases));
 
     if (!targetMode) {
       const requiredBy =
@@ -276,9 +311,16 @@ export function resolveRequestedModeId(input: {
 export function findModelConfigOption(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | undefined,
 ): EffectAcpSchema.SessionConfigOption | undefined {
-  return configOptions?.find(
-    (option) => option.category === "model" || option.id.trim().toLowerCase() === "model",
-  );
+  if (!configOptions) {
+    return undefined;
+  }
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[-_]/g, "");
+  return configOptions.find((option) => {
+    const category = option.category?.trim().toLowerCase().replace(/[-_]/g, "");
+    if (category === "model" || category === "selectedmodel") return true;
+    const idNorm = normalize(option.id);
+    return idNorm === "model" || idNorm === "selectedmodel";
+  });
 }
 
 const DEVIN_OPTION_ALIASES: Record<keyof DevinModelOptions, ReadonlyArray<string>> = {
@@ -293,9 +335,13 @@ function optionIdOrCategoryMatchesAny(
   option: EffectAcpSchema.SessionConfigOption,
   aliases: ReadonlyArray<string>,
 ): boolean {
-  const idLower = option.id.trim().toLowerCase();
-  const categoryLower = option.category?.trim().toLowerCase() ?? "";
-  return aliases.some((alias) => idLower === alias || categoryLower === alias);
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[-_]/g, "");
+  const idNorm = normalize(option.id);
+  const categoryNorm = option.category ? normalize(option.category) : "";
+  return aliases.some((alias) => {
+    const aliasNorm = normalize(alias);
+    return idNorm === aliasNorm || categoryNorm === aliasNorm;
+  });
 }
 
 function findDevinConfigOption(
@@ -326,14 +372,31 @@ function normalizeDevinConfigOptionValue(
     return undefined;
   }
   if (option.type === "select") {
-    if (typeof value === "boolean" || typeof value === "string") {
-      return String(value);
+    const candidates = collectSessionConfigOptionValues(option);
+    const str = String(value);
+    const canonical = candidates.find(
+      (candidate) => String(candidate).toLowerCase() === str.toLowerCase(),
+    );
+    if (canonical !== undefined) {
+      return String(canonical);
     }
-    if (typeof value === "number") {
-      return String(value);
-    }
+    return undefined;
   }
   return undefined;
+}
+
+function configOptionCurrentValueMatches(
+  configOption: EffectAcpSchema.SessionConfigOption,
+  value: string | boolean,
+): boolean {
+  const currentValue = configOption.currentValue;
+  if (configOption.type === "boolean") {
+    return currentValue === value;
+  }
+  if (typeof currentValue !== "string") {
+    return false;
+  }
+  return currentValue.trim() === String(value).trim();
 }
 
 export function applyDevinSessionConfiguration(input: {
@@ -399,6 +462,19 @@ export function applyDevinSessionConfiguration(input: {
       );
 
       configOptions = yield* readConfigOptions();
+      const finalModelOption = findModelConfigOption(configOptions);
+      const modelCurrentValue =
+        finalModelOption?.currentValue !== undefined && finalModelOption.currentValue !== null
+          ? String(finalModelOption.currentValue)
+          : undefined;
+      if (modelCurrentValue === undefined || !isAllowed(modelCurrentValue)) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "applyDevinSessionConfiguration",
+          issue: `Model "${targetModel}" was not confirmed by the ACP agent. Current model: ${modelCurrentValue ?? "undefined"}`,
+        });
+      }
+      confirmedModel = modelCurrentValue;
 
       const options = input.modelSelection.options;
       if (options) {
@@ -409,7 +485,7 @@ export function applyDevinSessionConfiguration(input: {
           "reasoningEffort",
           "variant",
         ] as Array<keyof DevinModelOptions>;
-        const appliedOptionIds = new Set<string>();
+        const appliedOptionValues = new Map<string, string | boolean>();
 
         for (const key of optionKeys) {
           const rawValue = options[key];
@@ -424,9 +500,7 @@ export function applyDevinSessionConfiguration(input: {
               issue: `Trait "${key}" is not supported by the current Devin session.`,
             });
           }
-          if (appliedOptionIds.has(option.id)) {
-            continue;
-          }
+
           const value = normalizeDevinConfigOptionValue(rawValue, option);
           if (value === undefined) {
             return yield* new ProviderAdapterValidationError({
@@ -434,6 +508,18 @@ export function applyDevinSessionConfiguration(input: {
               operation: "applyDevinSessionConfiguration",
               issue: `Trait "${key}" value ${JSON.stringify(rawValue)} cannot be applied to option "${option.id}".`,
             });
+          }
+
+          if (appliedOptionValues.has(option.id)) {
+            const previous = appliedOptionValues.get(option.id)!;
+            if (previous !== value) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "applyDevinSessionConfiguration",
+                issue: `Conflicting values for option "${option.id}": ${JSON.stringify(previous)} vs ${JSON.stringify(value)}`,
+              });
+            }
+            continue;
           }
 
           if (option.type === "select") {
@@ -463,16 +549,22 @@ export function applyDevinSessionConfiguration(input: {
                 }),
             ),
           );
-          appliedOptionIds.add(option.id);
+          appliedOptionValues.set(option.id, value);
+
+          const updatedOption = findSessionConfigOption(response.configOptions, option.id);
+          if (
+            updatedOption === undefined ||
+            !configOptionCurrentValueMatches(updatedOption, value)
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "applyDevinSessionConfiguration",
+              issue: `setConfigOption("${option.id}", ${JSON.stringify(value)}) was not confirmed by the ACP agent. Current value: ${JSON.stringify(updatedOption?.currentValue)}`,
+            });
+          }
           configOptions = response.configOptions;
         }
       }
-
-      const finalModelOption = findModelConfigOption(configOptions);
-      confirmedModel =
-        finalModelOption?.currentValue !== undefined && finalModelOption.currentValue !== null
-          ? String(finalModelOption.currentValue)
-          : targetModel;
     }
 
     const modeState = yield* input.runtime.getModeState.pipe(
@@ -498,6 +590,33 @@ export function applyDevinSessionConfiguration(input: {
             }),
         ),
       );
+
+      const modeStateAfter = yield* input.runtime.getModeState.pipe(
+        Effect.timeoutOption(5_000),
+        Effect.map(Option.getOrUndefined),
+        Effect.orElseSucceed(() => undefined),
+      );
+      const stillRequired = yield* resolveRequestedModeId({
+        modeState: modeStateAfter,
+        runtimeMode: input.runtimeMode,
+        interactionMode: input.interactionMode,
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "applyDevinSessionConfiguration",
+              issue: `setMode("${requestedModeId}") did not put the session into the requested mode: ${error.message}`,
+            }),
+        ),
+      );
+      if (stillRequired !== undefined) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "applyDevinSessionConfiguration",
+          issue: `setMode("${requestedModeId}") was not confirmed by the ACP agent. Current mode: ${modeStateAfter?.currentModeId ?? "undefined"}`,
+        });
+      }
     }
 
     return { model: confirmedModel };
@@ -1560,20 +1679,32 @@ export function makeDevinAdapter(
           return buildDevinProviderModelDescriptors(configOptions);
         }).pipe(Effect.scoped, Effect.timeout(DEVIN_MODEL_DISCOVERY_TIMEOUT_MS));
 
-        const dynamicModels = yield* discovery.pipe(
+        const dynamicResult = yield* discovery.pipe(
           Effect.match({
-            onFailure: () => [] as ReadonlyArray<ProviderModelDescriptor>,
-            onSuccess: (models) => models,
+            onFailure: (
+              error,
+            ): { models: ReadonlyArray<ProviderModelDescriptor>; error?: string } => ({
+              models: [],
+              error: error instanceof Error ? error.message : "Devin model discovery failed",
+            }),
+            onSuccess: (
+              models,
+            ): { models: ReadonlyArray<ProviderModelDescriptor>; error?: string } => ({
+              models,
+            }),
           }),
         );
 
         const models =
-          dynamicModels.length > 0 ? dynamicModels : buildDevinProviderModelDescriptors(undefined);
+          dynamicResult.models.length > 0
+            ? dynamicResult.models
+            : buildDevinProviderModelDescriptors(undefined);
 
         return {
           models,
-          source: dynamicModels.length > 0 ? "devin.acp" : "devin.static",
+          source: dynamicResult.models.length > 0 ? "devin.acp" : "devin.static",
           cached: false,
+          error: dynamicResult.error,
         } satisfies ProviderListModelsResult;
       });
 

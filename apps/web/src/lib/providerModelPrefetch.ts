@@ -138,6 +138,7 @@ export function providerModelsPrefetchQueryOptions(input: {
       return providerModelsQueryOptions({
         provider: "devin",
         binaryPath: settings.devinBinaryPath || null,
+        cwd,
       });
     case "antigravity":
       return providerModelsQueryOptions({

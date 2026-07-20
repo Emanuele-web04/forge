@@ -302,6 +302,9 @@ export const ProviderListModelsResult = Schema.Struct({
   models: Schema.Array(ProviderModelDescriptor),
   source: Schema.optional(TrimmedNonEmptyString),
   cached: Schema.optional(Schema.Boolean),
+  // A concise, redacted explanation when live discovery failed and the result
+  // was populated from a static fallback.
+  error: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;
 

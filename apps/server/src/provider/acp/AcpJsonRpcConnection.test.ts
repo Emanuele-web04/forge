@@ -12,6 +12,7 @@ import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Option, Stream } from "effect";
 import { describe, expect, it as runIt } from "vitest";
 
+import { collectSessionConfigOptionValues, findSessionConfigOption } from "./AcpRuntimeModel.ts";
 import {
   AcpSessionRuntime,
   type AcpProtocolLogEvent,
@@ -208,6 +209,12 @@ describe("AcpSessionRuntime", () => {
             clientInfo: { name: "synara-test", version: "0.0.0" },
             authMethodId: "test-key",
             authPolicy: "on-demand",
+            authSetupHeuristic: (initializeResult, setupResult) => {
+              const modelOption = findSessionConfigOption(setupResult.configOptions ?? [], "model");
+              const allowedModels =
+                modelOption?.type === "select" ? collectSessionConfigOptionValues(modelOption) : [];
+              return allowedModels.length === 0 && (initializeResult.authMethods?.length ?? 0) > 0;
+            },
             requestLogger: (event) =>
               Effect.sync(() => {
                 requestEvents.push(event);
