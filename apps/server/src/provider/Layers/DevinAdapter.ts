@@ -315,17 +315,18 @@ export function resolveRequestedModeId(input: {
   });
 }
 
+const normalizeConfigOptionKey = (value: string) => value.trim().toLowerCase().replace(/[-_]/g, "");
+
 export function findModelConfigOption(
   configOptions: ReadonlyArray<Acp.SessionConfigOption> | undefined,
 ): Acp.SessionConfigOption | undefined {
   if (!configOptions) {
     return undefined;
   }
-  const normalize = (value: string) => value.trim().toLowerCase().replace(/[-_]/g, "");
   return configOptions.find((option) => {
     const category = option.category?.trim().toLowerCase().replace(/[-_]/g, "");
     if (category === "model" || category === "selectedmodel") return true;
-    const idNorm = normalize(option.id);
+    const idNorm = normalizeConfigOptionKey(option.id);
     return idNorm === "model" || idNorm === "selectedmodel";
   });
 }
@@ -342,11 +343,10 @@ function optionIdOrCategoryMatchesAny(
   option: Acp.SessionConfigOption,
   aliases: ReadonlyArray<string>,
 ): boolean {
-  const normalize = (value: string) => value.trim().toLowerCase().replace(/[-_]/g, "");
-  const idNorm = normalize(option.id);
-  const categoryNorm = option.category ? normalize(option.category) : "";
+  const idNorm = normalizeConfigOptionKey(option.id);
+  const categoryNorm = option.category ? normalizeConfigOptionKey(option.category) : "";
   return aliases.some((alias) => {
-    const aliasNorm = normalize(alias);
+    const aliasNorm = normalizeConfigOptionKey(alias);
     return idNorm === aliasNorm || categoryNorm === aliasNorm;
   });
 }

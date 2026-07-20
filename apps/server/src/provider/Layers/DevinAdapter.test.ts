@@ -3,7 +3,7 @@
 // model discovery, and plan-mode fail-closed behavior.
 // Layer: Provider adapter tests
 
-import { Effect, Option, type Stream } from "effect";
+import { Effect, type Stream } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
 import type * as AcpErrors from "../acp/AcpErrors.ts";
 import { describe, expect, it } from "vitest";
@@ -33,9 +33,6 @@ function makeFakeAcpRuntime(
     calls.push({ method, args });
   };
 
-  const findOption = (id: string) =>
-    configOptions.find((o) => o.id.toLowerCase() === id.toLowerCase());
-
   const setOptionCurrentValue = (id: string, value: string | boolean) => {
     const idx = configOptions.findIndex((o) => o.id.toLowerCase() === id.toLowerCase());
     if (idx === -1) return;
@@ -52,9 +49,9 @@ function makeFakeAcpRuntime(
     getEvents: () =>
       ({
         // Empty stream placeholder; never consumed in these tests.
-        [Symbol.asyncIterator]: async function* () {
-          return;
-        },
+        [Symbol.asyncIterator]: () => ({
+          next: async () => ({ done: true as const, value: undefined }),
+        }),
       }) as unknown as Stream.Stream<never, never>,
     sessionUpdatesEnqueuedCount: Effect.succeed(0),
     supportsSessionFork: Effect.succeed(false),
@@ -114,16 +111,6 @@ function modelOption(
     type: "select",
     currentValue,
     options: values as never,
-  };
-}
-
-function booleanOption(id: string, name: string, currentValue: boolean): Acp.SessionConfigOption {
-  return {
-    id,
-    name,
-    category: "model_config",
-    type: "boolean",
-    currentValue,
   };
 }
 
