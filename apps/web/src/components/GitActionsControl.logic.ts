@@ -543,6 +543,12 @@ export function resolveLiveThreadBranchUpdate(input: {
     return null;
   }
 
+  // Branch list not ready yet — don't treat "status arrived first" as out-of-sync
+  // or we permanently invalidate and show "Refreshing git status...".
+  if (input.threadBranch === null) {
+    return null;
+  }
+
   if (input.gitStatus.branch === null && input.threadBranch !== null) {
     return null;
   }

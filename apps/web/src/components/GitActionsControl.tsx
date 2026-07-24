@@ -374,13 +374,18 @@ export default function GitActionsControl({
     });
   }, [threadToastData]);
 
-  const { data: gitStatus = null, error: gitStatusError } = useQuery(gitStatusQueryOptions(gitCwd));
-
-  const { data: branchList = null } = useQuery(gitBranchesQueryOptions(gitCwd));
+  const { data: branchList = null, isSuccess: branchListReady } = useQuery(
+    gitBranchesQueryOptions(gitCwd),
+  );
   // Default to true while loading so we don't flash init controls.
   const isRepo = branchList?.isRepo ?? true;
   const hasOriginRemote = branchList?.hasOriginRemote ?? false;
   const currentBranch = branchList?.branches.find((branch) => branch.current)?.name ?? null;
+  // Only poll status after branch discovery confirms a repo — avoids non-repo
+  // cwds feeding a permanent "Refreshing git status..." invalidation loop.
+  const { data: gitStatus = null, error: gitStatusError } = useQuery(
+    gitStatusQueryOptions(gitCwd, branchListReady && branchList?.isRepo === true),
+  );
   const liveThreadBranchUpdate = useMemo(
     () =>
       resolveLiveThreadBranchUpdate({
