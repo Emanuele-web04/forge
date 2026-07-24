@@ -4054,6 +4054,7 @@ export default function ChatView({
       workspaceCloseShortcutLabel: closeWorkspaceShortcutLabel ?? undefined,
       onActiveTerminalChange: activateTerminal,
       onCloseTerminal: closeTerminal,
+      onSessionExited: closeTerminal,
       onCloseTerminalGroup: (groupId: string) => {
         if (!activeThreadId) return;
         storeCloseTerminalGroup(activeThreadId, groupId);

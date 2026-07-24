@@ -40,7 +40,13 @@ export function DockTerminalPane(props: {
     : {};
 
   const terminal = useTerminalSurfaceController(scopeId);
-  const { terminalState, openTerminalThreadPage, bumpFocusRequest, newTerminalGroup } = terminal;
+  const {
+    terminalState,
+    openTerminalThreadPage,
+    bumpFocusRequest,
+    newTerminalGroup,
+    onSessionExited,
+  } = terminal;
 
   // A dock terminal pane always shows a live terminal: ensure one is open on mount
   // and re-open if the user closes the last tab (normalize guarantees a default id).
@@ -86,6 +92,7 @@ export function DockTerminalPane(props: {
       onMoveTerminalToGroup={terminal.moveTerminalToNewGroup}
       onActiveTerminalChange={terminal.activateTerminal}
       onCloseTerminal={terminal.closeTerminal}
+      onSessionExited={onSessionExited}
       onCloseTerminalGroup={terminal.closeTerminalGroup}
       onHeightChange={terminal.setTerminalHeight}
       onResizeTerminalSplit={terminal.resizeTerminalSplit}

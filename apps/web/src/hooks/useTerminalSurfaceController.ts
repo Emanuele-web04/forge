@@ -107,6 +107,17 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     bumpFocusRequest();
   };
 
+  // Workspace/dock surfaces keep the tab open when the shell exits so the user
+  // can still see the final output and close it manually. Only update activity
+  // state so the sidebar status dot stops spinning.
+  const onSessionExited = (terminalId: string) => {
+    setTerminalActivityStore(threadId, terminalId, {
+      hasRunningSubprocess: false,
+      agentState: null,
+    });
+    bumpFocusRequest();
+  };
+
   const closeTerminalGroup = (groupId: string) => closeTerminalGroupStore(threadId, groupId);
 
   const setTerminalHeight = (height: number) => setTerminalHeightStore(threadId, height);
@@ -133,6 +144,7 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     moveTerminalToNewGroup,
     activateTerminal,
     closeTerminal,
+    onSessionExited,
     closeTerminalGroup,
     setTerminalHeight,
     resizeTerminalSplit,

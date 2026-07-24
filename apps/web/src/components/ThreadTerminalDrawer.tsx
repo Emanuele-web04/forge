@@ -478,6 +478,7 @@ interface ThreadTerminalDrawerProps {
   onCloseTerminal: (terminalId: string) => void;
   onCloseTerminalGroup: (groupId: string) => void;
   onHeightChange: (height: number) => void;
+  onSessionExited?: ((terminalId: string) => void) | undefined;
   onResizeTerminalSplit: (groupId: string, splitId: string, weights: number[]) => void;
   onTerminalMetadataChange: (
     terminalId: string,
@@ -524,6 +525,7 @@ export default function ThreadTerminalDrawer({
   onCloseTerminal,
   onCloseTerminalGroup,
   onHeightChange,
+  onSessionExited,
   onResizeTerminalSplit,
   onTerminalMetadataChange,
   onTerminalActivityChange,
@@ -734,7 +736,7 @@ export default function ThreadTerminalDrawer({
                   terminalCliKind={terminalVisualIdentityById.get(terminalId)?.cliKind ?? null}
                   cwd={cwd}
                   {...(runtimeEnv ? { runtimeEnv } : {})}
-                  onSessionExited={() => onCloseTerminal(terminalId)}
+                  onSessionExited={() => (onSessionExited ?? onCloseTerminal)(terminalId)}
                   onTerminalMetadataChange={onTerminalMetadataChange}
                   onTerminalActivityChange={onTerminalActivityChange}
                   onAddTerminalContext={onAddTerminalContext}

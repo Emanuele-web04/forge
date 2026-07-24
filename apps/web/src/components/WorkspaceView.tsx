@@ -259,6 +259,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     onCloseTerminal: closeTerminal,
     onCloseTerminalGroup: closeTerminalGroup,
     onHeightChange: setTerminalHeight,
+    onSessionExited: terminal.onSessionExited,
     onResizeTerminalSplit: resizeTerminalSplit,
     onTerminalMetadataChange: setTerminalMetadata,
     onTerminalActivityChange: setTerminalActivity,
