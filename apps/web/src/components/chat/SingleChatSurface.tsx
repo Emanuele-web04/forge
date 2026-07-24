@@ -711,6 +711,7 @@ export function SingleChatSurface(props: {
               hostThreadId={props.threadId}
               projectId={props.projectId}
               isActive={context.isActive && dockState.open}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
             />
           </Suspense>
         );

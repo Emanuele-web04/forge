@@ -9,7 +9,7 @@
 // "ensure a terminal is open" policy is surface-specific (here: a single terminal-only page).
 
 import { type ProjectId, type ThreadId } from "@synara/contracts";
-import { useMemo, useEffect } from "react";
+import { useMemo, useEffect, useRef } from "react";
 
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
@@ -24,6 +24,7 @@ export function DockTerminalPane(props: {
   // When false the pane stays mounted but hidden (another dock tab is active),
   // so the xterm runtime sleeps its visual work without detaching its DOM.
   isActive?: boolean;
+  onClosePanel?: () => void;
 }) {
   const scopeId = dockTerminalThreadId(props.hostThreadId);
   const thread = useStore(
@@ -41,23 +42,35 @@ export function DockTerminalPane(props: {
 
   const terminal = useTerminalSurfaceController(scopeId);
   const { terminalState, openTerminalThreadPage, bumpFocusRequest, newTerminalGroup } = terminal;
+  const closedBySessionExitRef = useRef(false);
 
-  // A dock terminal pane always shows a live terminal: ensure one is open on mount
-  // and re-open if the user closes the last tab (normalize guarantees a default id).
+  // A dock terminal pane normally keeps a live terminal: ensure one is open on mount
+  // and re-open if the user closes the last tab. When the shell exits on its own,
+  // onSessionExited marks the ref so we do not immediately resurrect an empty tab.
   useEffect(() => {
-    if (terminalState.terminalOpen) {
+    if (terminalState.terminalOpen || closedBySessionExitRef.current) {
       return;
     }
     openTerminalThreadPage(scopeId, { terminalOnly: true });
   }, [openTerminalThreadPage, scopeId, terminalState.terminalOpen]);
 
   const createTerminal = () => {
+    closedBySessionExitRef.current = false;
     if (!terminalState.terminalOpen) {
       openTerminalThreadPage(scopeId, { terminalOnly: true });
       bumpFocusRequest();
       return;
     }
     newTerminalGroup();
+  };
+
+  const onSessionExited = (terminalId: string) => {
+    const isLastTerminal = terminalState.terminalIds.length <= 1;
+    if (isLastTerminal) {
+      closedBySessionExitRef.current = true;
+      props.onClosePanel?.();
+    }
+    terminal.onSessionExited(terminalId);
   };
 
   return (
@@ -86,6 +99,7 @@ export function DockTerminalPane(props: {
       onMoveTerminalToGroup={terminal.moveTerminalToNewGroup}
       onActiveTerminalChange={terminal.activateTerminal}
       onCloseTerminal={terminal.closeTerminal}
+      onSessionExited={onSessionExited}
       onCloseTerminalGroup={terminal.closeTerminalGroup}
       onHeightChange={terminal.setTerminalHeight}
       onResizeTerminalSplit={terminal.resizeTerminalSplit}
