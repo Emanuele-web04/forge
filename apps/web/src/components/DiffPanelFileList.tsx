@@ -193,7 +193,9 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
     <FileDiffSurface className="h-full min-h-0 overflow-auto px-2 pb-2">
       {props.renderableFiles.map((fileDiff) => {
         const fileKey = buildFileDiffRenderKey(fileDiff);
-        const themedFileKey = `${fileKey}:${props.resolvedTheme}`;
+        // Include render mode so @pierre/diffs remounts when stacked ↔ split changes
+        // (diffStyle is effectively mount-time config on FileDiff).
+        const themedFileKey = `${fileKey}:${props.resolvedTheme}:${props.diffRenderMode}`;
         return (
           <DiffPanelFileRow
             key={themedFileKey}

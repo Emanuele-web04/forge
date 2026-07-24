@@ -3,6 +3,7 @@
 // Layer: Shared Node/Electron network security boundary
 
 import { randomUUID } from "node:crypto";
+import type { LookupAddress } from "node:dns";
 import * as Dns from "node:dns/promises";
 import * as Http from "node:http";
 import * as Https from "node:https";
@@ -297,6 +298,29 @@ async function resolvePinnedAddress(
   return selected;
 }
 
+/**
+ * Custom `http`/`https` lookup that always returns the already-pinned address.
+ * Modern Node/Bun Happy Eyeballs pass `{ all: true }` and expect the array
+ * callback form; the legacy single-address form alone crashes those runtimes.
+ */
+export function invokePinnedDnsLookup(
+  pinned: { readonly address: string; readonly family: 4 | 6 },
+  options: { readonly all?: boolean | undefined } | undefined,
+  // Match Node/Bun's Happy Eyeballs lookup callback shape (`LookupAddress[]`, not
+  // a readonly structural twin) so `http.request({ lookup })` typechecks.
+  callback: (
+    err: NodeJS.ErrnoException | null,
+    address: string | LookupAddress[],
+    family?: number,
+  ) => void,
+): void {
+  if (options?.all) {
+    callback(null, [{ address: pinned.address, family: pinned.family }]);
+    return;
+  }
+  callback(null, pinned.address, pinned.family);
+}
+
 async function requestHop(input: {
   readonly url: URL;
   readonly method: string;
@@ -323,8 +347,8 @@ async function requestHop(input: {
         method: input.method,
         headers: requestHeaders(input.headers),
         signal: input.signal,
-        lookup: (_hostname, _options, callback) => {
-          callback(null, pinned.address, pinned.family);
+        lookup: (_hostname, options, callback) => {
+          invokePinnedDnsLookup(pinned, options, callback);
         },
       },
       (response) => {

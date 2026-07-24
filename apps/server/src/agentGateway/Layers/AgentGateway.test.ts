@@ -1913,6 +1913,50 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("starts explicit OpenCode and Kilo plan-agent targets in plan mode", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_threads",
+        args: {
+          requestId: "create-provider-plan-agents",
+          threads: [
+            {
+              prompt: "plan the OpenCode work",
+              target: {
+                provider: "opencode",
+                model: "openai/gpt-5",
+                options: { agent: "plan" },
+              },
+            },
+            {
+              prompt: "plan the Kilo work",
+              target: {
+                provider: "kilo",
+                model: "kilo/kilo-auto/free",
+                options: { agent: "plan" },
+              },
+            },
+          ],
+        },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+
+      const creates = harness.dispatched.filter((command) => command.type === "thread.create");
+      const turns = harness.dispatched.filter((command) => command.type === "thread.turn.start");
+      assert.lengthOf(creates, 2);
+      assert.lengthOf(turns, 2);
+      for (const command of [...creates, ...turns]) {
+        assert.equal(command.interactionMode, "plan");
+        assert.deepInclude(command.modelSelection ?? {}, {
+          options: { agent: "plan" },
+        });
+      }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("creates a detached worktree when environment=worktree", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {

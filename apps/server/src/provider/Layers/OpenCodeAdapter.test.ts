@@ -2026,6 +2026,49 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
+  it("ignores a stale plan agent option when Synara interaction mode is default", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-stale-plan-agent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-stale-plan-agent"),
+          input: "implement this",
+          interactionMode: "default",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+            options: {
+              agent: "plan",
+            },
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.promptCalls[0]).toMatchObject({
+      agent: "build",
+    });
+  });
+
   it("preserves explicitly selected OpenCode agents", async () => {
     const runtime = createMockOpenCodeRuntime();
 

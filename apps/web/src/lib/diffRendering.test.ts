@@ -53,6 +53,33 @@ describe("resolveDiffCopyText", () => {
     expect(resolveDiffCopyText(patch)).toBe(patch);
   });
 
+  it("preserves mode-only metadata without reconstructing the patch", () => {
+    const patch = [
+      "diff --git a/script.sh b/script.sh",
+      "old mode 100644",
+      "new mode 100755",
+      "",
+    ].join("\n");
+
+    expect(resolveDiffCopyText(patch)).toBe(patch);
+  });
+
+  it("preserves every line of a large patch without depending on mounted rows", () => {
+    const bodyLines = Array.from({ length: 6000 }, (_, index) => `+line ${index + 1}`);
+    const patch = [
+      "diff --git a/big.txt b/big.txt",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/big.txt",
+      "@@ -0,0 +1,6000 @@",
+      ...bodyLines,
+      "",
+    ].join("\n");
+
+    expect(resolveDiffCopyText(patch)).toBe(patch);
+  });
+
   it("does not expose empty or missing patches as copyable", () => {
     expect(resolveDiffCopyText(undefined)).toBeNull();
     expect(resolveDiffCopyText(" \n\t ")).toBeNull();

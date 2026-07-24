@@ -1,4 +1,8 @@
-import { encodeOutboundMultipart, OutboundHttpError } from "@synara/shared/outboundHttp";
+import {
+  encodeOutboundMultipart,
+  invokePinnedDnsLookup,
+  OutboundHttpError,
+} from "@synara/shared/outboundHttp";
 import {
   assertJsonWithinLimits,
   assertOutboundUrlAllowed,
@@ -81,5 +85,29 @@ describe("outbound HTTP policy", () => {
         { maxBytes: 1_024 },
       ),
     ).toThrowError(/content type is invalid/u);
+  });
+});
+
+describe("invokePinnedDnsLookup", () => {
+  const pinned = { address: "1.2.3.4", family: 4 as const };
+
+  it("returns the legacy single-address form when all is not requested", () => {
+    let result: unknown;
+    invokePinnedDnsLookup(pinned, {}, (err, address, family) => {
+      result = { err, address, family };
+    });
+    expect(result).toEqual({ err: null, address: "1.2.3.4", family: 4 });
+  });
+
+  it("returns the array form when Happy Eyeballs requests all addresses", () => {
+    let result: unknown;
+    invokePinnedDnsLookup(pinned, { all: true }, (err, address, family) => {
+      result = { err, address, family };
+    });
+    expect(result).toEqual({
+      err: null,
+      address: [{ address: "1.2.3.4", family: 4 }],
+      family: undefined,
+    });
   });
 });
