@@ -1,4 +1,8 @@
-import { encodeOutboundMultipart, OutboundHttpError } from "@synara/shared/outboundHttp";
+import {
+  createPinnedLookup,
+  encodeOutboundMultipart,
+  OutboundHttpError,
+} from "@synara/shared/outboundHttp";
 import {
   assertJsonWithinLimits,
   assertOutboundUrlAllowed,
@@ -55,6 +59,37 @@ describe("outbound HTTP policy", () => {
     expect(() => assertJsonWithinLimits([1, 2, 3], { maxDepth: 2, maxNodes: 3 })).toThrowError(
       /node limit/u,
     );
+  });
+
+  describe("pinned DNS lookup", () => {
+    const pinned = { address: "203.0.113.7", family: 4 } as const;
+
+    it("returns an address array when Node connects in all mode (autoSelectFamily)", () => {
+      const lookup = createPinnedLookup(pinned);
+      let address: unknown;
+      let family: unknown;
+      // lookupAndConnectMultiple calls the hook with { all: true } and reads addresses[0].
+      lookup("chatgpt.com", { all: true }, (error, result, resultFamily) => {
+        expect(error).toBeNull();
+        address = result;
+        family = resultFamily;
+      });
+      expect(address).toEqual([{ address: "203.0.113.7", family: 4 }]);
+      expect(family).toBeUndefined();
+    });
+
+    it("returns the single address form when Node connects without all", () => {
+      const lookup = createPinnedLookup(pinned);
+      let address: unknown;
+      let family: unknown;
+      lookup("chatgpt.com", { all: false }, (error, result, resultFamily) => {
+        expect(error).toBeNull();
+        address = result;
+        family = resultFamily;
+      });
+      expect(address).toBe("203.0.113.7");
+      expect(family).toBe(4);
+    });
   });
 
   it("encodes multipart bodies under an explicit byte budget", () => {

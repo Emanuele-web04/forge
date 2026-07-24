@@ -297,6 +297,26 @@ async function resolvePinnedAddress(
   return selected;
 }
 
+// Node's `autoSelectFamily` (Happy Eyeballs, default-on since Node 20) connects via
+// `lookupAndConnectMultiple`, which invokes the socket `lookup` hook in `all: true`
+// mode and expects the callback to receive an array of addresses. A hook that always
+// replies with the single `(address, family)` form makes Node read `addresses[0].address`
+// off a bare string, yielding `ERR_INVALID_IP_ADDRESS: Invalid IP address: undefined` and
+// killing every pinned request before it leaves the host. Honor both call conventions so
+// the connection is pinned to exactly the one validated address regardless of the mode.
+export function createPinnedLookup(pinned: {
+  readonly address: string;
+  readonly family: 4 | 6;
+}): Net.LookupFunction {
+  return (_hostname, options, callback) => {
+    if (typeof options === "object" && options !== null && options.all) {
+      callback(null, [{ address: pinned.address, family: pinned.family }]);
+      return;
+    }
+    callback(null, pinned.address, pinned.family);
+  };
+}
+
 async function requestHop(input: {
   readonly url: URL;
   readonly method: string;
@@ -323,9 +343,7 @@ async function requestHop(input: {
         method: input.method,
         headers: requestHeaders(input.headers),
         signal: input.signal,
-        lookup: (_hostname, _options, callback) => {
-          callback(null, pinned.address, pinned.family);
-        },
+        lookup: createPinnedLookup(pinned),
       },
       (response) => {
         const headers = responseHeaders(response.headers);
