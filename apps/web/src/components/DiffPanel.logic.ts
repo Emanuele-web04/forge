@@ -272,3 +272,42 @@ export function areAllRenderableFilesCollapsed(
   }
   return files.every((fileDiff) => collapsedFiles.has(buildFileDiffRenderKey(fileDiff)));
 }
+
+/**
+ * Track whether the diff viewport is in a "select all then copy" gesture so the copy
+ * handler can substitute the full raw diff instead of the few mounted rows the
+ * virtualizer left in the DOM.
+ *
+ * The diff surface renders into shadow DOM, so a native Cmd/Ctrl+A actually selects the
+ * surrounding light-DOM page and the resulting `copy` event never travels through the
+ * viewport element. We listen on `document`: the keydown still passes through the
+ * viewport (so we can tell the select-all happened there), and this state machine decides
+ * whether the very next copy should be hijacked.
+ */
+export function resolveDiffSelectAllArmed(
+  previous: boolean,
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey">,
+  isWithinDiffViewport: boolean,
+): boolean {
+  const key = event.key.toLowerCase();
+  const hasShortcutModifier = event.metaKey || event.ctrlKey;
+
+  if (hasShortcutModifier && key === "a") {
+    return isWithinDiffViewport;
+  }
+  if (hasShortcutModifier && key === "c") {
+    return previous;
+  }
+  if (key === "meta" || key === "control" || key === "shift" || key === "alt") {
+    return previous;
+  }
+  return false;
+}
+
+export function resolveDiffSelectAllWithinViewport(
+  eventWithinDiffViewport: boolean,
+  lastPointerInDiffViewport: boolean,
+  isTextEditingTarget: boolean,
+): boolean {
+  return eventWithinDiffViewport || (lastPointerInDiffViewport && !isTextEditingTarget);
+}

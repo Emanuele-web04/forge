@@ -309,37 +309,23 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
             >
               <MenuGroup>
                 <MenuGroupLabel>View</MenuGroupLabel>
-                <div
-                  className="mx-2 mb-1 grid grid-cols-2 rounded-lg bg-[var(--color-background-elevated-secondary)] p-0.5"
-                  role="radiogroup"
-                  aria-label="Diff view"
+                <MenuRadioGroup
+                  value={props.diffRenderMode}
+                  onValueChange={(value) => {
+                    if (value === "stacked" || value === "split") {
+                      props.onDiffRenderModeChange(value);
+                    }
+                  }}
                 >
-                  {(["stacked", "split"] as const).map((mode) => {
-                    const selected = props.diffRenderMode === mode;
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        className={cn(
-                          "flex h-7 min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 text-[11px] transition-colors",
-                          selected
-                            ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
-                            : "text-muted-foreground hover:text-foreground",
-                        )}
-                        onClick={() => props.onDiffRenderModeChange(mode)}
-                      >
-                        {mode === "stacked" ? (
-                          <Rows3Icon className="size-3.5 shrink-0" />
-                        ) : (
-                          <Columns2Icon className="size-3.5 shrink-0" />
-                        )}
-                        <span className="truncate">{mode === "stacked" ? "Stacked" : "Split"}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                  <MenuRadioItem value="stacked">
+                    <Rows3Icon className={DIFF_PANEL_PICKER_ICON_CLASS_NAME} />
+                    <span>Stacked</span>
+                  </MenuRadioItem>
+                  <MenuRadioItem value="split">
+                    <Columns2Icon className={DIFF_PANEL_PICKER_ICON_CLASS_NAME} />
+                    <span>Split</span>
+                  </MenuRadioItem>
+                </MenuRadioGroup>
                 <MenuCheckboxItem
                   checked={props.diffIgnoreWhitespace}
                   variant="switch"

@@ -10,10 +10,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  createPiModelRuntime,
   ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
   getPiSupportedThinkingOptions,
@@ -203,9 +204,43 @@ function makePiModel(input: {
 }
 
 describe("getPiDiscoverableModels", () => {
-  it("includes custom-provider models authenticated through auth.json semantics", () => {
+  it("isolates extension providers between sessions that share an agent directory", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-runtime-isolation-"));
+
+    try {
+      const firstRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+      const secondRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+      const firstRegistry = new ModelRegistry(firstRuntime);
+      const secondRegistry = new ModelRegistry(secondRuntime);
+
+      firstRegistry.registerProvider("project-local", {
+        baseUrl: "http://127.0.0.1:11434/v1",
+        api: "openai-completions",
+        apiKey: "test-key",
+        models: [
+          {
+            id: "project-model",
+            name: "Project Model",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+          },
+        ],
+      });
+
+      expect(firstRegistry.find("project-local", "project-model")).toBeDefined();
+      expect(secondRegistry.find("project-local", "project-model")).toBeUndefined();
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes custom-provider models authenticated through auth.json semantics", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-models-"));
     const modelsPath = path.join(agentDir, "models.json");
+    const authPath = path.join(agentDir, "auth.json");
 
     try {
       writeFileSync(
@@ -220,10 +255,18 @@ describe("getPiDiscoverableModels", () => {
           },
         }),
       );
-      const authStorage = AuthStorage.inMemory({
-        local: { type: "api_key", key: "test-key" },
+      writeFileSync(
+        authPath,
+        JSON.stringify({
+          local: { type: "api_key", key: "test-key" },
+        }),
+      );
+      const modelRuntime = await ModelRuntime.create({
+        authPath,
+        modelsPath,
+        allowModelNetwork: false,
       });
-      const registry = ModelRegistry.create(authStorage, modelsPath);
+      const registry = new ModelRegistry(modelRuntime);
 
       const models = getPiDiscoverableModels(registry);
 
@@ -236,16 +279,30 @@ describe("getPiDiscoverableModels", () => {
     }
   });
 
-  it("restores Fable 5 and Opus 4.8 after an extension replaces the Anthropic catalog", () => {
+  it("restores Fable 5 and Opus 4.8 after an extension replaces the Anthropic catalog", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-anthropic-"));
     const modelsPath = path.join(agentDir, "models.json");
+    const authPath = path.join(agentDir, "auth.json");
 
     try {
       writeFileSync(modelsPath, "{}");
-      const authStorage = AuthStorage.inMemory({
-        anthropic: { type: "oauth", access: "tok", refresh: "ref", expires: Date.now() + 60_000 },
+      writeFileSync(
+        authPath,
+        JSON.stringify({
+          anthropic: {
+            type: "oauth",
+            access: "tok",
+            refresh: "ref",
+            expires: Date.now() + 60_000,
+          },
+        }),
+      );
+      const modelRuntime = await ModelRuntime.create({
+        authPath,
+        modelsPath,
+        allowModelNetwork: false,
       });
-      const registry = ModelRegistry.create(authStorage, modelsPath);
+      const registry = new ModelRegistry(modelRuntime);
       registry.registerProvider("anthropic", {
         baseUrl: "https://api.anthropic.com",
         api: "anthropic-messages",

@@ -1402,6 +1402,15 @@ describe("resolveLiveThreadBranchUpdate", () => {
 
     assert.deepEqual(update, { branch: "feature/new" });
   });
+
+  it("does not treat pending branch discovery as out-of-sync with status", () => {
+    const update = resolveLiveThreadBranchUpdate({
+      threadBranch: null,
+      gitStatus: status({ branch: "main" }),
+    });
+
+    assert.equal(update, null);
+  });
 });
 
 describe("shouldOfferCreateBranchPrompt", () => {
