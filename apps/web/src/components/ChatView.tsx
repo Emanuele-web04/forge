@@ -1818,6 +1818,7 @@ export default function ChatView({
     openNewFullWidthTerminal,
     activateTerminal,
     closeTerminal,
+    onSessionExited: chatOnSessionExited,
     closeActiveWorkspaceView,
   } = useChatTerminalController({
     threadId,
@@ -4054,7 +4055,7 @@ export default function ChatView({
       workspaceCloseShortcutLabel: closeWorkspaceShortcutLabel ?? undefined,
       onActiveTerminalChange: activateTerminal,
       onCloseTerminal: closeTerminal,
-      onSessionExited: closeTerminal,
+      onSessionExited: chatOnSessionExited,
       onCloseTerminalGroup: (groupId: string) => {
         if (!activeThreadId) return;
         storeCloseTerminalGroup(activeThreadId, groupId);
@@ -4087,6 +4088,7 @@ export default function ChatView({
       activeProject?.cwd,
       activateTerminal,
       addTerminalContextToDraft,
+      chatOnSessionExited,
       closeTerminal,
       closeTerminalShortcutLabel,
       closeWorkspaceShortcutLabel,

@@ -296,6 +296,44 @@ export function useChatTerminalController({
       terminalState.terminalTitleOverridesById,
     ],
   );
+
+  // When the shell exits on its own, close the tab immediately without
+  // prompting — there is no running process left to protect. Preserve the
+  // same placeholder-thread cleanup that manual close performs.
+  const onSessionExited = useCallback(
+    (terminalId: string) => {
+      const api = readNativeApi();
+      if (!activeThreadId || !api) return;
+      const isFinalTerminal = terminalState.terminalIds.length <= 1;
+      const shouldDeletePlaceholderThread = shouldAutoDeleteTerminalThreadOnLastClose({
+        isLastTerminal: isFinalTerminal,
+        isServerThread,
+        terminalEntryPoint: terminalState.entryPoint,
+        thread: activeThread,
+      });
+      disposeAndCloseTerminalSession({
+        api,
+        threadId: activeThreadId,
+        terminalId,
+        clearHistoryBeforeClose: isFinalTerminal,
+      });
+      closeTerminalInStore(activeThreadId, terminalId);
+      requestTerminalFocus();
+      if (shouldDeletePlaceholderThread) {
+        void onDeletePlaceholderThread(activeThreadId);
+      }
+    },
+    [
+      activeThread,
+      activeThreadId,
+      closeTerminalInStore,
+      isServerThread,
+      onDeletePlaceholderThread,
+      requestTerminalFocus,
+      terminalState.entryPoint,
+      terminalState.terminalIds.length,
+    ],
+  );
   const closeActiveWorkspaceView = useCallback(() => {
     if (!activeThreadId || !terminalWorkspaceOpen) return;
     if (terminalState.workspaceLayout === "both" && terminalState.workspaceActiveTab === "chat") {
@@ -354,6 +392,7 @@ export function useChatTerminalController({
     openNewFullWidthTerminal,
     activateTerminal,
     closeTerminal,
+    onSessionExited,
     closeActiveWorkspaceView,
   };
 }

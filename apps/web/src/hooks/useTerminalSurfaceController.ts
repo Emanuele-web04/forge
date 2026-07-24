@@ -107,14 +107,15 @@ export function useTerminalSurfaceController(threadId: ThreadId) {
     bumpFocusRequest();
   };
 
-  // Workspace/dock surfaces keep the tab open when the shell exits so the user
-  // can still see the final output and close it manually. Only update activity
-  // state so the sidebar status dot stops spinning.
+  // When the shell exits on its own, close the tab immediately without
+  // prompting — there is no running process left to protect.
   const onSessionExited = (terminalId: string) => {
-    setTerminalActivityStore(threadId, terminalId, {
-      hasRunningSubprocess: false,
-      agentState: null,
-    });
+    const api = readNativeApi();
+    if (!api) {
+      return;
+    }
+    disposeAndCloseTerminalSession({ api, threadId, terminalId });
+    closeTerminalStore(threadId, terminalId);
     bumpFocusRequest();
   };
 
