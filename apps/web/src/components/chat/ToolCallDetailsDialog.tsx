@@ -8,6 +8,11 @@ import type { ReactNode } from "react";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { cn } from "~/lib/utils";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
+import type { WorkLogLiveActivity } from "../../workLog";
+import {
+  liveActivityElapsedMs,
+  useLiveActivityNow,
+} from "../../lib/liveActivityPresentation";
 import ChatMarkdown from "../ChatMarkdown";
 
 const DETAIL_HEADER_CLASS_NAME = "border-b border-border/45 px-3 py-2 text-[10px] font-medium";
@@ -16,8 +21,14 @@ const DETAIL_CODE_BLOCK_CLASS_NAME =
 const TOOL_DETAILS_MARKDOWN_CLASS_NAME =
   "text-[length:var(--app-font-size-ui,12px)] leading-relaxed";
 
-export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetails | undefined }) {
-  if (!details) {
+export function ToolCallDetailsContent({
+  details,
+  activity,
+}: {
+  details: WorkLogToolDetails | undefined;
+  activity?: WorkLogLiveActivity | undefined;
+}) {
+  if (!details && !activity) {
     return (
       <div className="rounded-lg border border-border/45 bg-background/60 px-3 py-2 text-sm text-muted-foreground">
         No detailed payload was available for this tool call.
@@ -27,7 +38,9 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
 
   return (
     <>
-      {details.command ? (
+      {activity ? <LiveActivityMetadata activity={activity} /> : null}
+
+      {details?.command ? (
         <div className="space-y-2">
           <MarkdownToolCodeBlock language="bash">
             {formatShellTranscript(details.command, details.output)}
@@ -36,7 +49,7 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
         </div>
       ) : null}
 
-      {details.files?.length ? (
+      {details?.files?.length ? (
         <ToolDetailSection title="Files">
           <div className="flex flex-wrap gap-1.5">
             {details.files.map((file) => (
@@ -52,13 +65,13 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
         </ToolDetailSection>
       ) : null}
 
-      {details.diff ? (
+      {details?.diff ? (
         <ToolDetailSection title="Diff">
           <DiffCodeBlock>{details.diff}</DiffCodeBlock>
         </ToolDetailSection>
       ) : null}
 
-      {details.edits?.length ? (
+      {details?.edits?.length ? (
         <ToolDetailSection title="Edits">
           <div className="space-y-3">
             {details.edits.map((edit, index) => (
@@ -89,14 +102,101 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
         </ToolDetailSection>
       ) : null}
 
-      {details.content ? (
+      {details?.content ? (
         <ToolDetailSection title="Written Content">
           <MarkdownToolCodeBlock language="text">{details.content}</MarkdownToolCodeBlock>
         </ToolDetailSection>
       ) : null}
 
-      {details.output && !details.command ? <ToolOutputSection output={details.output} /> : null}
+      {details?.output && !details.command ? <ToolOutputSection output={details.output} /> : null}
     </>
+  );
+}
+
+function formatActivityTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(timestamp);
+}
+
+function formatActivityElapsed(activity: WorkLogLiveActivity, nowMs: number): string | null {
+  const elapsedMs = liveActivityElapsedMs(activity, nowMs);
+  if (elapsedMs === null) {
+    return null;
+  }
+  const wholeSeconds = Math.floor(elapsedMs / 1_000);
+  if (wholeSeconds < 60) return `${wholeSeconds}s`;
+  const hours = Math.floor(wholeSeconds / 3_600);
+  const minutes = Math.floor((wholeSeconds % 3_600) / 60);
+  const seconds = wholeSeconds % 60;
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function formatActivityProgress(progress: number): string {
+  const percent = progress >= 0 && progress <= 1 ? progress * 100 : progress;
+  return `${Math.round(Math.min(100, Math.max(0, percent)))}%`;
+}
+
+function LiveActivityMetadata({ activity }: { activity: WorkLogLiveActivity }) {
+  const stateLabel = {
+    starting: "Starting",
+    thinking: "Thinking",
+    running_tool: "Running tool",
+    waiting: "Waiting",
+    streaming: "Streaming",
+    completed: "Completed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+  }[activity.state];
+  const nowMs = useLiveActivityNow(activity);
+  const elapsed = formatActivityElapsed(activity, nowMs);
+  const progress =
+    activity.progress !== undefined ? formatActivityProgress(activity.progress) : null;
+
+  return (
+    <ToolDetailSection title="Activity">
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-[11px]">
+        <dt className="text-muted-foreground/56">Status</dt>
+        <dd className="text-foreground/84">{stateLabel}</dd>
+        <dt className="text-muted-foreground/56">Started</dt>
+        <dd className="text-foreground/84">
+          <time dateTime={activity.startedAt} title={activity.startedAt}>
+            {formatActivityTimestamp(activity.startedAt)}
+          </time>
+        </dd>
+        <dt className="text-muted-foreground/56">Last activity</dt>
+        <dd className="text-foreground/84">
+          <time dateTime={activity.lastActivityAt} title={activity.lastActivityAt}>
+            {formatActivityTimestamp(activity.lastActivityAt)}
+          </time>
+        </dd>
+        {elapsed ? (
+          <>
+            <dt className="text-muted-foreground/56">Elapsed</dt>
+            <dd className="tabular-nums text-foreground/84">{elapsed}</dd>
+          </>
+        ) : null}
+        {progress ? (
+          <>
+            <dt className="text-muted-foreground/56">Progress</dt>
+            <dd className="tabular-nums text-foreground/84">{progress}</dd>
+          </>
+        ) : null}
+        {activity.detail ? (
+          <>
+            <dt className="text-muted-foreground/56">Detail</dt>
+            <dd className="break-words text-foreground/84">{activity.detail}</dd>
+          </>
+        ) : null}
+      </dl>
+    </ToolDetailSection>
   );
 }
 

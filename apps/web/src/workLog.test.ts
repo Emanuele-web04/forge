@@ -1606,6 +1606,69 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("merges provider tool lifecycle updates into one universal live activity", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "activity-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Bash started",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          data: {
+            toolCallId: "install-dependencies",
+            command: "bun install",
+          },
+        },
+      }),
+      makeActivity({
+        id: "activity-progress",
+        createdAt: "2026-02-23T00:02:15.000Z",
+        kind: "tool.updated",
+        summary: "Bash",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          detail: "Resolving packages",
+          data: {
+            toolCallId: "install-dependencies",
+            summary: "Resolving packages",
+            elapsedSeconds: 134,
+            progress: 0.42,
+          },
+        },
+      }),
+      makeActivity({
+        id: "activity-complete",
+        createdAt: "2026-02-23T00:02:16.000Z",
+        kind: "tool.completed",
+        summary: "Bash completed",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          status: "completed",
+          data: {
+            toolCallId: "install-dependencies",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity).toEqual({
+      state: "completed",
+      label: "Bash",
+      startedAt: "2026-02-23T00:00:01.000Z",
+      lastActivityAt: "2026-02-23T00:02:16.000Z",
+      detail: "Resolving packages",
+      progress: 0.42,
+      elapsedSeconds: 135,
+    });
+  });
+
   it("uses MCP tool names from preserved payload data", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

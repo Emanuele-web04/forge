@@ -36,6 +36,8 @@ export {
   type TimelineEntry,
   type WorkLogAutomation,
   type WorkLogEntry,
+  type WorkLogLiveActivity,
+  type WorkLogLiveActivityState,
   type WorkLogSubagent,
   type WorkLogSubagentAction,
   type WorkLogSynaraCreatedThread,

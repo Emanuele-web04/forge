@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
 
 function ToolDetailsTimeline() {
   return (
@@ -53,6 +54,37 @@ function ToolDetailsTimeline() {
       resolvedTheme="dark"
       timestampFormat="locale"
       workspaceRoot={undefined}
+    />
+  );
+}
+
+function LiveActivityTimeline() {
+  const nowMs = Date.now();
+  return (
+    <TimelineWorkEntryRow
+      workEntry={{
+        id: "work-live-activity",
+        createdAt: "2026-03-17T19:12:28.000Z",
+        label: "Bash",
+        tone: "tool",
+        itemType: "command_execution",
+        toolTitle: "Running command",
+        command: "bun install",
+        liveActivity: {
+          state: "running_tool",
+          label: "Running bun install",
+          startedAt: new Date(nowMs - 134_000).toISOString(),
+          lastActivityAt: new Date(nowMs - 2_000).toISOString(),
+          detail: "Resolving packages",
+          progress: 0.42,
+          elapsedSeconds: 132,
+        },
+      }}
+      chatMetaFontSizePx={12}
+      textFontSizePx={13}
+      density="compact"
+      onImageExpand={() => {}}
+      markdownCwd={undefined}
     />
   );
 }
@@ -147,6 +179,40 @@ describe("MessagesTimeline tool details", () => {
     } finally {
       window.requestAnimationFrame = originalRequestAnimationFrame;
       window.cancelAnimationFrame = originalCancelAnimationFrame;
+      await screen.unmount();
+      host.remove();
+      await settleLayout();
+    }
+  });
+
+  it("keeps live activity compact and reveals technical metadata on demand", async () => {
+    const host = createTimelineHost();
+    const screen = await render(<LiveActivityTimeline />, { container: host });
+
+    try {
+      expect(document.body.textContent ?? "").toContain("Running command · bun install");
+      expect(document.body.textContent ?? "").toContain("Active");
+      expect(document.body.textContent ?? "").toContain("2m 14s elapsed");
+      expect(document.body.textContent ?? "").toContain("42%");
+      expect(document.body.textContent ?? "").not.toContain("Resolving packages");
+      const displayText = document.querySelector("[data-work-entry-display-text='true']");
+      const activityMeta = document.querySelector("[data-live-activity-meta='true']");
+      expect(displayText?.closest("p")).toBe(activityMeta?.closest("p"));
+      expect(displayText?.closest("p")?.textContent ?? "").toContain(
+        "Running command · bun install · Active",
+      );
+
+      const trigger = document.querySelector<HTMLButtonElement>(
+        '[data-tool-detail-trigger="true"]',
+      );
+      expect(trigger).not.toBeNull();
+      trigger?.click();
+
+      await expect.poll(() => document.body.textContent ?? "").toContain("Resolving packages");
+      expect(document.body.textContent ?? "").toContain("Activity");
+      expect(document.body.textContent ?? "").toContain("Running tool");
+      expect(document.body.textContent ?? "").toContain("42%");
+    } finally {
       await screen.unmount();
       host.remove();
       await settleLayout();

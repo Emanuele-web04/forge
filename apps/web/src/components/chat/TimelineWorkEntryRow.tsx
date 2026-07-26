@@ -39,7 +39,10 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { cn } from "~/lib/utils";
 
-import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
+import {
+  isFileChangeWorkLogEntry,
+  type WorkLogEntry,
+} from "../../session-logic";
 import {
   formatAgentActivityEntryPreview,
   isAgentActivityWorkEntry,
@@ -71,6 +74,11 @@ import {
   sanitizeSynaraMcpToolPreview,
   type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
+import {
+  formatLiveActivityMeta,
+  formatLiveActivityPrimary,
+  useLiveActivityNow,
+} from "../../lib/liveActivityPresentation";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 
 const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
@@ -476,7 +484,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         status: toolWorkEntryStatus(workEntry),
       })
     : rawPreview;
-  const displayText = webFetchUrl
+  const defaultDisplayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
     : isReasoningUpdateWorkEntry(workEntry) && preview
       ? preview
@@ -486,6 +494,14 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     Boolean(preview) &&
     normalizeToolTextForComparison(heading) !== normalizeToolTextForComparison(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
+  const displayText = workEntry.liveActivity
+    ? formatLiveActivityPrimary({
+        activity: workEntry.liveActivity,
+        entry: workEntry,
+        heading,
+        rawCommand,
+      })
+    : defaultDisplayText;
   const hoverText =
     rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));
   const changedFiles = workEntry.changedFiles ?? [];
@@ -494,7 +510,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const openAgentActivity = canOpenAgentActivity
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
-  const canOpenToolDetails = Boolean(workEntry.toolDetails);
+  const canOpenToolDetails = Boolean(workEntry.toolDetails || workEntry.liveActivity);
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
@@ -508,6 +524,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         : EMPTY_FILE_DIFF_STATS,
     [workEntry],
   );
+  const liveActivityNowMs = useLiveActivityNow(workEntry.liveActivity);
+  const liveActivityMetaText = workEntry.liveActivity
+    ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs)
+    : null;
 
   // A created-automation row renders as its own card instead of a tool-call line.
   // Kept after the hooks above so the early return never changes hook order.
@@ -578,11 +598,12 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 compact={compact}
               />
             );
-            if (canOpenToolDetails && workEntry.toolDetails) {
+            if (canOpenToolDetails) {
               return (
                 <ToolDetailsDisclosure
                   key={`${workEntry.id}:${changedFilePath}`}
                   details={workEntry.toolDetails}
+                  activity={workEntry.liveActivity}
                   compact={compact}
                   tooltip={<span className="whitespace-pre-wrap">{changedFilePath}</span>}
                   summaryClassName={editedRowClassName}
@@ -675,15 +696,19 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
                     <span data-work-entry-display-text="true">{displayText}</span>
+                    {liveActivityMetaText ? (
+                      <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
+                    ) : null}
                   </p>
                 )}
               </div>
             </>
           );
-          if (canOpenToolDetails && workEntry.toolDetails) {
+          if (canOpenToolDetails) {
             return (
               <ToolDetailsDisclosure
                 details={workEntry.toolDetails}
+                activity={workEntry.liveActivity}
                 compact={compact}
                 tooltip={toolRowTooltipContent(rawCommand, displayText, displayText)}
               >
@@ -813,7 +838,8 @@ function ToolDetailsDisclosure(props: {
   children: ReactNode;
   compact: boolean;
   dataFileChangeRow?: boolean | undefined;
-  details: NonNullable<TimelineWorkEntry["toolDetails"]>;
+  details?: TimelineWorkEntry["toolDetails"] | undefined;
+  activity?: TimelineWorkEntry["liveActivity"] | undefined;
   summaryClassName?: string | undefined;
   tooltip?: ReactNode;
 }) {
@@ -895,7 +921,7 @@ function ToolDetailsDisclosure(props: {
           contentClassName={cn("min-w-0 pt-2", props.compact ? "ml-5" : "ml-7")}
         >
           <div data-tool-details-inline="true">
-            <ToolCallDetailsContent details={props.details} />
+            <ToolCallDetailsContent details={props.details} activity={props.activity} />
           </div>
         </DisclosureRegion>
       ) : null}

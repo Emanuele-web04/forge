@@ -54,6 +54,7 @@ export interface WorkLogEntry {
   toolName?: string;
   toolCallId?: string;
   toolStatus?: SynaraMcpToolStatus;
+  liveActivity?: WorkLogLiveActivity;
   toolDetails?: WorkLogToolDetails;
   itemType?: ToolLifecycleItemType;
   requestKind?: WorkLogRequestKind;
@@ -68,6 +69,26 @@ export interface WorkLogEntry {
   // Provider-native event type carried through the activity payload (e.g.
   // "background_tasks_changed") so the timeline can pick a specific icon.
   nativeEventType?: string;
+}
+
+export type WorkLogLiveActivityState =
+  | "starting"
+  | "thinking"
+  | "running_tool"
+  | "waiting"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface WorkLogLiveActivity {
+  state: WorkLogLiveActivityState;
+  label: string;
+  startedAt: string;
+  lastActivityAt: string;
+  detail?: string;
+  progress?: number;
+  elapsedSeconds?: number;
 }
 
 // Created-automation rows render as a dedicated card (icon + name + cadence + Open)
@@ -516,6 +537,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (readableTitle) {
     entry.toolTitle = readableTitle;
   }
+  const liveActivity = deriveWorkLogLiveActivity(activity, payload, entry);
+  if (liveActivity) {
+    entry.liveActivity = liveActivity;
+  }
   if (
     entry.detail &&
     normalizeToolTextForComparison(entry.detail) ===
@@ -555,6 +580,49 @@ function deriveToolLifecycleStatus(
   if (!isRenderableToolLifecycleActivity(activityKind)) return undefined;
   if (isFailedToolLifecyclePayload(payload)) return "failed";
   return activityKind === "tool.completed" ? "completed" : "running";
+}
+
+function deriveWorkLogLiveActivity(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown> | null,
+  entry: WorkLogEntry,
+): WorkLogLiveActivity | undefined {
+  if (!isRenderableToolLifecycleActivity(activity.kind)) {
+    return undefined;
+  }
+
+  const data = asRecord(payload?.data);
+  const stateRecord = asRecord(data?.state);
+  const rawOutput = asRecord(data?.rawOutput);
+  const rawStatus = [payload?.status, data?.status, stateRecord?.status, rawOutput?.status].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  const normalizedStatus = rawStatus?.trim().toLowerCase();
+  const state: WorkLogLiveActivityState = isFailedToolLifecyclePayload(payload)
+    ? "failed"
+    : normalizedStatus &&
+        ["cancelled", "canceled", "killed", "stopped", "aborted"].includes(normalizedStatus)
+      ? "cancelled"
+      : activity.kind === "tool.completed" ||
+          (normalizedStatus &&
+            ["completed", "complete", "success", "succeeded"].includes(normalizedStatus))
+        ? "completed"
+        : "running_tool";
+  const detail =
+    asTrimmedString(data?.summary) ??
+    (activity.kind === "tool.updated" ? asTrimmedString(payload?.detail) : null);
+  const progress = firstFiniteNumber(payload?.progress, data?.progress, data?.percent);
+  const elapsedSeconds = firstFiniteNumber(payload?.elapsedSeconds, data?.elapsedSeconds);
+
+  return {
+    state,
+    label: entry.toolTitle ?? entry.label,
+    startedAt: activity.createdAt,
+    lastActivityAt: activity.createdAt,
+    ...(detail ? { detail } : {}),
+    ...(progress !== undefined ? { progress } : {}),
+    ...(elapsedSeconds !== undefined ? { elapsedSeconds } : {}),
+  };
 }
 
 function isFailedToolLifecyclePayload(payload: Record<string, unknown> | null): boolean {
@@ -841,6 +909,7 @@ function mergeDerivedWorkLogEntries(
   const toolName = next.toolName ?? previous.toolName;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolStatus = next.toolStatus ?? previous.toolStatus;
+  const liveActivity = mergeWorkLogLiveActivity(previous.liveActivity, next.liveActivity);
   const toolDetails = mergeWorkLogToolDetails(previous.toolDetails, next.toolDetails);
   const turnId = next.turnId ?? previous.turnId;
   return {
@@ -862,7 +931,42 @@ function mergeDerivedWorkLogEntries(
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
+    ...(liveActivity ? { liveActivity } : {}),
     ...(toolDetails ? { toolDetails } : {}),
+  };
+}
+
+function mergeWorkLogLiveActivity(
+  previous: WorkLogLiveActivity | undefined,
+  next: WorkLogLiveActivity | undefined,
+): WorkLogLiveActivity | undefined {
+  if (!previous) return next;
+  if (!next) return previous;
+  const lifecycleElapsedSeconds =
+    (Date.parse(next.lastActivityAt) - Date.parse(previous.startedAt)) / 1_000;
+  const terminalElapsedSeconds =
+    next.state === "completed" || next.state === "failed" || next.state === "cancelled"
+      ? Math.max(
+          0,
+          Number.isFinite(lifecycleElapsedSeconds) ? lifecycleElapsedSeconds : 0,
+          next.elapsedSeconds ?? 0,
+          previous.elapsedSeconds ?? 0,
+        )
+      : undefined;
+  return {
+    state: next.state,
+    label: next.label || previous.label,
+    startedAt: previous.startedAt,
+    lastActivityAt: next.lastActivityAt,
+    ...(next.detail || previous.detail ? { detail: next.detail ?? previous.detail } : {}),
+    ...(next.progress !== undefined || previous.progress !== undefined
+      ? { progress: next.progress ?? previous.progress }
+      : {}),
+    ...(terminalElapsedSeconds !== undefined
+      ? { elapsedSeconds: terminalElapsedSeconds }
+      : next.elapsedSeconds !== undefined || previous.elapsedSeconds !== undefined
+        ? { elapsedSeconds: next.elapsedSeconds ?? previous.elapsedSeconds }
+        : {}),
   };
 }
 
@@ -963,6 +1067,12 @@ function asTrimmedString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  return values.find(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
 }
 
 function normalizeCollabIdentifier(value: string | null | undefined): string | null {
