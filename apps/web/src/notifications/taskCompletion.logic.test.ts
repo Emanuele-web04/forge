@@ -633,6 +633,17 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
+  it.each([
+    ["full", "Read [the guide][docs].\n[docs]: https://example.com", "Read the guide."],
+    ["collapsed", "Read [the guide][].\n[the guide]: https://example.com", "Read the guide."],
+    ["shortcut", "Read [docs].\n[docs]: https://example.com", "Read docs."],
+  ])("strips %s reference links and their definitions", (_label, assistantText, expectedBody) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: expectedBody,
+    });
+  });
+
   it("handles bracket-heavy generated output without recursive rescanning", () => {
     expect(buildCollectedTaskCompletionCopy("[".repeat(16_000))).toEqual({
       title: "Polish notifications",
@@ -682,6 +693,15 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
+  it("renders escaped Markdown punctuation literally", () => {
+    expect(
+      buildCollectedTaskCompletionCopy("Use \\*literal\\*, \\_name\\_, and \\[raw\\]."),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Use *literal*, _name_, and [raw].",
+    });
+  });
+
   it.each([
     [
       "blockquote",
@@ -697,6 +717,11 @@ describe("buildTaskCompletionCopy", () => {
       "ordered list",
       "Result:\n10. ```python\n    def __init__(self):\n    return value\n    ```\n**Done**",
       "Result: def __init__(self): return value Done",
+    ],
+    [
+      "ordered list with an over-indented fence-like code line",
+      "Result:\n10. ```python\n    def __init__(self):\n        ```\n    return value\n    ```\n**Done**",
+      "Result: def __init__(self): ``` return value Done",
     ],
   ])(
     "preserves Markdown-shaped syntax inside a fence nested in a %s",

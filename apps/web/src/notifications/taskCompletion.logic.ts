@@ -77,6 +77,14 @@ const NOTIFICATION_SUMMARY_MAX_LENGTH = 120;
 const PROTECTED_CODE_START = "\uE000";
 const PROTECTED_CODE_END = "\uE001";
 
+function markdownColumnWidth(value: string): number {
+  let columns = 0;
+  for (const character of value) {
+    columns = character === "\t" ? columns + (4 - (columns % 4)) : columns + 1;
+  }
+  return columns;
+}
+
 function protectMarkdownFencedBlocks(text: string, protect: (content: string) => string): string {
   const openingPattern =
     /(^|\n)((?:[ \t]{0,3}(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])[ \t]+))*[ \t]{0,3})(`{3,}|~{3,})([^\r\n]*)\r?\n/g;
@@ -101,18 +109,25 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
     const quotePrefix = `(?:[ \\t]{0,3}>[ \\t]?){${quoteDepth}}`;
     const prefixWithoutBlockquotes = containerPrefix.replace(/[ \t]{0,3}>[ \t]?/g, "");
     const listContinuationIndent = /(?:[-+*]|\d{1,9}[.)])[ \t]+/.test(prefixWithoutBlockquotes)
-      ? prefixWithoutBlockquotes.length
+      ? markdownColumnWidth(prefixWithoutBlockquotes)
       : 0;
-    const closingIndent =
-      listContinuationIndent > 0
-        ? `(?: {${listContinuationIndent},}|[ \\t]*\\t[ \\t]*)`
-        : "[ \\t]{0,3}";
     const closingPattern = new RegExp(
-      `(^|\\n)${quotePrefix}${closingIndent}${fenceCharacter}{${fence.length},}[ \\t]*\\r?(?=\\n|$)`,
+      `(^|\\n)${quotePrefix}([ \\t]*)${fenceCharacter}{${fence.length},}[ \\t]*\\r?(?=\\n|$)`,
       "g",
     );
     closingPattern.lastIndex = openingPattern.lastIndex;
-    const closingMatch = closingPattern.exec(text);
+    let closingMatch: RegExpExecArray | null = null;
+    let closingCandidate: RegExpExecArray | null;
+    const minimumClosingIndent = listContinuationIndent;
+    const maximumClosingIndent = listContinuationIndent + 3;
+
+    while ((closingCandidate = closingPattern.exec(text)) !== null) {
+      const closingColumns = markdownColumnWidth(closingCandidate[2] ?? "");
+      if (closingColumns >= minimumClosingIndent && closingColumns <= maximumClosingIndent) {
+        closingMatch = closingCandidate;
+        break;
+      }
+    }
     const contentEnd = closingMatch?.index ?? text.length;
     const content = text
       .slice(openingPattern.lastIndex, contentEnd)
@@ -132,6 +147,12 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
   }
 
   return result + text.slice(cursor);
+}
+
+function protectMarkdownEscapes(text: string, protect: (content: string) => string): string {
+  return text.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, (_match, punctuation: string) =>
+    protect(punctuation),
+  );
 }
 
 function protectMarkdownInlineCode(text: string, protect: (content: string) => string): string {
@@ -197,7 +218,8 @@ function protectMarkdownCode(text: string): {
   };
 
   const protectedBlocks = protectMarkdownFencedBlocks(text, protect);
-  const protectedText = protectMarkdownInlineCode(protectedBlocks, protect);
+  const protectedEscapes = protectMarkdownEscapes(protectedBlocks, protect);
+  const protectedText = protectMarkdownInlineCode(protectedEscapes, protect);
 
   return {
     protectedText,
@@ -238,7 +260,29 @@ function buildMatchingMarkdownDelimiters(
   return matches;
 }
 
-function stripMarkdownLinks(text: string): string {
+function normalizeMarkdownReferenceLabel(label: string): string {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function collectMarkdownReferenceLabels(text: string): ReadonlySet<string> {
+  const labels = new Set<string>();
+  const definitionPattern = /^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*\S.*$/gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = definitionPattern.exec(text)) !== null) {
+    const label = match[1];
+    if (label) {
+      labels.add(normalizeMarkdownReferenceLabel(label));
+    }
+  }
+  return labels;
+}
+
+function removeMarkdownReferenceDefinitions(text: string): string {
+  return text.replace(/^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S.*$/gm, "");
+}
+
+function stripMarkdownLinks(text: string, referenceLabels: ReadonlySet<string>): string {
   const labelMatches = buildMatchingMarkdownDelimiters(text, "[", "]");
   const destinationMatches = buildMatchingMarkdownDelimiters(text, "(", ")");
   let result = "";
@@ -261,25 +305,52 @@ function stripMarkdownLinks(text: string): string {
     }
 
     const destinationOpenIndex = labelCloseIndex + 1;
-    if (text[destinationOpenIndex] !== "(") {
+    if (text[destinationOpenIndex] === "(") {
+      const destinationCloseIndex = destinationMatches.get(destinationOpenIndex);
+      if (destinationCloseIndex === undefined) {
+        result += text[index];
+        index += 1;
+        continue;
+      }
+
+      if (isImage) {
+        result += " ";
+      } else {
+        result += text.slice(labelOpenIndex + 1, labelCloseIndex);
+      }
+      index = destinationCloseIndex + 1;
+      continue;
+    }
+
+    const label = text.slice(labelOpenIndex + 1, labelCloseIndex);
+    if (text[destinationOpenIndex] === "[") {
+      const referenceCloseIndex = labelMatches.get(destinationOpenIndex);
+      if (referenceCloseIndex === undefined) {
+        result += text[index];
+        index += 1;
+        continue;
+      }
+      const explicitReference = text.slice(destinationOpenIndex + 1, referenceCloseIndex);
+      const reference = explicitReference.length > 0 ? explicitReference : label;
+      if (!referenceLabels.has(normalizeMarkdownReferenceLabel(reference))) {
+        result += text[index];
+        index += 1;
+        continue;
+      }
+
+      result += isImage ? " " : label;
+      index = referenceCloseIndex + 1;
+      continue;
+    }
+
+    if (!referenceLabels.has(normalizeMarkdownReferenceLabel(label))) {
       result += text[index];
       index += 1;
       continue;
     }
 
-    const destinationCloseIndex = destinationMatches.get(destinationOpenIndex);
-    if (destinationCloseIndex === undefined) {
-      result += text[index];
-      index += 1;
-      continue;
-    }
-
-    if (isImage) {
-      result += " ";
-    } else {
-      result += text.slice(labelOpenIndex + 1, labelCloseIndex);
-    }
-    index = destinationCloseIndex + 1;
+    result += isImage ? " " : label;
+    index = labelCloseIndex + 1;
   }
 
   return result;
@@ -289,7 +360,9 @@ function stripMarkdownLinks(text: string): string {
 // notifications should never expose Markdown syntax or turn into mini transcripts.
 function summarizeAssistantText(text: string): string | null {
   const { protectedText, restore } = protectMarkdownCode(text);
-  const cleaned = stripMarkdownLinks(protectedText)
+  const referenceLabels = collectMarkdownReferenceLabels(protectedText);
+  const withoutReferenceDefinitions = removeMarkdownReferenceDefinitions(protectedText);
+  const cleaned = stripMarkdownLinks(withoutReferenceDefinitions, referenceLabels)
     .replace(/`+/g, "")
     .replace(/^[ \t]{0,3}(?:#{1,6}[ \t]+|>[ \t]?)/gm, "")
     .replace(/^[ \t]{0,3}(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, " · ")
