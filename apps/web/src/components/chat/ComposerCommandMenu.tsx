@@ -371,9 +371,9 @@ export function ComposerCommandMenu(props: {
                       item={item}
                       resolvedTheme={props.resolvedTheme}
                       isActive={props.activeItemId === item.id}
-                    itemRef={(node) => {
-                      itemRefs.current[item.id] = node;
-                    }}
+                      itemRef={(node) => {
+                        itemRefs.current[item.id] = node;
+                      }}
                       onHighlight={props.onHighlightedItemChange}
                       onSelect={props.onSelect}
                     />

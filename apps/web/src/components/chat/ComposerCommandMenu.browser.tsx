@@ -44,20 +44,23 @@ describe("ComposerCommandMenu empty states", () => {
     ["mention", "mention", "Searching mentions..."],
     ["skill", "skill", "Loading skills..."],
     ["slash command", "slash-command", "Loading commands..."],
-  ] as const)("shows the %s loading label before results are available", async (_label, triggerKind, text) => {
-    const menu = await mountMenu({ isLoading: true, triggerKind });
+  ] as const)(
+    "shows the %s loading label before results are available",
+    async (_label, triggerKind, text) => {
+      const menu = await mountMenu({ isLoading: true, triggerKind });
 
-    try {
-      await expect.element(page.getByText(text, { exact: true })).toBeVisible();
-      if (triggerKind === "mention") {
-        await expect.element(page.getByText("Files", { exact: true })).toBeVisible();
-      } else {
-        expect(document.querySelector('[data-slot="command-list"]')).toBeNull();
+      try {
+        await expect.element(page.getByText(text, { exact: true })).toBeVisible();
+        if (triggerKind === "mention") {
+          await expect.element(page.getByText("Files", { exact: true })).toBeVisible();
+        } else {
+          expect(document.querySelector('[data-slot="command-list"]')).toBeNull();
+        }
+      } finally {
+        await menu.cleanup();
       }
-    } finally {
-      await menu.cleanup();
-    }
-  });
+    },
+  );
 
   it("uses the supplied empty copy after loading completes", async () => {
     const menu = await mountMenu({
