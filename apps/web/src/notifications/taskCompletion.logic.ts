@@ -78,15 +78,17 @@ const PROTECTED_CODE_START = "\uE000";
 const PROTECTED_CODE_END = "\uE001";
 
 function protectMarkdownFencedBlocks(text: string, protect: (content: string) => string): string {
-  const openingPattern = /(^|\n)[ \t]{0,3}(`{3,}|~{3,})([^\r\n]*)\r?\n/g;
+  const openingPattern =
+    /(^|\n)((?:[ \t]{0,3}(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])[ \t]+))*[ \t]{0,3})(`{3,}|~{3,})([^\r\n]*)\r?\n/g;
   let result = "";
   let cursor = 0;
   let openingMatch: RegExpExecArray | null;
 
   while ((openingMatch = openingPattern.exec(text)) !== null) {
     const linePrefix = openingMatch[1] ?? "";
-    const fence = openingMatch[2] ?? "";
-    const info = openingMatch[3] ?? "";
+    const containerPrefix = openingMatch[2] ?? "";
+    const fence = openingMatch[3] ?? "";
+    const info = openingMatch[4] ?? "";
     const fenceCharacter = fence[0];
 
     // Backticks are not valid inside a backtick fence's info string. Treat
@@ -95,17 +97,22 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
       continue;
     }
 
+    const quoteDepth = containerPrefix.match(/>/g)?.length ?? 0;
+    const quotePrefix = `(?:[ \\t]{0,3}>[ \\t]?){${quoteDepth}}`;
     const closingPattern = new RegExp(
-      `(^|\\n)[ \\t]{0,3}${fenceCharacter}{${fence.length},}[ \\t]*\\r?(?=\\n|$)`,
+      `(^|\\n)${quotePrefix}[ \\t]{0,3}${fenceCharacter}{${fence.length},}[ \\t]*\\r?(?=\\n|$)`,
       "g",
     );
     closingPattern.lastIndex = openingPattern.lastIndex;
     const closingMatch = closingPattern.exec(text);
     const contentEnd = closingMatch?.index ?? text.length;
+    const content = text
+      .slice(openingPattern.lastIndex, contentEnd)
+      .replace(new RegExp(`(^|\\n)${quotePrefix}`, "g"), "$1");
 
     result += text.slice(cursor, openingMatch.index);
     result += linePrefix;
-    result += protect(text.slice(openingPattern.lastIndex, contentEnd));
+    result += protect(content);
 
     if (!closingMatch) {
       cursor = text.length;
@@ -114,6 +121,68 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
 
     cursor = closingPattern.lastIndex;
     openingPattern.lastIndex = cursor;
+  }
+
+  return result + text.slice(cursor);
+}
+
+function protectMarkdownInlineCode(text: string, protect: (content: string) => string): string {
+  const runs: Array<{ start: number; end: number; length: number; line: number }> = [];
+  let line = 0;
+  let index = 0;
+
+  while (index < text.length) {
+    if (text[index] === "\n") {
+      line += 1;
+      index += 1;
+      continue;
+    }
+    if (text[index] !== "`") {
+      index += 1;
+      continue;
+    }
+
+    const start = index;
+    while (text[index] === "`") {
+      index += 1;
+    }
+    runs.push({ start, end: index, length: index - start, line });
+  }
+
+  const nextMatchingRun = Array.from<number | undefined>({ length: runs.length });
+  const nextRunByLength = new Map<number, number>();
+  let scannedLine: number | undefined;
+
+  for (let runIndex = runs.length - 1; runIndex >= 0; runIndex -= 1) {
+    const run = runs[runIndex];
+    if (!run) {
+      continue;
+    }
+    if (run.line !== scannedLine) {
+      nextRunByLength.clear();
+      scannedLine = run.line;
+    }
+    nextMatchingRun[runIndex] = nextRunByLength.get(run.length);
+    nextRunByLength.set(run.length, runIndex);
+  }
+
+  let result = "";
+  let cursor = 0;
+  let runIndex = 0;
+
+  while (runIndex < runs.length) {
+    const openingRun = runs[runIndex];
+    const closingRunIndex = nextMatchingRun[runIndex];
+    const closingRun = closingRunIndex === undefined ? undefined : runs[closingRunIndex];
+    if (!openingRun || !closingRun || closingRun.line !== openingRun.line) {
+      runIndex += 1;
+      continue;
+    }
+
+    result += text.slice(cursor, openingRun.start);
+    result += protect(text.slice(openingRun.end, closingRun.start));
+    cursor = closingRun.end;
+    runIndex = closingRunIndex + 1;
   }
 
   return result + text.slice(cursor);
@@ -131,10 +200,7 @@ function protectMarkdownCode(text: string): {
   };
 
   const protectedBlocks = protectMarkdownFencedBlocks(text, protect);
-  const protectedText = protectedBlocks.replace(
-    /(`+)([^`\n]*?)\1/g,
-    (_match, _delimiter: string, content: string) => protect(content),
-  );
+  const protectedText = protectMarkdownInlineCode(protectedBlocks, protect);
 
   return {
     protectedText,
@@ -231,10 +297,10 @@ function summarizeAssistantText(text: string): string | null {
     .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?)/gm, "")
     .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/gm, " · ")
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
-    .replace(/(^|[^\w])__([^_\n]+)__(?=$|[^\w])/g, "$1$2")
+    .replace(/(^|[^\p{L}\p{N}\p{M}_])__([^_\n]+)__(?=$|[^\p{L}\p{N}\p{M}_])/gu, "$1$2")
     .replace(/~~([^~\n]+)~~/g, "$1")
-    .replace(/(^|[^\w])\*([^*\n]+)\*(?=$|[^\w])/g, "$1$2")
-    .replace(/(^|[^\w])_([^_\n]+)_(?=$|[^\w])/g, "$1$2");
+    .replace(/(^|[^\p{L}\p{N}\p{M}_])\*([^*\n]+)\*(?=$|[^\p{L}\p{N}\p{M}_])/gu, "$1$2")
+    .replace(/(^|[^\p{L}\p{N}\p{M}_])_([^_\n]+)_(?=$|[^\p{L}\p{N}\p{M}_])/gu, "$1$2");
   const trimmed = restore(cleaned).trim().replace(/\s+/g, " ");
   if (trimmed.length === 0) {
     return null;

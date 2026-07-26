@@ -633,6 +633,13 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
+  it("preserves shorter backtick runs inside multi-backtick code spans", () => {
+    expect(buildCollectedTaskCompletionCopy("Use ``foo ` bar`` now.")).toEqual({
+      title: "Polish notifications",
+      body: "Use foo ` bar now.",
+    });
+  });
+
   it("does not strip underscores from inline code identifiers", () => {
     expect(buildCollectedTaskCompletionCopy("Updated `__init__.py` and `foo__bar__`.")).toEqual({
       title: "Polish notifications",
@@ -644,6 +651,23 @@ describe("buildTaskCompletionCopy", () => {
     expect(buildCollectedTaskCompletionCopy("Updated foo__bar__ successfully.")).toEqual({
       title: "Polish notifications",
       body: "Updated foo__bar__ successfully.",
+    });
+  });
+
+  it("does not treat double underscores beside Unicode identifier characters as emphasis", () => {
+    expect(buildCollectedTaskCompletionCopy("Updated café__menu__ and 变量__名称__.")).toEqual({
+      title: "Polish notifications",
+      body: "Updated café__menu__ and 变量__名称__.",
+    });
+  });
+
+  it.each([
+    ["blockquote", "Result:\n> ```python\n> def __init__(self):\n>   return value\n> ```"],
+    ["list", "Result:\n- ```python\n  def __init__(self):\n  return value\n  ```"],
+  ])("preserves Markdown-shaped syntax inside a fence nested in a %s", (_label, assistantText) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: "Result: def __init__(self): return value",
     });
   });
 });
