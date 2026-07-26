@@ -32,8 +32,7 @@ export function resolveDesktopPhysicalZoomAction(
     return null;
   }
 
-  const isMinusKey =
-    input.key === "-" || input.code === "Minus" || input.code === "NumpadSubtract";
+  const isMinusKey = input.key === "-" || input.code === "Minus" || input.code === "NumpadSubtract";
   return isMinusKey ? "zoomOut" : null;
 }
 

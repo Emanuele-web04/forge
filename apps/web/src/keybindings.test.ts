@@ -44,10 +44,7 @@ function event(overrides: Partial<ShortcutEventLike> = {}): ShortcutEventLike {
 describe("isKeyboardShortcutsHelpShortcut", () => {
   it("does not mistake the physical minus keys for shortcuts help on Windows", () => {
     assert.isFalse(
-      isKeyboardShortcutsHelpShortcut(
-        event({ ctrlKey: true, key: "/", code: "Minus" }),
-        "Win32",
-      ),
+      isKeyboardShortcutsHelpShortcut(event({ ctrlKey: true, key: "/", code: "Minus" }), "Win32"),
     );
     assert.isFalse(
       isKeyboardShortcutsHelpShortcut(
@@ -56,19 +53,13 @@ describe("isKeyboardShortcutsHelpShortcut", () => {
       ),
     );
     assert.isFalse(
-      isKeyboardShortcutsHelpShortcut(
-        event({ ctrlKey: true, key: "-", code: "Slash" }),
-        "Win32",
-      ),
+      isKeyboardShortcutsHelpShortcut(event({ ctrlKey: true, key: "-", code: "Slash" }), "Win32"),
     );
   });
 
   it("recognizes the physical slash keys on Windows", () => {
     assert.isTrue(
-      isKeyboardShortcutsHelpShortcut(
-        event({ ctrlKey: true, key: "/", code: "Slash" }),
-        "Win32",
-      ),
+      isKeyboardShortcutsHelpShortcut(event({ ctrlKey: true, key: "/", code: "Slash" }), "Win32"),
     );
     assert.isTrue(
       isKeyboardShortcutsHelpShortcut(
@@ -89,6 +80,49 @@ describe("isKeyboardShortcutsHelpShortcut", () => {
       isKeyboardShortcutsHelpShortcut(
         event({ ctrlKey: true, key: "/", code: "Slash" }),
         "MacIntel",
+      ),
+    );
+  });
+
+  it("uses Ctrl+/ on Linux without accepting Meta+/", () => {
+    assert.isTrue(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "/", code: "Slash" }),
+        "Linux x86_64",
+      ),
+    );
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ metaKey: true, key: "/", code: "Slash" }),
+        "Linux x86_64",
+      ),
+    );
+  });
+
+  it("ignores key-up, auto-repeat, and modified slash events", () => {
+    const platform = "Win32";
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ type: "keyup", ctrlKey: true, key: "/", code: "Slash" }),
+        platform,
+      ),
+    );
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ repeat: true, ctrlKey: true, key: "/", code: "Slash" }),
+        platform,
+      ),
+    );
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, shiftKey: true, key: "/", code: "Slash" }),
+        platform,
+      ),
+    );
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, altKey: true, key: "/", code: "Slash" }),
+        platform,
       ),
     );
   });

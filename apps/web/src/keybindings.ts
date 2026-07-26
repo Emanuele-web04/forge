@@ -738,31 +738,19 @@ export function isKeyboardShortcutsHelpShortcut(
 
   // On some Windows layouts Ctrl+- reports the physical Slash code. The
   // translated key is authoritative here so the browser can retain zoom-out.
-  if (
-    event.key === "-" ||
-    event.code === "Minus" ||
-    event.code === "NumpadSubtract"
-  ) {
+  if (event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract") {
     return false;
   }
 
   if (isMacPlatform(platform)) {
-    return (
-      event.metaKey &&
-      !event.ctrlKey &&
-      (event.code === "Slash" || event.key === "/")
-    );
+    return event.metaKey && !event.ctrlKey && (event.code === "Slash" || event.key === "/");
   }
 
   if (!event.ctrlKey || event.metaKey) {
     return false;
   }
 
-  return (
-    event.code === "Slash" ||
-    event.code === "NumpadDivide" ||
-    event.key === "/"
-  );
+  return event.code === "Slash" || event.code === "NumpadDivide" || event.key === "/";
 }
 
 export function terminalNavigationShortcutData(

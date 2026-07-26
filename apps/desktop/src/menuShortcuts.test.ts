@@ -21,9 +21,9 @@ describe("resolveDesktopPhysicalZoomAction", () => {
   };
 
   it("handles both physical minus keys as zoom-out on Windows", () => {
-    expect(
-      resolveDesktopPhysicalZoomAction("win32", { ...windowsCtrlInput, code: "Minus" }),
-    ).toBe("zoomOut");
+    expect(resolveDesktopPhysicalZoomAction("win32", { ...windowsCtrlInput, code: "Minus" })).toBe(
+      "zoomOut",
+    );
     expect(
       resolveDesktopPhysicalZoomAction("win32", {
         ...windowsCtrlInput,
@@ -53,11 +53,42 @@ describe("resolveDesktopPhysicalZoomAction", () => {
         shift: true,
       }),
     ).toBeNull();
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", {
+        ...windowsCtrlInput,
+        code: "Minus",
+        alt: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", {
+        ...windowsCtrlInput,
+        code: "Minus",
+        meta: true,
+      }),
+    ).toBeNull();
   });
 
-  it("leaves macOS keyboard handling unchanged", () => {
+  it("only handles Windows Ctrl key-down events", () => {
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", {
+        ...windowsCtrlInput,
+        type: "keyUp",
+        code: "Minus",
+      }),
+    ).toBeNull();
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", {
+        ...windowsCtrlInput,
+        control: false,
+        code: "Minus",
+      }),
+    ).toBeNull();
     expect(
       resolveDesktopPhysicalZoomAction("darwin", { ...windowsCtrlInput, code: "Minus" }),
+    ).toBeNull();
+    expect(
+      resolveDesktopPhysicalZoomAction("linux", { ...windowsCtrlInput, code: "Minus" }),
     ).toBeNull();
   });
 });
