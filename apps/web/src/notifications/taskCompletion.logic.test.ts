@@ -500,6 +500,81 @@ describe("buildTaskCompletionCopy", () => {
       body: 'Result: {"status":"ok"}',
     });
   });
+
+  it("does not reinterpret Markdown-shaped syntax inside fenced code", () => {
+    expect(
+      buildTaskCompletionCopy({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        completedAt: "2026-04-05T10:00:05.000Z",
+        assistantSummary: "Result:\n```python\ndef __init__(self):\n  return x - y\n```",
+      }),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Result: def __init__(self): return x - y",
+    });
+  });
+
+  it("only normalizes list markers at the start of a line", () => {
+    expect(
+      buildTaskCompletionCopy({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        completedAt: "2026-04-05T10:00:05.000Z",
+        assistantSummary: "Computed 7 * 6 = 42; auth - tests pass.",
+      }),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Computed 7 * 6 = 42; auth - tests pass.",
+    });
+  });
+
+  it("consumes balanced parentheses in Markdown link destinations", () => {
+    expect(
+      buildTaskCompletionCopy({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        completedAt: "2026-04-05T10:00:05.000Z",
+        assistantSummary: "Read the [docs](https://example.com/a_(b)) for details.",
+      }),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Read the docs for details.",
+    });
+  });
+
+  it("keeps separate triple-backtick inline spans independent", () => {
+    expect(
+      buildTaskCompletionCopy({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        completedAt: "2026-04-05T10:00:05.000Z",
+        assistantSummary: "Use ```foo``` now.\nThen ```bar``` next.",
+      }),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Use foo now. Then bar next.",
+    });
+  });
+
+  it("does not strip underscores from inline code identifiers", () => {
+    expect(
+      buildTaskCompletionCopy({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        completedAt: "2026-04-05T10:00:05.000Z",
+        assistantSummary: "Updated `__init__.py` and `foo__bar__`.",
+      }),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Updated __init__.py and foo__bar__.",
+    });
+  });
 });
 
 describe("collectInputNeededThreadCandidates", () => {

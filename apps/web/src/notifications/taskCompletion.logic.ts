@@ -74,27 +74,126 @@ function isRunningStatus(status: ThreadSessionStatus | null | undefined): boolea
 
 const NOTIFICATION_SUMMARY_MAX_LENGTH = 120;
 
+const PROTECTED_CODE_START = "\uE000";
+const PROTECTED_CODE_END = "\uE001";
+
+function protectMarkdownCode(text: string): {
+  protectedText: string;
+  restore: (value: string) => string;
+} {
+  const segments: string[] = [];
+  const protect = (content: string): string => {
+    const token = `${PROTECTED_CODE_START}${segments.length}${PROTECTED_CODE_END}`;
+    segments.push(content);
+    return token;
+  };
+
+  // A fenced block must start on its own line. Keeping that boundary prevents
+  // separate triple-backtick inline spans from being mistaken for one block.
+  const protectedBlocks = text.replace(
+    /(^|\n)[ \t]{0,3}```[^\n`]*\n([\s\S]*?)(?:(?:\n)?[ \t]{0,3}```[ \t]*(?=\n|$)|$)/g,
+    (_match, prefix: string, content: string) => `${prefix}${protect(content)}`,
+  );
+  const protectedText = protectedBlocks.replace(
+    /(`{1,3})([^`\n]*?)\1/g,
+    (_match, _delimiter: string, content: string) => protect(content),
+  );
+
+  return {
+    protectedText,
+    restore: (value) =>
+      value.replace(
+        new RegExp(`${PROTECTED_CODE_START}(\\d+)${PROTECTED_CODE_END}`, "g"),
+        (_match, index: string) => segments[Number(index)] ?? "",
+      ),
+  };
+}
+
+function findClosingMarkdownDelimiter(
+  text: string,
+  openIndex: number,
+  openDelimiter: "[" | "(",
+  closeDelimiter: "]" | ")",
+): number {
+  let depth = 1;
+  for (let index = openIndex + 1; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "\\") {
+      index += 1;
+      continue;
+    }
+    if (character === openDelimiter) {
+      depth += 1;
+      continue;
+    }
+    if (character === closeDelimiter) {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function stripMarkdownLinks(text: string): string {
+  let result = "";
+  let index = 0;
+
+  while (index < text.length) {
+    const isImage = text[index] === "!" && text[index + 1] === "[";
+    const labelOpenIndex = isImage ? index + 1 : index;
+    if (text[labelOpenIndex] !== "[") {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    const labelCloseIndex = findClosingMarkdownDelimiter(text, labelOpenIndex, "[", "]");
+    const destinationOpenIndex = labelCloseIndex + 1;
+    if (labelCloseIndex < 0 || text[destinationOpenIndex] !== "(") {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    const destinationCloseIndex = findClosingMarkdownDelimiter(
+      text,
+      destinationOpenIndex,
+      "(",
+      ")",
+    );
+    if (destinationCloseIndex < 0) {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    if (isImage) {
+      result += " ";
+    } else {
+      result += text.slice(labelOpenIndex + 1, labelCloseIndex);
+    }
+    index = destinationCloseIndex + 1;
+  }
+
+  return result;
+}
+
 // Reduce rich assistant output to readable notification context. Toasts and OS
 // notifications should never expose Markdown syntax or turn into mini transcripts.
 function summarizeAssistantText(text: string): string | null {
-  const trimmed = text
-    .replace(/```[^\n]*\n([\s\S]*?)```/g, "$1")
-    .replace(/```([\s\S]*?)```/g, "$1")
-    .replace(/```[^\n]*\n?/g, " ")
-    .replace(/`([^`\n]+)`/g, "$1")
+  const { protectedText, restore } = protectMarkdownCode(text);
+  const cleaned = stripMarkdownLinks(protectedText)
     .replace(/`+/g, "")
-    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
-    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
     .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?)/gm, "")
     .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/gm, " · ")
-    .replace(/\s+[-*+]\s+/g, " · ")
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
     .replace(/__([^_\n]+)__/g, "$1")
     .replace(/~~([^~\n]+)~~/g, "$1")
     .replace(/(^|[^\w])\*([^*\n]+)\*(?=$|[^\w])/g, "$1$2")
-    .replace(/(^|[^\w])_([^_\n]+)_(?=$|[^\w])/g, "$1$2")
-    .trim()
-    .replace(/\s+/g, " ");
+    .replace(/(^|[^\w])_([^_\n]+)_(?=$|[^\w])/g, "$1$2");
+  const trimmed = restore(cleaned).trim().replace(/\s+/g, " ");
   if (trimmed.length === 0) {
     return null;
   }
