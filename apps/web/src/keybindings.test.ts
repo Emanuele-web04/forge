@@ -12,6 +12,7 @@ import {
   isChatNewShortcut,
   isChatNewChatShortcut,
   isDiffToggleShortcut,
+  isKeyboardShortcutsHelpShortcut,
   isOpenFavoriteEditorShortcut,
   isSidebarToggleShortcut,
   isTerminalClearShortcut,
@@ -39,6 +40,59 @@ function event(overrides: Partial<ShortcutEventLike> = {}): ShortcutEventLike {
     ...overrides,
   };
 }
+
+describe("isKeyboardShortcutsHelpShortcut", () => {
+  it("does not mistake the physical minus keys for shortcuts help on Windows", () => {
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "/", code: "Minus" }),
+        "Win32",
+      ),
+    );
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "/", code: "NumpadSubtract" }),
+        "Win32",
+      ),
+    );
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "-", code: "Slash" }),
+        "Win32",
+      ),
+    );
+  });
+
+  it("recognizes the physical slash keys on Windows", () => {
+    assert.isTrue(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "/", code: "Slash" }),
+        "Win32",
+      ),
+    );
+    assert.isTrue(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "/", code: "NumpadDivide" }),
+        "Win32",
+      ),
+    );
+  });
+
+  it("uses Cmd+/ on macOS without accepting Ctrl+/", () => {
+    assert.isTrue(
+      isKeyboardShortcutsHelpShortcut(
+        event({ metaKey: true, key: "/", code: "Slash" }),
+        "MacIntel",
+      ),
+    );
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "/", code: "Slash" }),
+        "MacIntel",
+      ),
+    );
+  });
+});
 
 function modShortcut(
   key: string,

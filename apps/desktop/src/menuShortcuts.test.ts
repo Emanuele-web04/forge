@@ -5,9 +5,62 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveDesktopMenuAccelerator,
+  resolveDesktopPhysicalZoomAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
+
+describe("resolveDesktopPhysicalZoomAction", () => {
+  const windowsCtrlInput = {
+    type: "keyDown",
+    key: "",
+    control: true,
+    meta: false,
+    shift: false,
+    alt: false,
+  };
+
+  it("handles both physical minus keys as zoom-out on Windows", () => {
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", { ...windowsCtrlInput, code: "Minus" }),
+    ).toBe("zoomOut");
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", {
+        ...windowsCtrlInput,
+        code: "NumpadSubtract",
+      }),
+    ).toBe("zoomOut");
+  });
+
+  it("uses the translated minus value for Windows layouts whose physical code is Slash", () => {
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", {
+        ...windowsCtrlInput,
+        key: "-",
+        code: "Slash",
+      }),
+    ).toBe("zoomOut");
+  });
+
+  it("does not intercept slash or modified minus chords", () => {
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", { ...windowsCtrlInput, code: "Slash" }),
+    ).toBeNull();
+    expect(
+      resolveDesktopPhysicalZoomAction("win32", {
+        ...windowsCtrlInput,
+        code: "Minus",
+        shift: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("leaves macOS keyboard handling unchanged", () => {
+    expect(
+      resolveDesktopPhysicalZoomAction("darwin", { ...windowsCtrlInput, code: "Minus" }),
+    ).toBeNull();
+  });
+});
 
 describe("resolveDesktopMenuAccelerator", () => {
   it("disables custom native menu accelerators on Linux", () => {

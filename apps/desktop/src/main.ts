@@ -136,6 +136,7 @@ import {
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
   resolveDesktopMenuAccelerator,
+  resolveDesktopPhysicalZoomAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -1317,6 +1318,25 @@ function attachDesktopZoomFactorSync(window: BrowserWindow): void {
   window.webContents.on("did-finish-load", notify);
 }
 
+function adjustWebContentsZoom(webContents: Electron.WebContents, multiplier: number): void {
+  const nextZoomFactor = Math.min(
+    DESKTOP_MENU_MAX_ZOOM_FACTOR,
+    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
+  );
+  webContents.setZoomFactor(nextZoomFactor);
+}
+
+function attachDesktopPhysicalZoomShortcuts(window: BrowserWindow): void {
+  window.webContents.on("before-input-event", (event, input) => {
+    if (resolveDesktopPhysicalZoomAction(process.platform, input) !== "zoomOut") {
+      return;
+    }
+
+    event.preventDefault();
+    adjustWebContentsZoom(window.webContents, 1 / DESKTOP_MENU_ZOOM_FACTOR_STEP);
+  });
+}
+
 function resetWindowZoomFromMenu(): void {
   resolveMenuTargetWindow()?.webContents.setZoomFactor(1);
 }
@@ -1324,11 +1344,7 @@ function resetWindowZoomFromMenu(): void {
 function adjustWindowZoomFromMenu(multiplier: number): void {
   const webContents = resolveMenuTargetWindow()?.webContents;
   if (!webContents) return;
-  const nextZoomFactor = Math.min(
-    DESKTOP_MENU_MAX_ZOOM_FACTOR,
-    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
-  );
-  webContents.setZoomFactor(nextZoomFactor);
+  adjustWebContentsZoom(webContents, multiplier);
 }
 
 // A configured app-update.yml (or the mock-updates flag) is the prerequisite for any
@@ -3815,6 +3831,7 @@ function createWindow(): BrowserWindow {
   browserManager.setWindow(window);
   attachDesktopZoomFactorSync(window);
   attachRendererCrashRecovery(window);
+  attachDesktopPhysicalZoomShortcuts(window);
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();

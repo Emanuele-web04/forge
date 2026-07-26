@@ -5,6 +5,38 @@
 
 import type { MenuItemConstructorOptions } from "electron";
 
+export interface DesktopKeyboardInput {
+  type: string;
+  key: string;
+  code?: string;
+  control: boolean;
+  meta: boolean;
+  shift: boolean;
+  alt: boolean;
+}
+
+export type DesktopPhysicalZoomAction = "zoomOut" | null;
+
+export function resolveDesktopPhysicalZoomAction(
+  platform: NodeJS.Platform,
+  input: DesktopKeyboardInput,
+): DesktopPhysicalZoomAction {
+  if (
+    platform !== "win32" ||
+    input.type !== "keyDown" ||
+    !input.control ||
+    input.meta ||
+    input.shift ||
+    input.alt
+  ) {
+    return null;
+  }
+
+  const isMinusKey =
+    input.key === "-" || input.code === "Minus" || input.code === "NumpadSubtract";
+  return isMinusKey ? "zoomOut" : null;
+}
+
 export function resolveDesktopMenuAccelerator(
   platform: NodeJS.Platform,
   accelerator: MenuItemConstructorOptions["accelerator"],

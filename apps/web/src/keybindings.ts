@@ -19,6 +19,7 @@ export interface ShortcutEventLike {
   ctrlKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+  repeat?: boolean;
 }
 
 export interface ShortcutMatchContext {
@@ -720,6 +721,48 @@ export function isTerminalClearShortcut(event: ShortcutEventLike): boolean {
   const key = event.key.toLowerCase();
 
   return key === "l" && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+}
+
+export function isKeyboardShortcutsHelpShortcut(
+  event: ShortcutEventLike,
+  platform = navigator.platform,
+): boolean {
+  if (
+    (event.type !== undefined && event.type !== "keydown") ||
+    event.shiftKey ||
+    event.altKey ||
+    event.repeat
+  ) {
+    return false;
+  }
+
+  // On some Windows layouts Ctrl+- reports the physical Slash code. The
+  // translated key is authoritative here so the browser can retain zoom-out.
+  if (
+    event.key === "-" ||
+    event.code === "Minus" ||
+    event.code === "NumpadSubtract"
+  ) {
+    return false;
+  }
+
+  if (isMacPlatform(platform)) {
+    return (
+      event.metaKey &&
+      !event.ctrlKey &&
+      (event.code === "Slash" || event.key === "/")
+    );
+  }
+
+  if (!event.ctrlKey || event.metaKey) {
+    return false;
+  }
+
+  return (
+    event.code === "Slash" ||
+    event.code === "NumpadDivide" ||
+    event.key === "/"
+  );
 }
 
 export function terminalNavigationShortcutData(
