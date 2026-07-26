@@ -270,6 +270,9 @@ const RETRYABLE_STREAM_DUPLICATE_ERROR_CODES = new Set([
 ]);
 const DEFAULT_STREAM_DUPLICATE_RETRY_MS = 250;
 export const MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS = 5;
+const THREAD_SNAPSHOT_BOOTSTRAP_ERROR_CODE = "THREAD_SNAPSHOT_NOT_FOUND";
+const DEFAULT_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_MS = 100;
+export const MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS = 12;
 
 /**
  * Duplicate rejections arrive marked `retryable: false` because one socket may
@@ -297,14 +300,42 @@ export function getStreamDuplicateRetryDelayMs(
   return null;
 }
 
+/**
+ * A visible local draft subscribes before its `thread.create` projection exists
+ * so it cannot miss the first provider events. The event journal and projection
+ * commit independently, leaving a short window where that valid subscription
+ * receives THREAD_SNAPSHOT_NOT_FOUND. Retry only that admission race in place;
+ * bounded attempts still surface genuinely missing or deleted thread ids.
+ */
+export function getThreadSnapshotBootstrapRetryDelayMs(
+  cause: Cause.Cause<unknown>,
+  previousAttempts: number,
+): number | null {
+  if (previousAttempts >= MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS) return null;
+  for (const reason of cause.reasons) {
+    if (!Cause.isFailReason(reason)) continue;
+    const error = reason.error;
+    if (!error || typeof error !== "object") continue;
+    const code = "code" in error ? error.code : undefined;
+    if (code !== THREAD_SNAPSHOT_BOOTSTRAP_ERROR_CODE) continue;
+    const retryAfterMs = "retryAfterMs" in error ? error.retryAfterMs : undefined;
+    return typeof retryAfterMs === "number" && retryAfterMs > 0
+      ? retryAfterMs
+      : DEFAULT_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_MS;
+  }
+  return null;
+}
+
 export type StreamAdmissionRetry =
   | { readonly kind: "capacity"; readonly attempt: number; readonly delayMs: number }
-  | { readonly kind: "duplicate"; readonly attempt: number; readonly delayMs: number };
+  | { readonly kind: "duplicate"; readonly attempt: number; readonly delayMs: number }
+  | { readonly kind: "thread-bootstrap"; readonly attempt: number; readonly delayMs: number };
 
 export function resolveStreamAdmissionRetry(
   cause: Cause.Cause<unknown>,
   capacityAttempts: number,
   duplicateAttempts: number,
+  threadBootstrapAttempts = 0,
 ): StreamAdmissionRetry | null {
   const capacityDelayMs = getStreamCapacityRetryDelayMs(cause);
   if (capacityDelayMs !== null) {
@@ -315,13 +346,22 @@ export function resolveStreamAdmissionRetry(
     };
   }
   const duplicateDelayMs = getStreamDuplicateRetryDelayMs(cause, duplicateAttempts);
-  if (duplicateDelayMs === null) {
-    return null;
+  if (duplicateDelayMs !== null) {
+    return {
+      kind: "duplicate",
+      attempt: duplicateAttempts + 1,
+      delayMs: duplicateDelayMs,
+    };
   }
+  const threadBootstrapDelayMs = getThreadSnapshotBootstrapRetryDelayMs(
+    cause,
+    threadBootstrapAttempts,
+  );
+  if (threadBootstrapDelayMs === null) return null;
   return {
-    kind: "duplicate",
-    attempt: duplicateAttempts + 1,
-    delayMs: duplicateDelayMs,
+    kind: "thread-bootstrap",
+    attempt: threadBootstrapAttempts + 1,
+    delayMs: threadBootstrapDelayMs,
   };
 }
 
@@ -416,6 +456,7 @@ export class WsTransport {
   private readonly streamSettled = new Map<string, Promise<void>>();
   private readonly streamCapacityRetries = new Map<string, number>();
   private readonly streamDuplicateRetries = new Map<string, number>();
+  private readonly streamThreadBootstrapRetries = new Map<string, number>();
   private readonly streamCapacityRetryTimers = new Map<string, number>();
   private readonly activeThreadStreamInputs = new Map<string, unknown>();
   private shellSubscribed = false;
@@ -761,6 +802,7 @@ export class WsTransport {
     this.clearStreamCapacityRetryTimer(key);
     this.streamCapacityRetries.delete(key);
     this.streamDuplicateRetries.delete(key);
+    this.streamThreadBootstrapRetries.delete(key);
   }
 
   private resetAllStreamCapacityRetries(): void {
@@ -770,6 +812,7 @@ export class WsTransport {
     this.streamCapacityRetryTimers.clear();
     this.streamCapacityRetries.clear();
     this.streamDuplicateRetries.clear();
+    this.streamThreadBootstrapRetries.clear();
   }
 
   private setCompatibilityIssue(issue: WsCompatibilityError | null): void {
@@ -1046,6 +1089,9 @@ export class WsTransport {
           if (this.streamDuplicateRetries.has(key)) {
             this.streamDuplicateRetries.delete(key);
           }
+          if (this.streamThreadBootstrapRetries.has(key)) {
+            this.streamThreadBootstrapRetries.delete(key);
+          }
           listener(event);
         }),
       ),
@@ -1068,12 +1114,15 @@ export class WsTransport {
               exit.cause,
               this.streamCapacityRetries.get(key) ?? 0,
               this.streamDuplicateRetries.get(key) ?? 0,
+              this.streamThreadBootstrapRetries.get(key) ?? 0,
             );
             if (admissionRetry !== null) {
               const retries =
                 admissionRetry.kind === "capacity"
                   ? this.streamCapacityRetries
-                  : this.streamDuplicateRetries;
+                  : admissionRetry.kind === "duplicate"
+                    ? this.streamDuplicateRetries
+                    : this.streamThreadBootstrapRetries;
               retries.set(key, admissionRetry.attempt);
               this.clearStreamCapacityRetryTimer(key);
               const timeoutId = window.setTimeout(
@@ -1137,6 +1186,7 @@ export class WsTransport {
     if (options?.resetCapacityRetry !== false) {
       this.streamCapacityRetries.delete(key);
       this.streamDuplicateRetries.delete(key);
+      this.streamThreadBootstrapRetries.delete(key);
     }
     this.activeThreadStreamInputs.delete(key);
     const cleanup = this.streamCleanups.get(key);

@@ -37,15 +37,25 @@ export type ProviderRuntimeReconciliationPlan =
       readonly reason: string;
     };
 
-function hasProjectedInFlightTurn(thread: OrchestrationThreadShell): boolean {
-  return (
-    thread.session?.status === "starting" ||
-    thread.session?.status === "running" ||
-    (thread.session !== null &&
-      thread.session.status !== "error" &&
-      thread.session.activeTurnId !== null) ||
-    thread.latestTurn?.state === "running"
-  );
+function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | null {
+  const session = thread.session;
+  if (
+    session !== null &&
+    (session.status === "ready" ||
+      session.status === "interrupted" ||
+      session.status === "stopped" ||
+      session.status === "error")
+  ) {
+    return null;
+  }
+  // A queued start has no provider turn yet. Falling back to latestTurn here
+  // can attach the new request to an older terminal (or ingestion-lagged) turn.
+  if (session?.status === "starting" && session.activeTurnId === null) {
+    return null;
+  }
+  return session?.activeTurnId ?? (thread.latestTurn?.state === "running"
+    ? thread.latestTurn.turnId
+    : null);
 }
 
 function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
@@ -82,7 +92,6 @@ export function planProviderRuntimeReconciliation(input: {
   const plans: ProviderRuntimeReconciliationPlan[] = [];
 
   for (const thread of input.threads) {
-    if (!hasProjectedInFlightTurn(thread)) continue;
     if (projectedLifecycleAgeMs(thread, input.nowMs) < staleAfterMs) continue;
 
     // Native child threads share a parent session and intentionally have no
@@ -90,7 +99,7 @@ export function planProviderRuntimeReconciliation(input: {
     const binding = bindingByThreadId.get(thread.id);
     if (!binding) continue;
 
-    const projectedTurnId = thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null;
+    const projectedTurnId = projectedInFlightTurnId(thread);
     const liveSession = liveSessionByThreadId.get(thread.id);
     const liveTurnId = liveSession?.activeTurnId ?? null;
     const detail = pumpDetail(binding.provider, healthByProvider);
@@ -110,6 +119,9 @@ export function planProviderRuntimeReconciliation(input: {
       continue;
     }
 
+    // Settling a projection is only safe when it names a concrete in-flight
+    // turn. ProviderCommandReactor owns failures before a start acquires one.
+    if (projectedTurnId === null) continue;
     if (liveSession?.status === "connecting") continue;
 
     const liveSessionSettled =

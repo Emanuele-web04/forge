@@ -20,11 +20,13 @@ import {
   getStreamCapacityRetryDelayMs,
   getStreamDuplicateRetryDelayMs,
   getStreamFailureCode,
+  getThreadSnapshotBootstrapRetryDelayMs,
   getTerminalCompatibilityError,
   isTerminalCompatibilityFailure,
   makeFeatureSocketUrl,
   makeRequestAbortScope,
   MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS,
+  MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS,
   resolveStreamAdmissionRetry,
   shouldReconnectAfterStreamFailure,
   threadStreamInputsEqual,
@@ -91,6 +93,7 @@ interface WsTransportInternals {
   readonly streamSettled: Map<string, Promise<void>>;
   readonly streamCapacityRetries: Map<string, number>;
   readonly streamDuplicateRetries: Map<string, number>;
+  readonly streamThreadBootstrapRetries: Map<string, number>;
   readonly streamCapacityRetryTimers: Map<string, number>;
   readonly activeThreadStreamInputs: Map<string, unknown>;
   readonly threadSubscriptions: Map<string, unknown>;
@@ -117,6 +120,7 @@ function makeBareTransport(): {
     streamSettled: new Map(),
     streamCapacityRetries: new Map(),
     streamDuplicateRetries: new Map(),
+    streamThreadBootstrapRetries: new Map(),
     streamCapacityRetryTimers: new Map(),
     activeThreadStreamInputs: new Map(),
     threadSubscriptions: new Map(),
@@ -263,6 +267,34 @@ describe("WsTransport", () => {
     });
     expect(
       resolveStreamAdmissionRetry(duplicate, 0, MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS),
+    ).toBeNull();
+  });
+
+  it("retries a missing draft snapshot until its projection becomes visible", () => {
+    const projectionLag = Cause.fail({
+      code: "THREAD_SNAPSHOT_NOT_FOUND",
+      retryable: false,
+    });
+
+    expect(getThreadSnapshotBootstrapRetryDelayMs(projectionLag, 0)).toBe(100);
+    expect(resolveStreamAdmissionRetry(projectionLag, 0, 0, 0)).toEqual({
+      kind: "thread-bootstrap",
+      attempt: 1,
+      delayMs: 100,
+    });
+    expect(
+      getThreadSnapshotBootstrapRetryDelayMs(
+        projectionLag,
+        MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS,
+      ),
+    ).toBeNull();
+    expect(
+      resolveStreamAdmissionRetry(
+        projectionLag,
+        0,
+        0,
+        MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS,
+      ),
     ).toBeNull();
   });
 

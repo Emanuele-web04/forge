@@ -246,6 +246,85 @@ describe("planProviderRuntimeReconciliation", () => {
     expect(settledWithoutSession).toEqual([]);
   });
 
+  it("does not recover a queued startup that has no concrete in-flight turn", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "completed",
+            completedAt: "2026-07-23T20:00:05.000Z",
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([]);
+  });
+
+  it("aligns a queued startup when the live provider has acquired a turn", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "completed",
+            completedAt: "2026-07-23T20:00:05.000Z",
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(LIVE_TURN_ID)],
+      liveSessions: [liveSession({ status: "running", activeTurnId: LIVE_TURN_ID })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "align-running-turn",
+        projectedTurnId: null,
+        runtimeTurnId: LIVE_TURN_ID,
+      }),
+    ]);
+  });
+
+  it("does not reopen a settled session because its latest turn is stale", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          session: {
+            ...threadShell().session!,
+            status: "interrupted",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([]);
+  });
+
   it("records degraded pump evidence in the reconciliation reason", () => {
     const plans = planProviderRuntimeReconciliation({
       threads: [threadShell()],

@@ -401,6 +401,137 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("hides repeated non-adjacent recovery rows for the same provider turn", () => {
+    const recoveryPayload = {
+      provider: "codex",
+      action: "settle-interrupted",
+      projectedTurnId: "turn-stale",
+      runtimeTurnId: null,
+    };
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "recovery-first",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Synara recovered a stale running state",
+        turnId: "turn-stale",
+        payload: recoveryPayload,
+      }),
+      makeActivity({
+        id: "unrelated-progress",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.progress",
+        summary: "Continuing work",
+      }),
+      makeActivity({
+        id: "recovery-repeat",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Synara recovered a stale running state",
+        turnId: "turn-stale",
+        payload: recoveryPayload,
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["recovery-first", "unrelated-progress"]);
+  });
+
+  it("keeps recovery rows for different turns, actions, or runtime turns", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "settle-turn-a",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Recovered turn A",
+        payload: {
+          provider: "codex",
+          action: "settle-interrupted",
+          projectedTurnId: "turn-a",
+          runtimeTurnId: null,
+        },
+      }),
+      makeActivity({
+        id: "settle-turn-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Recovered turn B",
+        payload: {
+          provider: "codex",
+          action: "settle-interrupted",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: null,
+        },
+      }),
+      makeActivity({
+        id: "align-turn-b",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Realigned turn B",
+        payload: {
+          provider: "codex",
+          action: "align-running-turn",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: "turn-live-1",
+        },
+      }),
+      makeActivity({
+        id: "align-turn-b-new-runtime",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Realigned turn B again",
+        payload: {
+          provider: "codex",
+          action: "align-running-turn",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: "turn-live-2",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "settle-turn-a",
+      "settle-turn-b",
+      "align-turn-b",
+      "align-turn-b-new-runtime",
+    ]);
+  });
+
+  it("does not collapse recovery rows whose identity payload is incomplete", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "malformed-recovery-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Recovered an unknown turn",
+        payload: {
+          provider: "codex",
+          action: "settle-interrupted",
+        },
+      }),
+      makeActivity({
+        id: "malformed-recovery-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Recovered an unknown turn",
+        payload: {
+          provider: "codex",
+          action: "settle-interrupted",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "malformed-recovery-1",
+      "malformed-recovery-2",
+    ]);
+  });
+
   it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

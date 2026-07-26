@@ -117,6 +117,7 @@ import {
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
+const THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS = 4_500;
 const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
 const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
 const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
@@ -987,12 +988,19 @@ function EventRouter() {
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadReplayRequestInFlight = new Set<ThreadId>();
+    const threadProjectionReconcileInFlight = new Set<ThreadId>();
+    const nextThreadProjectionReconcileAtById = new Map<ThreadId, number>();
     let reconcileThreadSubscriptionsChain = Promise.resolve();
 
     const beginThreadSubscription = (threadId: ThreadId) => {
       threadSnapshotSequenceById.delete(threadId);
       pendingThreadEventsById.set(threadId, []);
       threadSnapshotRequestInFlight.delete(threadId);
+      threadProjectionReconcileInFlight.delete(threadId);
+      nextThreadProjectionReconcileAtById.set(
+        threadId,
+        Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+      );
     };
 
     const flushThreadBuffer = (threadId: ThreadId, snapshotSequence: number) => {
@@ -1032,6 +1040,8 @@ function EventRouter() {
         pendingThreadEventsById.delete(threadId);
         threadSnapshotRequestInFlight.delete(threadId);
         threadReplayRequestInFlight.delete(threadId);
+        threadProjectionReconcileInFlight.delete(threadId);
+        nextThreadProjectionReconcileAtById.delete(threadId);
         subscribedThreadIds.delete(threadId);
       }
       // A retention eviction can refresh a thread whose lease is dropping in the
@@ -1135,6 +1145,8 @@ function EventRouter() {
         pendingThreadEventsById.clear();
         threadSnapshotRequestInFlight.clear();
         threadReplayRequestInFlight.clear();
+        threadProjectionReconcileInFlight.clear();
+        nextThreadProjectionReconcileAtById.clear();
         const previousThreadIds = [...subscribedThreadIds];
         subscribedThreadIds.clear();
         // Reconnect drops every lease at once, so the reconcile below sees no
@@ -1307,6 +1319,59 @@ function EventRouter() {
         });
     };
 
+    const reconcileThreadProjection = async (threadId: ThreadId): Promise<void> => {
+      if (
+        disposed ||
+        !subscribedThreadIds.has(threadId) ||
+        threadProjectionReconcileInFlight.has(threadId)
+      ) {
+        return;
+      }
+      threadProjectionReconcileInFlight.add(threadId);
+      try {
+        const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
+        if (
+          snapshot === null ||
+          disposed ||
+          !canApplyThreadSnapshot({ threadId, leasedThreadIds: subscribedThreadIds })
+        ) {
+          return;
+        }
+        const currentSequence = threadSnapshotSequenceById.get(threadId) ?? -1;
+        const currentThread = getThreadFromState(useStore.getState(), threadId);
+        const projectionSettlesCurrentTurn =
+          currentThread?.latestTurn?.state === "running" &&
+          snapshot.thread.latestTurn !== null &&
+          snapshot.thread.latestTurn.turnId === currentThread.latestTurn.turnId &&
+          snapshot.thread.latestTurn.state !== "running" &&
+          snapshot.thread.latestTurn.completedAt !== null;
+        threadSnapshotSequenceById.set(
+          threadId,
+          Math.max(currentSequence, snapshot.snapshotSequence),
+        );
+        // Apply even when the cursor did not advance. The projection is
+        // authoritative and can repair a client that advanced its cursor while
+        // dropping or failing to reduce one of the corresponding live events.
+        syncServerThreadDetailHotPath(snapshot.thread);
+        reconcilePromotedDraftFromThreadDetail(snapshot.thread);
+        flushThreadBuffer(threadId, snapshot.snapshotSequence);
+        if (projectionSettlesCurrentTurn) {
+          // Mirror terminal-event invalidation when recovery came from the
+          // projection rather than the live stream.
+          needsProviderInvalidation = true;
+          pendingGitInvalidationThreadIds.add(threadId);
+          pendingStudioOutputInvalidationThreadIds.add(threadId);
+          domainEventFlushThrottler.maybeExecute();
+        }
+      } finally {
+        threadProjectionReconcileInFlight.delete(threadId);
+        nextThreadProjectionReconcileAtById.set(
+          threadId,
+          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+        );
+      }
+    };
+
     const domainEventFlushThrottler = new Throttler(
       () => {
         flushPendingDomainEvents();
@@ -1367,6 +1432,10 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        nextThreadProjectionReconcileAtById.set(
+          threadId,
+          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+        );
         syncServerThreadDetailHotPath(item.snapshot.thread);
         reconcilePromotedDraftFromThreadDetail(item.snapshot.thread);
         flushThreadBuffer(threadId, item.snapshot.snapshotSequence);
@@ -1388,6 +1457,10 @@ function EventRouter() {
         return;
       }
       threadSnapshotSequenceById.set(threadId, item.event.sequence);
+      nextThreadProjectionReconcileAtById.set(
+        threadId,
+        Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+      );
       queueDomainEvent(item.event);
     });
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
@@ -1601,6 +1674,13 @@ function EventRouter() {
           } else {
             void replayThreadEvents(threadId).catch(() => undefined);
           }
+          if (
+            Date.now() >=
+            (nextThreadProjectionReconcileAtById.get(threadId) ??
+              Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS)
+          ) {
+            void reconcileThreadProjection(threadId).catch(() => undefined);
+          }
         }
       }
     }, THREAD_DETAIL_CATCHUP_INTERVAL_MS);
@@ -1614,6 +1694,8 @@ function EventRouter() {
       needsBroadGitInvalidation = false;
       pendingGitInvalidationThreadIds = new Set();
       pendingStudioOutputInvalidationThreadIds = new Set();
+      threadProjectionReconcileInFlight.clear();
+      nextThreadProjectionReconcileAtById.clear();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       void api.orchestration.unsubscribeShell().catch(() => undefined);

@@ -537,7 +537,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (toolDetails) {
     entry.toolDetails = toolDetails;
   }
-  const collapseKey = deriveToolLifecycleCollapseKey(entry);
+  const collapseKey =
+    deriveProviderRuntimeReconciliationCollapseKey(activity, payload) ??
+    deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
@@ -546,6 +548,35 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     entry.collapseCommand = collapseCommand;
   }
   return entry;
+}
+
+function deriveProviderRuntimeReconciliationCollapseKey(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown> | null,
+): string | undefined {
+  if (activity.kind !== "provider.runtime.reconciled") {
+    return undefined;
+  }
+  const provider = asTrimmedString(payload?.provider);
+  const action = asTrimmedString(payload?.action);
+  const projectedTurnId =
+    asTrimmedString(payload?.projectedTurnId) ?? activity.turnId ?? undefined;
+  const runtimeTurnId = asTrimmedString(payload?.runtimeTurnId);
+  if (
+    !provider ||
+    !projectedTurnId ||
+    (action !== "settle-interrupted" && action !== "align-running-turn") ||
+    (action === "align-running-turn" && !runtimeTurnId)
+  ) {
+    return undefined;
+  }
+  return [
+    "provider-runtime-reconcile",
+    provider,
+    action,
+    projectedTurnId,
+    runtimeTurnId ?? "none",
+  ].join(":");
 }
 
 function deriveToolLifecycleStatus(
@@ -682,7 +713,23 @@ function collapseDerivedWorkLogEntries(
   // separate completed row. The id is unique per call, so distinct calls of the
   // same tool never merge into each other.
   const stableToolIndexByKey = new Map<string, number>();
+  // Older servers included the current observation sequence in recovery ids,
+  // so the same repair could be persisted more than once while projections
+  // converged. Preserve the first row for each semantic repair and hide only
+  // exact repeats; different turns/actions remain independently visible.
+  const seenRuntimeReconciliationKeys = new Set<string>();
   for (const entry of entries) {
+    const runtimeReconciliationKey = entry.collapseKey?.startsWith(
+      "provider-runtime-reconcile:",
+    )
+      ? entry.collapseKey
+      : undefined;
+    if (runtimeReconciliationKey !== undefined) {
+      if (seenRuntimeReconciliationKeys.has(runtimeReconciliationKey)) {
+        continue;
+      }
+      seenRuntimeReconciliationKeys.add(runtimeReconciliationKey);
+    }
     const previous = collapsed.at(-1);
     if (previous && shouldCollapseRuntimeWarningEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeRuntimeWarningEntries(previous, entry);

@@ -162,6 +162,8 @@ import type {
   ClientOrchestrationCommand,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
+  OrchestrationGetThreadDetailSnapshotInput,
+  OrchestrationGetThreadDetailSnapshotResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
   OrchestrationListProviderDeliveryBlockersInput,
@@ -710,6 +712,9 @@ export interface NativeApi {
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;
     getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
+    getThreadDetailSnapshot: (
+      input: OrchestrationGetThreadDetailSnapshotInput,
+    ) => Promise<OrchestrationGetThreadDetailSnapshotResult>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     importThread: (
       input: OrchestrationImportThreadInput,

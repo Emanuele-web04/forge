@@ -26,6 +26,7 @@ import {
   OrchestrationUnsubscribeThreadInput,
   ORCHESTRATION_WS_CHANNELS,
   OrchestrationGetFullThreadDiffInput,
+  OrchestrationGetThreadDetailSnapshotInput,
   OrchestrationGetShellSnapshotInput,
   OrchestrationRepairStateInput,
   ORCHESTRATION_WS_METHODS,
@@ -286,6 +287,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getShellSnapshot, OrchestrationGetShellSnapshotInput),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot,
+    OrchestrationGetThreadDetailSnapshotInput,
+  ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.repairState, OrchestrationRepairStateInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getTurnDiff, OrchestrationGetTurnDiffInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getFullThreadDiff, OrchestrationGetFullThreadDiffInput),

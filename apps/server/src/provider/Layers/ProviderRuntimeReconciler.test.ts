@@ -79,7 +79,7 @@ function readyProviderSession(): ProviderSession {
 }
 
 describe("ProviderRuntimeReconcilerLive", () => {
-  it("persists an interrupted terminal state when the live provider has already settled", async () => {
+  it("retries a stale repair without duplicating its visible recovery activity", async () => {
     const commands: OrchestrationCommand[] = [];
     const reconcileSettledOpenTurns = vi.fn();
 
@@ -135,9 +135,13 @@ describe("ProviderRuntimeReconcilerLive", () => {
     await Effect.gen(function* () {
       const reconciler = yield* ProviderRuntimeReconciler;
       yield* reconciler.reconcileNow;
+      // The projection can remain stale for another observation cycle.
+      yield* reconciler.reconcileNow;
     }).pipe(Effect.provide(layer), Effect.runPromise);
 
     expect(commands.map((command) => command.type)).toEqual([
+      "thread.activity.append",
+      "thread.session.set",
       "thread.activity.append",
       "thread.session.set",
     ]);
@@ -159,6 +163,17 @@ describe("ProviderRuntimeReconcilerLive", () => {
         lastError: null,
       });
     }
-    expect(reconcileSettledOpenTurns).toHaveBeenCalledOnce();
+    const activityCommands = commands.filter(
+      (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
+        command.type === "thread.activity.append",
+    );
+    const sessionCommands = commands.filter(
+      (command): command is Extract<OrchestrationCommand, { type: "thread.session.set" }> =>
+        command.type === "thread.session.set",
+    );
+    expect(activityCommands[0]?.activity.id).toBe(activityCommands[1]?.activity.id);
+    expect(activityCommands[0]?.commandId).not.toBe(activityCommands[1]?.commandId);
+    expect(sessionCommands[0]?.commandId).not.toBe(sessionCommands[1]?.commandId);
+    expect(reconcileSettledOpenTurns).toHaveBeenCalledTimes(2);
   });
 });

@@ -859,6 +859,19 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     return incoming;
   }
 
+  const incomingSettlesLocalTurn =
+    previousThread.latestTurn?.state === "running" &&
+    incoming.latestTurn !== null &&
+    incoming.latestTurn.turnId === previousThread.latestTurn.turnId &&
+    incoming.latestTurn.state !== "running" &&
+    incoming.latestTurn.completedAt !== null;
+  if (incomingSettlesLocalTurn) {
+    // A scoped projection refresh is authoritative for a terminal transition.
+    // Do not preserve stale local streaming flags or client-only message rows
+    // after the server has settled the exact turn they belonged to.
+    return incoming;
+  }
+
   const preserveRunningTurn = shouldPreserveRunningTurn(previousThread, incoming);
   const messages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread);
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {

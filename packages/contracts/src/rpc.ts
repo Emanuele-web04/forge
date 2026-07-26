@@ -260,6 +260,15 @@ export const WsOrchestrationGetFullThreadDiffRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationGetThreadDetailSnapshotRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot,
+  {
+    payload: OrchestrationRpcSchemas.getThreadDetailSnapshot.input,
+    success: OrchestrationRpcSchemas.getThreadDetailSnapshot.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.replayEvents, {
   payload: OrchestrationRpcSchemas.replayEvents.input,
   success: OrchestrationRpcSchemas.replayEvents.output,
@@ -975,6 +984,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationImportThreadRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,
+  WsOrchestrationGetThreadDetailSnapshotRpc,
   WsOrchestrationRepairStateRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
