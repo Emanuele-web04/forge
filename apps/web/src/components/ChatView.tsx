@@ -1755,6 +1755,7 @@ export default function ChatView({
   // `foo?.bar` read inside a memo makes React Compiler infer `foo` as the dependency, which
   // no longer matches the hand-written `foo?.bar` dep and bails the whole component out.
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
+  const activeLatestTurnStartedAt = activeLatestTurn?.startedAt ?? null;
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
   const activeLatestTurnCompletedAt = activeLatestTurn?.completedAt ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
@@ -2276,12 +2277,14 @@ export default function ChatView({
       deriveWorkLogEntries(threadActivities, activeLatestTurnId ?? undefined, {
         visibleTurnIds: workLogVisibleTurnIds,
         activeTurnId: latestTurnLive ? activeLatestTurnId : null,
+        activeTurnStartedAt: activeLatestTurnStartedAt,
         latestTurnState: activeLatestTurnState,
         latestTurnCompletedAt: activeLatestTurnCompletedAt,
       }),
     [
       activeLatestTurnCompletedAt,
       activeLatestTurnId,
+      activeLatestTurnStartedAt,
       activeLatestTurnState,
       latestTurnLive,
       threadActivities,
@@ -2374,6 +2377,9 @@ export default function ChatView({
   const stripSourceLatestTurnState = stripParentThread
     ? (stripParentThread.latestTurn?.state ?? null)
     : activeLatestTurnState;
+  const stripSourceLatestTurnStartedAt = stripParentThread
+    ? (stripParentThread.latestTurn?.startedAt ?? null)
+    : activeLatestTurnStartedAt;
   const stripSourceLatestTurnCompletedAt = stripParentThread
     ? (stripParentThread.latestTurn?.completedAt ?? null)
     : activeLatestTurnCompletedAt;
@@ -2406,6 +2412,7 @@ export default function ChatView({
       deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
         visibleTurnIds: stripVisibleTurnIds,
         activeTurnId: stripLiveTurnId,
+        activeTurnStartedAt: stripSourceLatestTurnStartedAt,
         latestTurnState: stripSourceLatestTurnState,
         latestTurnCompletedAt: stripSourceLatestTurnCompletedAt,
       }),
@@ -2414,6 +2421,7 @@ export default function ChatView({
       stripSourceActivities,
       stripSourceLatestTurnCompletedAt,
       stripSourceLatestTurnId,
+      stripSourceLatestTurnStartedAt,
       stripSourceLatestTurnState,
       stripVisibleTurnIds,
     ],

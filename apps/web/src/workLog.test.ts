@@ -1224,6 +1224,123 @@ describe("deriveWorkLogEntries", () => {
     expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
   });
 
+  it("retains a filtered Codex command start timestamp after lifecycle correlation", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-start-no-command",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_command_arrives_later",
+              status: "inProgress",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-command-update",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_command_arrives_later",
+              command: "git status --short",
+              status: "inProgress",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-command-complete",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_command_arrives_later",
+              command: "git status --short",
+              status: "completed",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      command: "git status --short",
+      liveActivity: {
+        state: "completed",
+        startedAt: "2026-02-23T00:00:01.000Z",
+        lastActivityAt: "2026-02-23T00:00:06.000Z",
+        elapsedSeconds: 5,
+      },
+    });
+  });
+
+  it("does not revive turnless historical activity during a later active turn", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "historical-turnless-tool",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Historical tool",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Historical tool",
+            data: {
+              toolCallId: "historical-turnless-call",
+            },
+          },
+        }),
+        makeActivity({
+          id: "current-turnless-tool",
+          createdAt: "2026-02-23T00:00:11.000Z",
+          kind: "tool.started",
+          summary: "Current tool",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Current tool",
+            data: {
+              toolCallId: "current-turnless-call",
+            },
+          },
+        }),
+      ],
+      undefined,
+      {
+        activeTurnId: TurnId.makeUnsafe("later-turn"),
+        activeTurnStartedAt: "2026-02-23T00:00:10.000Z",
+        latestTurnState: "running",
+      },
+    );
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.liveActivity?.state).toBe("cancelled");
+    expect(entries[1]?.liveActivity?.state).toBe("running_tool");
+  });
+
   it("reads Codex commandActions from the raw data envelope", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

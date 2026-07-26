@@ -150,6 +150,7 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   toolName?: string;
   runtimeWarningRepeatCount?: number;
   runtimeWarningMessage?: string;
+  suppressStandaloneCommandStart?: boolean;
 }
 
 export function isFileChangeWorkLogEntry(
@@ -244,6 +245,7 @@ export function deriveWorkLogEntries(
   options: {
     visibleTurnIds?: ReadonlySet<TurnId | string>;
     activeTurnId?: TurnId | null;
+    activeTurnStartedAt?: string | null;
     latestTurnState?: OrchestrationLatestTurnState | null;
     latestTurnCompletedAt?: string | null;
   } = {},
@@ -268,7 +270,6 @@ export function deriveWorkLogEntries(
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
-    .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);
   // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
   // `toolName` and `activityKind` are intentionally kept: they are public
@@ -282,15 +283,18 @@ export function deriveWorkLogEntries(
     ordered,
     latestTurnId,
     options,
-  ).map(
-    ({
-      collapseCommand: _collapseCommand,
-      collapseKey: _collapseKey,
-      runtimeWarningMessage: _runtimeWarningMessage,
-      runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
-      ...entry
-    }) => entry,
-  );
+  )
+    .filter((entry) => !isUninformativeCommandStartEntry(entry))
+    .map(
+      ({
+        collapseCommand: _collapseCommand,
+        collapseKey: _collapseKey,
+        runtimeWarningMessage: _runtimeWarningMessage,
+        runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
+        suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
+        ...entry
+      }) => entry,
+    );
 }
 
 function shouldKeepActivityForWorkLog(
@@ -327,20 +331,11 @@ function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): bo
   return activity.tone !== "error";
 }
 
-function isUninformativeCommandStartActivity(activity: OrchestrationThreadActivity): boolean {
-  if (activity.kind !== "tool.started") {
-    return false;
-  }
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
-  if (extractWorkLogItemType(payload) !== "command_execution") {
-    return false;
-  }
-  const commandAction = extractPrimaryCommandAction(payload);
-  const commandPreview = extractToolCommand(payload, commandAction);
-  return !commandAction && !commandPreview.command;
+function isUninformativeCommandStartEntry(entry: DerivedWorkLogEntry): boolean {
+  return (
+    entry.activityKind === "tool.started" &&
+    entry.suppressStandaloneCommandStart === true
+  );
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
@@ -505,6 +500,14 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (requestKind) {
     entry.requestKind = requestKind;
+  }
+  if (
+    activity.kind === "tool.started" &&
+    itemType === "command_execution" &&
+    !commandAction &&
+    !commandPreview.command
+  ) {
+    entry.suppressStandaloneCommandStart = true;
   }
   const subagents = extractCollabSubagents(payload);
   if (subagents.length > 0) {
@@ -1025,6 +1028,7 @@ function reconcileSettledLiveActivities(
   latestTurnId: TurnId | undefined,
   options: {
     activeTurnId?: TurnId | null;
+    activeTurnStartedAt?: string | null;
     latestTurnState?: OrchestrationLatestTurnState | null;
     latestTurnCompletedAt?: string | null;
   },
@@ -1074,6 +1078,9 @@ function reconcileSettledLiveActivities(
   }
 
   const hasActiveTurnContext = options.activeTurnId !== undefined;
+  const activeTurnStartedAtMs = options.activeTurnStartedAt
+    ? Date.parse(options.activeTurnStartedAt)
+    : Number.NaN;
   return entries.map((entry) => {
     const liveActivity = entry.liveActivity;
     if (!liveActivity || !isInProgressLiveActivityState(liveActivity.state)) {
@@ -1095,11 +1102,15 @@ function reconcileSettledLiveActivities(
     if (!hasActiveTurnContext) {
       return entry;
     }
+    const entryLastActivityAtMs = Date.parse(liveActivity.lastActivityAt);
+    const turnlessEntryBelongsToActiveTurn =
+      (entry.turnId === undefined || entry.turnId === null) &&
+      Number.isFinite(activeTurnStartedAtMs) &&
+      Number.isFinite(entryLastActivityAtMs) &&
+      entryLastActivityAtMs >= activeTurnStartedAtMs;
     if (
       options.activeTurnId !== null &&
-      (entry.turnId === undefined ||
-        entry.turnId === null ||
-        entry.turnId === options.activeTurnId)
+      (entry.turnId === options.activeTurnId || turnlessEntryBelongsToActiveTurn)
     ) {
       return entry;
     }

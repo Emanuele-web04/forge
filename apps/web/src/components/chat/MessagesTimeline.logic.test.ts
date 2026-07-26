@@ -235,6 +235,55 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(second.result[0]).toBe(enrichedRows[0]);
   });
 
+  it("replaces work rows when live activity settles without a final tool event", () => {
+    const firstRow: WorkTimelineRow = {
+      kind: "work",
+      id: "work-group-live-activity",
+      createdAt: "2026-05-09T10:00:00.000Z",
+      groupedEntries: [
+        {
+          id: "activity-command",
+          createdAt: "2026-05-09T10:00:00.000Z",
+          label: "Bash",
+          tone: "tool",
+          itemType: "command_execution",
+          liveActivity: {
+            state: "running_tool",
+            label: "Bash",
+            startedAt: "2026-05-09T10:00:00.000Z",
+            lastActivityAt: "2026-05-09T10:00:01.000Z",
+            detail: "Running",
+            progress: 0.5,
+            elapsedSeconds: 1,
+          },
+        },
+      ],
+    };
+    const first = computeStableMessagesTimelineRows([firstRow], emptyStableRows());
+    const settledRow: WorkTimelineRow = {
+      ...firstRow,
+      groupedEntries: [
+        {
+          ...firstRow.groupedEntries[0]!,
+          liveActivity: {
+            state: "completed",
+            label: "Bash completed",
+            startedAt: "2026-05-09T10:00:00.000Z",
+            lastActivityAt: "2026-05-09T10:00:05.000Z",
+            detail: "Done",
+            progress: 1,
+            elapsedSeconds: 5,
+          },
+        },
+      ],
+    };
+
+    const second = computeStableMessagesTimelineRows([settledRow], first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(settledRow);
+  });
+
   it("reuses worktree-setup rows until a step status or open state changes", () => {
     const makeRow = (
       status: "active" | "done",
