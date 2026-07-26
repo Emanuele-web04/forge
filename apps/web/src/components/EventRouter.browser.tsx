@@ -790,6 +790,17 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
+  it("does not poll a converged terminal thread projection", async () => {
+    const mounted = await mountApp();
+
+    try {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 5_200));
+      expect(getThreadDetailSnapshotRequestCount).toBe(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
   it("reconciles a missed completion from the authoritative thread projection", async () => {
     const turnId = TurnId.makeUnsafe("turn-missed-completion");
     const progressMessageId = MessageId.makeUnsafe("msg-missed-completion-progress");
@@ -910,8 +921,44 @@ describe("EventRouter scoped orchestration sync", () => {
         },
       };
 
-      // Deliberately do not push the terminal message/session events. The
-      // periodic scoped projection read must converge the live renderer.
+      // Deliver only the terminal session transition, not the final message.
+      // The reducer now considers the session and turn terminal, but the stale
+      // streaming message must keep projection repair eligible until the
+      // authoritative detail snapshot closes it.
+      sendThreadEventPush({
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-missed-completion-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+        expect(
+          thread?.messages.find((message) => message.id === progressMessageId)?.streaming,
+        ).toBe(true);
+      });
+
       await vi.waitFor(
         () => {
           const thread = getThreadFromState(useStore.getState(), THREAD_ID);

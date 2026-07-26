@@ -340,6 +340,33 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
+  it("settles a running latest turn projected under an idle session", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          session: {
+            ...threadShell().session!,
+            status: "idle",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
+      }),
+    ]);
+  });
+
   it.each(["ready", "interrupted", "stopped", "error"] as const)(
     "settles a stale running turn without reopening its %s session",
     (status) => {
@@ -401,6 +428,39 @@ describe("planProviderRuntimeReconciliation", () => {
         projectedTurnId: OLD_TURN_ID,
         runtimeTurnId: null,
         errorMessage: "Provider stream failed.",
+      }),
+    ]);
+  });
+
+  it("prefers a recovered live session over a stale durable binding error", () => {
+    const terminalSession = {
+      ...threadShell().session!,
+      status: "ready" as const,
+      activeTurnId: null,
+    };
+    const plans = planProviderRuntimeReconciliation({
+      threads: [threadShell({ session: terminalSession })],
+      bindings: [
+        {
+          ...binding(null),
+          status: "error",
+          runtimePayload: {
+            activeTurnId: null,
+            lastError: "Previous provider failure.",
+          },
+        },
+      ],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-terminal-projection",
+        projectedTurnId: OLD_TURN_ID,
+        terminalSession,
       }),
     ]);
   });

@@ -72,6 +72,7 @@ function terminalProjectedSession(
     case "stopped":
     case "error":
       return { ...session, status: session.status };
+    case "idle":
     case "starting":
     case "running":
       return null;
@@ -177,11 +178,12 @@ export function planProviderRuntimeReconciliation(input: {
         liveSession.status === "closed" ||
         liveSession.status === "error");
     const missingLiveSession = liveSession === undefined;
-    const bindingSettled = binding.status === "stopped" || binding.status === "error";
+    const bindingSettled =
+      missingLiveSession && (binding.status === "stopped" || binding.status === "error");
 
     if (!liveSessionSettled && !missingLiveSession && !bindingSettled) continue;
 
-    if (liveSession?.status === "error" || binding.status === "error") {
+    if (liveSession?.status === "error" || (missingLiveSession && binding.status === "error")) {
       const errorMessage =
         liveSession?.lastError ??
         bindingLastError(binding) ??

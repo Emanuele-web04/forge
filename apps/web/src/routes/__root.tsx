@@ -898,6 +898,16 @@ function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
   );
 }
 
+function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
+  const thread = getThreadFromState(useStore.getState(), threadId);
+  return (
+    thread?.session?.orchestrationStatus === "starting" ||
+    thread?.session?.orchestrationStatus === "running" ||
+    thread?.latestTurn?.state === "running" ||
+    thread?.messages.some((message) => message.role === "assistant" && message.streaming) === true
+  );
+}
+
 /**
  * Frees the detail of threads whose stream lease just dropped and that nothing
  * else owns. Batched into one store write because every write re-runs the
@@ -1385,10 +1395,14 @@ function EventRouter() {
           threadProjectionReconcileInFlight.delete(threadId);
         }
         if (threadSubscriptionGenerationById.get(threadId) === subscriptionGeneration) {
-          nextThreadProjectionReconcileAtById.set(
-            threadId,
-            Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
-          );
+          if (shouldReconcileThreadProjection(threadId)) {
+            nextThreadProjectionReconcileAtById.set(
+              threadId,
+              Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+            );
+          } else {
+            nextThreadProjectionReconcileAtById.delete(threadId);
+          }
         }
       }
     };
@@ -1701,6 +1715,10 @@ function EventRouter() {
           } else {
             void replayThreadEvents(threadId).catch(() => undefined);
           }
+        }
+        if (!shouldReconcileThreadProjection(threadId)) {
+          nextThreadProjectionReconcileAtById.delete(threadId);
+          continue;
         }
         const nextProjectionReconcileAt =
           nextThreadProjectionReconcileAtById.get(threadId);
