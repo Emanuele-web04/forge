@@ -58,6 +58,7 @@ import {
   type ProviderListSkillsResult,
   type ProviderListAgentsResult,
   type ProviderListModelsResult,
+  type ProjectRemote,
   getAgentMentionAliases,
 } from "@synara/contracts";
 import {
@@ -70,6 +71,7 @@ import {
   trimOrNull,
 } from "@synara/shared/model";
 import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
+import { buildLocalSshProcessEnv, buildSshRemoteSpawn } from "@synara/shared/sshRemote";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
@@ -411,6 +413,50 @@ function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedPr
     stdio: ["pipe", "pipe", "inherit"],
     windowsHide: true,
   }) as unknown as ClaudeOwnedProcess;
+}
+
+/**
+ * Environment the CLI reads about *how* it was launched rather than about this machine.
+ * Everything else the SDK inherited (config dirs, credentials, PATH) describes the local
+ * host, so only these are forwarded across the connection.
+ */
+const CLAUDE_REMOTE_FORWARDED_ENV_KEYS = ["CLAUDE_CODE_ENTRYPOINT"] as const;
+
+/**
+ * Rewrites the SDK's local spawn request into the equivalent `ssh` invocation.
+ *
+ * The CLI's own argv is preserved verbatim — only *where* it runs changes — so the SDK
+ * keeps talking the same newline-delimited JSON protocol over the ssh process' stdio.
+ * `cwd` deliberately does not survive: it is a path on the remote host, and handing it to
+ * the local spawn would fail with ENOENT before ssh ever ran.
+ */
+export function toRemoteClaudeSpawnOptions(
+  options: ClaudeSpawnOptions,
+  remote: ProjectRemote,
+  reverseLoopbackPorts: ReadonlyArray<number>,
+): ClaudeSpawnOptions {
+  const forwardedEnv: Record<string, string> = {};
+  for (const key of CLAUDE_REMOTE_FORWARDED_ENV_KEYS) {
+    const value = options.env[key];
+    if (value !== undefined) {
+      forwardedEnv[key] = value;
+    }
+  }
+  const spawn = buildSshRemoteSpawn({
+    remote,
+    command: options.command,
+    args: options.args,
+    cwd: options.cwd,
+    shellInit: remote.shellInit,
+    env: forwardedEnv,
+    reverseLoopbackPorts,
+  });
+  return {
+    command: spawn.command,
+    args: [...spawn.args],
+    env: buildLocalSshProcessEnv(options.env),
+    signal: options.signal,
+  };
 }
 
 export interface ClaudeAdapterLiveOptions {
@@ -1505,6 +1551,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
+    // The gateway MCP endpoint is a loopback URL on this machine. A remote CLI reaches it
+    // through an ssh reverse tunnel bound to the same port number, so the endpoint URL the
+    // session is handed resolves to this server from either side of the connection.
+    const resolveGatewayLoopbackPorts = (): ReadonlyArray<number> => {
+      if (!agentGatewayCredentials) {
+        return [];
+      }
+      const port = Number(URL.parse(agentGatewayCredentials.mcpEndpointUrl)?.port);
+      return Number.isInteger(port) && port > 0 ? [port] : [];
+    };
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -1551,9 +1607,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     );
 
     const bindClaudeProcessOwner =
-      (owner: ClaudeProcessOwner) =>
+      (owner: ClaudeProcessOwner, remote?: ProjectRemote | null) =>
       (spawnOptions: ClaudeSpawnOptions): ClaudeSpawnedProcess => {
-        const process = spawnClaudeProcess(spawnOptions);
+        const process = spawnClaudeProcess(
+          remote
+            ? toRemoteClaudeSpawnOptions(spawnOptions, remote, resolveGatewayLoopbackPorts())
+            : spawnOptions,
+        );
         owner.process = process;
         return process;
       };
@@ -4491,6 +4551,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           );
 
         const providerOptions = input.providerOptions?.claudeAgent;
+        // A remote session resolves its binary on the far host: the local override points
+        // at this machine's filesystem and would not exist there.
+        const remote = providerOptions?.remote ?? null;
+        const claudeExecutablePath = remote
+          ? (remote.binaryPath ?? "claude")
+          : (providerOptions?.binaryPath ?? "claude");
         const modelSelection =
           input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
         const requestedEffort = trimOrNull(modelSelection?.options?.effort ?? null);
@@ -4560,7 +4626,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // Keep Claude context-window selection model-driven so session start
           // and in-session switches both use the same API model contract.
           ...(apiModelId ? { model: apiModelId } : {}),
-          pathToClaudeCodeExecutable: providerOptions?.binaryPath ?? "claude",
+          pathToClaudeCodeExecutable: claudeExecutablePath,
           settingSources: [...CLAUDE_SETTING_SOURCES],
           systemPrompt: {
             type: "preset",
@@ -4595,7 +4661,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           },
           canUseTool,
           env: claudeSdkEnv,
-          spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
+          spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner, remote),
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
           ...(agentGatewayCredentials
             ? {

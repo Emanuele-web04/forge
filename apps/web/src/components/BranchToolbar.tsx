@@ -2,6 +2,7 @@
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@synara/contracts";
+import { isRemoteProject } from "@synara/shared/sshRemote";
 import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
@@ -276,6 +277,7 @@ export default function BranchToolbar({
   const environmentPresentation = resolveThreadEnvironmentPresentation({
     envMode: effectiveEnvMode,
     worktreePath: activeWorktreePath,
+    projectRemote: activeProject?.remote ?? null,
   });
 
   const setThreadWorkspace = useCallback(
@@ -403,21 +405,23 @@ export default function BranchToolbar({
     ],
   );
 
+  // Worktrees are git checkouts this server creates on its own filesystem. A project whose
+  // workspace lives on another host has none to offer, so the environment picker collapses
+  // to the same single-choice state a fixed local workspace already uses.
+  const worktreesUnavailable = usesFixedLocalWorkspace || isRemoteProject(activeProject);
   const canHandoffToWorktree = Boolean(
-    !usesFixedLocalWorkspace &&
+    !worktreesUnavailable &&
     hasServerThread &&
     envLocked &&
     !activeWorktreePath &&
     effectiveEnvMode === "local",
   );
-  const canHandoffToLocal = Boolean(
-    !usesFixedLocalWorkspace && hasServerThread && activeWorktreePath,
-  );
+  const canHandoffToLocal = Boolean(!worktreesUnavailable && hasServerThread && activeWorktreePath);
   const canSwitchToWorktree = Boolean(
-    !usesFixedLocalWorkspace && !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
+    !worktreesUnavailable && !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
   );
   const canSwitchToLocal = Boolean(
-    !usesFixedLocalWorkspace && !envLocked && effectiveEnvMode === "worktree",
+    !worktreesUnavailable && !envLocked && effectiveEnvMode === "worktree",
   );
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
 

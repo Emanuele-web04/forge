@@ -479,6 +479,17 @@ function normalizePersistedPastedTextDraft(value: unknown): PersistedPastedTextD
   return { id, createdAt, text };
 }
 
+/**
+ * Contract shapes are deeply readonly while the persisted draft mirror is deeply mutable,
+ * so a contract value cannot be stored by reference. Cloning also keeps a persisted draft
+ * from aliasing live composer state.
+ */
+function toPersistedProviderStartOptions(
+  options: ProviderStartOptions,
+): DeepMutable<ProviderStartOptions> {
+  return structuredClone(options) as DeepMutable<ProviderStartOptions>;
+}
+
 function normalizePersistedQueuedTurns(
   rawQueuedTurns: unknown,
 ): DeepMutable<NonNullable<PersistedComposerThreadDraftState["queuedTurns"]>> | undefined {
@@ -603,7 +614,13 @@ function normalizePersistedQueuedTurns(
         selectedModel,
         selectedPromptEffort,
         modelSelection,
-        ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        ...(providerOptionsForDispatch
+          ? {
+              providerOptionsForDispatch: toPersistedProviderStartOptions(
+                providerOptionsForDispatch,
+              ),
+            }
+          : {}),
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         runtimeMode,
         interactionMode,
@@ -632,7 +649,13 @@ function normalizePersistedQueuedTurns(
         selectedModel,
         selectedPromptEffort,
         modelSelection,
-        ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        ...(providerOptionsForDispatch
+          ? {
+              providerOptionsForDispatch: toPersistedProviderStartOptions(
+                providerOptionsForDispatch,
+              ),
+            }
+          : {}),
         runtimeMode,
       });
       seenIds.add(id);
@@ -1019,7 +1042,11 @@ export function partializeComposerDraftStoreState(
           selectedPromptEffort: queuedTurn.selectedPromptEffort,
           modelSelection: queuedTurn.modelSelection,
           ...(queuedTurn.providerOptionsForDispatch
-            ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+            ? {
+                providerOptionsForDispatch: toPersistedProviderStartOptions(
+                  queuedTurn.providerOptionsForDispatch,
+                ),
+              }
             : {}),
           ...(queuedTurn.sourceProposedPlan
             ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
@@ -1042,7 +1069,11 @@ export function partializeComposerDraftStoreState(
         selectedPromptEffort: queuedTurn.selectedPromptEffort,
         modelSelection: queuedTurn.modelSelection,
         ...(queuedTurn.providerOptionsForDispatch
-          ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+          ? {
+              providerOptionsForDispatch: toPersistedProviderStartOptions(
+                queuedTurn.providerOptionsForDispatch,
+              ),
+            }
           : {}),
         runtimeMode: queuedTurn.runtimeMode,
       });

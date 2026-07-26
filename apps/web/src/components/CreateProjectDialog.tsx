@@ -1,10 +1,11 @@
 // FILE: CreateProjectDialog.tsx
 // Purpose: Single entry point for adding a project — typed path, source folder
-//          (drag/drop or native browse), and destination Space.
+//          (drag/drop or native browse), optional SSH host, and destination Space.
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
-import { type SpaceId } from "@synara/contracts";
+import { type ProjectRemote, type SpaceId } from "@synara/contracts";
+import { parseSshArgs } from "@synara/shared/sshRemote";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 import { isElectron } from "../env";
@@ -23,6 +24,8 @@ import { describeAddProjectError } from "./Sidebar.logic";
 import { SpaceEditorDialog, type SpaceEditorValue } from "./SpaceEditorDialog";
 import { SpaceIcon } from "./SpaceIcon";
 import { Button } from "./ui/button";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
+import { DisclosureRegion } from "./ui/DisclosureRegion";
 import {
   Dialog,
   DialogFooter,
@@ -44,6 +47,8 @@ const fieldControlClassName = "h-9 rounded-lg border-foreground/12";
 function isFileDrag(event: globalThis.DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }
+
+type ProjectLocation = "local" | "ssh";
 
 type DroppedFolderResult = { readonly path: string } | { readonly error: string };
 
@@ -67,6 +72,8 @@ export interface CreateProjectSubmitValue {
   readonly spaceId: SpaceId | null;
   /** True when the path was typed/edited by hand, so a missing folder may be created. */
   readonly createIfMissing: boolean;
+  /** SSH target when the workspace lives on another machine; `null` for this one. */
+  readonly remote: ProjectRemote | null;
 }
 
 export function CreateProjectDialog(props: {
@@ -83,6 +90,12 @@ export function CreateProjectDialog(props: {
    * opt into create-if-missing — the same split the old Browse/Type-path pair had.
    */
   const [pickedPath, setPickedPath] = useState<string | null>(null);
+  const [location, setLocation] = useState<ProjectLocation>("local");
+  const [sshHost, setSshHost] = useState("");
+  const [sshArgs, setSshArgs] = useState("");
+  const [shellInit, setShellInit] = useState("");
+  const [remoteBinaryPath, setRemoteBinaryPath] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectedSpaceKey, setSelectedSpaceKey] = useState<string>(VOID_SPACE_KEY);
   const [spaceEditorOpen, setSpaceEditorOpen] = useState(false);
   /**
@@ -100,6 +113,8 @@ export function CreateProjectDialog(props: {
   const pathInputId = `${fieldId}-path`;
   const submitButtonId = `${fieldId}-submit`;
   const sourceFolderLabelId = `${fieldId}-source-folder`;
+  const locationLabelId = `${fieldId}-location`;
+  const sshHostInputId = `${fieldId}-ssh-host`;
   const spaceLabelId = `${fieldId}-space`;
   const errorId = `${fieldId}-error`;
 
@@ -110,6 +125,12 @@ export function CreateProjectDialog(props: {
     if (!props.open) return;
     setPath("");
     setPickedPath(null);
+    setLocation("local");
+    setSshHost("");
+    setSshArgs("");
+    setShellInit("");
+    setRemoteBinaryPath("");
+    setAdvancedOpen(false);
     setSelectedSpaceKey(spaceKey(props.activeSpaceId));
     setSpaceEditorOpen(false);
     setCreatedSpace(null);
@@ -124,6 +145,8 @@ export function CreateProjectDialog(props: {
   }, [pathInputId, props.activeSpaceId, props.open]);
 
   const trimmedPath = path.trim();
+  const isRemote = location === "ssh";
+  const trimmedSshHost = sshHost.trim();
   const formErrorMeaning = formError ? describeAddProjectError(formError) : null;
   const spaces =
     createdSpace && !props.spaces.some((space) => space.id === createdSpace.id)
@@ -211,7 +234,15 @@ export function CreateProjectDialog(props: {
     // The confirm button stays enabled (and white) like the reference dialog;
     // an empty submit explains what is missing instead of being unclickable.
     if (trimmedPath.length === 0) {
-      setFormError("Type a folder path, or drop a folder above.");
+      setFormError(
+        isRemote
+          ? "Type the project folder path on the host."
+          : "Type a folder path, or drop a folder above.",
+      );
+      return;
+    }
+    if (isRemote && trimmedSshHost.length === 0) {
+      setFormError("Type the SSH host to connect to.");
       return;
     }
     setSubmitting(true);
@@ -220,7 +251,18 @@ export function CreateProjectDialog(props: {
       await props.onSubmit({
         workspaceRoot: trimmedPath,
         spaceId: spaces.find((space) => space.id === selectedSpaceKey)?.id ?? null,
-        createIfMissing: trimmedPath !== pickedPath,
+        // A remote folder is never scaffolded from here: Synara has no filesystem access
+        // on the host, so the path is taken as given.
+        createIfMissing: !isRemote && trimmedPath !== pickedPath,
+        remote: isRemote
+          ? {
+              kind: "ssh",
+              host: trimmedSshHost,
+              sshArgs: parseSshArgs(sshArgs),
+              shellInit: shellInit.trim() || null,
+              binaryPath: remoteBinaryPath.trim() || null,
+            }
+          : null,
       });
       props.onOpenChange(false);
     } catch (error) {
@@ -277,10 +319,10 @@ export function CreateProjectDialog(props: {
             <InputGroupInput
               id={pathInputId}
               value={path}
-              aria-label="Project folder path"
+              aria-label={isRemote ? "Project folder path on the host" : "Project folder path"}
               aria-invalid={formError ? true : undefined}
               {...(formError ? { "aria-describedby": errorId } : {})}
-              placeholder="/path/to/project"
+              placeholder={isRemote ? "/srv/app" : "/path/to/project"}
               spellCheck={false}
               autoCorrect="off"
               autoCapitalize="off"
@@ -292,7 +334,7 @@ export function CreateProjectDialog(props: {
             />
           </InputGroup>
 
-          {isElectron ? (
+          {isElectron && !isRemote ? (
             <div className="space-y-2">
               <span
                 id={sourceFolderLabelId}
@@ -331,6 +373,125 @@ export function CreateProjectDialog(props: {
               </button>
             </div>
           ) : null}
+
+          <div className="space-y-2">
+            <span
+              id={locationLabelId}
+              className={cn(
+                "block",
+                dialogFieldLabelClassName,
+                "text-[length:var(--app-font-size-ui,12px)] text-foreground",
+              )}
+            >
+              Location
+            </span>
+            <Select
+              value={location}
+              onValueChange={(next) => {
+                if (next !== "local" && next !== "ssh") return;
+                setLocation(next);
+                setFormError(null);
+              }}
+            >
+              <SelectTrigger
+                aria-labelledby={locationLabelId}
+                className={cn(fieldControlClassName, "w-full")}
+              >
+                <SelectValue>
+                  {location === "ssh" ? "Remote over SSH" : "This computer"}
+                </SelectValue>
+              </SelectTrigger>
+              <ComposerPickerSelectPopup align="start">
+                <SelectItem value="local">This computer</SelectItem>
+                <SelectItem value="ssh">Remote over SSH</SelectItem>
+              </ComposerPickerSelectPopup>
+            </Select>
+          </div>
+
+          <DisclosureRegion open={isRemote}>
+            <div className="space-y-4 pt-0.5">
+              <div className="space-y-2">
+                <label
+                  htmlFor={sshHostInputId}
+                  className={cn(
+                    "block",
+                    dialogFieldLabelClassName,
+                    "text-[length:var(--app-font-size-ui,12px)] text-foreground",
+                  )}
+                >
+                  SSH host
+                </label>
+                <InputGroup className={fieldControlClassName}>
+                  <InputGroupInput
+                    id={sshHostInputId}
+                    value={sshHost}
+                    placeholder="deploy@build-box"
+                    spellCheck={false}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    onChange={(event) => {
+                      setSshHost(event.target.value);
+                      setFormError(null);
+                    }}
+                    onKeyDown={submitOnEnter}
+                  />
+                </InputGroup>
+                <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+                  Any ssh destination — a <code>~/.ssh/config</code> alias keeps your port, key, and
+                  jump hosts exactly as your terminal uses them.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  aria-expanded={advancedOpen}
+                  className="flex cursor-pointer items-center gap-1.5 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground transition-colors outline-none hover:text-foreground"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                >
+                  <DisclosureChevron open={advancedOpen} className="size-3.5" />
+                  Advanced
+                </button>
+                <DisclosureRegion open={advancedOpen}>
+                  <div className="space-y-3 pt-1">
+                    <InputGroup className={fieldControlClassName}>
+                      <InputGroupInput
+                        value={sshArgs}
+                        aria-label="Extra ssh arguments"
+                        placeholder="Extra ssh arguments, e.g. -p 2222 -J bastion"
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        onChange={(event) => setSshArgs(event.target.value)}
+                      />
+                    </InputGroup>
+                    <InputGroup className={fieldControlClassName}>
+                      <InputGroupInput
+                        value={shellInit}
+                        aria-label="Remote shell setup command"
+                        placeholder="Shell setup, e.g. source ~/.nvm/nvm.sh"
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        onChange={(event) => setShellInit(event.target.value)}
+                      />
+                    </InputGroup>
+                    <InputGroup className={fieldControlClassName}>
+                      <InputGroupInput
+                        value={remoteBinaryPath}
+                        aria-label="Claude binary path on the host"
+                        placeholder="Claude binary on the host, e.g. /usr/local/bin/claude"
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        onChange={(event) => setRemoteBinaryPath(event.target.value)}
+                      />
+                    </InputGroup>
+                  </div>
+                </DisclosureRegion>
+              </div>
+            </div>
+          </DisclosureRegion>
 
           <div className="space-y-2">
             <span

@@ -14,10 +14,50 @@ const PROJECT_READ_FILE_PATH_MAX_LENGTH = 2048;
 const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
 const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
+const PROJECT_REMOTE_HOST_MAX_LENGTH = 256;
+const PROJECT_REMOTE_SSH_ARG_MAX_LENGTH = 512;
+const PROJECT_REMOTE_SSH_ARGS_MAX_COUNT = 32;
+const PROJECT_REMOTE_SHELL_INIT_MAX_LENGTH = 1024;
+const PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH = 512;
 const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
 export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
 export type ProjectKind = typeof ProjectKind.Type;
+
+/**
+ * SSH target for a project whose workspace lives on another machine.
+ *
+ * Synara deliberately owns none of the connection setup: `host` is any ssh(1)
+ * destination, so a `~/.ssh/config` Host alias already carries the user's port,
+ * identity, jump hosts, ProxyCommand and multiplexing exactly as their terminal
+ * uses them. `sshArgs` is the escape hatch for people who do not keep an ssh
+ * config, and `shellInit` covers non-interactive shells that need a version
+ * manager or credential export before the agent binary is reachable.
+ */
+export const ProjectRemote = Schema.Struct({
+  kind: Schema.Literal("ssh"),
+  /** ssh destination: a `~/.ssh/config` Host alias or `[user@]hostname`. */
+  host: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_HOST_MAX_LENGTH)),
+  /** Extra ssh flags, already tokenized (e.g. `["-p", "2222", "-J", "bastion"]`). */
+  sshArgs: Schema.optional(
+    Schema.Array(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_SSH_ARG_MAX_LENGTH)),
+    ).check(Schema.isMaxLength(PROJECT_REMOTE_SSH_ARGS_MAX_COUNT)),
+  ).pipe(Schema.withDecodingDefault(() => [])),
+  /** Shell command run on the remote before the agent, e.g. `source ~/.nvm/nvm.sh`. */
+  shellInit: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_SHELL_INIT_MAX_LENGTH)),
+    ),
+  ).pipe(Schema.withDecodingDefault(() => null)),
+  /** Agent binary as resolved on the remote host; defaults to the provider's own default. */
+  binaryPath: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+    ),
+  ).pipe(Schema.withDecodingDefault(() => null)),
+});
+export type ProjectRemote = typeof ProjectRemote.Type;
 
 export const ProjectSearchEntriesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,

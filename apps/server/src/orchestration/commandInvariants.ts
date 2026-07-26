@@ -17,6 +17,7 @@ import {
   isLegacyHomeChatContainerRow as isSharedLegacyHomeChatContainerRow,
   isOrdinaryProjectRow as isSharedOrdinaryProjectRow,
 } from "@synara/shared/projectContainers";
+import { resolveProjectRemote } from "@synara/shared/sshRemote";
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { Effect } from "effect";
 
@@ -253,19 +254,31 @@ export function requireSpaceAssignableProject(input: {
 }
 
 // Finds active projects by workspace root using the same comparison rules as import flows.
+export interface ActiveProjectWorkspaceRootScope {
+  readonly kinds?: ReadonlySet<ProjectKind>;
+  /**
+   * ssh host the root belongs to, or `null`/omitted for this machine. Workspace-root
+   * uniqueness is per host: two servers can legitimately expose the same absolute path,
+   * and a remote path can coincide with an unrelated local one.
+   */
+  readonly remoteHost?: string | null;
+}
+
 export function listActiveProjectsByWorkspaceRoot(
   readModel: OrchestrationReadModel,
   workspaceRoot: string,
-  options?: { readonly kinds?: ReadonlySet<ProjectKind> },
+  options?: ActiveProjectWorkspaceRootScope,
 ): ReadonlyArray<OrchestrationProject> {
   const normalizedWorkspaceRoot = normalizeWorkspaceRootForComparison(workspaceRoot, {
     platform: process.platform,
   });
   const acceptedKinds = options?.kinds ?? new Set<ProjectKind>(["project"]);
+  const remoteHost = options?.remoteHost ?? null;
   return readModel.projects.filter(
     (project) =>
       project.deletedAt === null &&
       acceptedKinds.has(project.kind ?? "project") &&
+      (resolveProjectRemote(project)?.host ?? null) === remoteHost &&
       normalizeWorkspaceRootForComparison(project.workspaceRoot, {
         platform: process.platform,
       }) === normalizedWorkspaceRoot,
@@ -318,14 +331,14 @@ export function requireProjectWorkspaceRootAvailable(input: {
   readonly workspaceRoot: string;
   readonly excludeProjectId?: ProjectId;
   readonly kinds?: ReadonlySet<ProjectKind>;
+  readonly remoteHost?: string | null;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
   // Skip the excluded project BEFORE picking, not after: if corrupt state ever leaves two
   // active owners on one root, the project being updated must not mask the other owner.
-  const existingProject = listActiveProjectsByWorkspaceRoot(
-    input.readModel,
-    input.workspaceRoot,
-    input.kinds ? { kinds: input.kinds } : undefined,
-  ).find((project) => project.id !== input.excludeProjectId);
+  const existingProject = listActiveProjectsByWorkspaceRoot(input.readModel, input.workspaceRoot, {
+    ...(input.kinds ? { kinds: input.kinds } : {}),
+    remoteHost: input.remoteHost ?? null,
+  }).find((project) => project.id !== input.excludeProjectId);
   if (!existingProject) {
     return Effect.void;
   }

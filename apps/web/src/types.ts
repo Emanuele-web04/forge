@@ -29,6 +29,7 @@ import type {
   CheckpointRef,
   ProviderInteractionMode,
   ProjectKind,
+  ProjectRemote,
   RuntimeMode,
   ThreadCreationSource,
   ThreadEnvironmentMode,
@@ -174,6 +175,11 @@ export interface Project {
   folderName: string;
   localName: string | null;
   cwd: string;
+  /**
+   * SSH target when the project's workspace lives on another host; `null`/missing is local.
+   * Optional because renderer state persisted before remote projects existed has no field.
+   */
+  remote?: ProjectRemote | null;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
   isPinned?: boolean;

@@ -90,6 +90,11 @@ import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedA
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
+import {
+  resolveProjectRemote,
+  supportsRemoteExecution,
+  withProjectRemoteStartOptions,
+} from "@synara/shared/sshRemote";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
   buildPriorTranscriptBootstrapText,
@@ -887,10 +892,25 @@ const make = Effect.gen(function* () {
         issue: `Provider '${preferredProvider}' is disabled in server settings revision ${settingsSnapshot.revision}.`,
       });
     }
-    const resolvedProviderOptions = providerStartOptionsFromServerSettings(
-      settingsSnapshot.settings,
+    const workspaceProject = yield* resolveThreadWorkspaceProject(thread);
+    // The SSH target is resolved server-side from the project row rather than accepted from
+    // the client: it decides where the agent process runs, so it must not be spoofable by a
+    // connected UI.
+    const projectRemote = resolveProjectRemote(workspaceProject);
+    if (projectRemote && !supportsRemoteExecution(preferredProvider)) {
+      return yield* new ProviderAdapterValidationError({
+        provider: preferredProvider,
+        operation: "thread.turn.start",
+        issue: `Provider '${preferredProvider}' cannot run on the remote host '${projectRemote.host}'. Switch this thread to Claude, or move the project back to a local folder.`,
+      });
+    }
+    const resolvedProviderOptions = withProjectRemoteStartOptions(
+      providerStartOptionsFromServerSettings(settingsSnapshot.settings),
+      projectRemote,
     );
-    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const effectiveCwd = workspaceProject
+      ? resolveThreadWorkspaceCwd({ thread, projects: [workspaceProject] })
+      : undefined;
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,

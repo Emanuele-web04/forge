@@ -128,6 +128,10 @@
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
     },
+    "./sshRemote": {
+      "types": "./src/sshRemote.ts",
+      "import": "./src/sshRemote.ts"
+    },
     "./subagents": {
       "types": "./src/subagents.ts",
       "import": "./src/subagents.ts"

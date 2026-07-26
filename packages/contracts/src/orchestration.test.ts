@@ -341,6 +341,40 @@ it.effect("trims branded ids and command string fields at decode boundaries", ()
   }),
 );
 
+it.effect("defaults a project.created payload without a remote to a local project", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.remote, null);
+  }),
+);
+
+it.effect("decodes an ssh remote with only its required host", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreateCommand({
+      type: "project.create",
+      commandId: "cmd-1",
+      projectId: "project-1",
+      title: "Project Title",
+      workspaceRoot: " /srv/app ",
+      remote: { kind: "ssh", host: " deploy@build-box " },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.workspaceRoot, "/srv/app");
+    assert.strictEqual(parsed.remote?.host, "deploy@build-box");
+    assert.deepStrictEqual(parsed.remote?.sshArgs, []);
+    assert.strictEqual(parsed.remote?.shellInit, null);
+    assert.strictEqual(parsed.remote?.binaryPath, null);
+  }),
+);
+
 it.effect("decodes historical project.created payloads with a default provider", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeProjectCreatedPayload({

@@ -407,6 +407,7 @@ export function projectEvent(
             kind: payload.kind,
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
+            remote: payload.remote ?? null,
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
@@ -440,6 +441,7 @@ export function projectEvent(
                   ...(payload.workspaceRoot !== undefined
                     ? { workspaceRoot: payload.workspaceRoot }
                     : {}),
+                  ...(payload.remote !== undefined ? { remote: payload.remote } : {}),
                   ...(payload.defaultModelSelection !== undefined
                     ? { defaultModelSelection: payload.defaultModelSelection }
                     : {}),

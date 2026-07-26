@@ -3,7 +3,8 @@
 // Layer: Web domain helpers
 // Exports: thread env resolution + `/fork` target planning
 
-import type { ThreadEnvironmentMode } from "@synara/contracts";
+import type { ProjectRemote, ThreadEnvironmentMode } from "@synara/contracts";
+import { describeProjectRemote } from "@synara/shared/sshRemote";
 import {
   isPendingThreadWorktree,
   resolveThreadEnvironmentMode,
@@ -35,8 +36,9 @@ export {
 export interface ThreadEnvironmentPresentation {
   mode: ThreadEnvironmentMode;
   workspaceState: ResolvedThreadWorkspaceState;
-  shortLabel: "Local" | "Worktree";
-  localOptionLabel: "Local project";
+  /** "Local"/"Worktree", or the ssh host for a project that runs on another machine. */
+  shortLabel: string;
+  localOptionLabel: string;
   worktreeOptionLabel: "Worktree";
   worktreeBadgeLabel: "Worktree" | "Worktree pending" | null;
 }
@@ -44,15 +46,18 @@ export interface ThreadEnvironmentPresentation {
 export function resolveThreadEnvironmentPresentation(input: {
   envMode?: ThreadEnvironmentMode | null | undefined;
   worktreePath?: string | null | undefined;
+  /** Set when the thread's project runs on another host; worktrees do not apply there. */
+  projectRemote?: ProjectRemote | null | undefined;
 }): ThreadEnvironmentPresentation {
   const mode = resolveThreadEnvironmentMode(input);
   const workspaceState = resolveThreadWorkspaceState(input);
+  const remote = input.projectRemote ?? null;
 
   return {
     mode,
     workspaceState,
-    shortLabel: mode === "worktree" ? "Worktree" : "Local",
-    localOptionLabel: "Local project",
+    shortLabel: remote ? remote.host : mode === "worktree" ? "Worktree" : "Local",
+    localOptionLabel: remote ? `Remote — ${describeProjectRemote(remote)}` : "Local project",
     worktreeOptionLabel: "Worktree",
     worktreeBadgeLabel:
       workspaceState === "worktree-ready"

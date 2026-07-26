@@ -43,6 +43,7 @@ export type ProjectNormalizationInput = Pick<
   | "kind"
   | "title"
   | "workspaceRoot"
+  | "remote"
   | "defaultModelSelection"
   | "scripts"
   | "isPinned"
@@ -335,6 +336,7 @@ export function normalizeProject(
     previous.folderName === folderName &&
     previous.localName === localName &&
     previous.cwd === incoming.workspaceRoot &&
+    deepEqualJson(previous.remote ?? null, incoming.remote ?? null) &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
@@ -354,6 +356,7 @@ export function normalizeProject(
     folderName,
     localName,
     cwd: incoming.workspaceRoot,
+    remote: incoming.remote ?? null,
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
