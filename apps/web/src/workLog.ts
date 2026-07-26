@@ -1,6 +1,7 @@
 import {
   isToolLifecycleItemType,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
+  type OrchestrationLatestTurnState,
   type OrchestrationThreadActivity,
   type ProviderKind,
   type ToolLifecycleItemType,
@@ -242,6 +243,9 @@ export function deriveWorkLogEntries(
   latestTurnId: TurnId | undefined,
   options: {
     visibleTurnIds?: ReadonlySet<TurnId | string>;
+    activeTurnId?: TurnId | null;
+    latestTurnState?: OrchestrationLatestTurnState | null;
+    latestTurnCompletedAt?: string | null;
   } = {},
 ): WorkLogEntry[] {
   const visibleTurnIds = options.visibleTurnIds;
@@ -273,7 +277,12 @@ export function deriveWorkLogEntries(
   // GitHub icon, user-input rows -> question / submit glyphs). Stripping
   // `toolName` here previously made those icon checks dead code, leaving the
   // generic wrench.
-  return collapseDerivedWorkLogEntries(entries).map(
+  return reconcileSettledLiveActivities(
+    collapseDerivedWorkLogEntries(entries),
+    ordered,
+    latestTurnId,
+    options,
+  ).map(
     ({
       collapseCommand: _collapseCommand,
       collapseKey: _collapseKey,
@@ -919,8 +928,17 @@ function mergeDerivedWorkLogEntries(
   const rawCommand = next.rawCommand ?? previous.rawCommand;
   const preview = next.preview ?? previous.preview;
   const toolTitle = mergeWorkLogToolTitle(previous, next);
-  const itemType = next.itemType ?? previous.itemType;
-  const requestKind = next.requestKind ?? previous.requestKind;
+  const preservePreviousToolSemantics =
+    next.activityKind === "tool.updated" &&
+    next.itemType === "mcp_tool_call" &&
+    previous.itemType !== undefined &&
+    previous.itemType !== "mcp_tool_call";
+  const itemType = preservePreviousToolSemantics
+    ? previous.itemType
+    : (next.itemType ?? previous.itemType);
+  const requestKind = preservePreviousToolSemantics
+    ? previous.requestKind
+    : (next.requestKind ?? previous.requestKind);
   const subagents = next.subagents ?? previous.subagents;
   const subagentAction = next.subagentAction ?? previous.subagentAction;
   const synaraThreadCreation = next.synaraThreadCreation ?? previous.synaraThreadCreation;
@@ -965,10 +983,18 @@ function mergeWorkLogLiveActivity(
   const lifecycleElapsedSeconds = startedAt
     ? (Date.parse(next.lastActivityAt) - Date.parse(startedAt)) / 1_000
     : undefined;
+  const activityDeltaSeconds =
+    (Date.parse(next.lastActivityAt) - Date.parse(previous.lastActivityAt)) / 1_000;
+  const carriedElapsedSeconds =
+    next.elapsedSeconds === undefined &&
+    previous.elapsedSeconds !== undefined &&
+    Number.isFinite(activityDeltaSeconds)
+      ? previous.elapsedSeconds + Math.max(0, activityDeltaSeconds)
+      : previous.elapsedSeconds;
   const elapsedCandidates = [
     lifecycleElapsedSeconds,
     next.elapsedSeconds,
-    previous.elapsedSeconds,
+    carriedElapsedSeconds,
   ].filter((value): value is number => value !== undefined && Number.isFinite(value));
   const terminalElapsedSeconds =
     next.state === "completed" || next.state === "failed" || next.state === "cancelled"
@@ -987,10 +1013,144 @@ function mergeWorkLogLiveActivity(
       : {}),
     ...(terminalElapsedSeconds !== undefined
       ? { elapsedSeconds: terminalElapsedSeconds }
-      : next.elapsedSeconds !== undefined || previous.elapsedSeconds !== undefined
-        ? { elapsedSeconds: next.elapsedSeconds ?? previous.elapsedSeconds }
+      : next.elapsedSeconds !== undefined || carriedElapsedSeconds !== undefined
+        ? { elapsedSeconds: next.elapsedSeconds ?? carriedElapsedSeconds }
         : {}),
   };
+}
+
+function reconcileSettledLiveActivities(
+  entries: ReadonlyArray<DerivedWorkLogEntry>,
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+  options: {
+    activeTurnId?: TurnId | null;
+    latestTurnState?: OrchestrationLatestTurnState | null;
+    latestTurnCompletedAt?: string | null;
+  },
+): DerivedWorkLogEntry[] {
+  const terminalByTurnId = new Map<
+    TurnId | string,
+    {
+      state: Extract<WorkLogLiveActivityState, "completed" | "failed" | "cancelled">;
+      settledAt: string;
+    }
+  >();
+  for (const activity of activities) {
+    if (activity.turnId === null) {
+      continue;
+    }
+    if (activity.kind === "turn.aborted") {
+      terminalByTurnId.set(activity.turnId, {
+        state: "cancelled",
+        settledAt: activity.createdAt,
+      });
+    } else if (activity.kind === "turn.completed") {
+      terminalByTurnId.set(activity.turnId, {
+        state: activity.tone === "error" ? "failed" : "completed",
+        settledAt: activity.createdAt,
+      });
+    }
+  }
+
+  const latestTerminalState =
+    options.latestTurnState === "completed"
+      ? "completed"
+      : options.latestTurnState === "error"
+        ? "failed"
+        : options.latestTurnState === "interrupted"
+          ? "cancelled"
+          : null;
+  if (
+    latestTurnId &&
+    latestTerminalState &&
+    options.latestTurnCompletedAt &&
+    !terminalByTurnId.has(latestTurnId)
+  ) {
+    terminalByTurnId.set(latestTurnId, {
+      state: latestTerminalState,
+      settledAt: options.latestTurnCompletedAt,
+    });
+  }
+
+  const hasActiveTurnContext = options.activeTurnId !== undefined;
+  return entries.map((entry) => {
+    const liveActivity = entry.liveActivity;
+    if (!liveActivity || !isInProgressLiveActivityState(liveActivity.state)) {
+      return entry;
+    }
+
+    const terminal = entry.turnId ? terminalByTurnId.get(entry.turnId) : undefined;
+    if (terminal) {
+      return {
+        ...entry,
+        liveActivity: settleWorkLogLiveActivity(
+          liveActivity,
+          terminal.state,
+          terminal.settledAt,
+        ),
+      };
+    }
+
+    if (!hasActiveTurnContext) {
+      return entry;
+    }
+    if (
+      options.activeTurnId !== null &&
+      (entry.turnId === undefined ||
+        entry.turnId === null ||
+        entry.turnId === options.activeTurnId)
+    ) {
+      return entry;
+    }
+
+    return {
+      ...entry,
+      liveActivity: settleWorkLogLiveActivity(
+        liveActivity,
+        latestTurnId && entry.turnId === latestTurnId && latestTerminalState
+          ? latestTerminalState
+          : "cancelled",
+        latestTurnId &&
+          entry.turnId === latestTurnId &&
+          options.latestTurnCompletedAt
+          ? options.latestTurnCompletedAt
+          : liveActivity.lastActivityAt,
+      ),
+    };
+  });
+}
+
+function isInProgressLiveActivityState(state: WorkLogLiveActivityState): boolean {
+  return (
+    state === "starting" ||
+    state === "thinking" ||
+    state === "running_tool" ||
+    state === "waiting" ||
+    state === "streaming"
+  );
+}
+
+function settleWorkLogLiveActivity(
+  activity: WorkLogLiveActivity,
+  state: Extract<WorkLogLiveActivityState, "completed" | "failed" | "cancelled">,
+  settledAt: string,
+): WorkLogLiveActivity {
+  const activityAtMs = Date.parse(activity.lastActivityAt);
+  const settledAtMs = Date.parse(settledAt);
+  const lastActivityAt =
+    Number.isFinite(activityAtMs) &&
+    Number.isFinite(settledAtMs) &&
+    settledAtMs >= activityAtMs
+      ? settledAt
+      : activity.lastActivityAt;
+  return (
+    mergeWorkLogLiveActivity(activity, {
+      state,
+      label: activity.label,
+      lastActivityAt,
+    }) ?? activity
+  );
 }
 
 function mergeWorkLogToolTitle(

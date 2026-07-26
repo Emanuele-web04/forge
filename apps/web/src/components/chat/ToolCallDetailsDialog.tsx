@@ -11,7 +11,9 @@ import type { TimestampFormat } from "../../appSettings";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
 import type { WorkLogLiveActivity } from "../../workLog";
 import {
-  liveActivityElapsedMs,
+  formatLiveActivityElapsed,
+  formatLiveActivityProgress,
+  formatLiveActivityStateLabel,
   useLiveActivityNow,
 } from "../../lib/liveActivityPresentation";
 import { formatTimestamp } from "../../timestampFormat";
@@ -127,25 +129,6 @@ function formatActivityTimestamp(value: string, timestampFormat: TimestampFormat
   return formatTimestamp(value, timestampFormat);
 }
 
-function formatActivityElapsed(activity: WorkLogLiveActivity, nowMs: number): string | null {
-  const elapsedMs = liveActivityElapsedMs(activity, nowMs);
-  if (elapsedMs === null) {
-    return null;
-  }
-  const wholeSeconds = Math.floor(elapsedMs / 1_000);
-  if (wholeSeconds < 60) return `${wholeSeconds}s`;
-  const hours = Math.floor(wholeSeconds / 3_600);
-  const minutes = Math.floor((wholeSeconds % 3_600) / 60);
-  const seconds = wholeSeconds % 60;
-  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-}
-
-function formatActivityProgress(progress: number): string {
-  const percent = progress >= 0 && progress <= 1 ? progress * 100 : progress;
-  return `${Math.round(Math.min(100, Math.max(0, percent)))}%`;
-}
-
 function LiveActivityMetadata({
   activity,
   timestampFormat,
@@ -153,20 +136,11 @@ function LiveActivityMetadata({
   activity: WorkLogLiveActivity;
   timestampFormat: TimestampFormat;
 }) {
-  const stateLabel = {
-    starting: "Starting",
-    thinking: "Thinking",
-    running_tool: "Running tool",
-    waiting: "Waiting",
-    streaming: "Streaming",
-    completed: "Completed",
-    failed: "Failed",
-    cancelled: "Cancelled",
-  }[activity.state];
+  const stateLabel = formatLiveActivityStateLabel(activity.state);
   const nowMs = useLiveActivityNow(activity);
-  const elapsed = formatActivityElapsed(activity, nowMs);
+  const elapsed = formatLiveActivityElapsed(activity, nowMs);
   const progress =
-    activity.progress !== undefined ? formatActivityProgress(activity.progress) : null;
+    activity.progress !== undefined ? formatLiveActivityProgress(activity.progress) : null;
 
   return (
     <ToolDetailSection title="Activity">

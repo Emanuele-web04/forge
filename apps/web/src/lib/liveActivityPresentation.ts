@@ -173,9 +173,40 @@ export function formatLiveActivityPrimary(input: {
   return target ? `${lead} · ${target}` : lead;
 }
 
-function formatActivityProgress(progress: number): string {
+export function formatLiveActivityProgress(progress: number): string {
   const percent = progress >= 0 && progress <= 1 ? progress * 100 : progress;
   return `${Math.round(Math.min(100, Math.max(0, percent)))}%`;
+}
+
+export function formatLiveActivityStateLabel(
+  state: WorkLogLiveActivity["state"],
+): string {
+  switch (state) {
+    case "starting":
+      return "Starting";
+    case "thinking":
+      return "Thinking";
+    case "running_tool":
+      return "Running tool";
+    case "waiting":
+      return "Waiting";
+    case "streaming":
+      return "Streaming";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+  }
+}
+
+export function formatLiveActivityElapsed(
+  activity: WorkLogLiveActivity,
+  nowMs: number,
+): string | null {
+  const elapsedMs = liveActivityElapsedMs(activity, nowMs);
+  return elapsedMs === null ? null : formatClockDuration(elapsedMs);
 }
 
 export function formatLiveActivityMeta(
@@ -183,7 +214,7 @@ export function formatLiveActivityMeta(
   nowMs: number,
 ): string | null {
   const parts: string[] = [];
-  const elapsedMs = liveActivityElapsedMs(activity, nowMs);
+  const elapsed = formatLiveActivityElapsed(activity, nowMs);
   const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
 
   if (isLiveActivityInProgress(activity)) {
@@ -200,13 +231,13 @@ export function formatLiveActivityMeta(
   } else {
     switch (activity.state) {
       case "completed":
-        parts.push("Completed");
+        parts.push(formatLiveActivityStateLabel(activity.state));
         break;
       case "failed":
-        parts.push("Failed");
+        parts.push(formatLiveActivityStateLabel(activity.state));
         break;
       case "cancelled":
-        parts.push("Cancelled");
+        parts.push(formatLiveActivityStateLabel(activity.state));
         break;
       default:
         parts.push(activityStateLead(activity, "tool"));
@@ -214,11 +245,11 @@ export function formatLiveActivityMeta(
     }
   }
 
-  if (elapsedMs !== null) {
-    parts.push(`${formatClockDuration(elapsedMs)} elapsed`);
+  if (elapsed !== null) {
+    parts.push(`${elapsed} elapsed`);
   }
   if (activity.progress !== undefined) {
-    parts.push(formatActivityProgress(activity.progress));
+    parts.push(formatLiveActivityProgress(activity.progress));
   }
 
   return parts.length > 0 ? parts.join(" · ") : null;

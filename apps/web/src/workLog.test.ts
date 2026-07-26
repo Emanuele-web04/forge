@@ -1728,6 +1728,168 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("preserves command semantics while a Claude progress placeholder is live", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "claude-command-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Bash started",
+          payload: {
+            itemType: "command_execution",
+            title: "Bash",
+            data: {
+              toolCallId: "claude-live-command",
+              command: "sleep 5",
+            },
+          },
+        }),
+        makeActivity({
+          id: "claude-command-progress",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.updated",
+          summary: "Bash",
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "Bash",
+            data: {
+              toolUseId: "claude-live-command",
+              toolName: "Bash",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      itemType: "command_execution",
+      command: "sleep 5",
+      liveActivity: {
+        state: "running_tool",
+      },
+    });
+  });
+
+  it("settles orphaned tool activity when its owning turn completes", () => {
+    const turnId = TurnId.makeUnsafe("turn-with-orphaned-tool");
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "orphaned-command-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Bash started",
+          turnId,
+          payload: {
+            itemType: "command_execution",
+            title: "Bash",
+            data: {
+              toolCallId: "orphaned-command",
+              command: "sleep 5",
+            },
+          },
+        }),
+        makeActivity({
+          id: "owning-turn-complete",
+          createdAt: "2026-02-23T00:00:06.000Z",
+          kind: "turn.completed",
+          summary: "Turn completed",
+          tone: "info",
+          turnId,
+        }),
+      ],
+      turnId,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "completed",
+      startedAt: "2026-02-23T00:00:01.000Z",
+      lastActivityAt: "2026-02-23T00:00:06.000Z",
+      elapsedSeconds: 5,
+    });
+  });
+
+  it("settles orphaned activity from latest-turn state after a reconnect gap", () => {
+    const turnId = TurnId.makeUnsafe("turn-with-reconnect-gap");
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "reconnected-command-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Bash started",
+          turnId,
+          payload: {
+            itemType: "command_execution",
+            title: "Bash",
+            data: {
+              toolCallId: "reconnected-command",
+              command: "sleep 5",
+            },
+          },
+        }),
+      ],
+      turnId,
+      {
+        activeTurnId: null,
+        latestTurnState: "error",
+        latestTurnCompletedAt: "2026-02-23T00:00:04.000Z",
+      },
+    );
+
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "failed",
+      lastActivityAt: "2026-02-23T00:00:04.000Z",
+      elapsedSeconds: 3,
+    });
+  });
+
+  it("advances retained elapsed time across metadata-only updates", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "elapsed-progress",
+          createdAt: "2026-02-23T00:00:10.000Z",
+          kind: "tool.updated",
+          summary: "Deploy",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            data: {
+              toolCallId: "deploy-with-sparse-elapsed",
+              elapsedSeconds: 10,
+            },
+          },
+        }),
+        makeActivity({
+          id: "metadata-only-progress",
+          createdAt: "2026-02-23T00:00:15.000Z",
+          kind: "tool.updated",
+          summary: "Deploy",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            data: {
+              toolCallId: "deploy-with-sparse-elapsed",
+              summary: "Still working",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "running_tool",
+      lastActivityAt: "2026-02-23T00:00:15.000Z",
+      elapsedSeconds: 15,
+    });
+  });
+
   it("preserves terminal failure detail in live activity metadata", () => {
     const entries = deriveWorkLogEntries(
       [

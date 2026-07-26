@@ -8,6 +8,7 @@ import { TurnId } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { WorkspaceFileOpenerContext } from "../../lib/workspaceFileOpener";
 import { formatTimestamp } from "../../timestampFormat";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
@@ -227,6 +228,7 @@ describe("MessagesTimeline tool details", () => {
 
   it("keeps agent activity as the primary action when live metadata is present", async () => {
     const onOpenAgentActivity = vi.fn();
+    const nowMs = Date.now();
     const host = createTimelineHost();
     const screen = await render(
       <TimelineWorkEntryRow
@@ -240,8 +242,8 @@ describe("MessagesTimeline tool details", () => {
           liveActivity: {
             state: "running_tool",
             label: "Agent task",
-            startedAt: "2026-03-17T19:12:28.000Z",
-            lastActivityAt: "2026-03-17T19:12:29.000Z",
+            startedAt: new Date(nowMs - 2_000).toISOString(),
+            lastActivityAt: new Date(nowMs - 1_000).toISOString(),
           },
         }}
         chatMetaFontSizePx={12}
@@ -260,6 +262,8 @@ describe("MessagesTimeline tool details", () => {
       document.querySelector<HTMLButtonElement>("button")?.click();
       expect(onOpenAgentActivity).toHaveBeenCalledWith("agent-live-activity");
       expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
+      expect(document.body.textContent ?? "").toContain("Running agent · Agent task");
+      expect(document.body.textContent ?? "").toContain("Active");
     } finally {
       await screen.unmount();
       host.remove();
@@ -305,6 +309,48 @@ describe("MessagesTimeline tool details", () => {
       expect(fileRow).not.toBeNull();
       fileRow?.click();
       expect(onOpenTurnDiff).toHaveBeenCalledWith(turnId, "src/app.ts");
+      expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+      await settleLayout();
+    }
+  });
+
+  it("preserves the file-open action for activity-only read rows", async () => {
+    const openFile = vi.fn(() => true);
+    const host = createTimelineHost();
+    const screen = await render(
+      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
+        <TimelineWorkEntryRow
+          workEntry={{
+            id: "read-live-activity",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            label: "Read file",
+            tone: "tool",
+            requestKind: "file-read",
+            detail: "src/app.ts",
+            liveActivity: {
+              state: "completed",
+              label: "Read file",
+              lastActivityAt: "2026-03-17T19:12:29.000Z",
+            },
+          }}
+          chatMetaFontSizePx={12}
+          textFontSizePx={13}
+          density="compact"
+          onImageExpand={() => {}}
+          markdownCwd={undefined}
+          timestampFormat="locale"
+        />
+      </WorkspaceFileOpenerContext.Provider>,
+      { container: host },
+    );
+
+    try {
+      expect(document.querySelector("[data-tool-detail-trigger='true']")).toBeNull();
+      document.querySelector<HTMLButtonElement>("button")?.click();
+      expect(openFile).toHaveBeenCalledWith("src/app.ts");
       expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
     } finally {
       await screen.unmount();

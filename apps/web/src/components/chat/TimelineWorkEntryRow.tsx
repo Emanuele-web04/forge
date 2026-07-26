@@ -514,8 +514,6 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
   const hasToolDetails = Boolean(workEntry.toolDetails);
-  const canOpenToolDetails =
-    !canOpenAgentActivity && Boolean(workEntry.toolDetails || workEntry.liveActivity);
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
@@ -561,6 +559,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
       ? extractFilePathFromDetail(workEntry.detail)
       : null;
   const canOpenReadFile = readFilePath !== null;
+  const canOpenToolDetails =
+    !canOpenAgentActivity &&
+    Boolean(workEntry.toolDetails || (workEntry.liveActivity && !canOpenReadFile));
   const openReadFile = readFilePath
     ? () => openWorkspaceFileReference(opener, readFilePath)
     : undefined;
@@ -675,7 +676,12 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       className="truncate font-medium leading-5 text-muted-foreground/72"
                       style={{ fontSize: `${rowFontSizePx}px` }}
                     >
-                      {heading}
+                      <span data-work-entry-display-text="true">
+                        {workEntry.liveActivity ? displayText : heading}
+                      </span>
+                      {liveActivityMetaText ? (
+                        <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
+                      ) : null}
                     </p>
                     <ChatMarkdown
                       text={preview ?? ""}
