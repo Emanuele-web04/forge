@@ -7,12 +7,14 @@
 import type { ReactNode } from "react";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { cn } from "~/lib/utils";
+import type { TimestampFormat } from "../../appSettings";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
 import type { WorkLogLiveActivity } from "../../workLog";
 import {
   liveActivityElapsedMs,
   useLiveActivityNow,
 } from "../../lib/liveActivityPresentation";
+import { formatTimestamp } from "../../timestampFormat";
 import ChatMarkdown from "../ChatMarkdown";
 
 const DETAIL_HEADER_CLASS_NAME = "border-b border-border/45 px-3 py-2 text-[10px] font-medium";
@@ -24,9 +26,11 @@ const TOOL_DETAILS_MARKDOWN_CLASS_NAME =
 export function ToolCallDetailsContent({
   details,
   activity,
+  timestampFormat,
 }: {
   details: WorkLogToolDetails | undefined;
   activity?: WorkLogLiveActivity | undefined;
+  timestampFormat: TimestampFormat;
 }) {
   if (!details && !activity) {
     return (
@@ -38,7 +42,9 @@ export function ToolCallDetailsContent({
 
   return (
     <>
-      {activity ? <LiveActivityMetadata activity={activity} /> : null}
+      {activity ? (
+        <LiveActivityMetadata activity={activity} timestampFormat={timestampFormat} />
+      ) : null}
 
       {details?.command ? (
         <div className="space-y-2">
@@ -113,16 +119,12 @@ export function ToolCallDetailsContent({
   );
 }
 
-function formatActivityTimestamp(value: string): string {
+function formatActivityTimestamp(value: string, timestampFormat: TimestampFormat): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) {
     return value;
   }
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(timestamp);
+  return formatTimestamp(value, timestampFormat);
 }
 
 function formatActivityElapsed(activity: WorkLogLiveActivity, nowMs: number): string | null {
@@ -144,7 +146,13 @@ function formatActivityProgress(progress: number): string {
   return `${Math.round(Math.min(100, Math.max(0, percent)))}%`;
 }
 
-function LiveActivityMetadata({ activity }: { activity: WorkLogLiveActivity }) {
+function LiveActivityMetadata({
+  activity,
+  timestampFormat,
+}: {
+  activity: WorkLogLiveActivity;
+  timestampFormat: TimestampFormat;
+}) {
   const stateLabel = {
     starting: "Starting",
     thinking: "Thinking",
@@ -165,16 +173,20 @@ function LiveActivityMetadata({ activity }: { activity: WorkLogLiveActivity }) {
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-[11px]">
         <dt className="text-muted-foreground/56">Status</dt>
         <dd className="text-foreground/84">{stateLabel}</dd>
-        <dt className="text-muted-foreground/56">Started</dt>
-        <dd className="text-foreground/84">
-          <time dateTime={activity.startedAt} title={activity.startedAt}>
-            {formatActivityTimestamp(activity.startedAt)}
-          </time>
-        </dd>
+        {activity.startedAt ? (
+          <>
+            <dt className="text-muted-foreground/56">Started</dt>
+            <dd className="text-foreground/84">
+              <time dateTime={activity.startedAt} title={activity.startedAt}>
+                {formatActivityTimestamp(activity.startedAt, timestampFormat)}
+              </time>
+            </dd>
+          </>
+        ) : null}
         <dt className="text-muted-foreground/56">Last activity</dt>
         <dd className="text-foreground/84">
           <time dateTime={activity.lastActivityAt} title={activity.lastActivityAt}>
-            {formatActivityTimestamp(activity.lastActivityAt)}
+            {formatActivityTimestamp(activity.lastActivityAt, timestampFormat)}
           </time>
         </dd>
         {elapsed ? (

@@ -68,7 +68,10 @@ export function useLiveActivityNow(activity: WorkLogLiveActivity | undefined): n
   return inProgress ? nowMs : Date.now();
 }
 
-function parseTimestamp(value: string): number | null {
+function parseTimestamp(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? null : timestamp;
 }

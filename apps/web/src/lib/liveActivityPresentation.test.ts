@@ -73,4 +73,17 @@ describe("live activity presentation", () => {
       "Completed · 2m 14s elapsed · 100%",
     );
   });
+
+  it("does not invent elapsed time when a terminal event has no known start", () => {
+    const activity: WorkLogLiveActivity = {
+      state: "completed",
+      label: "Deploy",
+      lastActivityAt: "2026-07-26T14:02:14.000Z",
+    };
+
+    expect(liveActivityElapsedMs(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
+    expect(formatLiveActivityMeta(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBe(
+      "Completed",
+    );
+  });
 });

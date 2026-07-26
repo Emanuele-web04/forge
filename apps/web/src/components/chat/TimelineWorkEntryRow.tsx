@@ -17,6 +17,7 @@ import {
 } from "react";
 
 import { basenameOfPath } from "~/file-icons";
+import type { TimestampFormat } from "../../appSettings";
 import {
   ArrowUpCircleIcon,
   BackgroundTrayIcon,
@@ -433,6 +434,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenAutomation?: (automationId: string) => void;
+  timestampFormat: TimestampFormat;
 }) {
   // Defaults are applied in the body (not in the destructuring pattern): a default
   // value inside a destructuring pattern makes React Compiler bail out on the whole
@@ -449,6 +451,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     onOpenTurnDiff,
     onOpenAgentActivity,
     onOpenAutomation,
+    timestampFormat,
   } = props;
   const textFontSizePx = textFontSizePxProp ?? chatMetaFontSizePx;
   const density = densityProp ?? "default";
@@ -510,7 +513,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const openAgentActivity = canOpenAgentActivity
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
-  const canOpenToolDetails = Boolean(workEntry.toolDetails || workEntry.liveActivity);
+  const hasToolDetails = Boolean(workEntry.toolDetails);
+  const canOpenToolDetails =
+    !canOpenAgentActivity && Boolean(workEntry.toolDetails || workEntry.liveActivity);
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
@@ -598,7 +603,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 compact={compact}
               />
             );
-            if (canOpenToolDetails) {
+            if (hasToolDetails || (canOpenToolDetails && !canOpenEditedDiff)) {
               return (
                 <ToolDetailsDisclosure
                   key={`${workEntry.id}:${changedFilePath}`}
@@ -608,6 +613,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                   tooltip={<span className="whitespace-pre-wrap">{changedFilePath}</span>}
                   summaryClassName={editedRowClassName}
                   dataFileChangeRow
+                  timestampFormat={timestampFormat}
                 >
                   {editedRowChildren}
                 </ToolDetailsDisclosure>
@@ -710,6 +716,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 details={workEntry.toolDetails}
                 activity={workEntry.liveActivity}
                 compact={compact}
+                timestampFormat={timestampFormat}
                 tooltip={toolRowTooltipContent(rawCommand, displayText, displayText)}
               >
                 {rowContentChildren}
@@ -841,6 +848,7 @@ function ToolDetailsDisclosure(props: {
   details?: TimelineWorkEntry["toolDetails"] | undefined;
   activity?: TimelineWorkEntry["liveActivity"] | undefined;
   summaryClassName?: string | undefined;
+  timestampFormat: TimestampFormat;
   tooltip?: ReactNode;
 }) {
   const summaryClassName =
@@ -921,7 +929,11 @@ function ToolDetailsDisclosure(props: {
           contentClassName={cn("min-w-0 pt-2", props.compact ? "ml-5" : "ml-7")}
         >
           <div data-tool-details-inline="true">
-            <ToolCallDetailsContent details={props.details} activity={props.activity} />
+            <ToolCallDetailsContent
+              details={props.details}
+              activity={props.activity}
+              timestampFormat={props.timestampFormat}
+            />
           </div>
         </DisclosureRegion>
       ) : null}

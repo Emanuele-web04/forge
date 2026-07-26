@@ -1669,6 +1669,121 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("correlates Claude progress events by toolUseId with the surrounding lifecycle", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "claude-tool-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Bash started",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          data: {
+            toolCallId: "claude-bash-call",
+            command: "sleep 1",
+          },
+        },
+      }),
+      makeActivity({
+        id: "claude-tool-progress",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Bash",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "Bash",
+          detail: "Still running",
+          data: {
+            toolUseId: "claude-bash-call",
+            toolName: "Bash",
+          },
+        },
+      }),
+      makeActivity({
+        id: "claude-tool-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Bash completed",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          status: "completed",
+          data: {
+            toolCallId: "claude-bash-call",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "completed",
+      startedAt: "2026-02-23T00:00:01.000Z",
+      lastActivityAt: "2026-02-23T00:00:03.000Z",
+      detail: "Still running",
+      elapsedSeconds: 2,
+    });
+  });
+
+  it("preserves terminal failure detail in live activity metadata", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "failed-tool",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.completed",
+          summary: "Deploy failed",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            status: "failed",
+            detail: "Permission denied",
+            data: {
+              toolCallId: "failed-deploy",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "failed",
+      detail: "Permission denied",
+    });
+  });
+
+  it("leaves completion-only tool duration unknown without start evidence", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "completion-only-tool",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.completed",
+          summary: "Deploy completed",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            status: "completed",
+            data: {
+              toolCallId: "completion-only-deploy",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries[0]?.liveActivity).toEqual({
+      state: "completed",
+      label: "Deploy",
+      lastActivityAt: "2026-02-23T00:00:03.000Z",
+    });
+  });
+
   it("normalizes canonical declined status and percentage fields", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

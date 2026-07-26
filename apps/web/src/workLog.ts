@@ -84,7 +84,7 @@ export type WorkLogLiveActivityState =
 export interface WorkLogLiveActivity {
   state: WorkLogLiveActivityState;
   label: string;
-  startedAt: string;
+  startedAt?: string;
   lastActivityAt: string;
   detail?: string;
   progress?: number;
@@ -612,15 +612,19 @@ function deriveWorkLogLiveActivity(
         : "running_tool";
   const detail =
     asTrimmedString(data?.summary) ??
-    (activity.kind === "tool.updated" ? asTrimmedString(payload?.detail) : null);
+    (activity.kind === "tool.updated"
+      ? asTrimmedString(payload?.detail)
+      : state === "failed" || state === "cancelled"
+        ? (entry.detail ?? null)
+        : null);
   const progress = deriveWorkLogLiveActivityProgress(payload, data);
   const elapsedSeconds = firstFiniteNumber(payload?.elapsedSeconds, data?.elapsedSeconds);
 
   return {
     state,
     label: entry.toolTitle ?? entry.label,
-    startedAt: activity.createdAt,
     lastActivityAt: activity.createdAt,
+    ...(activity.kind === "tool.started" ? { startedAt: activity.createdAt } : {}),
     ...(detail ? { detail } : {}),
     ...(progress !== undefined ? { progress } : {}),
     ...(elapsedSeconds !== undefined ? { elapsedSeconds } : {}),
@@ -957,22 +961,26 @@ function mergeWorkLogLiveActivity(
 ): WorkLogLiveActivity | undefined {
   if (!previous) return next;
   if (!next) return previous;
-  const lifecycleElapsedSeconds =
-    (Date.parse(next.lastActivityAt) - Date.parse(previous.startedAt)) / 1_000;
+  const startedAt = previous.startedAt ?? next.startedAt;
+  const lifecycleElapsedSeconds = startedAt
+    ? (Date.parse(next.lastActivityAt) - Date.parse(startedAt)) / 1_000
+    : undefined;
+  const elapsedCandidates = [
+    lifecycleElapsedSeconds,
+    next.elapsedSeconds,
+    previous.elapsedSeconds,
+  ].filter((value): value is number => value !== undefined && Number.isFinite(value));
   const terminalElapsedSeconds =
     next.state === "completed" || next.state === "failed" || next.state === "cancelled"
-      ? Math.max(
-          0,
-          Number.isFinite(lifecycleElapsedSeconds) ? lifecycleElapsedSeconds : 0,
-          next.elapsedSeconds ?? 0,
-          previous.elapsedSeconds ?? 0,
-        )
+      ? elapsedCandidates.length > 0
+        ? Math.max(0, ...elapsedCandidates)
+        : undefined
       : undefined;
   return {
     state: next.state,
     label: next.label || previous.label,
-    startedAt: previous.startedAt,
     lastActivityAt: next.lastActivityAt,
+    ...(startedAt ? { startedAt } : {}),
     ...(next.detail || previous.detail ? { detail: next.detail ?? previous.detail } : {}),
     ...(next.progress !== undefined || previous.progress !== undefined
       ? { progress: next.progress ?? previous.progress }
@@ -1583,7 +1591,9 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
 function extractToolCallId(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
-  return asTrimmedString(data?.toolCallId ?? data?.callID ?? data?.callId ?? item?.id);
+  return asTrimmedString(
+    data?.toolCallId ?? data?.toolUseId ?? data?.callID ?? data?.callId ?? item?.id,
+  );
 }
 
 function stripTrailingExitCode(value: string): {

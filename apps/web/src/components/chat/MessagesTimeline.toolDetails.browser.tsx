@@ -4,9 +4,11 @@
 
 import "../../index.css";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { TurnId } from "@synara/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { formatTimestamp } from "../../timestampFormat";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
 
@@ -85,6 +87,7 @@ function LiveActivityTimeline() {
       density="compact"
       onImageExpand={() => {}}
       markdownCwd={undefined}
+      timestampFormat="24-hour"
     />
   );
 }
@@ -212,6 +215,97 @@ describe("MessagesTimeline tool details", () => {
       expect(document.body.textContent ?? "").toContain("Activity");
       expect(document.body.textContent ?? "").toContain("Running tool");
       expect(document.body.textContent ?? "").toContain("42%");
+      for (const time of document.querySelectorAll<HTMLTimeElement>("time[datetime]")) {
+        expect(time.textContent).toBe(formatTimestamp(time.dateTime, "24-hour"));
+      }
+    } finally {
+      await screen.unmount();
+      host.remove();
+      await settleLayout();
+    }
+  });
+
+  it("keeps agent activity as the primary action when live metadata is present", async () => {
+    const onOpenAgentActivity = vi.fn();
+    const host = createTimelineHost();
+    const screen = await render(
+      <TimelineWorkEntryRow
+        workEntry={{
+          id: "agent-live-activity",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Agent task",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          detail: "Review the implementation",
+          liveActivity: {
+            state: "running_tool",
+            label: "Agent task",
+            startedAt: "2026-03-17T19:12:28.000Z",
+            lastActivityAt: "2026-03-17T19:12:29.000Z",
+          },
+        }}
+        chatMetaFontSizePx={12}
+        textFontSizePx={13}
+        density="compact"
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        onOpenAgentActivity={onOpenAgentActivity}
+        timestampFormat="locale"
+      />,
+      { container: host },
+    );
+
+    try {
+      expect(document.querySelector("[data-tool-detail-trigger='true']")).toBeNull();
+      document.querySelector<HTMLButtonElement>("button")?.click();
+      expect(onOpenAgentActivity).toHaveBeenCalledWith("agent-live-activity");
+      expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+      await settleLayout();
+    }
+  });
+
+  it("opens the turn diff for activity-only file rows", async () => {
+    const onOpenTurnDiff = vi.fn();
+    const turnId = TurnId.makeUnsafe("turn-file-activity");
+    const host = createTimelineHost();
+    const screen = await render(
+      <TimelineWorkEntryRow
+        workEntry={{
+          id: "file-live-activity",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Edited file",
+          tone: "tool",
+          itemType: "file_change",
+          changedFiles: ["src/app.ts"],
+          liveActivity: {
+            state: "completed",
+            label: "Edited file",
+            lastActivityAt: "2026-03-17T19:12:29.000Z",
+          },
+        }}
+        chatMetaFontSizePx={12}
+        textFontSizePx={13}
+        density="compact"
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        turnId={turnId}
+        onOpenTurnDiff={onOpenTurnDiff}
+        timestampFormat="locale"
+      />,
+      { container: host },
+    );
+
+    try {
+      const fileRow = document.querySelector<HTMLButtonElement>(
+        "[data-file-change-row='true']",
+      );
+      expect(fileRow).not.toBeNull();
+      fileRow?.click();
+      expect(onOpenTurnDiff).toHaveBeenCalledWith(turnId, "src/app.ts");
+      expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
     } finally {
       await screen.unmount();
       host.remove();
