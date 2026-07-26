@@ -9,6 +9,7 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
   type ThreadJumpKeybindingCommand,
 } from "@synara/contracts";
+import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
@@ -727,34 +728,22 @@ export function isKeyboardShortcutsHelpShortcut(
   event: ShortcutEventLike,
   platform = navigator.platform,
 ): boolean {
-  if (
-    (event.type !== undefined && event.type !== "keydown") ||
-    event.shiftKey ||
-    event.altKey ||
-    event.repeat
-  ) {
-    return false;
-  }
-
-  // On some Windows layouts Ctrl+- reports "/" for the translated key while
-  // retaining a physical minus code. Outside Windows, "/" remains authoritative
-  // so remapped and non-US layouts keep the shortcuts-help chord.
-  if (
-    event.key === "-" ||
-    (isWindowsPlatform(platform) && (event.code === "Minus" || event.code === "NumpadSubtract"))
-  ) {
-    return false;
-  }
-
-  if (isMacPlatform(platform)) {
-    return event.metaKey && !event.ctrlKey && (event.code === "Slash" || event.key === "/");
-  }
-
-  if (!event.ctrlKey || event.metaKey) {
-    return false;
-  }
-
-  return event.code === "Slash" || event.code === "NumpadDivide" || event.key === "/";
+  return isKeyboardShortcutsHelpChord(
+    {
+      key: event.key,
+      meta: event.metaKey,
+      ctrl: event.ctrlKey,
+      shift: event.shiftKey,
+      alt: event.altKey,
+      ...(event.type !== undefined ? { type: event.type } : {}),
+      ...(event.code !== undefined ? { code: event.code } : {}),
+      ...(event.repeat !== undefined ? { repeat: event.repeat } : {}),
+    },
+    {
+      isMac: isMacPlatform(platform),
+      isWindows: isWindowsPlatform(platform),
+    },
+  );
 }
 
 export function terminalNavigationShortcutData(

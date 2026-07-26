@@ -49,6 +49,7 @@ import {
 } from "electron-updater";
 
 import type { ContextMenuItem } from "@synara/contracts";
+import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import {
   SYNARA_DESKTOP_UPDATE_CHANNEL,
@@ -328,6 +329,29 @@ let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager({
   beforeInputEvent: (event, input) => {
+    if (
+      isKeyboardShortcutsHelpChord(
+        {
+          type: input.type,
+          key: input.key,
+          code: input.code,
+          meta: input.meta,
+          ctrl: input.control,
+          shift: input.shift,
+          alt: input.alt,
+          repeat: input.isAutoRepeat,
+        },
+        {
+          isMac: process.platform === "darwin",
+          isWindows: process.platform === "win32",
+        },
+      )
+    ) {
+      event.preventDefault();
+      dispatchMenuAction("show-shortcuts");
+      return true;
+    }
+
     const target = resolveMenuTargetWindow()?.webContents;
     return target ? handleDesktopPhysicalZoomShortcut(event, input, target) : false;
   },
