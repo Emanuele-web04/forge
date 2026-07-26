@@ -565,118 +565,122 @@ export function CreateProjectDialog(props: {
                       </Select>
                     </div>
 
-                    <DisclosureRegion open={launcherForm.kind === "login-shell"}>
-                      <InputGroup className={fieldControlClassName}>
-                        <InputGroupInput
-                          value={launcherForm.loginShell}
-                          aria-label="Login shell on the host"
-                          placeholder="Login shell (default: bash)"
-                          spellCheck={false}
-                          autoCorrect="off"
-                          autoCapitalize="off"
-                          onChange={(event) =>
-                            setLauncherForm((form) => ({ ...form, loginShell: event.target.value }))
-                          }
-                        />
-                      </InputGroup>
-                    </DisclosureRegion>
-
-                    <DisclosureRegion open={launcherForm.kind === "container"}>
-                      <div className="space-y-3">
-                        <Select
-                          value={launcherForm.containerEngine}
-                          onValueChange={(next) => {
-                            if (typeof next !== "string") return;
-                            setLauncherForm((form) => ({
-                              ...form,
-                              containerEngine: next as ContainerEngine,
-                            }));
-                          }}
-                        >
-                          <SelectTrigger
-                            aria-label="Container engine"
-                            className={cn(fieldControlClassName, "w-full")}
-                          >
-                            <SelectValue>
-                              {CONTAINER_ENGINE_LABELS[launcherForm.containerEngine]}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <ComposerPickerSelectPopup align="start">
-                            {(Object.keys(CONTAINER_ENGINE_LABELS) as ContainerEngine[]).map(
-                              (engine) => (
-                                <SelectItem key={engine} value={engine}>
-                                  {CONTAINER_ENGINE_LABELS[engine]}
-                                </SelectItem>
-                              ),
-                            )}
-                          </ComposerPickerSelectPopup>
-                        </Select>
+                    <DisclosureRegion open={launcherForm.kind !== "direct"}>
+                      {launcherForm.kind === "login-shell" ? (
                         <InputGroup className={fieldControlClassName}>
                           <InputGroupInput
-                            value={launcherForm.containerTarget}
-                            aria-label={
-                              launcherForm.containerEngine === "docker-compose"
-                                ? "Compose service"
-                                : "Container name"
-                            }
-                            placeholder={
-                              launcherForm.containerEngine === "docker-compose"
-                                ? "Compose service, e.g. app"
-                                : "Container, e.g. web"
-                            }
-                            spellCheck={false}
-                            autoCorrect="off"
-                            autoCapitalize="off"
-                            onChange={(event) => {
-                              setLauncherForm((form) => ({
-                                ...form,
-                                containerTarget: event.target.value,
-                              }));
-                              setFormError(null);
-                            }}
-                          />
-                        </InputGroup>
-                        <InputGroup className={fieldControlClassName}>
-                          <InputGroupInput
-                            value={launcherForm.containerUser}
-                            aria-label="User inside the container"
-                            placeholder="User inside the container (optional)"
+                            value={launcherForm.loginShell}
+                            aria-label="Login shell on the host"
+                            placeholder="Login shell (default: bash)"
                             spellCheck={false}
                             autoCorrect="off"
                             autoCapitalize="off"
                             onChange={(event) =>
                               setLauncherForm((form) => ({
                                 ...form,
-                                containerUser: event.target.value,
+                                loginShell: event.target.value,
                               }))
                             }
                           />
                         </InputGroup>
-                      </div>
-                    </DisclosureRegion>
-
-                    <DisclosureRegion open={launcherForm.kind === "command"}>
-                      <div className="space-y-1.5">
-                        <InputGroup className={fieldControlClassName}>
-                          <InputGroupInput
-                            value={launcherForm.command}
-                            aria-label="Custom command to run the agent through"
-                            placeholder="e.g. mise exec --"
-                            spellCheck={false}
-                            autoCorrect="off"
-                            autoCapitalize="off"
-                            onChange={(event) => {
-                              setLauncherForm((form) => ({ ...form, command: event.target.value }));
-                              setFormError(null);
+                      ) : launcherForm.kind === "container" ? (
+                        <div className="space-y-3">
+                          <Select
+                            value={launcherForm.containerEngine}
+                            onValueChange={(next) => {
+                              if (typeof next !== "string") return;
+                              setLauncherForm((form) => ({
+                                ...form,
+                                containerEngine: next as ContainerEngine,
+                              }));
                             }}
-                          />
-                        </InputGroup>
-                        <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
-                          Runs in place and is handed the project command, like{" "}
-                          <code>nix develop -c</code> or <code>direnv exec .</code>. Terminal
-                          multiplexers cannot be used — see below.
-                        </p>
-                      </div>
+                          >
+                            <SelectTrigger
+                              aria-label="Container engine"
+                              className={cn(fieldControlClassName, "w-full")}
+                            >
+                              <SelectValue>
+                                {CONTAINER_ENGINE_LABELS[launcherForm.containerEngine]}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <ComposerPickerSelectPopup align="start">
+                              {(Object.keys(CONTAINER_ENGINE_LABELS) as ContainerEngine[]).map(
+                                (engine) => (
+                                  <SelectItem key={engine} value={engine}>
+                                    {CONTAINER_ENGINE_LABELS[engine]}
+                                  </SelectItem>
+                                ),
+                              )}
+                            </ComposerPickerSelectPopup>
+                          </Select>
+                          <InputGroup className={fieldControlClassName}>
+                            <InputGroupInput
+                              value={launcherForm.containerTarget}
+                              aria-label={
+                                launcherForm.containerEngine === "docker-compose"
+                                  ? "Compose service"
+                                  : "Container name"
+                              }
+                              placeholder={
+                                launcherForm.containerEngine === "docker-compose"
+                                  ? "Compose service, e.g. app"
+                                  : "Container, e.g. web"
+                              }
+                              spellCheck={false}
+                              autoCorrect="off"
+                              autoCapitalize="off"
+                              onChange={(event) => {
+                                setLauncherForm((form) => ({
+                                  ...form,
+                                  containerTarget: event.target.value,
+                                }));
+                                setFormError(null);
+                              }}
+                            />
+                          </InputGroup>
+                          <InputGroup className={fieldControlClassName}>
+                            <InputGroupInput
+                              value={launcherForm.containerUser}
+                              aria-label="User inside the container"
+                              placeholder="User inside the container (optional)"
+                              spellCheck={false}
+                              autoCorrect="off"
+                              autoCapitalize="off"
+                              onChange={(event) =>
+                                setLauncherForm((form) => ({
+                                  ...form,
+                                  containerUser: event.target.value,
+                                }))
+                              }
+                            />
+                          </InputGroup>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <InputGroup className={fieldControlClassName}>
+                            <InputGroupInput
+                              value={launcherForm.command}
+                              aria-label="Custom command to run the agent through"
+                              placeholder="e.g. mise exec --"
+                              spellCheck={false}
+                              autoCorrect="off"
+                              autoCapitalize="off"
+                              onChange={(event) => {
+                                setLauncherForm((form) => ({
+                                  ...form,
+                                  command: event.target.value,
+                                }));
+                                setFormError(null);
+                              }}
+                            />
+                          </InputGroup>
+                          <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+                            Runs in place and is handed the project command, like{" "}
+                            <code>nix develop -c</code> or <code>direnv exec .</code>. Terminal
+                            multiplexers cannot be used — see below.
+                          </p>
+                        </div>
+                      )}
                     </DisclosureRegion>
 
                     {launcherProblem ? (
