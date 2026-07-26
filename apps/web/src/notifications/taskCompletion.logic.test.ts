@@ -610,6 +610,20 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
+  it("preserves spaced multiplication operators", () => {
+    expect(buildCollectedTaskCompletionCopy("Computed 2 * 3 * 4 = 24.")).toEqual({
+      title: "Polish notifications",
+      body: "Computed 2 * 3 * 4 = 24.",
+    });
+  });
+
+  it("removes GFM task-list markers with their list prefix", () => {
+    expect(buildCollectedTaskCompletionCopy("- [x] Tests passed\n- [ ] Release pending")).toEqual({
+      title: "Polish notifications",
+      body: "· Tests passed · Release pending",
+    });
+  });
+
   it("consumes balanced parentheses in Markdown link destinations", () => {
     expect(
       buildCollectedTaskCompletionCopy("Read the [docs](https://example.com/a_(b)) for details."),
@@ -640,6 +654,13 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
+  it("preserves Markdown-shaped syntax inside code spans that cross line breaks", () => {
+    expect(buildCollectedTaskCompletionCopy("Use `foo\n__bar__` now.")).toEqual({
+      title: "Polish notifications",
+      body: "Use foo __bar__ now.",
+    });
+  });
+
   it("does not strip underscores from inline code identifiers", () => {
     expect(buildCollectedTaskCompletionCopy("Updated `__init__.py` and `foo__bar__`.")).toEqual({
       title: "Polish notifications",
@@ -662,14 +683,30 @@ describe("buildTaskCompletionCopy", () => {
   });
 
   it.each([
-    ["blockquote", "Result:\n> ```python\n> def __init__(self):\n>   return value\n> ```"],
-    ["list", "Result:\n- ```python\n  def __init__(self):\n  return value\n  ```"],
-  ])("preserves Markdown-shaped syntax inside a fence nested in a %s", (_label, assistantText) => {
-    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
-      title: "Polish notifications",
-      body: "Result: def __init__(self): return value",
-    });
-  });
+    [
+      "blockquote",
+      "Result:\n> ```python\n> def __init__(self):\n>   return value\n> ```",
+      "Result: def __init__(self): return value",
+    ],
+    [
+      "list",
+      "Result:\n- ```python\n  def __init__(self):\n  return value\n  ```",
+      "Result: def __init__(self): return value",
+    ],
+    [
+      "ordered list",
+      "Result:\n10. ```python\n    def __init__(self):\n    return value\n    ```\n**Done**",
+      "Result: def __init__(self): return value Done",
+    ],
+  ])(
+    "preserves Markdown-shaped syntax inside a fence nested in a %s",
+    (_label, assistantText, expectedBody) => {
+      expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+        title: "Polish notifications",
+        body: expectedBody,
+      });
+    },
+  );
 });
 
 describe("collectInputNeededThreadCandidates", () => {

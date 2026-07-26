@@ -99,8 +99,16 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
 
     const quoteDepth = containerPrefix.match(/>/g)?.length ?? 0;
     const quotePrefix = `(?:[ \\t]{0,3}>[ \\t]?){${quoteDepth}}`;
+    const prefixWithoutBlockquotes = containerPrefix.replace(/[ \t]{0,3}>[ \t]?/g, "");
+    const listContinuationIndent = /(?:[-+*]|\d{1,9}[.)])[ \t]+/.test(prefixWithoutBlockquotes)
+      ? prefixWithoutBlockquotes.length
+      : 0;
+    const closingIndent =
+      listContinuationIndent > 0
+        ? `(?: {${listContinuationIndent},}|[ \\t]*\\t[ \\t]*)`
+        : "[ \\t]{0,3}";
     const closingPattern = new RegExp(
-      `(^|\\n)${quotePrefix}[ \\t]{0,3}${fenceCharacter}{${fence.length},}[ \\t]*\\r?(?=\\n|$)`,
+      `(^|\\n)${quotePrefix}${closingIndent}${fenceCharacter}{${fence.length},}[ \\t]*\\r?(?=\\n|$)`,
       "g",
     );
     closingPattern.lastIndex = openingPattern.lastIndex;
@@ -127,16 +135,10 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
 }
 
 function protectMarkdownInlineCode(text: string, protect: (content: string) => string): string {
-  const runs: Array<{ start: number; end: number; length: number; line: number }> = [];
-  let line = 0;
+  const runs: Array<{ start: number; end: number; length: number }> = [];
   let index = 0;
 
   while (index < text.length) {
-    if (text[index] === "\n") {
-      line += 1;
-      index += 1;
-      continue;
-    }
     if (text[index] !== "`") {
       index += 1;
       continue;
@@ -146,21 +148,16 @@ function protectMarkdownInlineCode(text: string, protect: (content: string) => s
     while (text[index] === "`") {
       index += 1;
     }
-    runs.push({ start, end: index, length: index - start, line });
+    runs.push({ start, end: index, length: index - start });
   }
 
   const nextMatchingRun = Array.from<number | undefined>({ length: runs.length });
   const nextRunByLength = new Map<number, number>();
-  let scannedLine: number | undefined;
 
   for (let runIndex = runs.length - 1; runIndex >= 0; runIndex -= 1) {
     const run = runs[runIndex];
     if (!run) {
       continue;
-    }
-    if (run.line !== scannedLine) {
-      nextRunByLength.clear();
-      scannedLine = run.line;
     }
     nextMatchingRun[runIndex] = nextRunByLength.get(run.length);
     nextRunByLength.set(run.length, runIndex);
@@ -174,7 +171,7 @@ function protectMarkdownInlineCode(text: string, protect: (content: string) => s
     const openingRun = runs[runIndex];
     const closingRunIndex = nextMatchingRun[runIndex];
     const closingRun = closingRunIndex === undefined ? undefined : runs[closingRunIndex];
-    if (!openingRun || !closingRun || closingRun.line !== openingRun.line) {
+    if (!openingRun || !closingRun) {
       runIndex += 1;
       continue;
     }
@@ -294,13 +291,22 @@ function summarizeAssistantText(text: string): string | null {
   const { protectedText, restore } = protectMarkdownCode(text);
   const cleaned = stripMarkdownLinks(protectedText)
     .replace(/`+/g, "")
-    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?)/gm, "")
-    .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/gm, " · ")
-    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
-    .replace(/(^|[^\p{L}\p{N}\p{M}_])__([^_\n]+)__(?=$|[^\p{L}\p{N}\p{M}_])/gu, "$1$2")
-    .replace(/~~([^~\n]+)~~/g, "$1")
-    .replace(/(^|[^\p{L}\p{N}\p{M}_])\*([^*\n]+)\*(?=$|[^\p{L}\p{N}\p{M}_])/gu, "$1$2")
-    .replace(/(^|[^\p{L}\p{N}\p{M}_])_([^_\n]+)_(?=$|[^\p{L}\p{N}\p{M}_])/gu, "$1$2");
+    .replace(/^[ \t]{0,3}(?:#{1,6}[ \t]+|>[ \t]?)/gm, "")
+    .replace(/^[ \t]{0,3}(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, " · ")
+    .replace(/\*\*([^\s*\n](?:[^*\n]*[^\s*\n])?)\*\*/g, "$1")
+    .replace(
+      /(^|[^\p{L}\p{N}\p{M}_])__([^\s_\n](?:[^_\n]*[^\s_\n])?)__(?=$|[^\p{L}\p{N}\p{M}_])/gu,
+      "$1$2",
+    )
+    .replace(/~~([^\s~\n](?:[^~\n]*[^\s~\n])?)~~/g, "$1")
+    .replace(
+      /(^|[^\p{L}\p{N}\p{M}_])\*([^\s*\n](?:[^*\n]*[^\s*\n])?)\*(?=$|[^\p{L}\p{N}\p{M}_])/gu,
+      "$1$2",
+    )
+    .replace(
+      /(^|[^\p{L}\p{N}\p{M}_])_([^\s_\n](?:[^_\n]*[^\s_\n])?)_(?=$|[^\p{L}\p{N}\p{M}_])/gu,
+      "$1$2",
+    );
   const trimmed = restore(cleaned).trim().replace(/\s+/g, " ");
   if (trimmed.length === 0) {
     return null;
