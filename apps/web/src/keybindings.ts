@@ -9,7 +9,7 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
   type ThreadJumpKeybindingCommand,
 } from "@synara/contracts";
-import { isMacPlatform } from "./lib/utils";
+import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
   type?: string;
@@ -736,9 +736,13 @@ export function isKeyboardShortcutsHelpShortcut(
     return false;
   }
 
-  // On some Windows layouts Ctrl+- reports the physical Slash code. The
-  // translated key is authoritative here so the browser can retain zoom-out.
-  if (event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract") {
+  // On some Windows layouts Ctrl+- reports "/" for the translated key while
+  // retaining a physical minus code. Outside Windows, "/" remains authoritative
+  // so remapped and non-US layouts keep the shortcuts-help chord.
+  if (
+    event.key === "-" ||
+    (isWindowsPlatform(platform) && (event.code === "Minus" || event.code === "NumpadSubtract"))
+  ) {
     return false;
   }
 

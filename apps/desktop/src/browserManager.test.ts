@@ -176,4 +176,49 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
       expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(beforeSchemeDenial);
     }
   });
+
+  it("gives the shell first refusal on browser guest keyboard input", () => {
+    const beforeInputEvent = vi.fn((event: Electron.Event) => {
+      event.preventDefault();
+      return true;
+    });
+    const manager = new DesktopBrowserManager({ beforeInputEvent });
+    const initial = manager.open({ threadId: THREAD_ID });
+    const tabId = initial.activeTabId;
+    expect(tabId).not.toBeNull();
+    if (!tabId) return;
+
+    const tabContents = new FakeWebContents();
+    asCharacterizationAccess(manager).configureRuntimeWebContents({
+      key: `thread-1:${tabId}`,
+      threadId: THREAD_ID,
+      tabId,
+      webContents: tabContents as unknown as WebContents,
+      view: null,
+      ownsWebContents: false,
+      listenerDisposers: [],
+    });
+    const event = {
+      preventDefault: vi.fn(),
+      defaultPrevented: false,
+    };
+    const input = {
+      type: "keyDown",
+      key: "-",
+      code: "Minus",
+      isAutoRepeat: false,
+      isComposing: false,
+      shift: false,
+      control: true,
+      alt: false,
+      meta: false,
+      location: 0,
+      modifiers: ["control"],
+    };
+
+    tabContents.emit("before-input-event", event, input);
+
+    expect(beforeInputEvent).toHaveBeenCalledWith(event, input);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
 });

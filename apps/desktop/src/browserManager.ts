@@ -111,6 +111,10 @@ export interface BrowserUseCdpEvent {
   params?: unknown;
 }
 
+export interface DesktopBrowserManagerOptions {
+  beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
+}
+
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
   return {
     id: Crypto.randomUUID(),
@@ -271,6 +275,8 @@ export class DesktopBrowserManager {
     inactiveTabBudgetEvictions: 0,
     warmInactiveRuntimeCount: 0,
   };
+
+  constructor(private readonly options: DesktopBrowserManagerOptions = {}) {}
 
   setWindow(window: BrowserWindow | null): void {
     this.window = window;
@@ -1448,8 +1454,12 @@ export class DesktopBrowserManager {
     this.configureWindowOpenHandling(webContents, runtime, runtime.listenerDisposers);
 
     // The native page owns keyboard focus while browsing, so the renderer never sees the
-    // copy-link chord. Intercept it here, copy the live URL, and let the shell toast.
+    // shell's physical zoom fallback or copy-link chord. Give the shell first refusal,
+    // then handle browser-local chords here.
     const beforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
+      if (this.options.beforeInputEvent?.(event, input)) {
+        return;
+      }
       if (input.type !== "keyDown") {
         return;
       }

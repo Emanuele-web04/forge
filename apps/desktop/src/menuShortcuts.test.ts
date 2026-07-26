@@ -1,9 +1,10 @@
 // FILE: menuShortcuts.test.ts
 // Purpose: Verifies desktop menu accelerator choices that affect native keyboard behavior.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  applyDesktopPhysicalZoomAction,
   resolveDesktopMenuAccelerator,
   resolveDesktopPhysicalZoomAction,
   resolveKeyboardShortcutsMenuAccelerator,
@@ -90,6 +91,20 @@ describe("resolveDesktopPhysicalZoomAction", () => {
     expect(
       resolveDesktopPhysicalZoomAction("linux", { ...windowsCtrlInput, code: "Minus" }),
     ).toBeNull();
+  });
+});
+
+describe("applyDesktopPhysicalZoomAction", () => {
+  it("uses Electron's native half-level zoom-out step", () => {
+    const target = {
+      getZoomLevel: vi.fn(() => 1.25),
+      setZoomLevel: vi.fn(),
+    };
+
+    applyDesktopPhysicalZoomAction(target, "zoomOut");
+
+    expect(target.getZoomLevel).toHaveBeenCalledOnce();
+    expect(target.setZoomLevel).toHaveBeenCalledWith(0.75);
   });
 });
 

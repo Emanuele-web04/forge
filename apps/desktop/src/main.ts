@@ -135,6 +135,7 @@ import {
 } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
+  applyDesktopPhysicalZoomAction,
   resolveDesktopMenuAccelerator,
   resolveDesktopPhysicalZoomAction,
   resolveKeyboardShortcutsMenuAccelerator,
@@ -325,7 +326,12 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
-const browserManager = new DesktopBrowserManager();
+const browserManager = new DesktopBrowserManager({
+  beforeInputEvent: (event, input) => {
+    const target = resolveMenuTargetWindow()?.webContents;
+    return target ? handleDesktopPhysicalZoomShortcut(event, input, target) : false;
+  },
+});
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredUpdaterCacheDirName: string | null = null;
@@ -1326,14 +1332,24 @@ function adjustWebContentsZoom(webContents: Electron.WebContents, multiplier: nu
   webContents.setZoomFactor(nextZoomFactor);
 }
 
+function handleDesktopPhysicalZoomShortcut(
+  event: Electron.Event,
+  input: Electron.Input,
+  target: Electron.WebContents,
+): boolean {
+  const action = resolveDesktopPhysicalZoomAction(process.platform, input);
+  if (!action || target.isDestroyed()) {
+    return false;
+  }
+
+  event.preventDefault();
+  applyDesktopPhysicalZoomAction(target, action);
+  return true;
+}
+
 function attachDesktopPhysicalZoomShortcuts(window: BrowserWindow): void {
   window.webContents.on("before-input-event", (event, input) => {
-    if (resolveDesktopPhysicalZoomAction(process.platform, input) !== "zoomOut") {
-      return;
-    }
-
-    event.preventDefault();
-    adjustWebContentsZoom(window.webContents, 1 / DESKTOP_MENU_ZOOM_FACTOR_STEP);
+    handleDesktopPhysicalZoomShortcut(event, input, window.webContents);
   });
 }
 

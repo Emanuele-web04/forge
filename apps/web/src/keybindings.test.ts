@@ -76,6 +76,12 @@ describe("isKeyboardShortcutsHelpShortcut", () => {
         "MacIntel",
       ),
     );
+    assert.isTrue(
+      isKeyboardShortcutsHelpShortcut(
+        event({ metaKey: true, key: "/", code: "Minus" }),
+        "MacIntel",
+      ),
+    );
     assert.isFalse(
       isKeyboardShortcutsHelpShortcut(
         event({ ctrlKey: true, key: "/", code: "Slash" }),
@@ -88,6 +94,18 @@ describe("isKeyboardShortcutsHelpShortcut", () => {
     assert.isTrue(
       isKeyboardShortcutsHelpShortcut(
         event({ ctrlKey: true, key: "/", code: "Slash" }),
+        "Linux x86_64",
+      ),
+    );
+    assert.isTrue(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "/", code: "Minus" }),
+        "Linux x86_64",
+      ),
+    );
+    assert.isTrue(
+      isKeyboardShortcutsHelpShortcut(
+        event({ ctrlKey: true, key: "/", code: "NumpadSubtract" }),
         "Linux x86_64",
       ),
     );
