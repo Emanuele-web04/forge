@@ -326,6 +326,7 @@ describe("wsNativeApi", () => {
             customModels: [],
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
+          omp: { enabled: true, binaryPath: "omp", agentDir: "", customModels: [] },
         },
         skills: { disabled: [] },
       },

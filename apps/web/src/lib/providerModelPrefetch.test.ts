@@ -34,6 +34,8 @@ function makeSettings(
     openCodeBinaryPath: "",
     piBinaryPath: "",
     piAgentDir: "",
+    ompBinaryPath: "",
+    ompAgentDir: "",
     ...overrides,
   };
 }
@@ -160,6 +162,22 @@ describe("providerModelsPrefetchQueryOptions", () => {
     });
     expect(codexOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models("codex", null, null, null, null),
+    );
+  });
+  it("matches ChatView cache key for OMP and keeps it cwd-agnostic", () => {
+    const settings = makeSettings({
+      ompBinaryPath: "/bin/omp",
+      ompAgentDir: "/tmp/omp-agent",
+    });
+    const ompOptions = providerModelsPrefetchQueryOptions({
+      provider: "omp",
+      settings,
+      cwd: "/tmp/project",
+    });
+    // OMP's catalog is global, so cwd is forced to null — the prefetch must land on the
+    // same cwd-agnostic key the composer reads and the startup warmer (ProviderModelDiscoveryWarmer) writes.
+    expect(ompOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/tmp/omp-agent", null),
     );
   });
 });

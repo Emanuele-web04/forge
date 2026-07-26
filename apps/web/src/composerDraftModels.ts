@@ -37,6 +37,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "kilo",
   "opencode",
   "pi",
+  "omp",
 ] as const satisfies readonly ProviderKind[];
 
 const isProviderKind = Schema.is(ProviderKind);
@@ -209,6 +210,14 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
           : {}),
       };
+    case "omp":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "omp" }>["options"] }
+          : {}),
+      };
   }
 }
 
@@ -253,6 +262,10 @@ export function normalizeProviderModelOptions(
   const piCandidate =
     candidate?.pi && typeof candidate.pi === "object"
       ? (candidate.pi as Record<string, unknown>)
+      : null;
+  const ompCandidate =
+    candidate?.omp && typeof candidate.omp === "object"
+      ? (candidate.omp as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -389,6 +402,16 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
+  const ompThinkingLevel: PiThinkingLevel | undefined =
+    ompCandidate?.thinkingLevel === "off" ||
+    ompCandidate?.thinkingLevel === "minimal" ||
+    ompCandidate?.thinkingLevel === "low" ||
+    ompCandidate?.thinkingLevel === "medium" ||
+    ompCandidate?.thinkingLevel === "high" ||
+    ompCandidate?.thinkingLevel === "xhigh"
+      ? ompCandidate.thinkingLevel
+      : undefined;
+  const omp = ompThinkingLevel !== undefined ? { thinkingLevel: ompThinkingLevel } : undefined;
   if (
     !codex &&
     !claude &&
@@ -398,7 +421,8 @@ export function normalizeProviderModelOptions(
     !droid &&
     !kilo &&
     !opencode &&
-    !pi
+    !pi &&
+    !omp
   ) {
     return null;
   }
@@ -412,6 +436,7 @@ export function normalizeProviderModelOptions(
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
+    ...(omp ? { omp } : {}),
   };
 }
 
@@ -485,7 +510,9 @@ export function normalizeModelSelection(
                     ? modelOptions?.opencode
                     : provider === "pi"
                       ? modelOptions?.pi
-                      : undefined;
+                      : provider === "omp"
+                        ? modelOptions?.omp
+                        : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {
@@ -771,8 +798,11 @@ export function resolvePreferredComposerModelSelection(input: {
     (input.projectModelSelection?.provider === preferredProvider
       ? input.projectModelSelection
       : null) ?? {
-      provider: preferredProvider === "pi" ? "codex" : preferredProvider,
-      model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
+      provider:
+        preferredProvider === "pi" || preferredProvider === "omp" ? "codex" : preferredProvider,
+      model: getDefaultModel(
+        preferredProvider === "pi" || preferredProvider === "omp" ? "codex" : preferredProvider,
+      ),
     }
   );
 }

@@ -347,6 +347,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "OpenCode";
     case "pi":
       return "Pi";
+    case "omp":
+      return "Oh My Pi";
   }
 }
 

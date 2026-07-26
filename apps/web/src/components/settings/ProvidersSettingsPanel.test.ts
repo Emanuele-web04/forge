@@ -72,6 +72,8 @@ describe("createProviderInstallResetPatch", () => {
         "kiloBinaryPath",
         "kiloServerPassword",
         "kiloServerUrl",
+        "ompAgentDir",
+        "ompBinaryPath",
         "openCodeBinaryPath",
         "openCodeExperimentalWebSockets",
         "openCodeServerPassword",
