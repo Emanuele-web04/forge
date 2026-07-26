@@ -131,6 +131,54 @@ export const ProjectRemote = Schema.Struct({
 });
 export type ProjectRemote = typeof ProjectRemote.Type;
 
+/**
+ * Outcome of a remote probe, ordered from "nothing worked" to "ready".
+ *
+ * Each value maps to one thing the user has to fix, because every one of them is otherwise
+ * indistinguishable at session start: the session simply fails to produce a first turn.
+ */
+export const ProjectRemoteProbeStatus = Schema.Literals([
+  /** ssh itself never got a shell on the host: DNS, network, or authentication. */
+  "unreachable",
+  /** Connected, but the workspace root does not exist there. */
+  "missing-path",
+  /** Connected and the path exists, but the agent binary is not on the resolved PATH. */
+  "missing-binary",
+  /**
+   * The agent ran, but the shell wrote to stdout before it did. That output lands in the
+   * middle of the agent protocol, so the session would fail in a way that looks random.
+   */
+  "noisy-shell",
+  "ok",
+]);
+export type ProjectRemoteProbeStatus = typeof ProjectRemoteProbeStatus.Type;
+
+export const ProjectProbeRemoteInput = Schema.Struct({
+  remote: ProjectRemote,
+  workspaceRoot: TrimmedNonEmptyString,
+  /** Binary to look for; defaults to the Claude CLI. */
+  binaryName: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+  ),
+});
+export type ProjectProbeRemoteInput = typeof ProjectProbeRemoteInput.Type;
+
+export const ProjectProbeRemoteResult = Schema.Struct({
+  status: ProjectRemoteProbeStatus,
+  /** One sentence the UI can show as-is. */
+  summary: Schema.String,
+  /** Verbatim diagnostic output (ssh stderr, or the shell noise) when there is any. */
+  detail: Schema.NullOr(Schema.String),
+  /** Agent version reported by the host, when it ran. */
+  version: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * Set when the probe found the agent only after retrying through a login shell. The UI
+   * switches the launcher to this rather than making the user work out which one to pick.
+   */
+  suggestedLauncher: Schema.NullOr(ProjectRemoteLauncher),
+});
+export type ProjectProbeRemoteResult = typeof ProjectProbeRemoteResult.Type;
+
 export const ProjectSearchEntriesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   query: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),

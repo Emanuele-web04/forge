@@ -4,7 +4,12 @@
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
-import { type ProjectRemote, type ProjectRemoteLauncher, type SpaceId } from "@synara/contracts";
+import {
+  type ProjectProbeRemoteResult,
+  type ProjectRemote,
+  type ProjectRemoteLauncher,
+  type SpaceId,
+} from "@synara/contracts";
 import { describeRejectedRemoteLauncher, parseShellWords } from "@synara/shared/sshRemote";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
@@ -168,6 +173,13 @@ export function CreateProjectDialog(props: {
   const [remoteBinaryPath, setRemoteBinaryPath] = useState("");
   const [launcherForm, setLauncherForm] = useState<LauncherFormState>(EMPTY_LAUNCHER_FORM);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
+  // Kept with the inputs it was produced for: a result is only ever shown while it still
+  // describes what the form currently says, so editing a field cannot leave a stale "ready".
+  const [probe, setProbe] = useState<{
+    readonly signature: string;
+    readonly result: ProjectProbeRemoteResult;
+  } | null>(null);
   const [selectedSpaceKey, setSelectedSpaceKey] = useState<string>(VOID_SPACE_KEY);
   const [spaceEditorOpen, setSpaceEditorOpen] = useState(false);
   /**
@@ -205,6 +217,8 @@ export function CreateProjectDialog(props: {
     setRemoteBinaryPath("");
     setLauncherForm(EMPTY_LAUNCHER_FORM);
     setAdvancedOpen(false);
+    setChecking(false);
+    setProbe(null);
     setSelectedSpaceKey(spaceKey(props.activeSpaceId));
     setSpaceEditorOpen(false);
     setCreatedSpace(null);
@@ -222,6 +236,64 @@ export function CreateProjectDialog(props: {
   const isRemote = location === "ssh";
   const trimmedSshHost = sshHost.trim();
   const launcherProblem = isRemote ? describeLauncherProblem(launcherForm) : null;
+  const probeSignature = JSON.stringify([
+    trimmedPath,
+    trimmedSshHost,
+    sshArgs,
+    shellInit,
+    remoteBinaryPath,
+    launcherForm,
+  ]);
+  const probeResult = probe?.signature === probeSignature ? probe.result : null;
+  const buildRemote = (): ProjectRemote => ({
+    kind: "ssh",
+    host: trimmedSshHost,
+    sshArgs: parseShellWords(sshArgs),
+    shellInit: shellInit.trim() || null,
+    binaryPath: remoteBinaryPath.trim() || null,
+    launcher: buildLauncher(launcherForm),
+  });
+
+  // Runs the command a session would run, so the dialog can answer the one question the
+  // user cannot answer from here: does this host, path, and launcher combination work.
+  const checkConnection = async () => {
+    if (checking || trimmedPath.length === 0 || trimmedSshHost.length === 0) {
+      setFormError(
+        trimmedSshHost.length === 0
+          ? "Type the SSH host to connect to."
+          : "Type the project folder path on the host.",
+      );
+      return;
+    }
+    if (launcherProblem) {
+      setFormError(launcherProblem);
+      return;
+    }
+    const api = readNativeApi();
+    if (!api) {
+      setFormError("The app server is unavailable.");
+      return;
+    }
+    setChecking(true);
+    setFormError(null);
+    setProbe(null);
+    try {
+      const result = await api.projects.probeRemote({
+        remote: buildRemote(),
+        workspaceRoot: trimmedPath,
+      });
+      setProbe({ signature: probeSignature, result });
+      // The probe found the agent only through a login shell: apply that rather than
+      // leaving the user to map the finding onto a setting.
+      if (result.suggestedLauncher?.kind === "login-shell") {
+        setLauncherForm((form) => ({ ...form, kind: "login-shell" }));
+        setAdvancedOpen(true);
+      }
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Could not reach the host.");
+    }
+    setChecking(false);
+  };
   const formErrorMeaning = formError ? describeAddProjectError(formError) : null;
   const spaces =
     createdSpace && !props.spaces.some((space) => space.id === createdSpace.id)
@@ -333,16 +405,7 @@ export function CreateProjectDialog(props: {
         // A remote folder is never scaffolded from here: Synara has no filesystem access
         // on the host, so the path is taken as given.
         createIfMissing: !isRemote && trimmedPath !== pickedPath,
-        remote: isRemote
-          ? {
-              kind: "ssh",
-              host: trimmedSshHost,
-              sshArgs: parseShellWords(sshArgs),
-              shellInit: shellInit.trim() || null,
-              binaryPath: remoteBinaryPath.trim() || null,
-              launcher: buildLauncher(launcherForm),
-            }
-          : null,
+        remote: isRemote ? buildRemote() : null,
       });
       props.onOpenChange(false);
     } catch (error) {
@@ -520,6 +583,42 @@ export function CreateProjectDialog(props: {
                   Any ssh destination — a <code>~/.ssh/config</code> alias keeps your port, key, and
                   jump hosts exactly as your terminal uses them.
                 </p>
+              </div>
+
+              <div className="space-y-2">
+                <Button
+                  variant="outline"
+                  className={cn(fieldControlClassName, "w-full")}
+                  disabled={checking || submitting}
+                  onClick={() => void checkConnection()}
+                >
+                  {checking ? "Checking…" : "Check connection"}
+                </Button>
+                {probeResult ? (
+                  <div
+                    role="status"
+                    className={cn(
+                      "space-y-1 rounded-lg border px-3 py-2",
+                      probeResult.status === "ok"
+                        ? "border-foreground/12"
+                        : "border-destructive/40",
+                    )}
+                  >
+                    <p
+                      className={cn(
+                        "text-[length:var(--app-font-size-ui-xs,10px)]",
+                        probeResult.status === "ok" ? "text-foreground" : "text-destructive",
+                      )}
+                    >
+                      {probeResult.summary}
+                    </p>
+                    {probeResult.detail ? (
+                      <pre className="max-h-24 overflow-auto text-[length:var(--app-font-size-ui-xs,10px)] whitespace-pre-wrap text-muted-foreground/70">
+                        {probeResult.detail}
+                      </pre>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <div className="space-y-2">

@@ -472,6 +472,7 @@ export function createWsNativeApi(): NativeApi {
     },
     projects: {
       discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
+      probeRemote: (input) => transport.request(WS_METHODS.projectsProbeRemote, input),
       listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       searchLocalEntries: (input) =>

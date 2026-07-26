@@ -17,9 +17,48 @@ does not exist on this machine.
 4. **SSH host** — any ssh(1) destination: `deploy@build-box`, `10.0.0.5`, or a
    `~/.ssh/config` `Host` alias.
 
+5. **Check connection**, then **Create project**.
+
 That is the whole required setup when your host is already in `~/.ssh/config`. Synara shells
 out to `ssh`, so your existing port, identity, `ProxyJump`, `ProxyCommand`, and
 `ControlMaster` settings apply unchanged, and agent forwarding keeps working.
+
+## Check connection
+
+The button runs the command a real session would run — same ssh options, same launcher, same
+working directory, same quoting — with `claude --version` in place of a turn. A check that
+passes cannot be passing for a different command than the one that will run.
+
+| What it finds                              | What you see                                                                           |
+| ------------------------------------------ | -------------------------------------------------------------------------------------- |
+| ssh could not get a shell                  | ssh's own stderr: wrong key, unknown host, no route                                    |
+| The path is not there                      | the path, named                                                                        |
+| `claude` is not on the connection's `PATH` | it retries through a login shell, and if that works, **switches the launcher for you** |
+| The shell prints before the agent runs     | a warning — that output lands inside the agent protocol and corrupts the session       |
+| Everything works                           | the version the host reported                                                          |
+
+It runs with `BatchMode=yes` so a host that wants a password fails immediately with that as
+the reason, rather than hanging on a prompt no one can answer. Real sessions keep ssh's
+normal interactive behaviour.
+
+Editing any field discards the result, so a green check always describes what the form
+currently says.
+
+### Multiple threads on one host
+
+Each thread opens its own ssh connection and runs its own agent, in parallel. Add
+connection reuse so that stays cheap:
+
+```
+Host <your host>
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%r@%h:%p
+  ControlPersist 10m
+```
+
+Without it every thread pays a full TCP and auth handshake. With it they share one
+connection, and the host sees one login instead of N. Past roughly ten concurrent threads,
+raise `MaxSessions` in the host's `sshd_config` — that is the multiplexed-channel cap.
 
 ## Where the agent lands
 

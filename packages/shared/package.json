@@ -132,6 +132,10 @@
       "types": "./src/sshRemote.ts",
       "import": "./src/sshRemote.ts"
     },
+    "./sshRemoteProbe": {
+      "types": "./src/sshRemoteProbe.ts",
+      "import": "./src/sshRemoteProbe.ts"
+    },
     "./subagents": {
       "types": "./src/subagents.ts",
       "import": "./src/subagents.ts"
