@@ -565,7 +565,9 @@ function deriveProviderRuntimeReconciliationCollapseKey(
   if (
     !provider ||
     !projectedTurnId ||
-    (action !== "settle-interrupted" && action !== "align-running-turn") ||
+    (action !== "settle-interrupted" &&
+      action !== "settle-terminal-projection" &&
+      action !== "align-running-turn") ||
     (action === "align-running-turn" && !runtimeTurnId)
   ) {
     return undefined;

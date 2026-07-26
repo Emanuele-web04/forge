@@ -404,7 +404,7 @@ describe("deriveWorkLogEntries", () => {
   it("hides repeated non-adjacent recovery rows for the same provider turn", () => {
     const recoveryPayload = {
       provider: "codex",
-      action: "settle-interrupted",
+      action: "settle-terminal-projection",
       projectedTurnId: "turn-stale",
       runtimeTurnId: null,
     };

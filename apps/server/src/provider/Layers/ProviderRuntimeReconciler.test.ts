@@ -54,10 +54,10 @@ function staleShellSnapshot(): OrchestrationShellSnapshot {
         },
         session: {
           threadId: THREAD_ID,
-          status: "running",
+          status: "ready",
           providerName: "codex",
           runtimeMode: "full-access",
-          activeTurnId: TURN_ID,
+          activeTurnId: null,
           lastError: null,
           updatedAt,
         },
@@ -79,7 +79,7 @@ function readyProviderSession(): ProviderSession {
 }
 
 describe("ProviderRuntimeReconcilerLive", () => {
-  it("retries a stale repair without duplicating its visible recovery activity", async () => {
+  it("retries a terminal-session turn repair without reopening the session", async () => {
     const commands: OrchestrationCommand[] = [];
     const reconcileSettledOpenTurns = vi.fn();
 
@@ -106,8 +106,8 @@ describe("ProviderRuntimeReconcilerLive", () => {
           {
             threadId: THREAD_ID,
             provider: "codex" as const,
-            status: "running" as const,
-            runtimePayload: { activeTurnId: TURN_ID },
+            status: "stopped" as const,
+            runtimePayload: { activeTurnId: null },
           },
         ]),
     } as unknown as ProviderSessionDirectoryShape;
@@ -151,14 +151,14 @@ describe("ProviderRuntimeReconcilerLive", () => {
       expect(activityCommand.activity.kind).toBe("provider.runtime.reconciled");
       expect(activityCommand.activity.summary).toContain("recovered");
       expect(activityCommand.activity.payload).toMatchObject({
-        action: "settle-interrupted",
+        action: "settle-terminal-projection",
       });
     }
     const sessionCommand = commands[1];
     expect(sessionCommand?.type).toBe("thread.session.set");
     if (sessionCommand?.type === "thread.session.set") {
       expect(sessionCommand.session).toMatchObject({
-        status: "interrupted",
+        status: "ready",
         activeTurnId: null,
         lastError: null,
       });

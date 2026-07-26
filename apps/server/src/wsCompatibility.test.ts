@@ -2,6 +2,7 @@ import {
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
+  WS_SERVER_CAPABILITIES,
 } from "@synara/contracts";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -20,7 +21,7 @@ describe("WebSocket compatibility bootstrap", () => {
         minRevision: WS_PROTOCOL_MIN_REVISION,
         maxRevision: WS_PROTOCOL_MAX_REVISION,
         clientBuild: "test-client",
-        requiredCapabilities: ["orchestration.cursor-safe-streams"],
+        requiredCapabilities: [...WS_SERVER_CAPABILITIES],
       }),
     );
 
@@ -31,6 +32,7 @@ describe("WebSocket compatibility bootstrap", () => {
     expect(result.serverBuild.length).toBeGreaterThan(0);
     expect(result.serverInstanceId.length).toBeGreaterThan(0);
     expect(result.capabilities).toContain("orchestration.cursor-safe-streams");
+    expect(result.capabilities).toContain("orchestration.thread-detail-snapshot");
   });
 
   it("returns terminal update guidance and rejects feature calls without negotiated query data", async () => {

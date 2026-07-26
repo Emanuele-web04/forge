@@ -8,6 +8,7 @@
  * @module providerRuntimeReconciliation
  */
 import type {
+  OrchestrationSession,
   OrchestrationThreadShell,
   ProviderSession,
   ThreadId,
@@ -35,19 +36,41 @@ export type ProviderRuntimeReconciliationPlan =
       readonly projectedTurnId: TurnId | null;
       readonly runtimeTurnId: null;
       readonly reason: string;
+    }
+  | {
+      readonly action: "settle-terminal-projection";
+      readonly threadId: ThreadId;
+      readonly provider: ProviderRuntimeBinding["provider"];
+      readonly projectedTurnId: TurnId;
+      readonly runtimeTurnId: null;
+      readonly terminalSession: TerminalProjectedSession;
+      readonly reason: string;
     };
+
+type TerminalProjectedSession = Omit<OrchestrationSession, "status"> & {
+  readonly status: "ready" | "interrupted" | "stopped" | "error";
+};
+
+function terminalProjectedSession(
+  thread: OrchestrationThreadShell,
+): TerminalProjectedSession | null {
+  const session = thread.session;
+  if (session === null) return null;
+
+  switch (session.status) {
+    case "ready":
+    case "interrupted":
+    case "stopped":
+    case "error":
+      return { ...session, status: session.status };
+    case "starting":
+    case "running":
+      return null;
+  }
+}
 
 function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | null {
   const session = thread.session;
-  if (
-    session !== null &&
-    (session.status === "ready" ||
-      session.status === "interrupted" ||
-      session.status === "stopped" ||
-      session.status === "error")
-  ) {
-    return null;
-  }
   // A queued start has no provider turn yet. Falling back to latestTurn here
   // can attach the new request to an older terminal (or ingestion-lagged) turn.
   if (session?.status === "starting" && session.activeTurnId === null) {
@@ -133,6 +156,24 @@ export function planProviderRuntimeReconciliation(input: {
     const bindingSettled = binding.status === "stopped" || binding.status === "error";
 
     if (!liveSessionSettled && !missingLiveSession && !bindingSettled) continue;
+
+    const terminalSession = terminalProjectedSession(thread);
+    if (terminalSession !== null) {
+      plans.push({
+        action: "settle-terminal-projection",
+        threadId: thread.id,
+        provider: binding.provider,
+        projectedTurnId,
+        runtimeTurnId: null,
+        terminalSession,
+        reason: liveSessionSettled
+          ? `The live provider session is '${liveSession.status}', but terminal projection '${terminalSession.status}' still has a running turn.${detail}`
+          : bindingSettled
+            ? `The durable provider binding is '${binding.status}', but terminal projection '${terminalSession.status}' still has a running turn.${detail}`
+            : `Terminal projection '${terminalSession.status}' still has a running turn, but the provider Adapter no longer owns a live session.${detail}`,
+      });
+      continue;
+    }
 
     plans.push({
       action: "settle-interrupted",

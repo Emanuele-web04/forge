@@ -26,6 +26,7 @@ export const WS_COMPATIBILITY_QUERY = {
 
 export const WS_SERVER_CAPABILITIES = [
   "orchestration.cursor-safe-streams",
+  "orchestration.thread-detail-snapshot",
   "rpc.typed-errors",
 ] as const;
 

@@ -304,26 +304,37 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
-  it("does not reopen a settled session because its latest turn is stale", () => {
-    const plans = planProviderRuntimeReconciliation({
-      threads: [
-        threadShell({
-          session: {
-            ...threadShell().session!,
-            status: "interrupted",
-            activeTurnId: null,
-          },
-        }),
-      ],
-      bindings: [binding(null)],
-      liveSessions: [liveSession({ status: "ready" })],
-      pumpHealth: [],
-      nowMs: NOW,
-      staleAfterMs: 10_000,
-    });
+  it.each(["ready", "interrupted", "stopped", "error"] as const)(
+    "settles a stale running turn without reopening its %s session",
+    (status) => {
+      const terminalSession = {
+        ...threadShell().session!,
+        status,
+        activeTurnId: null,
+      };
+      const plans = planProviderRuntimeReconciliation({
+        threads: [
+          threadShell({
+            session: terminalSession,
+          }),
+        ],
+        bindings: [binding(null)],
+        liveSessions: [liveSession({ status: "ready" })],
+        pumpHealth: [],
+        nowMs: NOW,
+        staleAfterMs: 10_000,
+      });
 
-    expect(plans).toEqual([]);
-  });
+      expect(plans).toEqual([
+        expect.objectContaining({
+          action: "settle-terminal-projection",
+          projectedTurnId: OLD_TURN_ID,
+          runtimeTurnId: null,
+          terminalSession,
+        }),
+      ]);
+    },
+  );
 
   it("records degraded pump evidence in the reconciliation reason", () => {
     const plans = planProviderRuntimeReconciliation({
