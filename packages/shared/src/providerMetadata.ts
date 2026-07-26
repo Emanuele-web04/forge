@@ -57,6 +57,7 @@ export const PROVIDER_DESCRIPTORS = [
     usage: null,
   },
   { kind: "pi", displayName: PROVIDER_DISPLAY_NAMES.pi, available: true, usage: null },
+  { kind: "omp", displayName: PROVIDER_DISPLAY_NAMES.omp, available: true, usage: null },
 ] as const satisfies readonly ProviderDescriptor[];
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(
