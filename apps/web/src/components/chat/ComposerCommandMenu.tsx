@@ -331,6 +331,7 @@ export function ComposerCommandMenu(props: {
     props.triggerKind,
     props.groupSlashCommandSections ?? true,
   );
+  const shouldRenderList = props.items.length > 0 || props.triggerKind === "mention";
 
   useEffect(() => {
     if (!props.activeItemId) {
@@ -353,54 +354,63 @@ export function ComposerCommandMenu(props: {
       }}
     >
       <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME}>
-        <CommandList className="max-h-72 scroll-py-1 p-1">
-          {groups.map((group, groupIndex) => (
-            <div key={group.id}>
-              {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
-              <CommandGroup>
-                {group.label ? (
-                  <CommandGroupLabel className={COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME}>
-                    {group.label}
-                  </CommandGroupLabel>
-                ) : null}
-                {group.items.map((item) => (
-                  <ComposerCommandMenuItem
-                    key={item.id}
-                    item={item}
-                    resolvedTheme={props.resolvedTheme}
-                    isActive={props.activeItemId === item.id}
+        {shouldRenderList ? (
+          <CommandList className="max-h-72 scroll-py-1 p-1">
+            {groups.map((group, groupIndex) => (
+              <div key={group.id}>
+                {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
+                <CommandGroup>
+                  {group.label ? (
+                    <CommandGroupLabel className={COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME}>
+                      {group.label}
+                    </CommandGroupLabel>
+                  ) : null}
+                  {group.items.map((item) => (
+                    <ComposerCommandMenuItem
+                      key={item.id}
+                      item={item}
+                      resolvedTheme={props.resolvedTheme}
+                      isActive={props.activeItemId === item.id}
                     itemRef={(node) => {
                       itemRefs.current[item.id] = node;
                     }}
-                    onHighlight={props.onHighlightedItemChange}
-                    onSelect={props.onSelect}
-                  />
-                ))}
-              </CommandGroup>
-            </div>
-          ))}
-          {props.triggerKind === "mention" ? (
-            <>
-              {groups.length > 0 ? <CommandSeparator className="my-0.5" /> : null}
-              {/* This footer is informational copy, not a selectable result group. */}
-              <div className="pt-0.5 pb-2">
-                <p
-                  className={cn(
-                    COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME,
-                    "px-2 py-0 font-medium text-muted-foreground text-xs",
-                  )}
-                >
-                  Files
-                </p>
-                <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
-                  Type to search for files
-                </p>
+                      onHighlight={props.onHighlightedItemChange}
+                      onSelect={props.onSelect}
+                    />
+                  ))}
+                </CommandGroup>
               </div>
-            </>
-          ) : null}
-        </CommandList>
+            ))}
+            {props.triggerKind === "mention" ? (
+              <>
+                {groups.length > 0 ? <CommandSeparator className="my-0.5" /> : null}
+                {/* This footer is informational copy, not a selectable result group. */}
+                <div className="pt-0.5 pb-2">
+                  <p
+                    className={cn(
+                      COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME,
+                      "px-2 py-0 font-medium text-muted-foreground text-xs",
+                    )}
+                  >
+                    Files
+                  </p>
+                  <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
+                    Type to search for files
+                  </p>
+                </div>
+              </>
+            ) : null}
+          </CommandList>
+        ) : null}
         {props.items.length === 0 && (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p
+            className={cn(
+              "text-muted-foreground/50 text-[11px]",
+              props.isLoading
+                ? "flex h-[calc(1.625rem+0.5rem)] items-center px-2 text-left"
+                : "px-2 py-1.5",
+            )}
+          >
             {props.isLoading
               ? props.triggerKind === "mention"
                 ? "Searching mentions..."
