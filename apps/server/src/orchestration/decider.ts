@@ -4,6 +4,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationThread,
   ProjectKind,
+  ProjectRemote,
   ThreadMarker,
 } from "@synara/contracts";
 import {
@@ -20,6 +21,7 @@ import {
   deriveAssociatedWorktreeMetadataPatch,
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
+import { describeRejectedRemoteLauncher } from "@synara/shared/sshRemote";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import {
   collectTailTurnIds,
@@ -59,6 +61,23 @@ import {
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
+
+/**
+ * A launcher that detaches the agent from its stdio produces a session that connects and
+ * then waits forever, which is indistinguishable from a slow model. Rejecting it here means
+ * the failure is a message on the command that configured it, not a hung thread later.
+ */
+const requireUsableRemoteLauncher = (
+  command: OrchestrationCommand,
+  remote: ProjectRemote | null | undefined,
+): Effect.Effect<void, OrchestrationCommandInvariantError> => {
+  const rejection = remote?.launcher ? describeRejectedRemoteLauncher(remote.launcher) : null;
+  return rejection
+    ? Effect.fail(
+        new OrchestrationCommandInvariantError({ commandType: command.type, detail: rejection }),
+      )
+    : Effect.void;
+};
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "buffered" as const;
 const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 // Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
@@ -581,6 +600,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Managed '${nextProjectKind}' containers cannot target a remote host.`,
         });
       }
+      yield* requireUsableRemoteLauncher(command, command.remote);
       if (nextProjectKind === "project") {
         // The app-managed Studio container owns its root exclusively and is never retired here:
         // silently deleting it would orphan Studio threads, so adding its folder as a project
@@ -712,6 +732,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Managed '${nextProjectKind}' containers cannot target a remote host.`,
         });
       }
+      yield* requireUsableRemoteLauncher(command, nextRemote);
       const requestedSpaceId =
         command.spaceId !== undefined
           ? command.spaceId

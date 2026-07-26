@@ -4,7 +4,12 @@
 // Layer: Shared domain helper (pure; no process/filesystem access)
 // Exports: project remote predicates, POSIX quoting, remote script assembly, ssh argv assembly
 
-import type { ProjectRemote, ProviderKind, ProviderStartOptions } from "@synara/contracts";
+import type {
+  ProjectRemote,
+  ProjectRemoteLauncher,
+  ProviderKind,
+  ProviderStartOptions,
+} from "@synara/contracts";
 
 /**
  * Providers whose runtime Synara can currently launch on another host.
@@ -109,11 +114,12 @@ export function quotePosixShellArgument(value: string): string {
 }
 
 /**
- * Splits a typed ssh option string into argv entries, honouring quotes so options whose
- * value contains spaces survive (`-o "ProxyCommand=nc %h %p"`). The result is passed to
- * `execve`, never to a shell, so quoting here is about faithfulness rather than safety.
+ * Splits a typed command line into argv entries, honouring quotes so arguments whose value
+ * contains spaces survive (`-o "ProxyCommand=nc %h %p"`). Used for both the ssh options and
+ * the custom launcher. Every result is quoted again before it reaches a shell, so this is
+ * about reading the user's intent faithfully rather than about safety.
  */
-export function parseSshArgs(value: string): ReadonlyArray<string> {
+export function parseShellWords(value: string): ReadonlyArray<string> {
   const args: string[] = [];
   let current = "";
   let quote: '"' | "'" | null = null;
@@ -149,6 +155,85 @@ export function parseSshArgs(value: string): ReadonlyArray<string> {
   return args;
 }
 
+const DEFAULT_LOGIN_SHELL = "bash";
+const DEFAULT_LAUNCHER_SHELL = "sh";
+
+/**
+ * Wrappers that move the command onto their own pty or into the background. They are
+ * refused rather than supported: the agent speaks newline-delimited JSON on the stdin and
+ * stdout it inherits, and every one of these replaces or detaches those descriptors, so a
+ * session would connect and then wait forever for a first frame that cannot arrive.
+ */
+const DETACHING_LAUNCHER_COMMANDS: ReadonlyMap<string, string> = new Map([
+  ["tmux", "tmux"],
+  ["screen", "screen"],
+  ["zellij", "zellij"],
+  ["byobu", "byobu"],
+  ["dtach", "dtach"],
+  ["abduco", "abduco"],
+  ["nohup", "nohup"],
+  ["setsid", "setsid"],
+  ["daemonize", "daemonize"],
+]);
+
+const DETACHING_LAUNCHER_FLAGS: ReadonlySet<string> = new Set(["-d", "--detach", "--detached"]);
+
+function commandBasename(command: string): string {
+  return command.split(/[/\\]/).findLast((segment) => segment.length > 0) ?? command;
+}
+
+/**
+ * Explains why a launcher cannot work, or `null` when it can. Callers surface the string
+ * at configuration time so the failure is a readable message next to the field rather than
+ * a session that starts and silently never produces a turn.
+ */
+export function describeRejectedRemoteLauncher(launcher: ProjectRemoteLauncher): string | null {
+  if (launcher.kind !== "command") {
+    return null;
+  }
+  const [command, ...rest] = launcher.args;
+  if (command === undefined) {
+    return "Type the command to run the agent through.";
+  }
+  const detaching = DETACHING_LAUNCHER_COMMANDS.get(commandBasename(command).toLowerCase());
+  if (detaching) {
+    return `${detaching} runs the command on its own terminal, so the agent's output never reaches Synara. Use a wrapper that runs in place — a login shell, a container exec, or a tool like mise, nix, or direnv.`;
+  }
+  const detachingFlag = rest.find((argument) => DETACHING_LAUNCHER_FLAGS.has(argument));
+  if (detachingFlag) {
+    return `'${detachingFlag}' detaches the agent from Synara, which needs to stay attached to its output. Remove it.`;
+  }
+  return null;
+}
+
+/**
+ * Renders the launcher's own argv around the project script.
+ *
+ * Every kind hands the script to a shell as one argument, so the script's meaning — cd,
+ * shell setup, environment, `exec` — is identical no matter what it runs inside. The only
+ * difference between kinds is which process opens that shell.
+ */
+function buildLauncherPrefix(launcher: ProjectRemoteLauncher): ReadonlyArray<string> {
+  switch (launcher.kind) {
+    case "direct":
+      return [];
+    case "login-shell":
+      // `-l` sources the profile; `-c` keeps the script a single argument.
+      return [launcher.shell ?? DEFAULT_LOGIN_SHELL, "-l", "-c"];
+    case "container": {
+      const shell = launcher.shell ?? DEFAULT_LAUNCHER_SHELL;
+      const user = launcher.user ? ["-u", launcher.user] : [];
+      // The interactive flag is what keeps stdin open through the exec; compose spells it
+      // `-T` (disable its own pty) where the engines spell it `-i`.
+      return launcher.engine === "docker-compose"
+        ? ["docker", "compose", "exec", "-T", ...user, launcher.target, shell, "-c"]
+        : [launcher.engine, "exec", "-i", ...user, launcher.target, shell, "-c"];
+    }
+    case "command":
+      return [...launcher.args, launcher.shell ?? DEFAULT_LAUNCHER_SHELL, "-c"];
+  }
+}
+
 export interface RemoteShellScriptInput {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -156,17 +241,20 @@ export interface RemoteShellScriptInput {
   readonly shellInit?: string | null | undefined;
   /** Forwarded verbatim to the remote; every value is quoted before it reaches the shell. */
   readonly env?: Readonly<Record<string, string>> | undefined;
+  /** What the project script runs inside on the host. Defaults to running it directly. */
+  readonly launcher?: ProjectRemoteLauncher | null | undefined;
 }
 
 /**
- * Builds the single command string ssh hands to the remote login shell.
+ * Builds the project script: the command the agent's own shell runs, wherever that shell
+ * ends up living.
  *
  * Steps are chained with `&&` so a failed `cd` or `shellInit` fails the session loudly
  * instead of silently running the agent in the wrong directory. `exec` makes the agent
  * the shell's own process, so ssh's connection teardown reaches the agent directly and
  * no wrapper shell survives the CLI.
  */
-export function buildRemoteShellScript(input: RemoteShellScriptInput): string {
+export function buildProjectScript(input: RemoteShellScriptInput): string {
   const steps: string[] = [];
   const cwd = input.cwd?.trim();
   if (cwd) {
@@ -186,6 +274,18 @@ export function buildRemoteShellScript(input: RemoteShellScriptInput): string {
       : `exec ${invocation}`,
   );
   return steps.join(" && ");
+}
+
+/**
+ * Builds the single command string ssh hands to the remote login shell: the project script,
+ * optionally handed to a launcher that opens the shell it runs in.
+ */
+export function buildRemoteShellScript(input: RemoteShellScriptInput): string {
+  const script = buildProjectScript(input);
+  const prefix = buildLauncherPrefix(input.launcher ?? { kind: "direct" });
+  return prefix.length === 0
+    ? script
+    : `exec ${prefix.map(quotePosixShellArgument).join(" ")} ${quotePosixShellArgument(script)}`;
 }
 
 export interface SshRemoteSpawnInput extends RemoteShellScriptInput {
@@ -225,7 +325,7 @@ export function buildSshRemoteSpawn(input: SshRemoteSpawnInput): SshRemoteSpawn 
       ...SSH_KEEPALIVE_OPTIONS,
       ...reverseForwards,
       input.remote.host,
-      buildRemoteShellScript(input),
+      buildRemoteShellScript({ ...input, launcher: input.launcher ?? input.remote.launcher }),
     ],
   };
 }

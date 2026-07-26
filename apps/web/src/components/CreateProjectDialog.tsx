@@ -4,8 +4,8 @@
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
-import { type ProjectRemote, type SpaceId } from "@synara/contracts";
-import { parseSshArgs } from "@synara/shared/sshRemote";
+import { type ProjectRemote, type ProjectRemoteLauncher, type SpaceId } from "@synara/contracts";
+import { describeRejectedRemoteLauncher, parseShellWords } from "@synara/shared/sshRemote";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 import { isElectron } from "../env";
@@ -49,6 +49,77 @@ function isFileDrag(event: globalThis.DragEvent): boolean {
 }
 
 type ProjectLocation = "local" | "ssh";
+
+type LauncherKind = ProjectRemoteLauncher["kind"];
+type ContainerEngine = Extract<ProjectRemoteLauncher, { kind: "container" }>["engine"];
+
+const LAUNCHER_LABELS: Record<LauncherKind, string> = {
+  direct: "Directly",
+  "login-shell": "A login shell",
+  container: "A container",
+  command: "A custom command",
+};
+
+const CONTAINER_ENGINE_LABELS: Record<ContainerEngine, string> = {
+  docker: "docker exec",
+  podman: "podman exec",
+  "docker-compose": "docker compose exec",
+};
+
+interface LauncherFormState {
+  readonly kind: LauncherKind;
+  readonly loginShell: string;
+  readonly containerEngine: ContainerEngine;
+  readonly containerTarget: string;
+  readonly containerUser: string;
+  readonly containerShell: string;
+  readonly command: string;
+}
+
+const EMPTY_LAUNCHER_FORM: LauncherFormState = {
+  kind: "direct",
+  loginShell: "",
+  containerEngine: "docker",
+  containerTarget: "",
+  containerUser: "",
+  containerShell: "",
+  command: "",
+};
+
+const trimmedOrNull = (value: string): string | null => value.trim() || null;
+
+function buildLauncher(form: LauncherFormState): ProjectRemoteLauncher {
+  switch (form.kind) {
+    case "direct":
+      return { kind: "direct" };
+    case "login-shell":
+      return { kind: "login-shell", shell: trimmedOrNull(form.loginShell) };
+    case "container":
+      return {
+        kind: "container",
+        engine: form.containerEngine,
+        target: form.containerTarget.trim(),
+        user: trimmedOrNull(form.containerUser),
+        shell: trimmedOrNull(form.containerShell),
+      };
+    case "command":
+      return {
+        kind: "command",
+        args: parseShellWords(form.command),
+        shell: null,
+      };
+  }
+}
+
+/** Configuration-time explanation, so a broken launcher never becomes a hung session. */
+function describeLauncherProblem(form: LauncherFormState): string | null {
+  if (form.kind === "container" && form.containerTarget.trim().length === 0) {
+    return form.containerEngine === "docker-compose"
+      ? "Type the compose service to run in."
+      : "Type the container to run in.";
+  }
+  return describeRejectedRemoteLauncher(buildLauncher(form));
+}
 
 type DroppedFolderResult = { readonly path: string } | { readonly error: string };
 
@@ -95,6 +166,7 @@ export function CreateProjectDialog(props: {
   const [sshArgs, setSshArgs] = useState("");
   const [shellInit, setShellInit] = useState("");
   const [remoteBinaryPath, setRemoteBinaryPath] = useState("");
+  const [launcherForm, setLauncherForm] = useState<LauncherFormState>(EMPTY_LAUNCHER_FORM);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectedSpaceKey, setSelectedSpaceKey] = useState<string>(VOID_SPACE_KEY);
   const [spaceEditorOpen, setSpaceEditorOpen] = useState(false);
@@ -115,6 +187,7 @@ export function CreateProjectDialog(props: {
   const sourceFolderLabelId = `${fieldId}-source-folder`;
   const locationLabelId = `${fieldId}-location`;
   const sshHostInputId = `${fieldId}-ssh-host`;
+  const launcherLabelId = `${fieldId}-launcher`;
   const spaceLabelId = `${fieldId}-space`;
   const errorId = `${fieldId}-error`;
 
@@ -130,6 +203,7 @@ export function CreateProjectDialog(props: {
     setSshArgs("");
     setShellInit("");
     setRemoteBinaryPath("");
+    setLauncherForm(EMPTY_LAUNCHER_FORM);
     setAdvancedOpen(false);
     setSelectedSpaceKey(spaceKey(props.activeSpaceId));
     setSpaceEditorOpen(false);
@@ -147,6 +221,7 @@ export function CreateProjectDialog(props: {
   const trimmedPath = path.trim();
   const isRemote = location === "ssh";
   const trimmedSshHost = sshHost.trim();
+  const launcherProblem = isRemote ? describeLauncherProblem(launcherForm) : null;
   const formErrorMeaning = formError ? describeAddProjectError(formError) : null;
   const spaces =
     createdSpace && !props.spaces.some((space) => space.id === createdSpace.id)
@@ -245,6 +320,10 @@ export function CreateProjectDialog(props: {
       setFormError("Type the SSH host to connect to.");
       return;
     }
+    if (launcherProblem) {
+      setFormError(launcherProblem);
+      return;
+    }
     setSubmitting(true);
     setFormError(null);
     try {
@@ -258,9 +337,10 @@ export function CreateProjectDialog(props: {
           ? {
               kind: "ssh",
               host: trimmedSshHost,
-              sshArgs: parseSshArgs(sshArgs),
+              sshArgs: parseShellWords(sshArgs),
               shellInit: shellInit.trim() || null,
               binaryPath: remoteBinaryPath.trim() || null,
+              launcher: buildLauncher(launcherForm),
             }
           : null,
       });
@@ -454,6 +534,157 @@ export function CreateProjectDialog(props: {
                 </button>
                 <DisclosureRegion open={advancedOpen}>
                   <div className="space-y-3 pt-1">
+                    <div className="space-y-2">
+                      <span
+                        id={launcherLabelId}
+                        className="block text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70"
+                      >
+                        Run the agent through
+                      </span>
+                      <Select
+                        value={launcherForm.kind}
+                        onValueChange={(next) => {
+                          if (typeof next !== "string") return;
+                          setLauncherForm((form) => ({ ...form, kind: next as LauncherKind }));
+                          setFormError(null);
+                        }}
+                      >
+                        <SelectTrigger
+                          aria-labelledby={launcherLabelId}
+                          className={cn(fieldControlClassName, "w-full")}
+                        >
+                          <SelectValue>{LAUNCHER_LABELS[launcherForm.kind]}</SelectValue>
+                        </SelectTrigger>
+                        <ComposerPickerSelectPopup align="start">
+                          {(Object.keys(LAUNCHER_LABELS) as LauncherKind[]).map((kind) => (
+                            <SelectItem key={kind} value={kind}>
+                              {LAUNCHER_LABELS[kind]}
+                            </SelectItem>
+                          ))}
+                        </ComposerPickerSelectPopup>
+                      </Select>
+                    </div>
+
+                    <DisclosureRegion open={launcherForm.kind === "login-shell"}>
+                      <InputGroup className={fieldControlClassName}>
+                        <InputGroupInput
+                          value={launcherForm.loginShell}
+                          aria-label="Login shell on the host"
+                          placeholder="Login shell (default: bash)"
+                          spellCheck={false}
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          onChange={(event) =>
+                            setLauncherForm((form) => ({ ...form, loginShell: event.target.value }))
+                          }
+                        />
+                      </InputGroup>
+                    </DisclosureRegion>
+
+                    <DisclosureRegion open={launcherForm.kind === "container"}>
+                      <div className="space-y-3">
+                        <Select
+                          value={launcherForm.containerEngine}
+                          onValueChange={(next) => {
+                            if (typeof next !== "string") return;
+                            setLauncherForm((form) => ({
+                              ...form,
+                              containerEngine: next as ContainerEngine,
+                            }));
+                          }}
+                        >
+                          <SelectTrigger
+                            aria-label="Container engine"
+                            className={cn(fieldControlClassName, "w-full")}
+                          >
+                            <SelectValue>
+                              {CONTAINER_ENGINE_LABELS[launcherForm.containerEngine]}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <ComposerPickerSelectPopup align="start">
+                            {(Object.keys(CONTAINER_ENGINE_LABELS) as ContainerEngine[]).map(
+                              (engine) => (
+                                <SelectItem key={engine} value={engine}>
+                                  {CONTAINER_ENGINE_LABELS[engine]}
+                                </SelectItem>
+                              ),
+                            )}
+                          </ComposerPickerSelectPopup>
+                        </Select>
+                        <InputGroup className={fieldControlClassName}>
+                          <InputGroupInput
+                            value={launcherForm.containerTarget}
+                            aria-label={
+                              launcherForm.containerEngine === "docker-compose"
+                                ? "Compose service"
+                                : "Container name"
+                            }
+                            placeholder={
+                              launcherForm.containerEngine === "docker-compose"
+                                ? "Compose service, e.g. app"
+                                : "Container, e.g. web"
+                            }
+                            spellCheck={false}
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            onChange={(event) => {
+                              setLauncherForm((form) => ({
+                                ...form,
+                                containerTarget: event.target.value,
+                              }));
+                              setFormError(null);
+                            }}
+                          />
+                        </InputGroup>
+                        <InputGroup className={fieldControlClassName}>
+                          <InputGroupInput
+                            value={launcherForm.containerUser}
+                            aria-label="User inside the container"
+                            placeholder="User inside the container (optional)"
+                            spellCheck={false}
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            onChange={(event) =>
+                              setLauncherForm((form) => ({
+                                ...form,
+                                containerUser: event.target.value,
+                              }))
+                            }
+                          />
+                        </InputGroup>
+                      </div>
+                    </DisclosureRegion>
+
+                    <DisclosureRegion open={launcherForm.kind === "command"}>
+                      <div className="space-y-1.5">
+                        <InputGroup className={fieldControlClassName}>
+                          <InputGroupInput
+                            value={launcherForm.command}
+                            aria-label="Custom command to run the agent through"
+                            placeholder="e.g. mise exec --"
+                            spellCheck={false}
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            onChange={(event) => {
+                              setLauncherForm((form) => ({ ...form, command: event.target.value }));
+                              setFormError(null);
+                            }}
+                          />
+                        </InputGroup>
+                        <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+                          Runs in place and is handed the project command, like{" "}
+                          <code>nix develop -c</code> or <code>direnv exec .</code>. Terminal
+                          multiplexers cannot be used — see below.
+                        </p>
+                      </div>
+                    </DisclosureRegion>
+
+                    {launcherProblem ? (
+                      <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-destructive">
+                        {launcherProblem}
+                      </p>
+                    ) : null}
+
                     <InputGroup className={fieldControlClassName}>
                       <InputGroupInput
                         value={sshArgs}

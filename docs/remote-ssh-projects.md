@@ -21,9 +21,48 @@ That is the whole required setup when your host is already in `~/.ssh/config`. S
 out to `ssh`, so your existing port, identity, `ProxyJump`, `ProxyCommand`, and
 `ControlMaster` settings apply unchanged, and agent forwarding keeps working.
 
+## Where the agent lands
+
+**Run the agent through** (in Advanced) decides what the agent command runs inside on the
+host. Every option hands the same project script — `cd <path> && <shell setup> && exec <claude>` —
+to a different shell, so the script's meaning never changes; only what opens that shell does.
+
+| Option           | Runs                                          | Use it for                                                                                                                  |
+| ---------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Directly         | `<claude>`                                    | Default. The host's non-interactive environment already works.                                                              |
+| A login shell    | `bash -l -c '<script>'`                       | nvm, mise, asdf, rbenv, Herd — anything that only exists once a profile is sourced. Shell is configurable.                  |
+| A container      | `docker exec -i <container> sh -c '<script>'` | Dockerized dev environments. Supports `docker`, `podman`, and `docker compose exec -T`, plus an optional user.              |
+| A custom command | `<your command> sh -c '<script>'`             | Everything else that runs in place: `mise exec --`, `nix develop -c`, `direnv exec .`, `distrobox enter --`, `toolbox run`. |
+
+The container option is typed rather than left to the custom field because the interactive
+flag is what keeps stdin open — `exec -i`, or `-T` for compose. Omitting it produces a
+session that connects and then silently never answers, which is the least debuggable
+failure this feature can have.
+
+### Why tmux is not an option
+
+Terminal multiplexers are refused, with the reason shown next to the field.
+
+The agent speaks newline-delimited JSON on the stdin and stdout it inherits from ssh. tmux,
+screen, and zellij all run their command in a separate server process on a **new pty**:
+
+- `tmux new-session -d '<claude>'` — the pane does not inherit Synara's stdin/stdout, and the
+  ssh command returns immediately, so the session is over before the first frame.
+- `tmux new-session` without `-d` over `ssh -T` — "open terminal failed: not a terminal".
+- `ssh -t` plus tmux — the protocol goes through a pty _and_ tmux's terminal emulation, so it
+  arrives echoed, wrapped at the pane width, and interleaved with escape sequences.
+
+`nohup`, `setsid`, and `-d`/`--detach` flags are refused for the same reason: they detach the
+process Synara needs to stay attached to.
+
+The persistence tmux normally provides is already covered — a Synara thread outlives the ssh
+connection and resumes the provider session, so a dropped link is not a lost conversation.
+If you want a shell on the host alongside the agent, open one the way you always have; it is
+simply not where the agent lives.
+
 ## Advanced
 
-Three optional fields cover hosts that need more than an alias:
+Three more optional fields cover hosts that need more than an alias:
 
 | Field                     | Use it for                                                       | Example                               |
 | ------------------------- | ---------------------------------------------------------------- | ------------------------------------- |
@@ -42,8 +81,11 @@ For each session Synara builds one command:
 ```
 ssh -T <your ssh args> -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
     [-R <gateway port>:127.0.0.1:<gateway port>] <host> \
-    'cd <path> && <shell setup> && exec env CLAUDE_CODE_ENTRYPOINT=sdk-ts <claude> <cli flags>'
+    '<launcher> cd <path> && <shell setup> && exec env CLAUDE_CODE_ENTRYPOINT=sdk-ts <claude> <cli flags>'
 ```
+
+With a launcher configured, the part after `<launcher>` is quoted and handed to it as one
+argument — for a login shell that is `exec bash -l -c '<script>'`.
 
 - The CLI's own argv is unchanged — only _where_ it runs differs — so the Claude Agent SDK
   keeps speaking its normal stdio protocol, now over the ssh connection.
@@ -82,3 +124,5 @@ A remote project is a chat-and-agent surface today. These stay local-only for no
   read this machine's filesystem.
 - Native slash-command discovery before the first turn. Once a session is running the
   commands come from the live remote CLI.
+- Editing a project's remote settings after creation. The command exists server-side; there
+  is no UI for it yet, so a change means re-adding the project.

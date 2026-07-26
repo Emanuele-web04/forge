@@ -25,6 +25,74 @@ export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
 export type ProjectKind = typeof ProjectKind.Type;
 
 /**
+ * How the agent command is wrapped once ssh reaches the host.
+ *
+ * Every launcher must be **stdio-transparent**: it has to run the agent in place, keeping
+ * the inherited stdin/stdout, because the agent protocol is newline-delimited JSON on
+ * those descriptors. Terminal multiplexers (tmux, screen, zellij) and backgrounding
+ * wrappers (nohup, setsid) move the process onto their own pty or detach it, so the
+ * protocol never reaches Synara — `describeRejectedRemoteLauncher` refuses them by name
+ * instead of letting a session start and hang.
+ */
+export const ProjectRemoteLauncher = Schema.Union([
+  /** Run the agent as ssh's own command. */
+  Schema.Struct({ kind: Schema.Literal("direct") }),
+  /**
+   * Run it through a login shell so the user's profile (nvm, mise, asdf, rbenv, Herd)
+   * is loaded — the usual reason a setup works in a terminal but not over ssh.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("login-shell"),
+    shell: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+      ),
+    ).pipe(Schema.withDecodingDefault(() => null)),
+  }),
+  /**
+   * Run it inside a container on the host. Typed rather than left to the custom launcher
+   * because the interactive flag (`exec -i`, `compose exec -T`) is what keeps stdin open,
+   * and omitting it produces a session that connects and then silently never responds.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("container"),
+    engine: Schema.Literals(["docker", "podman", "docker-compose"]),
+    /** Container name, or compose service name for the `docker-compose` engine. */
+    target: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_HOST_MAX_LENGTH)),
+    user: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_HOST_MAX_LENGTH)),
+      ),
+    ).pipe(Schema.withDecodingDefault(() => null)),
+    /** Shell used inside the container to run the project script. */
+    shell: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+      ),
+    ).pipe(Schema.withDecodingDefault(() => null)),
+  }),
+  /**
+   * Anything else that runs a command in place: `mise exec --`, `nix develop -c`,
+   * `direnv exec .`, `distrobox enter --`, `toolbox run`. The project script is handed
+   * to it as a single shell-command argument.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("command"),
+    args: Schema.Array(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_SSH_ARG_MAX_LENGTH)),
+    )
+      .check(Schema.isMinLength(1), Schema.isMaxLength(PROJECT_REMOTE_SSH_ARGS_MAX_COUNT))
+      .annotate({ description: "Wrapper command and its arguments, already tokenized." }),
+    shell: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+      ),
+    ).pipe(Schema.withDecodingDefault(() => null)),
+  }),
+]);
+export type ProjectRemoteLauncher = typeof ProjectRemoteLauncher.Type;
+
+/**
  * SSH target for a project whose workspace lives on another machine.
  *
  * Synara deliberately owns none of the connection setup: `host` is any ssh(1)
@@ -50,6 +118,10 @@ export const ProjectRemote = Schema.Struct({
       TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_SHELL_INIT_MAX_LENGTH)),
     ),
   ).pipe(Schema.withDecodingDefault(() => null)),
+  /** What the agent command runs inside on the host. Defaults to running it directly. */
+  launcher: Schema.optional(ProjectRemoteLauncher).pipe(
+    Schema.withDecodingDefault(() => ({ kind: "direct" as const })),
+  ),
   /** Agent binary as resolved on the remote host; defaults to the provider's own default. */
   binaryPath: Schema.optional(
     Schema.NullOr(

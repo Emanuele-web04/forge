@@ -12,7 +12,7 @@ import {
   buildSshRemoteSpawn,
   describeProjectRemote,
   isRemoteProject,
-  parseSshArgs,
+  parseShellWords,
   quotePosixShellArgument,
   resolveProjectRemote,
 } from "./sshRemote";
@@ -68,9 +68,9 @@ describe("quotePosixShellArgument", () => {
   });
 });
 
-describe("parseSshArgs", () => {
+describe("parseShellWords", () => {
   it("splits on whitespace", () => {
-    expect(parseSshArgs("  -p 2222   -i ~/.ssh/id_ed25519 ")).toEqual([
+    expect(parseShellWords("  -p 2222   -i ~/.ssh/id_ed25519 ")).toEqual([
       "-p",
       "2222",
       "-i",
@@ -79,7 +79,7 @@ describe("parseSshArgs", () => {
   });
 
   it("keeps quoted option values in one argument", () => {
-    expect(parseSshArgs(`-o "ProxyCommand=nc %h %p" -J bastion`)).toEqual([
+    expect(parseShellWords(`-o "ProxyCommand=nc %h %p" -J bastion`)).toEqual([
       "-o",
       "ProxyCommand=nc %h %p",
       "-J",
@@ -88,11 +88,11 @@ describe("parseSshArgs", () => {
   });
 
   it("returns nothing for blank input", () => {
-    expect(parseSshArgs("   ")).toEqual([]);
+    expect(parseShellWords("   ")).toEqual([]);
   });
 
   it("preserves an intentionally empty quoted argument", () => {
-    expect(parseSshArgs(`-o ""`)).toEqual(["-o", ""]);
+    expect(parseShellWords(`-o ""`)).toEqual(["-o", ""]);
   });
 });
 
