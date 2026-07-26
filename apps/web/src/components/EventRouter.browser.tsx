@@ -801,6 +801,129 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   }, 60_000);
 
+  it("runs one terminal reconciliation when the final assistant event is absent", async () => {
+    const turnId = TurnId.makeUnsafe("turn-terminal-fence");
+    const finalMessageId = MessageId.makeUnsafe("msg-terminal-fence-final");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+    const mounted = await mountApp();
+
+    try {
+      const completedAt = "2026-03-04T12:00:09.000Z";
+      const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: 3,
+          updatedAt: completedAt,
+          threads: [
+            {
+              ...currentThread,
+              latestTurn: {
+                turnId,
+                state: "completed",
+                requestedAt: startedAt,
+                startedAt,
+                completedAt,
+                assistantMessageId: finalMessageId,
+              },
+              messages: [
+                ...currentThread.messages,
+                {
+                  id: finalMessageId,
+                  role: "assistant",
+                  text: "Recovered after the terminal fence.",
+                  turnId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: completedAt,
+                  updatedAt: completedAt,
+                },
+              ],
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: completedAt,
+              },
+              updatedAt: completedAt,
+            },
+          ],
+        },
+      };
+
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-terminal-fence-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.messages.some((message) => message.id === finalMessageId)).toBe(false);
+      });
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(thread?.messages.find((message) => message.id === finalMessageId)?.text).toBe(
+            "Recovered after the terminal fence.",
+          );
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
   it("reconciles a missed completion from the authoritative thread projection", async () => {
     const turnId = TurnId.makeUnsafe("turn-missed-completion");
     const progressMessageId = MessageId.makeUnsafe("msg-missed-completion-progress");

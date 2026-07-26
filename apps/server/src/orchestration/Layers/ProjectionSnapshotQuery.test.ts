@@ -2015,6 +2015,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'thread-unbound-oldest', 'project-runtime-candidates', 'Unbound',
             '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
             '2026-07-22T00:00:00.000Z', '2026-07-22T00:00:00.000Z', NULL, NULL
+          ),
+          (
+            'thread-queued-oldest', 'project-runtime-candidates', 'Queued',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z', NULL, NULL
           )
       `;
       yield* sql`
@@ -2041,20 +2046,28 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (
             'thread-unbound-oldest', 'running', 'codex', NULL, NULL,
             'full-access', 'turn-unbound', NULL, '2026-07-22T00:00:00.000Z'
+          ),
+          (
+            'thread-queued-oldest', 'starting', 'codex', NULL, NULL,
+            'full-access', NULL, NULL, '2026-07-21T00:00:00.000Z'
           )
       `;
       yield* sql`
         INSERT INTO provider_session_runtime (
           thread_id, provider_name, adapter_key, runtime_mode, status,
-          lifecycle_generation, last_seen_at
+          lifecycle_generation, last_seen_at, runtime_payload_json
         ) VALUES
           (
             'thread-stale-running', 'codex', 'codex', 'full-access', 'running',
-            'generation-stale', '2026-07-23T00:00:00.000Z'
+            'generation-stale', '2026-07-23T00:00:00.000Z', NULL
           ),
           (
             'thread-fresh-running', 'codex', 'codex', 'full-access', 'running',
-            'generation-fresh', '2026-07-23T09:59:00.000Z'
+            'generation-fresh', '2026-07-23T09:59:00.000Z', NULL
+          ),
+          (
+            'thread-queued-oldest', 'codex', 'codex', 'full-access', 'starting',
+            'generation-queued', '2026-07-21T00:00:00.000Z', '{}'
           )
         ON CONFLICT (thread_id) DO UPDATE SET
           provider_name = excluded.provider_name,
@@ -2062,7 +2075,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtime_mode = excluded.runtime_mode,
           status = excluded.status,
           lifecycle_generation = excluded.lifecycle_generation,
-          last_seen_at = excluded.last_seen_at
+          last_seen_at = excluded.last_seen_at,
+          runtime_payload_json = excluded.runtime_payload_json
       `;
 
       const candidates = yield* snapshotQuery.listStaleInFlightThreadIds({

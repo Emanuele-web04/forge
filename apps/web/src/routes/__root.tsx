@@ -908,6 +908,15 @@ function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
   );
 }
 
+function isTerminalThreadSessionStatus(status: string): boolean {
+  return (
+    status === "ready" ||
+    status === "interrupted" ||
+    status === "stopped" ||
+    status === "error"
+  );
+}
+
 /**
  * Frees the detail of threads whose stream lease just dropped and that nothing
  * else owns. Batched into one store write because every write re-runs the
@@ -1000,6 +1009,7 @@ function EventRouter() {
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadReplayRequestInFlight = new Set<ThreadId>();
     const threadProjectionReconcileInFlight = new Map<ThreadId, number>();
+    const threadProjectionTerminalFencePending = new Set<ThreadId>();
     const threadSubscriptionGenerationById = new Map<ThreadId, number>();
     const nextThreadProjectionReconcileAtById = new Map<ThreadId, number>();
     let nextThreadSubscriptionGeneration = 0;
@@ -1010,6 +1020,7 @@ function EventRouter() {
       pendingThreadEventsById.set(threadId, []);
       threadSnapshotRequestInFlight.delete(threadId);
       threadProjectionReconcileInFlight.delete(threadId);
+      threadProjectionTerminalFencePending.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
       threadSubscriptionGenerationById.set(threadId, nextThreadSubscriptionGeneration);
       nextThreadProjectionReconcileAtById.set(
@@ -1056,6 +1067,7 @@ function EventRouter() {
         threadSnapshotRequestInFlight.delete(threadId);
         threadReplayRequestInFlight.delete(threadId);
         threadProjectionReconcileInFlight.delete(threadId);
+        threadProjectionTerminalFencePending.delete(threadId);
         threadSubscriptionGenerationById.delete(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
         subscribedThreadIds.delete(threadId);
@@ -1162,6 +1174,7 @@ function EventRouter() {
         threadSnapshotRequestInFlight.clear();
         threadReplayRequestInFlight.clear();
         threadProjectionReconcileInFlight.clear();
+        threadProjectionTerminalFencePending.clear();
         threadSubscriptionGenerationById.clear();
         nextThreadProjectionReconcileAtById.clear();
         const previousThreadIds = [...subscribedThreadIds];
@@ -1347,6 +1360,7 @@ function EventRouter() {
         return;
       }
       threadProjectionReconcileInFlight.set(threadId, subscriptionGeneration);
+      let projectionConfirmed = false;
       try {
         const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
         if (
@@ -1382,6 +1396,7 @@ function EventRouter() {
         syncServerThreadDetailHotPath(snapshot.thread);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
+        projectionConfirmed = true;
         if (projectionSettlesCurrentTurn) {
           // Mirror terminal-event invalidation when recovery came from the
           // projection rather than the live stream.
@@ -1395,7 +1410,13 @@ function EventRouter() {
           threadProjectionReconcileInFlight.delete(threadId);
         }
         if (threadSubscriptionGenerationById.get(threadId) === subscriptionGeneration) {
-          if (shouldReconcileThreadProjection(threadId)) {
+          if (projectionConfirmed) {
+            threadProjectionTerminalFencePending.delete(threadId);
+          }
+          if (
+            threadProjectionTerminalFencePending.has(threadId) ||
+            shouldReconcileThreadProjection(threadId)
+          ) {
             nextThreadProjectionReconcileAtById.set(
               threadId,
               Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
@@ -1446,6 +1467,18 @@ function EventRouter() {
       if (
         item.kind === "thread-upserted" &&
         subscribedThreadIds.has(item.thread.id) &&
+        item.thread.session !== null &&
+        isTerminalThreadSessionStatus(item.thread.session.status)
+      ) {
+        threadProjectionTerminalFencePending.add(item.thread.id);
+        nextThreadProjectionReconcileAtById.set(
+          item.thread.id,
+          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+        );
+      }
+      if (
+        item.kind === "thread-upserted" &&
+        subscribedThreadIds.has(item.thread.id) &&
         !threadSnapshotSequenceById.has(item.thread.id)
       ) {
         void requestThreadSnapshot(item.thread.id);
@@ -1478,6 +1511,16 @@ function EventRouter() {
       }
 
       const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
+      if (
+        item.event.type === "thread.session-set" &&
+        isTerminalThreadSessionStatus(item.event.payload.session.status)
+      ) {
+        threadProjectionTerminalFencePending.add(threadId);
+        nextThreadProjectionReconcileAtById.set(
+          threadId,
+          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+        );
+      }
       const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
       if (latestThreadSequence === undefined) {
         const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
@@ -1716,7 +1759,10 @@ function EventRouter() {
             void replayThreadEvents(threadId).catch(() => undefined);
           }
         }
-        if (!shouldReconcileThreadProjection(threadId)) {
+        if (
+          !threadProjectionTerminalFencePending.has(threadId) &&
+          !shouldReconcileThreadProjection(threadId)
+        ) {
           nextThreadProjectionReconcileAtById.delete(threadId);
           continue;
         }
@@ -1744,6 +1790,7 @@ function EventRouter() {
       pendingGitInvalidationThreadIds = new Set();
       pendingStudioOutputInvalidationThreadIds = new Set();
       threadProjectionReconcileInFlight.clear();
+      threadProjectionTerminalFencePending.clear();
       threadSubscriptionGenerationById.clear();
       nextThreadProjectionReconcileAtById.clear();
       domainEventFlushThrottler.cancel();

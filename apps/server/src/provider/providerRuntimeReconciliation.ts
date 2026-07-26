@@ -120,6 +120,14 @@ function bindingLastError(binding: ProviderRuntimeBinding): string | null {
     : null;
 }
 
+function bindingActiveTurnId(binding: ProviderRuntimeBinding): string | null {
+  const payload = binding.runtimePayload;
+  if (typeof payload !== "object" || payload === null || !("activeTurnId" in payload)) {
+    return null;
+  }
+  return typeof payload.activeTurnId === "string" ? payload.activeTurnId : null;
+}
+
 export function planProviderRuntimeReconciliation(input: {
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
   readonly bindings: ReadonlyArray<ProviderRuntimeBinding>;
@@ -184,6 +192,23 @@ export function planProviderRuntimeReconciliation(input: {
     if (!liveSessionSettled && !missingLiveSession && !bindingSettled) continue;
 
     if (liveSession?.status === "error" || (missingLiveSession && binding.status === "error")) {
+      const errorTurnId =
+        liveSession?.status === "error"
+          ? (liveSession.activeTurnId ?? null)
+          : bindingActiveTurnId(binding);
+      if (errorTurnId !== projectedTurnId) {
+        plans.push({
+          action: "settle-interrupted",
+          threadId: thread.id,
+          provider: binding.provider,
+          projectedTurnId,
+          runtimeTurnId: null,
+          reason:
+            `The provider reported an error for turn '${errorTurnId ?? "unknown"}', which cannot ` +
+            `be safely attributed to projected turn '${projectedTurnId}'.${detail}`,
+        });
+        continue;
+      }
       const errorMessage =
         liveSession?.lastError ??
         bindingLastError(binding) ??

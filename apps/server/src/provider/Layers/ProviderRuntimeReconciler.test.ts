@@ -143,6 +143,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
       providerSession = {
         ...providerSession,
         status: "error",
+        activeTurnId: TURN_ID,
         lastError: "Provider stream failed.",
       };
       yield* reconciler.reconcileNow;

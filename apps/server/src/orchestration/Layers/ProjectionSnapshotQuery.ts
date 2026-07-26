@@ -927,6 +927,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             )
             OR latest_turn.state IN ('pending', 'running')
           )
+          AND NOT (
+            sessions.status = 'starting'
+            AND sessions.active_turn_id IS NULL
+            AND (
+              latest_turn.state IS NULL
+              OR latest_turn.state NOT IN ('pending', 'running')
+            )
+            AND (
+              runtime.runtime_payload_json IS NULL
+              OR json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NULL
+            )
+          )
           AND COALESCE(sessions.updated_at, threads.updated_at) <= ${updatedBefore}
         ORDER BY COALESCE(sessions.updated_at, threads.updated_at) ASC, threads.thread_id ASC
         LIMIT ${Math.max(1, Math.min(1_000, Math.floor(limit)))}

@@ -424,12 +424,37 @@ describe("planProviderRuntimeReconciliation", () => {
 
     expect(plans).toEqual([
       expect.objectContaining({
-        action: "settle-error",
+        action: "settle-interrupted",
         projectedTurnId: OLD_TURN_ID,
         runtimeTurnId: null,
-        errorMessage: "Provider stream failed.",
       }),
     ]);
+  });
+
+  it("does not attribute a live provider error to a different projected turn", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [threadShell()],
+      bindings: [binding(LIVE_TURN_ID)],
+      liveSessions: [
+        liveSession({
+          status: "error",
+          activeTurnId: LIVE_TURN_ID,
+          lastError: "Newer provider turn failed.",
+        }),
+      ],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
+      }),
+    ]);
+    expect(plans[0]?.reason).toContain(LIVE_TURN_ID);
   });
 
   it("prefers a recovered live session over a stale durable binding error", () => {
