@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
-  serverConfigQueryOptions,
+  refreshServerConfigAfterTransportOpen,
   serverAllProviderUsageQueryOptions,
   serverLocalServersQueryOptions,
   serverProviderUsageSnapshotQueryOptions,
@@ -91,11 +91,52 @@ describe("server provider status reconciliation", () => {
     ]);
   });
 
-  it("marks server config for reconnect and focus refresh", () => {
-    const options = serverConfigQueryOptions();
+  it("keeps a provider snapshot that arrives during reconnect config refresh", async () => {
+    const queryClient = new QueryClient();
+    const unavailableStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:40:00.000Z",
+    } satisfies ServerProviderStatus;
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([unavailableStatus]));
+    let resolveConfig!: (config: ServerConfig) => void;
+    const configProjection = new Promise<ServerConfig>((resolve) => {
+      resolveConfig = resolve;
+    });
 
-    expect(options.refetchOnReconnect).toBe(true);
-    expect(options.refetchOnWindowFocus).toBe(true);
+    const refresh = refreshServerConfigAfterTransportOpen(queryClient, {
+      loadConfig: () => configProjection,
+    });
+    await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+    resolveConfig(makeServerConfig([unavailableStatus]));
+    await refresh;
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      READY_CODEX_STATUS,
+    ]);
+  });
+
+  it("accepts reconnect config when no newer provider snapshot arrives", async () => {
+    const queryClient = new QueryClient();
+    const unavailableStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: "2026-07-26T16:40:00.000Z",
+    } satisfies ServerProviderStatus;
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([unavailableStatus]));
+    await reconcileServerProviderStatuses(queryClient, [unavailableStatus]);
+
+    await refreshServerConfigAfterTransportOpen(queryClient, {
+      loadConfig: async () => makeServerConfig([READY_CODEX_STATUS]),
+    });
+
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
+      READY_CODEX_STATUS,
+    ]);
   });
 });
 

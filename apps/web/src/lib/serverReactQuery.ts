@@ -44,15 +44,27 @@ export function serverConfigQueryOptions() {
       return api.server.getConfig();
     },
     staleTime: Infinity,
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
   });
 }
 
-const latestProviderStatusesByQueryClient = new WeakMap<
-  QueryClient,
-  readonly ServerProviderStatus[]
->();
+interface ProviderStatusSnapshot {
+  readonly revision: number;
+  readonly providers: readonly ServerProviderStatus[];
+}
+
+const latestProviderStatusSnapshotByQueryClient = new WeakMap<QueryClient, ProviderStatusSnapshot>();
+
+function recordProviderStatusSnapshot(
+  queryClient: QueryClient,
+  providers: readonly ServerProviderStatus[],
+): ProviderStatusSnapshot {
+  const snapshot = {
+    revision: (latestProviderStatusSnapshotByQueryClient.get(queryClient)?.revision ?? 0) + 1,
+    providers,
+  };
+  latestProviderStatusSnapshotByQueryClient.set(queryClient, snapshot);
+  return snapshot;
+}
 
 /**
  * Folds an authoritative provider snapshot into server.config. Provider streams
@@ -66,7 +78,7 @@ export async function reconcileServerProviderStatuses(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
-  latestProviderStatusesByQueryClient.set(queryClient, providers);
+  recordProviderStatusSnapshot(queryClient, providers);
 
   let applied = false;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
@@ -84,11 +96,42 @@ export async function reconcileServerProviderStatuses(
         staleTime: 0,
       }));
   const hydratedConfig = await loadConfig();
-  const latestProviders = latestProviderStatusesByQueryClient.get(queryClient) ?? providers;
+  const latestProviders =
+    latestProviderStatusSnapshotByQueryClient.get(queryClient)?.providers ?? providers;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => ({
     ...(current ?? hydratedConfig),
     providers: latestProviders,
   }));
+}
+
+/**
+ * Refreshes the config projection when the WebSocket reopens without letting
+ * the response overwrite a provider snapshot that arrived while it was in flight.
+ */
+export async function refreshServerConfigAfterTransportOpen(
+  queryClient: QueryClient,
+  options?: {
+    readonly loadConfig?: () => Promise<ServerConfig>;
+  },
+): Promise<void> {
+  const providerRevisionAtStart =
+    latestProviderStatusSnapshotByQueryClient.get(queryClient)?.revision ?? 0;
+  const loadConfig =
+    options?.loadConfig ??
+    (() =>
+      queryClient.fetchQuery({
+        ...serverConfigQueryOptions(),
+        staleTime: 0,
+      }));
+  const config = await loadConfig();
+  const latestProviderSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient);
+  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), {
+    ...config,
+    providers:
+      latestProviderSnapshot && latestProviderSnapshot.revision > providerRevisionAtStart
+        ? latestProviderSnapshot.providers
+        : config.providers,
+  });
 }
 
 export function serverAuthSessionQueryOptions() {

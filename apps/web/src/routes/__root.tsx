@@ -44,6 +44,7 @@ import type { FeedbackThreadContext } from "../feedback";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   reconcileServerProviderStatuses,
+  refreshServerConfigAfterTransportOpen,
   serverConfigQueryOptions,
   serverQueryKeys,
   serverSettingsQueryOptions,
@@ -1554,14 +1555,7 @@ function EventRouter() {
         previousProviderDiscoveryFingerprint !== nextProviderDiscoveryFingerprint;
       providerDiscoveryInvalidationFingerprint = nextProviderDiscoveryFingerprint;
 
-      if (!currentConfig) {
-        void reconcileServerProviderStatuses(queryClient, payload.providers).catch(() => undefined);
-        return;
-      }
-      queryClient.setQueryData(serverQueryKeys.config(), {
-        ...currentConfig,
-        providers: payload.providers,
-      });
+      void reconcileServerProviderStatuses(queryClient, payload.providers).catch(() => undefined);
       if (shouldInvalidateProviderDiscovery) {
         // Model and agent discovery can depend on auth, availability, and installed versions,
         // but not on every provider-status timestamp replay.
@@ -1587,12 +1581,7 @@ function EventRouter() {
         if (state !== "open") return;
         // Reopening the socket is a projection boundary. React Query otherwise
         // keeps the previous infinite-stale config and can strand "Checking".
-        void queryClient
-          .fetchQuery({
-            ...serverConfigQueryOptions(),
-            staleTime: 0,
-          })
-          .catch(() => undefined);
+        void refreshServerConfigAfterTransportOpen(queryClient).catch(() => undefined);
       },
       { replayCurrent: true },
     );
