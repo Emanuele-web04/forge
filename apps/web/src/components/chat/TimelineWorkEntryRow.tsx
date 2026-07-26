@@ -502,6 +502,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         activity: workEntry.liveActivity,
         entry: workEntry,
         heading,
+        displayTarget: showInlineAgentTaskPreview ? heading : defaultDisplayText,
         rawCommand,
       })
     : defaultDisplayText;

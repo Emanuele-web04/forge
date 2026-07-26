@@ -1091,6 +1091,7 @@ function reconcileSettledLiveActivities(
     if (terminal) {
       return {
         ...entry,
+        toolStatus: terminal.state === "failed" ? "failed" : "completed",
         liveActivity: settleWorkLogLiveActivity(
           liveActivity,
           terminal.state,
@@ -1115,13 +1116,16 @@ function reconcileSettledLiveActivities(
       return entry;
     }
 
+    const settledState =
+      latestTurnId && entry.turnId === latestTurnId && latestTerminalState
+        ? latestTerminalState
+        : "cancelled";
     return {
       ...entry,
+      toolStatus: settledState === "failed" ? "failed" : "completed",
       liveActivity: settleWorkLogLiveActivity(
         liveActivity,
-        latestTurnId && entry.turnId === latestTurnId && latestTerminalState
-          ? latestTerminalState
-          : "cancelled",
+        settledState,
         latestTurnId &&
           entry.turnId === latestTurnId &&
           options.latestTurnCompletedAt

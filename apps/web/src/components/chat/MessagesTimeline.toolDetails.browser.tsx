@@ -352,6 +352,7 @@ describe("MessagesTimeline tool details", () => {
       document.querySelector<HTMLButtonElement>("button")?.click();
       expect(openFile).toHaveBeenCalledWith("src/app.ts");
       expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
+      expect(document.body.textContent ?? "").toContain("Completed file read · Read file app.ts");
     } finally {
       await screen.unmount();
       host.remove();

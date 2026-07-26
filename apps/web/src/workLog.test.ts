@@ -1928,6 +1928,7 @@ describe("deriveWorkLogEntries", () => {
       lastActivityAt: "2026-02-23T00:00:06.000Z",
       elapsedSeconds: 5,
     });
+    expect(entries[0]?.toolStatus).toBe("completed");
   });
 
   it("settles orphaned activity from latest-turn state after a reconnect gap", () => {
@@ -1963,6 +1964,7 @@ describe("deriveWorkLogEntries", () => {
       lastActivityAt: "2026-02-23T00:00:04.000Z",
       elapsedSeconds: 3,
     });
+    expect(entries[0]?.toolStatus).toBe("failed");
   });
 
   it("advances retained elapsed time across metadata-only updates", () => {

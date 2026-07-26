@@ -42,6 +42,20 @@ describe("live activity presentation", () => {
     ).toBe("Running command · PowerShell");
   });
 
+  it("preserves the existing target for non-command activity", () => {
+    expect(
+      formatLiveActivityPrimary({
+        activity: runningActivity({
+          state: "completed",
+          label: "Read",
+        }),
+        entry: { requestKind: "file-read" },
+        heading: "Read",
+        displayTarget: "Read app.ts",
+      }),
+    ).toBe("Completed file read · Read app.ts");
+  });
+
   it("renders recent activity and elapsed time from one normalized state", () => {
     const activity = runningActivity();
     const nowMs = Date.parse("2026-07-26T14:02:14.000Z");

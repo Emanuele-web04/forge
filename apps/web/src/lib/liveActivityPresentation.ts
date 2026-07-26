@@ -163,13 +163,14 @@ export function formatLiveActivityPrimary(input: {
   activity: WorkLogLiveActivity;
   entry: Pick<WorkLogEntry, "itemType" | "requestKind">;
   heading: string;
+  displayTarget?: string | undefined;
   rawCommand?: string | undefined;
 }): string {
   const subject = activitySubject(input.entry);
   const lead = activityStateLead(input.activity, subject);
   const target = input.rawCommand
     ? friendlyLiveCommandTarget(input.rawCommand)
-    : (input.activity.label || input.heading).trim();
+    : (input.displayTarget || input.activity.label || input.heading).trim();
   return target ? `${lead} · ${target}` : lead;
 }
 
