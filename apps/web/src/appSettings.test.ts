@@ -10,6 +10,7 @@ import {
   AppSettingsSchema,
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
+  DEFAULT_FOLLOW_UP_BEHAVIOR,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
   DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
@@ -32,6 +33,7 @@ import {
   normalizeTerminalFontSizePx,
   patchCustomModels,
   resolveAppModelSelection,
+  resolveFollowUpDispatchMode,
   resolveTerminalFontFamilyStack,
 } from "./appSettings";
 
@@ -54,6 +56,40 @@ describe("normalizeCustomModelSlugs", () => {
     expect(normalizeCustomModelSlugs(["claude/custom-sonnet"], "claudeAgent")).toEqual([
       "claude/custom-sonnet",
     ]);
+  });
+});
+
+describe("resolveFollowUpDispatchMode", () => {
+  it("uses the selected behavior only while a turn is live", () => {
+    expect(
+      resolveFollowUpDispatchMode({
+        behavior: "steer",
+        hasLiveTurn: false,
+      }),
+    ).toBe("queue");
+    expect(
+      resolveFollowUpDispatchMode({
+        behavior: "steer",
+        hasLiveTurn: true,
+      }),
+    ).toBe("steer");
+  });
+
+  it("uses Ctrl/Cmd+Enter as a one-message inversion", () => {
+    expect(
+      resolveFollowUpDispatchMode({
+        behavior: "queue",
+        hasLiveTurn: true,
+        useOppositeBehavior: true,
+      }),
+    ).toBe("steer");
+    expect(
+      resolveFollowUpDispatchMode({
+        behavior: "steer",
+        hasLiveTurn: true,
+        useOppositeBehavior: true,
+      }),
+    ).toBe("queue");
   });
 });
 
@@ -826,6 +862,7 @@ describe("AppSettingsSchema", () => {
       appSnapShortcut: { kind: "both-option-keys" },
       appSnapPlaySound: true,
       enableAssistantStreaming: true,
+      followUpBehavior: DEFAULT_FOLLOW_UP_BEHAVIOR,
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
       sidebarThreadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
       showStudioSection: true,

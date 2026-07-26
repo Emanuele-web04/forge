@@ -89,7 +89,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     id: "behavior",
     group: "app",
     label: "Behavior",
-    description: "Streaming, diff handling, and destructive confirmations.",
+    description: "Follow-ups, streaming, diff handling, and destructive confirmations.",
     icon: "settings-slider-hor",
     eyebrow: "Interaction rules",
   },

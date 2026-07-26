@@ -323,6 +323,7 @@ import {
   getProviderStartOptions,
   resolveAppModelSelection,
   resolveAssistantDeliveryMode,
+  resolveFollowUpDispatchMode,
   useAppSettings,
 } from "../appSettings";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -6665,7 +6666,10 @@ export default function ChatView({
 
   const onSend = async (
     e?: { preventDefault: () => void },
-    dispatchMode: "queue" | "steer" = "queue",
+    dispatchMode: "queue" | "steer" = resolveFollowUpDispatchMode({
+      behavior: settings.followUpBehavior,
+      hasLiveTurn,
+    }),
     queuedTurn?: QueuedComposerChatTurn,
   ): Promise<boolean> => {
     e?.preventDefault();
@@ -9645,7 +9649,14 @@ export default function ChatView({
       !menuIsActive &&
       extractChatAutomationInvocation(snapshot.value) !== null
     ) {
-      void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
+      void onSend(
+        undefined,
+        resolveFollowUpDispatchMode({
+          behavior: settings.followUpBehavior,
+          hasLiveTurn,
+          useOppositeBehavior: event.metaKey || event.ctrlKey,
+        }),
+      );
       return true;
     }
 
@@ -9748,7 +9759,14 @@ export default function ChatView({
         setComposerDraftPromptHistorySavedDraft(threadId, null);
       }
       expectedPromptHistoryPromptRef.current = null;
-      void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
+      void onSend(
+        undefined,
+        resolveFollowUpDispatchMode({
+          behavior: settings.followUpBehavior,
+          hasLiveTurn,
+          useOppositeBehavior: event.metaKey || event.ctrlKey,
+        }),
+      );
       return true;
     }
     return false;

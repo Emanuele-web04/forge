@@ -246,6 +246,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Behavior ──────────────────────────────────────────────────────────────────
   {
+    id: "behavior:follow-up-behavior",
+    section: "behavior",
+    title: "Follow-up behavior",
+    keywords:
+      "Choose whether messages sent during an active turn wait in the queue or steer the current run. Ctrl Cmd Enter opposite send",
+  },
+  {
     id: "behavior:assistant-output",
     section: "behavior",
     title: "Assistant output",

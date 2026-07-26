@@ -30,6 +30,11 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "behavior:diff-line-wrapping")).toBe(true);
   });
 
+  it("indexes the follow-up Queue and Steer preference", () => {
+    const results = rankSettingsSearchEntries("steer", 12);
+    expect(results.some((entry) => entry.id === "behavior:follow-up-behavior")).toBe(true);
+  });
+
   it("includes the activity toasts notification row", () => {
     const results = rankSettingsSearchEntries("toasts", 12);
     expect(results.some((entry) => entry.id === "notifications:activity-toasts")).toBe(true);

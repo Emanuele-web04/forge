@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   type AppSettings,
+  type FollowUpBehavior,
   DEFAULT_UI_DENSITY,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
@@ -161,6 +162,11 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   created_at: "Newest first",
 } as const;
 
+const FOLLOW_UP_BEHAVIOR_OPTIONS = [
+  { value: "queue", label: "Queue" },
+  { value: "steer", label: "Steer" },
+] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
+
 // ── Settings UI primitives ────────────────────────────────────────────────
 
 // Shared settings controls live in ~/components/settings/SettingControls.
@@ -255,6 +261,7 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
     ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
     ...(!sameAppSnapShortcut(settings.appSnapShortcut, defaults.appSnapShortcut)
       ? ["AppSnap shortcut"]
@@ -911,6 +918,31 @@ function SettingsRouteView() {
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Runtime behavior">
+        <SettingsRow
+          title="Follow-up behavior"
+          description="Choose whether messages sent during an active turn wait in the queue or steer the current run. Ctrl/Cmd+Enter uses the opposite behavior for one message."
+          resetAction={
+            settings.followUpBehavior !== defaults.followUpBehavior ? (
+              <SettingResetButton
+                label="follow-up behavior"
+                onClick={() =>
+                  updateSettings({
+                    followUpBehavior: defaults.followUpBehavior,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.followUpBehavior}
+              onValueChange={(value) => updateSettings({ followUpBehavior: value })}
+              ariaLabel="Follow-up behavior"
+              options={FOLLOW_UP_BEHAVIOR_OPTIONS}
+            />
+          }
+        />
+
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
           title: "Assistant output",

@@ -86,6 +86,9 @@ export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manu
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
+export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
+export type FollowUpBehavior = typeof FollowUpBehavior.Type;
+export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
 
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
@@ -227,6 +230,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
+  followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
@@ -1134,6 +1138,24 @@ export function resolveAssistantDeliveryMode(
   settings: Pick<AppSettings, "enableAssistantStreaming">,
 ): AssistantDeliveryMode {
   return settings.enableAssistantStreaming ? "streaming" : "buffered";
+}
+
+/**
+ * Resolves the dispatch mode for a composer submit. The preference applies only
+ * while a turn is live; Ctrl/Cmd+Enter temporarily selects the opposite mode.
+ */
+export function resolveFollowUpDispatchMode(input: {
+  behavior: FollowUpBehavior;
+  hasLiveTurn: boolean;
+  useOppositeBehavior?: boolean;
+}): FollowUpBehavior {
+  if (!input.hasLiveTurn) {
+    return "queue";
+  }
+  if (!input.useOppositeBehavior) {
+    return input.behavior;
+  }
+  return input.behavior === "queue" ? "steer" : "queue";
 }
 
 export function getCustomBinaryPathForProvider(
