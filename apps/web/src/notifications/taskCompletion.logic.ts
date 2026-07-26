@@ -77,6 +77,48 @@ const NOTIFICATION_SUMMARY_MAX_LENGTH = 120;
 const PROTECTED_CODE_START = "\uE000";
 const PROTECTED_CODE_END = "\uE001";
 
+function protectMarkdownFencedBlocks(text: string, protect: (content: string) => string): string {
+  const openingPattern = /(^|\n)[ \t]{0,3}(`{3,}|~{3,})([^\n]*)\n/g;
+  let result = "";
+  let cursor = 0;
+  let openingMatch: RegExpExecArray | null;
+
+  while ((openingMatch = openingPattern.exec(text)) !== null) {
+    const linePrefix = openingMatch[1] ?? "";
+    const fence = openingMatch[2] ?? "";
+    const info = openingMatch[3] ?? "";
+    const fenceCharacter = fence[0];
+
+    // Backticks are not valid inside a backtick fence's info string. Treat
+    // such a line as prose so same-line multi-backtick code remains inline.
+    if (fenceCharacter === "`" && info.includes("`")) {
+      continue;
+    }
+
+    const closingPattern = new RegExp(
+      `(^|\\n)[ \\t]{0,3}${fenceCharacter}{${fence.length},}[ \\t]*(?=\\n|$)`,
+      "g",
+    );
+    closingPattern.lastIndex = openingPattern.lastIndex;
+    const closingMatch = closingPattern.exec(text);
+    const contentEnd = closingMatch?.index ?? text.length;
+
+    result += text.slice(cursor, openingMatch.index);
+    result += linePrefix;
+    result += protect(text.slice(openingPattern.lastIndex, contentEnd));
+
+    if (!closingMatch) {
+      cursor = text.length;
+      break;
+    }
+
+    cursor = closingPattern.lastIndex;
+    openingPattern.lastIndex = cursor;
+  }
+
+  return result + text.slice(cursor);
+}
+
 function protectMarkdownCode(text: string): {
   protectedText: string;
   restore: (value: string) => string;
@@ -88,14 +130,9 @@ function protectMarkdownCode(text: string): {
     return token;
   };
 
-  // A fenced block must start on its own line. Keeping that boundary prevents
-  // separate triple-backtick inline spans from being mistaken for one block.
-  const protectedBlocks = text.replace(
-    /(^|\n)[ \t]{0,3}```[^\n`]*\n([\s\S]*?)(?:(?:\n)?[ \t]{0,3}```[ \t]*(?=\n|$)|$)/g,
-    (_match, prefix: string, content: string) => `${prefix}${protect(content)}`,
-  );
+  const protectedBlocks = protectMarkdownFencedBlocks(text, protect);
   const protectedText = protectedBlocks.replace(
-    /(`{1,3})([^`\n]*?)\1/g,
+    /(`+)([^`\n]*?)\1/g,
     (_match, _delimiter: string, content: string) => protect(content),
   );
 
@@ -109,34 +146,38 @@ function protectMarkdownCode(text: string): {
   };
 }
 
-function findClosingMarkdownDelimiter(
+function buildMatchingMarkdownDelimiters(
   text: string,
-  openIndex: number,
   openDelimiter: "[" | "(",
   closeDelimiter: "]" | ")",
-): number {
-  let depth = 1;
-  for (let index = openIndex + 1; index < text.length; index += 1) {
+): ReadonlyMap<number, number> {
+  const openingIndexes: number[] = [];
+  const matches = new Map<number, number>();
+
+  for (let index = 0; index < text.length; index += 1) {
     const character = text[index];
     if (character === "\\") {
       index += 1;
       continue;
     }
     if (character === openDelimiter) {
-      depth += 1;
+      openingIndexes.push(index);
       continue;
     }
     if (character === closeDelimiter) {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
+      const openingIndex = openingIndexes.pop();
+      if (openingIndex !== undefined) {
+        matches.set(openingIndex, index);
       }
     }
   }
-  return -1;
+
+  return matches;
 }
 
 function stripMarkdownLinks(text: string): string {
+  const labelMatches = buildMatchingMarkdownDelimiters(text, "[", "]");
+  const destinationMatches = buildMatchingMarkdownDelimiters(text, "(", ")");
   let result = "";
   let index = 0;
 
@@ -149,21 +190,22 @@ function stripMarkdownLinks(text: string): string {
       continue;
     }
 
-    const labelCloseIndex = findClosingMarkdownDelimiter(text, labelOpenIndex, "[", "]");
-    const destinationOpenIndex = labelCloseIndex + 1;
-    if (labelCloseIndex < 0 || text[destinationOpenIndex] !== "(") {
+    const labelCloseIndex = labelMatches.get(labelOpenIndex);
+    if (labelCloseIndex === undefined) {
       result += text[index];
       index += 1;
       continue;
     }
 
-    const destinationCloseIndex = findClosingMarkdownDelimiter(
-      text,
-      destinationOpenIndex,
-      "(",
-      ")",
-    );
-    if (destinationCloseIndex < 0) {
+    const destinationOpenIndex = labelCloseIndex + 1;
+    if (text[destinationOpenIndex] !== "(") {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    const destinationCloseIndex = destinationMatches.get(destinationOpenIndex);
+    if (destinationCloseIndex === undefined) {
       result += text[index];
       index += 1;
       continue;
@@ -481,7 +523,7 @@ export function buildTaskCompletionCopy(candidate: CompletedThreadCandidate): {
 
   return {
     title: threadLabel,
-    body: summarizeAssistantText(candidate.assistantSummary ?? "") || "Finished working.",
+    body: candidate.assistantSummary || "Finished working.",
   };
 }
 

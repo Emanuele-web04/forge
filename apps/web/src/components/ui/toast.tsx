@@ -450,7 +450,7 @@ function ToastSurface({
           <Toast.Description
             className={cn(
               "min-w-0 text-[var(--notification-fg)]/72",
-              compactContextual ? "line-clamp-2 max-w-80 leading-snug" : "break-words",
+              compactContextual ? "line-clamp-2 max-w-80 break-words leading-snug" : "break-words",
             )}
             data-slot="toast-description"
           />

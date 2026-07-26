@@ -55,6 +55,49 @@ function makeThread(overrides: Partial<Thread>): Thread {
   };
 }
 
+function buildCollectedTaskCompletionCopy(assistantText: string) {
+  const completedAt = "2026-04-05T10:00:05.000Z";
+  const candidates = collectCompletedThreadCandidates(
+    [makeThread({})],
+    [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: completedAt,
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt,
+          assistantMessageId: MessageId.makeUnsafe("msg-1"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-1"),
+            role: "assistant",
+            text: assistantText,
+            createdAt: "2026-04-05T10:00:01.000Z",
+            completedAt,
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+        ],
+      }),
+    ],
+  );
+  const candidate = candidates[0];
+  if (!candidate) {
+    throw new Error("Expected a completed thread candidate");
+  }
+  return buildTaskCompletionCopy(candidate);
+}
+
 describe("collectCompletedThreadCandidates", () => {
   it("returns threads that moved from working to completed", () => {
     const previous = [
@@ -442,13 +485,7 @@ describe("shouldShowThreadNotificationToast", () => {
 describe("buildTaskCompletionCopy", () => {
   it("prefers assistant output when available", () => {
     expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Finished the task and everything looks good.",
-      }),
+      buildCollectedTaskCompletionCopy("Finished the task and everything looks good."),
     ).toEqual({
       title: "Polish notifications",
       body: "Finished the task and everything looks good.",
@@ -457,14 +494,9 @@ describe("buildTaskCompletionCopy", () => {
 
   it("keeps compact context while stripping assistant Markdown", () => {
     expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary:
-          "Sì, esattamente così:\n- menu principale con `Model`, **Effort** e Speed\n- slider dentro [Advanced](https://example.com)",
-      }),
+      buildCollectedTaskCompletionCopy(
+        "Sì, esattamente così:\n- menu principale con `Model`, **Effort** e Speed\n- slider dentro [Advanced](https://example.com)",
+      ),
     ).toEqual({
       title: "Polish notifications",
       body: "Sì, esattamente così: · menu principale con Model, Effort e Speed · slider dentro Advanced",
@@ -473,13 +505,9 @@ describe("buildTaskCompletionCopy", () => {
 
   it("preserves technical underscores and cleans an unclosed code fence", () => {
     expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Updated `apps/web/src/foo_bar.ts`.\n```ts\nconst result_value = true;",
-      }),
+      buildCollectedTaskCompletionCopy(
+        "Updated `apps/web/src/foo_bar.ts`.\n```ts\nconst result_value = true;",
+      ),
     ).toEqual({
       title: "Polish notifications",
       body: "Updated apps/web/src/foo_bar.ts. const result_value = true;",
@@ -487,15 +515,7 @@ describe("buildTaskCompletionCopy", () => {
   });
 
   it("preserves useful content inside a closed code fence", () => {
-    expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: 'Result:\n```json\n{"status":"ok"}\n```',
-      }),
-    ).toEqual({
+    expect(buildCollectedTaskCompletionCopy('Result:\n```json\n{"status":"ok"}\n```')).toEqual({
       title: "Polish notifications",
       body: 'Result: {"status":"ok"}',
     });
@@ -503,29 +523,27 @@ describe("buildTaskCompletionCopy", () => {
 
   it("does not reinterpret Markdown-shaped syntax inside fenced code", () => {
     expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Result:\n```python\ndef __init__(self):\n  return x - y\n```",
-      }),
+      buildCollectedTaskCompletionCopy(
+        "Result:\n```python\ndef __init__(self):\n  return x - y\n```",
+      ),
     ).toEqual({
       title: "Polish notifications",
       body: "Result: def __init__(self): return x - y",
     });
   });
 
+  it.each([
+    ["four-backtick", "Result:\n````python\ndef __init__(self):\n  return x * y * z\n````"],
+    ["tilde", "Result:\n~~~python\ndef __init__(self):\n  return x * y * z\n~~~"],
+  ])("preserves Markdown-shaped syntax inside a %s fence", (_label, assistantText) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: "Result: def __init__(self): return x * y * z",
+    });
+  });
+
   it("only normalizes list markers at the start of a line", () => {
-    expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Computed 7 * 6 = 42; auth - tests pass.",
-      }),
-    ).toEqual({
+    expect(buildCollectedTaskCompletionCopy("Computed 7 * 6 = 42; auth - tests pass.")).toEqual({
       title: "Polish notifications",
       body: "Computed 7 * 6 = 42; auth - tests pass.",
     });
@@ -533,44 +551,29 @@ describe("buildTaskCompletionCopy", () => {
 
   it("consumes balanced parentheses in Markdown link destinations", () => {
     expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Read the [docs](https://example.com/a_(b)) for details.",
-      }),
+      buildCollectedTaskCompletionCopy("Read the [docs](https://example.com/a_(b)) for details."),
     ).toEqual({
       title: "Polish notifications",
       body: "Read the docs for details.",
     });
   });
 
+  it("handles bracket-heavy generated output without recursive rescanning", () => {
+    expect(buildCollectedTaskCompletionCopy("[".repeat(16_000))).toEqual({
+      title: "Polish notifications",
+      body: `${"[".repeat(119)}…`,
+    });
+  });
+
   it("keeps separate triple-backtick inline spans independent", () => {
-    expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Use ```foo``` now.\nThen ```bar``` next.",
-      }),
-    ).toEqual({
+    expect(buildCollectedTaskCompletionCopy("Use ```foo``` now.\nThen ```bar``` next.")).toEqual({
       title: "Polish notifications",
       body: "Use foo now. Then bar next.",
     });
   });
 
   it("does not strip underscores from inline code identifiers", () => {
-    expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Updated `__init__.py` and `foo__bar__`.",
-      }),
-    ).toEqual({
+    expect(buildCollectedTaskCompletionCopy("Updated `__init__.py` and `foo__bar__`.")).toEqual({
       title: "Polish notifications",
       body: "Updated __init__.py and foo__bar__.",
     });
