@@ -173,6 +173,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
         status: "ready",
         activeTurnId: null,
         lastError: null,
+        updatedAt: "2026-07-23T19:00:00.000Z",
       });
     }
     const errorActivityCommand = commands[4];

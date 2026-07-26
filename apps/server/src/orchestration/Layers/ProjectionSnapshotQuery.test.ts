@@ -2018,9 +2018,21 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ),
           (
             'thread-queued-oldest', 'project-runtime-candidates', 'Queued',
-            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, 'turn-queued',
             '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z', NULL, NULL
           )
+      `;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, pending_message_id, source_proposed_plan_thread_id,
+          source_proposed_plan_id, assistant_message_id, state, requested_at,
+          started_at, completed_at, checkpoint_turn_count, checkpoint_ref,
+          checkpoint_status, checkpoint_files_json
+        ) VALUES (
+          'thread-queued-oldest', 'turn-queued', NULL, NULL,
+          NULL, NULL, 'pending', '2026-07-21T00:00:00.000Z',
+          NULL, NULL, 0, NULL, 'missing', '[]'
+        )
       `;
       yield* sql`
         INSERT INTO projection_thread_sessions (

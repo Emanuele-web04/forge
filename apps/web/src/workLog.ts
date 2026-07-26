@@ -573,13 +573,12 @@ function deriveProviderRuntimeReconciliationCollapseKey(
   ) {
     return undefined;
   }
-  return [
-    "provider-runtime-reconcile",
+  return `provider-runtime-reconcile:${JSON.stringify([
     provider,
     action,
     projectedTurnId,
-    runtimeTurnId ?? "none",
-  ].join(":");
+    runtimeTurnId ?? null,
+  ])}`;
 }
 
 function deriveToolLifecycleStatus(

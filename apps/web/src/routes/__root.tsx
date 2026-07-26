@@ -1380,6 +1380,8 @@ function EventRouter() {
           return;
         }
         const currentThread = getThreadFromState(useStore.getState(), threadId);
+        const projectionRepairsTerminalFence =
+          threadProjectionTerminalFencePending.has(threadId);
         const projectionSettlesCurrentTurn =
           currentThread?.latestTurn?.state === "running" &&
           snapshot.thread.latestTurn !== null &&
@@ -1397,7 +1399,7 @@ function EventRouter() {
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
         projectionConfirmed = true;
-        if (projectionSettlesCurrentTurn) {
+        if (projectionSettlesCurrentTurn || projectionRepairsTerminalFence) {
           // Mirror terminal-event invalidation when recovery came from the
           // projection rather than the live stream.
           needsProviderInvalidation = true;

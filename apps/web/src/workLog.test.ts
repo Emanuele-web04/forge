@@ -545,6 +545,40 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("keeps reconciliation rows with delimiter-shaped but distinct turn ids", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "recovery-delimited-projected",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Realigned a delimited projected turn",
+        payload: {
+          provider: "codex",
+          action: "align-running-turn",
+          projectedTurnId: "turn:a",
+          runtimeTurnId: "turn-b",
+        },
+      }),
+      makeActivity({
+        id: "recovery-delimited-runtime",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Realigned a delimited runtime turn",
+        payload: {
+          provider: "codex",
+          action: "align-running-turn",
+          projectedTurnId: "turn",
+          runtimeTurnId: "a:turn-b",
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined).map((entry) => entry.id)).toEqual([
+      "recovery-delimited-projected",
+      "recovery-delimited-runtime",
+    ]);
+  });
+
   it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

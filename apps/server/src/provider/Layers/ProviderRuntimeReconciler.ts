@@ -35,14 +35,13 @@ export interface ProviderRuntimeReconcilerLiveOptions {
 }
 
 function reconciliationKey(plan: ProviderRuntimeReconciliationPlan): string {
-  return [
-    "provider-runtime-reconcile",
+  return `provider-runtime-reconcile:${JSON.stringify([
     plan.provider,
     plan.action,
     plan.threadId,
-    plan.projectedTurnId ?? "none",
-    plan.runtimeTurnId ?? "none",
-  ].join(":");
+    plan.projectedTurnId,
+    plan.runtimeTurnId,
+  ])}`;
 }
 
 const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
@@ -140,7 +139,10 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
               : plan.action === "settle-terminal-projection"
                 ? plan.terminalSession.lastError
                 : null,
-          updatedAt: now,
+          updatedAt:
+            plan.action === "settle-terminal-projection"
+              ? plan.terminalSession.updatedAt
+              : now,
         },
         createdAt: now,
       });
