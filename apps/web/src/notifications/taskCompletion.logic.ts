@@ -72,17 +72,34 @@ function isRunningStatus(status: ThreadSessionStatus | null | undefined): boolea
   return status === "running" || status === "connecting";
 }
 
-const NOTIFICATION_SUMMARY_MAX_LENGTH = 140;
+const NOTIFICATION_SUMMARY_MAX_LENGTH = 120;
 
-// Normalize + cap a message body so long output never leaks into OS chrome.
+// Reduce rich assistant output to readable notification context. Toasts and OS
+// notifications should never expose Markdown syntax or turn into mini transcripts.
 function summarizeAssistantText(text: string): string | null {
-  const trimmed = text.trim().replace(/\s+/g, " ");
+  const trimmed = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/```[^\n]*\n?/g, " ")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/`+/g, "")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?)/gm, "")
+    .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/gm, " · ")
+    .replace(/\s+[-*+]\s+/g, " · ")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/__([^_\n]+)__/g, "$1")
+    .replace(/~~([^~\n]+)~~/g, "$1")
+    .replace(/(^|[^\w])\*([^*\n]+)\*(?=$|[^\w])/g, "$1$2")
+    .replace(/(^|[^\w])_([^_\n]+)_(?=$|[^\w])/g, "$1$2")
+    .trim()
+    .replace(/\s+/g, " ");
   if (trimmed.length === 0) {
     return null;
   }
   return trimmed.length <= NOTIFICATION_SUMMARY_MAX_LENGTH
     ? trimmed
-    : `${trimmed.slice(0, NOTIFICATION_SUMMARY_MAX_LENGTH - 3)}...`;
+    : `${trimmed.slice(0, NOTIFICATION_SUMMARY_MAX_LENGTH - 1).trimEnd()}…`;
 }
 
 // Build a short body from the turn's *final* assistant message — the end-of-turn reply
@@ -364,7 +381,7 @@ export function buildTaskCompletionCopy(candidate: CompletedThreadCandidate): {
 
   return {
     title: threadLabel,
-    body: candidate.assistantSummary || "Finished working.",
+    body: summarizeAssistantText(candidate.assistantSummary ?? "") || "Finished working.",
   };
 }
 

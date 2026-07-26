@@ -128,10 +128,12 @@ function showThreadToast(
     description: body,
     data: {
       allowCrossThreadVisibility: true,
+      compactContextual: true,
       threadId,
       dismissAfterVisibleMs: 8000,
     },
     actionProps: {
+      "aria-label": `Open ${title}`,
       children: "Open",
       onClick: () => focusThread(threadId, navigate),
     },

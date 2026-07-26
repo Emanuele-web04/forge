@@ -454,6 +454,37 @@ describe("buildTaskCompletionCopy", () => {
       body: "Finished the task and everything looks good.",
     });
   });
+
+  it("keeps compact context while stripping assistant Markdown", () => {
+    expect(
+      buildTaskCompletionCopy({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        completedAt: "2026-04-05T10:00:05.000Z",
+        assistantSummary:
+          "Sì, esattamente così:\n- menu principale con `Model`, **Effort** e Speed\n- slider dentro [Advanced](https://example.com)",
+      }),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Sì, esattamente così: · menu principale con Model, Effort e Speed · slider dentro Advanced",
+    });
+  });
+
+  it("preserves technical underscores and cleans an unclosed code fence", () => {
+    expect(
+      buildTaskCompletionCopy({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        completedAt: "2026-04-05T10:00:05.000Z",
+        assistantSummary: "Updated `apps/web/src/foo_bar.ts`.\n```ts\nconst result_value = true;",
+      }),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Updated apps/web/src/foo_bar.ts. const result_value = true;",
+    });
+  });
 });
 
 describe("collectInputNeededThreadCandidates", () => {
