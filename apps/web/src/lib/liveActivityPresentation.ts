@@ -2,7 +2,7 @@
 // Purpose: Provider-agnostic labels and live timing for normalized transcript activity.
 // Layer: Web presentation helper
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 import type { WorkLogEntry, WorkLogLiveActivity } from "../workLog";
 import { formatClockDuration } from "../session-logic";
@@ -10,6 +10,43 @@ import { deriveReadableCommandDisplay } from "./toolCallLabel";
 
 const NO_ACTIVITY_THRESHOLD_MS = 30_000;
 const LIVE_ACTIVITY_TICK_MS = 1_000;
+const liveActivityClockListeners = new Set<() => void>();
+let liveActivityClockIntervalId: number | null = null;
+let liveActivityClockNowMs = Date.now();
+
+function emitLiveActivityClockTick(): void {
+  liveActivityClockNowMs = Date.now();
+  for (const listener of liveActivityClockListeners) {
+    listener();
+  }
+}
+
+function subscribeLiveActivityClock(listener: () => void): () => void {
+  liveActivityClockListeners.add(listener);
+  if (liveActivityClockListeners.size === 1) {
+    liveActivityClockNowMs = Date.now();
+    liveActivityClockIntervalId = window.setInterval(
+      emitLiveActivityClockTick,
+      LIVE_ACTIVITY_TICK_MS,
+    );
+  }
+
+  return () => {
+    liveActivityClockListeners.delete(listener);
+    if (liveActivityClockListeners.size === 0 && liveActivityClockIntervalId !== null) {
+      window.clearInterval(liveActivityClockIntervalId);
+      liveActivityClockIntervalId = null;
+    }
+  };
+}
+
+function subscribeInactiveLiveActivityClock(): () => void {
+  return () => {};
+}
+
+function getLiveActivityClockSnapshot(): number {
+  return liveActivityClockNowMs;
+}
 
 export function isLiveActivityInProgress(activity: WorkLogLiveActivity): boolean {
   return (
@@ -22,17 +59,13 @@ export function isLiveActivityInProgress(activity: WorkLogLiveActivity): boolean
 }
 
 export function useLiveActivityNow(activity: WorkLogLiveActivity | undefined): number {
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const inProgress = activity ? isLiveActivityInProgress(activity) : false;
-
-  useEffect(() => {
-    setNowMs(Date.now());
-    if (!inProgress) return;
-    const intervalId = window.setInterval(() => setNowMs(Date.now()), LIVE_ACTIVITY_TICK_MS);
-    return () => window.clearInterval(intervalId);
-  }, [inProgress]);
-
-  return nowMs;
+  const nowMs = useSyncExternalStore(
+    inProgress ? subscribeLiveActivityClock : subscribeInactiveLiveActivityClock,
+    getLiveActivityClockSnapshot,
+    getLiveActivityClockSnapshot,
+  );
+  return inProgress ? nowMs : Date.now();
 }
 
 function parseTimestamp(value: string): number | null {

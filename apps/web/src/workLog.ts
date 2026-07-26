@@ -601,7 +601,9 @@ function deriveWorkLogLiveActivity(
   const state: WorkLogLiveActivityState = isFailedToolLifecyclePayload(payload)
     ? "failed"
     : normalizedStatus &&
-        ["cancelled", "canceled", "killed", "stopped", "aborted"].includes(normalizedStatus)
+        ["cancelled", "canceled", "declined", "killed", "stopped", "aborted"].includes(
+          normalizedStatus,
+        )
       ? "cancelled"
       : activity.kind === "tool.completed" ||
           (normalizedStatus &&
@@ -611,7 +613,7 @@ function deriveWorkLogLiveActivity(
   const detail =
     asTrimmedString(data?.summary) ??
     (activity.kind === "tool.updated" ? asTrimmedString(payload?.detail) : null);
-  const progress = firstFiniteNumber(payload?.progress, data?.progress, data?.percent);
+  const progress = deriveWorkLogLiveActivityProgress(payload, data);
   const elapsedSeconds = firstFiniteNumber(payload?.elapsedSeconds, data?.elapsedSeconds);
 
   return {
@@ -623,6 +625,19 @@ function deriveWorkLogLiveActivity(
     ...(progress !== undefined ? { progress } : {}),
     ...(elapsedSeconds !== undefined ? { elapsedSeconds } : {}),
   };
+}
+
+function deriveWorkLogLiveActivityProgress(
+  payload: Record<string, unknown> | null,
+  data: Record<string, unknown> | null,
+): number | undefined {
+  const progress = firstFiniteNumber(payload?.progress, data?.progress);
+  if (progress !== undefined) {
+    return progress;
+  }
+
+  const percent = firstFiniteNumber(data?.percent);
+  return percent === undefined ? undefined : percent / 100;
 }
 
 function isFailedToolLifecyclePayload(payload: Record<string, unknown> | null): boolean {

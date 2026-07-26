@@ -1669,6 +1669,31 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("normalizes canonical declined status and percentage fields", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "activity-declined",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.completed",
+        summary: "Tool call declined",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "declined",
+          title: "Deploy",
+          data: {
+            toolCallId: "declined-deploy",
+            percent: 1,
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)[0]?.liveActivity).toMatchObject({
+      state: "cancelled",
+      progress: 0.01,
+    });
+  });
+
   it("uses MCP tool names from preserved payload data", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
