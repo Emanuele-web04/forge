@@ -6,10 +6,10 @@
 
 import { useEffect } from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import type { ServerConfig, ServerProviderStatus } from "@synara/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
-import { serverQueryKeys } from "../lib/serverReactQuery";
+import { reconcileServerProviderStatuses } from "../lib/serverReactQuery";
 
 export type RefreshProviderStatusesOptions = {
   readonly silent?: boolean;
@@ -23,9 +23,7 @@ function writeProviderStatusesToConfigCache(
   queryClient: QueryClient,
   providers: readonly ServerProviderStatus[],
 ) {
-  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) =>
-    current ? { ...current, providers } : current,
-  );
+  return reconcileServerProviderStatuses(queryClient, providers);
 }
 
 /**
@@ -39,7 +37,7 @@ export function useRefreshProviderStatusesNow(): RefreshProviderStatusesNow {
     if (!api) return null;
     try {
       const result = await api.server.refreshProviders();
-      writeProviderStatusesToConfigCache(queryClient, result.providers);
+      await writeProviderStatusesToConfigCache(queryClient, result.providers);
       return result.providers;
     } catch (error) {
       if (!options?.silent) {
@@ -97,7 +95,7 @@ export function useProviderStatusRefresh(options: ProviderStatusRefreshOptions):
           if (disposed) {
             return;
           }
-          writeProviderStatusesToConfigCache(queryClient, result.providers);
+          return writeProviderStatusesToConfigCache(queryClient, result.providers);
         })
         .catch(() => undefined);
     };

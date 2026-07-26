@@ -1,6 +1,8 @@
 import type {
   ProviderKind,
+  ServerConfig,
   ServerListProviderUsageInput,
+  ServerProviderStatus,
   ServerStopLocalServerInput,
   ThreadId,
 } from "@synara/contracts";
@@ -42,7 +44,51 @@ export function serverConfigQueryOptions() {
       return api.server.getConfig();
     },
     staleTime: Infinity,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
+}
+
+const latestProviderStatusesByQueryClient = new WeakMap<
+  QueryClient,
+  readonly ServerProviderStatus[]
+>();
+
+/**
+ * Folds an authoritative provider snapshot into server.config. Provider streams
+ * can win the race against the initial config query, so retain the latest
+ * snapshot and apply it after config hydration instead of dropping it.
+ */
+export async function reconcileServerProviderStatuses(
+  queryClient: QueryClient,
+  providers: readonly ServerProviderStatus[],
+  options?: {
+    readonly loadConfig?: () => Promise<ServerConfig>;
+  },
+): Promise<void> {
+  latestProviderStatusesByQueryClient.set(queryClient, providers);
+
+  let applied = false;
+  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
+    if (!current) return current;
+    applied = true;
+    return { ...current, providers };
+  });
+  if (applied) return;
+
+  const loadConfig =
+    options?.loadConfig ??
+    (() =>
+      queryClient.fetchQuery({
+        ...serverConfigQueryOptions(),
+        staleTime: 0,
+      }));
+  const hydratedConfig = await loadConfig();
+  const latestProviders = latestProviderStatusesByQueryClient.get(queryClient) ?? providers;
+  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => ({
+    ...(current ?? hydratedConfig),
+    providers: latestProviders,
+  }));
 }
 
 export function serverAuthSessionQueryOptions() {

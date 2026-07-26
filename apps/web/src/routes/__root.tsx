@@ -43,6 +43,7 @@ import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
+  reconcileServerProviderStatuses,
   serverConfigQueryOptions,
   serverQueryKeys,
   serverSettingsQueryOptions,
@@ -66,6 +67,7 @@ import {
 } from "../wsNativeApi";
 import {
   addWsCompatibilityIssueListener,
+  addWsTransportStateListener,
   readLatestWsCompatibilityIssue,
 } from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
@@ -1553,7 +1555,7 @@ function EventRouter() {
       providerDiscoveryInvalidationFingerprint = nextProviderDiscoveryFingerprint;
 
       if (!currentConfig) {
-        void queryClient.fetchQuery(serverConfigQueryOptions()).catch(() => undefined);
+        void reconcileServerProviderStatuses(queryClient, payload.providers).catch(() => undefined);
         return;
       }
       queryClient.setQueryData(serverQueryKeys.config(), {
@@ -1580,6 +1582,20 @@ function EventRouter() {
         });
       }
     });
+    const unsubWsTransportState = addWsTransportStateListener(
+      (state) => {
+        if (state !== "open") return;
+        // Reopening the socket is a projection boundary. React Query otherwise
+        // keeps the previous infinite-stale config and can strand "Checking".
+        void queryClient
+          .fetchQuery({
+            ...serverConfigQueryOptions(),
+            staleTime: 0,
+          })
+          .catch(() => undefined);
+      },
+      { replayCurrent: true },
+    );
     const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
       queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);
       void queryClient.invalidateQueries({
@@ -1638,6 +1654,7 @@ function EventRouter() {
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
+      unsubWsTransportState();
       unsubServerSettingsUpdated();
     };
   }, [
