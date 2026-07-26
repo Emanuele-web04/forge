@@ -459,6 +459,389 @@
   transform: scale(1.08);
 }
 
+/* Composer reasoning slider: custom visual track/thumb under a transparent
+   native range. This keeps keyboard/accessibility semantics while giving
+   Electron's WebKit renderer a thick, smoothly animated surface. */
+.composer-effort-slider-visual {
+  height: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 11%, transparent);
+  box-shadow:
+    inset 0 2px 4px color-mix(in srgb, black 24%, transparent),
+    0 1px 0 color-mix(in srgb, white 5%, transparent);
+  transition:
+    filter 180ms ease,
+    box-shadow 220ms ease;
+}
+
+.composer-effort-slider-fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 100%;
+  min-width: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    oklch(0.58 0.23 288) 0%,
+    oklch(0.68 0.22 305) 48%,
+    oklch(0.78 0.17 325) 100%
+  );
+  box-shadow:
+    inset 0 1px 1px color-mix(in srgb, white 24%, transparent),
+    0 0 12px color-mix(in srgb, oklch(0.7 0.2 310) 34%, transparent);
+  transform: scaleX(var(--effort-fill-scale, 0));
+  transform-origin: left center;
+  will-change: transform;
+}
+
+.composer-effort-slider-ticks {
+  position: absolute;
+  inset: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.composer-effort-slider-tick {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 25%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, black 8%, transparent);
+  transition:
+    background 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.composer-effort-slider-tick--active {
+  background: color-mix(in srgb, white 76%, oklch(0.83 0.13 319));
+  box-shadow: 0 0 5px color-mix(in srgb, oklch(0.8 0.15 320) 72%, transparent);
+  transform: scale(1.08);
+}
+
+.composer-effort-slider-thumb {
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  transform: translate3d(var(--effort-thumb-x, 12px), -50%, 0) translateX(-50%);
+  will-change: transform;
+}
+
+.composer-effort-slider-thumb-core {
+  position: absolute;
+  inset: 0;
+  border: 3px solid color-mix(in srgb, white 90%, transparent);
+  border-radius: 999px;
+  background: linear-gradient(145deg, white 8%, oklch(0.94 0.035 302) 90%);
+  box-shadow:
+    0 3px 9px rgba(15, 8, 35, 0.48),
+    0 0 0 1px color-mix(in srgb, oklch(0.66 0.18 303) 28%, transparent);
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1),
+    box-shadow 220ms ease,
+    background 220ms ease;
+}
+
+.composer-effort-slider-shell:not([data-dragging="true"]) .composer-effort-slider-fill {
+  transition: transform 180ms cubic-bezier(0.22, 0.86, 0.3, 1);
+}
+
+.composer-effort-slider-shell:not([data-dragging="true"]) .composer-effort-slider-thumb {
+  transition: transform 180ms cubic-bezier(0.22, 0.86, 0.3, 1);
+}
+
+.composer-effort-slider-shell:has(.composer-effort-slider:hover) .composer-effort-slider-visual,
+.composer-effort-slider-shell:has(.composer-effort-slider:focus-visible)
+  .composer-effort-slider-visual {
+  filter: saturate(1.14) brightness(1.05);
+  box-shadow:
+    inset 0 2px 4px color-mix(in srgb, black 24%, transparent),
+    0 0 0 1px color-mix(in srgb, oklch(0.72 0.18 310) 25%, transparent),
+    0 0 18px color-mix(in srgb, oklch(0.68 0.2 305) 17%, transparent);
+}
+
+.composer-effort-slider-shell:has(.composer-effort-slider:hover) .composer-effort-slider-thumb-core,
+.composer-effort-slider-shell:has(.composer-effort-slider:focus-visible)
+  .composer-effort-slider-thumb-core {
+  transform: scale(1.08);
+}
+
+.composer-effort-slider-shell:has(.composer-effort-slider:active)
+  .composer-effort-slider-thumb-core {
+  transform: scale(1.15);
+  box-shadow:
+    0 2px 7px rgba(15, 8, 35, 0.4),
+    0 0 0 5px color-mix(in srgb, oklch(0.72 0.18 310) 17%, transparent),
+    0 0 20px color-mix(in srgb, oklch(0.7 0.2 315) 30%, transparent);
+}
+
+.composer-effort-slider-shell:has(.composer-effort-slider:disabled) {
+  opacity: 0.45;
+}
+
+.composer-effort-slider::-webkit-slider-runnable-track {
+  height: 12px;
+  border: 0;
+  background: transparent;
+}
+
+.composer-effort-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  margin-top: -7px;
+}
+
+.composer-effort-slider::-moz-range-track {
+  height: 12px;
+  border: 0;
+  background: transparent;
+}
+
+.composer-effort-slider::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+}
+
+/* Theme-aware refinement: the selected theme owns the effort accent. Reaching
+   the maximum produces one kinetic lock sequence—sweep, ticks, thumb snap—
+   and then settles into a quiet static state. */
+.composer-effort-slider-shell {
+  --effort-accent: var(--color-text-accent, var(--ring));
+  --effort-accent-soft: color-mix(in srgb, var(--effort-accent) 24%, transparent);
+}
+
+.composer-effort-slider-visual {
+  height: 10px;
+}
+
+.composer-effort-slider-fill {
+  overflow: hidden;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--effort-accent) 68%, var(--color-background-surface)) 0%,
+    var(--effort-accent) 100%
+  );
+  box-shadow:
+    inset 0 1px 1px color-mix(in srgb, white 20%, transparent),
+    0 0 9px var(--effort-accent-soft);
+}
+
+.composer-effort-slider-tick {
+  width: 3px;
+  height: 3px;
+}
+
+.composer-effort-slider-tick--active {
+  background: color-mix(in srgb, white 76%, var(--effort-accent));
+  box-shadow: 0 0 4px color-mix(in srgb, var(--effort-accent) 58%, transparent);
+}
+
+.composer-effort-slider-thumb {
+  width: 24px;
+  height: 24px;
+  will-change: transform;
+}
+
+.composer-effort-slider-thumb-core {
+  border-width: 2px;
+  border-color: color-mix(in srgb, white 74%, var(--effort-accent));
+  background: color-mix(in srgb, white 92%, var(--effort-accent));
+  box-shadow:
+    0 2px 6px color-mix(in srgb, black 30%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--effort-accent) 16%, transparent);
+}
+
+.composer-effort-slider-shell:has(.composer-effort-slider:hover) .composer-effort-slider-visual,
+.composer-effort-slider-shell:has(.composer-effort-slider:focus-visible)
+  .composer-effort-slider-visual {
+  filter: saturate(1.06) brightness(1.03);
+  box-shadow:
+    inset 0 2px 3px color-mix(in srgb, black 22%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--effort-accent) 22%, transparent),
+    0 0 12px color-mix(in srgb, var(--effort-accent) 13%, transparent);
+}
+
+.composer-effort-slider-shell:has(.composer-effort-slider:hover) .composer-effort-slider-thumb-core,
+.composer-effort-slider-shell:has(.composer-effort-slider:focus-visible)
+  .composer-effort-slider-thumb-core {
+  transform: scale(1.06);
+}
+
+.composer-effort-slider-shell:has(.composer-effort-slider:active)
+  .composer-effort-slider-thumb-core {
+  transform: scale(1.1);
+  box-shadow:
+    0 2px 7px color-mix(in srgb, black 34%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--effort-accent) 15%, transparent),
+    0 0 15px color-mix(in srgb, var(--effort-accent) 22%, transparent);
+}
+
+.composer-effort-slider::-webkit-slider-runnable-track {
+  height: 10px;
+}
+
+.composer-effort-slider::-webkit-slider-thumb {
+  width: 24px;
+  height: 24px;
+  margin-top: -7px;
+}
+
+.composer-effort-slider::-moz-range-track {
+  height: 10px;
+}
+
+.composer-effort-slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+}
+
+.composer-effort-slider-shell[data-max-reasoning="true"] .composer-effort-slider-fill {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--effort-accent) 66%, var(--color-background-surface)) 0%,
+    var(--effort-accent) 58%,
+    color-mix(in srgb, white 36%, var(--effort-accent)) 100%
+  );
+  box-shadow:
+    inset 0 1px 1px color-mix(in srgb, white 24%, transparent),
+    0 0 12px color-mix(in srgb, var(--effort-accent) 28%, transparent);
+  animation: none;
+}
+
+.composer-effort-slider-shell[data-max-reasoning="true"]:not([data-dragging="true"])
+  .composer-effort-slider-fill::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset-block: -2px;
+  left: 0;
+  width: 38%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, white 68%, var(--effort-accent)),
+    transparent
+  );
+  filter: blur(2px);
+  opacity: 0;
+  transform: translateX(-125%);
+  animation: composer-effort-lock-sweep 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.composer-effort-slider-shell[data-max-reasoning="true"]:not([data-dragging="true"])
+  .composer-effort-slider-thumb::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: -4px;
+  border: 1px solid color-mix(in srgb, var(--effort-accent) 52%, transparent);
+  border-radius: 999px;
+  opacity: 0;
+  transform: scale(0.72);
+  animation: composer-effort-lock-ring 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.composer-effort-slider-shell[data-max-reasoning="true"] .composer-effort-slider-thumb-core {
+  border-color: color-mix(in srgb, white 74%, var(--effort-accent));
+  background: color-mix(in srgb, white 90%, var(--effort-accent));
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--effort-accent) 15%, transparent),
+    0 0 19px color-mix(in srgb, var(--effort-accent) 44%, transparent);
+  animation: none;
+}
+
+.composer-effort-slider-shell[data-max-reasoning="true"]:not([data-dragging="true"])
+  .composer-effort-slider-thumb-core {
+  animation: composer-effort-lock-snap 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.composer-effort-slider-shell[data-max-reasoning="true"]:not([data-dragging="true"])
+  .composer-effort-slider-tick--active {
+  animation: composer-effort-lock-tick 260ms ease-out both;
+  animation-delay: var(--effort-tick-delay, 0ms);
+}
+
+@keyframes composer-effort-lock-sweep {
+  0% {
+    opacity: 0;
+    transform: translateX(-125%);
+  }
+  22% {
+    opacity: 0.82;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(270%);
+  }
+}
+
+@keyframes composer-effort-lock-ring {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  28% {
+    opacity: 0.72;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.32);
+  }
+}
+
+@keyframes composer-effort-lock-snap {
+  0% {
+    transform: scale(0.92);
+  }
+  58% {
+    transform: scale(1.075);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes composer-effort-lock-tick {
+  0% {
+    opacity: 0.45;
+    transform: scale(0.72);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(1.42);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-effort-slider-fill::after,
+  .composer-effort-slider-thumb::before,
+  .composer-effort-slider-thumb-core,
+  .composer-effort-slider-tick {
+    animation: none;
+  }
+
+  .composer-effort-slider-fill::after,
+  .composer-effort-slider-thumb::before {
+    opacity: 0;
+  }
+}
+
 /* Theme settings color picker: keep react-colorful aligned with the compact popover. */
 .theme-color-picker .react-colorful {
   width: 100%;

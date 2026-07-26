@@ -207,35 +207,29 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("shows only the provided effort options", async () => {
+  it("maps the provided Claude effort ladder onto slider steps", async () => {
     await using _ = await mountClaudePicker({
       model: "claude-sonnet-4-6",
     });
 
     await page.getByRole("button").click();
 
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Low");
-      expect(text).toContain("Medium");
-      expect(text).toContain("High");
-      expect(text).toContain("Max");
-      expect(text).toContain("Ultrathink");
-    });
+    const slider = page.getByRole("slider", { name: "Effort" });
+    await expect.element(slider).toHaveAttribute("min", "0");
+    await expect.element(slider).toHaveAttribute("max", "4");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
   });
 
-  it("shows Extra High for Claude Opus 4.7", async () => {
+  it("includes every Claude Opus 4.7 effort in the slider", async () => {
     await using _ = await mountClaudePicker({
       model: "claude-opus-4-7",
     });
 
     await page.getByRole("button").click();
 
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Extra High");
-      expect(text).toContain("Max");
-    });
+    const slider = page.getByRole("slider", { name: "Effort" });
+    await expect.element(slider).toHaveAttribute("max", "6");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
   });
 
   it("shows a th  inking on/off dropdown for Haiku", async () => {
@@ -275,6 +269,10 @@ describe("TraitsPicker (Claude)", () => {
       expect(text).toContain("Effort");
       expect(text).toContain("Remove Ultrathink from the prompt to change effort.");
       expect(text).not.toContain("Fallback Effort");
+      expect(
+        document.body.querySelector<HTMLInputElement>('[role="slider"], input[type="range"]')
+          ?.disabled,
+      ).toBe(true);
     });
   });
 
@@ -285,15 +283,17 @@ describe("TraitsPicker (Claude)", () => {
     });
 
     await page.getByRole("button").click();
-    await page.getByRole("menuitemradio", { name: "Max" }).click();
+    await page.getByRole("slider", { name: "Effort" }).fill("3");
 
-    expect(
-      useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent,
-    ).toMatchObject({
-      provider: "claudeAgent",
-      options: {
-        effort: "max",
-      },
+    await vi.waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent,
+      ).toMatchObject({
+        provider: "claudeAgent",
+        options: {
+          effort: "max",
+        },
+      });
     });
   });
 
@@ -429,23 +429,20 @@ describe("TraitsPicker (Codex)", () => {
     });
   });
 
-  it("shows only the provided effort options", async () => {
+  it("maps Codex effort capabilities onto slider steps", async () => {
     await using _ = await mountCodexPicker({
       options: { fastMode: false },
     });
 
     await page.getByRole("button").click();
 
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Low");
-      expect(text).toContain("Medium");
-      expect(text).toContain("High");
-      expect(text).toContain("Extra High");
-    });
+    const slider = page.getByRole("slider", { name: "Effort" });
+    await expect.element(slider).toHaveAttribute("min", "0");
+    await expect.element(slider).toHaveAttribute("max", "3");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium");
   });
 
-  it("closes after clicking the already-selected effort", async () => {
+  it("keeps the picker open while changing Codex effort", async () => {
     await using _ = await mountCodexPicker({
       options: { reasoningEffort: "medium", fastMode: false },
     });
@@ -456,10 +453,14 @@ describe("TraitsPicker (Codex)", () => {
       expect(document.body.textContent ?? "").toContain("Effort");
     });
 
-    await page.getByRole("menuitemradio", { name: "Medium" }).click();
+    await page.getByRole("slider", { name: "Effort" }).fill("2");
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").not.toContain("Effort");
+      expect(document.body.textContent ?? "").toContain("Effort");
+      expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
+        provider: "codex",
+        options: { reasoningEffort: "high" },
+      });
     });
   });
 
@@ -590,9 +591,10 @@ describe("TraitsPicker (Cursor)", () => {
       expect(text).toContain("Effort");
       expect(text).toContain("300K");
       expect(text).toContain("1M");
-      expect(text).toContain("Extra High");
-      expect(text).toContain("Max");
     });
+    const slider = page.getByRole("slider", { name: "Effort" });
+    await expect.element(slider).toHaveAttribute("max", "4");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
   });
 });
 

@@ -11,7 +11,17 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { applyClaudePromptEffortPrefix } from "@synara/shared/model";
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { ChevronDownIcon, FastModeIcon, FastModeOutlineIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -150,12 +160,18 @@ export function resolveTraitsTriggerSummary(options: {
   };
 }
 
-// Compact icon toggle for fast mode, docked at the far right of the Effort
-// section header. Outline zap (Central reversed set) = default speed, filled
-// zap (Central fill set) = fast mode on. Toggling keeps the menu open so the
-// state flip is visible in place.
-function FastModeToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
-  const Icon = enabled ? FastModeIcon : FastModeOutlineIcon;
+// Compact fast-mode toggle. The text label keeps the control legible at picker
+// scale while the speedometer and theme-accent surface communicate its state.
+// Toggling keeps the menu open so the result remains visible in place.
+function FastModeToggle({
+  enabled,
+  onToggle,
+  className,
+}: {
+  enabled: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger
@@ -164,18 +180,42 @@ function FastModeToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () 
             type="button"
             aria-label="Fast mode"
             aria-pressed={enabled}
-            className="-my-1 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)]"
-            onClick={onToggle}
+            className={cn(
+              "flex h-6 shrink-0 self-center cursor-pointer items-center justify-center gap-1 rounded-md border px-1.5 text-[11px] font-medium leading-none outline-none transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-out focus-visible:ring-1 focus-visible:ring-[var(--color-border-focus)] active:scale-[0.97] motion-reduce:transition-none",
+              enabled
+                ? "border-[color-mix(in_srgb,var(--color-text-accent)_34%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_12%,transparent)] text-[var(--color-text-accent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-text-accent)_7%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-text-accent)_16%,transparent)]"
+                : "border-[color-mix(in_srgb,var(--foreground)_12%,transparent)] bg-[color-mix(in_srgb,var(--foreground)_3%,transparent)] text-muted-foreground hover:border-[color-mix(in_srgb,var(--foreground)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--foreground)_7%,transparent)] hover:text-foreground",
+              className,
+            )}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle();
+            }}
           />
         }
       >
-        <Icon
+        <span
           aria-hidden="true"
-          className={cn(
-            "size-3.5",
-            enabled ? "text-[hsl(var(--chart-4))]" : "text-muted-foreground/70",
-          )}
-        />
+          data-slot="fast-mode-icon"
+          className="relative flex size-4 shrink-0 items-center justify-center"
+        >
+          <FastModeOutlineIcon
+            className={cn(
+              "absolute inset-0 size-4 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+              enabled ? "-translate-y-0.5 scale-90 opacity-0" : "scale-100 opacity-100",
+            )}
+          />
+          <FastModeIcon
+            className={cn(
+              "absolute inset-0 size-4 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+              enabled ? "scale-100 opacity-100" : "translate-y-0.5 scale-90 opacity-0",
+            )}
+          />
+        </span>
+        <span data-slot="fast-mode-label" className="leading-none">
+          Fast
+        </span>
       </TooltipTrigger>
       <TooltipPopup side="top" variant="picker">
         {enabled ? "Fast mode on" : "Fast mode off"}
@@ -184,11 +224,270 @@ function FastModeToggle({ enabled, onToggle }: { enabled: boolean; onToggle: () 
   );
 }
 
+export function ComposerFastModeToggle({
+  provider,
+  threadId,
+  model,
+  modelOptions,
+  enabled,
+  className,
+}: {
+  provider: ProviderKind;
+  threadId: ThreadId;
+  model: string;
+  modelOptions: ProviderOptions | null | undefined;
+  enabled: boolean;
+  className?: string;
+}) {
+  const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  const handleToggle = useCallback(() => {
+    setProviderModelOptions(
+      threadId,
+      provider,
+      buildNextProviderOptions(provider, modelOptions, { fastMode: !enabled }),
+      { model, persistSticky: true },
+    );
+  }, [enabled, model, modelOptions, provider, setProviderModelOptions, threadId]);
+
+  return <FastModeToggle enabled={enabled} onToggle={handleToggle} className={className} />;
+}
+
 interface TraitRadioOption {
   value: string;
   label: string;
   isDefault?: boolean;
   description?: string | null;
+}
+
+function TraitSliderSection({
+  label,
+  labelTrailing,
+  note,
+  value,
+  options,
+  disabled,
+  onValueChange,
+}: {
+  label: string;
+  labelTrailing?: ReactNode;
+  note?: ReactNode;
+  value: string;
+  options: ReadonlyArray<TraitRadioOption>;
+  disabled?: boolean;
+  onValueChange: (value: string) => void;
+}) {
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
+  const maxIndex = Math.max(0, options.length - 1);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const pointerActiveRef = useRef(false);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const sliderRef = useRef<HTMLInputElement>(null);
+  const trackWidthRef = useRef(0);
+  const snapFrameRef = useRef<number | null>(null);
+  const visualIndex = dragIndex ?? selectedIndex;
+  const selectedOption = options[visualIndex];
+  const isMaximumReasoning = maxIndex > 0 && visualIndex === maxIndex;
+
+  const applyVisualPosition = useCallback(
+    (position: number) => {
+      const shell = shellRef.current;
+      const trackWidth = trackWidthRef.current;
+      if (!shell || trackWidth <= 0) return;
+
+      const clampedPosition = Math.min(maxIndex, Math.max(0, position));
+      const progress = maxIndex === 0 ? 1 : clampedPosition / maxIndex;
+      const thumbRadius = 12;
+      const thumbX = thumbRadius + progress * Math.max(0, trackWidth - thumbRadius * 2);
+
+      shell.style.setProperty("--effort-thumb-x", `${thumbX}px`);
+      shell.style.setProperty("--effort-fill-scale", String(thumbX / trackWidth));
+    },
+    [maxIndex],
+  );
+
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    const slider = sliderRef.current;
+    if (!shell || !slider) return;
+
+    const syncVisualPosition = (width: number) => {
+      trackWidthRef.current = width;
+      const position = pointerActiveRef.current ? Number(slider.value) : selectedIndex;
+      applyVisualPosition(position);
+    };
+
+    if (!pointerActiveRef.current) {
+      slider.value = String(selectedIndex);
+      setDragIndex(null);
+    }
+    syncVisualPosition(shell.getBoundingClientRect().width);
+
+    if (typeof ResizeObserver === "undefined") return;
+    const resizeObserver = new ResizeObserver(([entry]) => {
+      if (entry) syncVisualPosition(entry.contentRect.width);
+    });
+    resizeObserver.observe(shell);
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [applyVisualPosition, selectedIndex]);
+
+  useEffect(
+    () => () => {
+      if (snapFrameRef.current !== null) {
+        cancelAnimationFrame(snapFrameRef.current);
+      }
+    },
+    [],
+  );
+
+  const commitPosition = (position: number) => {
+    const nextIndex = Math.min(maxIndex, Math.max(0, Math.round(position)));
+    const nextOption = options[nextIndex];
+    if (sliderRef.current) {
+      sliderRef.current.value = String(nextIndex);
+    }
+    setDragIndex(nextIndex);
+    if (nextOption) {
+      onValueChange(nextOption.value);
+    }
+    return nextIndex;
+  };
+
+  const commitKeyboardStep = (event: KeyboardEvent<HTMLInputElement>) => {
+    const direction =
+      event.key === "ArrowRight" || event.key === "ArrowUp"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowDown"
+          ? -1
+          : 0;
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? maxIndex
+          : direction === 0
+            ? null
+            : Math.min(maxIndex, Math.max(0, visualIndex + direction));
+    if (nextIndex === null) return;
+    event.preventDefault();
+    commitPosition(nextIndex);
+    applyVisualPosition(nextIndex);
+  };
+
+  return (
+    <MenuGroup>
+      <MenuGroupLabel className="flex items-center justify-between gap-2">
+        <span>{label}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span
+            className="max-w-24 truncate text-[var(--color-text-foreground-secondary)]"
+            title={
+              selectedOption?.isDefault
+                ? `${selectedOption.label} (default)`
+                : selectedOption?.label
+            }
+          >
+            {selectedOption?.label}
+          </span>
+          {labelTrailing}
+        </span>
+      </MenuGroupLabel>
+      {note}
+      <div className="px-2 pb-2.5 pt-1">
+        <div
+          ref={shellRef}
+          className="composer-effort-slider-shell relative flex h-9 items-center"
+          data-max-reasoning={isMaximumReasoning ? "true" : undefined}
+          data-dragging={isDragging ? "true" : undefined}
+        >
+          <div aria-hidden="true" className="composer-effort-slider-visual absolute inset-x-0">
+            <div className="composer-effort-slider-fill" />
+            <div className="composer-effort-slider-ticks">
+              {options.map((option, optionIndex) => (
+                <span
+                  key={option.value}
+                  style={{ "--effort-tick-delay": `${36 + optionIndex * 42}ms` } as CSSProperties}
+                  className={cn(
+                    "composer-effort-slider-tick",
+                    optionIndex <= visualIndex && "composer-effort-slider-tick--active",
+                  )}
+                />
+              ))}
+            </div>
+          </div>
+          <div aria-hidden="true" className="composer-effort-slider-thumb">
+            <span className="composer-effort-slider-thumb-core" />
+          </div>
+          <input
+            ref={sliderRef}
+            type="range"
+            min={0}
+            max={maxIndex}
+            step={0.01}
+            defaultValue={selectedIndex}
+            disabled={disabled}
+            aria-label={label}
+            aria-valuetext={selectedOption?.label ?? value}
+            data-max-reasoning={isMaximumReasoning ? "true" : undefined}
+            className="composer-effort-slider absolute inset-0 z-4 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0 focus-visible:outline-none disabled:cursor-not-allowed"
+            onPointerDown={(event) => {
+              pointerActiveRef.current = true;
+              shellRef.current?.setAttribute("data-dragging", "true");
+              setIsDragging(true);
+              if (snapFrameRef.current !== null) {
+                cancelAnimationFrame(snapFrameRef.current);
+                snapFrameRef.current = null;
+              }
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+              setDragIndex(Math.round(Number(event.currentTarget.value)));
+            }}
+            onPointerUp={(event) => {
+              pointerActiveRef.current = false;
+              shellRef.current?.removeAttribute("data-dragging");
+              setIsDragging(false);
+              const nextIndex = commitPosition(Number(event.currentTarget.value));
+              snapFrameRef.current = requestAnimationFrame(() => {
+                applyVisualPosition(nextIndex);
+                snapFrameRef.current = null;
+              });
+              event.currentTarget.releasePointerCapture?.(event.pointerId);
+            }}
+            onPointerCancel={() => {
+              pointerActiveRef.current = false;
+              shellRef.current?.removeAttribute("data-dragging");
+              setIsDragging(false);
+              setDragIndex(null);
+              if (sliderRef.current) {
+                sliderRef.current.value = String(selectedIndex);
+              }
+              applyVisualPosition(selectedIndex);
+            }}
+            onKeyDown={commitKeyboardStep}
+            onInput={(event) => {
+              const nextPosition = Number(event.currentTarget.value);
+              applyVisualPosition(nextPosition);
+              setDragIndex((currentIndex) => {
+                const nextIndex = Math.min(maxIndex, Math.max(0, Math.round(nextPosition)));
+                return currentIndex === nextIndex ? currentIndex : nextIndex;
+              });
+            }}
+            onChange={(event) => {
+              const nextPosition = Number(event.currentTarget.value);
+              if (!pointerActiveRef.current) {
+                const nextIndex = commitPosition(nextPosition);
+                applyVisualPosition(nextIndex);
+              }
+            }}
+          />
+        </div>
+      </div>
+    </MenuGroup>
+  );
 }
 
 // Shared layout for one composer trait section: a labeled radio group whose rows
@@ -269,6 +568,8 @@ export interface TraitsMenuContentProps {
   prompt: string;
   onPromptChange: (prompt: string) => void;
   includeFastMode?: boolean;
+  effortPresentation?: "radio" | "slider";
+  sections?: ReadonlyArray<"thinking" | "context" | "effort" | "speed" | "agent">;
   modelOptions?: ProviderOptions | null | undefined;
   onSelectionComplete?: () => void;
 }
@@ -282,6 +583,8 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   prompt,
   onPromptChange,
   includeFastMode: includeFastModeProp,
+  effortPresentation = "slider",
+  sections,
   modelOptions,
   onSelectionComplete,
 }: TraitsMenuContentProps) {
@@ -303,29 +606,35 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     fastModeDescriptor,
     promptInjectedValues,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
-  const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
-    { includeFastMode },
-  );
+  const includesSection = (section: "thinking" | "context" | "effort" | "speed" | "agent") =>
+    sections === undefined || sections.includes(section);
   const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
-  // Fast mode rides the Effort header as a compact icon toggle whenever an
-  // effort section exists; fast-only models (no effort levels) keep the
-  // standalone radio section instead.
+  const showThinking = includesSection("thinking") && thinkingEnabled !== null;
+  const showContext = includesSection("context") && contextWindowOptions.length > 1;
+  const showEffort = includesSection("effort") && effortLevels.length > 0;
+  // Fast mode rides the slider header only in the standalone traits picker.
+  // The combined Model/Effort menu gives Speed its own explicit submenu.
   const showsFastModeEffortToggle =
-    includeFastMode && supportsFastModeControl && effortLevels.length > 0;
+    includeFastMode &&
+    effortPresentation === "slider" &&
+    supportsFastModeControl &&
+    showEffort &&
+    includesSection("speed");
+  const showSpeed =
+    includesSection("speed") &&
+    includeFastMode &&
+    supportsFastModeControl &&
+    !showsFastModeEffortToggle;
   const agentOptions = getAgentOptions(provider, runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
-  const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
-  const hasPriorContextWindowSection = thinkingEnabled !== null;
+  const showAgent = includesSection("agent") && agentOptions.length > 0 && defaultAgent !== null;
+  const hasVisibleControls = showThinking || showContext || showEffort || showSpeed;
   // Both descriptor ids are resolved up here rather than inline. React Compiler cannot lower a `??`
   // in an object-key position, and it cannot match an optional-chained expression in a dependency
   // list to its own inferred scope — either one makes it skip this component entirely.
   const contextWindowTraitId = contextWindowDescriptor?.id ?? "contextWindow";
   const primarySelectDescriptorId = primarySelectDescriptor?.id;
-  const hasPriorEffortSection = thinkingEnabled !== null || contextWindowOptions.length > 1;
-  const hasPriorFastModeSection =
-    thinkingEnabled !== null || effortLevels.length > 0 || contextWindowOptions.length > 1;
 
   // Single home for committing a trait change: merge the patch into the provider
   // options, persist it as sticky, and close the menu. Every section funnels here.
@@ -349,7 +658,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   // `getComposerTraitSelection` call, which React Compiler memoizes as a single scope, so no
   // hand-written dependency list can match it and the validator refuses to compile the component at
   // all. Letting the compiler own this memoization is what gets the whole file optimized.
-  const handleEffortChange = (value: string) => {
+  const handleEffortChange = (value: string, options?: { keepMenuOpen?: boolean }) => {
     if (ultrathinkPromptControlled) return;
     if (!value) return;
     const nextOption = effortLevels.find((option) => option.value === value);
@@ -360,7 +669,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           ? ULTRATHINK_PROMPT_PREFIX
           : applyClaudePromptEffortPrefix(prompt, "ultrathink");
       onPromptChange(nextPrompt);
-      onSelectionComplete?.();
+      if (!options?.keepMenuOpen) {
+        onSelectionComplete?.();
+      }
       return;
     }
     const optionId =
@@ -372,16 +683,16 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           : provider === "claudeAgent"
             ? "effort"
             : "reasoningEffort");
-    commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value));
+    commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value), options);
   };
 
-  if (!hasVisibleControls && !hasAgentControls) {
+  if (!hasVisibleControls && !showAgent) {
     return null;
   }
 
   return (
     <>
-      {thinkingEnabled !== null ? (
+      {showThinking ? (
         <TraitRadioSection
           label="Thinking"
           value={thinkingEnabled ? "on" : "off"}
@@ -393,9 +704,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           onSelectionComplete={onSelectionComplete}
         />
       ) : null}
-      {contextWindowOptions.length > 1 ? (
+      {showContext ? (
         <>
-          {hasPriorContextWindowSection ? <MenuDivider /> : null}
+          {showThinking ? <MenuDivider /> : null}
           <TraitRadioSection
             label={contextWindowDescriptor?.label ?? "Context"}
             value={contextWindow ?? defaultContextWindow ?? ""}
@@ -409,44 +720,58 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           />
         </>
       ) : null}
-      {effortLevels.length > 0 ? (
+      {showEffort ? (
         <>
-          {hasPriorEffortSection ? <MenuDivider /> : null}
-          <TraitRadioSection
-            label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
-            labelTrailing={
-              showsFastModeEffortToggle ? (
-                <FastModeToggle
-                  enabled={fastModeEnabled}
-                  onToggle={() =>
-                    commitTrait({ fastMode: !fastModeEnabled }, { keepMenuOpen: true })
-                  }
-                />
-              ) : undefined
-            }
-            note={
-              ultrathinkPromptControlled ? (
-                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
-                  Remove Ultrathink from the prompt to change effort.
-                </div>
-              ) : undefined
-            }
-            value={effort ?? ""}
-            disabled={ultrathinkPromptControlled}
-            options={effortLevels.map((option) => ({
-              value: option.value,
-              label: option.label,
-              isDefault: option.value === defaultEffort,
-              description: option.description ?? null,
-            }))}
-            onValueChange={handleEffortChange}
-            onSelectionComplete={onSelectionComplete}
-          />
+          {showThinking || showContext ? <MenuDivider /> : null}
+          {provider === "kilo" || provider === "opencode" || effortPresentation === "radio" ? (
+            <TraitRadioSection
+              label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+              value={effort ?? ""}
+              options={effortLevels.map((option) => ({
+                value: option.value,
+                label: option.label,
+                isDefault: option.value === defaultEffort,
+                description: option.description ?? null,
+              }))}
+              onValueChange={handleEffortChange}
+              onSelectionComplete={onSelectionComplete}
+            />
+          ) : (
+            <TraitSliderSection
+              label="Effort"
+              labelTrailing={
+                showsFastModeEffortToggle ? (
+                  <FastModeToggle
+                    enabled={fastModeEnabled}
+                    onToggle={() =>
+                      commitTrait({ fastMode: !fastModeEnabled }, { keepMenuOpen: true })
+                    }
+                  />
+                ) : undefined
+              }
+              note={
+                ultrathinkPromptControlled ? (
+                  <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                    Remove Ultrathink from the prompt to change effort.
+                  </div>
+                ) : undefined
+              }
+              value={effort ?? defaultEffort ?? effortLevels[0]?.value ?? ""}
+              disabled={ultrathinkPromptControlled}
+              options={effortLevels.map((option) => ({
+                value: option.value,
+                label: option.label,
+                isDefault: option.value === defaultEffort,
+                description: option.description ?? null,
+              }))}
+              onValueChange={(value) => handleEffortChange(value, { keepMenuOpen: true })}
+            />
+          )}
         </>
       ) : null}
-      {includeFastMode && supportsFastModeControl && !showsFastModeEffortToggle ? (
+      {showSpeed ? (
         <>
-          {hasPriorFastModeSection ? <MenuDivider /> : null}
+          {showThinking || showContext || showEffort ? <MenuDivider /> : null}
           <TraitRadioSection
             label="Speed"
             value={fastModeEnabled ? "on" : "off"}
@@ -459,9 +784,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           />
         </>
       ) : null}
-      {hasAgentControls ? (
+      {showAgent ? (
         <>
-          {hasVisibleControls ? <MenuDivider /> : null}
+          {showThinking || showContext || showEffort || showSpeed ? <MenuDivider /> : null}
           <TraitRadioSection
             label={provider === "kilo" ? "Mode" : "Agent"}
             value={selectedAgent ?? defaultAgent ?? ""}
@@ -600,7 +925,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           <>
             <span className="shrink-0 text-muted-foreground/45">·</span>
             <span className="inline-flex shrink-0 items-center gap-1">
-              <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+              <FastModeIcon aria-hidden="true" className="size-3 text-[var(--color-text-accent)]" />
               <span>Fast</span>
             </span>
           </>
@@ -624,7 +949,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           <>
             <span className="text-muted-foreground/45">·</span>
             <span className="inline-flex items-center gap-1">
-              <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+              <FastModeIcon aria-hidden="true" className="size-3 text-[var(--color-text-accent)]" />
               <span>Fast</span>
             </span>
           </>

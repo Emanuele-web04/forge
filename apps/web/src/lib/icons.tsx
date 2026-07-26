@@ -259,9 +259,8 @@ export const Undo2Icon = adaptIcon(IconArrowBackUp);
 export const WorktreeIcon = centralIconWrapper("arrow-split-right");
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);
-// Single source for the fast-mode glyph. Every fast-mode affordance (composer
-// trait badges, the effort-header toggle, the /fast command) renders this one solid
-// lightning bolt from the Central fill set instead of mixing Tabler/Ionicons bolts.
-export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
-// Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
-export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
+// Single source for the fast-mode glyph. A high-reading speedometer keeps every
+// fast-mode affordance explicit without leaning on the more playful lightning
+// metaphor. The neutral twin shows the needle at standard speed in toggles.
+export const FastModeIcon: LucideIcon = centralIconWrapper("speed-high");
+export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("speed-middle");

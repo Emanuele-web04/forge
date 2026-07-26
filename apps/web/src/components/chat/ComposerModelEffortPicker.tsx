@@ -19,7 +19,9 @@ import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ProviderModelOption } from "../../providerModelOptions";
 import { Button } from "../ui/button";
-import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
+import { DisclosureChevron } from "../ui/DisclosureChevron";
+import { DisclosureRegion } from "../ui/DisclosureRegion";
+import { Menu, MenuItem, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
@@ -35,7 +37,7 @@ import {
   ProviderModelMenuItems,
   resolveProviderModelLabel,
 } from "./ProviderModelPicker";
-import { TraitsMenuContent } from "./TraitsPicker";
+import { ComposerFastModeToggle, TraitsMenuContent } from "./TraitsPicker";
 
 type ComposerModelEffortPickerProps = {
   // Model picker data.
@@ -72,17 +74,20 @@ type ComposerModelEffortPickerProps = {
 };
 
 // Renders a single composer trigger that combines model selection, reasoning
-// effort, and the optional speed/fast-mode toggle. The primary menu hosts the
-// reasoning radio group (with fast mode as an icon toggle in its Effort
-// header); the model is reachable via a sub-menu so the footer stays compact.
+// effort, and speed. Providers with a real effort ladder open on the direct
+// slider; Advanced expands the named controls in the same popup.
 export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps) {
   const { onOpenChange, open } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
 
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
       setUncontrolledOpen(nextOpen);
+    }
+    if (!nextOpen) {
+      setAdvancedOpen(false);
     }
     onOpenChange?.(nextOpen);
   };
@@ -116,6 +121,9 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
 
   const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
   const hasTraitsTopSection = hasVisibleComposerTraitControls(traitSelection);
+  const hasEffortControl = effortLevels.length > 0;
+  const supportsDirectEffortSlider =
+    effortLevels.length > 1 && props.provider !== "kilo" && props.provider !== "opencode";
 
   const effortLabel = effort
     ? (effortLevels.find((level) => level.value === effort)?.label ?? effort)
@@ -201,6 +209,107 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     </span>
   );
 
+  const namedControls = (
+    <>
+      <MenuSub>
+        <MenuSubTrigger>
+          <span className="min-w-0 flex-1 truncate">Model</span>
+          <span className="max-w-28 truncate text-muted-foreground">{modelLabel}</span>
+        </MenuSubTrigger>
+        <ComposerPickerMenuSubPopup
+          fixedWidth
+          className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+        >
+          <ProviderModelMenuItems
+            provider={props.provider}
+            model={props.model}
+            lockedProvider={props.lockedProvider}
+            {...(props.providers ? { providers: props.providers } : {})}
+            modelOptionsByProvider={props.modelOptionsByProvider}
+            {...(props.loadingModelProviders
+              ? { loadingModelProviders: props.loadingModelProviders }
+              : {})}
+            {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
+            {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+            {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+            onProviderModelChange={props.onProviderModelChange}
+            onAfterSelection={handleAfterModelSelection}
+          />
+        </ComposerPickerMenuSubPopup>
+      </MenuSub>
+
+      {hasEffortControl ? (
+        <MenuSub>
+          <MenuSubTrigger>
+            <span className="min-w-0 flex-1 truncate">
+              {props.provider === "kilo" || props.provider === "opencode" ? "Variant" : "Effort"}
+            </span>
+            <span className="max-w-24 truncate text-muted-foreground">
+              {effortLabel ?? "Default"}
+            </span>
+          </MenuSubTrigger>
+          <ComposerPickerMenuSubPopup fixedWidth>
+            <TraitsMenuContent
+              provider={props.provider}
+              threadId={props.threadId}
+              model={props.model}
+              {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+              modelOptions={props.modelOptions}
+              prompt={props.prompt}
+              onPromptChange={props.onPromptChange}
+              includeFastMode={false}
+              effortPresentation="radio"
+              sections={["effort"]}
+              onSelectionComplete={handleAfterTraitsSelection}
+            />
+          </ComposerPickerMenuSubPopup>
+        </MenuSub>
+      ) : null}
+
+      {supportsFastModeControl && !supportsDirectEffortSlider ? (
+        <MenuSub>
+          <MenuSubTrigger>
+            <span className="min-w-0 flex-1 truncate">Speed</span>
+            <span className="max-w-24 truncate text-muted-foreground">
+              {fastModeEnabled ? "Fast" : "Standard"}
+            </span>
+          </MenuSubTrigger>
+          <ComposerPickerMenuSubPopup fixedWidth>
+            <TraitsMenuContent
+              provider={props.provider}
+              threadId={props.threadId}
+              model={props.model}
+              {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+              modelOptions={props.modelOptions}
+              prompt={props.prompt}
+              onPromptChange={props.onPromptChange}
+              includeFastMode
+              sections={["speed"]}
+              onSelectionComplete={handleAfterTraitsSelection}
+            />
+          </ComposerPickerMenuSubPopup>
+        </MenuSub>
+      ) : null}
+
+      {hasTraitsTopSection ? (
+        <TraitsMenuContent
+          provider={props.provider}
+          threadId={props.threadId}
+          model={props.model}
+          {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+          {...(props.runtimeModels !== undefined ? { runtimeModels: props.runtimeModels } : {})}
+          {...(props.runtimeAgents !== undefined ? { runtimeAgents: props.runtimeAgents } : {})}
+          modelOptions={props.modelOptions}
+          prompt={props.prompt}
+          onPromptChange={props.onPromptChange}
+          includeFastMode={false}
+          sections={["thinking", "context", "agent"]}
+          onSelectionComplete={handleAfterTraitsSelection}
+        />
+      ) : null}
+    </>
+  );
+
   return (
     <Menu
       open={isMenuOpen}
@@ -233,52 +342,56 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
       <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
-        {hasTraitsTopSection ? (
-          <TraitsMenuContent
-            provider={props.provider}
-            threadId={props.threadId}
-            model={props.model}
-            {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
-            {...(props.runtimeModels !== undefined ? { runtimeModels: props.runtimeModels } : {})}
-            {...(props.runtimeAgents !== undefined ? { runtimeAgents: props.runtimeAgents } : {})}
-            modelOptions={props.modelOptions}
-            prompt={props.prompt}
-            onPromptChange={props.onPromptChange}
-            onSelectionComplete={handleAfterTraitsSelection}
-          />
-        ) : null}
-
-        {hasTraitsTopSection ? <MenuSeparator /> : null}
-
-        <MenuSub>
-          <MenuSubTrigger>
-            <ProviderIcon
-              aria-hidden="true"
-              className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
-            />
-            <span className="truncate">{modelLabel}</span>
-          </MenuSubTrigger>
-          <ComposerPickerMenuSubPopup
-            fixedWidth
-            className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
-          >
-            <ProviderModelMenuItems
-              provider={props.provider}
-              model={props.model}
-              lockedProvider={props.lockedProvider}
-              {...(props.providers ? { providers: props.providers } : {})}
-              modelOptionsByProvider={props.modelOptionsByProvider}
-              {...(props.loadingModelProviders
-                ? { loadingModelProviders: props.loadingModelProviders }
-                : {})}
-              {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
-              {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
-              {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-              onProviderModelChange={props.onProviderModelChange}
-              onAfterSelection={handleAfterModelSelection}
-            />
-          </ComposerPickerMenuSubPopup>
-        </MenuSub>
+        {supportsDirectEffortSlider ? (
+          <>
+            <DisclosureRegion open={advancedOpen}>
+              {namedControls}
+              <MenuSeparator />
+            </DisclosureRegion>
+            <MenuItem
+              closeOnClick={false}
+              aria-expanded={advancedOpen}
+              onClick={() => setAdvancedOpen((current) => !current)}
+            >
+              <SettingsIcon aria-hidden="true" className="size-3 shrink-0 opacity-65" />
+              <span
+                className={cn("min-w-0 truncate", supportsFastModeControl ? undefined : "flex-1")}
+              >
+                Advanced
+              </span>
+              <DisclosureChevron
+                open={advancedOpen}
+                className={supportsFastModeControl ? undefined : "ms-auto"}
+              />
+              {supportsFastModeControl ? (
+                <ComposerFastModeToggle
+                  provider={props.provider}
+                  threadId={props.threadId}
+                  model={props.model}
+                  modelOptions={props.modelOptions}
+                  enabled={fastModeEnabled}
+                  className="ms-auto"
+                />
+              ) : null}
+            </MenuItem>
+            <DisclosureRegion open={!advancedOpen}>
+              <TraitsMenuContent
+                provider={props.provider}
+                threadId={props.threadId}
+                model={props.model}
+                {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+                modelOptions={props.modelOptions}
+                prompt={props.prompt}
+                onPromptChange={props.onPromptChange}
+                includeFastMode={false}
+                effortPresentation="slider"
+                sections={["effort"]}
+              />
+            </DisclosureRegion>
+          </>
+        ) : (
+          namedControls
+        )}
       </ComposerPickerMenuPopup>
     </Menu>
   );
