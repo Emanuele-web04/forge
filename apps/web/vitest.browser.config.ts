@@ -33,8 +33,10 @@ export default mergeConfig(
           port: Number(process.env.VITEST_BROWSER_API_PORT ?? 51_100),
         },
       },
-      testTimeout: 30_000,
-      hookTimeout: 30_000,
+      // The full desktop route graph can take more than 30 seconds to compile
+      // on a cold Windows cache before an individual browser test can proceed.
+      testTimeout: 90_000,
+      hookTimeout: 90_000,
     },
   }),
 );

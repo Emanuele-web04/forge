@@ -60,6 +60,12 @@ let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
 let getThreadDetailSnapshotRequestCount = 0;
+let delayNextThreadDetailSnapshotResponse = false;
+let pendingThreadDetailSnapshotResponse: {
+  readonly client: EffectRpcWebSocketClient;
+  readonly requestId: string;
+  readonly result: unknown;
+} | null = null;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -295,7 +301,20 @@ const worker = setupWorker(
         });
         return;
       }
-      sendEffectRpcExit(client, request.id, resolveWsRpc(method, requestBody));
+      const result = resolveWsRpc(method, requestBody);
+      if (
+        method === ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot &&
+        delayNextThreadDetailSnapshotResponse
+      ) {
+        delayNextThreadDetailSnapshotResponse = false;
+        pendingThreadDetailSnapshotResponse = {
+          client,
+          requestId: request.id,
+          result,
+        };
+        return;
+      }
+      sendEffectRpcExit(client, request.id, result);
     });
   }),
   http.get("*/attachments/:attachmentId", () => new HttpResponse(null, { status: 204 })),
@@ -331,9 +350,9 @@ async function mountApp(options?: {
           expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         ).toBe(true);
       },
-      // The first Chromium/MSW mount can spend more than 20 seconds compiling
+      // The first Chromium/MSW mount can spend more than 40 seconds compiling
       // the full desktop route graph on a cold Windows dev cache.
-      { timeout: 40_000, interval: 16 },
+      { timeout: 60_000, interval: 16 },
     );
   } catch (cause) {
     await screen.unmount();
@@ -378,6 +397,15 @@ function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
       thread: getThreadDetailFromFixtureSnapshot(threadId),
     },
   });
+}
+
+function sendPendingThreadDetailSnapshotResponse() {
+  const pending = pendingThreadDetailSnapshotResponse;
+  if (pending === null) {
+    throw new Error("No delayed thread-detail snapshot response is pending");
+  }
+  pendingThreadDetailSnapshotResponse = null;
+  sendEffectRpcExit(pending.client, pending.requestId, pending.result);
 }
 
 function sendShellEventPush(event: OrchestrationShellStreamEvent) {
@@ -445,6 +473,8 @@ describe("EventRouter scoped orchestration sync", () => {
     replayEvents = [];
     replayRequestCursors = [];
     getThreadDetailSnapshotRequestCount = 0;
+    delayNextThreadDetailSnapshotResponse = false;
+    pendingThreadDetailSnapshotResponse = null;
   });
 
   afterEach(() => {
@@ -904,6 +934,94 @@ describe("EventRouter scoped orchestration sync", () => {
         },
         { timeout: 10_000, interval: 16 },
       );
+    } finally {
+      fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  }, 60_000);
+
+  it("does not apply a delayed projection snapshot behind the live thread cursor", async () => {
+    const turnId = TurnId.makeUnsafe("turn-delayed-projection");
+    const startedAt = "2026-03-04T12:00:04.000Z";
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: startedAt,
+          startedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: startedAt,
+        },
+        updatedAt: startedAt,
+      }),
+    };
+
+    const mounted = await mountApp();
+
+    try {
+      delayNextThreadDetailSnapshotResponse = true;
+      await vi.waitFor(
+        () => {
+          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(0);
+          expect(pendingThreadDetailSnapshotResponse).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+
+      const completedAt = "2026-03-04T12:00:09.000Z";
+      sendThreadEventPush({
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-delayed-projection-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: completedAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.latestTurn?.state).toBe("completed");
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+      });
+
+      sendPendingThreadDetailSnapshotResponse();
+      // Let the RPC continuation run before asserting that the older snapshot
+      // did not roll back the just-applied stream event.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+
+      expect(pendingThreadDetailSnapshotResponse).toBeNull();
+      const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+      expect(thread?.latestTurn?.state).toBe("completed");
+      expect(thread?.latestTurn?.completedAt).toBe(completedAt);
+      expect(thread?.session?.orchestrationStatus).toBe("ready");
+      expect(thread?.session?.activeTurnId).toBeUndefined();
     } finally {
       fixture = buildFixture();
       await mounted.cleanup();

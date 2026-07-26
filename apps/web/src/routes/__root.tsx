@@ -1338,6 +1338,13 @@ function EventRouter() {
           return;
         }
         const currentSequence = threadSnapshotSequenceById.get(threadId) ?? -1;
+        // The RPC response can race a newer stream event. An older projection is
+        // authoritative only for its own fence; applying it after the live cursor
+        // advances would roll the thread back and the already-consumed event is no
+        // longer buffered to restore it.
+        if (snapshot.snapshotSequence < currentSequence) {
+          return;
+        }
         const currentThread = getThreadFromState(useStore.getState(), threadId);
         const projectionSettlesCurrentTurn =
           currentThread?.latestTurn?.state === "running" &&
