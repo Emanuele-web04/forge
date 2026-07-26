@@ -85,6 +85,47 @@ function markdownColumnWidth(value: string): number {
   return columns;
 }
 
+function findMarkdownContainerBoundary(
+  text: string,
+  contentStart: number,
+  quotePrefix: string,
+  quoteDepth: number,
+  listContinuationIndent: number,
+): number | null {
+  if (quoteDepth === 0 && listContinuationIndent === 0) {
+    return null;
+  }
+
+  const quotePattern = new RegExp(`^${quotePrefix}`);
+  let lineStart = contentStart;
+
+  while (lineStart < text.length) {
+    const nextNewline = text.indexOf("\n", lineStart);
+    const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+    const line = text.slice(lineStart, lineEnd).replace(/\r$/, "");
+    const quoteMatch = quotePattern.exec(line);
+
+    if (quoteDepth > 0 && !quoteMatch) {
+      return lineStart;
+    }
+
+    const content = line.slice(quoteMatch?.[0].length ?? 0);
+    if (listContinuationIndent > 0 && content.trim().length > 0) {
+      const indentation = content.match(/^[ \t]*/)?.[0] ?? "";
+      if (markdownColumnWidth(indentation) < listContinuationIndent) {
+        return lineStart;
+      }
+    }
+
+    if (nextNewline === -1) {
+      break;
+    }
+    lineStart = nextNewline + 1;
+  }
+
+  return null;
+}
+
 function protectMarkdownFencedBlocks(text: string, protect: (content: string) => string): string {
   const openingPattern =
     /(^|\n)((?:[ \t]{0,3}(?:>[ \t]?|(?:[-+*]|\d{1,9}[.)])[ \t]+))*[ \t]{0,3})(`{3,}|~{3,})([^\r\n]*)\r?\n/g;
@@ -128,7 +169,20 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
         break;
       }
     }
-    const contentEnd = closingMatch?.index ?? text.length;
+    const containerBoundary = findMarkdownContainerBoundary(
+      text,
+      openingPattern.lastIndex,
+      quotePrefix,
+      quoteDepth,
+      listContinuationIndent,
+    );
+    const boundaryPrecedesClosing =
+      containerBoundary !== null &&
+      (closingMatch === null || containerBoundary < closingMatch.index);
+    const effectiveClosingMatch = boundaryPrecedesClosing ? null : closingMatch;
+    const contentEnd = boundaryPrecedesClosing
+      ? containerBoundary
+      : (effectiveClosingMatch?.index ?? text.length);
     const content = text
       .slice(openingPattern.lastIndex, contentEnd)
       .replace(new RegExp(`(^|\\n)${quotePrefix}`, "g"), "$1");
@@ -137,9 +191,13 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
     result += linePrefix;
     result += protect(content);
 
-    if (!closingMatch) {
-      cursor = text.length;
-      break;
+    if (!effectiveClosingMatch) {
+      cursor = contentEnd;
+      if (containerBoundary === null) {
+        break;
+      }
+      openingPattern.lastIndex = cursor;
+      continue;
     }
 
     cursor = closingPattern.lastIndex;
@@ -264,12 +322,13 @@ function normalizeMarkdownReferenceLabel(label: string): string {
   return label.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+const MARKDOWN_REFERENCE_DEFINITION_PATTERN =
+  /^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*(?:<[^<>\r\n]*>|[^\s<>]+)(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^)\r\n]*\)))?[ \t]*$/gm;
+
 function collectMarkdownReferenceLabels(text: string): ReadonlySet<string> {
   const labels = new Set<string>();
-  const definitionPattern = /^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*\S.*$/gm;
-  let match: RegExpExecArray | null;
 
-  while ((match = definitionPattern.exec(text)) !== null) {
+  for (const match of text.matchAll(MARKDOWN_REFERENCE_DEFINITION_PATTERN)) {
     const label = match[1];
     if (label) {
       labels.add(normalizeMarkdownReferenceLabel(label));
@@ -279,7 +338,7 @@ function collectMarkdownReferenceLabels(text: string): ReadonlySet<string> {
 }
 
 function removeMarkdownReferenceDefinitions(text: string): string {
-  return text.replace(/^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S.*$/gm, "");
+  return text.replace(MARKDOWN_REFERENCE_DEFINITION_PATTERN, "");
 }
 
 function stripMarkdownLinks(text: string, referenceLabels: ReadonlySet<string>): string {
@@ -365,7 +424,7 @@ function summarizeAssistantText(text: string): string | null {
   const cleaned = stripMarkdownLinks(withoutReferenceDefinitions, referenceLabels)
     .replace(/`+/g, "")
     .replace(/^[ \t]{0,3}(?:#{1,6}[ \t]+|>[ \t]?)/gm, "")
-    .replace(/^[ \t]{0,3}(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, " · ")
+    .replace(/^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, " · ")
     .replace(/\*\*([^\s*\n](?:[^*\n]*[^\s*\n])?)\*\*/g, "$1")
     .replace(
       /(^|[^\p{L}\p{N}\p{M}_])__([^\s_\n](?:[^_\n]*[^\s_\n])?)__(?=$|[^\p{L}\p{N}\p{M}_])/gu,

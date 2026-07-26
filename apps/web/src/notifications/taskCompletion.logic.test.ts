@@ -624,6 +624,13 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
+  it("preserves numeric prefixes longer than Markdown ordered-list markers", () => {
+    expect(buildCollectedTaskCompletionCopy("1234567890. tests passed")).toEqual({
+      title: "Polish notifications",
+      body: "1234567890. tests passed",
+    });
+  });
+
   it("consumes balanced parentheses in Markdown link destinations", () => {
     expect(
       buildCollectedTaskCompletionCopy("Read the [docs](https://example.com/a_(b)) for details."),
@@ -641,6 +648,13 @@ describe("buildTaskCompletionCopy", () => {
     expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
       title: "Polish notifications",
       body: expectedBody,
+    });
+  });
+
+  it("preserves bracketed status text that is not a valid reference definition", () => {
+    expect(buildCollectedTaskCompletionCopy("[status]: all tests passed")).toEqual({
+      title: "Polish notifications",
+      body: "[status]: all tests passed",
     });
   });
 
@@ -732,6 +746,16 @@ describe("buildTaskCompletionCopy", () => {
       });
     },
   );
+
+  it.each([
+    ["blockquote", "Result:\n> ```\n> code\n\n**Done**"],
+    ["list", "Result:\n- ```\n  code\n\n**Done**"],
+  ])("stops an unclosed fence at its %s container boundary", (_label, assistantText) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: "Result: code Done",
+    });
+  });
 });
 
 describe("collectInputNeededThreadCandidates", () => {
