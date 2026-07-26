@@ -249,6 +249,56 @@ describe("collectCompletedThreadCandidates", () => {
     );
   });
 
+  it("does not reuse a legacy null-turn reply for a newer completed turn", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:06.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:04.000Z",
+          startedAt: "2026-04-05T10:00:04.000Z",
+          completedAt: "2026-04-05T10:00:06.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-final"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-legacy"),
+            role: "assistant",
+            text: "Stale answer from an imported turn.",
+            createdAt: "2026-04-05T09:00:00.000Z",
+            completedAt: "2026-04-05T09:00:01.000Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("msg-final"),
+            role: "assistant",
+            text: "   ",
+            createdAt: "2026-04-05T10:00:05.500Z",
+            completedAt: "2026-04-05T10:00:06.000Z",
+            turnId: TurnId.makeUnsafe("turn-2"),
+            streaming: false,
+          },
+        ],
+      }),
+    ];
+
+    const candidate = collectCompletedThreadCandidates(previous, next)[0];
+    expect(candidate?.assistantSummary).toBeNull();
+    expect(candidate && buildTaskCompletionCopy(candidate)).toEqual({
+      title: "Polish notifications",
+      body: "Finished working.",
+    });
+  });
+
   it("returns threads that settle after skipping the visible running-to-ready transition", () => {
     const previous = [
       makeThread({
@@ -542,6 +592,17 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
+  it("recognizes CRLF fenced blocks without swallowing following prose", () => {
+    expect(
+      buildCollectedTaskCompletionCopy(
+        "Result:\r\n```ts\r\nconst foo__bar__ = true;\r\n```\r\n**Done**",
+      ),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Result: const foo__bar__ = true; Done",
+    });
+  });
+
   it("only normalizes list markers at the start of a line", () => {
     expect(buildCollectedTaskCompletionCopy("Computed 7 * 6 = 42; auth - tests pass.")).toEqual({
       title: "Polish notifications",
@@ -576,6 +637,13 @@ describe("buildTaskCompletionCopy", () => {
     expect(buildCollectedTaskCompletionCopy("Updated `__init__.py` and `foo__bar__`.")).toEqual({
       title: "Polish notifications",
       body: "Updated __init__.py and foo__bar__.",
+    });
+  });
+
+  it("does not treat intraword double underscores as emphasis", () => {
+    expect(buildCollectedTaskCompletionCopy("Updated foo__bar__ successfully.")).toEqual({
+      title: "Polish notifications",
+      body: "Updated foo__bar__ successfully.",
     });
   });
 });

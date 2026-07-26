@@ -78,7 +78,7 @@ const PROTECTED_CODE_START = "\uE000";
 const PROTECTED_CODE_END = "\uE001";
 
 function protectMarkdownFencedBlocks(text: string, protect: (content: string) => string): string {
-  const openingPattern = /(^|\n)[ \t]{0,3}(`{3,}|~{3,})([^\n]*)\n/g;
+  const openingPattern = /(^|\n)[ \t]{0,3}(`{3,}|~{3,})([^\r\n]*)\r?\n/g;
   let result = "";
   let cursor = 0;
   let openingMatch: RegExpExecArray | null;
@@ -96,7 +96,7 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
     }
 
     const closingPattern = new RegExp(
-      `(^|\\n)[ \\t]{0,3}${fenceCharacter}{${fence.length},}[ \\t]*(?=\\n|$)`,
+      `(^|\\n)[ \\t]{0,3}${fenceCharacter}{${fence.length},}[ \\t]*\\r?(?=\\n|$)`,
       "g",
     );
     closingPattern.lastIndex = openingPattern.lastIndex;
@@ -231,7 +231,7 @@ function summarizeAssistantText(text: string): string | null {
     .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?)/gm, "")
     .replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/gm, " · ")
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
-    .replace(/__([^_\n]+)__/g, "$1")
+    .replace(/(^|[^\w])__([^_\n]+)__(?=$|[^\w])/g, "$1$2")
     .replace(/~~([^~\n]+)~~/g, "$1")
     .replace(/(^|[^\w])\*([^*\n]+)\*(?=$|[^\w])/g, "$1$2")
     .replace(/(^|[^\w])_([^_\n]+)_(?=$|[^\w])/g, "$1$2");
@@ -268,7 +268,7 @@ function summarizeLatestAssistantMessage(thread: Thread): string | null {
       continue;
     }
     // Stay within the just-completed turn so an earlier/other-turn preamble can't win.
-    if (latestTurnId && message.turnId && message.turnId !== latestTurnId) {
+    if (latestTurnId && message.turnId !== latestTurnId) {
       continue;
     }
     const summary = summarizeAssistantText(message.text);
