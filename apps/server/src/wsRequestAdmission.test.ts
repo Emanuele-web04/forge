@@ -7,6 +7,9 @@ import { classifyWsRequest, makeWsRequestAdmission } from "./wsRequestAdmission"
 describe("WsRequestAdmission", () => {
   it("keeps lightweight shell reads out of the expensive lane", () => {
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.getShellSnapshot)).toBe("standard");
+    expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot)).toBe(
+      "expensive-read",
+    );
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.getTurnDiff)).toBe("expensive-read");
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.repairState)).toBe("expensive-read");
     expect(classifyWsRequest(WS_METHODS.terminalAckOutput)).toBe("control");

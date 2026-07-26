@@ -82,6 +82,8 @@ describe("ProviderRuntimeReconcilerLive", () => {
   it("retries a terminal-session turn repair without reopening the session", async () => {
     const commands: OrchestrationCommand[] = [];
     const reconcileSettledOpenTurns = vi.fn();
+    let bindingStatus: "stopped" | "error" = "stopped";
+    let providerSession = readyProviderSession();
 
     const engine = {
       dispatch: (command: OrchestrationCommand) =>
@@ -106,13 +108,13 @@ describe("ProviderRuntimeReconcilerLive", () => {
           {
             threadId: THREAD_ID,
             provider: "codex" as const,
-            status: "stopped" as const,
+            status: bindingStatus,
             runtimePayload: { activeTurnId: null },
           },
         ]),
     } as unknown as ProviderSessionDirectoryShape;
     const provider = {
-      listSessions: () => Effect.succeed([readyProviderSession()]),
+      listSessions: () => Effect.succeed([providerSession]),
       getRuntimeEventPumpHealth: () =>
         Effect.succeed([
           {
@@ -137,9 +139,18 @@ describe("ProviderRuntimeReconcilerLive", () => {
       yield* reconciler.reconcileNow;
       // The projection can remain stale for another observation cycle.
       yield* reconciler.reconcileNow;
+      bindingStatus = "error";
+      providerSession = {
+        ...providerSession,
+        status: "error",
+        lastError: "Provider stream failed.",
+      };
+      yield* reconciler.reconcileNow;
     }).pipe(Effect.provide(layer), Effect.runPromise);
 
     expect(commands.map((command) => command.type)).toEqual([
+      "thread.activity.append",
+      "thread.session.set",
       "thread.activity.append",
       "thread.session.set",
       "thread.activity.append",
@@ -163,6 +174,22 @@ describe("ProviderRuntimeReconcilerLive", () => {
         lastError: null,
       });
     }
+    const errorActivityCommand = commands[4];
+    expect(errorActivityCommand?.type).toBe("thread.activity.append");
+    if (errorActivityCommand?.type === "thread.activity.append") {
+      expect(errorActivityCommand.activity.payload).toMatchObject({
+        action: "settle-error",
+      });
+    }
+    const errorSessionCommand = commands[5];
+    expect(errorSessionCommand?.type).toBe("thread.session.set");
+    if (errorSessionCommand?.type === "thread.session.set") {
+      expect(errorSessionCommand.session).toMatchObject({
+        status: "error",
+        activeTurnId: TURN_ID,
+        lastError: "Provider stream failed.",
+      });
+    }
     const activityCommands = commands.filter(
       (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
         command.type === "thread.activity.append",
@@ -174,6 +201,6 @@ describe("ProviderRuntimeReconcilerLive", () => {
     expect(activityCommands[0]?.activity.id).toBe(activityCommands[1]?.activity.id);
     expect(activityCommands[0]?.commandId).not.toBe(activityCommands[1]?.commandId);
     expect(sessionCommands[0]?.commandId).not.toBe(sessionCommands[1]?.commandId);
-    expect(reconcileSettledOpenTurns).toHaveBeenCalledTimes(2);
+    expect(reconcileSettledOpenTurns).toHaveBeenCalledTimes(3);
   });
 });

@@ -118,6 +118,7 @@ import {
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
 const THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS = 4_500;
+const THREAD_DETAIL_PROJECTION_RECONCILE_MAX_CONCURRENCY = 2;
 const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
 const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
 const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
@@ -988,8 +989,10 @@ function EventRouter() {
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadReplayRequestInFlight = new Set<ThreadId>();
-    const threadProjectionReconcileInFlight = new Set<ThreadId>();
+    const threadProjectionReconcileInFlight = new Map<ThreadId, number>();
+    const threadSubscriptionGenerationById = new Map<ThreadId, number>();
     const nextThreadProjectionReconcileAtById = new Map<ThreadId, number>();
+    let nextThreadSubscriptionGeneration = 0;
     let reconcileThreadSubscriptionsChain = Promise.resolve();
 
     const beginThreadSubscription = (threadId: ThreadId) => {
@@ -997,6 +1000,8 @@ function EventRouter() {
       pendingThreadEventsById.set(threadId, []);
       threadSnapshotRequestInFlight.delete(threadId);
       threadProjectionReconcileInFlight.delete(threadId);
+      nextThreadSubscriptionGeneration += 1;
+      threadSubscriptionGenerationById.set(threadId, nextThreadSubscriptionGeneration);
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
@@ -1041,6 +1046,7 @@ function EventRouter() {
         threadSnapshotRequestInFlight.delete(threadId);
         threadReplayRequestInFlight.delete(threadId);
         threadProjectionReconcileInFlight.delete(threadId);
+        threadSubscriptionGenerationById.delete(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
         subscribedThreadIds.delete(threadId);
       }
@@ -1146,6 +1152,7 @@ function EventRouter() {
         threadSnapshotRequestInFlight.clear();
         threadReplayRequestInFlight.clear();
         threadProjectionReconcileInFlight.clear();
+        threadSubscriptionGenerationById.clear();
         nextThreadProjectionReconcileAtById.clear();
         const previousThreadIds = [...subscribedThreadIds];
         subscribedThreadIds.clear();
@@ -1320,19 +1327,22 @@ function EventRouter() {
     };
 
     const reconcileThreadProjection = async (threadId: ThreadId): Promise<void> => {
+      const subscriptionGeneration = threadSubscriptionGenerationById.get(threadId);
       if (
         disposed ||
         !subscribedThreadIds.has(threadId) ||
+        subscriptionGeneration === undefined ||
         threadProjectionReconcileInFlight.has(threadId)
       ) {
         return;
       }
-      threadProjectionReconcileInFlight.add(threadId);
+      threadProjectionReconcileInFlight.set(threadId, subscriptionGeneration);
       try {
         const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
         if (
           snapshot === null ||
           disposed ||
+          threadSubscriptionGenerationById.get(threadId) !== subscriptionGeneration ||
           !canApplyThreadSnapshot({ threadId, leasedThreadIds: subscribedThreadIds })
         ) {
           return;
@@ -1371,11 +1381,15 @@ function EventRouter() {
           domainEventFlushThrottler.maybeExecute();
         }
       } finally {
-        threadProjectionReconcileInFlight.delete(threadId);
-        nextThreadProjectionReconcileAtById.set(
-          threadId,
-          Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
-        );
+        if (threadProjectionReconcileInFlight.get(threadId) === subscriptionGeneration) {
+          threadProjectionReconcileInFlight.delete(threadId);
+        }
+        if (threadSubscriptionGenerationById.get(threadId) === subscriptionGeneration) {
+          nextThreadProjectionReconcileAtById.set(
+            threadId,
+            Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
+          );
+        }
       }
     };
 
@@ -1674,6 +1688,12 @@ function EventRouter() {
       void loadShellSnapshotOnce().catch(() => undefined);
     }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
     const threadDetailCatchupInterval = window.setInterval(() => {
+      const now = Date.now();
+      let availableProjectionReconcileSlots = Math.max(
+        0,
+        THREAD_DETAIL_PROJECTION_RECONCILE_MAX_CONCURRENCY -
+          threadProjectionReconcileInFlight.size,
+      );
       for (const threadId of subscribedThreadIds) {
         if (shouldPollThreadDetailCatchup(threadId)) {
           if (!threadSnapshotSequenceById.has(threadId)) {
@@ -1681,13 +1701,17 @@ function EventRouter() {
           } else {
             void replayThreadEvents(threadId).catch(() => undefined);
           }
-          if (
-            Date.now() >=
-            (nextThreadProjectionReconcileAtById.get(threadId) ??
-              Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS)
-          ) {
-            void reconcileThreadProjection(threadId).catch(() => undefined);
-          }
+        }
+        const nextProjectionReconcileAt =
+          nextThreadProjectionReconcileAtById.get(threadId);
+        if (
+          availableProjectionReconcileSlots > 0 &&
+          !threadProjectionReconcileInFlight.has(threadId) &&
+          nextProjectionReconcileAt !== undefined &&
+          now >= nextProjectionReconcileAt
+        ) {
+          availableProjectionReconcileSlots -= 1;
+          void reconcileThreadProjection(threadId).catch(() => undefined);
         }
       }
     }, THREAD_DETAIL_CATCHUP_INTERVAL_MS);
@@ -1702,6 +1726,7 @@ function EventRouter() {
       pendingGitInvalidationThreadIds = new Set();
       pendingStudioOutputInvalidationThreadIds = new Set();
       threadProjectionReconcileInFlight.clear();
+      threadSubscriptionGenerationById.clear();
       nextThreadProjectionReconcileAtById.clear();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;

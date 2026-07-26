@@ -84,6 +84,7 @@ function liveSession(input: {
   readonly status: ProviderSession["status"];
   readonly activeTurnId?: TurnId;
   readonly provider?: ProviderSession["provider"];
+  readonly lastError?: string;
 }): ProviderSession {
   return {
     provider: input.provider ?? "codex",
@@ -91,6 +92,7 @@ function liveSession(input: {
     runtimeMode: "full-access",
     threadId: THREAD_ID,
     ...(input.activeTurnId !== undefined ? { activeTurnId: input.activeTurnId } : {}),
+    ...(input.lastError !== undefined ? { lastError: input.lastError } : {}),
     createdAt: "2026-07-23T19:00:00.000Z",
     updatedAt: "2026-07-23T20:00:25.000Z",
   };
@@ -152,21 +154,28 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
-  it("trusts a terminal live status over stale active-turn metadata", () => {
+  it("trusts a terminal live error over stale active-turn metadata", () => {
     expect(
       planProviderRuntimeReconciliation({
         threads: [threadShell()],
         bindings: [binding()],
-        liveSessions: [liveSession({ status: "error", activeTurnId: OLD_TURN_ID })],
+        liveSessions: [
+          liveSession({
+            status: "error",
+            activeTurnId: OLD_TURN_ID,
+            lastError: "Provider process exited.",
+          }),
+        ],
         pumpHealth: [],
         nowMs: NOW,
         staleAfterMs: 10_000,
       }),
     ).toEqual([
       expect.objectContaining({
-        action: "settle-interrupted",
+        action: "settle-error",
         projectedTurnId: OLD_TURN_ID,
         runtimeTurnId: null,
+        errorMessage: "Provider process exited.",
       }),
     ]);
   });
@@ -304,6 +313,33 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
+  it("retains a running latest turn when its starting session update was partial", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [liveSession({ status: "ready" })],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
+      }),
+    ]);
+  });
+
   it.each(["ready", "interrupted", "stopped", "error"] as const)(
     "settles a stale running turn without reopening its %s session",
     (status) => {
@@ -335,6 +371,39 @@ describe("planProviderRuntimeReconciliation", () => {
       ]);
     },
   );
+
+  it("does not let stale readiness complete a turn after a live provider error", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          session: {
+            ...threadShell().session!,
+            status: "ready",
+            activeTurnId: null,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [
+        liveSession({
+          status: "error",
+          lastError: "Provider stream failed.",
+        }),
+      ],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-error",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
+        errorMessage: "Provider stream failed.",
+      }),
+    ]);
+  });
 
   it("records degraded pump evidence in the reconciliation reason", () => {
     const plans = planProviderRuntimeReconciliation({

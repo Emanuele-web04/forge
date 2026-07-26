@@ -112,9 +112,11 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
           status:
             plan.action === "align-running-turn"
               ? "running"
-              : plan.action === "settle-terminal-projection"
-                ? plan.terminalSession.status
-                : "interrupted",
+              : plan.action === "settle-error"
+                ? "error"
+                : plan.action === "settle-terminal-projection"
+                  ? plan.terminalSession.status
+                  : "interrupted",
           providerName:
             plan.action === "settle-terminal-projection"
               ? plan.terminalSession.providerName
@@ -126,14 +128,18 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
           activeTurnId:
             plan.action === "align-running-turn"
               ? plan.runtimeTurnId
-              : plan.action === "settle-terminal-projection" &&
-                  plan.terminalSession.status === "error"
-                ? plan.terminalSession.activeTurnId
-                : null,
+              : plan.action === "settle-error"
+                ? plan.projectedTurnId
+                : plan.action === "settle-terminal-projection" &&
+                    plan.terminalSession.status === "error"
+                  ? plan.terminalSession.activeTurnId
+                  : null,
           lastError:
-            plan.action === "settle-terminal-projection"
-              ? plan.terminalSession.lastError
-              : null,
+            plan.action === "settle-error"
+              ? plan.errorMessage
+              : plan.action === "settle-terminal-projection"
+                ? plan.terminalSession.lastError
+                : null,
           updatedAt: now,
         },
         createdAt: now,

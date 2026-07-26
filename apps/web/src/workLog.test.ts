@@ -465,6 +465,18 @@ describe("deriveWorkLogEntries", () => {
         },
       }),
       makeActivity({
+        id: "error-turn-b",
+        createdAt: "2026-02-23T00:00:02.500Z",
+        kind: "provider.runtime.reconciled",
+        summary: "Errored turn B",
+        payload: {
+          provider: "codex",
+          action: "settle-error",
+          projectedTurnId: "turn-b",
+          runtimeTurnId: null,
+        },
+      }),
+      makeActivity({
         id: "align-turn-b",
         createdAt: "2026-02-23T00:00:03.000Z",
         kind: "provider.runtime.reconciled",
@@ -495,6 +507,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual([
       "settle-turn-a",
       "settle-turn-b",
+      "error-turn-b",
       "align-turn-b",
       "align-turn-b-new-runtime",
     ]);

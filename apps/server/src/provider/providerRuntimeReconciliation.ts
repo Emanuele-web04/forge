@@ -45,6 +45,15 @@ export type ProviderRuntimeReconciliationPlan =
       readonly runtimeTurnId: null;
       readonly terminalSession: TerminalProjectedSession;
       readonly reason: string;
+    }
+  | {
+      readonly action: "settle-error";
+      readonly threadId: ThreadId;
+      readonly provider: ProviderRuntimeBinding["provider"];
+      readonly projectedTurnId: TurnId;
+      readonly runtimeTurnId: null;
+      readonly errorMessage: string;
+      readonly reason: string;
     };
 
 type TerminalProjectedSession = Omit<OrchestrationSession, "status"> & {
@@ -73,7 +82,11 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
   const session = thread.session;
   // A queued start has no provider turn yet. Falling back to latestTurn here
   // can attach the new request to an older terminal (or ingestion-lagged) turn.
-  if (session?.status === "starting" && session.activeTurnId === null) {
+  if (
+    session?.status === "starting" &&
+    session.activeTurnId === null &&
+    thread.latestTurn?.state !== "running"
+  ) {
     return null;
   }
   return session?.activeTurnId ?? (thread.latestTurn?.state === "running"
@@ -93,6 +106,17 @@ function pumpDetail(
   const health = healthByProvider.get(provider);
   if (!health || health.status === "healthy") return "";
   return ` The ${provider} runtime-event pump is ${health.status}.`;
+}
+
+function bindingLastError(binding: ProviderRuntimeBinding): string | null {
+  const payload = binding.runtimePayload;
+  if (typeof payload !== "object" || payload === null || !("lastError" in payload)) {
+    return null;
+  }
+  const lastError = payload.lastError;
+  return typeof lastError === "string" && lastError.trim().length > 0
+    ? lastError.trim()
+    : null;
 }
 
 export function planProviderRuntimeReconciliation(input: {
@@ -156,6 +180,26 @@ export function planProviderRuntimeReconciliation(input: {
     const bindingSettled = binding.status === "stopped" || binding.status === "error";
 
     if (!liveSessionSettled && !missingLiveSession && !bindingSettled) continue;
+
+    if (liveSession?.status === "error" || binding.status === "error") {
+      const errorMessage =
+        liveSession?.lastError ??
+        bindingLastError(binding) ??
+        "Provider runtime reported an error while reconciling a stale turn.";
+      plans.push({
+        action: "settle-error",
+        threadId: thread.id,
+        provider: binding.provider,
+        projectedTurnId,
+        runtimeTurnId: null,
+        errorMessage,
+        reason:
+          liveSession?.status === "error"
+            ? `The live provider session failed while the projection still had running turn '${projectedTurnId}'.${detail}`
+            : `The durable provider binding failed while the projection still had running turn '${projectedTurnId}'.${detail}`,
+      });
+      continue;
+    }
 
     const terminalSession = terminalProjectedSession(thread);
     if (terminalSession !== null) {
