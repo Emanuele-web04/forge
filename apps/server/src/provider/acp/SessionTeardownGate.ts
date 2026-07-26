@@ -1,11 +1,11 @@
-// FILE: DroidSessionTeardownGate.ts
-// Purpose: Prevents a replacement Droid ACP runtime from starting before its predecessor exits.
+// FILE: SessionTeardownGate.ts
+// Purpose: Prevents a replacement ACP runtime from starting before its predecessor exits.
 // Layer: Provider ACP lifecycle coordination
 
 import type { ThreadId } from "@synara/contracts";
 import { Deferred, Effect } from "effect";
 
-export interface DroidSessionTeardownGate {
+export interface SessionTeardownGate {
   readonly track: (threadId: ThreadId, completion: Deferred.Deferred<void>) => void;
   readonly isPending: (threadId: ThreadId) => boolean;
   readonly awaitPending: (threadId: ThreadId) => Effect.Effect<void>;
@@ -15,7 +15,7 @@ export interface DroidSessionTeardownGate {
   ) => Effect.Effect<void>;
 }
 
-export function makeDroidSessionTeardownGate(): DroidSessionTeardownGate {
+export function makeSessionTeardownGate(): SessionTeardownGate {
   const pendingByThreadId = new Map<ThreadId, Deferred.Deferred<void>>();
 
   return {
