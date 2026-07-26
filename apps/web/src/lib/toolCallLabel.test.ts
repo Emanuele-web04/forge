@@ -131,6 +131,12 @@ describe("deriveSynaraMcpToolTitle", () => {
         status: "failed",
       }),
     ).toBe("Synara couldn't create threads");
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "synara_create_thread",
+        status: "cancelled",
+      }),
+    ).toBe("Synara stopped creating a thread");
   });
 
   it("turns provider-specific create-thread identifiers into activity sentences", () => {

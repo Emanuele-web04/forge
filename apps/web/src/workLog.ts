@@ -591,6 +591,7 @@ function deriveToolLifecycleStatus(
 ): SynaraMcpToolStatus | undefined {
   if (!isRenderableToolLifecycleActivity(activityKind)) return undefined;
   if (isFailedToolLifecyclePayload(payload)) return "failed";
+  if (isCancelledToolLifecyclePayload(payload)) return "cancelled";
   return activityKind === "tool.completed" ? "completed" : "running";
 }
 
@@ -612,10 +613,7 @@ function deriveWorkLogLiveActivity(
   const normalizedStatus = rawStatus?.trim().toLowerCase();
   const state: WorkLogLiveActivityState = isFailedToolLifecyclePayload(payload)
     ? "failed"
-    : normalizedStatus &&
-        ["cancelled", "canceled", "declined", "killed", "stopped", "aborted"].includes(
-          normalizedStatus,
-        )
+    : isCancelledToolLifecyclePayload(payload)
       ? "cancelled"
       : activity.kind === "tool.completed" ||
           (normalizedStatus &&
@@ -677,6 +675,25 @@ function isFailedToolLifecyclePayload(payload: Record<string, unknown> | null): 
     rawOutput?.isError,
     rawOutput?.is_error,
   ].some((flag) => flag === true || flag === 1 || flag === "true");
+}
+
+function isCancelledToolLifecyclePayload(payload: Record<string, unknown> | null): boolean {
+  const data = asRecord(payload?.data);
+  const state = asRecord(data?.state);
+  const rawOutput = asRecord(data?.rawOutput);
+  return [payload?.status, data?.status, state?.status, rawOutput?.status].some(
+    (status) =>
+      typeof status === "string" &&
+      [
+        "cancelled",
+        "canceled",
+        "declined",
+        "interrupted",
+        "killed",
+        "stopped",
+        "aborted",
+      ].includes(status.trim().toLowerCase()),
+  );
 }
 
 function summarizeToolPayloadOutput(payload: Record<string, unknown> | null): string | null {
@@ -901,6 +918,9 @@ function shouldCollapseToolLifecycleEntries(
   if (previous.activityKind === "tool.completed") {
     return false;
   }
+  if (previous.suppressStandaloneCommandStart && next.toolCallId === undefined) {
+    return false;
+  }
   if (previous.collapseKey !== undefined && previous.collapseKey === next.collapseKey) {
     if (previous.collapseKey.startsWith("tool:")) {
       return true;
@@ -948,7 +968,14 @@ function mergeDerivedWorkLogEntries(
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
-  const toolStatus = next.toolStatus ?? previous.toolStatus;
+  const preservePreviousTerminalState =
+    previous.liveActivity !== undefined &&
+    !isInProgressLiveActivityState(previous.liveActivity.state) &&
+    next.liveActivity !== undefined &&
+    isInProgressLiveActivityState(next.liveActivity.state);
+  const toolStatus = preservePreviousTerminalState
+    ? previous.toolStatus
+    : (next.toolStatus ?? previous.toolStatus);
   const liveActivity = mergeWorkLogLiveActivity(previous.liveActivity, next.liveActivity);
   const toolDetails = mergeWorkLogToolDetails(previous.toolDetails, next.toolDetails);
   const turnId = next.turnId ?? previous.turnId;
@@ -982,6 +1009,18 @@ function mergeWorkLogLiveActivity(
 ): WorkLogLiveActivity | undefined {
   if (!previous) return next;
   if (!next) return previous;
+  if (
+    !isInProgressLiveActivityState(previous.state) &&
+    isInProgressLiveActivityState(next.state)
+  ) {
+    return {
+      ...previous,
+      ...(next.detail || previous.detail ? { detail: next.detail ?? previous.detail } : {}),
+      ...(next.progress !== undefined || previous.progress !== undefined
+        ? { progress: next.progress ?? previous.progress }
+        : {}),
+    };
+  }
   const startedAt = previous.startedAt ?? next.startedAt;
   const lifecycleElapsedSeconds = startedAt
     ? (Date.parse(next.lastActivityAt) - Date.parse(startedAt)) / 1_000
@@ -1091,7 +1130,12 @@ function reconcileSettledLiveActivities(
     if (terminal) {
       return {
         ...entry,
-        toolStatus: terminal.state === "failed" ? "failed" : "completed",
+        toolStatus:
+          terminal.state === "failed"
+            ? "failed"
+            : terminal.state === "cancelled"
+              ? "cancelled"
+              : "completed",
         liveActivity: settleWorkLogLiveActivity(
           liveActivity,
           terminal.state,
@@ -1122,7 +1166,12 @@ function reconcileSettledLiveActivities(
         : "cancelled";
     return {
       ...entry,
-      toolStatus: settledState === "failed" ? "failed" : "completed",
+      toolStatus:
+        settledState === "failed"
+          ? "failed"
+          : settledState === "cancelled"
+            ? "cancelled"
+            : "completed",
       liveActivity: settleWorkLogLiveActivity(
         liveActivity,
         settledState,

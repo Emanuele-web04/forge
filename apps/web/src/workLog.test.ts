@@ -1298,6 +1298,69 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("does not correlate placeholder command starts through ambiguous adjacency", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "parallel-placeholder-a",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Ran command started",
+          payload: {
+            itemType: "command_execution",
+            title: "Ran command",
+            data: {
+              item: {
+                type: "commandExecution",
+                id: "parallel-call-a",
+                status: "inProgress",
+              },
+            },
+          },
+        }),
+        makeActivity({
+          id: "parallel-placeholder-b",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.started",
+          summary: "Ran command started",
+          payload: {
+            itemType: "command_execution",
+            title: "Ran command",
+            data: {
+              item: {
+                type: "commandExecution",
+                id: "parallel-call-b",
+                status: "inProgress",
+              },
+            },
+          },
+        }),
+        makeActivity({
+          id: "ambiguous-command-update",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.updated",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            title: "Ran command",
+            data: {
+              item: {
+                type: "commandExecution",
+                command: "echo ambiguous",
+                status: "inProgress",
+              },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.command).toBe("echo ambiguous");
+    expect(entries[0]?.liveActivity?.startedAt).toBeUndefined();
+  });
+
   it("does not revive turnless historical activity during a later active turn", () => {
     const entries = deriveWorkLogEntries(
       [
@@ -1931,6 +1994,128 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.toolStatus).toBe("completed");
   });
 
+  it("preserves cancellation when an owning turn aborts", () => {
+    const turnId = TurnId.makeUnsafe("turn-with-cancelled-synara-tool");
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "cancelled-synara-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Synara create thread",
+          turnId,
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "Synara create thread",
+            data: {
+              toolCallId: "cancelled-synara-call",
+              toolName: "mcp__synara__synara_create_thread",
+            },
+          },
+        }),
+        makeActivity({
+          id: "owning-turn-aborted",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          kind: "turn.aborted",
+          summary: "Turn aborted",
+          tone: "info",
+          turnId,
+        }),
+      ],
+      turnId,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity?.state).toBe("cancelled");
+    expect(entries[0]?.toolStatus).toBe("cancelled");
+  });
+
+  it("treats an explicitly interrupted tool completion as cancelled", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "interrupted-tool",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.completed",
+          summary: "Synara create thread",
+          payload: {
+            itemType: "mcp_tool_call",
+            title: "Synara create thread",
+            status: "interrupted",
+            data: {
+              toolCallId: "interrupted-synara-call",
+              toolName: "mcp__synara__synara_create_thread",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.liveActivity?.state).toBe("cancelled");
+    expect(entries[0]?.toolStatus).toBe("cancelled");
+  });
+
+  it("does not revive a terminal tool when late progress arrives", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "late-progress-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Deploy",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            data: {
+              toolCallId: "late-progress-call",
+            },
+          },
+        }),
+        makeActivity({
+          id: "late-progress-complete",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.completed",
+          summary: "Deploy completed",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            status: "completed",
+            data: {
+              toolCallId: "late-progress-call",
+            },
+          },
+        }),
+        makeActivity({
+          id: "late-progress-update",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          kind: "tool.updated",
+          summary: "Deploy",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Deploy",
+            detail: "Late metadata",
+            data: {
+              toolCallId: "late-progress-call",
+              summary: "Late metadata",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.toolStatus).toBe("completed");
+    expect(entries[0]?.liveActivity).toMatchObject({
+      state: "completed",
+      lastActivityAt: "2026-02-23T00:00:03.000Z",
+      elapsedSeconds: 2,
+      detail: "Late metadata",
+    });
+  });
+
   it("settles orphaned activity from latest-turn state after a reconnect gap", () => {
     const turnId = TurnId.makeUnsafe("turn-with-reconnect-gap");
     const entries = deriveWorkLogEntries(
@@ -2084,10 +2269,12 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    expect(deriveWorkLogEntries(activities, undefined)[0]?.liveActivity).toMatchObject({
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.liveActivity).toMatchObject({
       state: "cancelled",
       progress: 0.01,
     });
+    expect(entry?.toolStatus).toBe("cancelled");
   });
 
   it("uses MCP tool names from preserved payload data", () => {
