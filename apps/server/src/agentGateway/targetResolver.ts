@@ -4,6 +4,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DROID_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
+  OMP_THINKING_LEVEL_OPTIONS,
   PI_THINKING_LEVEL_OPTIONS,
   type ModelSelection,
   type ProviderKind,
@@ -212,6 +213,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "thinkingLevel",
     options: { thinkingLevel: providerOptionRule("string", PI_THINKING_LEVEL_OPTIONS) },
   }),
+  omp: defineProviderOptionConfig<"omp">({
+    primaryOptionKey: "thinkingLevel",
+    options: { thinkingLevel: providerOptionRule("string", OMP_THINKING_LEVEL_OPTIONS) },
+  }),
   antigravity: defineProviderOptionConfig<"antigravity">({
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
@@ -239,7 +244,7 @@ const PROVIDER_TARGET_OPTION_RULES = {
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
 
 function providerDefaultModel(provider: ProviderKind): string | null {
-  return provider === "pi" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
+  return provider === "pi" || provider === "omp" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
 export function loadAgentGatewayProviderCatalog(input: {

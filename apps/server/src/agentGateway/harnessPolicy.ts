@@ -75,6 +75,7 @@ const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([
   "opencode",
   "kilo",
   "pi",
+  "omp",
 ]);
 
 export function providerHasSynaraGatewayControl(input: {
