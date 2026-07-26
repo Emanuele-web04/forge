@@ -485,6 +485,21 @@ describe("buildTaskCompletionCopy", () => {
       body: "Updated apps/web/src/foo_bar.ts. const result_value = true;",
     });
   });
+
+  it("preserves useful content inside a closed code fence", () => {
+    expect(
+      buildTaskCompletionCopy({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        completedAt: "2026-04-05T10:00:05.000Z",
+        assistantSummary: 'Result:\n```json\n{"status":"ok"}\n```',
+      }),
+    ).toEqual({
+      title: "Polish notifications",
+      body: 'Result: {"status":"ok"}',
+    });
+  });
 });
 
 describe("collectInputNeededThreadCandidates", () => {

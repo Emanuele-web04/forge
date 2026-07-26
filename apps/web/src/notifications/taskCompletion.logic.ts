@@ -78,7 +78,8 @@ const NOTIFICATION_SUMMARY_MAX_LENGTH = 120;
 // notifications should never expose Markdown syntax or turn into mini transcripts.
 function summarizeAssistantText(text: string): string | null {
   const trimmed = text
-    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/```[^\n]*\n([\s\S]*?)```/g, "$1")
+    .replace(/```([\s\S]*?)```/g, "$1")
     .replace(/```[^\n]*\n?/g, " ")
     .replace(/`([^`\n]+)`/g, "$1")
     .replace(/`+/g, "")
