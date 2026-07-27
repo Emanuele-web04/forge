@@ -4070,9 +4070,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       });
 
       harness.query.fail(
-        new Error(
-          "No conversation found with session ID: 44c0b890-8775-4f30-b47f-0709d29cc9e1",
-        ),
+        new Error("No conversation found with session ID: 44c0b890-8775-4f30-b47f-0709d29cc9e1"),
       );
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));

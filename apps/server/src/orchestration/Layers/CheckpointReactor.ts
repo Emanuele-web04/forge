@@ -1238,8 +1238,7 @@ const make = Effect.gen(function* () {
             checkpointRef: rescueCheckpointRef,
           }),
         );
-        const compensated =
-          Exit.isSuccess(compensationExit) && compensationExit.value === true;
+        const compensated = Exit.isSuccess(compensationExit) && compensationExit.value === true;
         if (compensated) {
           clearWorkspaceIndexCache(checkpointCwd);
           yield* checkpointStore
@@ -1274,17 +1273,13 @@ const make = Effect.gen(function* () {
         type: "thread.revert.complete",
         // Stable across retries: if persistence committed but the response was
         // lost, command receipts make this retry idempotent.
-        commandId: CommandId.makeUnsafe(
-          `server:checkpoint-revert-complete:${event.eventId}`,
-        ),
+        commandId: CommandId.makeUnsafe(`server:checkpoint-revert-complete:${event.eventId}`),
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
         createdAt: now,
       })
       .pipe(
-        Effect.retry(
-          Schedule.addDelay(Schedule.recurs(3), () => Effect.succeed("100 millis")),
-        ),
+        Effect.retry(Schedule.addDelay(Schedule.recurs(3), () => Effect.succeed("100 millis"))),
       );
 
     // Domain state is authoritative. Delete stale and rescue refs only after

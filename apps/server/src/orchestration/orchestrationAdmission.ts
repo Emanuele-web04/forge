@@ -82,8 +82,7 @@ export function tryAdmitOrchestrationCommand<A>(input: {
   const admissionLimit = usesReservedCommandAdmission(input.commandType)
     ? policy.capacity
     : policy.capacity - policy.reservedCapacity;
-  const queued =
-    Queue.sizeUnsafe(input.queues.control) + Queue.sizeUnsafe(input.queues.normal);
+  const queued = Queue.sizeUnsafe(input.queues.control) + Queue.sizeUnsafe(input.queues.normal);
   if (queued >= admissionLimit) {
     return { accepted: false, reason: "overloaded" };
   }

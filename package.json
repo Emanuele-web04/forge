@@ -23,7 +23,7 @@
   },
   "type": "module",
   "scripts": {
-    "prepare": "effect-language-service patch",
+    "prepare": "node scripts/patch-effect-language-service.mjs",
     "dev": "node scripts/dev-runner.ts dev",
     "dev:server": "node scripts/dev-runner.ts dev:server",
     "dev:web": "node scripts/dev-runner.ts dev:web",
@@ -63,12 +63,10 @@
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .turbo apps/*/.turbo packages/*/.turbo"
   },
   "devDependencies": {
-    "@effect/language-service": "catalog:",
     "@types/node": "catalog:",
     "oxfmt": "^0.40.0",
     "oxlint": "^1.55.0",
     "turbo": "^2.9.14",
-    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "overrides": {

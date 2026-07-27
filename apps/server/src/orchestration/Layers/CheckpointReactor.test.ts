@@ -1972,10 +1972,7 @@ describe("CheckpointReactor", () => {
           threadId: ThreadId.makeUnsafe("thread-1"),
           turnId: asTurnId(`turn-${turnCount}`),
           completedAt: createdAt,
-          checkpointRef: checkpointRefForThreadTurn(
-            ThreadId.makeUnsafe("thread-1"),
-            turnCount,
-          ),
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
           status: "ready",
           files: [],
           checkpointTurnCount: turnCount,
@@ -2036,10 +2033,7 @@ describe("CheckpointReactor", () => {
           threadId: ThreadId.makeUnsafe("thread-1"),
           turnId: asTurnId(`turn-${turnCount}`),
           completedAt: createdAt,
-          checkpointRef: checkpointRefForThreadTurn(
-            ThreadId.makeUnsafe("thread-1"),
-            turnCount,
-          ),
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
           status: "ready",
           files: [],
           checkpointTurnCount: turnCount,
@@ -2066,9 +2060,9 @@ describe("CheckpointReactor", () => {
       true,
     );
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
-    expect(
-      fs.readFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "utf8"),
-    ).toBe("preserve\n");
+    expect(fs.readFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "utf8")).toBe(
+      "preserve\n",
+    );
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
     ).toBe(true);
