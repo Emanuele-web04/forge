@@ -5,10 +5,12 @@
     "": {
       "name": "@synara/monorepo",
       "devDependencies": {
+        "@effect/language-service": "catalog:",
         "@types/node": "catalog:",
         "oxfmt": "^0.40.0",
         "oxlint": "^1.55.0",
         "turbo": "^2.9.14",
+        "typescript": "catalog:",
         "vitest": "catalog:",
       },
     },
