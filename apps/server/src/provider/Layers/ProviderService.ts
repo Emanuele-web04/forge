@@ -2129,6 +2129,36 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
+    const ensureRuntimeSession: NonNullable<ProviderServiceShape["ensureRuntimeSession"]> = (
+      input,
+    ) =>
+      Effect.gen(function* () {
+        clearRuntimeIdleTimer(input.threadId);
+        yield* waitForRuntimeIdleStop(input.threadId);
+        const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+        if (!binding) {
+          return yield* toValidationError(
+            "ProviderService.ensureRuntimeSession",
+            `Cannot recover thread '${input.threadId}' because no persisted provider binding exists.`,
+          );
+        }
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.ensureRuntimeSession",
+          allowRecovery: true,
+        });
+        const session = (yield* routed.adapter.listSessions()).find(
+          (entry) => entry.threadId === input.threadId,
+        );
+        if (!session) {
+          return yield* toValidationError(
+            "ProviderService.ensureRuntimeSession",
+            `Provider '${binding.provider}' did not expose a live session after recovery for thread '${input.threadId}'.`,
+          );
+        }
+        return session;
+      });
+
     const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
       registry.getByProvider(provider).pipe(Effect.map((adapter) => adapter.capabilities));
 
@@ -2306,6 +2336,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       hasLiveRuntimeTasks,
       clearSessionResumeCursor,
       listSessions,
+      ensureRuntimeSession,
       getCapabilities,
       rollbackConversation,
       compactThread,

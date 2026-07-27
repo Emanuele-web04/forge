@@ -55,6 +55,8 @@ import {
   ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
   ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
   type OrchestrationCommandAdmissionDecision,
+  type OrchestrationCommandQueues,
+  takeNextOrchestrationCommand,
   tryAdmitOrchestrationCommand,
   usesReservedCommandAdmission,
 } from "../orchestrationAdmission.ts";
@@ -158,7 +160,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   let commandReadModel = createEmptyReadModel(new Date().toISOString());
 
-  const commandQueue = yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY);
+  const commandQueues = {
+    control: yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY),
+    normal: yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY),
+    wake: yield* Queue.unbounded<void>(),
+  } satisfies OrchestrationCommandQueues<CommandEnvelope>;
   const eventPubSub = yield* PubSub.bounded<OrchestrationEvent>(
     ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
   );
@@ -966,7 +972,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   );
 
   const worker = Effect.forever(
-    Queue.take(commandQueue).pipe(
+    takeNextOrchestrationCommand(commandQueues).pipe(
       Effect.flatMap((envelope) => processEnvelope(envelope).pipe(Effect.ensuring(finishEnvelope))),
     ),
   );
@@ -1006,7 +1012,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               phase: "draining",
             },
     ).pipe(
-      Effect.andThen(Queue.interrupt(commandQueue).pipe(Effect.asVoid)),
+      Effect.andThen(
+        Effect.all(
+          [
+            Queue.interrupt(commandQueues.control),
+            Queue.interrupt(commandQueues.normal),
+            Queue.interrupt(commandQueues.wake),
+          ],
+          { discard: true },
+        ),
+      ),
       Effect.andThen(Fiber.await(workerFiber).pipe(Effect.asVoid)),
       Effect.andThen(drain),
       Effect.andThen(
@@ -1075,7 +1090,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             return [{ accepted: false, reason: "stopped" as const }, current] as const;
           }
           const decision = tryAdmitOrchestrationCommand({
-            queue: commandQueue,
+            queues: commandQueues,
             envelope,
             commandType: command.type,
           });

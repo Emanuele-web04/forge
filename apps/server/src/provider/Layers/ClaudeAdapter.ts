@@ -543,6 +543,12 @@ function isClaudeBenignTerminationCause(cause: Cause.Cause<Error>): boolean {
   return normalizeClaudeStreamMessages(cause).some(isClaudeBenignTerminationMessage);
 }
 
+function isClaudeMissingResumeConversationCause(cause: Cause.Cause<Error>): boolean {
+  return normalizeClaudeStreamMessages(cause).some((message) =>
+    message.toLowerCase().includes("no conversation found with session id"),
+  );
+}
+
 function resultErrorsText(result: SDKResultMessage): string {
   return "errors" in result && Array.isArray(result.errors)
     ? result.errors.join(" ").toLowerCase()
@@ -3976,6 +3982,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               exit.cause,
               "Claude runtime stream failed.",
             );
+            if (isClaudeMissingResumeConversationCause(exit.cause)) {
+              // The SDK can accept a resumed query and report the missing
+              // native conversation only after the prompt is queued. Drop the
+              // dead native ids before completing the turn so ProviderService
+              // persists a cursor without `resume`; the next dispatch then
+              // starts a fresh Claude session and bootstraps Synara's retained
+              // transcript instead of replaying the same broken id forever.
+              context.resumeSessionId = undefined;
+              context.lastAssistantUuid = undefined;
+              context.trackedTasks.clear();
+              yield* Effect.logWarning("claude.session.stale_resume_invalidated", {
+                threadId: context.session.threadId,
+                detail: message,
+              });
+            }
             yield* emitRuntimeError(context, message, Cause.pretty(exit.cause));
             yield* completeTurn(context, "failed", message);
           }

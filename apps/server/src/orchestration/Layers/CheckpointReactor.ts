@@ -12,7 +12,7 @@ import {
   type ProviderSession,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
-import { Cause, Effect, Layer, Option, Schedule, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schedule, Stream } from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
@@ -1122,17 +1122,39 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const sessionRuntime = yield* resolveSessionRuntimeForThread(event.payload.threadId);
-    if (Option.isNone(sessionRuntime)) {
+    const ensuredSession = providerService.ensureRuntimeSession
+      ? yield* providerService
+          .ensureRuntimeSession({ threadId: sessionThreadId })
+          .pipe(Effect.option)
+      : yield* resolveSessionRuntimeForThread(event.payload.threadId).pipe(
+          Effect.map(
+            Option.map((runtime) => ({
+              threadId: runtime.threadId,
+              cwd: runtime.cwd,
+            })),
+          ),
+        );
+    if (Option.isNone(ensuredSession)) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
-        detail: "No active provider session with workspace cwd is bound to this thread.",
+        detail: "The provider session could not be resumed for conversation rollback.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
     }
-    if (!isGitWorkspace(sessionRuntime.value.cwd)) {
+    const project = yield* getProjectShell(thread.projectId);
+    const checkpointCwd =
+      ensuredSession.value.cwd ??
+      (project
+        ? yield* resolveCheckpointCwd({
+            threadId: event.payload.threadId,
+            thread,
+            project,
+            preferSessionRuntime: true,
+          })
+        : undefined);
+    if (!checkpointCwd || !isGitWorkspace(checkpointCwd)) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
@@ -1169,11 +1191,25 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const rescueCheckpointRef = CheckpointRef.makeUnsafe(
+      `refs/synara/checkpoints/revert-rescue/${event.payload.threadId}/${crypto.randomUUID()}`,
+    );
+    yield* checkpointStore.captureCheckpoint({
+      cwd: checkpointCwd,
+      checkpointRef: rescueCheckpointRef,
+    });
+
     const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: sessionRuntime.value.cwd,
+      cwd: checkpointCwd,
       checkpointRef: targetCheckpointRef,
     });
     if (!restored) {
+      yield* checkpointStore
+        .deleteCheckpointRefs({
+          cwd: checkpointCwd,
+          checkpointRefs: [rescueCheckpointRef],
+        })
+        .pipe(Effect.catch(() => Effect.void));
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
@@ -1185,45 +1221,87 @@ const make = Effect.gen(function* () {
 
     // Invalidate the workspace entry cache so the @-mention file picker
     // reflects the reverted filesystem state.
-    clearWorkspaceIndexCache(sessionRuntime.value.cwd);
+    clearWorkspaceIndexCache(checkpointCwd);
 
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
     if (rolledBackTurns > 0) {
-      yield* providerService.rollbackConversation({
-        threadId: sessionRuntime.value.threadId,
-        numTurns: rolledBackTurns,
-      });
+      const rollbackExit = yield* Effect.exit(
+        providerService.rollbackConversation({
+          threadId: sessionThreadId,
+          numTurns: rolledBackTurns,
+        }),
+      );
+      if (Exit.isFailure(rollbackExit)) {
+        const compensationExit = yield* Effect.exit(
+          checkpointStore.restoreCheckpoint({
+            cwd: checkpointCwd,
+            checkpointRef: rescueCheckpointRef,
+          }),
+        );
+        const compensated =
+          Exit.isSuccess(compensationExit) && compensationExit.value === true;
+        if (compensated) {
+          clearWorkspaceIndexCache(checkpointCwd);
+          yield* checkpointStore
+            .deleteCheckpointRefs({
+              cwd: checkpointCwd,
+              checkpointRefs: [rescueCheckpointRef],
+            })
+            .pipe(Effect.catch(() => Effect.void));
+        }
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: compensated
+            ? `Provider conversation rollback failed; the workspace was restored. ${Cause.pretty(rollbackExit.cause)}`
+            : `Provider conversation rollback failed and workspace compensation also failed. Rescue checkpoint: ${rescueCheckpointRef}. Provider error: ${Cause.pretty(rollbackExit.cause)}${
+                Exit.isFailure(compensationExit)
+                  ? ` Compensation error: ${Cause.pretty(compensationExit.cause)}`
+                  : ""
+              }`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
     }
 
     const staleCheckpointRefs = thread.checkpoints
       .filter((checkpoint) => checkpoint.checkpointTurnCount > event.payload.turnCount)
       .map((checkpoint) => checkpoint.checkpointRef);
 
-    if (staleCheckpointRefs.length > 0) {
-      yield* checkpointStore.deleteCheckpointRefs({
-        cwd: sessionRuntime.value.cwd,
-        checkpointRefs: staleCheckpointRefs,
-      });
-    }
-
     yield* orchestrationEngine
       .dispatch({
         type: "thread.revert.complete",
-        commandId: serverCommandId("checkpoint-revert-complete"),
+        // Stable across retries: if persistence committed but the response was
+        // lost, command receipts make this retry idempotent.
+        commandId: CommandId.makeUnsafe(
+          `server:checkpoint-revert-complete:${event.eventId}`,
+        ),
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
         createdAt: now,
       })
       .pipe(
+        Effect.retry(
+          Schedule.addDelay(Schedule.recurs(3), () => Effect.succeed("100 millis")),
+        ),
+      );
+
+    // Domain state is authoritative. Delete stale and rescue refs only after
+    // the completion event commits, so a dispatch failure remains retryable.
+    yield* checkpointStore
+      .deleteCheckpointRefs({
+        cwd: checkpointCwd,
+        checkpointRefs: [...staleCheckpointRefs, rescueCheckpointRef],
+      })
+      .pipe(
         Effect.catch((error) =>
-          appendRevertFailureActivity({
+          Effect.logWarning("checkpoint revert ref cleanup failed after completion", {
             threadId: event.payload.threadId,
             turnCount: event.payload.turnCount,
             detail: error.message,
-            createdAt: now,
           }),
         ),
-        Effect.asVoid,
       );
   });
 
