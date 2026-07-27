@@ -44,7 +44,7 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --concurrent-scripts=1
 
       - name: Verify Linux terminal PTY native dependency
         if: runner.os == 'Linux'
@@ -115,7 +115,7 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --concurrent-scripts=1
 
       - name: Test Windows process planning
         run: bun run --cwd packages/shared test src/windowsProcess.test.ts
