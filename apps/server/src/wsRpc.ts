@@ -1147,6 +1147,31 @@ const makeWsRpcHandlersLayer = () =>
           pullRequestsEffect(pullRequests.comment(input), "Could not post the comment"),
         [WS_METHODS.pullRequestsSetPinned]: (input) =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
+        [WS_METHODS.pullRequestsReviewDraftsList]: (input) =>
+          pullRequestsEffect(
+            pullRequests.listReviewDrafts(input),
+            "Failed to load pull request review drafts",
+          ),
+        [WS_METHODS.pullRequestsReviewDraftCreate]: (input) =>
+          pullRequestsEffect(
+            pullRequests.createReviewDraft(input),
+            "Failed to save pull request review draft",
+          ),
+        [WS_METHODS.pullRequestsReviewDraftUpdate]: (input) =>
+          pullRequestsEffect(
+            pullRequests.updateReviewDraft(input),
+            "Failed to update pull request review draft",
+          ),
+        [WS_METHODS.pullRequestsReviewDraftDelete]: (input) =>
+          pullRequestsEffect(
+            pullRequests.deleteReviewDraft(input),
+            "Failed to delete pull request review draft",
+          ),
+        [WS_METHODS.pullRequestsReviewSubmit]: (input) =>
+          pullRequestsEffect(
+            pullRequests.submitReview(input),
+            "Failed to submit pull request review",
+          ),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitCreateWorktree]: (input) =>

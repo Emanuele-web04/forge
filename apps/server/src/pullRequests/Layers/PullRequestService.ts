@@ -24,6 +24,10 @@ import {
   type ProjectPullRequestPinsShape,
 } from "../../persistence/Services/ProjectPullRequestPins";
 import {
+  PullRequestReviewDraftStore,
+  type PullRequestReviewDraftStoreShape,
+} from "../../persistence/Services/PullRequestReviewDraftStore";
+import {
   buildPullRequestListEntry,
   isValidGitHubRepositoryNameWithOwner,
   isViewerReviewRequested,
@@ -69,6 +73,7 @@ export interface PullRequestServiceDependencies {
   readonly homeDir: string;
   readonly github: GitHubCliShape;
   readonly pins: ProjectPullRequestPinsShape;
+  readonly reviewDrafts?: PullRequestReviewDraftStoreShape;
   /**
    * Live (non-soft-deleted) projects. Deliberately not the full read model: the PR
    * service only ever reads `snapshot.projects`, and hydrating every thread body for a
@@ -562,6 +567,7 @@ export const makePullRequestService = (
     const operations = makePullRequestOperations({
       github: dependencies.github,
       pins: dependencies.pins,
+      ...(dependencies.reviewDrafts ? { reviewDrafts: dependencies.reviewDrafts } : {}),
       findProject,
       validateRepository: validatePullRequestRepository,
       validateProjectRepository: validateProjectPullRequestRepository,
@@ -584,11 +590,13 @@ export const PullRequestServiceLive = Layer.effect(
     const git = yield* GitCore;
     const github = yield* GitHubCli;
     const pins = yield* ProjectPullRequestPins;
+    const reviewDrafts = yield* PullRequestReviewDraftStore;
     const projection = yield* ProjectionSnapshotQuery;
     return yield* makePullRequestService({
       homeDir: config.homeDir,
       github,
       pins,
+      reviewDrafts,
       listProjects: () =>
         projection
           .getShellSnapshot()

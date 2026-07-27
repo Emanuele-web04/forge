@@ -20,6 +20,8 @@ import { PullRequestDiffStat } from "./PullRequestDiffStat";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
 import { PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
+import { PullRequestReviewSubmitBar } from "./review/PullRequestReviewSubmitBar";
+import { usePullRequestReview } from "./review/usePullRequestReview";
 
 export function PullRequestCodeTab({
   input,
@@ -31,6 +33,7 @@ export function PullRequestCodeTab({
   const { resolvedTheme } = useTheme();
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const diffQuery = useQuery(pullRequestDiffQueryOptions(input));
+  const review = usePullRequestReview({ target: input, detail, diff: diffQuery.data });
 
   const renderablePatch = getRenderablePatch(
     diffQuery.data?.patch,
@@ -82,6 +85,9 @@ export function PullRequestCodeTab({
                 return next;
               })
             }
+            lineAnnotations={review.annotationsByFile}
+            renderAnnotation={review.renderAnnotation}
+            onStartLineComment={review.startDraft}
             isLoading={diffQuery.isFetching}
             hasNoChanges={diffQuery.isSuccess && !renderablePatch}
             error={
@@ -97,6 +103,14 @@ export function PullRequestCodeTab({
             viewKind="repo"
           />
         )}
+        <PullRequestReviewSubmitBar
+          target={input}
+          drafts={review.currentDrafts}
+          staleDrafts={review.staleDrafts}
+          loading={review.isLoading}
+          busy={review.busy}
+          onDeleteDraft={review.deleteDraft}
+        />
       </div>
     </DiffWorkerPoolProvider>
   );

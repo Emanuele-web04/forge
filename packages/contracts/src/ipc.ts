@@ -89,8 +89,17 @@ import type {
   PullRequestDetail,
   PullRequestDetailInput,
   PullRequestDiffResult,
+  PullRequestReviewDraftCreateInput,
+  PullRequestReviewDraftDeleteInput,
+  PullRequestReviewDraftDeleteResult,
+  PullRequestReviewDraftListInput,
+  PullRequestReviewDraftListResult,
+  PullRequestReviewDraftResult,
+  PullRequestReviewDraftUpdateInput,
   PullRequestReviewRequestCountInput,
   PullRequestReviewRequestCountResult,
+  PullRequestReviewSubmitInput,
+  PullRequestReviewSubmitResult,
   PullRequestSetPinnedInput,
   PullRequestSetPinnedResult,
   PullRequestsListInput,
@@ -632,6 +641,19 @@ export interface NativeApi {
     action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;
     comment: (input: PullRequestCommentInput) => Promise<PullRequestActionResult>;
     setPinned: (input: PullRequestSetPinnedInput) => Promise<PullRequestSetPinnedResult>;
+    listReviewDrafts: (
+      input: PullRequestReviewDraftListInput,
+    ) => Promise<PullRequestReviewDraftListResult>;
+    createReviewDraft: (
+      input: PullRequestReviewDraftCreateInput,
+    ) => Promise<PullRequestReviewDraftResult>;
+    updateReviewDraft: (
+      input: PullRequestReviewDraftUpdateInput,
+    ) => Promise<PullRequestReviewDraftResult>;
+    deleteReviewDraft: (
+      input: PullRequestReviewDraftDeleteInput,
+    ) => Promise<PullRequestReviewDraftDeleteResult>;
+    submitReview: (input: PullRequestReviewSubmitInput) => Promise<PullRequestReviewSubmitResult>;
   };
   contextMenu: {
     show: <T extends string>(

@@ -4,6 +4,7 @@ import { Schema } from "effect";
 import {
   PullRequestCommentInput,
   PullRequestDetail,
+  PullRequestDiffResult,
   PullRequestListEntry,
   PullRequestReviewRequestCountResult,
   PullRequestSetPinnedInput,
@@ -11,6 +12,7 @@ import {
 
 const decodeListEntry = Schema.decodeUnknownSync(PullRequestListEntry);
 const decodeDetail = Schema.decodeUnknownSync(PullRequestDetail);
+const decodeDiff = Schema.decodeUnknownSync(PullRequestDiffResult);
 const decodeCommentInput = Schema.decodeUnknownSync(PullRequestCommentInput);
 const decodeSetPinnedInput = Schema.decodeUnknownSync(PullRequestSetPinnedInput);
 const decodeReviewRequestCountResult = Schema.decodeUnknownSync(
@@ -54,7 +56,7 @@ describe("PullRequestListEntry", () => {
 });
 
 describe("PullRequestDetail", () => {
-  it("defaults mergeability for a real pre-field detail payload", () => {
+  it("defaults additive fields for a real pre-field detail payload", () => {
     const decoded = decodeDetail({
       projectId: "project-1",
       projectTitle: "Project One",
@@ -96,6 +98,18 @@ describe("PullRequestDetail", () => {
     });
 
     expect(decoded.mergeability).toBe("unknown");
+    expect(decoded.reviewThreads).toEqual([]);
+  });
+});
+
+describe("PullRequestDiffResult", () => {
+  it("defaults head metadata for an older server payload", () => {
+    expect(decodeDiff({ patch: "diff", truncated: false })).toEqual({
+      patch: "diff",
+      truncated: false,
+      headSha: "",
+      patchSignature: "",
+    });
   });
 });
 

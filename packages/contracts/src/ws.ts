@@ -116,7 +116,12 @@ import {
   PullRequestActionInput,
   PullRequestCommentInput,
   PullRequestDetailInput,
+  PullRequestReviewDraftCreateInput,
+  PullRequestReviewDraftDeleteInput,
+  PullRequestReviewDraftListInput,
+  PullRequestReviewDraftUpdateInput,
   PullRequestReviewRequestCountInput,
+  PullRequestReviewSubmitInput,
   PullRequestSetPinnedInput,
   PullRequestsListInput,
 } from "./pullRequests";
@@ -185,6 +190,11 @@ export const WS_METHODS = {
   pullRequestsAction: "pullRequests.action",
   pullRequestsComment: "pullRequests.comment",
   pullRequestsSetPinned: "pullRequests.setPinned",
+  pullRequestsReviewDraftsList: "pullRequests.reviewDrafts.list",
+  pullRequestsReviewDraftCreate: "pullRequests.reviewDrafts.create",
+  pullRequestsReviewDraftUpdate: "pullRequests.reviewDrafts.update",
+  pullRequestsReviewDraftDelete: "pullRequests.reviewDrafts.delete",
+  pullRequestsReviewSubmit: "pullRequests.review.submit",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -359,6 +369,11 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.pullRequestsAction, PullRequestActionInput),
   tagRequestBody(WS_METHODS.pullRequestsComment, PullRequestCommentInput),
   tagRequestBody(WS_METHODS.pullRequestsSetPinned, PullRequestSetPinnedInput),
+  tagRequestBody(WS_METHODS.pullRequestsReviewDraftsList, PullRequestReviewDraftListInput),
+  tagRequestBody(WS_METHODS.pullRequestsReviewDraftCreate, PullRequestReviewDraftCreateInput),
+  tagRequestBody(WS_METHODS.pullRequestsReviewDraftUpdate, PullRequestReviewDraftUpdateInput),
+  tagRequestBody(WS_METHODS.pullRequestsReviewDraftDelete, PullRequestReviewDraftDeleteInput),
+  tagRequestBody(WS_METHODS.pullRequestsReviewSubmit, PullRequestReviewSubmitInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),

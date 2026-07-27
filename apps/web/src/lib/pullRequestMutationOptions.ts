@@ -2,6 +2,11 @@ import type {
   ProjectId,
   PullRequestActionInput,
   PullRequestCommentInput,
+  PullRequestReviewDraftCreateInput,
+  PullRequestReviewDraftDeleteInput,
+  PullRequestReviewDraftListInput,
+  PullRequestReviewDraftUpdateInput,
+  PullRequestReviewSubmitInput,
   PullRequestSetPinnedInput,
   PullRequestState,
 } from "@synara/contracts";
@@ -54,7 +59,69 @@ export const pullRequestMutationKeys = {
   setPinned: ["pull-requests", "set-pinned"] as const,
   comment: ["pull-requests", "comment"] as const,
   forceRefresh: ["pull-requests", "force-refresh"] as const,
+  createReviewDraft: ["pull-requests", "review-drafts", "create"] as const,
+  updateReviewDraft: ["pull-requests", "review-drafts", "update"] as const,
+  deleteReviewDraft: ["pull-requests", "review-drafts", "delete"] as const,
+  submitReview: ["pull-requests", "review", "submit"] as const,
 };
+
+function refreshReviewDrafts(
+  queryClient: QueryClient,
+  input: PullRequestReviewDraftListInput,
+): Promise<void> {
+  return queryClient.invalidateQueries({
+    queryKey: pullRequestQueryKeys.reviewDrafts(input),
+    exact: true,
+  });
+}
+
+export function pullRequestReviewDraftCreateMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationKey: pullRequestMutationKeys.createReviewDraft,
+    networkMode: "always",
+    mutationFn: (input: PullRequestReviewDraftCreateInput) =>
+      ensureNativeApi().pullRequests.createReviewDraft(input),
+    onSettled: (_result, _error, input) => refreshReviewDrafts(queryClient, input),
+  });
+}
+
+export function pullRequestReviewDraftUpdateMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationKey: pullRequestMutationKeys.updateReviewDraft,
+    networkMode: "always",
+    mutationFn: (input: PullRequestReviewDraftUpdateInput) =>
+      ensureNativeApi().pullRequests.updateReviewDraft(input),
+    onSettled: (_result, _error, input) => refreshReviewDrafts(queryClient, input),
+  });
+}
+
+export function pullRequestReviewDraftDeleteMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationKey: pullRequestMutationKeys.deleteReviewDraft,
+    networkMode: "always",
+    mutationFn: (input: PullRequestReviewDraftDeleteInput) =>
+      ensureNativeApi().pullRequests.deleteReviewDraft(input),
+    onSettled: (_result, _error, input) => refreshReviewDrafts(queryClient, input),
+  });
+}
+
+export function pullRequestReviewSubmitMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationKey: pullRequestMutationKeys.submitReview,
+    networkMode: "always",
+    mutationFn: (input: PullRequestReviewSubmitInput) =>
+      ensureNativeApi().pullRequests.submitReview(input),
+    onSettled: async (_result, _error, input) => {
+      await Promise.all([
+        refreshReviewDrafts(queryClient, input),
+        queryClient.invalidateQueries({
+          queryKey: pullRequestQueryKeys.detail(input),
+          exact: true,
+        }),
+      ]);
+    },
+  });
+}
 
 function refreshPullRequestReviewRequestCounts(queryClient: QueryClient): void {
   // This global sidebar badge is passive UI. Mark it stale and refresh active observers without

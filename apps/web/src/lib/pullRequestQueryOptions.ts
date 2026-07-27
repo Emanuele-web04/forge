@@ -2,6 +2,7 @@ import type {
   ProjectId,
   PullRequestDetailInput,
   PullRequestInvolvement,
+  PullRequestReviewDraftListInput,
   PullRequestState,
 } from "@synara/contracts";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
@@ -37,6 +38,8 @@ export const pullRequestQueryKeys = {
       input?.repository ?? null,
       input?.number ?? null,
     ] as const,
+  reviewDrafts: (input: PullRequestReviewDraftListInput | null) =>
+    ["pull-requests", "review-drafts", input?.repository ?? null, input?.number ?? null] as const,
 };
 
 export const PULL_REQUEST_STATES: readonly PullRequestState[] = ["open", "closed", "merged"];
@@ -161,5 +164,22 @@ export function pullRequestDiffQueryOptions(input: PullRequestDetailInput | null
     gcTime: 60_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
+  });
+}
+
+export function pullRequestReviewDraftsQueryOptions(
+  input: PullRequestReviewDraftListInput | null,
+  enabled = true,
+) {
+  return queryOptions({
+    queryKey: pullRequestQueryKeys.reviewDrafts(input),
+    queryFn: () => {
+      if (!input) throw new Error("Pull request review drafts are unavailable.");
+      return ensureNativeApi().pullRequests.listReviewDrafts(input);
+    },
+    enabled: enabled && input !== null,
+    staleTime: 10_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: "always",
   });
 }

@@ -81,8 +81,17 @@ import {
   PullRequestDetail,
   PullRequestDetailInput,
   PullRequestDiffResult,
+  PullRequestReviewDraftCreateInput,
+  PullRequestReviewDraftDeleteInput,
+  PullRequestReviewDraftDeleteResult,
+  PullRequestReviewDraftListInput,
+  PullRequestReviewDraftListResult,
+  PullRequestReviewDraftResult,
+  PullRequestReviewDraftUpdateInput,
   PullRequestReviewRequestCountInput,
   PullRequestReviewRequestCountResult,
+  PullRequestReviewSubmitInput,
+  PullRequestReviewSubmitResult,
   PullRequestSetPinnedInput,
   PullRequestSetPinnedResult,
   PullRequestsListInput,
@@ -537,6 +546,45 @@ export const WsPullRequestsSetPinnedRpc = Rpc.make(WS_METHODS.pullRequestsSetPin
   payload: PullRequestSetPinnedInput,
   success: PullRequestSetPinnedResult,
   error: WsRpcError,
+});
+
+export const WsPullRequestsReviewDraftsListRpc = Rpc.make(WS_METHODS.pullRequestsReviewDraftsList, {
+  payload: PullRequestReviewDraftListInput,
+  success: PullRequestReviewDraftListResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsReviewDraftCreateRpc = Rpc.make(
+  WS_METHODS.pullRequestsReviewDraftCreate,
+  {
+    payload: PullRequestReviewDraftCreateInput,
+    success: PullRequestReviewDraftResult,
+    error: PullRequestsRpcError,
+  },
+);
+
+export const WsPullRequestsReviewDraftUpdateRpc = Rpc.make(
+  WS_METHODS.pullRequestsReviewDraftUpdate,
+  {
+    payload: PullRequestReviewDraftUpdateInput,
+    success: PullRequestReviewDraftResult,
+    error: PullRequestsRpcError,
+  },
+);
+
+export const WsPullRequestsReviewDraftDeleteRpc = Rpc.make(
+  WS_METHODS.pullRequestsReviewDraftDelete,
+  {
+    payload: PullRequestReviewDraftDeleteInput,
+    success: PullRequestReviewDraftDeleteResult,
+    error: PullRequestsRpcError,
+  },
+);
+
+export const WsPullRequestsReviewSubmitRpc = Rpc.make(WS_METHODS.pullRequestsReviewSubmit, {
+  payload: PullRequestReviewSubmitInput,
+  success: PullRequestReviewSubmitResult,
+  error: PullRequestsRpcError,
 });
 
 export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
@@ -1027,6 +1075,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsPullRequestsActionRpc,
   WsPullRequestsCommentRpc,
   WsPullRequestsSetPinnedRpc,
+  WsPullRequestsReviewDraftsListRpc,
+  WsPullRequestsReviewDraftCreateRpc,
+  WsPullRequestsReviewDraftUpdateRpc,
+  WsPullRequestsReviewDraftDeleteRpc,
+  WsPullRequestsReviewSubmitRpc,
   WsGitListBranchesRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,

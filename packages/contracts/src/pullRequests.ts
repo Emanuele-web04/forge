@@ -75,6 +75,46 @@ export const PullRequestComment = Schema.Struct({
 });
 export type PullRequestComment = typeof PullRequestComment.Type;
 
+export const PullRequestReviewSide = Schema.Literals(["LEFT", "RIGHT"]);
+export type PullRequestReviewSide = typeof PullRequestReviewSide.Type;
+
+export const PullRequestReviewEvent = Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]);
+export type PullRequestReviewEvent = typeof PullRequestReviewEvent.Type;
+
+export const PullRequestReviewDraft = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  headSha: TrimmedNonEmptyString,
+  patchSignature: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  line: PositiveInt,
+  side: PullRequestReviewSide,
+  body: TrimmedNonEmptyString.check(Schema.isMaxLength(65_536)),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type PullRequestReviewDraft = typeof PullRequestReviewDraft.Type;
+
+export const PullRequestReviewThreadComment = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  author: Schema.NullOr(PullRequestActor),
+  body: Schema.String,
+  createdAt: Schema.NullOr(IsoDateTime),
+  url: Schema.NullOr(Schema.String),
+});
+export type PullRequestReviewThreadComment = typeof PullRequestReviewThreadComment.Type;
+
+export const PullRequestReviewThread = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  line: PositiveInt,
+  side: PullRequestReviewSide,
+  isResolved: Schema.Boolean,
+  comments: Schema.Array(PullRequestReviewThreadComment),
+});
+export type PullRequestReviewThread = typeof PullRequestReviewThread.Type;
+
 export const PullRequestCommit = Schema.Struct({
   oid: TrimmedNonEmptyString,
   messageHeadline: Schema.String,
@@ -217,6 +257,9 @@ export const PullRequestDetail = Schema.Struct({
   comments: Schema.Array(PullRequestComment),
   commentsTruncated: Schema.Boolean,
   commentsIncomplete: Schema.Boolean,
+  reviewThreads: Schema.optional(Schema.Array(PullRequestReviewThread)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
   commits: Schema.Array(PullRequestCommit),
   mergeCapabilities: PullRequestMergeCapabilities,
 });
@@ -225,6 +268,8 @@ export type PullRequestDetail = typeof PullRequestDetail.Type;
 export const PullRequestDiffResult = Schema.Struct({
   patch: Schema.String,
   truncated: Schema.Boolean,
+  headSha: Schema.optional(Schema.String).pipe(Schema.withDecodingDefault(() => "")),
+  patchSignature: Schema.optional(Schema.String).pipe(Schema.withDecodingDefault(() => "")),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 
@@ -246,6 +291,72 @@ export const PullRequestCommentInput = Schema.Struct({
   body: TrimmedNonEmptyString.check(Schema.isMaxLength(65536)),
 });
 export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
+
+export const PullRequestReviewDraftListInput = Schema.Struct({
+  projectId: ProjectId,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+});
+export type PullRequestReviewDraftListInput = typeof PullRequestReviewDraftListInput.Type;
+
+export const PullRequestReviewDraftListResult = Schema.Struct({
+  drafts: Schema.Array(PullRequestReviewDraft),
+});
+export type PullRequestReviewDraftListResult = typeof PullRequestReviewDraftListResult.Type;
+
+export const PullRequestReviewDraftCreateInput = Schema.Struct({
+  ...PullRequestReviewDraftListInput.fields,
+  headSha: TrimmedNonEmptyString,
+  patchSignature: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  line: PositiveInt,
+  side: PullRequestReviewSide,
+  body: TrimmedNonEmptyString.check(Schema.isMaxLength(65_536)),
+});
+export type PullRequestReviewDraftCreateInput = typeof PullRequestReviewDraftCreateInput.Type;
+
+export const PullRequestReviewDraftUpdateInput = Schema.Struct({
+  ...PullRequestReviewDraftListInput.fields,
+  id: TrimmedNonEmptyString,
+  body: TrimmedNonEmptyString.check(Schema.isMaxLength(65_536)),
+});
+export type PullRequestReviewDraftUpdateInput = typeof PullRequestReviewDraftUpdateInput.Type;
+
+export const PullRequestReviewDraftDeleteInput = Schema.Struct({
+  ...PullRequestReviewDraftListInput.fields,
+  id: TrimmedNonEmptyString,
+});
+export type PullRequestReviewDraftDeleteInput = typeof PullRequestReviewDraftDeleteInput.Type;
+
+export const PullRequestReviewDraftResult = Schema.Struct({
+  draft: PullRequestReviewDraft,
+});
+export type PullRequestReviewDraftResult = typeof PullRequestReviewDraftResult.Type;
+
+export const PullRequestReviewDraftDeleteResult = Schema.Struct({
+  deletedId: TrimmedNonEmptyString,
+});
+export type PullRequestReviewDraftDeleteResult = typeof PullRequestReviewDraftDeleteResult.Type;
+
+export const PullRequestReviewSubmitInput = Schema.Struct({
+  ...PullRequestReviewDraftListInput.fields,
+  event: PullRequestReviewEvent,
+  body: Schema.optional(Schema.String.check(Schema.isMaxLength(65_536))).pipe(
+    Schema.withDecodingDefault(() => ""),
+  ),
+  draftIds: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(500)),
+  ).pipe(Schema.withDecodingDefault(() => [])),
+});
+export type PullRequestReviewSubmitInput = typeof PullRequestReviewSubmitInput.Type;
+
+export const PullRequestReviewSubmitResult = Schema.Struct({
+  status: Schema.Literals(["submitted", "blocked"]),
+  submittedDraftIds: Schema.Array(TrimmedNonEmptyString),
+  staleDraftIds: Schema.Array(TrimmedNonEmptyString),
+  invalidDraftIds: Schema.Array(TrimmedNonEmptyString),
+});
+export type PullRequestReviewSubmitResult = typeof PullRequestReviewSubmitResult.Type;
 
 export const PullRequestSetPinnedInput = Schema.Struct({
   projectId: ProjectId,

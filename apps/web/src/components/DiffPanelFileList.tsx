@@ -2,13 +2,14 @@
 // Purpose: Multi-file diff list for the review panel, including per-file actions and previews.
 // Layer: Diff panel UI
 
+import type { DiffLineAnnotation } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
-import { type MouseEvent as ReactMouseEvent } from "react";
+import { type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ChevronDownIcon, CopyIcon, EllipsisIcon, MessageCircleIcon } from "~/lib/icons";
 
 import { buildFileDiffRenderKey, resolveFileDiffPath } from "~/lib/diffRendering";
-import { FileDiffCard, FileDiffSurface } from "./chat/FileDiffView";
+import { FileDiffCard, FileDiffSurface, type DiffLineCommentAnchor } from "./chat/FileDiffView";
 import { LocalImagePreview } from "./LocalImagePreview";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
@@ -96,7 +97,7 @@ function DiffFileCollapseChevron(props: { collapsed: boolean }) {
   );
 }
 
-const DiffPanelFileRow = function DiffPanelFileRow(props: {
+function DiffPanelFileRow<TAnnotation>(props: {
   fileDiff: FileDiffMetadata;
   resolvedTheme: "light" | "dark";
   diffRenderMode: DiffRenderMode;
@@ -105,6 +106,9 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   isCollapsed: boolean;
   onToggleFileCollapsed: (fileKey: string) => void;
   chatActions?: DiffFileChatActions | undefined;
+  lineAnnotations?: ReadonlyArray<DiffLineAnnotation<TAnnotation>>;
+  renderAnnotation?: (data: TAnnotation) => ReactNode;
+  onStartLineComment?: (anchor: DiffLineCommentAnchor) => void;
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
@@ -155,6 +159,9 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
         overflow={props.diffWordWrap ? "wrap" : "scroll"}
         collapsed={props.isCollapsed}
         renderHeaderTrailing={renderHeaderTrailing}
+        {...(props.lineAnnotations ? { lineAnnotations: props.lineAnnotations } : {})}
+        {...(props.renderAnnotation ? { renderAnnotation: props.renderAnnotation } : {})}
+        {...(props.onStartLineComment ? { onStartLineComment: props.onStartLineComment } : {})}
       />
       {shouldPreviewImage ? (
         <LocalImagePreview
@@ -167,9 +174,9 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
       ) : null}
     </div>
   );
-};
+}
 
-export const DiffPanelFileList = function DiffPanelFileList(props: {
+export const DiffPanelFileList = function DiffPanelFileList<TAnnotation = undefined>(props: {
   renderableFiles: ReadonlyArray<FileDiffMetadata>;
   resolvedTheme: "light" | "dark";
   diffRenderMode: DiffRenderMode;
@@ -178,6 +185,9 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
   collapsedFiles: ReadonlySet<string>;
   onToggleFileCollapsed: (fileKey: string) => void;
   chatActions?: DiffFileChatActions | undefined;
+  lineAnnotations?: ReadonlyMap<string, ReadonlyArray<DiffLineAnnotation<TAnnotation>>>;
+  renderAnnotation?: (data: TAnnotation) => ReactNode;
+  onStartLineComment?: (anchor: DiffLineCommentAnchor) => void;
 }) {
   if (props.renderableFiles.length === 0) {
     return (
@@ -193,6 +203,8 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
     <FileDiffSurface className="h-full min-h-0 overflow-auto px-2 pb-2">
       {props.renderableFiles.map((fileDiff) => {
         const fileKey = buildFileDiffRenderKey(fileDiff);
+        const filePath = resolveFileDiffPath(fileDiff);
+        const lineAnnotations = props.lineAnnotations?.get(filePath);
         // Include render mode so @pierre/diffs remounts when stacked ↔ split changes
         // (diffStyle is effectively mount-time config on FileDiff).
         const themedFileKey = `${fileKey}:${props.resolvedTheme}:${props.diffRenderMode}`;
@@ -206,7 +218,10 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
             workspaceRoot={props.workspaceRoot}
             isCollapsed={props.collapsedFiles.has(fileKey)}
             onToggleFileCollapsed={props.onToggleFileCollapsed}
-            chatActions={props.chatActions}
+            {...(props.chatActions ? { chatActions: props.chatActions } : {})}
+            {...(lineAnnotations ? { lineAnnotations } : {})}
+            {...(props.renderAnnotation ? { renderAnnotation: props.renderAnnotation } : {})}
+            {...(props.onStartLineComment ? { onStartLineComment: props.onStartLineComment } : {})}
           />
         );
       })}

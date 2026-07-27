@@ -18,6 +18,9 @@ import type {
   PullRequestLabel,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
+  PullRequestReviewEvent,
+  PullRequestReviewSide,
+  PullRequestReviewThread,
   PullRequestState,
 } from "@synara/contracts";
 
@@ -62,6 +65,7 @@ export interface GitHubRepositoryCloneUrls {
 
 export interface GitHubPullRequestReviewCommentsResult {
   readonly comments: ReadonlyArray<GitPullRequestComment>;
+  readonly threads: ReadonlyArray<PullRequestReviewThread>;
   readonly truncated: boolean;
 }
 
@@ -187,6 +191,27 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly number: number;
   }) => Effect.Effect<{ readonly patch: string; readonly truncated: boolean }, GitHubCliError>;
+
+  readonly getPullRequestHeadSha: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+  }) => Effect.Effect<string, GitHubCliError>;
+
+  readonly submitPullRequestReview: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly headSha: string;
+    readonly event: PullRequestReviewEvent;
+    readonly body: string;
+    readonly comments: ReadonlyArray<{
+      readonly path: string;
+      readonly line: number;
+      readonly side: PullRequestReviewSide;
+      readonly body: string;
+    }>;
+  }) => Effect.Effect<void, GitHubCliError>;
 
   readonly runPullRequestAction: (input: {
     readonly cwd: string;

@@ -276,7 +276,7 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
-  it.effect("returns root comments of unresolved review threads only", () =>
+  it.effect("returns timeline roots and preserves grouped review threads", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({
         stdout: JSON.stringify({
@@ -286,7 +286,12 @@ layer("GitHubCliLive", (it) => {
                 reviewThreads: {
                   nodes: [
                     {
+                      id: "PRRT_11",
                       isResolved: false,
+                      path: "CursorAcpCommand.ts",
+                      line: 18,
+                      originalLine: 17,
+                      diffSide: "RIGHT",
                       comments: {
                         nodes: [
                           {
@@ -301,7 +306,12 @@ layer("GitHubCliLive", (it) => {
                       },
                     },
                     {
+                      id: "PRRT_12",
                       isResolved: true,
+                      path: "CursorAcpCommand.ts",
+                      line: null,
+                      originalLine: 9,
+                      diffSide: "LEFT",
                       comments: {
                         nodes: [
                           {
@@ -356,6 +366,50 @@ layer("GitHubCliLive", (it) => {
           createdAt: "2026-07-01T10:00:00Z",
         },
       ]);
+      assert.deepStrictEqual(
+        result.threads.map((thread) => ({
+          id: thread.id,
+          path: thread.path,
+          line: thread.line,
+          side: thread.side,
+          isResolved: thread.isResolved,
+          comments: thread.comments.map((comment) => ({
+            id: comment.id,
+            author: comment.author?.login ?? null,
+            body: comment.body,
+          })),
+        })),
+        [
+          {
+            id: "PRRT_11",
+            path: "CursorAcpCommand.ts",
+            line: 18,
+            side: "RIGHT",
+            isResolved: false,
+            comments: [
+              {
+                id: "PRRC_11",
+                author: "codex-bot",
+                body: "Avoid returning shims directly",
+              },
+            ],
+          },
+          {
+            id: "PRRT_12",
+            path: "CursorAcpCommand.ts",
+            line: 9,
+            side: "LEFT",
+            isResolved: true,
+            comments: [
+              {
+                id: "PRRC_12",
+                author: "codex-bot",
+                body: "Already handled",
+              },
+            ],
+          },
+        ],
+      );
       assert.equal(result.truncated, false);
 
       const [command, args, options] = mockedRunProcess.mock.calls[0] ?? [];
@@ -1292,6 +1346,87 @@ layer("GitHubCliLive", (it) => {
       // The body must never appear in argv — it travels over stdin.
       expect(mockedRunProcess.mock.calls[0]?.[2]).toEqual(
         expect.objectContaining({ stdin: "Looks good!\n\nShipping it." }),
+      );
+    }),
+  );
+
+  it.effect("reads the live head and submits one review payload over stdin", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "abc123\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "{}",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      assert.strictEqual(
+        yield* gh.getPullRequestHeadSha({
+          cwd: "/repo",
+          repository: "acme/app",
+          number: 9,
+        }),
+        "abc123",
+      );
+      yield* gh.submitPullRequestReview({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+        headSha: "abc123",
+        event: "REQUEST_CHANGES",
+        body: "Please fix this.",
+        comments: [
+          {
+            path: "src/a.ts",
+            line: 7,
+            side: "RIGHT",
+            body: "This can fail.",
+          },
+        ],
+      });
+
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "api",
+        "--hostname",
+        "github.com",
+        "repos/acme/app/pulls/9",
+        "--jq",
+        ".head.sha",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "api",
+        "--hostname",
+        "github.com",
+        "--method",
+        "POST",
+        "repos/acme/app/pulls/9/reviews",
+        "--input",
+        "-",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({
+          stdin: JSON.stringify({
+            commit_id: "abc123",
+            event: "REQUEST_CHANGES",
+            body: "Please fix this.",
+            comments: [
+              {
+                path: "src/a.ts",
+                line: 7,
+                side: "RIGHT",
+                body: "This can fail.",
+              },
+            ],
+          }),
+        }),
       );
     }),
   );

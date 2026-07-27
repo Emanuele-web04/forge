@@ -11,6 +11,7 @@ import {
   type PullRequestCommit,
   type PullRequestLabel,
   type PullRequestMergeCapabilities,
+  type PullRequestReviewThread,
 } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import {
@@ -291,8 +292,13 @@ const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!
     pullRequest(number: $number) {
       reviewThreads(first: $first, after: $after) {
         nodes {
+          id
           isResolved
-          comments(first: 1) {
+          path
+          line
+          originalLine
+          diffSide
+          comments(first: 50) {
             nodes {
               id
               body
@@ -332,7 +338,12 @@ const RawReviewThreadCommentSchema = Schema.Struct({
 });
 
 const RawReviewThreadSchema = Schema.Struct({
+  id: Schema.optional(Schema.NullOr(Schema.String)),
   isResolved: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  path: Schema.optional(Schema.NullOr(Schema.String)),
+  line: Schema.optional(Schema.NullOr(Schema.Number)),
+  originalLine: Schema.optional(Schema.NullOr(Schema.Number)),
+  diffSide: Schema.optional(Schema.NullOr(Schema.String)),
   comments: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
@@ -670,6 +681,58 @@ function normalizePullRequestReviewComments(
     });
   }
   return comments;
+}
+
+function normalizePullRequestReviewThreads(
+  raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
+): PullRequestReviewThread[] {
+  const threads = raw.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+  return threads.flatMap((thread) => {
+    if (!thread) return [];
+    const id = thread.id?.trim();
+    const path = thread.path?.trim();
+    const line = thread.line ?? thread.originalLine;
+    const side = thread.diffSide;
+    if (
+      !id ||
+      !path ||
+      typeof line !== "number" ||
+      !Number.isInteger(line) ||
+      line <= 0 ||
+      (side !== "LEFT" && side !== "RIGHT")
+    ) {
+      return [];
+    }
+    return [
+      {
+        id,
+        path,
+        line,
+        side,
+        isResolved: thread.isResolved === true,
+        comments: (thread.comments?.nodes ?? []).flatMap((comment) => {
+          if (!comment) return [];
+          const login = comment.author?.login?.trim();
+          return [
+            {
+              id: comment.id,
+              author: login
+                ? {
+                    login,
+                    name: null,
+                    avatarUrl: githubAvatarUrlForLogin(login),
+                    url: null,
+                  }
+                : null,
+              body: comment.body ?? "",
+              createdAt: comment.createdAt?.trim() || null,
+              url: comment.url ?? null,
+            },
+          ];
+        }),
+      },
+    ];
+  });
 }
 
 function getGraphQlErrorDetail(
@@ -1214,6 +1277,58 @@ const makeGitHubCli = Effect.sync(() => {
           ),
         ),
       ),
+    getPullRequestHeadSha: (input) =>
+      validateRepository(input.repository, "getPullRequestHeadSha").pipe(
+        Effect.flatMap((repository) =>
+          execute({
+            cwd: input.cwd,
+            args: [
+              "api",
+              "--hostname",
+              GITHUB_HOST,
+              `repos/${repository}/pulls/${input.number}`,
+              "--jq",
+              ".head.sha",
+            ],
+          }),
+        ),
+        Effect.flatMap((result) => {
+          const headSha = result.stdout.trim();
+          return headSha.length > 0
+            ? Effect.succeed(headSha)
+            : Effect.fail(
+                new GitHubCliError({
+                  operation: "getPullRequestHeadSha",
+                  detail: "GitHub returned an empty pull request head commit.",
+                }),
+              );
+        }),
+      ),
+    submitPullRequestReview: (input) =>
+      validateRepository(input.repository, "submitPullRequestReview").pipe(
+        Effect.flatMap((repository) =>
+          execute({
+            cwd: input.cwd,
+            args: [
+              "api",
+              "--hostname",
+              GITHUB_HOST,
+              "--method",
+              "POST",
+              `repos/${repository}/pulls/${input.number}/reviews`,
+              "--input",
+              "-",
+            ],
+            stdin: JSON.stringify({
+              commit_id: input.headSha,
+              event: input.event,
+              ...(input.body.trim().length > 0 ? { body: input.body } : {}),
+              comments: input.comments,
+            }),
+          }),
+        ),
+        Effect.asVoid,
+      ),
     runPullRequestAction: (input) =>
       validateRepository(input.repository, "runPullRequestAction").pipe(
         Effect.flatMap((repository) => {
@@ -1314,6 +1429,7 @@ const makeGitHubCli = Effect.sync(() => {
     getPullRequestReviewComments: (input) =>
       Effect.gen(function* () {
         const comments: GitPullRequestComment[] = [];
+        const threads: PullRequestReviewThread[] = [];
         let after: string | null = null;
         let fetchedPages = 0;
         let truncated = false;
@@ -1358,17 +1474,19 @@ const makeGitHubCli = Effect.sync(() => {
           }
 
           const remaining = PULL_REQUEST_REVIEW_COMMENT_LIMIT - comments.length;
-          const pageComments = normalizePullRequestReviewComments(decoded);
-          if (pageComments.length > remaining) {
-            truncated = true;
+          if (remaining > 0) {
+            const pageComments = normalizePullRequestReviewComments(decoded);
+            if (pageComments.length > remaining) {
+              truncated = true;
+            }
+            comments.push(...pageComments.slice(0, remaining));
           }
-          comments.push(...pageComments.slice(0, Math.max(remaining, 0)));
+          threads.push(...normalizePullRequestReviewThreads(decoded));
 
           const pageInfo = getPullRequestReviewThreadsPageInfo(decoded);
           const canFetchNextPage =
             pageInfo.hasNextPage &&
             pageInfo.endCursor !== null &&
-            comments.length < PULL_REQUEST_REVIEW_COMMENT_LIMIT &&
             fetchedPages < PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT;
           // hasNextPage alone marks truncation: a null endCursor still means threads remain,
           // we just cannot page to them.
@@ -1378,7 +1496,7 @@ const makeGitHubCli = Effect.sync(() => {
           after = canFetchNextPage ? pageInfo.endCursor : null;
         } while (after !== null);
 
-        return { comments, truncated };
+        return { comments, threads, truncated };
       }),
     getRepositoryCloneUrls: (input) =>
       validateRepository(input.repository, "getRepositoryCloneUrls").pipe(

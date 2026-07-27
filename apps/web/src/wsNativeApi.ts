@@ -560,6 +560,16 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.pullRequestsAction, input, { timeoutMs: null }),
       comment: (input) => transport.request(WS_METHODS.pullRequestsComment, input),
       setPinned: (input) => transport.request(WS_METHODS.pullRequestsSetPinned, input),
+      listReviewDrafts: (input) =>
+        transport.request(WS_METHODS.pullRequestsReviewDraftsList, input),
+      createReviewDraft: (input) =>
+        transport.request(WS_METHODS.pullRequestsReviewDraftCreate, input),
+      updateReviewDraft: (input) =>
+        transport.request(WS_METHODS.pullRequestsReviewDraftUpdate, input),
+      deleteReviewDraft: (input) =>
+        transport.request(WS_METHODS.pullRequestsReviewDraftDelete, input),
+      submitReview: (input) =>
+        transport.request(WS_METHODS.pullRequestsReviewSubmit, input, { timeoutMs: null }),
     },
     contextMenu: {
       show: async <T extends string>(

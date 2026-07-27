@@ -7,6 +7,15 @@ import type {
   PullRequestDiffResult,
   PullRequestReviewRequestCountInput,
   PullRequestReviewRequestCountResult,
+  PullRequestReviewDraftCreateInput,
+  PullRequestReviewDraftDeleteInput,
+  PullRequestReviewDraftDeleteResult,
+  PullRequestReviewDraftListInput,
+  PullRequestReviewDraftListResult,
+  PullRequestReviewDraftResult,
+  PullRequestReviewDraftUpdateInput,
+  PullRequestReviewSubmitInput,
+  PullRequestReviewSubmitResult,
   PullRequestSetPinnedInput,
   PullRequestSetPinnedResult,
   PullRequestsListInput,
@@ -28,6 +37,21 @@ export interface PullRequestServiceShape {
   readonly comment: (
     input: PullRequestCommentInput,
   ) => Effect.Effect<PullRequestActionResult, unknown>;
+  readonly listReviewDrafts: (
+    input: PullRequestReviewDraftListInput,
+  ) => Effect.Effect<PullRequestReviewDraftListResult, unknown>;
+  readonly createReviewDraft: (
+    input: PullRequestReviewDraftCreateInput,
+  ) => Effect.Effect<PullRequestReviewDraftResult, unknown>;
+  readonly updateReviewDraft: (
+    input: PullRequestReviewDraftUpdateInput,
+  ) => Effect.Effect<PullRequestReviewDraftResult, unknown>;
+  readonly deleteReviewDraft: (
+    input: PullRequestReviewDraftDeleteInput,
+  ) => Effect.Effect<PullRequestReviewDraftDeleteResult, unknown>;
+  readonly submitReview: (
+    input: PullRequestReviewSubmitInput,
+  ) => Effect.Effect<PullRequestReviewSubmitResult, unknown>;
   readonly setPinned: (
     input: PullRequestSetPinnedInput,
   ) => Effect.Effect<PullRequestSetPinnedResult, unknown>;

@@ -12,6 +12,8 @@ import type {
   GitPullRequestCheck,
   GitPullRequestComment,
   PullRequestMergeCapabilities,
+  PullRequestReviewEvent,
+  PullRequestReviewThread,
 } from "@synara/contracts";
 
 import { GitHubCliError } from "../Errors.ts";
@@ -47,6 +49,7 @@ export interface FakeGhScenario {
   repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
   pullRequestChecks?: GitPullRequestCheck[];
   pullRequestReviewComments?: GitPullRequestComment[];
+  pullRequestReviewThreads?: PullRequestReviewThread[];
   pullRequestReviewCommentsTruncated?: boolean;
   failWith?: GitHubCliError;
   reviewCommentsError?: GitHubCliError;
@@ -58,6 +61,18 @@ export interface FakeGhScenario {
   reviewRequestedPullRequestNumbers?: number[];
   mergeCapabilities?: PullRequestMergeCapabilities;
   pullRequestDiff?: { patch: string; truncated: boolean };
+  pullRequestHeadSha?: string;
+  submittedReviews?: Array<{
+    headSha: string;
+    event: PullRequestReviewEvent;
+    body: string;
+    comments: ReadonlyArray<{
+      path: string;
+      line: number;
+      side: "LEFT" | "RIGHT";
+      body: string;
+    }>;
+  }>;
 }
 
 export type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -321,6 +336,22 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         ghCalls.push(`pr diff ${input.number} --repo ${input.repository}`);
         return Effect.succeed(scenario.pullRequestDiff ?? { patch: "", truncated: false });
       },
+      getPullRequestHeadSha: (input) => {
+        ghCalls.push(`pr head ${input.number} --repo ${input.repository}`);
+        return scenario.failWith
+          ? Effect.fail(scenario.failWith)
+          : Effect.succeed(scenario.pullRequestHeadSha ?? "head-sha");
+      },
+      submitPullRequestReview: (input) => {
+        ghCalls.push(`pr review ${input.number} --repo ${input.repository} --event ${input.event}`);
+        scenario.submittedReviews?.push({
+          headSha: input.headSha,
+          event: input.event,
+          body: input.body,
+          comments: input.comments,
+        });
+        return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
+      },
       runPullRequestAction: (input) => {
         ghCalls.push(
           `pr action ${input.action} ${input.number} --repo ${input.repository}${input.mergeMethod ? ` --${input.mergeMethod}` : ""}`,
@@ -422,6 +453,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           ? Effect.fail(scenario.reviewCommentsError)
           : Effect.succeed({
               comments: scenario.pullRequestReviewComments ?? [],
+              threads: scenario.pullRequestReviewThreads ?? [],
               truncated: scenario.pullRequestReviewCommentsTruncated ?? false,
             });
       },

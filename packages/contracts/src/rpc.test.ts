@@ -8,6 +8,11 @@ import {
   WsFeatureRpcGroup,
   WsProjectsDiscoverScriptsRpc,
   WsPullRequestsReviewRequestCountRpc,
+  WsPullRequestsReviewDraftsListRpc,
+  WsPullRequestsReviewDraftCreateRpc,
+  WsPullRequestsReviewDraftUpdateRpc,
+  WsPullRequestsReviewDraftDeleteRpc,
+  WsPullRequestsReviewSubmitRpc,
   WsRpcError,
   WsRpcGroup,
 } from "./rpc";
@@ -42,5 +47,15 @@ describe("WS RPC contracts", () => {
 
   it("exports the count-only pull request review RPC", () => {
     expect(WsPullRequestsReviewRequestCountRpc).toBeDefined();
+  });
+
+  it("exports review draft and submit RPCs through the pull request group", () => {
+    expect(WsPullRequestsReviewDraftsListRpc).toBeDefined();
+    expect(WsPullRequestsReviewDraftCreateRpc).toBeDefined();
+    expect(WsPullRequestsReviewDraftUpdateRpc).toBeDefined();
+    expect(WsPullRequestsReviewDraftDeleteRpc).toBeDefined();
+    expect(WsPullRequestsReviewSubmitRpc).toBeDefined();
+    expect(WsFeatureRpcGroup.requests.has("pullRequests.reviewDrafts.list")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("pullRequests.review.submit")).toBe(true);
   });
 });
