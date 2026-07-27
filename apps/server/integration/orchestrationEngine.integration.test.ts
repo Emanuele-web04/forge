@@ -862,6 +862,11 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
         true,
       );
       assert.equal(fs.readFileSync(path.join(harness.workspaceDir, "README.md"), "utf8"), "v2\n");
+      yield* waitForSync(
+        () => gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
+        (exists) => !exists,
+        "stale checkpoint ref cleanup after revert completion",
+      );
       assert.equal(
         gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
         false,

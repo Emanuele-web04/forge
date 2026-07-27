@@ -1145,7 +1145,7 @@ const make = Effect.gen(function* () {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
-        detail: "The provider session could not be resumed for conversation rollback.",
+        detail: "No active provider session could be resumed for conversation rollback.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
