@@ -1126,12 +1126,18 @@ const make = Effect.gen(function* () {
 
     let ensuredSession: Option.Option<{
       readonly threadId: ThreadId;
-      readonly cwd?: string;
+      readonly cwd: string | undefined;
     }>;
     if (providerService.ensureRuntimeSession !== undefined) {
       ensuredSession = yield* providerService
         .ensureRuntimeSession({ threadId: sessionThreadId })
-        .pipe(Effect.option);
+        .pipe(
+          Effect.map((session) => ({
+            threadId: session.threadId,
+            cwd: session.cwd,
+          })),
+          Effect.option,
+        );
     } else {
       ensuredSession = yield* resolveSessionRuntimeForThread(event.payload.threadId);
     }
