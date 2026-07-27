@@ -10,6 +10,8 @@ import {
   type OrchestrationShellSnapshot,
   type ProjectScript,
   type ModelSlug,
+  type OmpModelOptions,
+  type OmpModelSelection,
   type ProviderKind,
   type ProjectEntry,
   type ProjectId,
@@ -5938,6 +5940,36 @@ export default function ChatView({
     ],
   );
 
+  const onProviderModelRoleSelect = useCallback(
+    (model: ModelSlug, options: OmpModelOptions) => {
+      if (!activeThread) return;
+      if (lockedProvider !== null && lockedProvider !== "omp") {
+        scheduleComposerFocus();
+        return;
+      }
+      const resolvedModel = resolveCommittedProviderModel({
+        selectedModel: model,
+        availableOptions: modelOptionsByProvider.omp,
+        fallback: () => resolveAppModelSelection("omp", customModelsByProvider, model),
+      });
+      const nextModelSelection: OmpModelSelection = {
+        provider: "omp",
+        model: resolvedModel,
+        options,
+      };
+      setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
+      scheduleComposerFocus();
+    },
+    [
+      activeThread,
+      lockedProvider,
+      scheduleComposerFocus,
+      setComposerDraftModelSelectionAndSticky,
+      customModelsByProvider,
+      modelOptionsByProvider,
+    ],
+  );
+
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -9021,6 +9053,7 @@ export default function ChatView({
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
         onProviderModelChange={onProviderModelSelect}
+        onProviderModelRoleSelect={onProviderModelRoleSelect}
         onSelectionCommitted={scheduleComposerFocus}
         open={isModelPickerOpen}
         onOpenChange={handleModelPickerOpenChange}
@@ -9064,6 +9097,7 @@ export default function ChatView({
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
       onProviderModelChange={onProviderModelSelect}
+      onProviderModelRoleSelect={onProviderModelRoleSelect}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
       onOpenChange={handleComposerModelEffortPickerOpenChange}

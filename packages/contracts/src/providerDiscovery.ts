@@ -5,7 +5,7 @@
 
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
-import { ProviderOptionDescriptor } from "./model";
+import { OMP_THINKING_LEVEL_OPTIONS, ProviderOptionDescriptor } from "./model";
 
 const ProviderDiscoveryKind = Schema.Literals([
   "codex",
@@ -285,8 +285,16 @@ export const ProviderModelDescriptor = Schema.Struct({
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 
+export const OmpRoleDescriptor = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  model: TrimmedNonEmptyString,
+  thinkingLevel: Schema.optional(Schema.Literals(OMP_THINKING_LEVEL_OPTIONS)),
+});
+export type OmpRoleDescriptor = typeof OmpRoleDescriptor.Type;
+
 export const ProviderListModelsResult = Schema.Struct({
   models: Schema.Array(ProviderModelDescriptor),
+  roles: Schema.optional(Schema.Array(OmpRoleDescriptor)),
   source: Schema.optional(TrimmedNonEmptyString),
   cached: Schema.optional(Schema.Boolean),
 });

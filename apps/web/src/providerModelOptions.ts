@@ -20,6 +20,7 @@ import type {
   ModelSelection,
   OmpModelOptions,
   OmpModelSelection,
+  OmpThinkingLevel,
   OpenCodeModelOptions,
   OpenCodeModelSelection,
   PiModelOptions,
@@ -37,6 +38,7 @@ export interface ProviderModelOption {
   description?: string;
   upstreamProviderId?: string;
   upstreamProviderName?: string;
+  role?: { name: string; model: string; thinkingLevel?: OmpThinkingLevel };
 }
 
 export interface ProviderModelOptionGroup {

@@ -6,12 +6,14 @@ import { Effect } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { describe, expect, it } from "vitest";
+import { OMP_THINKING_LEVEL_OPTIONS } from "@synara/contracts";
 
 import {
   applyOmpAcpInteractionMode,
   applyOmpAcpModelSelection,
   buildOmpAcpSpawnInput,
   parseOmpCliModelList,
+  parseOmpModelRoles,
   resolveOmpAcpAuthMethodId,
   resolveOmpCliBinaryPath,
 } from "./OmpAcpSupport.ts";
@@ -359,5 +361,63 @@ describe("resolveOmpAcpAuthMethodId", () => {
       resolveOmpAcpAuthMethodId(initializeWithAuthMethods([])).pipe(Effect.flip),
     );
     expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
+  });
+});
+
+describe("parseOmpModelRoles", () => {
+  it("splits a trailing known thinking level from the model slug", () => {
+    expect(
+      parseOmpModelRoles({ "Dreaming-Proposer": "alibaba-token-plan/qwen3.8-max-preview:low" }),
+    ).toEqual([
+      {
+        name: "Dreaming-Proposer",
+        model: "alibaba-token-plan/qwen3.8-max-preview",
+        thinkingLevel: "low",
+      },
+    ]);
+  });
+
+  it("omits thinkingLevel when the value has no known suffix", () => {
+    const [role] = parseOmpModelRoles({ smol: "zai/glm-4.7" });
+    expect(role).toEqual({ name: "smol", model: "zai/glm-4.7" });
+    expect(role).not.toHaveProperty("thinkingLevel");
+  });
+
+  it("keeps an unknown suffix as part of the model slug", () => {
+    expect(parseOmpModelRoles({ weird: "foo:bar" })).toEqual([{ name: "weird", model: "foo:bar" }]);
+  });
+
+  it("skips non-string and blank values", () => {
+    expect(parseOmpModelRoles({ a: "", b: "   ", c: 123, d: null, e: "zai/glm-5.2" })).toEqual([
+      { name: "e", model: "zai/glm-5.2" },
+    ]);
+  });
+
+  it("preserves config insertion order", () => {
+    const roles = parseOmpModelRoles({ z: "m1", a: "m2", m: "m3" });
+    expect(roles.map((role) => role.name)).toEqual(["z", "a", "m"]);
+  });
+
+  it("recognizes every known thinking level", () => {
+    for (const level of OMP_THINKING_LEVEL_OPTIONS) {
+      const [role] = parseOmpModelRoles({ x: `p/m:${level}` });
+      expect(role).toEqual({ name: "x", model: "p/m", thinkingLevel: level });
+    }
+  });
+
+  it("splits only the trailing level, keeping earlier colons in the model slug", () => {
+    expect(parseOmpModelRoles({ x: "provider/sub:id:low" })).toEqual([
+      { name: "x", model: "provider/sub:id", thinkingLevel: "low" },
+    ]);
+  });
+
+  it("returns an empty array for non-record input", () => {
+    expect(parseOmpModelRoles(null)).toEqual([]);
+    expect(parseOmpModelRoles("not-a-map")).toEqual([]);
+    expect(parseOmpModelRoles([["x", "p/m"]])).toEqual([]);
+  });
+
+  it("returns an empty array for an empty map", () => {
+    expect(parseOmpModelRoles({})).toEqual([]);
   });
 });

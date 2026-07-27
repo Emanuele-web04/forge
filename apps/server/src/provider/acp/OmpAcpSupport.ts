@@ -6,7 +6,11 @@
 import { existsSync } from "node:fs";
 import * as nodePath from "node:path";
 
-import { type ProviderModelDescriptor, OMP_THINKING_LEVEL_OPTIONS } from "@synara/contracts";
+import {
+  type OmpRoleDescriptor,
+  type ProviderModelDescriptor,
+  OMP_THINKING_LEVEL_OPTIONS,
+} from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
@@ -54,6 +58,35 @@ const OMP_DEFAULT_MODE_ID = "default";
 const OMP_PLAN_MODE_ID = "plan";
 
 const OMP_AGENT_AUTH_METHOD_ID = "agent";
+
+/**
+ * Parses OMP `modelRoles` entries (from `~/.omp/agent/config.yml`) into role
+ * descriptors. Each value is `<provider/id>[:<thinking-level>]`; a trailing
+ * segment is split off as the thinking level only when it matches a known OMP
+ * thinking level. Entries whose value is not a non-empty trimmed string are
+ * skipped. Insertion order is preserved so the picker lists roles in config order.
+ */
+export function parseOmpModelRoles(modelRoles: unknown): ReadonlyArray<OmpRoleDescriptor> {
+  if (!isStringRecord(modelRoles)) return [];
+  const roles: OmpRoleDescriptor[] = [];
+  for (const [name, rawValue] of Object.entries(modelRoles)) {
+    if (typeof rawValue !== "string") continue;
+    const value = rawValue.trim();
+    if (!value) continue;
+    const lastColon = value.lastIndexOf(":");
+    if (lastColon > 0) {
+      const maybeLevel = value.slice(lastColon + 1);
+      const model = value.slice(0, lastColon);
+      const level = OMP_THINKING_LEVEL_OPTIONS.find((candidate) => candidate === maybeLevel);
+      if (level !== undefined && model) {
+        roles.push({ name, model, thinkingLevel: level });
+        continue;
+      }
+    }
+    roles.push({ name, model: value });
+  }
+  return roles;
+}
 
 /** Honors a configured binary path first, then resolves `omp` from PATH. */
 export function resolveOmpCliBinaryPath(binaryPath?: string | null): string {

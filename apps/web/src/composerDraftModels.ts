@@ -12,6 +12,7 @@ import {
   type GrokReasoningEffort,
   type ModelSelection,
   type ModelSlug,
+  type OmpModelOptions,
   type PiThinkingLevel,
   type ProviderModelOptions,
 } from "@synara/contracts";
@@ -20,6 +21,7 @@ import * as Schema from "effect/Schema";
 import {
   getDefaultModel,
   normalizeModelSlug,
+  normalizeOmpModelOptions,
   resolveModelSlugForProvider,
   resolveSelectableModel,
 } from "@synara/shared/model";
@@ -402,16 +404,7 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
-  const ompThinkingLevel: PiThinkingLevel | undefined =
-    ompCandidate?.thinkingLevel === "off" ||
-    ompCandidate?.thinkingLevel === "minimal" ||
-    ompCandidate?.thinkingLevel === "low" ||
-    ompCandidate?.thinkingLevel === "medium" ||
-    ompCandidate?.thinkingLevel === "high" ||
-    ompCandidate?.thinkingLevel === "xhigh"
-      ? ompCandidate.thinkingLevel
-      : undefined;
-  const omp = ompThinkingLevel !== undefined ? { thinkingLevel: ompThinkingLevel } : undefined;
+  const omp = normalizeOmpModelOptions(ompCandidate as OmpModelOptions | null | undefined);
   if (
     !codex &&
     !claude &&

@@ -3,6 +3,10 @@
  *
  * @module OmpAdapterLive
  */
+import * as nodeFs from "node:fs/promises";
+import * as nodeOs from "node:os";
+import * as nodePath from "node:path";
+import YAML from "yaml";
 import {
   ApprovalRequestId,
   EventId,
@@ -19,6 +23,7 @@ import {
   RuntimeTaskId,
   ThreadId,
   TurnId,
+  type OmpRoleDescriptor,
 } from "@synara/contracts";
 import {
   Cause,
@@ -107,6 +112,7 @@ import {
   applyOmpAcpModelSelection,
   makeOmpAcpRuntime,
   parseOmpCliModelList,
+  parseOmpModelRoles,
   resolveOmpCliBinaryPath,
   type OmpAcpRuntimeSettings,
 } from "../acp/OmpAcpSupport.ts";
@@ -1942,7 +1948,9 @@ export function makeOmpAdapter(
             ompSettingsBinaryPath: ompSettings.binaryPath ?? null,
           });
           const binaryPath = input.binaryPath?.trim() || ompSettings.binaryPath?.trim() || "omp";
-          const cacheKey = binaryPath;
+          const agentDir =
+            input.agentDir?.trim() || nodePath.join(nodeOs.homedir(), ".omp", "agent");
+          const cacheKey = `${binaryPath}::${agentDir}`;
           const cached = modelDiscoveryCache.get(cacheKey);
           if (cached && cached.expiresAt > Date.now()) {
             log.info("model/list cache hit", {
@@ -1995,11 +2003,27 @@ export function makeOmpAdapter(
             modelCount: result.models.length,
             source: result.source,
           });
+          const roles = yield* Effect.tryPromise(async () => {
+            const text = await nodeFs.readFile(nodePath.join(agentDir, "config.yml"), "utf8");
+            const parsed = YAML.parse(text) as { modelRoles?: Record<string, unknown> } | null;
+            return parseOmpModelRoles(parsed?.modelRoles ?? {});
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                log.warn("model/list roles read failed", {
+                  agentDir,
+                  detail: error instanceof Error ? error.message : String(error),
+                });
+                return [] as ReadonlyArray<OmpRoleDescriptor>;
+              }),
+            ),
+          );
+          const resultWithRoles: ProviderListModelsResult = { ...result, roles };
           setOmpDiscoveryCacheEntry(modelDiscoveryCache, cacheKey, {
             expiresAt: Date.now() + OMP_MODEL_DISCOVERY_CACHE_MS,
-            result,
+            result: resultWithRoles,
           });
-          return result;
+          return resultWithRoles;
         }),
       );
 

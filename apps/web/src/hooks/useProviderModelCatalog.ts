@@ -366,6 +366,21 @@ export function useProviderModelCatalog(input: {
         });
       }
     }
+    const ompRoles = ompDynamicModelsQuery.data?.roles ?? [];
+    if (ompRoles.length > 0) {
+      const roleOptions: ProviderModelOption[] = ompRoles.map((role) => ({
+        slug: `role:${role.name}`,
+        name: role.name.replace(/[-_]/g, " "),
+        upstreamProviderName: "Roles",
+        upstreamProviderId: "roles",
+        role: {
+          name: role.name,
+          model: role.model,
+          ...(role.thinkingLevel ? { thinkingLevel: role.thinkingLevel } : {}),
+        },
+      }));
+      result.omp = [...roleOptions, ...result.omp];
+    }
     // Terminal OMP discovery failure: clear options so the picker surfaces a
     // load-failure message instead of the hint-only static list (OMP has no
     // built-in catalog to fall back to).
