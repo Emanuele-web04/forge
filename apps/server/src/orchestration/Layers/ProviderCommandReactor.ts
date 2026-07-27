@@ -4,6 +4,7 @@
 
 import {
   type ChatAttachment,
+  type CheckpointRef,
   CommandId,
   EventId,
   type ModelSelection,
@@ -34,6 +35,7 @@ import {
   Exit,
   Layer,
   Option,
+  Queue,
   Schema,
   Semaphore,
   Stream,
@@ -114,6 +116,7 @@ import {
   isClaimedProviderIntent,
   isProviderIntentEvent,
   isProviderSideEffectIntent,
+  isQuarantineExemptProviderIntent,
   isReplaySafeClaimedProviderIntent,
   type ProviderIntentEvent,
 } from "../providerIntentClassification.ts";
@@ -170,6 +173,66 @@ export function classifyProviderAttemptOutcome(
   }
 }
 
+type BoundedProviderCallResult<E> =
+  | { readonly _tag: "ok" }
+  | { readonly _tag: "timeout"; readonly detail: string }
+  | {
+      readonly _tag: "failed";
+      readonly outcome: Exclude<ProviderAttemptOutcome, { readonly _tag: "accepted" }>;
+      readonly cause: Cause.Cause<E>;
+    };
+
+/**
+ * Runs a provider call under a hard deadline and reduces it to a decision.
+ * A call that never returns cannot simply be awaited here: the caller holds the
+ * reactor's single delivery permit, so waiting forever stalls every thread.
+ * Interruption is re-raised untouched so shutdown still cancels cleanly.
+ */
+const runBoundedProviderCall = <E, R>(input: {
+  readonly label: string;
+  readonly timeout: Duration.Duration;
+  readonly call: Effect.Effect<unknown, E, R>;
+}): Effect.Effect<BoundedProviderCallResult<E>, E, R> =>
+  Effect.suspend(() => {
+    let timedOut = false;
+    return input.call.pipe(
+      Effect.timeoutOption(input.timeout),
+      Effect.flatMap((result) =>
+        Effect.sync(() => {
+          timedOut = Option.isNone(result);
+        }),
+      ),
+      Effect.exit,
+      Effect.flatMap(
+        (exit): Effect.Effect<BoundedProviderCallResult<E>, E> =>
+          Exit.isSuccess(exit)
+            ? Effect.succeed(
+                timedOut
+                  ? {
+                      _tag: "timeout",
+                      detail: `${input.label} did not respond within ${Duration.toMillis(input.timeout)}ms.`,
+                    }
+                  : { _tag: "ok" },
+              )
+            : Cause.hasInterruptsOnly(exit.cause)
+              ? Effect.failCause(exit.cause)
+              : Effect.sync((): BoundedProviderCallResult<E> => {
+                  const outcome = classifyProviderAttemptOutcome(exit);
+                  return {
+                    _tag: "failed",
+                    // classify only reports "accepted" for success exits, which
+                    // cannot reach this branch; normalize to keep the type honest.
+                    outcome:
+                      outcome._tag === "accepted"
+                        ? { _tag: "uncertain", detail: Cause.pretty(exit.cause) }
+                        : outcome,
+                    cause: exit.cause,
+                  };
+                }),
+      ),
+    );
+  });
+
 export function isSafeLegacyProviderBlocker(lastError: string | null): boolean {
   const normalized = lastError?.toLowerCase() ?? "";
   return normalized.includes("stdin closed before the frame was written");
@@ -222,6 +285,16 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
+/**
+ * Every provider intent runs under a single process-wide delivery lock, so an
+ * unbounded provider call does not stall one thread — it stalls the reactor,
+ * which back-pressures the orchestration event PubSub and eventually times out
+ * every dispatched command. These deadlines make "hung" degrade into a normal
+ * terminal delivery failure instead of a process-wide deadlock.
+ */
+const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
+const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
+const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -618,6 +691,43 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * Finalizes a turn the provider will never settle on its own. `Stop` is only
+   * trustworthy if every dead-end branch clears the projected active turn:
+   * `settleTurnStateFromSession` finalizes a running turn only when the session
+   * reports `activeTurnId: null`, so leaving it set renders as "Thinking"
+   * forever with no escape hatch left for the user.
+   */
+  const settleInterruptedProviderTurn = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    const session = thread?.session;
+    if (!thread || !session) {
+      return;
+    }
+    if (session.activeTurnId === null && thread.latestTurn?.state !== "running") {
+      return;
+    }
+    yield* setThreadSession({
+      threadId: input.threadId,
+      session: {
+        ...session,
+        threadId: input.threadId,
+        // Already-terminal statuses stay as they are; anything else becomes
+        // `interrupted` so the turn is never reported as a clean completion.
+        status:
+          session.status === "stopped" || session.status === "error"
+            ? session.status
+            : "interrupted",
+        activeTurnId: null,
+        updatedAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
@@ -781,17 +891,29 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const restoreWorkspaceBeforeEditReplay = Effect.fnUntraced(function* (input: {
+  interface EditReplayWorkspaceRestorePlan {
+    readonly cwd: string;
+    readonly checkpointRef: CheckpointRef;
+    readonly targetTurnCount: number;
+  }
+
+  /**
+   * Resolves and validates the workspace restore before the provider
+   * conversation rollback runs, so a missing checkpoint refuses the whole edit
+   * replay instead of leaving the conversation trimmed with the files intact.
+   * Returns `null` when there is legitimately nothing to restore.
+   */
+  const planWorkspaceRestoreForEditReplay = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly removedTurnIds: ReadonlyArray<TurnId>;
   }) {
     if (input.removedTurnIds.length === 0) {
-      return;
+      return null;
     }
 
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
-      return;
+      return null;
     }
 
     const removedTurnIdSet = new Set(input.removedTurnIds);
@@ -799,7 +921,7 @@ const make = Effect.gen(function* () {
       removedTurnIdSet.has(checkpoint.turnId),
     );
     if (removedCheckpoints.length === 0) {
-      return;
+      return null;
     }
 
     const firstRemovedTurnCount = removedCheckpoints.reduce(
@@ -809,11 +931,11 @@ const make = Effect.gen(function* () {
     const targetTurnCount = Math.max(0, firstRemovedTurnCount - 1);
     const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     if (!cwd) {
-      return;
+      return null;
     }
 
     if (!(yield* checkpointStore.isGitRepository(cwd))) {
-      return;
+      return null;
     }
 
     const targetCheckpointRef =
@@ -828,18 +950,44 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd,
-      checkpointRef: targetCheckpointRef,
-      fallbackToHead: targetTurnCount === 0,
-    });
-    if (!restored) {
+    // Turn zero restores with `fallbackToHead`, so a missing baseline ref is
+    // tolerated there; every other turn must have its checkpoint on disk.
+    if (
+      targetTurnCount !== 0 &&
+      !(yield* checkpointStore.hasCheckpointRef({ cwd, checkpointRef: targetCheckpointRef }))
+    ) {
       return yield* Effect.fail(
         new Error(`Filesystem checkpoint is unavailable for edit replay turn ${targetTurnCount}.`),
       );
     }
 
-    clearWorkspaceIndexCache(cwd);
+    return {
+      cwd,
+      checkpointRef: targetCheckpointRef,
+      targetTurnCount,
+    } satisfies EditReplayWorkspaceRestorePlan;
+  });
+
+  const executeEditReplayWorkspaceRestore = Effect.fnUntraced(function* (
+    plan: EditReplayWorkspaceRestorePlan | null,
+  ) {
+    if (plan === null) {
+      return;
+    }
+    const restored = yield* checkpointStore.restoreCheckpoint({
+      cwd: plan.cwd,
+      checkpointRef: plan.checkpointRef,
+      fallbackToHead: plan.targetTurnCount === 0,
+    });
+    if (!restored) {
+      return yield* Effect.fail(
+        new Error(
+          `Filesystem checkpoint for edit replay turn ${plan.targetTurnCount} became unavailable during the rollback.`,
+        ),
+      );
+    }
+
+    clearWorkspaceIndexCache(plan.cwd);
   });
 
   const ensureSessionForThread = Effect.fnUntraced(function* (
@@ -2295,16 +2443,26 @@ const make = Effect.gen(function* () {
   }) {
     const thread = yield* resolveThread(input.threadId);
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
-    if (!thread || !providerThread) {
+    if (!thread) {
       return;
     }
-    if (!providerThread.session || providerThread.session.status === "stopped") {
-      return yield* appendProviderFailureActivity({
+
+    const reportInterruptFailure = (detail: string, settlementStatus?: "uncertain") =>
+      appendProviderFailureActivity({
         threadId: input.threadId,
         kind: "provider.turn.interrupt.failed",
         summary: "Provider turn interrupt failed",
-        detail: "No active provider session is bound to this thread.",
+        detail,
         turnId: input.turnId ?? null,
+        createdAt: input.createdAt,
+        ...(settlementStatus ? { settlementStatus } : {}),
+      });
+
+    if (!providerThread || !providerThread.session || providerThread.session.status === "stopped") {
+      yield* reportInterruptFailure("No active provider session is bound to this thread.");
+      // Nothing is left that could ever emit a terminal event for this turn.
+      return yield* settleInterruptedProviderTurn({
+        threadId: input.threadId,
         createdAt: input.createdAt,
       });
     }
@@ -2313,32 +2471,48 @@ const make = Effect.gen(function* () {
     // exact generation-scoped provider turn and rejects a stale mismatch.
     const providerThreadId = resolveSubagentProviderThreadId(thread.id, providerThread.id);
     const turnId = input.turnId ?? thread.session?.activeTurnId ?? undefined;
-    const exit = yield* Effect.exit(
-      providerService.interruptTurn({
+    const result = yield* runBoundedProviderCall({
+      label: "The provider interrupt",
+      timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+      call: providerService.interruptTurn({
         threadId: providerThread.id,
         ...(turnId ? { turnId } : {}),
         ...(providerThreadId ? { providerThreadId } : {}),
       }),
-    );
-    if (Exit.isSuccess(exit)) {
+    });
+    if (result._tag === "ok") {
       return;
     }
-    // Terminal rejections (validation and friends) would otherwise vanish
-    // silently and leave the stop button looking dead; surface them on the
-    // thread. Retryable/uncertain failures keep propagating so the durable
-    // delivery machinery can quarantine and retry them.
-    const outcome = classifyProviderAttemptOutcome(exit);
-    if (outcome._tag === "rejected") {
-      return yield* appendProviderFailureActivity({
+
+    // An interrupt that timed out or failed uncertainly is escalated to a full
+    // session stop rather than propagated: propagating would quarantine the
+    // thread, which suppresses every later side effect while still leaving the
+    // turn running. The stop path always settles the projection.
+    if (result._tag === "timeout" || result.outcome._tag === "uncertain") {
+      const detail =
+        result._tag === "timeout"
+          ? `${result.detail} Stopping the provider session to settle the turn.`
+          : `${result.outcome.detail}\nStopping the provider session to settle the turn.`;
+      yield* reportInterruptFailure(detail, "uncertain");
+      return yield* processThreadSessionStop({
         threadId: input.threadId,
-        kind: "provider.turn.interrupt.failed",
-        summary: "Provider turn interrupt failed",
-        detail: outcome.detail,
-        turnId: input.turnId ?? null,
         createdAt: input.createdAt,
       });
     }
-    return yield* Effect.failCause(exit.cause);
+
+    // Terminal rejections (validation and friends) would otherwise vanish
+    // silently and leave the stop button looking dead; surface them on the
+    // thread and settle locally, since the provider never accepted the request.
+    if (result.outcome._tag === "rejected") {
+      yield* reportInterruptFailure(result.outcome.detail);
+      return yield* settleInterruptedProviderTurn({
+        threadId: input.threadId,
+        createdAt: input.createdAt,
+      });
+    }
+    // Safe retries (persistence faults) keep propagating so the durable delivery
+    // machinery can retry the whole command.
+    return yield* Effect.failCause(result.cause);
   });
 
   const processTurnInterruptRequested = Effect.fnUntraced(function* (
@@ -2678,16 +2852,20 @@ const make = Effect.gen(function* () {
         ),
       );
     }
+    // Validate the workspace restore before the provider conversation rollback:
+    // once the provider trims its conversation there is no undo, so a missing
+    // checkpoint must refuse the edit replay while nothing has happened yet.
+    const workspaceRestorePlan = yield* planWorkspaceRestoreForEditReplay({
+      threadId: payload.threadId,
+      removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
+    });
     if (options?.skipProviderRollback !== true && editTarget.rollbackTurnCount > 0) {
       yield* rollbackProviderConversationForEdit({
         threadId: payload.threadId,
         numTurns: editTarget.rollbackTurnCount,
       });
     }
-    yield* restoreWorkspaceBeforeEditReplay({
-      threadId: payload.threadId,
-      removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
-    });
+    yield* executeEditReplayWorkspaceRestore(workspaceRestorePlan);
     yield* orchestrationEngine.dispatch({
       type: "thread.conversation.rollback.complete",
       commandId: serverCommandId("message-edit-rollback-complete"),
@@ -2888,11 +3066,35 @@ const make = Effect.gen(function* () {
       providerThread.session &&
       providerThread.session.status !== "stopped"
     ) {
-      yield* providerService.interruptTurn({
-        threadId: providerThread.id,
-        turnId: thread.session.activeTurnId,
-        providerThreadId,
+      const childInterrupt = yield* runBoundedProviderCall({
+        label: "The provider interrupt",
+        timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+        call: providerService.interruptTurn({
+          threadId: providerThread.id,
+          turnId: thread.session.activeTurnId,
+          providerThreadId,
+        }),
       });
+      if (childInterrupt._tag !== "ok") {
+        const detail =
+          childInterrupt._tag === "timeout" ? childInterrupt.detail : childInterrupt.outcome.detail;
+        yield* appendProviderFailureActivity({
+          threadId: thread.id,
+          kind: "provider.turn.interrupt.failed",
+          summary: "Provider turn interrupt failed",
+          detail,
+          turnId: thread.session.activeTurnId,
+          createdAt: input.createdAt,
+          settlementStatus: "uncertain",
+        });
+        // The parent session was never told to end this child turn, so no
+        // terminal child event is coming: settle instead of waiting for one.
+        yield* settleInterruptedProviderTurn({
+          threadId: thread.id,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
 
       yield* setThreadSession({
         threadId: thread.id,
@@ -2913,7 +3115,24 @@ const make = Effect.gen(function* () {
 
     const ownsProviderSession = providerThread !== null && providerThread.id === thread.id;
     if (thread.session && thread.session.status !== "stopped" && ownsProviderSession) {
-      yield* providerService.stopSession({ threadId: providerThread.id });
+      // A stop that cannot finish must still settle the projection: the session
+      // row below is the only thing that releases the turn in the UI.
+      const stopped = yield* runBoundedProviderCall({
+        label: "The provider session stop",
+        timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
+        call: providerService.stopSession({ threadId: providerThread.id }),
+      });
+      if (stopped._tag !== "ok") {
+        yield* appendProviderFailureActivity({
+          threadId: thread.id,
+          kind: "provider.session.stop.failed",
+          summary: "Provider session stop failed",
+          detail: stopped._tag === "timeout" ? stopped.detail : stopped.outcome.detail,
+          turnId: null,
+          createdAt: input.createdAt,
+          settlementStatus: "uncertain",
+        });
+      }
     }
 
     yield* setThreadSession({
@@ -3063,6 +3282,17 @@ const make = Effect.gen(function* () {
 
   const processDomainEventSafely = (event: ProviderIntentEvent) =>
     processDomainEvent(event).pipe(
+      Effect.timeoutOption(PROVIDER_COMMAND_EVENT_TIMEOUT),
+      Effect.flatMap((completed) =>
+        Option.isSome(completed)
+          ? Effect.void
+          : Effect.logError("provider command reactor timed out processing event", {
+              eventType: event.type,
+              eventSequence: event.sequence,
+              threadId: event.payload.threadId,
+              timeoutMs: Duration.toMillis(PROVIDER_COMMAND_EVENT_TIMEOUT),
+            }),
+      ),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
@@ -3092,7 +3322,18 @@ const make = Effect.gen(function* () {
   // canary classes settle before cursor advancement. Remaining classes execute
   // serially in the same source but do not acquire delivery claims yet.
   const startProviderIntentSource = Effect.gen(function* () {
-    const liveEvents = yield* orchestrationEngine.subscribeDomainEvents;
+    const liveEventSource = yield* orchestrationEngine.subscribeDomainEvents;
+    // Detach the engine from this reactor's processing latency. The engine
+    // publishes committed events into a bounded PubSub from an uninterruptible
+    // section of its single command worker, so a subscriber that stalls (a hung
+    // provider call, or just slow boot replay below) back-pressures the worker
+    // and then fails every dispatched command with a dispatch timeout. Draining
+    // into an unbounded queue immediately after subscribing keeps the engine
+    // free while boot work runs; ordering is preserved because the queue is FIFO
+    // and `processOrderedEvent` skips anything at or below the durable cursor.
+    const liveEventQueue = yield* Queue.unbounded<OrchestrationEvent, Cause.Done>();
+    yield* Stream.runIntoQueue(liveEventSource, liveEventQueue).pipe(Effect.forkScoped);
+    const liveEvents = Stream.fromQueue(liveEventQueue);
     const consumerState = yield* deliveryRepository.getConsumerState(
       PROVIDER_COMMAND_REACTOR_CONSUMER,
     );
@@ -3175,6 +3416,9 @@ const make = Effect.gen(function* () {
     const skipQuarantinedSideEffect = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
       if (
         !isProviderSideEffectIntent(event) ||
+        // An interrupt is the escape hatch out of a quarantined thread; skipping
+        // it leaves the turn running with nothing left that could settle it.
+        isQuarantineExemptProviderIntent(event) ||
         !(yield* isThreadQuarantined(event.payload.threadId))
       ) {
         return false;
@@ -3295,11 +3539,25 @@ const make = Effect.gen(function* () {
           );
         }
 
-        const workerExit = yield* processDomainEvent(event).pipe(Effect.exit);
-        if (Exit.isFailure(workerExit) && Cause.hasInterruptsOnly(workerExit.cause)) {
-          return yield* Effect.failCause(workerExit.cause);
+        const workerResult = yield* runBoundedProviderCall({
+          label: `The provider command '${event.type}'`,
+          timeout: PROVIDER_COMMAND_EVENT_TIMEOUT,
+          call: processDomainEvent(event),
+        });
+        if (workerResult._tag === "timeout") {
+          // The delivery lock is single-permit and process-wide, so an attempt
+          // that never returns is a total outage. Settle it as uncertain and
+          // let the thread quarantine rather than block every other thread.
+          yield* settleTerminalFailure({
+            event,
+            claimOwner,
+            state: "uncertain",
+            detail: workerResult.detail,
+          });
+          return;
         }
-        const outcome = classifyProviderAttemptOutcome(workerExit);
+        const outcome: ProviderAttemptOutcome =
+          workerResult._tag === "ok" ? { _tag: "accepted" } : workerResult.outcome;
 
         switch (outcome._tag) {
           case "accepted":

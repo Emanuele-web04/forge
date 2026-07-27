@@ -925,6 +925,10 @@ describe("ProviderCommandReactor", () => {
     expect(consumerState.pipe(Option.getOrThrow).lastAckedSequence).toBe(events.at(-1)!.sequence);
   });
 
+  // The ambiguous command here is a conversation rollback whose provider
+  // interrupt cannot prove it landed. A bare `thread.turn.interrupt` never
+  // quarantines a thread on purpose: it escalates to a full session stop, so
+  // the stop button can never leave a thread blocked (see the exemption below).
   it("REL-01B gate: quarantines one thread and resumes it after explicit safe retry", async () => {
     const failure = new ProviderAdapterRequestError({
       provider: "codex",
@@ -942,6 +946,11 @@ describe("ProviderCommandReactor", () => {
       },
     });
     const now = new Date().toISOString();
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-durable-uncertain"),
+      turnId: asTurnId("turn-durable-rolled-back"),
+      createdAt: now,
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -998,10 +1007,11 @@ describe("ProviderCommandReactor", () => {
 
     await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-durable-uncertain-interrupt"),
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-durable-uncertain-rollback"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-durable-uncertain"),
+        messageId: asMessageId("user-message-durable-uncertain"),
+        numTurns: 1,
         createdAt: now,
       }),
     );
@@ -1022,6 +1032,9 @@ describe("ProviderCommandReactor", () => {
       attemptCount: 1,
     });
 
+    // Interrupts are the escape hatch out of a quarantined thread, so the
+    // blocked thread still runs its own interrupt; the unrelated thread is
+    // untouched by another thread's quarantine.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.interrupt",
@@ -1041,11 +1054,14 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(() => harness.interruptTurn.mock.calls.length === 2);
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 3);
     expect(harness.interruptTurn.mock.calls.map(([request]) => request.threadId)).toEqual([
+      ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
     ]);
+    // The quarantined command itself never ran: no rollback reached the provider.
+    expect(harness.rollbackConversation.mock.calls.length).toBe(0);
     const unrelatedBlocker = await Effect.runPromise(
       harness.deliveryRepository.firstBlockingDeliveryForThread({
         consumerName: "provider-command-reactor.v1",
@@ -1053,6 +1069,18 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     expect(Option.isNone(unrelatedBlocker)).toBe(true);
+
+    // A non-exempt side effect on the blocked thread is skipped while the
+    // quarantine holds, and must be replayed once the thread resumes.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.task.stop",
+        commandId: CommandId.makeUnsafe("cmd-durable-blocked-task-stop"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        taskId: "task-durable-blocked",
+        createdAt: now,
+      }),
+    );
     const highWater = await Effect.runPromise(harness.engine.getEventHighWaterSequence);
     await waitFor(async () => {
       const state = await Effect.runPromise(
@@ -1060,6 +1088,7 @@ describe("ProviderCommandReactor", () => {
       );
       return state.pipe(Option.getOrThrow).lastAckedSequence >= highWater;
     });
+    expect(harness.stopTask.mock.calls.length).toBe(0);
 
     const reconciliation = await Effect.runPromise(
       harness.reactor.reconcileDelivery({
@@ -1078,10 +1107,18 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.interruptTurn.mock.calls.length === 4);
     expect(harness.interruptTurn.mock.calls.map(([request]) => request.threadId)).toEqual([
       ThreadId.makeUnsafe("thread-1"),
+      ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
       ThreadId.makeUnsafe("thread-1"),
-      ThreadId.makeUnsafe("thread-1"),
     ]);
+    // The authorized retry completed the previously blocked rollback and
+    // replayed the side effect the quarantine had skipped.
+    expect(harness.rollbackConversation.mock.calls.length).toBe(1);
+    await waitFor(() => harness.stopTask.mock.calls.length === 1);
+    expect(harness.stopTask.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      taskId: "task-durable-blocked",
+    });
     expect(
       Option.isNone(
         await Effect.runPromise(
@@ -1111,6 +1148,11 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = asTurnId("turn-abandon-source");
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-abandon-source"),
+      turnId: asTurnId("turn-abandon-rolled-back"),
+      createdAt: now,
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1129,12 +1171,15 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+    // A rollback whose provider interrupt cannot prove it landed is ambiguous,
+    // so it quarantines the thread instead of retrying itself.
     await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-abandon-interrupt"),
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-abandon-rollback"),
         threadId,
-        turnId,
+        messageId: asMessageId("user-message-abandon-source"),
+        numTurns: 1,
         createdAt: now,
       }),
     );
@@ -1214,8 +1259,9 @@ describe("ProviderCommandReactor", () => {
     );
 
     expect(reconciled).toMatchObject({ outcome: "abandon", state: "succeeded" });
-    // The abandoned interrupt is never retried; the skipped message is.
+    // The abandoned rollback is never retried; the skipped message is.
     expect(harness.interruptTurn.mock.calls.length).toBe(1);
+    expect(harness.rollbackConversation.mock.calls.length).toBe(0);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(
       Option.isNone(
@@ -1248,6 +1294,11 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = asTurnId("turn-operator-retry");
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-operator-retry"),
+      turnId: asTurnId("turn-operator-retry-rolled-back"),
+      createdAt: now,
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1266,12 +1317,13 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
-    const requested = await Effect.runPromise(
+    await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.makeUnsafe("cmd-operator-retry-interrupt"),
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-operator-retry-rollback"),
         threadId,
-        turnId,
+        messageId: asMessageId("user-message-operator-retry"),
+        numTurns: 1,
         createdAt: now,
       }),
     );
@@ -1287,10 +1339,20 @@ describe("ProviderCommandReactor", () => {
       ),
     );
     expect(interruptAttempts).toBe(1);
+    // The ambiguous command stays unexecuted until an operator decides.
+    expect(harness.rollbackConversation.mock.calls.length).toBe(0);
+    const requested = (
+      await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId,
+        }),
+      )
+    ).pipe(Option.getOrThrow);
 
     const reconciled = await Effect.runPromise(
       harness.reactor.reconcileDelivery({
-        eventSequence: requested.sequence,
+        eventSequence: requested.eventSequence,
         threadId,
         expectedState: "uncertain",
         outcome: "safe_retry",
@@ -1300,12 +1362,13 @@ describe("ProviderCommandReactor", () => {
     );
 
     expect(reconciled).toMatchObject({
-      eventSequence: requested.sequence,
+      eventSequence: requested.eventSequence,
       threadId,
       outcome: "safe_retry",
       state: "succeeded",
     });
     expect(interruptAttempts).toBe(2);
+    expect(harness.rollbackConversation.mock.calls.length).toBe(1);
     const blocker = await Effect.runPromise(
       harness.deliveryRepository.firstBlockingDeliveryForThread({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,

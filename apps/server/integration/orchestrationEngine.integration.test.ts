@@ -862,11 +862,6 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
         true,
       );
       assert.equal(fs.readFileSync(path.join(harness.workspaceDir, "README.md"), "utf8"), "v2\n");
-      yield* waitForSync(
-        () => gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
-        (exists) => !exists,
-        "stale checkpoint ref cleanup after revert completion",
-      );
       assert.equal(
         gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
         false,
@@ -882,7 +877,7 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
 );
 
 it.live(
-  "appends checkpoint.revert.failed activity when revert is requested without an active session",
+  "appends checkpoint.revert.failed activity when revert without an active session finds no checkpoint",
   () =>
     withHarness((harness) =>
       Effect.gen(function* () {
@@ -908,11 +903,12 @@ it.live(
           (activity) => activity.kind === "checkpoint.revert.failed",
         );
         assert.equal(failureActivity !== undefined, true);
+        // A revert dispatched without a live provider session is no longer rejected up
+        // front: it resolves the checkpoint cwd on its own and fails only when the
+        // requested turn has no filesystem checkpoint.
         assert.equal(
-          String(
-            (failureActivity?.payload as { readonly detail?: string } | undefined)?.detail,
-          ).includes("No active provider session"),
-          true,
+          String((failureActivity?.payload as { readonly detail?: string } | undefined)?.detail),
+          "Filesystem checkpoint is unavailable for turn 0.",
         );
       }),
     ),

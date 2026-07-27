@@ -368,6 +368,130 @@ const makeCheckpointStore = Effect.gen(function* () {
       return result.stdout;
     });
 
+  // Rolls the working tree back to `treeOid` for the provided paths without
+  // touching the repository index: paths absent from the tree did not exist
+  // before the aborted apply, so they are deleted instead of restored.
+  const restoreWorktreePathsFromTree = (input: {
+    readonly cwd: string;
+    readonly treeOid: string;
+    readonly paths: ReadonlyArray<string>;
+  }) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.restoreWorktreePathsFromTree";
+      if (input.paths.length === 0) {
+        return;
+      }
+
+      const trackedResult = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["ls-tree", "-r", "--name-only", "-z", input.treeOid, "--", ...input.paths],
+        allowNonZeroExit: true,
+      });
+      const trackedPaths = trackedResult.stdout.split("\0").filter((entry) => entry.length > 0);
+      if (trackedPaths.length > 0) {
+        yield* git.execute({
+          operation,
+          cwd: input.cwd,
+          args: ["restore", "--source", input.treeOid, "--worktree", "--", ...trackedPaths],
+        });
+      }
+
+      const trackedPathSet = new Set(trackedPaths);
+      yield* Effect.forEach(
+        input.paths.filter((entry) => !trackedPathSet.has(entry)),
+        (relativePath) => fs.remove(path.join(input.cwd, relativePath), { force: true }),
+        { discard: true },
+      );
+    });
+
+  // Fallback for undo when the working tree drifted after the checkpoint: a
+  // plain `git apply --reverse` is all-or-nothing, so any unrelated edit in a
+  // touched hunk aborts the whole undo.
+  //
+  // `git apply --3way` implies `--index` and therefore refuses to run while the
+  // working tree differs from the index. Point it at a throwaway index that
+  // mirrors the current working tree so the merge can run; the repository index
+  // stays untouched and the caller's `git reset` remains its only writer.
+  const applyReverseWithThreeWayMerge = (input: {
+    readonly cwd: string;
+    readonly tempDir: string;
+    readonly patchPath: string;
+    readonly affectedPaths: ReadonlyArray<string>;
+    readonly strictApplyStderr: string;
+  }) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.reverseCheckpointDiff";
+      const mergeIndexEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        GIT_INDEX_FILE: path.join(input.tempDir, `undo-index-${randomUUID()}`),
+      };
+
+      const headExists = yield* hasHeadCommit(input.cwd);
+      if (headExists) {
+        yield* git.execute({
+          operation,
+          cwd: input.cwd,
+          args: ["read-tree", "HEAD"],
+          env: mergeIndexEnv,
+        });
+      }
+      yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["add", "-A", "--", "."],
+        env: mergeIndexEnv,
+      });
+      // Snapshot of the pre-attempt working tree, used to undo a conflicted
+      // 3-way apply (which writes conflict markers before failing).
+      const preAttemptTreeResult = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["write-tree"],
+        env: mergeIndexEnv,
+      });
+      const preAttemptTreeOid = preAttemptTreeResult.stdout.trim();
+
+      const applied = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["apply", "--reverse", "--3way", "--whitespace=nowarn", "--", input.patchPath],
+        env: mergeIndexEnv,
+        allowNonZeroExit: true,
+      });
+      if (applied.code === 0) {
+        return;
+      }
+
+      if (preAttemptTreeOid.length > 0) {
+        yield* restoreWorktreePathsFromTree({
+          cwd: input.cwd,
+          treeOid: preAttemptTreeOid,
+          paths: input.affectedPaths,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to roll back a conflicted checkpoint undo", {
+              cwd: input.cwd,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+      }
+
+      return yield* new GitCommandError({
+        operation,
+        command: "git apply --reverse --3way",
+        cwd: input.cwd,
+        detail: [
+          "Undo could not be applied because the workspace changed since this checkpoint.",
+          input.strictApplyStderr.trim(),
+          applied.stderr.trim(),
+        ]
+          .filter((part) => part.length > 0)
+          .join(" "),
+      });
+    });
+
   const reverseCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.reverseCheckpointDiff";
@@ -417,11 +541,21 @@ const makeCheckpointStore = Effect.gen(function* () {
           Effect.gen(function* () {
             const patchPath = path.join(tempDir, "turn.patch");
             yield* fs.writeFileString(patchPath, diff.stdout);
-            yield* git.execute({
+            const strictApply = yield* git.execute({
               operation,
               cwd: input.cwd,
               args: ["apply", "--reverse", "--whitespace=nowarn", "--", patchPath],
+              allowNonZeroExit: true,
             });
+            if (strictApply.code !== 0) {
+              yield* applyReverseWithThreeWayMerge({
+                cwd: input.cwd,
+                tempDir,
+                patchPath,
+                affectedPaths,
+                strictApplyStderr: strictApply.stderr,
+              });
+            }
             if (affectedPaths.length > 0) {
               const resetExit = yield* Effect.exit(
                 git.execute({

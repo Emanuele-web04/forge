@@ -88,7 +88,7 @@ describe("transcript auto-follow signal", () => {
 describe("file undo completion", () => {
   const pending = {
     threadId: ThreadId.makeUnsafe("thread-file-undo"),
-    turnCount: 2,
+    turnCounts: [2],
     existingFailureActivityIds: [],
   };
   const summary = {
@@ -115,6 +115,38 @@ describe("file undo completion", () => {
         thread: {
           ...baseThread,
           turnDiffSummaries: [{ ...summary, files: [] }],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("stays pending until every merged turn in the card has been reverted", () => {
+    const olderSummary = {
+      ...summary,
+      turnId: TurnId.makeUnsafe("turn-1"),
+      checkpointTurnCount: 1,
+      checkpointTurnCounts: [1],
+      files: [],
+    };
+    const multiTurnPending = { ...pending, turnCounts: [2, 1] };
+
+    expect(
+      hasFileUndoSettled({
+        pending: multiTurnPending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [olderSummary, summary],
+          activities: [],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasFileUndoSettled({
+        pending: multiTurnPending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [olderSummary, { ...summary, files: [] }],
+          activities: [],
         },
       }),
     ).toBe(true);

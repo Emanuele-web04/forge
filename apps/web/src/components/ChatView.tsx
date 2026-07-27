@@ -2751,6 +2751,16 @@ export default function ChatView({
   const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
   const isPreparingWorktree = activeWorktreeSetup !== null;
   const hasLiveTurn = phase === "running";
+  // Providers that clear `activeTurnId` on every terminal event (Claude) would
+  // otherwise leave the transcript with no active turn while work is still in
+  // progress, collapsing the newest answer into a closed "Worked for" disclosure.
+  // The latest turn is the transcript's own notion of "current", so fall back to it.
+  const activeTurnIdForTranscript = activeThread?.session?.activeTurnId ?? activeLatestTurnId;
+  // Defence in depth against a session stuck at "running" with no turn to
+  // complete: nothing would ever drain the composer queue, so messages routed
+  // into it would be swallowed. Server-side reconciliation settles these
+  // sessions; this keeps the composer usable until it does.
+  const hasQueueableLiveTurn = hasLiveTurn && activeThread?.session?.activeTurnId != null;
   const {
     automationProjects,
     automationThreads,
@@ -5606,6 +5616,21 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
+  // UI spinning with no explanation, so the stop affordances report it.
+  const onInterruptFromStopControl = useCallback(() => {
+    void onInterrupt().catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Could not stop the current response",
+        description:
+          error instanceof Error
+            ? error.message
+            : "The interrupt request failed. Try again in a moment.",
+      });
+    });
+  }, [onInterrupt]);
+
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
     if (!api || !activeThread || !workflowRunState) return;
@@ -5739,7 +5764,7 @@ export default function ChatView({
       ) {
         event.preventDefault();
         event.stopPropagation();
-        void onInterrupt();
+        onInterruptFromStopControl();
         return;
       }
       // Ctrl+B mirrors the native CLI: background all foreground running
@@ -5996,7 +6021,7 @@ export default function ChatView({
     terminalWorkspaceTerminalTabActive,
     onToggleBrowser,
     onToggleDiff,
-    onInterrupt,
+    onInterruptFromStopControl,
     onSplitSurface,
     showGitActions,
     isGitRepo,
@@ -6187,7 +6212,7 @@ export default function ChatView({
       }
       const confirmed = await api.dialogs.confirm(
         [
-          "Undo the latest file changes shown in this card?",
+          "Undo the file changes shown in this card?",
           "Earlier file changes will remain available to undo.",
           "Messages and provider conversation history will be kept.",
           "This action cannot be undone.",
@@ -6197,32 +6222,38 @@ export default function ChatView({
 
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
-      const turnCount = Math.max(...turnCounts);
+      // The card can merge several turns. The server refuses to undo a turn while
+      // newer file changes are still applied, so revert newest-first and stop at
+      // the first failure rather than leaving the card half-undone silently.
+      const orderedTurnCounts = [...new Set(turnCounts)].toSorted((left, right) => right - left);
       const requestedAt = new Date().toISOString();
       setPendingFileUndo({
         threadId: activeThread.id,
-        turnCount,
+        turnCounts: orderedTurnCounts,
         existingFailureActivityIds: activeThread.activities
           .filter((activity) => activity.kind === "checkpoint.revert.failed")
           .map((activity) => activity.id),
       });
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.checkpoint.revert",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          turnCount,
-          scope: "files",
-          createdAt: requestedAt,
-        });
-      } catch (err) {
+      const dispatchReverts = async () => {
+        for (const turnCount of orderedTurnCounts) {
+          await api.orchestration.dispatchCommand({
+            type: "thread.checkpoint.revert",
+            commandId: newCommandId(),
+            threadId: activeThread.id,
+            turnCount,
+            scope: "files",
+            createdAt: requestedAt,
+          });
+        }
+      };
+      await dispatchReverts().catch((err: unknown) => {
         setPendingFileUndo(null);
         setIsRevertingCheckpoint(false);
         setThreadError(
           activeThread.id,
           err instanceof Error ? err.message : "Failed to undo file changes.",
         );
-      }
+      });
     },
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
@@ -6857,7 +6888,7 @@ export default function ChatView({
         interactionModeForSend = followUp.interactionMode;
         trimmedPromptForSend = followUp.text.trim();
       } else {
-        if (hasLiveTurn && dispatchMode === "queue") {
+        if (hasQueueableLiveTurn && dispatchMode === "queue") {
           clearComposerInput(activeThread.id);
           scheduleComposerFocus();
           enqueueQueuedComposerTurn(activeThread.id, {
@@ -7119,7 +7150,7 @@ export default function ChatView({
       });
     }
 
-    if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
+    if (hasQueueableLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
       clearComposerInput(activeThread.id);
       scheduleComposerFocus();
       const queuedImagesForPersistence = await Promise.all(
@@ -8441,7 +8472,7 @@ export default function ChatView({
 
   useEffect(() => {
     if (
-      hasLiveTurn ||
+      hasQueueableLiveTurn ||
       phase === "disconnected" ||
       isSendBusy ||
       isConnecting ||
@@ -8484,7 +8515,7 @@ export default function ChatView({
     isConnecting,
     isSendBusy,
     pendingUserInputs.length,
-    hasLiveTurn,
+    hasQueueableLiveTurn,
     queuedAutoDispatchTick,
     queuedComposerTurns,
     queuedSteerGate,
@@ -10695,7 +10726,7 @@ export default function ChatView({
                           variant="prominent"
                           size="icon-xs"
                           className="sm:size-[26px]"
-                          onClick={() => void onInterrupt()}
+                          onClick={onInterruptFromStopControl}
                           aria-label="Stop generation"
                           title="Stop the current response. On Mac, press Ctrl+C to interrupt."
                         >
@@ -11107,7 +11138,7 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
-                    activeTurnId={activeThread.session?.activeTurnId ?? null}
+                    activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}

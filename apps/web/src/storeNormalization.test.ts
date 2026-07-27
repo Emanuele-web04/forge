@@ -133,12 +133,12 @@ describe("createThreadActivityAccumulator", () => {
         payload: { requestId: "request-2" },
         sequence: 2,
       }),
-      ...Array.from({ length: 600 }, (_, index) =>
+      ...Array.from({ length: 2100 }, (_, index) =>
         makeActivity({ id: `activity-bulk-${index}`, sequence: 10 + index }),
       ),
     ];
     const batch = Array.from({ length: 25 }, (_, index) =>
-      makeActivity({ id: `activity-batch-${index}`, sequence: 1000 + index }),
+      makeActivity({ id: `activity-batch-${index}`, sequence: 10_000 + index }),
     );
 
     expectEquivalent(previous, batch);

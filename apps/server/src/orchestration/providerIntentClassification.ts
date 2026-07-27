@@ -61,3 +61,11 @@ export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean 
 
 export const isClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
   isReplaySafeClaimedProviderIntent(event) || isProviderSideEffectIntent(event);
+
+/**
+ * Intents that must still execute while a thread is quarantined by a blocking
+ * delivery. Skipping an interrupt is never safe: the turn it would settle keeps
+ * running (or keeps showing as running) with no other way out for the user.
+ */
+export const isQuarantineExemptProviderIntent = (event: ProviderIntentEvent): boolean =>
+  event.type === "thread.turn-interrupt-requested";

@@ -84,7 +84,7 @@ describe("planRestartTurnReconciliation", () => {
     expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([]);
   });
 
-  it("preserves a terminal error session with a retained turn id when no requests are pending", () => {
+  it("clears a dangling active turn id while preserving the terminal error session", () => {
     const threads = [
       makeThread("errored", {
         session: makeSession("errored", {
@@ -96,7 +96,26 @@ describe("planRestartTurnReconciliation", () => {
       }),
     ];
 
-    expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([]);
+    // The turn is already settled, but the retained `activeTurnId` keeps every
+    // "is this thread busy?" check true - so the pointer is cleared without
+    // rewriting the terminal status or dropping the error banner.
+    expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([
+      {
+        type: "thread.session.set",
+        commandId: `restart-reconcile-active-turn:errored:${NOW}`,
+        threadId: "errored",
+        createdAt: NOW,
+        session: {
+          threadId: "errored",
+          status: "error",
+          providerName: "grok",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "runtime exploded",
+          updatedAt: NOW,
+        },
+      },
+    ]);
   });
 
   it("marks an unfinished checkpoint revert as failed after restart", () => {
@@ -168,12 +187,29 @@ describe("planRestartTurnReconciliation", () => {
     expect(commands.map((command) => command.type)).toEqual([
       "thread.activity.append",
       "thread.activity.append",
+      "thread.session.set",
     ]);
     expect(commands[0]).toMatchObject({
       commandId: `restart-reconcile:errored-with-requests:approval:approval-after-error:${NOW}`,
     });
     expect(commands[1]).toMatchObject({
       commandId: `restart-reconcile:errored-with-requests:user-input:input-after-error:${NOW}`,
+    });
+    // Only the stale turn pointer is settled: the error status and its banner survive.
+    expect(commands[2]).toEqual({
+      type: "thread.session.set",
+      commandId: `restart-reconcile-active-turn:errored-with-requests:${NOW}`,
+      threadId: "errored-with-requests",
+      createdAt: NOW,
+      session: {
+        threadId: "errored-with-requests",
+        status: "error",
+        providerName: "grok",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: "runtime exploded",
+        updatedAt: NOW,
+      },
     });
   });
 

@@ -47,6 +47,74 @@ const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
 const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
 export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
 
+export type AcpSessionStartupStep =
+  | "initialize"
+  | "authenticate"
+  | "session/new"
+  | "session/load"
+  | "session/resume"
+  | "startup";
+
+export interface AcpSessionStartupTimeouts {
+  readonly initializeMs: number;
+  readonly authenticateMs: number;
+  readonly sessionSetupMs: number;
+  /** Aggregate cap; deliberately lower than the sum of the per-step budgets. */
+  readonly totalMs: number;
+}
+
+// Every startup step is bounded because an agent can block indefinitely without
+// ever failing: `cursor-agent` authenticates through the macOS Keychain, whose
+// `security` call legitimately takes >10s and hangs forever when a Keychain
+// prompt cannot be displayed. Budgets are generous so slow-but-healthy
+// handshakes still succeed; adapters override them via `startupTimeouts`.
+export const DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS: AcpSessionStartupTimeouts = {
+  initializeMs: 20_000,
+  authenticateMs: 30_000,
+  sessionSetupMs: 20_000,
+  totalMs: 60_000,
+};
+
+/** JSON-RPC implementation-defined server error; not produced by ACP agents. */
+export const ACP_STARTUP_TIMEOUT_ERROR_CODE = -32001;
+
+export interface AcpStartupTimeoutData {
+  readonly reason: "acp-startup-timeout";
+  readonly step: AcpSessionStartupStep;
+  readonly timeoutMs: number;
+}
+
+export function acpStartupTimeoutError(
+  step: AcpSessionStartupStep,
+  timeoutMs: number,
+): AcpErrors.AcpRequestError {
+  const seconds = Math.round(timeoutMs / 1000);
+  return new AcpErrors.AcpRequestError({
+    code: ACP_STARTUP_TIMEOUT_ERROR_CODE,
+    errorMessage:
+      step === "startup"
+        ? `ACP agent did not finish session startup within ${seconds}s.`
+        : `ACP agent did not respond to ${step} within ${seconds}s.`,
+    data: {
+      reason: "acp-startup-timeout",
+      step,
+      timeoutMs,
+    } satisfies AcpStartupTimeoutData,
+  });
+}
+
+export function isAcpStartupTimeoutError(
+  error: unknown,
+): error is AcpErrors.AcpRequestError & { readonly data: AcpStartupTimeoutData } {
+  return (
+    Schema.is(AcpErrors.AcpRequestError)(error) &&
+    error.code === ACP_STARTUP_TIMEOUT_ERROR_CODE &&
+    typeof error.data === "object" &&
+    error.data !== null &&
+    (error.data as { reason?: unknown }).reason === "acp-startup-timeout"
+  );
+}
+
 export interface AcpProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
   readonly stage: "raw" | "decoded";
@@ -127,6 +195,8 @@ export interface AcpSessionRuntimeOptions {
    */
   readonly buildMcpServers?: (initializeResult: Acp.InitializeResponse) => Array<Acp.McpServer>;
   readonly authenticateMeta?: Record<string, unknown>;
+  /** Overrides for {@link DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS}. */
+  readonly startupTimeouts?: Partial<AcpSessionStartupTimeouts>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -947,6 +1017,26 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    const startupTimeouts: AcpSessionStartupTimeouts = {
+      ...DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS,
+      ...options.startupTimeouts,
+    };
+
+    const withStartupTimeout = <A>(
+      step: AcpSessionStartupStep,
+      timeoutMs: number,
+      effect: Effect.Effect<A, AcpErrors.AcpError>,
+    ): Effect.Effect<A, AcpErrors.AcpError> =>
+      effect.pipe(
+        Effect.timeoutOption(timeoutMs),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(acpStartupTimeoutError(step, timeoutMs)),
+            onSome: Effect.succeed,
+          }),
+        ),
+      );
+
     const startOnce = Effect.gen(function* () {
       const initializePayload = {
         protocolVersion: 1,
@@ -954,10 +1044,10 @@ const makeAcpSessionRuntime = (
         clientInfo: options.clientInfo,
       } satisfies Acp.InitializeRequest;
 
-      const initializeResult = yield* runLoggedRequest(
+      const initializeResult = yield* withStartupTimeout(
         "initialize",
-        initializePayload,
-        acp.agent.initialize(initializePayload),
+        startupTimeouts.initializeMs,
+        runLoggedRequest("initialize", initializePayload, acp.agent.initialize(initializePayload)),
       );
       const authMethodId =
         options.resolveAuthMethodId !== undefined
@@ -977,10 +1067,14 @@ const makeAcpSessionRuntime = (
         ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
       } satisfies Acp.AuthenticateRequest;
 
-      yield* runLoggedRequest(
+      yield* withStartupTimeout(
         "authenticate",
-        authenticatePayload,
-        acp.agent.authenticate(authenticatePayload),
+        startupTimeouts.authenticateMs,
+        runLoggedRequest(
+          "authenticate",
+          authenticatePayload,
+          acp.agent.authenticate(authenticatePayload),
+        ),
       );
 
       const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
@@ -1010,10 +1104,14 @@ const makeAcpSessionRuntime = (
           });
         }
         const resumed = yield* supportsResume
-          ? runLoggedRequest(
+          ? withStartupTimeout(
               "session/resume",
-              resumePayload,
-              acp.agent.resumeSession(resumePayload),
+              startupTimeouts.sessionSetupMs,
+              runLoggedRequest(
+                "session/resume",
+                resumePayload,
+                acp.agent.resumeSession(resumePayload),
+              ),
             )
           : (() => {
               const loadPayload = {
@@ -1022,10 +1120,10 @@ const makeAcpSessionRuntime = (
                 mcpServers,
                 ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
               } satisfies Acp.LoadSessionRequest;
-              return runLoggedRequest(
+              return withStartupTimeout(
                 "session/load",
-                loadPayload,
-                acp.agent.loadSession(loadPayload),
+                startupTimeouts.sessionSetupMs,
+                runLoggedRequest("session/load", loadPayload, acp.agent.loadSession(loadPayload)),
               );
             })();
         // Resume/load failure is terminal. Retrying as session/new would create a second
@@ -1043,10 +1141,10 @@ const makeAcpSessionRuntime = (
           mcpServers,
           ...(options.sessionMeta ? { _meta: options.sessionMeta } : {}),
         } satisfies Acp.NewSessionRequest;
-        const created = yield* runLoggedRequest(
+        const created = yield* withStartupTimeout(
           "session/new",
-          createPayload,
-          acp.agent.createSession(createPayload),
+          startupTimeouts.sessionSetupMs,
+          runLoggedRequest("session/new", createPayload, acp.agent.createSession(createPayload)),
         );
         sessionId = created.sessionId;
         sessionSetupResult = created;
@@ -1076,6 +1174,10 @@ const makeAcpSessionRuntime = (
       return nextState;
     });
 
+    // Backstop for a step that stays under its own budget while the handshake as
+    // a whole never settles (e.g. an agent that keeps answering slowly).
+    const boundedStartOnce = withStartupTimeout("startup", startupTimeouts.totalMs, startOnce);
+
     const start = Effect.gen(function* () {
       const deferred = yield* Deferred.make<AcpSessionRuntimeStartResult, AcpErrors.AcpError>();
       const effect = yield* Ref.modify(startStateRef, (state) => {
@@ -1086,7 +1188,7 @@ const makeAcpSessionRuntime = (
             return [Deferred.await(state.deferred), state] as const;
           case "NotStarted":
             return [
-              startOnce.pipe(
+              boundedStartOnce.pipe(
                 Effect.tap((result) =>
                   Ref.set(startStateRef, { _tag: "Started", result }).pipe(
                     Effect.andThen(Deferred.succeed(deferred, result)),

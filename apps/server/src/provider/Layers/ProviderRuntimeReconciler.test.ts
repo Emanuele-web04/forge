@@ -149,15 +149,18 @@ describe("ProviderRuntimeReconcilerLive", () => {
       yield* reconciler.reconcileNow;
     }).pipe(Effect.provide(layer), Effect.runPromise);
 
+    // Session repair dispatches first so a partial failure still unsticks the
+    // thread, and `updatedAt` is the dispatch time rather than the terminal
+    // session's original timestamp (which would freeze the staleness clock).
     expect(commands.map((command) => command.type)).toEqual([
-      "thread.activity.append",
       "thread.session.set",
       "thread.activity.append",
       "thread.session.set",
       "thread.activity.append",
       "thread.session.set",
+      "thread.activity.append",
     ]);
-    const activityCommand = commands[0];
+    const activityCommand = commands[1];
     expect(activityCommand?.type).toBe("thread.activity.append");
     if (activityCommand?.type === "thread.activity.append") {
       expect(activityCommand.activity.kind).toBe("provider.runtime.reconciled");
@@ -166,24 +169,24 @@ describe("ProviderRuntimeReconcilerLive", () => {
         action: "settle-terminal-projection",
       });
     }
-    const sessionCommand = commands[1];
+    const sessionCommand = commands[0];
     expect(sessionCommand?.type).toBe("thread.session.set");
     if (sessionCommand?.type === "thread.session.set") {
       expect(sessionCommand.session).toMatchObject({
         status: "ready",
         activeTurnId: null,
         lastError: null,
-        updatedAt: "2026-07-23T19:00:00.000Z",
       });
+      expect(sessionCommand.session.updatedAt).not.toBe("2026-07-23T19:00:00.000Z");
     }
-    const errorActivityCommand = commands[4];
+    const errorActivityCommand = commands[5];
     expect(errorActivityCommand?.type).toBe("thread.activity.append");
     if (errorActivityCommand?.type === "thread.activity.append") {
       expect(errorActivityCommand.activity.payload).toMatchObject({
         action: "settle-error",
       });
     }
-    const errorSessionCommand = commands[5];
+    const errorSessionCommand = commands[4];
     expect(errorSessionCommand?.type).toBe("thread.session.set");
     if (errorSessionCommand?.type === "thread.session.set") {
       expect(errorSessionCommand.session).toMatchObject({

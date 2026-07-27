@@ -53,7 +53,9 @@ export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
 
 export interface PendingFileUndo {
   readonly threadId: ThreadIdType;
-  readonly turnCount: number;
+  // A changes card can merge several turns; one Undo reverts all of them, so the
+  // request only settles once every targeted turn has settled (or one failed).
+  readonly turnCounts: readonly number[];
   readonly existingFailureActivityIds: readonly string[];
 }
 
@@ -65,10 +67,16 @@ export function hasFileUndoSettled(input: {
     return false;
   }
 
-  const targetSummary = input.thread.turnDiffSummaries.find(
-    (summary) => summary.checkpointTurnCount === input.pending.turnCount,
+  const targetTurnCounts = new Set(input.pending.turnCounts);
+  const targetSummaries = input.thread.turnDiffSummaries.filter(
+    (summary) =>
+      summary.checkpointTurnCount !== undefined &&
+      targetTurnCounts.has(summary.checkpointTurnCount),
   );
-  if (targetSummary?.files.length === 0) {
+  if (
+    targetSummaries.length > 0 &&
+    targetSummaries.every((summary) => summary.files.length === 0)
+  ) {
     return true;
   }
 
@@ -79,11 +87,12 @@ export function hasFileUndoSettled(input: {
       existingFailureActivityIdSet.has(activity.id) ||
       typeof activity.payload !== "object" ||
       activity.payload === null ||
-      !("turnCount" in activity.payload)
+      !("turnCount" in activity.payload) ||
+      typeof activity.payload.turnCount !== "number"
     ) {
       return false;
     }
-    return activity.payload.turnCount === input.pending.turnCount;
+    return targetTurnCounts.has(activity.payload.turnCount);
   });
 }
 

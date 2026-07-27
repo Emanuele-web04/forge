@@ -31,6 +31,7 @@ import {
   ProviderInteractionMode,
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
+  type UserInputQuestion,
 } from "@synara/contracts";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
@@ -295,6 +296,18 @@ const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
+const CODEX_PENDING_SETTLE_DEADLINE_MS = 2_000;
+
+// Bounds the best-effort answers written to parked server requests: a child that
+// stopped draining stdin must never hold session teardown hostage.
+function withCodexPendingSettleDeadline(settle: Promise<unknown>): Promise<void> {
+  return Promise.race([
+    settle.then(() => undefined),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, CODEX_PENDING_SETTLE_DEADLINE_MS).unref();
+    }),
+  ]);
+}
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -709,6 +722,61 @@ function toCodexUserInputAnswers(
       toCodexUserInputAnswer(value),
     ]),
   );
+}
+
+/**
+ * Canonical parse of an `item/tool/requestUserInput` payload into renderable
+ * questions. This is the single source of truth shared by the manager (which
+ * must refuse — and answer — requests it cannot surface) and `CodexAdapter`
+ * (which projects them into `user-input.requested`); if the two ever disagree,
+ * codex parks forever on a question nobody can see.
+ *
+ * Deliberately lenient: an option carries its label as its description when
+ * codex sends none (the UI hides a description identical to the label), and a
+ * question with no options is kept as a free-text prompt.
+ */
+export function parseCodexUserInputQuestions(
+  payload: Record<string, unknown> | undefined,
+): UserInputQuestion[] | undefined {
+  const questions = payload?.questions;
+  if (!Array.isArray(questions)) {
+    return undefined;
+  }
+
+  const parsedQuestions = questions.flatMap((entry): UserInputQuestion[] => {
+    const question = asObject(entry);
+    if (!question) {
+      return [];
+    }
+    const id = asString(question.id)?.trim();
+    const header = asString(question.header)?.trim();
+    const prompt = asString(question.question)?.trim();
+    if (!id || !header || !prompt) {
+      return [];
+    }
+    const options = (Array.isArray(question.options) ? question.options : []).flatMap(
+      (option): Array<{ label: string; description: string }> => {
+        const optionRecord = asObject(option);
+        const label = asString(optionRecord?.label)?.trim();
+        if (!label) {
+          return [];
+        }
+        const description = asString(optionRecord?.description)?.trim();
+        return [{ label, description: description || label }];
+      },
+    );
+    return [
+      {
+        id,
+        header,
+        question: prompt,
+        options,
+        ...(question.multiSelect === true ? { multiSelect: true } : {}),
+      },
+    ];
+  });
+
+  return parsedQuestions.length > 0 ? parsedQuestions : undefined;
 }
 
 export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
@@ -1281,6 +1349,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const context = this.requireSession(threadId);
     const effectiveTurnId = turnId ?? context.session.activeTurnId;
 
+    // Stop must also unpark codex from any question/approval it is blocked on;
+    // turn/interrupt alone does not settle server-initiated requests.
+    await this.settlePendingHumanRequests(context, "turn interrupted");
+
     const providerThreadId =
       providerThreadIdOverride ??
       readResumeThreadId({
@@ -1369,6 +1441,81 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       throw error;
     }
+  }
+
+  /** True while `turnId` is still the session's live turn. */
+  isTurnActive(threadId: ThreadId, turnId: TurnId): boolean {
+    const context = this.sessions.get(threadId);
+    return (
+      context !== undefined &&
+      !context.stopping &&
+      context.session.status === "running" &&
+      context.session.activeTurnId === turnId
+    );
+  }
+
+  /** True while the session is legitimately blocked on a human decision. */
+  isAwaitingHumanResponse(threadId: ThreadId): boolean {
+    const context = this.sessions.get(threadId);
+    return context !== undefined && this.hasPendingHumanRequests(context);
+  }
+
+  /**
+   * Force-settles a turn whose app-server went silent. Best-effort interrupt
+   * first — a child that is merely slow settles itself and emits its own
+   * terminal notification — then a synthetic `turn/aborted` so a wedged child
+   * cannot leave the session "running" forever.
+   */
+  async abandonTurn(threadId: ThreadId, turnId: TurnId, detail: string): Promise<void> {
+    const context = this.sessions.get(threadId);
+    if (!context || !this.isTurnActive(threadId, turnId)) {
+      return;
+    }
+
+    log.warn("abandoning stalled codex turn", { threadId, turnId, detail });
+    try {
+      await this.interruptTurn(threadId, turnId);
+    } catch (error) {
+      log.warn("turn/interrupt failed while abandoning a stalled codex turn", {
+        threadId,
+        turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (!this.isTurnActive(threadId, turnId)) {
+      return;
+    }
+
+    this.clearTaskCompleteFallback(context);
+    context.collabReceiverTurns.clear();
+    context.collabReceiverParents.clear();
+    context.reviewTurnIds.delete(turnId);
+    this.updateSession(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: detail,
+    });
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      ...(context.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: context.lifecycleGeneration }
+        : {}),
+      method: "turn/aborted",
+      turnId,
+      message: detail,
+      payload: {
+        turn: {
+          id: turnId,
+          status: "aborted",
+        },
+        abandonedBy: "turnIdleWatchdog",
+      },
+    });
   }
 
   async readThread(threadId: ThreadId): Promise<CodexThreadSnapshot> {
@@ -1593,9 +1740,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       activeTurnId: context.session.activeTurnId ?? null,
     }).pipe(this.runPromise);
 
-    this.updateSession(context, {
-      status: "running",
-    });
+    // Compaction outside a turn must not claim "running": there is no turn id to
+    // reconcile it against, so the session could never be settled back to ready.
+    if (context.session.activeTurnId !== undefined) {
+      this.updateSession(context, {
+        status: "running",
+      });
+    }
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
       kind: "notification",
@@ -1711,17 +1862,27 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const context = this.requireSession(threadId);
     const pendingRequest = context.pendingUserInputs.get(requestId);
     if (!pendingRequest) {
-      throw new Error(`Unknown pending user input request: ${requestId}`);
+      throw new Error(`Unknown pending user-input request: ${requestId}`);
     }
 
-    context.pendingUserInputs.delete(requestId);
+    await this.resolveUserInputRequest(context, pendingRequest, answers);
+  }
+
+  private async resolveUserInputRequest(
+    context: CodexSessionContext,
+    pendingRequest: PendingUserInputRequest,
+    answers: ProviderUserInputAnswers,
+  ): Promise<void> {
     const codexAnswers = toCodexUserInputAnswers(answers);
+    // The pending entry survives a failed write so the request stays answerable;
+    // dropping it first would strand codex on an id nobody can respond to.
     await this.writeMessage(context, {
       id: pendingRequest.jsonRpcId,
       result: {
         answers: codexAnswers,
       },
     });
+    context.pendingUserInputs.delete(pendingRequest.requestId);
 
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
@@ -1744,6 +1905,65 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         answers: codexAnswers,
       },
     });
+  }
+
+  private hasPendingHumanRequests(context: CodexSessionContext): boolean {
+    return context.pendingApprovals.size > 0 || context.pendingUserInputs.size > 0;
+  }
+
+  /**
+   * Answers every outstanding human-facing server request so an abnormal exit
+   * (stop, interrupt, process exit, idle timeout) can never leave codex parked
+   * on a JSON-RPC id nobody will ever respond to.
+   *
+   * Abnormal paths only: unlike the human-driven responses, an entry is dropped
+   * even when its write fails, because the request is being abandoned and a
+   * surviving entry would only leak into the next turn.
+   */
+  private async settlePendingHumanRequests(
+    context: CodexSessionContext,
+    reason: string,
+  ): Promise<void> {
+    const pendingApprovals = Array.from(context.pendingApprovals.values());
+    const pendingUserInputs = Array.from(context.pendingUserInputs.values());
+    if (pendingApprovals.length === 0 && pendingUserInputs.length === 0) {
+      return;
+    }
+
+    log.info("settling pending codex human requests", {
+      threadId: context.session.threadId,
+      reason,
+      pendingApprovals: pendingApprovals.length,
+      pendingUserInputs: pendingUserInputs.length,
+    });
+
+    for (const pendingRequest of pendingApprovals) {
+      try {
+        await this.resolveApprovalRequest(context, pendingRequest, "cancel");
+      } catch (error) {
+        log.warn("failed to settle pending codex approval request", {
+          threadId: context.session.threadId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        context.pendingApprovals.delete(pendingRequest.requestId);
+      }
+    }
+
+    for (const pendingRequest of pendingUserInputs) {
+      try {
+        await this.resolveUserInputRequest(context, pendingRequest, {});
+      } catch (error) {
+        log.warn("failed to settle pending codex user-input request", {
+          threadId: context.session.threadId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        context.pendingUserInputs.delete(pendingRequest.requestId);
+      }
+    }
   }
 
   private async teardownContextProcess(context: CodexSessionContext): Promise<void> {
@@ -1775,17 +1995,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return context.stopPromise;
     }
 
+    let settleBeforeTeardown: Promise<void> | undefined;
     if (!context.stopping) {
       context.stopping = true;
       this.clearTaskCompleteFallback(context);
       context.gatewaySessionLease?.release();
 
       this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
-      context.pendingApprovals.clear();
-      context.pendingUserInputs.clear();
+      if (this.hasPendingHumanRequests(context)) {
+        // Answer parked server requests while stdin is still writable, then close.
+        // Time-boxed so a child that stopped reading stdin cannot stall teardown.
+        settleBeforeTeardown = withCodexPendingSettleDeadline(
+          this.settlePendingHumanRequests(context, "session stopped"),
+        ).finally(() => {
+          context.stdinWriter?.close(new Error("Codex session stopped"));
+        });
+      } else {
+        context.stdinWriter?.close(new Error("Codex session stopped"));
+      }
 
       context.detachStdout?.();
-      context.stdinWriter?.close(new Error("Codex session stopped"));
 
       // The session becomes unroutable immediately, but remains in the map as a
       // replacement barrier until teardown proves the old process tree exited.
@@ -1798,7 +2027,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.emitLifecycleEvent(context, "session/closed", "Session stopped");
     }
     let stopPromise: Promise<void>;
-    stopPromise = this.teardownContextProcess(context).then(
+    // Teardown starts synchronously unless parked requests still need answering,
+    // so a stop with nothing parked stays as prompt as it was before settling.
+    const teardown = settleBeforeTeardown
+      ? settleBeforeTeardown.then(() => this.teardownContextProcess(context))
+      : this.teardownContextProcess(context);
+    stopPromise = teardown.then(
       () => {
         if (this.sessions.get(threadId) === context) {
           this.sessions.delete(threadId);
@@ -2320,8 +2554,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const exitError = new Error(message);
       context.stdinWriter.close(exitError);
       this.rejectPendingRequests(context, exitError);
-      context.pendingApprovals.clear();
-      context.pendingUserInputs.clear();
+      // The child is gone, so the responses cannot land; settling still clears
+      // the maps and emits the resolutions that close the pending UI cards.
+      void this.settlePendingHumanRequests(context, "session exited");
       this.updateSession(context, {
         status: "closed",
         activeTurnId: undefined,
@@ -2461,6 +2696,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.updateSession(context, {
           resumeCursor: { threadId: startedThreadId },
         });
+      }
+      return;
+    }
+
+    if (notification.method === "thread/compacted") {
+      // Compaction is the only work that can hold the session "running" without
+      // a turn; settle it here so the status cannot stay stuck once it lands.
+      if (
+        !isChildConversation &&
+        context.session.activeTurnId === undefined &&
+        context.session.status === "running"
+      ) {
+        this.updateSession(context, { status: "ready" });
       }
       return;
     }
@@ -2607,9 +2855,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         message !== undefined && !willRetry && isNonFatalCodexErrorMessage(message);
 
       if (willRetry) {
-        this.updateSession(context, {
-          status: "running",
-        });
+        // Only a live turn may restore "running"; otherwise a retryable error
+        // arriving between turns would strand the session with no turn to
+        // reconcile against.
+        if (context.session.activeTurnId !== undefined) {
+          this.updateSession(context, {
+            status: "running",
+          });
+        }
         return;
       }
 
@@ -2664,7 +2917,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context.pendingApprovals.set(requestId, pendingRequest);
     }
 
-    if (request.method === "item/tool/requestUserInput") {
+    const isUserInputRequest = request.method === "item/tool/requestUserInput";
+    // Parsed up front: a request whose questions cannot be rendered must never
+    // become a pending entry, because nothing would ever answer its JSON-RPC id.
+    const userInputQuestions = isUserInputRequest
+      ? parseCodexUserInputQuestions(asObject(request.params))
+      : undefined;
+    if (isUserInputRequest && userInputQuestions) {
       requestId = ApprovalRequestId.makeUnsafe(randomUUID());
       context.pendingUserInputs.set(requestId, {
         requestId,
@@ -2702,7 +2961,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    if (request.method === "item/tool/requestUserInput") {
+    if (isUserInputRequest) {
+      if (userInputQuestions) {
+        // Intentionally unanswered: a human replies through respondToUserInput.
+        return;
+      }
+
+      const detail = "Codex asked a question Synara could not render, so it was declined.";
+      this.emitErrorEvent(context, "item/tool/requestUserInput/unrenderable", detail);
+      await this.writeMessage(context, {
+        id: request.id,
+        error: {
+          code: -32602,
+          message: "item/tool/requestUserInput did not include a renderable question.",
+        },
+      });
       return;
     }
 

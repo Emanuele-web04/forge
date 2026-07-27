@@ -81,6 +81,7 @@ import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
   isThreadDetailRetained,
   resolveThreadDetailSubscriptionLeaseIds,
+  setVisibleThreadDetailIds,
   subscribeThreadDetailEvictions,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
@@ -987,7 +988,10 @@ function EventRouter() {
   useEffect(() => {
     pathnameRef.current = pathname;
     visibleThreadIdsRef.current = subscribedThreadIds;
-  }, [pathname, subscribedThreadIds]);
+    // Retention must know what is on screen: an evicted visible thread keeps its
+    // shell row and renders as an empty conversation until a snapshot lands.
+    setVisibleThreadDetailIds(visibleThreadIds);
+  }, [pathname, subscribedThreadIds, visibleThreadIds]);
 
   useEffect(() => {
     const api = readNativeApi();
@@ -1007,6 +1011,7 @@ function EventRouter() {
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
+    const threadSnapshotRefreshPending = new Set<ThreadId>();
     const threadReplayRequestInFlight = new Set<ThreadId>();
     const threadProjectionReconcileInFlight = new Map<ThreadId, number>();
     const threadProjectionTerminalFencePending = new Set<ThreadId>();
@@ -1019,6 +1024,7 @@ function EventRouter() {
       threadSnapshotSequenceById.delete(threadId);
       pendingThreadEventsById.set(threadId, []);
       threadSnapshotRequestInFlight.delete(threadId);
+      threadSnapshotRefreshPending.delete(threadId);
       threadProjectionReconcileInFlight.delete(threadId);
       threadProjectionTerminalFencePending.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
@@ -1065,6 +1071,7 @@ function EventRouter() {
         threadSnapshotSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
         threadSnapshotRequestInFlight.delete(threadId);
+        threadSnapshotRefreshPending.delete(threadId);
         threadReplayRequestInFlight.delete(threadId);
         threadProjectionReconcileInFlight.delete(threadId);
         threadProjectionTerminalFencePending.delete(threadId);
@@ -1108,6 +1115,10 @@ function EventRouter() {
 
     const refreshThreadSnapshot = (threadId: ThreadId): Promise<void> => {
       if (threadSnapshotRequestInFlight.has(threadId)) {
+        // The in-flight snapshot predates whatever triggered this call (a
+        // retention eviction wiped detail the running request cannot know about),
+        // so re-arm instead of dropping it and leaving the thread blank.
+        threadSnapshotRefreshPending.add(threadId);
         return Promise.resolve();
       }
       threadSnapshotRequestInFlight.add(threadId);
@@ -1122,6 +1133,13 @@ function EventRouter() {
         await api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
       }).finally(() => {
         threadSnapshotRequestInFlight.delete(threadId);
+        if (!threadSnapshotRefreshPending.delete(threadId)) {
+          return;
+        }
+        if (disposed || !subscribedThreadIds.has(threadId)) {
+          return;
+        }
+        void refreshThreadSnapshot(threadId);
       });
     };
 
@@ -1172,6 +1190,7 @@ function EventRouter() {
         threadSnapshotSequenceById.clear();
         pendingThreadEventsById.clear();
         threadSnapshotRequestInFlight.clear();
+        threadSnapshotRefreshPending.clear();
         threadReplayRequestInFlight.clear();
         threadProjectionReconcileInFlight.clear();
         threadProjectionTerminalFencePending.clear();
@@ -1552,6 +1571,7 @@ function EventRouter() {
       // the failure so the thread view stops posing as an empty conversation.
       threadSnapshotSequenceById.delete(threadId);
       threadSnapshotRequestInFlight.delete(threadId);
+      threadSnapshotRefreshPending.delete(threadId);
       useStore.getState().markThreadDetailSyncFailed(threadId);
     });
     // Retention can evict a thread's detail slices while its stream lease stays

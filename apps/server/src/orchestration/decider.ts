@@ -975,6 +975,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
 
+      // Imported messages keep their source-thread timestamps so the transcript still
+      // reads chronologically. They are not activity in this thread: the retention
+      // clock floors on the new thread's own createdAt/updatedAt (see
+      // `threadRetention.getThreadLastActivityMs`) so a handoff of an old
+      // conversation is never born past the retention cutoff.
       const importedMessageEvents: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> =
         command.importedMessages.map((message) => ({
           ...withEventBase({
@@ -1061,6 +1066,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
 
+      // Imported messages keep their source-thread timestamps so the transcript still
+      // reads chronologically. They are not activity in this thread: the retention
+      // clock floors on the new thread's own createdAt/updatedAt (see
+      // `threadRetention.getThreadLastActivityMs`) so a fork of an old conversation
+      // is never born past the retention cutoff.
       const importedMessageEvents: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> =
         command.importedMessages.map((message) => ({
           ...withEventBase({

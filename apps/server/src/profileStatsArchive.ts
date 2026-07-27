@@ -374,9 +374,10 @@ export interface ProfileStatsArchiveShape {
   readonly purgeThreadWithStatsSnapshot: (input: {
     readonly threadId: string;
   }) => Effect.Effect<boolean, unknown>;
-  // Purges every soft-deleted thread that was NOT hidden by the retention
-  // sweep. Catches per-thread failures so one bad thread cannot stall the
-  // sweep; returns how many threads were purged.
+  // Purges every soft-deleted thread that a recorded delete event proves was a
+  // manual delete; retention hides and threads with unknown provenance are kept.
+  // Catches per-thread failures so one bad thread cannot stall the sweep;
+  // returns how many threads were purged.
   readonly purgeSoftDeletedManualThreads: (input?: {
     readonly beforePurge?: (threadId: string) => Effect.Effect<boolean, unknown>;
   }) => Effect.Effect<number, unknown>;
@@ -845,24 +846,22 @@ const makeProfileStatsArchive = Effect.gen(function* () {
     input,
   ) =>
     Effect.gen(function* () {
-      // Classify by the LATEST thread.deleted event: only threads whose most
-      // recent delete came from retention stay hidden-but-kept. Soft-deleted
-      // threads without any recorded delete event (legacy imports) count as
-      // manual deletes and get purged too.
+      // Classify by the LATEST thread.deleted event's command id, which is the
+      // only delete provenance that survives this purge. Purging is irreversible,
+      // so it requires positive evidence of a manual delete: a soft-deleted thread
+      // with no recorded delete event (legacy import, truncated event log) is kept
+      // rather than guessed at.
       const candidates = yield* sql<{ readonly threadId: string }>`
           SELECT t.thread_id AS threadId
           FROM projection_threads t
           WHERE t.deleted_at IS NOT NULL
-            AND COALESCE(
-              (
-                SELECT td.command_id
-                FROM orchestration_events td
-                WHERE td.event_type = 'thread.deleted'
-                  AND td.stream_id = t.thread_id
-                ORDER BY td.sequence DESC
-                LIMIT 1
-              ),
-              ''
+            AND (
+              SELECT td.command_id
+              FROM orchestration_events td
+              WHERE td.event_type = 'thread.deleted'
+                AND td.stream_id = t.thread_id
+              ORDER BY td.sequence DESC
+              LIMIT 1
             ) NOT LIKE ${`${THREAD_RETENTION_COMMAND_ID_PREFIX}%`}
         `;
 

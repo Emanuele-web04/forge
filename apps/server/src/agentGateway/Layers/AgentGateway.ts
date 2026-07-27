@@ -440,7 +440,9 @@ export const makeAgentGateway = Effect.gen(function* () {
         const target = yield* requireThreadShell(threadId);
         // Stopping a higher-privileged thread's work is still driving it.
         yield* assertCallerMayDriveThread(caller, target);
-        yield* orchestrationEngine
+        const activeTurnId = target.session?.activeTurnId ?? null;
+        const hadActiveTurn = activeTurnId !== null || target.latestTurn?.state === "running";
+        const dispatched = yield* orchestrationEngine
           .dispatch({
             type: "thread.turn.interrupt",
             commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:interrupt`),
@@ -448,7 +450,16 @@ export const makeAgentGateway = Effect.gen(function* () {
             createdAt: isoNow(),
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-        return mcpToolResultJson({ threadId: target.id, interrupted: true });
+        // The interrupt is only *requested* here: the provider settles the turn
+        // asynchronously. Reporting a constant `interrupted: true` told callers
+        // the turn had stopped even when there was no turn to stop.
+        return mcpToolResultJson({
+          threadId: target.id,
+          interruptRequested: true,
+          hadActiveTurn,
+          activeTurnId,
+          eventSequence: dispatched.sequence,
+        });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 

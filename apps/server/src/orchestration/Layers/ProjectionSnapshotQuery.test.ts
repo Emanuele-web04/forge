@@ -628,12 +628,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(snapshotActivities[1]?.id, asEventId("activity-5"));
       assert.equal(snapshotActivities.at(-1)?.id, asEventId("activity-504"));
 
+      // Thread detail keeps a far deeper window (2_000) than the bulk snapshot,
+      // so the same 506-row thread is returned whole - including the activities
+      // the snapshot had to drop.
       const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-activity-cap"));
       assert.isTrue(Option.isSome(detail));
       const detailActivities = Option.isSome(detail) ? detail.value.activities : [];
-      assert.equal(detailActivities.length, 501);
+      assert.equal(detailActivities.length, 506);
       assert.equal(detailActivities[0]?.id, asEventId("approval-old"));
-      assert.equal(detailActivities[1]?.id, asEventId("activity-5"));
+      assert.equal(detailActivities[1]?.id, asEventId("activity-0"));
       assert.equal(detailActivities.at(-1)?.id, asEventId("activity-504"));
 
       yield* sql`
@@ -717,9 +720,156 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const resolvedDetailActivities = Option.isSome(resolvedDetail)
         ? resolvedDetail.value.activities
         : [];
-      assert.equal(resolvedDetailActivities.length, 500);
-      assert.equal(resolvedDetailActivities[0]?.id, asEventId("resolved-activity-5"));
+      assert.equal(resolvedDetailActivities.length, 507);
+      assert.equal(resolvedDetailActivities[0]?.id, asEventId("approval-old"));
+      assert.equal(resolvedDetailActivities[1]?.id, asEventId("approval-resolved-old"));
       assert.equal(resolvedDetailActivities.at(-1)?.id, asEventId("resolved-activity-504"));
+    }),
+  );
+
+  it.effect("aligns the thread detail activity window to a turn boundary", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-turn-window', 'Turn window', '/tmp/turn-window',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-turn-window', 'project-turn-window', 'Turn Window',
+          '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+          '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:00.000Z', NULL
+        )
+      `;
+
+      // 2_150 activities across three turns, so the raw 2_000-row detail cap
+      // falls at sequence 151 - in the middle of `turn-cutoff` (51..250):
+      //   turn-old    -> sequence 1..50      (fully outside the window)
+      //   turn-cutoff -> sequence 51..250    (straddles the cap)
+      //   turn-recent -> sequence 251..2150
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary,
+          payload_json, sequence, created_at
+        )
+        WITH RECURSIVE sequences(n) AS (
+          SELECT 1 UNION ALL SELECT n + 1 FROM sequences WHERE n < 2150
+        )
+        SELECT
+          'activity-' || n,
+          'thread-turn-window',
+          CASE
+            WHEN n <= 50 THEN 'turn-old'
+            WHEN n <= 250 THEN 'turn-cutoff'
+            ELSE 'turn-recent'
+          END,
+          'tool',
+          'tool.completed',
+          'Tool completed',
+          '{"stage":"completed"}',
+          n,
+          '2026-02-24T00:00:00.000Z'
+        FROM sequences
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-turn-window"));
+      assert.isTrue(Option.isSome(detail));
+      const detailActivities = Option.isSome(detail) ? detail.value.activities : [];
+
+      // The partial `turn-cutoff` is dropped rather than extending the query
+      // beyond its budget. The complete recent turn remains intact.
+      assert.equal(detailActivities.length, 1_900);
+      assert.equal(detailActivities[0]?.id, asEventId("activity-251"));
+      assert.equal(detailActivities[0]?.turnId, asTurnId("turn-recent"));
+      assert.equal(detailActivities.at(-1)?.id, asEventId("activity-2150"));
+      assert.equal(
+        detailActivities.filter((activity) => activity.turnId === asTurnId("turn-cutoff")).length,
+        0,
+      );
+      // Turns entirely older than the window are still dropped.
+      assert.isFalse(detailActivities.some((activity) => activity.turnId === asTurnId("turn-old")));
+
+      // The bulk snapshot keeps its own, much smaller cap and does not turn-align.
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      const snapshotActivities = snapshot.threads[0]?.activities ?? [];
+      assert.equal(snapshotActivities.length, 500);
+      assert.equal(snapshotActivities[0]?.id, asEventId("activity-1651"));
+      assert.equal(snapshotActivities.at(-1)?.id, asEventId("activity-2150"));
+    }),
+  );
+
+  it.effect("keeps a single oversized turn capped instead of dropping the whole window", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-oversized-turn', 'Oversized turn', '/tmp/oversized-turn',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-oversized-turn', 'project-oversized-turn', 'Oversized Turn',
+          '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+          '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary,
+          payload_json, sequence, created_at
+        )
+        WITH RECURSIVE sequences(n) AS (
+          SELECT 1 UNION ALL SELECT n + 1 FROM sequences WHERE n < 2150
+        )
+        SELECT
+          'oversized-activity-' || n,
+          'thread-oversized-turn',
+          'turn-oversized',
+          'tool',
+          'tool.completed',
+          'Tool completed',
+          '{"stage":"completed"}',
+          n,
+          '2026-02-24T00:00:00.000Z'
+        FROM sequences
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-oversized-turn"));
+      assert.isTrue(Option.isSome(detail));
+      const activities = Option.isSome(detail) ? detail.value.activities : [];
+
+      assert.equal(activities.length, 2_000);
+      assert.equal(activities[0]?.id, asEventId("oversized-activity-151"));
+      assert.equal(activities.at(-1)?.id, asEventId("oversized-activity-2150"));
     }),
   );
 
@@ -1966,7 +2116,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
-  it.effect("lists only stale active thread ids for runtime reconciliation", () =>
+  it.effect("lists only stale active thread ids for reconciliation, oldest first", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
@@ -2093,10 +2243,29 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       const candidates = yield* snapshotQuery.listStaleInFlightThreadIds({
         updatedBefore: "2026-07-23T09:00:00.000Z",
-        limit: 1,
+        limit: 10,
       });
 
-      assert.deepEqual(candidates, [ThreadId.makeUnsafe("thread-stale-running")]);
+      // Candidacy covers every thread whose projection still claims an active
+      // turn past the staleness cutoff, including threads whose runtime binding
+      // row is already gone (`thread-unbound-oldest`) and archived threads
+      // (`thread-archived-running`) - archiving does not settle a live turn.
+      // Excluded: `thread-fresh-running` (updated after the cutoff),
+      // `thread-settled` (no active turn), and `thread-queued-oldest` (a pending
+      // turn with no active turn id on either the session or the runtime row).
+      assert.deepEqual(candidates, [
+        ThreadId.makeUnsafe("thread-unbound-oldest"),
+        ThreadId.makeUnsafe("thread-archived-running"),
+        ThreadId.makeUnsafe("thread-stale-running"),
+      ]);
+
+      // Oldest-first ordering, so a bounded sweep drains the longest-stuck
+      // threads first.
+      const oldestCandidate = yield* snapshotQuery.listStaleInFlightThreadIds({
+        updatedBefore: "2026-07-23T09:00:00.000Z",
+        limit: 1,
+      });
+      assert.deepEqual(oldestCandidate, [ThreadId.makeUnsafe("thread-unbound-oldest")]);
     }),
   );
 

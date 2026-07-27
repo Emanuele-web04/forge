@@ -235,6 +235,61 @@ const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
   contextWindowOptions: [],
 };
 
+// Cursor's live catalog is discovered per session (see CursorAdapter.listModels);
+// these entries are the cold-start fallback and mirror the base model ids the
+// `cursor-agent` ACP session advertises, with fast/effort/thinking expressed as
+// per-model controls rather than the CLI's expanded `-fast`/`-high` slugs.
+const CURSOR_EFFORT_LABELS = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+} as const;
+
+type CursorEffortValue = keyof typeof CURSOR_EFFORT_LABELS;
+
+function cursorCapabilities(input?: {
+  readonly efforts?: readonly CursorEffortValue[];
+  readonly defaultEffort?: CursorEffortValue;
+  readonly fast?: boolean;
+  readonly thinking?: boolean;
+}): ModelCapabilities {
+  const efforts = input?.efforts ?? [];
+  const defaultEffort =
+    input?.defaultEffort ?? (efforts.includes("high") ? "high" : efforts[efforts.length - 1]);
+  return {
+    reasoningEffortLevels: efforts.map((value) => ({
+      value,
+      label: CURSOR_EFFORT_LABELS[value],
+      ...(value === defaultEffort ? { isDefault: true as const } : {}),
+    })),
+    supportsFastMode: input?.fast ?? false,
+    supportsThinkingToggle: input?.thinking ?? false,
+    promptInjectedEffortLevels: [],
+    contextWindowOptions: [],
+  };
+}
+
+const CURSOR_CLAUDE_FULL_CAPABILITIES = cursorCapabilities({
+  efforts: ["low", "medium", "high", "xhigh", "max"],
+  thinking: true,
+  fast: true,
+});
+
+const CURSOR_CLAUDE_NO_FAST_CAPABILITIES = cursorCapabilities({
+  efforts: ["low", "medium", "high", "xhigh", "max"],
+  thinking: true,
+});
+
+const CURSOR_GPT_5_6_CAPABILITIES = cursorCapabilities({
+  efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+  defaultEffort: "medium",
+  fast: true,
+});
+
 function droidCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
   return {
     reasoningEffortLevels,
@@ -773,58 +828,187 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   pi: [],
   cursor: [
     {
+      // Cursor exposes auto as the `default` model id over ACP; the adapter maps it.
       slug: "auto",
       name: "Auto",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: cursorCapabilities(),
     },
     {
-      slug: "composer-2",
-      name: "Composer 2",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      slug: "composer-2.5",
+      name: "Composer 2.5",
+      capabilities: cursorCapabilities({ fast: true }),
+    },
+    {
+      slug: "claude-opus-5",
+      name: "Claude Opus 5",
+      capabilities: CURSOR_CLAUDE_FULL_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      capabilities: CURSOR_CLAUDE_FULL_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+      capabilities: CURSOR_CLAUDE_FULL_CAPABILITIES,
     },
     {
       slug: "claude-opus-4-6",
       name: "Claude Opus 4.6",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "max", label: "Max" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: cursorCapabilities({ efforts: ["high", "max"], thinking: true }),
+    },
+    {
+      slug: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      capabilities: cursorCapabilities({ efforts: ["high"], thinking: true }),
+    },
+    {
+      slug: "claude-fable-5",
+      name: "Claude Fable 5",
+      capabilities: CURSOR_CLAUDE_NO_FAST_CAPABILITIES,
+    },
+    {
+      slug: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      capabilities: CURSOR_CLAUDE_NO_FAST_CAPABILITIES,
+    },
+    {
+      slug: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      capabilities: cursorCapabilities({ efforts: ["medium"], thinking: true }),
+    },
+    {
+      slug: "claude-sonnet-4-5",
+      name: "Claude Sonnet 4.5",
+      capabilities: cursorCapabilities({ thinking: true }),
+    },
+    {
+      slug: "claude-sonnet-4",
+      name: "Claude Sonnet 4",
+      capabilities: cursorCapabilities({ thinking: true }),
+    },
+    {
+      slug: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      capabilities: cursorCapabilities(),
+    },
+    {
+      slug: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      capabilities: CURSOR_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      capabilities: CURSOR_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      capabilities: CURSOR_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.5",
+      name: "GPT-5.5",
+      capabilities: cursorCapabilities({
+        efforts: ["none", "low", "medium", "high", "xhigh"],
+        defaultEffort: "medium",
+        fast: true,
+      }),
+    },
+    {
+      slug: "gpt-5.4",
+      name: "GPT-5.4",
+      capabilities: cursorCapabilities({
+        efforts: ["none", "low", "medium", "high", "xhigh"],
+        defaultEffort: "medium",
+        fast: true,
+      }),
+    },
+    {
+      slug: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      capabilities: cursorCapabilities({
+        efforts: ["none", "low", "medium", "high", "xhigh"],
+        defaultEffort: "medium",
+      }),
+    },
+    {
+      slug: "gpt-5.4-nano",
+      name: "GPT-5.4 Nano",
+      capabilities: cursorCapabilities({
+        efforts: ["none", "low", "medium", "high", "xhigh"],
+        defaultEffort: "medium",
+      }),
     },
     {
       slug: "gpt-5.3-codex",
       name: "GPT-5.3 Codex",
-      capabilities: CODEX_GPT_5_CAPABILITIES,
+      capabilities: cursorCapabilities({
+        efforts: ["low", "medium", "high", "xhigh"],
+        fast: true,
+      }),
     },
     {
-      slug: "gemini-3-pro",
-      name: "Gemini 3 Pro",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      slug: "gpt-5.2",
+      name: "GPT-5.2",
+      capabilities: cursorCapabilities({
+        efforts: ["low", "medium", "high", "xhigh"],
+        fast: true,
+      }),
+    },
+    {
+      slug: "gpt-5.1",
+      name: "GPT-5.1",
+      capabilities: cursorCapabilities({ efforts: ["low", "medium", "high"] }),
+    },
+    {
+      slug: "gpt-5-mini",
+      name: "GPT-5 Mini",
+      capabilities: cursorCapabilities(),
+    },
+    {
+      slug: "grok-4.5",
+      name: "Grok 4.5",
+      capabilities: cursorCapabilities({ efforts: ["low", "medium", "high"], fast: true }),
+    },
+    {
+      slug: "gemini-3.1-pro",
+      name: "Gemini 3.1 Pro",
+      capabilities: cursorCapabilities(),
+    },
+    {
+      slug: "gemini-3.6-flash",
+      name: "Gemini 3.6 Flash",
+      capabilities: cursorCapabilities({
+        efforts: ["minimal", "low", "medium", "high"],
+      }),
+    },
+    {
+      slug: "gemini-3.5-flash",
+      name: "Gemini 3.5 Flash",
+      capabilities: cursorCapabilities(),
+    },
+    {
+      slug: "gemini-3-flash",
+      name: "Gemini 3 Flash",
+      capabilities: cursorCapabilities(),
+    },
+    {
+      slug: "gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      capabilities: cursorCapabilities(),
+    },
+    {
+      slug: "kimi-k2.7-code",
+      name: "Kimi K2.7 Code",
+      capabilities: cursorCapabilities(),
+    },
+    {
+      slug: "glm-5.2",
+      name: "GLM-5.2",
+      capabilities: cursorCapabilities({ efforts: ["high", "max"] }),
     },
   ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
@@ -889,17 +1073,38 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "claude-haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-4-5-20251001": "claude-haiku-4-5",
   },
+  // Retired Cursor slugs are remapped, not dropped: the agent answers -32602 for
+  // ids it no longer serves, so persisted selections must migrate to live ones.
   cursor: {
     auto: "auto",
-    composer: "composer-2",
-    "composer-2": "composer-2",
-    "composer-1.5": "composer-1.5",
-    "composer-1": "composer-1.5",
+    default: "auto",
+    composer: "composer-2.5",
+    "composer-2.5": "composer-2.5",
+    "composer-2": "composer-2.5",
+    opus: "claude-opus-5",
+    "opus-5": "claude-opus-5",
+    "opus-4.8": "claude-opus-4-8",
+    "opus-4.7": "claude-opus-4-7",
     "opus-4.6": "claude-opus-4-6",
     "opus-4.6-thinking": "claude-opus-4-6",
+    sonnet: "claude-sonnet-5",
+    "sonnet-5": "claude-sonnet-5",
+    "sonnet-4.6": "claude-sonnet-4-6",
+    fable: "claude-fable-5",
+    "fable-5": "claude-fable-5",
+    sol: "gpt-5.6-sol",
+    "5.6": "gpt-5.6-sol",
     "gpt-5.3": "gpt-5.3-codex",
     "codex-5.3": "gpt-5.3-codex",
-    "gemini-3": "gemini-3-pro",
+    grok: "grok-4.5",
+    "grok-4.5": "grok-4.5",
+    "cursor-grok-4.5": "grok-4.5",
+    gemini: "gemini-3.1-pro",
+    "gemini-3": "gemini-3.1-pro",
+    "gemini-3-pro": "gemini-3.1-pro",
+    "gemini-3.1-pro-preview": "gemini-3.1-pro",
+    glm: "glm-5.2",
+    kimi: "kimi-k2.7-code",
   },
   antigravity: {},
   droid: {

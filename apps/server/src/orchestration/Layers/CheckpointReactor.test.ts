@@ -75,7 +75,6 @@ function createProviderServiceHarness(
   providerName: ProviderSession["provider"] = "codex",
   providerStatus: ProviderSession["status"] = "ready",
   activeTurnId?: TurnId,
-  recoverStoppedSession = false,
 ) {
   const now = new Date().toISOString();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
@@ -85,19 +84,20 @@ function createProviderServiceHarness(
 
   const unsupported = <A>() =>
     Effect.die(new Error("Unsupported provider call in test")) as Effect.Effect<A, never>;
-  const session = {
-    provider: providerName,
-    status: providerStatus,
-    runtimeMode: "full-access",
-    threadId: ThreadId.makeUnsafe("thread-1"),
-    cwd: sessionCwd,
-    ...(activeTurnId !== undefined ? { activeTurnId } : {}),
-    createdAt: now,
-    updatedAt: now,
-  } satisfies ProviderSession;
   const listSessions = () =>
     hasSession
-      ? Effect.succeed([session] satisfies ReadonlyArray<ProviderSession>)
+      ? Effect.succeed([
+          {
+            provider: providerName,
+            status: providerStatus,
+            runtimeMode: "full-access",
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            cwd: sessionCwd,
+            ...(activeTurnId !== undefined ? { activeTurnId } : {}),
+            createdAt: now,
+            updatedAt: now,
+          },
+        ] satisfies ReadonlyArray<ProviderSession>)
       : Effect.succeed([] as ReadonlyArray<ProviderSession>);
   const service: ProviderServiceShape = {
     startSession: () => unsupported(),
@@ -113,11 +113,6 @@ function createProviderServiceHarness(
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions,
-    ...(recoverStoppedSession
-      ? {
-          ensureRuntimeSession: () => Effect.succeed(session),
-        }
-      : {}),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     rollbackConversation,
     compactThread: () => unsupported(),
@@ -246,21 +241,6 @@ async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 30_000)
   return poll();
 }
 
-async function waitForGitRefMissing(cwd: string, ref: string, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  const poll = async (): Promise<void> => {
-    if (!gitRefExists(cwd, ref)) {
-      return;
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for git ref '${ref}' to be deleted.`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    return poll();
-  };
-  return poll();
-}
-
 describe("CheckpointReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
     OrchestrationEngineService | CheckpointReactor | CheckpointStore,
@@ -296,7 +276,6 @@ describe("CheckpointReactor", () => {
     readonly providerStatus?: ProviderSession["status"];
     readonly providerActiveTurnId?: TurnId;
     readonly hasInitialCommit?: boolean;
-    readonly recoverStoppedSession?: boolean;
   }) {
     const cwd = createGitRepository(options?.hasInitialCommit ?? true);
     tempDirs.push(cwd);
@@ -307,7 +286,6 @@ describe("CheckpointReactor", () => {
       options?.providerName ?? "codex",
       options?.providerStatus ?? "ready",
       options?.providerActiveTurnId,
-      options?.recoverStoppedSession ?? false,
     );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -1315,16 +1293,17 @@ describe("CheckpointReactor", () => {
   });
 
   it("continues processing runtime events after a single checkpoint runtime failure", async () => {
-    const nonRepositorySessionCwd = fs.mkdtempSync(
-      path.join(os.tmpdir(), "synara-checkpoint-runtime-non-repo-"),
-    );
-    tempDirs.push(nonRepositorySessionCwd);
-
-    const harness = await createHarness({
-      seedFilesystemCheckpoints: false,
-      providerSessionCwd: nonRepositorySessionCwd,
-    });
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const createdAt = new Date().toISOString();
+
+    // Force the completion capture to fail inside git: a ref nested under the
+    // turn-1 checkpoint ref makes `git update-ref` refuse to create it, while
+    // every other checkpoint ref in the family stays writable.
+    runGit(harness.cwd, [
+      "update-ref",
+      `${checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)}/blocker`,
+      "HEAD",
+    ]);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1365,6 +1344,15 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-after-runtime-failure"),
     });
 
+    // The first event must genuinely fail, otherwise this test proves nothing.
+    await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    );
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)),
+    ).toBe(false);
+
+    // The second event is still processed by the same worker.
     await waitForGitRefExists(
       harness.cwd,
       checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
@@ -1931,148 +1919,9 @@ describe("CheckpointReactor", () => {
       numTurns: 1,
     });
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
-    await waitForGitRefMissing(
-      harness.cwd,
-      checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
-    );
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
     ).toBe(false);
-  });
-
-  it("resumes an idle-stopped provider before reverting the thread", async () => {
-    const harness = await createHarness({
-      hasSession: false,
-      recoverStoppedSession: true,
-    });
-    const createdAt = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-idle-revert-session-set"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "stopped",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-    for (const turnCount of [1, 2] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.diff.complete",
-          commandId: CommandId.makeUnsafe(`cmd-idle-revert-diff-${turnCount}`),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          turnId: asTurnId(`turn-${turnCount}`),
-          completedAt: createdAt,
-          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
-          status: "ready",
-          files: [],
-          checkpointTurnCount: turnCount,
-          createdAt,
-        }),
-      );
-    }
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.checkpoint.revert",
-        commandId: CommandId.makeUnsafe("cmd-idle-revert"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnCount: 1,
-        scope: "thread",
-        createdAt,
-      }),
-    );
-
-    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
-    expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      numTurns: 1,
-    });
-    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
-  });
-
-  it("restores the workspace when provider conversation rollback fails", async () => {
-    const harness = await createHarness();
-    const createdAt = new Date().toISOString();
-    fs.writeFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "preserve\n", "utf8");
-    harness.provider.rollbackConversation.mockImplementationOnce(() =>
-      Effect.die(new Error("simulated provider rollback failure")),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-compensated-revert-session-set"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      }),
-    );
-    for (const turnCount of [1, 2] as const) {
-      await Effect.runPromise(
-        harness.engine.dispatch({
-          type: "thread.turn.diff.complete",
-          commandId: CommandId.makeUnsafe(`cmd-compensated-revert-diff-${turnCount}`),
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          turnId: asTurnId(`turn-${turnCount}`),
-          completedAt: createdAt,
-          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
-          status: "ready",
-          files: [],
-          checkpointTurnCount: turnCount,
-          createdAt,
-        }),
-      );
-    }
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.checkpoint.revert",
-        commandId: CommandId.makeUnsafe("cmd-compensated-revert"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnCount: 1,
-        scope: "thread",
-        createdAt,
-      }),
-    );
-
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
-    );
-    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
-      true,
-    );
-    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
-    expect(fs.readFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "utf8")).toBe(
-      "preserve\n",
-    );
-    expect(
-      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
-    ).toBe(true);
-    expect(
-      runGit(harness.cwd, [
-        "for-each-ref",
-        "--format=%(refname)",
-        "refs/synara/checkpoints/revert-rescue",
-      ]),
-    ).toBe("");
   });
 
   it("restores turn zero from the persisted checkpoint family", async () => {

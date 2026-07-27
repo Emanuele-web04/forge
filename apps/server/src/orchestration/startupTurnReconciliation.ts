@@ -79,7 +79,17 @@ export interface ReconcilableThread {
  * stopped/error with no active turn and no open turn) is left untouched.
  */
 function needsRestartReconciliation(thread: ReconcilableThread): boolean {
-  return threadHasInFlightTurn(thread);
+  return threadHasInFlightTurn(thread) || hasDanglingActiveTurn(thread);
+}
+
+/**
+ * A session that already reports a terminal status while still naming an active
+ * turn is invisible to `threadHasInFlightTurn` (its turn has been settled), but
+ * the dangling `activeTurnId` keeps every "is this thread busy?" check true, so
+ * the composer stays blocked and Stop stays armed with nothing to stop.
+ */
+function hasDanglingActiveTurn(thread: ReconcilableThread): boolean {
+  return thread.session?.activeTurnId != null && !threadHasInFlightTurn(thread);
 }
 
 function planStalePendingRequestCommands(input: {
@@ -202,6 +212,26 @@ export function planRestartTurnReconciliation(input: {
       commands.push(staleCheckpointRevertCommand);
     }
     if (!hasInFlightTurn) {
+      if (!hasDanglingActiveTurn(thread)) {
+        continue;
+      }
+      // Preserve the terminal status (and its banner) - only the stale active
+      // turn pointer is wrong here.
+      commands.push({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe(`restart-reconcile-active-turn:${thread.id}:${input.now}`),
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: thread.session?.status ?? "interrupted",
+          providerName: thread.session?.providerName ?? null,
+          runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
+          activeTurnId: null,
+          lastError: thread.session?.lastError ?? null,
+          updatedAt: input.now,
+        },
+        createdAt: input.now,
+      });
       continue;
     }
     commands.push({

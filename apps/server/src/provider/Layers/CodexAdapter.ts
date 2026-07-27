@@ -54,9 +54,14 @@ import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.t
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   CodexAppServerManager,
+  parseCodexUserInputQuestions,
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
 } from "../../codexAppServerManager.ts";
+import {
+  evaluateAcpTurnIdleTick,
+  resolveAcpTurnIdleTimeoutMs,
+} from "../acp/AcpTurnIdleWatchdog.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { acquireAgentGatewaySessionLease } from "../../agentGateway/sessionLease.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
@@ -86,6 +91,22 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
+
+// Backstop for an alive-but-silent codex app-server: if a turn produces no
+// activity at all for this long, abort it instead of showing "Working" forever.
+// Every turn-scoped event (reasoning, tool output, deltas) resets the clock and
+// a pending question/approval pauses it, so only a wedged child trips this.
+// Generous by design; override with SYNARA_CODEX_TURN_IDLE_TIMEOUT_MS.
+const CODEX_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
+  envVar: "SYNARA_CODEX_TURN_IDLE_TIMEOUT_MS",
+  defaultMs: 900_000,
+});
+const CODEX_TURN_WATCHDOG_INTERVAL_MS = 15_000;
+
+interface CodexTurnWatchdogEntry {
+  readonly turnId: TurnId;
+  lastActivityAt: number;
+}
 
 type CodexRuntimeIngressItem = {
   readonly nativeEvent: ProviderEvent;
@@ -520,56 +541,6 @@ function toCanonicalUserInputAnswers(
   return result;
 }
 
-function toUserInputQuestions(payload: Record<string, unknown> | undefined) {
-  const questions = asArray(payload?.questions);
-  if (!questions) {
-    return undefined;
-  }
-
-  const parsedQuestions = questions
-    .map((entry) => {
-      const question = asObject(entry);
-      if (!question) return undefined;
-      const options = asArray(question.options)
-        ?.map((option) => {
-          const optionRecord = asObject(option);
-          if (!optionRecord) return undefined;
-          const label = asString(optionRecord.label)?.trim();
-          const description = asString(optionRecord.description)?.trim();
-          if (!label || !description) {
-            return undefined;
-          }
-          return { label, description };
-        })
-        .filter((option): option is { label: string; description: string } => option !== undefined);
-      const id = asString(question.id)?.trim();
-      const header = asString(question.header)?.trim();
-      const prompt = asString(question.question)?.trim();
-      if (!id || !header || !prompt || !options || options.length === 0) {
-        return undefined;
-      }
-      return {
-        id,
-        header,
-        question: prompt,
-        options,
-        ...(question.multiSelect === true ? { multiSelect: true } : {}),
-      };
-    })
-    .filter(
-      (
-        question,
-      ): question is {
-        id: string;
-        header: string;
-        question: string;
-        options: Array<{ label: string; description: string }>;
-      } => question !== undefined,
-    );
-
-  return parsedQuestions.length > 0 ? parsedQuestions : undefined;
-}
-
 function toThreadState(
   value: unknown,
 ): "active" | "idle" | "archived" | "closed" | "compacted" | "error" {
@@ -936,7 +907,9 @@ function mapToRuntimeEvents(
 
   if (event.kind === "request") {
     if (event.method === "item/tool/requestUserInput") {
-      const questions = toUserInputQuestions(payload);
+      // The manager refuses (and answers) unrenderable requests, so reaching
+      // this branch with no questions means nothing is parked on the reply.
+      const questions = parseCodexUserInputQuestions(payload);
       if (!questions) {
         return [];
       }
@@ -1716,6 +1689,79 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       (manager) => Effect.promise(() => manager.stopAll()),
     );
 
+    // Idle-progress backstop for codex turns. Same semantics as
+    // AcpTurnIdleWatchdog (any inbound activity resets it, a pending human
+    // decision pauses it), driven by one shared ticker because codex activity
+    // arrives on a single manager event stream instead of per-session fibers.
+    const turnWatchdogs = new Map<ThreadId, CodexTurnWatchdogEntry>();
+
+    const armTurnWatchdog = (threadId: ThreadId, turnId: TurnId): void => {
+      turnWatchdogs.set(threadId, { turnId, lastActivityAt: Date.now() });
+    };
+
+    const trackTurnWatchdogActivity = (
+      threadId: ThreadId,
+      runtimeEvents: ReadonlyArray<ProviderRuntimeEvent>,
+    ): void => {
+      const entry = turnWatchdogs.get(threadId);
+      if (entry) {
+        entry.lastActivityAt = Date.now();
+      }
+      for (const runtimeEvent of runtimeEvents) {
+        if (runtimeEvent.type === "turn.started" && runtimeEvent.turnId) {
+          armTurnWatchdog(threadId, runtimeEvent.turnId);
+        }
+      }
+    };
+
+    const abandonStalledTurn = (threadId: ThreadId, turnId: TurnId, idleMs: number): void => {
+      const idleSeconds = Math.round(idleMs / 1000);
+      void manager
+        .abandonTurn(
+          threadId,
+          turnId,
+          `Codex stopped responding (no activity for ${idleSeconds}s); the turn was aborted.`,
+        )
+        .catch((cause: unknown) => {
+          void Effect.runPromise(
+            Effect.logError("Codex idle turn abandon failed", {
+              threadId,
+              turnId,
+              idleMs,
+              cause,
+            }),
+          );
+        });
+    };
+
+    const evaluateTurnWatchdogs = (): void => {
+      const now = Date.now();
+      for (const [threadId, entry] of turnWatchdogs) {
+        const idleMs = now - entry.lastActivityAt;
+        const decision = evaluateAcpTurnIdleTick({
+          isTurnActive: manager.isTurnActive(threadId, entry.turnId),
+          isAwaitingHuman: manager.isAwaitingHumanResponse(threadId),
+          idleMs,
+          idleTimeoutMs: CODEX_TURN_IDLE_TIMEOUT_MS,
+        });
+        if (decision === "continue") {
+          continue;
+        }
+        if (decision === "touch") {
+          // Blocked on a human, not hung: keep the clock fresh so the turn
+          // cannot trip the watchdog the instant it resumes.
+          entry.lastActivityAt = now;
+          continue;
+        }
+        // Both "stop" (the turn already settled) and "timeout" disarm; a timeout
+        // disarms first so a slow interrupt cannot let the next tick re-fire.
+        turnWatchdogs.delete(threadId);
+        if (decision === "timeout") {
+          abandonStalledTurn(threadId, entry.turnId, idleMs);
+        }
+      }
+    };
+
     const prepareCodexManagerTurnInput = (
       input: ProviderSendTurnInput,
       method: "turn/start" | "turn/steer",
@@ -1803,6 +1849,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           try: () => manager.sendTurn(managerInput),
           catch: (cause) => toRequestError(input.threadId, "turn/start", cause),
         }).pipe(
+          // Armed here as well as on `turn.started`, so a child that goes silent
+          // before its first notification is still covered.
+          Effect.tap((result) => Effect.sync(() => armTurnWatchdog(input.threadId, result.turnId))),
           Effect.map((result) => ({
             ...result,
             threadId: input.threadId,
@@ -1818,6 +1867,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           try: () => manager.steerTurn(managerInput),
           catch: (cause) => toRequestError(input.threadId, "turn/steer", cause),
         }).pipe(
+          Effect.tap((result) => Effect.sync(() => armTurnWatchdog(input.threadId, result.turnId))),
           Effect.map((result) => ({
             ...result,
             threadId: input.threadId,
@@ -1830,6 +1880,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         try: () => manager.startReview(input),
         catch: (cause) => toRequestError(input.threadId, "review/start", cause),
       }).pipe(
+        Effect.tap((result) => Effect.sync(() => armTurnWatchdog(input.threadId, result.turnId))),
         Effect.map((result) => ({
           ...result,
           threadId: input.threadId,
@@ -2090,6 +2141,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const runtimeEvents = assignDerivedProviderRuntimeEventIds(
             mapToRuntimeEvents(event, event.threadId),
           ).map(compactProviderRuntimeEventForIngress);
+          trackTurnWatchdogActivity(event.threadId, runtimeEvents);
           const result = ingress.offer({
             nativeEvent: compactCodexNativeEventForIngress(event),
             runtimeEvents,
@@ -2107,11 +2159,15 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           }
         };
         manager.on("event", listener);
-        return { ingress, listener };
+        const watchdogTicker = setInterval(evaluateTurnWatchdogs, CODEX_TURN_WATCHDOG_INTERVAL_MS);
+        watchdogTicker.unref();
+        return { ingress, listener, watchdogTicker };
       }),
-      ({ ingress, listener }) =>
+      ({ ingress, listener, watchdogTicker }) =>
         Effect.gen(function* () {
           yield* Effect.sync(() => {
+            clearInterval(watchdogTicker);
+            turnWatchdogs.clear();
             manager.off("event", listener);
           });
           yield* ingress.stop;

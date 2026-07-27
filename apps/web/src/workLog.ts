@@ -40,6 +40,11 @@ import type { ChatMessage, ProposedPlan } from "./types";
 
 export type WorkLogRequestKind = ApprovalRequestKind;
 
+// Mirrors CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND in
+// apps/server/src/orchestration/commandInvariants.ts, which the web app cannot
+// import.
+const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
+
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
@@ -310,6 +315,14 @@ function shouldKeepActivityForWorkLog(
   // Created-automation milestones are thread-scoped and carry no provider turn id;
   // keep them so the transcript card survives once the thread has turn-stamped messages.
   if (activity.kind === "automation.created") {
+    return true;
+  }
+
+  // Revert failures are the only feedback a failed Undo produces. They can be
+  // emitted before any checkpoint exists to anchor them to a turn (or against a
+  // turn that the revert itself just rolled out of view), so never let the
+  // turn-visibility filter drop them.
+  if (activity.kind === CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND) {
     return true;
   }
 

@@ -77,7 +77,11 @@ import {
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
 } from "../acp/AcpAdapterSessionSupport.ts";
-import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import type * as AcpErrors from "../acp/AcpErrors.ts";
+import {
+  type AcpSessionRuntimeShape,
+  type AcpSessionStartupTimeouts,
+} from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -101,6 +105,7 @@ import {
   makeCursorAcpRuntime,
   parseCursorCliModelList,
   resolveCursorAcpBaseModelId,
+  type CursorAcpModelSelectionNotice,
   type CursorAcpRuntimeCursorSettings,
 } from "../acp/CursorAcpSupport.ts";
 import {
@@ -131,6 +136,15 @@ export const takeCursorSynaraHarnessPolicyTextPart = (
   });
 const CURSOR_RESUME_VERSION = 1 as const;
 const CURSOR_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
+// `cursor-agent` authenticates against the macOS Keychain: 1-12s is normal and it
+// hangs forever when a Keychain prompt cannot be shown, so authenticate gets the
+// widest budget while the aggregate cap keeps a stuck startup from hanging a thread.
+const CURSOR_ACP_STARTUP_TIMEOUTS = {
+  initializeMs: 20_000,
+  authenticateMs: 30_000,
+  sessionSetupMs: 20_000,
+  totalMs: 60_000,
+} as const satisfies AcpSessionStartupTimeouts;
 // Backstop for an alive-but-silent cursor-agent child: if a turn produces no
 // ACP activity for this long, force-fail it instead of showing "Working"
 // forever. Generous by design; override with SYNARA_CURSOR_TURN_IDLE_TIMEOUT_MS.
@@ -287,6 +301,50 @@ function parseCursorResume(raw: unknown): { sessionId: string } | undefined {
   return { sessionId: raw.sessionId.trim() };
 }
 
+function describeCursorErrorCause(cause: unknown): string {
+  if (cause instanceof Error) {
+    return cause.message.trim();
+  }
+  if (typeof cause === "string") {
+    return cause.trim();
+  }
+  return "";
+}
+
+function describeCursorAcpErrorData(data: unknown): string {
+  if (typeof data === "string") {
+    return data.trim();
+  }
+  if (!isRecord(data)) {
+    return "";
+  }
+  const detail = data.detail ?? data.details ?? data.message;
+  if (typeof detail === "string" && detail.trim()) {
+    return detail.trim();
+  }
+  return JSON.stringify(data).slice(0, 500);
+}
+
+// Startup failures are the only signal the user gets about why Cursor did not
+// come up, so keep the agent's own wording (JSON-RPC data included) instead of
+// the tagged-error class defaults, which carry no detail for transport errors.
+function cursorAcpFailureDetail(error: AcpErrors.AcpError): string {
+  if (error._tag === "AcpRequestError") {
+    const message = error.errorMessage.trim();
+    const data = describeCursorAcpErrorData(error.data);
+    const detail = [message, data && data !== message ? data : ""].filter(Boolean).join(" — ");
+    return detail
+      ? `${detail} (JSON-RPC ${String(error.code)})`
+      : `Cursor ACP request failed (JSON-RPC ${String(error.code)}).`;
+  }
+  const causeDetail = describeCursorErrorCause(error.cause);
+  const baseDetail =
+    error._tag === "AcpTransportError" ? error.detail.trim() : error.message.trim();
+  return [baseDetail, causeDetail && causeDetail !== baseDetail ? causeDetail : ""]
+    .filter(Boolean)
+    .join(" — ");
+}
+
 function applyRequestedSessionConfiguration<E>(input: {
   readonly runtime: AcpSessionRuntimeShape;
   readonly runtimeMode: RuntimeMode;
@@ -298,9 +356,10 @@ function applyRequestedSessionConfiguration<E>(input: {
       }
     | undefined;
   readonly mapError: (context: {
-    readonly cause: import("../acp/AcpErrors.ts").AcpError;
+    readonly cause: AcpErrors.AcpError;
     readonly method: "session/set_config_option" | "session/set_mode";
   }) => E;
+  readonly onModelSelectionNotice?: (notice: CursorAcpModelSelectionNotice) => Effect.Effect<void>;
 }): Effect.Effect<void, E> {
   return Effect.gen(function* () {
     if (input.modelSelection) {
@@ -313,6 +372,7 @@ function applyRequestedSessionConfiguration<E>(input: {
             cause,
             method: "session/set_config_option",
           }),
+        ...(input.onModelSelectionNotice ? { onNotice: input.onModelSelectionNotice } : {}),
       });
     }
 
@@ -416,6 +476,40 @@ export function makeCursorAdapter(
           },
           threadId,
         );
+      });
+
+    // Degraded model selection is a visible-but-non-fatal condition: the session
+    // keeps running on whatever model Cursor actually accepted.
+    const emitCursorModelSelectionNotice = (input: {
+      readonly threadId: ThreadId;
+      readonly lifecycleGeneration: string | undefined;
+      readonly turnId: TurnId | undefined;
+      readonly notice: CursorAcpModelSelectionNotice;
+    }) =>
+      Effect.gen(function* () {
+        yield* Effect.logWarning("cursor.acp.model_selection_degraded", {
+          threadId: input.threadId,
+          reason: input.notice.reason,
+          requestedModel: input.notice.requestedModel,
+          appliedModel: input.notice.appliedModel,
+        });
+        yield* offerRuntimeEvent(input.lifecycleGeneration, {
+          type: "runtime.warning",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: input.threadId,
+          ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
+          payload: {
+            message: input.notice.message,
+            detail: {
+              reason: input.notice.reason,
+              requestedModel: input.notice.requestedModel,
+              ...(input.notice.appliedModel !== undefined
+                ? { appliedModel: input.notice.appliedModel }
+                : {}),
+            },
+          },
+        });
       });
 
     const completeCursorPlanTurn = (
@@ -630,6 +724,7 @@ export function makeCursorAdapter(
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
+            startupTimeouts: CURSOR_ACP_STARTUP_TIMEOUTS,
             ...(agentGatewayCredentials
               ? {
                   buildMcpServers: (initializeResult) =>
@@ -648,7 +743,7 @@ export function makeCursorAdapter(
                 new ProviderAdapterProcessError({
                   provider: PROVIDER,
                   threadId: input.threadId,
-                  detail: cause.message,
+                  detail: cursorAcpFailureDetail(cause),
                   cause,
                 }),
             ),
@@ -834,8 +929,17 @@ export function makeCursorAdapter(
             );
             return yield* acp.start();
           }).pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
+            // Not mapAcpToAdapterError: startup must surface the agent's own
+            // failure text (Keychain -32603 data, "Authentication required…",
+            // startup timeout step) instead of a generic wrapper message.
+            Effect.mapError(
+              (error) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "session/start",
+                  detail: `Cursor session startup failed: ${cursorAcpFailureDetail(error)}`,
+                  cause: error,
+                }),
             ),
           );
 
@@ -846,6 +950,13 @@ export function makeCursorAdapter(
             modelSelection: cursorModelSelection,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+            onModelSelectionNotice: (notice) =>
+              emitCursorModelSelectionNotice({
+                threadId: input.threadId,
+                lifecycleGeneration: input.lifecycleGeneration,
+                turnId: undefined,
+                notice,
+              }),
           });
 
           const now = yield* nowIso;
@@ -1066,6 +1177,15 @@ export function makeCursorAdapter(
                 },
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+          // No turnId: the notice is emitted before turn.started, so it belongs
+          // to the session timeline rather than to an unannounced turn.
+          onModelSelectionNotice: (notice) =>
+            emitCursorModelSelectionNotice({
+              threadId: input.threadId,
+              lifecycleGeneration: ctx.lifecycleGeneration,
+              turnId: undefined,
+              notice,
+            }),
         });
         const promptParts: Array<Acp.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({

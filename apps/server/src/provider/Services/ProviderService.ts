@@ -177,14 +177,6 @@ export interface ProviderServiceShape {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
-   * Ensure a persisted provider binding has a live runtime session, resuming it
-   * when an idle-stop previously released the adapter process.
-   */
-  readonly ensureRuntimeSession?: (input: {
-    readonly threadId: ThreadId;
-  }) => Effect.Effect<ProviderSession, ProviderServiceError>;
-
-  /**
    * Read static capabilities for a provider adapter.
    */
   readonly getCapabilities: (

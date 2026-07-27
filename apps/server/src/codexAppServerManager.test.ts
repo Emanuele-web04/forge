@@ -120,6 +120,8 @@ function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" 
       planType: null,
       sparkEnabled: true,
     },
+    pendingApprovals: new Map(),
+    pendingUserInputs: new Map(),
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
     reviewTurnIds: new Set<string>(),
@@ -163,6 +165,8 @@ function createThreadControlHarness() {
       createdAt: "2026-02-10T00:00:00.000Z",
       updatedAt: "2026-02-10T00:00:00.000Z",
     },
+    pendingApprovals: new Map(),
+    pendingUserInputs: new Map(),
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
     reviewTurnIds: new Set<string>(),
@@ -202,6 +206,7 @@ function createPendingUserInputHarness() {
       createdAt: "2026-02-10T00:00:00.000Z",
       updatedAt: "2026-02-10T00:00:00.000Z",
     },
+    pendingApprovals: new Map(),
     pendingUserInputs: new Map([
       [
         ApprovalRequestId.makeUnsafe("req-user-input-1"),
@@ -2406,6 +2411,8 @@ describe("thread checkpoint control", () => {
   it("emits compaction progress before waiting for thread/compact/start", async () => {
     const { manager, context, sendRequest, updateSession, emitEvent } =
       createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_compact";
     let resolveRequest: (() => void) | undefined;
     sendRequest.mockImplementation(
       () =>
@@ -2440,6 +2447,29 @@ describe("thread checkpoint control", () => {
 
     resolveRequest?.();
     await compactPromise;
+  });
+
+  it("does not claim running status when compacting outside an active turn", async () => {
+    const { manager, context, sendRequest, updateSession, emitEvent } =
+      createThreadControlHarness();
+    sendRequest.mockResolvedValue({});
+
+    await manager.compactThread(asThreadId("thread_1"));
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/compact/start", {
+      threadId: "thread_1",
+    });
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "thread/compacting",
+        message: "Compacting context",
+        payload: {
+          threadId: "thread_1",
+          state: "compacting",
+        },
+      }),
+    );
   });
 });
 
@@ -2892,7 +2922,14 @@ describe("collab child conversation routing", () => {
         threadId: "child_provider_unmapped",
         turnId: "turn_child_unmapped",
         itemId: "tool_child_unmapped",
-        questions: [],
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which scope should this change target?",
+            options: [{ label: "child", description: "Only the child thread" }],
+          },
+        ],
       },
     });
 

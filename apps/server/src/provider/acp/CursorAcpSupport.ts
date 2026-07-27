@@ -53,6 +53,24 @@ export interface CursorAcpModelSelectionErrorContext {
   readonly configId?: string;
 }
 
+export interface CursorAcpModelSelectionNotice {
+  readonly reason: "model-unavailable" | "model-rejected";
+  readonly message: string;
+  readonly requestedModel: string;
+  /** Model the session keeps running with, when one could be applied. */
+  readonly appliedModel?: string;
+  readonly cause?: AcpErrors.AcpError;
+}
+
+/** JSON-RPC invalid params: Cursor's answer to an unknown model value. */
+const CURSOR_INVALID_MODEL_ERROR_CODE = -32602;
+
+function isCursorModelRejection(cause: AcpErrors.AcpError): boolean {
+  return (
+    Schema.is(AcpErrors.AcpRequestError)(cause) && cause.code === CURSOR_INVALID_MODEL_ERROR_CODE
+  );
+}
+
 export interface CursorAcpModelChoice {
   readonly slug: string;
   readonly name: string;
@@ -1282,33 +1300,56 @@ function resolveCursorAutoModelValue(
 ): string | undefined {
   return (
     choices.find((choice) => choice.slug.trim().toLowerCase() === "auto")?.slug ??
+    choices.find((choice) => choice.slug.trim().toLowerCase() === CURSOR_ACP_AUTO_MODEL_ID)?.slug ??
     choices.find((choice) => normalizedText(choice.name) === "auto")?.slug
   );
 }
 
-function resolveCursorAcpModelValue(
+// The session's own selection is the safest degrade target; the agent's default
+// ("auto") is the last resort. Both are session-advertised by construction.
+function resolveCursorSessionModelValue(
+  configOptions: ReadonlyArray<Acp.SessionConfigOption>,
+  choices: ReadonlyArray<CursorAcpModelChoice>,
+): string | undefined {
+  const modelOption = findCursorModelConfigOption(configOptions);
+  const currentValue = modelOption?.type === "select" ? modelOption.currentValue.trim() : undefined;
+  if (currentValue && choices.some((choice) => choice.slug === currentValue)) {
+    return currentValue;
+  }
+  return resolveCursorAutoModelValue(choices);
+}
+
+type CursorAcpModelSelectionOutcome =
+  /** Nothing to apply: no model requested, or the agent picks it ("auto"). */
+  | { readonly _tag: "None" }
+  | { readonly _tag: "Resolved"; readonly value: string }
+  | { readonly _tag: "Fallback"; readonly value: string; readonly requested: string }
+  | { readonly _tag: "Unavailable"; readonly requested: string };
+
+function resolveCursorAcpModelSelection(
   configOptions: ReadonlyArray<Acp.SessionConfigOption>,
   model: string | null | undefined,
   options: CursorModelOptions | null | undefined,
-): string | undefined {
+): CursorAcpModelSelectionOutcome {
   const trimmed = model?.trim();
   if (!trimmed) {
-    return undefined;
+    return { _tag: "None" };
   }
 
   const choices = flattenCursorAcpModelChoices(configOptions);
   if (trimmed === "auto") {
-    return resolveCursorAutoModelValue(choices);
+    const autoValue = resolveCursorAutoModelValue(choices);
+    return autoValue ? { _tag: "Resolved", value: autoValue } : { _tag: "None" };
   }
 
   const exactChoice = choices.find((choice) => choice.slug === trimmed);
   if (exactChoice) {
-    return exactChoice.slug;
+    return { _tag: "Resolved", value: exactChoice.slug };
   }
 
   const baseModel = resolveCursorAcpBaseModelId(trimmed);
   if (baseModel === "auto") {
-    return undefined;
+    return { _tag: "None" };
   }
   const cliBaseModel = normalizeCursorCliBaseModelId(baseModel);
 
@@ -1330,13 +1371,62 @@ function resolveCursorAcpModelValue(
       choices,
     }) ?? inferredModel;
   if (choices.some((choice) => choice.slug === resolvedModel)) {
-    return resolvedModel;
+    return { _tag: "Resolved", value: resolvedModel };
   }
-  return (
+
+  const relaxedMatch =
     findCursorModelChoiceIgnoringFast(choices, resolvedModel) ??
-    findCursorModelChoiceWithSupportedParameters(choices, resolvedModel) ??
-    resolvedModel
-  );
+    findCursorModelChoiceWithSupportedParameters(choices, resolvedModel);
+  if (relaxedMatch) {
+    return { _tag: "Resolved", value: relaxedMatch };
+  }
+
+  // Parameterized ids ("model[context=1m,effort=high]") are accepted even though
+  // only base ids are advertised, so a parameterized value whose base is
+  // advertised still passes through. An unadvertised base never does: Cursor
+  // rejects it with -32602 and that used to abort the whole session start.
+  const resolvedBase = stripCursorParameterizedSuffix(resolvedModel);
+  if (choices.some((choice) => stripCursorParameterizedSuffix(choice.slug) === resolvedBase)) {
+    return { _tag: "Resolved", value: resolvedModel };
+  }
+
+  const fallbackValue = resolveCursorSessionModelValue(configOptions, choices);
+  return fallbackValue
+    ? { _tag: "Fallback", value: fallbackValue, requested: trimmed }
+    : { _tag: "Unavailable", requested: trimmed };
+}
+
+function cursorModelLabel(model: string): string {
+  return formatModelDisplayName(model) ?? model;
+}
+
+function makeCursorUnavailableModelNotice(
+  selection: Extract<CursorAcpModelSelectionOutcome, { _tag: "Fallback" | "Unavailable" }>,
+): CursorAcpModelSelectionNotice {
+  const requested = cursorModelLabel(selection.requested);
+  return {
+    reason: "model-unavailable",
+    requestedModel: selection.requested,
+    ...(selection._tag === "Fallback" ? { appliedModel: selection.value } : {}),
+    message:
+      selection._tag === "Fallback"
+        ? `Cursor does not offer ${requested} in this session; continuing with ${cursorModelLabel(selection.value)}.`
+        : `Cursor does not offer ${requested} in this session; continuing with the agent's current model.`,
+  };
+}
+
+function makeCursorRejectedModelNotice(
+  requestedModel: string | null | undefined,
+  appliedModel: string,
+  cause: AcpErrors.AcpError,
+): CursorAcpModelSelectionNotice {
+  const requested = requestedModel?.trim() || appliedModel;
+  return {
+    reason: "model-rejected",
+    requestedModel: requested,
+    message: `Cursor rejected model ${cursorModelLabel(appliedModel)} (${cause.message}); continuing with the agent's current model.`,
+    cause,
+  };
 }
 
 export function applyCursorAcpModelSelection<E>(input: {
@@ -1344,7 +1434,11 @@ export function applyCursorAcpModelSelection<E>(input: {
   readonly model: string | null | undefined;
   readonly options: CursorModelOptions | null | undefined;
   readonly mapError: (context: CursorAcpModelSelectionErrorContext) => E;
+  /** Model selection must degrade, never abort the session; notices go here. */
+  readonly onNotice?: (notice: CursorAcpModelSelectionNotice) => Effect.Effect<void>;
 }): Effect.Effect<void, E> {
+  const notify = (notice: CursorAcpModelSelectionNotice): Effect.Effect<void> =>
+    input.onNotice ? input.onNotice(notice) : Effect.void;
   return Effect.gen(function* () {
     const initialConfigOptions = yield* input.runtime.getConfigOptions;
     const choices = flattenCursorAcpModelChoices(initialConfigOptions);
@@ -1362,14 +1456,27 @@ export function applyCursorAcpModelSelection<E>(input: {
       cursorModelOptionsFromCliModelId(input.model),
       runtimeSafeOptions,
     );
-    const modelValue = resolveCursorAcpModelValue(initialConfigOptions, input.model, mergedOptions);
-    if (modelValue) {
+    const selection = resolveCursorAcpModelSelection(
+      initialConfigOptions,
+      input.model,
+      mergedOptions,
+    );
+    if (selection._tag === "Fallback" || selection._tag === "Unavailable") {
+      yield* notify(makeCursorUnavailableModelNotice(selection));
+    }
+    if (selection._tag === "Resolved" || selection._tag === "Fallback") {
+      const modelValue = selection.value;
       yield* input.runtime.setModel(modelValue).pipe(
-        Effect.mapError((cause) =>
-          input.mapError({
-            cause,
-            step: "set-model",
-          }),
+        Effect.asVoid,
+        Effect.catch((cause) =>
+          isCursorModelRejection(cause)
+            ? notify(makeCursorRejectedModelNotice(input.model, modelValue, cause))
+            : Effect.fail(
+                input.mapError({
+                  cause,
+                  step: "set-model",
+                }),
+              ),
         ),
       );
     }
