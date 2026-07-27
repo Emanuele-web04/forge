@@ -404,7 +404,11 @@ export function makeOmpAdapter(
     const collectDiscoveryStreamAsString = <E>(
       stream: Stream.Stream<Uint8Array, E>,
     ): Effect.Effect<string, E> =>
-      Stream.runFold(stream, () => "", (acc, chunk) => acc + new TextDecoder().decode(chunk));
+      Stream.runFold(
+        stream,
+        () => "",
+        (acc, chunk) => acc + new TextDecoder().decode(chunk),
+      );
 
     // OMP publishes its full multi-provider catalog via `omp models --json` in a
     // single subprocess call; each model carries its own `thinking` efforts
@@ -445,8 +449,7 @@ export function makeOmpAdapter(
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "model/list",
-            detail:
-              stderr.trim() || `'${executable} models --json' exited with code ${exitCode}.`,
+            detail: stderr.trim() || `'${executable} models --json' exited with code ${exitCode}.`,
           });
         }
         const models = parseOmpCliModelList(stdout);
@@ -1938,8 +1941,7 @@ export function makeOmpAdapter(
             inputBinaryPath: input.binaryPath ?? null,
             ompSettingsBinaryPath: ompSettings.binaryPath ?? null,
           });
-          const binaryPath =
-            input.binaryPath?.trim() || ompSettings.binaryPath?.trim() || "omp";
+          const binaryPath = input.binaryPath?.trim() || ompSettings.binaryPath?.trim() || "omp";
           const cacheKey = binaryPath;
           const cached = modelDiscoveryCache.get(cacheKey);
           if (cached && cached.expiresAt > Date.now()) {
