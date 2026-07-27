@@ -7,6 +7,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { nonEmptyTrimmed } from "@synara/shared/text";
 
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
@@ -16,12 +17,87 @@ const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
 
 type ActivityPayload = OrchestrationThreadActivity["payload"];
 
+/**
+ * Project a value onto exactly what `Schema.Json` admits: `null`, finite numbers,
+ * booleans, strings, arrays and records of the same.
+ *
+ * Activity payloads splice in raw provider values - `Schema.Unknown` payload
+ * fields, rate-limit blobs, usage records, workflow snapshots - that are built in
+ * adapter code and never decoded. Those can carry explicitly-present `undefined`
+ * members, bigints, functions, symbols, non-finite numbers or cycles, and any one
+ * of them makes the enclosing `thread.activity.append` command fail its own schema.
+ *
+ * Primitive, array and object-member semantics match `JSON.stringify`
+ * (undefined/function/symbol members dropped from objects and nulled inside
+ * arrays, non-finite numbers nulled), Dates keep their JSON timestamp, and bigint
+ * plus cycle handling matches {@link stringifyJsonLike}. Already-safe values are
+ * returned by reference: a payload built from literals is walked but never copied.
+ */
+function jsonSafeValue(value: unknown, ancestors: Set<object>): unknown {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value !== "object") {
+    // undefined, function, symbol: no JSON representation at all.
+    return undefined;
+  }
+  if (ancestors.has(value)) {
+    return "[Circular]";
+  }
+  ancestors.add(value);
+  try {
+    if (value instanceof Date) {
+      return value.toJSON();
+    }
+    if (Array.isArray(value)) {
+      let changed = false;
+      const retained: unknown[] = new Array<unknown>(value.length);
+      for (let index = 0; index < value.length; index += 1) {
+        const entry = value[index];
+        // Array positions are meaningful: an unrepresentable entry becomes null
+        // rather than shifting everything after it.
+        const safe = jsonSafeValue(entry, ancestors) ?? null;
+        changed ||= !Object.is(safe, entry);
+        retained[index] = safe;
+      }
+      return changed ? retained : value;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    const canReuseObject = prototype === Object.prototype || prototype === null;
+    let changed = false;
+    const retained: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      const safe = jsonSafeValue(entry, ancestors);
+      if (safe === undefined) {
+        changed = true;
+        continue;
+      }
+      changed ||= !Object.is(safe, entry);
+      retained[key] = safe;
+    }
+    // Class instances, Dates, Maps, typed arrays, and other exotic objects are
+    // not Schema.Json even when their enumerable entries happen to be safe.
+    return changed || !canReuseObject ? retained : value;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 function toActivityPayload(payload: unknown): ActivityPayload {
-  return payload as ActivityPayload;
+  return (jsonSafeValue(payload, new Set<object>()) ?? null) as ActivityPayload;
 }
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
-  return value === undefined ? undefined : TurnId.makeUnsafe(String(value));
+  // A blank runtime turn id means "no turn", not a turn named "". Trimming here
+  // is not cosmetic: `TurnId.makeUnsafe` throws on both blank and untrimmed input.
+  const trimmed = value === undefined ? undefined : nonEmptyTrimmed(String(value));
+  return trimmed === undefined ? undefined : TurnId.makeUnsafe(trimmed);
 }
 
 function truncateDetail(value: string, limit = 180): string {
@@ -367,9 +443,11 @@ export function projectProviderRuntimeActivities(
   event: ProviderRuntimeEvent,
 ): ReadonlyArray<OrchestrationThreadActivity> {
   const maybeSequence = (() => {
-    const eventWithSequence = event as ProviderRuntimeEvent & { sessionSequence?: number };
-    return eventWithSequence.sessionSequence !== undefined
-      ? { sequence: eventWithSequence.sessionSequence }
+    const sequence = (event as ProviderRuntimeEvent & { sessionSequence?: number }).sessionSequence;
+    // Activity `sequence` is a NonNegativeInt. A fractional or negative runtime
+    // counter has to be dropped: carrying it invalidates the whole command.
+    return typeof sequence === "number" && Number.isInteger(sequence) && sequence >= 0
+      ? { sequence }
       : {};
   })();
   // Codex and Antigravity only render completed reasoning items with a readable summary.
@@ -429,6 +507,7 @@ export function projectProviderRuntimeActivities(
         return [];
       }
       const requestKind = requestKindFromCanonicalRequestType(event.payload.requestType);
+      const requestId = nonEmptyTrimmed(event.requestId);
       return [
         {
           id: event.eventId,
@@ -446,10 +525,9 @@ export function projectProviderRuntimeActivities(
                     ? "File-change approval requested"
                     : "Approval requested",
           payload: toActivityPayload({
-            requestId:
-              event.requestId === undefined
-                ? undefined
-                : ApprovalRequestId.makeUnsafe(event.requestId),
+            // Omitted, never `undefined`: `Schema.Json` rejects a member that is
+            // explicitly present and undefined.
+            ...(requestId ? { requestId: ApprovalRequestId.makeUnsafe(requestId) } : {}),
             ...(event.lifecycleGeneration !== undefined
               ? { lifecycleGeneration: event.lifecycleGeneration }
               : {}),
@@ -825,6 +903,9 @@ export function projectProviderRuntimeActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      // A provider that sends a blank title must not turn into a blank summary:
+      // `??` falls back on undefined only, so normalize before choosing.
+      const itemTitle = nonEmptyTrimmed(event.payload.title);
       return [
         {
           id: event.eventId,
@@ -838,13 +919,12 @@ export function projectProviderRuntimeActivities(
                 : "tool.updated",
           summary:
             event.type === "item.started"
-              ? `${event.payload.title ?? "Tool"} started`
-              : (event.payload.title ??
-                (event.type === "item.completed" ? "Tool" : "Tool updated")),
+              ? `${itemTitle ?? "Tool"} started`
+              : (itemTitle ?? (event.type === "item.completed" ? "Tool" : "Tool updated")),
           payload: toActivityPayload({
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
-            ...(event.payload.title ? { title: event.payload.title } : {}),
+            ...(itemTitle ? { title: itemTitle } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...activityDataField(event.payload.data),
           }),
@@ -861,7 +941,10 @@ export function projectProviderRuntimeActivities(
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.updated",
-          summary: event.payload.toolName ?? event.payload.summary ?? "MCP tool call",
+          summary:
+            nonEmptyTrimmed(event.payload.toolName) ??
+            nonEmptyTrimmed(event.payload.summary) ??
+            "MCP tool call",
           payload: buildToolProgressActivityPayload(event),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

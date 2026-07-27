@@ -593,19 +593,39 @@ const makeCheckpointStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const operation = "CheckpointStore.deleteCheckpointRefs";
 
-      // Ref deletion writes contend on packed-refs.lock; concurrent deletes
-      // lose the lock race and allowNonZeroExit would swallow the failure.
-      yield* Effect.forEach(
-        input.checkpointRefs,
-        (checkpointRef) =>
-          git.execute({
+      // Ref deletion writes contend on packed-refs.lock, so a concurrent delete
+      // can lose the lock race. `allowNonZeroExit` keeps one loser from
+      // abandoning the rest of the batch, but the exit codes must still be
+      // inspected: silently discarding them made every caller's cleanup error
+      // handling unreachable. Deleting an already-absent ref exits 0, so the
+      // "missing refs are tolerated" contract is unaffected.
+      const results = yield* Effect.forEach(input.checkpointRefs, (checkpointRef) =>
+        git
+          .execute({
             operation,
             cwd: input.cwd,
             args: ["update-ref", "-d", checkpointRef],
             allowNonZeroExit: true,
-          }),
-        { discard: true },
+          })
+          .pipe(Effect.map((result) => ({ checkpointRef, result }))),
       );
+
+      const failures = results.filter((entry) => entry.result.code !== 0);
+      if (failures.length === 0) {
+        return;
+      }
+
+      return yield* new GitCommandError({
+        operation,
+        command: "git update-ref -d",
+        cwd: input.cwd,
+        detail: `Failed to delete ${failures.length} of ${results.length} checkpoint ref(s): ${failures
+          .map(
+            (entry) =>
+              `${entry.checkpointRef} (${entry.result.stderr.trim() || `exit code ${entry.result.code}`})`,
+          )
+          .join("; ")}`,
+      });
     });
 
   return {

@@ -48,6 +48,7 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
+import { nonEmptyTrimmed } from "@synara/shared/text";
 
 import { ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -193,8 +194,11 @@ function toRuntimePayloadFromSession(
   return {
     cwd: session.cwd ?? null,
     model: session.model ?? null,
-    activeTurnId: session.activeTurnId ?? null,
-    lastError: session.lastError ?? null,
+    activeTurnId: nonEmptyTrimmed(session.activeTurnId) ?? null,
+    // `thread.session.set` types both as trimmed-non-empty-or-null, so a blank
+    // provider string has to become an explicit "absent" rather than reaching
+    // the schema as "".
+    lastError: nonEmptyTrimmed(session.lastError) ?? null,
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
@@ -317,9 +321,15 @@ function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): boolean
 }
 
 function runtimeLastErrorForEvent(event: ProviderRuntimeEvent): string | null | undefined {
-  if (event.type === "runtime.error") return event.payload.message;
+  // A blank message must not degrade to `null`: null means "clear the error",
+  // which would erase the very failure being reported. Fall back to an honest
+  // constant instead.
+  if (event.type === "runtime.error")
+    return nonEmptyTrimmed(event.payload.message) ?? "Provider runtime reported an error.";
   if (event.type === "session.state.changed")
-    return event.payload.state === "error" ? (event.payload.reason ?? "Session error") : null;
+    return event.payload.state === "error"
+      ? (nonEmptyTrimmed(event.payload.reason) ?? "Session error")
+      : null;
   if (event.type === "thread.state.changed")
     return event.payload.state === "error" ? "Thread error" : null;
   return event.type === "turn.started" ||
@@ -1124,6 +1134,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               lifecycleGeneration: lease.generation,
             }),
           );
+          lease.commit();
           yield* analytics.record("provider.session.recovered", {
             provider: resumed.provider,
             strategy: "resume-thread",
@@ -1283,6 +1294,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   lifecycleGeneration: lease.generation,
                 }),
               );
+              lease.commit();
               yield* analytics.record("provider.session.started", {
                 provider: session.provider,
                 runtimeMode: input.runtimeMode,
@@ -1356,6 +1368,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           providerOptions: previousProviderOptions,
                         }),
                       );
+                      // The restored runtime stamps its events with the exact
+                      // generation persisted above, so the coordinator must end
+                      // the run owning that generation and not the abandoned
+                      // replacement's.
+                      lease.adopt(previousGeneration);
                     }),
               ),
             );
@@ -1995,6 +2012,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 },
               }),
             );
+            lease.commit();
             yield* analytics.record("provider.session.runtime_stopped", {
               provider: binding.provider,
             });
@@ -2100,20 +2118,28 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (!preserveActive) {
                 liveRuntimeTaskIds.delete(input.threadId);
               }
+              // A preserved runtime keeps stamping its events with the
+              // generation it was started under, so clearing the cursor must
+              // not re-label the thread with a generation that runtime will
+              // never emit.
+              const effectiveGeneration = preserveActive
+                ? (binding.lifecycleGeneration ?? lease.generation)
+                : lease.generation;
               yield* directory.upsert({
                 threadId: input.threadId,
                 provider: binding.provider,
                 ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
                 ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
                 status: preserveActive ? (binding.status ?? "running") : "stopped",
-                lifecycleGeneration: lease.generation,
+                lifecycleGeneration: effectiveGeneration,
                 resumeCursor: null,
                 runtimePayload: {
                   ...runtimePayloadRecord(binding.runtimePayload),
                   ...(preserveActive ? {} : { activeTurnId: null }),
-                  lifecycleGeneration: lease.generation,
+                  lifecycleGeneration: effectiveGeneration,
                 },
               });
+              lease.adopt(effectiveGeneration);
               return binding.provider;
             }),
           ),

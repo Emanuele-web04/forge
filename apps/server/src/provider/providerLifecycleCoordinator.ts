@@ -1,13 +1,25 @@
 import { randomUUID } from "node:crypto";
 
 import type { ThreadId } from "@synara/contracts";
-import { Duration, Effect, Exit, Option } from "effect";
+import { Duration, Effect, Option } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 export interface ProviderLifecycleLease {
   readonly generation: string;
   readonly isCurrent: () => boolean;
+  /**
+   * Takes lasting ownership of {@link ProviderLifecycleLease.generation}.
+   *
+   * A run publishes its generation eagerly (runtime events emitted *while* a
+   * provider starts must not look stale), but that publication is provisional:
+   * it survives the run only if the run says it took ownership. Call this once
+   * the generation is observable outside the coordinator — i.e. a session was
+   * started with it or a binding was persisted with it.
+   */
+  readonly commit: () => void;
+  /** Takes lasting ownership of an existing generation instead of this run's. */
   readonly adopt: (generation: string) => void;
+  /** Takes lasting ownership of "this thread has no provider generation". */
   readonly retire: () => void;
 }
 
@@ -112,30 +124,48 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
         const previousGeneration = currentGenerations.get(threadId);
         currentGenerations.set(threadId, generation);
         let ownedGeneration: string = generation;
+        // Ownership is opt-in. The eagerly published generation is rewound on
+        // exit unless the run explicitly committed/adopted/retired, so a run
+        // that ends without changing anything — a successful no-op early
+        // return, a failure, an interrupt before the provider was touched —
+        // leaves the still-live session's generation exactly as it found it.
+        // The inverse default is unsafe: an uncommitted generation nobody else
+        // knows about silently invalidates every runtime event and every
+        // generation-checked control call for that thread, forever.
+        let owned = false;
         const isCurrent = () => currentGenerations.get(threadId) === ownedGeneration;
         return operation({
           generation,
           isCurrent,
+          commit: () => {
+            if (isCurrent()) owned = true;
+          },
           adopt: (adoptedGeneration) => {
             if (isCurrent()) {
               ownedGeneration = adoptedGeneration;
               currentGenerations.set(threadId, adoptedGeneration);
+              owned = true;
             }
           },
           retire: () => {
-            if (isCurrent()) currentGenerations.delete(threadId);
+            if (isCurrent()) {
+              currentGenerations.delete(threadId);
+              owned = true;
+            }
           },
         }).pipe(
-          Effect.onExit((exit) =>
-            Exit.isFailure(exit) && isCurrent()
-              ? Effect.sync(() => {
+          Effect.onExit(() =>
+            // `isCurrent` also guards against clobbering a newer owner: only
+            // rewind while this run's generation is still the published one.
+            owned || !isCurrent()
+              ? Effect.void
+              : Effect.sync(() => {
                   if (previousGeneration === undefined) {
                     currentGenerations.delete(threadId);
                   } else {
                     currentGenerations.set(threadId, previousGeneration);
                   }
-                })
-              : Effect.void,
+                }),
           ),
         );
       }),

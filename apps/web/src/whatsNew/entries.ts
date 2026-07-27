@@ -22,6 +22,52 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.6.3",
+    date: "Jul 27",
+    features: [
+      {
+        id: "responsive-stop-controls",
+        title: "Stop stays responsive under load",
+        description:
+          "Interrupt and stop actions now take priority over new work, even when a busy Synara server has filled its ordinary command queue.",
+        details:
+          "Control, user, and background commands now use separate admission priorities while preserving reserved capacity for recovery. Provider calls and lifecycle locks are bounded too, so one wedged session cannot hold every other task hostage, and failed stop requests now surface an actionable error instead of silently leaving the UI spinning.",
+      },
+      {
+        id: "compensating-checkpoint-reverts",
+        title: "Undo can recover from a partial failure",
+        description:
+          "File and conversation reverts now preserve a rescue snapshot before changing your worktree and restore it if the provider rollback fails.",
+        details:
+          "Reverts validate checkpoints before mutation, work without a live provider session, retry their deterministic completion step, and clean up managed refs only after the operation commits. Grouped file-change cards undo newest-first, while failures identify any retained rescue ref so recovery remains explicit.",
+      },
+      {
+        id: "durable-session-settlement",
+        title: "Interrupted sessions settle cleanly",
+        description:
+          "Turns are less likely to remain stuck as running after terminal provider events, restarts, stale resumes, or delayed lifecycle updates.",
+        details:
+          "Synara retains enough turn identity to settle late Claude results, fences stale lifecycle generations, reconciles durable provider commands and runtime events, and aligns Codex, Claude, Cursor, and ACP session ownership through start, stop, reconnect, and restart boundaries.",
+      },
+      {
+        id: "safe-follow-up-queues",
+        title: "Follow-ups no longer disappear into stale queues",
+        description:
+          "A thread that looks busy but has no real active turn keeps the composer available instead of accepting a message that cannot be dispatched.",
+        details:
+          "Queue draining now requires a queueable live turn, the transcript keeps the newest answer open while terminal state converges, and visible stop failures are reported immediately. These safeguards keep the conversation usable while server-side recovery repairs stale session state.",
+      },
+      {
+        id: "visible-thread-rehydration",
+        title: "Open tasks stay present during refreshes",
+        description:
+          "Visible task details are retained and re-requested across overlapping snapshot, subscription, and eviction work instead of briefly rendering as an empty conversation.",
+        details:
+          "Thread-detail retention now understands what is on screen, re-arms refreshes that race an in-flight snapshot, and normalizes projections more defensively. Cleanup also preserves archived tasks, newly forked or handed-off tasks, and soft-deleted history without proven manual-delete provenance.",
+      },
+    ],
+  },
+  {
     version: "0.6.2",
     date: "Jul 27",
     features: [

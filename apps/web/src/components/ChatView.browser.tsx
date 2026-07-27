@@ -1839,6 +1839,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyActiveProvider: null,
     });
     useStore.setState({
+      shellSnapshotSequence: 0,
+      spaces: [],
       projects: [],
       threadIds: [],
       threadShellById: {},
@@ -1852,6 +1854,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       proposedPlanByThreadId: {},
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
+      threadDetailSyncById: {},
+      deletedProjectIdsById: {},
+      deletedThreadIdsById: {},
       sidebarThreadSummaryById: {},
       threadsHydrated: false,
     });

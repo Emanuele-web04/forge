@@ -1,5 +1,14 @@
-import type { ProviderRuntimeEvent } from "@synara/contracts";
-import { ApprovalRequestId, EventId, RuntimeItemId, ThreadId, TurnId } from "@synara/contracts";
+import type { OrchestrationThreadActivity, ProviderRuntimeEvent } from "@synara/contracts";
+import {
+  ApprovalRequestId,
+  CommandId,
+  EventId,
+  OrchestrationCommand,
+  RuntimeItemId,
+  ThreadId,
+  TurnId,
+} from "@synara/contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +30,184 @@ function runtimeEvent(input: Record<string, unknown> & { eventId: string }): Pro
     eventId: EventId.makeUnsafe(input.eventId),
   } as ProviderRuntimeEvent;
 }
+
+/**
+ * The single invariant that matters: every activity this projection emits has to
+ * survive the schema of the command that carries it. Server-built commands never
+ * cross the WebSocket decode boundary, so nothing else enforces the schema-only
+ * refinements (`TrimmedNonEmptyString`, `Schema.Json`) that TypeScript cannot express.
+ */
+function decodeActivityAppendCommand(activity: OrchestrationThreadActivity): unknown {
+  return Schema.decodeUnknownSync(OrchestrationCommand)({
+    type: "thread.activity.append",
+    commandId: CommandId.makeUnsafe("cmd-activity-append"),
+    threadId: THREAD_ID,
+    activity,
+    createdAt: CREATED_AT,
+  });
+}
+
+function expectSchemaValidActivities(event: ProviderRuntimeEvent): void {
+  const activities = projectProviderRuntimeActivities(event);
+  expect(activities.length).toBeGreaterThan(0);
+  for (const activity of activities) {
+    expect(() => decodeActivityAppendCommand(activity)).not.toThrow();
+  }
+}
+
+describe("projected activities satisfy the orchestration command schema", () => {
+  it("omits an absent approval request id instead of emitting an explicit undefined", () => {
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "request.opened",
+        eventId: "approval-without-request-id",
+        turnId: TURN_ID,
+        payload: { requestType: "command_execution_approval", detail: "rm -rf build" },
+      }),
+    );
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "request.resolved",
+        eventId: "approval-resolved-without-request-id",
+        turnId: TURN_ID,
+        payload: { requestType: "command_execution_approval", decision: "approved" },
+      }),
+    );
+    const [opened] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        eventId: "approval-without-request-id",
+        turnId: TURN_ID,
+        payload: { requestType: "command_execution_approval" },
+      }),
+    );
+    expect(Object.keys(opened?.payload as Record<string, unknown>)).not.toContain("requestId");
+
+    // `ApprovalRequestId.makeUnsafe` rejects untrimmed input instead of trimming it.
+    const [padded] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        eventId: "approval-padded-request-id",
+        turnId: TURN_ID,
+        requestId: "  approval-7  ",
+        payload: { requestType: "command_execution_approval" },
+      }),
+    );
+    expect(padded?.payload).toMatchObject({ requestId: "approval-7" });
+  });
+
+  it("never derives a blank summary from a blank tool name or title", () => {
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "tool.progress",
+        eventId: "tool-progress-blank-name",
+        turnId: TURN_ID,
+        payload: { toolUseId: "tool-blank", toolName: "   ", summary: "" },
+      }),
+    );
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "item.completed",
+        eventId: "item-completed-blank-title",
+        turnId: TURN_ID,
+        itemId: RuntimeItemId.makeUnsafe("tool-item"),
+        payload: { itemType: "command_execution", status: "completed", title: "" },
+      }),
+    );
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "item.updated",
+        eventId: "item-updated-blank-title",
+        turnId: TURN_ID,
+        itemId: RuntimeItemId.makeUnsafe("tool-item"),
+        payload: { itemType: "command_execution", status: "inProgress", title: "  " },
+      }),
+    );
+  });
+
+  // `TurnId.makeUnsafe` validates: it rejects "" *and* untrimmed input rather than
+  // normalizing it, so an unnormalized runtime turn id throws inside the projection
+  // itself before it can even reach the command schema.
+  it("normalizes a blank or untrimmed runtime turn id instead of throwing", () => {
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "turn.completed",
+        eventId: "turn-blank-turn-id",
+        turnId: "",
+        payload: { state: "completed" },
+      }),
+    );
+    const [padded] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "turn.completed",
+        eventId: "turn-padded-turn-id",
+        turnId: "  turn-padded  ",
+        payload: { state: "completed" },
+      }),
+    );
+    expect(padded?.turnId).toBe("turn-padded");
+  });
+
+  it("drops a fractional runtime sequence rather than emitting a non-integer", () => {
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "turn.steered",
+        eventId: "turn-steered-fractional-sequence",
+        turnId: TURN_ID,
+        sessionSequence: 12.5,
+        payload: { message: "keep going" },
+      }),
+    );
+  });
+
+  it("keeps raw provider payloads inside what Schema.Json admits", () => {
+    const cyclic: Record<string, unknown> = { window: "5h" };
+    cyclic.self = cyclic;
+    const rateLimitsEvent = runtimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: "rate-limits-hostile",
+      payload: {
+        rateLimits: {
+          status: "rejected",
+          utilization: 0.9,
+          resetsAt: undefined,
+          planTier: undefined,
+          requestCount: 42n,
+          onReset: () => undefined,
+          observedAt: new Date("2026-07-27T00:00:00.000Z"),
+          cyclic,
+        },
+      },
+    });
+    expectSchemaValidActivities(rateLimitsEvent);
+    const rateLimitsActivity = projectProviderRuntimeActivities(rateLimitsEvent).find(
+      (activity) => activity.kind === "account.rate-limits.updated",
+    );
+    expect(rateLimitsActivity?.payload).toMatchObject({
+      observedAt: "2026-07-27T00:00:00.000Z",
+    });
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "thread.token-usage.updated",
+        eventId: "token-usage-explicit-undefined",
+        turnId: TURN_ID,
+        payload: { usage: { usedTokens: 1_000, maxTokens: 200_000, usedPercent: undefined } },
+      }),
+    );
+    expectSchemaValidActivities(
+      runtimeEvent({
+        type: "task.progress",
+        eventId: "task-progress-raw-usage",
+        turnId: TURN_ID,
+        payload: {
+          taskId: "task-1",
+          description: "Working",
+          usage: { inputTokens: 10, outputTokens: undefined, costUsd: Number.NaN },
+        },
+      }),
+    );
+  });
+});
 
 describe("provider runtime activity projection", () => {
   it("keeps assistant text and assistant lifecycle events out of work activity", () => {

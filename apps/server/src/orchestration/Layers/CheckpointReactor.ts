@@ -18,6 +18,7 @@ import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shar
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
   checkpointRefForThreadMessageStart,
+  checkpointRefForThreadRevertRescue,
   checkpointRefForThreadTurn,
   checkpointRefForThreadTurnInManagedFamily,
   checkpointRefForThreadTurnLive,
@@ -98,6 +99,11 @@ const serverCommandId = (tag: string): CommandId =>
 const ASSISTANT_MESSAGE_ID_RETRY_DELAY_MS = 20;
 const ASSISTANT_MESSAGE_ID_RETRY_ATTEMPTS = 6;
 const REVERT_FAILURE_ACTIVITY_MAX_RETRIES = 3;
+
+const REVERT_COMPLETE_MAX_RETRIES = 3;
+
+const revertRescueCheckpointRef = (threadId: ThreadId): CheckpointRef =>
+  checkpointRefForThreadRevertRescue(threadId, crypto.randomUUID());
 
 function resolveExistingAssistantMessageIdForTurn(
   thread:
@@ -1183,10 +1189,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Preconditions before side effects: the filesystem checkpoint must exist
-    // before anything is mutated. Discovering it only at restore time would
-    // leave the conversation rolled back over a worktree that still holds the
-    // undone turns' files — the exact divergence this ordering prevents.
+    // Cheap read before any write: a missing checkpoint refuses the revert
+    // while the worktree and the conversation are both still untouched, so no
+    // rescue snapshot has to be captured only to be rolled straight back.
     const missingTargetCheckpointDetail = yield* checkpointStore
       .hasCheckpointRef({
         cwd: checkpointCwd,
@@ -1214,56 +1219,96 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Conversation first, files second: a rolled-back conversation over an
-    // untouched worktree is recoverable (the revert can simply be retried),
-    // while reverted files under a conversation that still remembers the
-    // undone turns is not.
+    // A revert mutates two systems that cannot be committed together: the
+    // worktree and the provider's conversation. Snapshot the pre-revert
+    // worktree first so failures can restore it.
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
-    if (rolledBackTurns > 0) {
-      const conversationRollbackFailure = yield* providerService
-        .rollbackConversation({
-          threadId: sessionThreadId,
-          numTurns: rolledBackTurns,
-        })
-        .pipe(
-          Effect.as(null),
-          Effect.catch((error) =>
-            Effect.succeed(`Conversation rollback failed, no files were changed: ${error.message}`),
+    const rescueCheckpointRef = revertRescueCheckpointRef(event.payload.threadId);
+    const rescueCaptureFailure = yield* checkpointStore
+      .captureCheckpoint({ cwd: checkpointCwd, checkpointRef: rescueCheckpointRef })
+      .pipe(
+        Effect.as(null),
+        Effect.catch((error) =>
+          Effect.succeed(
+            `The pre-revert workspace snapshot could not be captured, so the revert was refused: ${error.message}`,
           ),
-        );
-      if (conversationRollbackFailure !== null) {
-        yield* appendRevertFailureActivity({
-          threadId: event.payload.threadId,
-          turnCount: event.payload.turnCount,
-          detail: conversationRollbackFailure,
-          createdAt: now,
-        }).pipe(Effect.catch(() => Effect.void));
-        return;
-      }
+        ),
+      );
+    if (rescueCaptureFailure !== null) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: rescueCaptureFailure,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
     }
 
-    const restoreFailure = yield* checkpointStore
+    const discardRescueCheckpoint = checkpointStore
+      .deleteCheckpointRefs({ cwd: checkpointCwd, checkpointRefs: [rescueCheckpointRef] })
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("checkpoint revert rescue ref cleanup failed", {
+            threadId: event.payload.threadId,
+            turnCount: event.payload.turnCount,
+            rescueCheckpointRef,
+            detail: error.message,
+          }),
+        ),
+      );
+
+    // Puts the workspace back where the revert found it. Returns null on
+    // success, otherwise why the pre-revert tree could not be reinstated — at
+    // which point the rescue ref is the only remaining copy of it and must
+    // survive.
+    const restoreRescueCheckpoint = (rescueRef: CheckpointRef) =>
+      checkpointStore.restoreCheckpoint({ cwd: checkpointCwd, checkpointRef: rescueRef }).pipe(
+        Effect.map((restored) => (restored ? null : "the rescue snapshot was no longer available")),
+        Effect.catch((error) => Effect.succeed(error.message)),
+      );
+
+    // Three outcomes, not two: `restoreCheckpoint` resolves the target commit
+    // with a read-only lookup before it issues a single writing command, so
+    // `false` is proof that the workspace was never touched, while a failure can
+    // land anywhere — including halfway through rewriting the tree. Collapsing
+    // them into one string made the caller discard the rescue snapshot in both
+    // cases, destroying the only copy of a workspace it had just half-rewritten.
+    const restoreOutcome = yield* checkpointStore
       .restoreCheckpoint({
         cwd: checkpointCwd,
         checkpointRef: targetCheckpointRef,
       })
       .pipe(
         Effect.map((restored) =>
-          restored
-            ? null
-            : `Filesystem checkpoint became unavailable for turn ${event.payload.turnCount} during the revert.`,
+          restored ? ({ kind: "restored" } as const) : ({ kind: "unavailable" } as const),
         ),
-        Effect.catch((error) =>
-          Effect.succeed(
-            `Filesystem restore failed after the conversation was rolled back: ${error.message}`,
-          ),
-        ),
+        Effect.catch((error) => Effect.succeed({ kind: "failed", detail: error.message } as const)),
       );
-    if (restoreFailure !== null) {
+
+    if (restoreOutcome.kind === "unavailable") {
+      yield* discardRescueCheckpoint;
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
-        detail: restoreFailure,
+        detail: `Filesystem checkpoint became unavailable for turn ${event.payload.turnCount} during the revert.`,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    if (restoreOutcome.kind === "failed") {
+      const compensationFailure = yield* restoreRescueCheckpoint(rescueCheckpointRef);
+      if (compensationFailure === null) {
+        clearWorkspaceIndexCache(checkpointCwd);
+        yield* discardRescueCheckpoint;
+      }
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          compensationFailure === null
+            ? `Filesystem restore failed and the workspace was put back: ${restoreOutcome.detail}`
+            : `Filesystem restore failed and the workspace could not be put back (${compensationFailure}). The pre-revert snapshot is kept at ${rescueCheckpointRef}. Restore error: ${restoreOutcome.detail}`,
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
@@ -1273,35 +1318,90 @@ const make = Effect.gen(function* () {
     // reflects the reverted filesystem state.
     clearWorkspaceIndexCache(checkpointCwd);
 
-    const staleCheckpointRefs = thread.checkpoints
-      .filter((checkpoint) => checkpoint.checkpointTurnCount > event.payload.turnCount)
-      .map((checkpoint) => checkpoint.checkpointRef);
-
-    if (staleCheckpointRefs.length > 0) {
-      yield* checkpointStore.deleteCheckpointRefs({
-        cwd: checkpointCwd,
-        checkpointRefs: staleCheckpointRefs,
-      });
+    if (rolledBackTurns > 0) {
+      const conversationRollbackFailure = yield* providerService
+        .rollbackConversation({
+          threadId: sessionThreadId,
+          numTurns: rolledBackTurns,
+        })
+        .pipe(
+          Effect.as(null),
+          Effect.catch((error) => Effect.succeed(error.message)),
+        );
+      if (conversationRollbackFailure !== null) {
+        const compensationFailure = yield* restoreRescueCheckpoint(rescueCheckpointRef);
+        if (compensationFailure === null) {
+          clearWorkspaceIndexCache(checkpointCwd);
+          yield* discardRescueCheckpoint;
+        }
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail:
+            compensationFailure === null
+              ? `Conversation rollback failed and the workspace was put back: ${conversationRollbackFailure}`
+              : `Conversation rollback failed and the workspace could not be put back (${compensationFailure}). The pre-revert snapshot is kept at ${rescueCheckpointRef}. Provider error: ${conversationRollbackFailure}`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
     }
 
-    yield* orchestrationEngine
+    const completionFailure = yield* orchestrationEngine
       .dispatch({
         type: "thread.revert.complete",
-        commandId: serverCommandId("checkpoint-revert-complete"),
+        // Stable across retries: if persistence committed but the response was
+        // lost, the command receipt makes the retry idempotent instead of
+        // reverting a second time.
+        commandId: CommandId.makeUnsafe(`server:checkpoint-revert-complete:${event.eventId}`),
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
         createdAt: now,
       })
       .pipe(
+        Effect.retry(
+          Schedule.addDelay(Schedule.recurs(REVERT_COMPLETE_MAX_RETRIES), () =>
+            Effect.succeed("100 millis"),
+          ),
+        ),
+        Effect.as(null),
+        Effect.catch((error) => Effect.succeed(error.message)),
+      );
+    if (completionFailure !== null) {
+      // Both systems already moved, so the snapshot is deliberately kept: it is
+      // the only way back to the pre-revert worktree. Name it in the activity,
+      // otherwise the ref survives with nothing pointing a human at it.
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          `${completionFailure} The workspace${rolledBackTurns > 0 ? " and the conversation were" : " was"} already reverted; ` +
+          `the pre-revert snapshot is kept at ${rescueCheckpointRef}.`,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    // Domain state is authoritative, so refs are dropped only once the
+    // completion has committed. Deleting them earlier would destroy the
+    // checkpoints a retry needs when the dispatch is the step that fails.
+    const staleCheckpointRefs = thread.checkpoints
+      .filter((checkpoint) => checkpoint.checkpointTurnCount > event.payload.turnCount)
+      .map((checkpoint) => checkpoint.checkpointRef);
+
+    yield* checkpointStore
+      .deleteCheckpointRefs({
+        cwd: checkpointCwd,
+        checkpointRefs: [...staleCheckpointRefs, rescueCheckpointRef],
+      })
+      .pipe(
         Effect.catch((error) =>
-          appendRevertFailureActivity({
+          Effect.logWarning("checkpoint revert ref cleanup failed after completion", {
             threadId: event.payload.threadId,
             turnCount: event.payload.turnCount,
             detail: error.message,
-            createdAt: now,
           }),
         ),
-        Effect.asVoid,
       );
   });
 

@@ -863,9 +863,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         FROM sequences
       `;
 
-      const detail = yield* snapshotQuery.getThreadDetailById(
-        asThreadId("thread-oversized-turn"),
-      );
+      const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-oversized-turn"));
       assert.isTrue(Option.isSome(detail));
       const activities = Option.isSome(detail) ? detail.value.activities : [];
 

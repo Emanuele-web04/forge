@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.6.3 - 2026-07-27
+
+### Added
+
+- Added explicit control, user, and normal orchestration lanes so stop, interrupt, and settlement commands drain ahead of new turns and background projection work without weakening reserved-capacity or shutdown admission rules.
+- Added a compensating checkpoint-revert saga that captures the pre-revert worktree in a managed rescue ref and restores it if provider conversation rollback fails.
+- Added deterministic, retryable revert completion and user-visible failure activities that identify retained rescue refs when manual recovery may be needed.
+- Added bounded provider-command attempts and urgent lifecycle control so one unresponsive adapter or per-thread lock cannot stall every task.
+
+### Changed
+
+- Reworked provider lifecycle coordination and runtime reconciliation across Codex, Claude, Cursor, and ACP sessions so durable commands, terminal events, ownership, generations, and restart recovery converge on one session state.
+- Unified checkpoint cwd resolution, validation, ref encoding, cleanup, and recovery behavior across file-only undo, conversation rollback, and edit-and-resend.
+- Improved thread snapshot projection, visible-detail retention, store normalization, and refresh re-arming across lease, subscription, eviction, and reconnect races.
+- Improved provider runtime activity attribution so late or replayed terminal events settle the intended turn without duplicating work-log output.
+- Changed grouped file-change undo to revert every represented turn newest-first and stop on the first failure rather than silently leaving the card partially applied.
+- Bumped Synara release package versions to `0.6.3` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed stop and interrupt actions being starved behind a saturated queue, rejected during overload, or blocked indefinitely by a wedged provider start.
+- Fixed new turns being admitted while the orchestration engine was quiescing, which could orphan work during shutdown.
+- Fixed Claude terminal results without live turn state leaving a thread permanently marked as running, and bounded Claude interrupt acknowledgements that could otherwise hang their caller.
+- Fixed provider delivery timeouts holding the process-wide delivery lock forever; uncertain outcomes now settle explicitly for later reconciliation.
+- Fixed checkpoint revert requiring a live provider session, diffing the wrong checkout, mutating before checkpoint validation, or trimming a provider conversation twice after a half-applied retry.
+- Fixed invalid rescue-ref names for subagent thread identifiers, ineffective rescue-ref leak assertions, and unnecessary full-tree snapshots for no-op conversation rollbacks.
+- Fixed stale Claude resumes leaving task chips stranded or retrying a native conversation that the provider had already reported missing.
+- Fixed queued follow-ups being accepted while no real active turn existed, which could swallow the message instead of dispatching it.
+- Fixed the newest live answer collapsing into a completed disclosure while provider terminal state was still converging.
+- Fixed failed stop controls producing no visible explanation in the composer or keyboard shortcut path.
+- Fixed visible thread details being evicted or losing a refresh race and temporarily rendering as an empty conversation.
+- Fixed profile-stat cleanup purging soft-deleted threads without evidence of a manual delete, and retention sweeping archived or newly created fork and handoff threads because of inherited message timestamps.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,536 files.
+- `bun run lint` passed with 300 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only the existing TS44 informational schema messages remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 11m14.547s. Web passed 264 files / 3,255 tests; server/CLI passed 279 files / 2,988 tests with 2 skipped files / 7 skipped tests. No targeted reruns or flaky failures were needed.
+
 ## 0.6.2 - 2026-07-27
 
 ### Added

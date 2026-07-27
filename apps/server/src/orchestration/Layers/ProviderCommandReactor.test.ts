@@ -9,6 +9,7 @@ import path from "node:path";
 
 import type {
   ModelSelection,
+  OrchestrationCommand,
   OrchestrationEvent,
   ProviderForkThreadResult,
   ProviderRuntimeEvent,
@@ -16,6 +17,7 @@ import type {
 } from "@synara/contracts";
 import {
   ApprovalRequestId,
+  type ChatAttachment,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -26,7 +28,17 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { PROVIDER_DELIVERY_BLOCK_SUMMARY } from "@synara/shared/providerDeliveryBlock";
-import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
+import {
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Option,
+  PubSub,
+  Scope,
+  Stream,
+} from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -62,9 +74,13 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import {
   classifyProviderAttemptOutcome,
   isSafeLegacyProviderBlocker,
-  ProviderCommandReactorLive,
+  makeProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
-import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "../Services/OrchestrationEngine.ts";
+import { OrchestrationCommandInvariantError, type OrchestrationDispatchError } from "../Errors.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import {
   StudioOutputReactor,
@@ -186,6 +202,7 @@ describe("ProviderCommandReactor", () => {
     readonly forkThreadResult?: ProviderForkThreadResult | null;
     readonly startReactor?: boolean;
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
+    readonly commandEventTimeout?: Duration.Duration;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -472,7 +489,11 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     );
-    const layer = ProviderCommandReactorLive.pipe(
+    const layer = makeProviderCommandReactorLive(
+      input?.commandEventTimeout === undefined
+        ? undefined
+        : { commandEventTimeout: input.commandEventTimeout },
+    ).pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
@@ -503,6 +524,21 @@ describe("ProviderCommandReactor", () => {
       Effect.runPromise(PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid));
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    // Fault injection for command admission. The reactor resolves
+    // `dispatch` off the shared engine service on every call, so swapping the
+    // property here is observed by the reactor without rebuilding the layer.
+    const engineDispatchTarget = engine as {
+      dispatch: OrchestrationEngineShape["dispatch"];
+    };
+    const passthroughDispatch = engineDispatchTarget.dispatch;
+    const interceptEngineDispatch = (
+      interceptor: (
+        command: OrchestrationCommand,
+      ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError> | undefined,
+    ) => {
+      engineDispatchTarget.dispatch = (command, context) =>
+        interceptor(command) ?? passthroughDispatch(command, context);
+    };
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     const deliveryRepository = await runtime.runPromise(
       Effect.service(OrchestrationEventDeliveryRepository),
@@ -708,6 +744,7 @@ describe("ProviderCommandReactor", () => {
             updated_at = excluded.updated_at
         `),
       queuedTurnPromotionRepository,
+      interceptEngineDispatch,
     };
   }
 
@@ -4491,6 +4528,320 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
       input: "queue this next",
+    });
+  });
+
+  // Sets up a thread with one live turn and one durably queued follow-up, then
+  // returns the sequence of its `thread.turn-queued` event so the promotion row
+  // can be inspected directly.
+  async function seedQueuedTurnBehindLiveTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    input: {
+      readonly liveTurnId: TurnId;
+      readonly messageId: MessageId;
+      readonly text: string;
+      readonly attachments?: ReadonlyArray<ChatAttachment>;
+    },
+  ) {
+    const now = new Date().toISOString();
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: input.liveTurnId,
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe(`cmd-session-running-${input.messageId}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: input.liveTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.sendTurn.mockClear();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(`cmd-turn-${input.messageId}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: input.messageId,
+          role: "user",
+          text: input.text,
+          attachments: [...(input.attachments ?? [])],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((collected) => Array.from(collected)),
+      ),
+    );
+    const queuedEvent = events.find(
+      (event) => event.type === "thread.turn-queued" && event.payload.messageId === input.messageId,
+    );
+    expect(queuedEvent).toBeDefined();
+    return queuedEvent!.sequence;
+  }
+
+  const settleLiveTurn = async (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    input: { readonly turnId: TurnId; readonly eventId: string },
+  ) => {
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId(input.eventId),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: input.turnId,
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+  };
+
+  it("drains a thread again after a promotion dispatch failed", async () => {
+    const harness = await createHarness();
+    const queuedSequence = await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-running-blocked"),
+      messageId: asMessageId("msg-queue-blocked"),
+      text: "promote me on the next settle",
+    });
+
+    // A checkpoint revert in flight blocks promotion and is deliberately not
+    // retried — it clears through its own completion path. The failed drain
+    // must still release its per-thread in-flight guard, or every later
+    // terminal event for the thread would be ignored for the process lifetime.
+    let refusals = 0;
+    harness.interceptEngineDispatch((command) => {
+      if (command.type !== "thread.turn.dispatch-queued" || refusals > 0) {
+        return undefined;
+      }
+      refusals += 1;
+      return Effect.fail(
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Thread has a checkpoint revert in progress.",
+        }),
+      );
+    });
+
+    await settleLiveTurn(harness, {
+      turnId: asTurnId("turn-running-blocked"),
+      eventId: "evt-turn-completed-blocked",
+    });
+    await waitFor(() => refusals === 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await settleLiveTurn(harness, {
+      turnId: asTurnId("turn-running-blocked-later"),
+      eventId: "evt-turn-completed-blocked-later",
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "promote me on the next settle",
+    });
+    const promotion = await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.getBySequence(queuedSequence),
+    );
+    expect(promotion.pipe(Option.getOrThrow)).toMatchObject({ state: "promoted" });
+  });
+
+  it("drains a session again after a promoted turn start failed before dispatch", async () => {
+    const harness = await createHarness();
+    // The queued message carries a managed attachment whose file disappears
+    // between queueing and promotion (a real scenario: attachment GC, or the
+    // state dir being cleaned while a turn waits in the queue). The promoted
+    // turn start then fails in `resolveProviderDispatchAttachments`, which sits
+    // *before* `dispatchTurnForThread` — whose own `catchCause` is the only
+    // place that releases the reservation on a failure. The generator is
+    // abandoned while the session still holds its queued-dispatch reservation.
+    // That reservation gates `drainQueuedTurnsForThread` and makes
+    // `processQueueDrainEvent` absorb terminal events instead of draining, so
+    // leaking it strands every later queued message on this provider session
+    // for the rest of the process lifetime.
+    const attachment = {
+      type: "image",
+      id: `att_v2_${"a1b2c3d4".repeat(4)}`,
+      name: "vanishes.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+    } as const;
+    const attachmentPath = await harness.stageAttachment(attachment);
+    const queuedSequence = await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-running-reservation"),
+      messageId: asMessageId("msg-queue-reservation"),
+      text: "this promotion never reaches the provider",
+      attachments: [attachment],
+    });
+    fs.rmSync(attachmentPath, { force: true });
+
+    await settleLiveTurn(harness, {
+      turnId: asTurnId("turn-running-reservation"),
+      eventId: "evt-turn-completed-reservation",
+    });
+    // The promotion is consumed and then fails; nothing reaches the provider.
+    await waitFor(async () => {
+      const promotion = await Effect.runPromise(
+        harness.queuedTurnPromotionRepository.getBySequence(queuedSequence),
+      );
+      return Option.getOrUndefined(promotion)?.state === "promoted";
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    // Second call: a fresh queued message behind a fresh live turn must still
+    // promote when that turn settles.
+    await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-running-reservation-next"),
+      messageId: asMessageId("msg-queue-reservation-next"),
+      text: "promote me after the failed promotion",
+    });
+    await settleLiveTurn(harness, {
+      turnId: asTurnId("turn-running-reservation-next"),
+      eventId: "evt-turn-completed-reservation-next",
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "promote me after the failed promotion",
+    });
+  });
+
+  it("does not promote another queued turn while the reactor is shutting down", async () => {
+    const harness = await createHarness();
+    await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-running-shutdown"),
+      messageId: asMessageId("msg-queue-shutdown-1"),
+      text: "first queued turn",
+    });
+    const secondQueuedSequence = await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-running-shutdown"),
+      messageId: asMessageId("msg-queue-shutdown-2"),
+      text: "stay queued for the next boot",
+    });
+
+    let promotionDispatches = 0;
+    harness.interceptEngineDispatch((command) => {
+      if (command.type === "thread.turn.dispatch-queued") {
+        promotionDispatches += 1;
+      }
+      return undefined;
+    });
+    // Keep the first promotion in flight until closing the reactor scope
+    // interrupts it. The second message must remain durable queued work.
+    harness.sendTurn.mockImplementationOnce(() => Effect.never);
+
+    await settleLiveTurn(harness, {
+      turnId: asTurnId("turn-running-shutdown"),
+      eventId: "evt-turn-completed-shutdown",
+    });
+    await waitFor(() => promotionDispatches === 1 && harness.sendTurn.mock.calls.length === 1);
+
+    const activeScope = scope;
+    expect(activeScope).not.toBeNull();
+    await Effect.runPromise(Scope.close(activeScope!, Exit.void));
+    scope = null;
+
+    expect(promotionDispatches).toBe(1);
+    const secondPromotion = await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.getBySequence(secondQueuedSequence),
+    );
+    expect(secondPromotion.pipe(Option.getOrThrow)).toMatchObject({
+      state: "queued",
+      claimOwner: null,
+    });
+  });
+
+  it("releases a timed-out promoted turn when its live provider turn settles", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(25),
+    });
+    await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-running-timeout"),
+      messageId: asMessageId("msg-queue-timeout-1"),
+      text: "first queued turn times out after provider acceptance",
+    });
+    await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("turn-running-timeout"),
+      messageId: asMessageId("msg-queue-timeout-2"),
+      text: "second queued turn must drain after settlement",
+    });
+
+    const timedOutTurnId = asTurnId("turn-provider-accepted-before-timeout");
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.sync(() =>
+        harness.setRuntimeSessionTurnState({
+          threadId: "thread-1",
+          status: "running",
+          activeTurnId: timedOutTurnId,
+        }),
+      ).pipe(Effect.andThen(Effect.never)),
+    );
+
+    await settleLiveTurn(harness, {
+      turnId: asTurnId("turn-running-timeout"),
+      eventId: "evt-turn-completed-timeout",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(async () =>
+      Effect.runPromise(
+        harness.deliveryRepository
+          .firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: "thread-1",
+          })
+          .pipe(Effect.map(Option.isSome)),
+      ),
+    );
+
+    const blocker = (
+      await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId: "thread-1",
+        }),
+      )
+    ).pipe(Option.getOrThrow);
+    await Effect.runPromise(
+      harness.reactor.reconcileDelivery({
+        eventSequence: blocker.eventSequence,
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        expectedState: "uncertain",
+        outcome: "abandon",
+        reconciledBy: "test-operator",
+        note: "The provider accepted the timed-out turn.",
+      }),
+    );
+
+    await settleLiveTurn(harness, {
+      turnId: timedOutTurnId,
+      eventId: "evt-provider-turn-completed-after-timeout",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "second queued turn must drain after settlement",
     });
   });
 

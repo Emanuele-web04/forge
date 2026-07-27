@@ -38,6 +38,7 @@ import {
   Queue,
   Schema,
   Semaphore,
+  ServiceMap,
   Stream,
 } from "effect";
 import {
@@ -429,7 +430,21 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
   return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
 }
 
+export interface ProviderCommandReactorLiveOptions {
+  readonly commandEventTimeout?: Duration.Duration;
+}
+
+interface ProviderCommandReactorConfigShape {
+  readonly commandEventTimeout: Duration.Duration;
+}
+
+class ProviderCommandReactorConfig extends ServiceMap.Service<
+  ProviderCommandReactorConfig,
+  ProviderCommandReactorConfigShape
+>()("synara/orchestration/Layers/ProviderCommandReactorConfig") {}
+
 const make = Effect.gen(function* () {
+  const { commandEventTimeout } = yield* ProviderCommandReactorConfig;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const deliveryRepository = yield* OrchestrationEventDeliveryRepository;
   const turnCheckpointCoordinator = yield* TurnCheckpointCoordinator;
@@ -1883,7 +1898,13 @@ const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           Effect.logWarning(
             "provider command reactor failed to apply fallback worktree branch name",
-            { threadId: input.threadId, cwd, oldBranch, targetBranch, cause: Cause.pretty(cause) },
+            {
+              threadId: input.threadId,
+              cwd,
+              oldBranch,
+              targetBranch,
+              cause: Cause.pretty(cause),
+            },
           ),
         ),
       );
@@ -2041,7 +2062,42 @@ const make = Effect.gen(function* () {
         yield* drainQueuedTurnsForSession(event.payload.threadId);
       }
     });
-    try {
+    // Safety net for a promoted queued dispatch that never reaches a turn. While
+    // this reservation is present, `drainQueuedTurnsForThread` early-returns for
+    // every thread on this provider session, and an unbound reservation also
+    // absorbs terminal turn events instead of draining — so leaking it strands
+    // the thread's queued messages until the process restarts.
+    //
+    // `Effect.onExit`, never a JS `finally`: a generator driven by
+    // `Effect.fnUntraced` is not resumed when a yielded effect fails or is
+    // interrupted, so a `finally` here would simply never run on those paths.
+    // `onExit` rather than `ensuring` because this release is itself fallible
+    // and must keep propagating its errors, exactly as the `finally` did.
+    const releaseOrphanedQueuedDispatchReservation = (redrain: boolean) =>
+      Effect.gen(function* () {
+        const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+        if (
+          !isPendingQueuedDispatch ||
+          reservation === undefined ||
+          !ownsReservation(reservation) ||
+          reservation.releaseOnTurnId !== undefined
+        ) {
+          return;
+        }
+        if (yield* hasQueuedTurnStart(event.payload.threadId, event.payload.messageId)) {
+          return;
+        }
+        const liveTurnId = yield* resolveLiveProviderTurnId(event.payload.threadId);
+        if (liveTurnId !== undefined) {
+          yield* bindPendingQueuedDispatchToTurn(liveTurnId);
+          return;
+        }
+        yield* clearPendingQueuedDispatch;
+        if (redrain) {
+          yield* drainQueuedTurnsForSession(event.payload.threadId);
+        }
+      });
+    yield* Effect.gen(function* () {
       const key = turnStartKeyForEvent(event);
       if (yield* hasHandledTurnStartRecently(key)) {
         return;
@@ -2189,53 +2245,48 @@ const make = Effect.gen(function* () {
         createdAt: event.payload.createdAt,
       }).pipe(
         Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            const detail = Cause.pretty(cause);
-            yield* appendProviderFailureActivity({
-              threadId: event.payload.threadId,
-              kind: "provider.turn.start.failed",
-              summary: "Provider turn start failed",
-              detail,
-              turnId: null,
-              createdAt: event.payload.createdAt,
-            });
-            yield* setThreadSessionError({
-              threadId: event.payload.threadId,
-              runtimeMode: event.payload.runtimeMode,
-              detail,
-              createdAt: event.payload.createdAt,
-            });
-            // A direct start has no provider turn and therefore cannot emit a
-            // terminal runtime event. Recover every queue sharing this
-            // provider session now; otherwise follow-ups queued before the
-            // failure remain stranded indefinitely (including child threads
-            // multiplexed onto their parent's provider session).
-            if (isPendingQueuedDispatch) {
-              yield* clearPendingQueuedDispatch;
-            }
-            yield* drainQueuedTurnsForSession(event.payload.threadId);
-            return yield* Effect.failCause(cause);
-          }),
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.gen(function* () {
+                const detail = Cause.pretty(cause);
+                yield* appendProviderFailureActivity({
+                  threadId: event.payload.threadId,
+                  kind: "provider.turn.start.failed",
+                  summary: "Provider turn start failed",
+                  detail,
+                  turnId: null,
+                  createdAt: event.payload.createdAt,
+                });
+                yield* setThreadSessionError({
+                  threadId: event.payload.threadId,
+                  runtimeMode: event.payload.runtimeMode,
+                  detail,
+                  createdAt: event.payload.createdAt,
+                });
+                // A direct start has no provider turn and therefore cannot emit a
+                // terminal runtime event. Recover every queue sharing this
+                // provider session now; otherwise follow-ups queued before the
+                // failure remain stranded indefinitely (including child threads
+                // multiplexed onto their parent's provider session).
+                if (isPendingQueuedDispatch) {
+                  yield* clearPendingQueuedDispatch;
+                }
+                yield* drainQueuedTurnsForSession(event.payload.threadId);
+                return yield* Effect.failCause(cause);
+              }),
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
       if (startedTurn && isPendingQueuedDispatch) {
         yield* bindPendingQueuedDispatchToTurn(startedTurn.turnId);
       }
-    } finally {
-      const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
-      if (
-        isPendingQueuedDispatch &&
-        reservation !== undefined &&
-        ownsReservation(reservation) &&
-        reservation.releaseOnTurnId === undefined &&
-        !(yield* hasQueuedTurnStart(event.payload.threadId, event.payload.messageId)) &&
-        !(yield* hasLiveProviderTurn(event.payload.threadId))
-      ) {
-        yield* clearPendingQueuedDispatch;
-        yield* drainQueuedTurnsForSession(event.payload.threadId);
-      }
-    }
+    }).pipe(
+      Effect.onExit((exit) =>
+        releaseOrphanedQueuedDispatchReservation(
+          Exit.isSuccess(exit) || !Cause.hasInterruptsOnly(exit.cause),
+        ),
+      ),
+    );
   });
 
   const processTurnStartRequested = (
@@ -2272,7 +2323,11 @@ const make = Effect.gen(function* () {
       return;
     }
     drainingQueuedTurns.add(threadId);
-    try {
+    // `Effect.ensuring`, never a JS `finally`: a generator driven by
+    // `Effect.fnUntraced` does not resume to run `finally` blocks when a
+    // yielded effect fails, so a failed promotion dispatch would leak this
+    // in-flight guard and silently disable every later drain for the thread.
+    yield* Effect.gen(function* () {
       const claimed = yield* queuedTurnPromotions.claimNext({
         threadId,
         claimOwner: queuedTurnPromotionOwner,
@@ -2357,9 +2412,7 @@ const make = Effect.gen(function* () {
           ]).pipe(Effect.asVoid),
         ),
       );
-    } finally {
-      drainingQueuedTurns.delete(threadId);
-    }
+    }).pipe(Effect.ensuring(Effect.sync(() => drainingQueuedTurns.delete(threadId))));
   });
 
   const drainQueuedTurnsForSession = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -3282,7 +3335,7 @@ const make = Effect.gen(function* () {
 
   const processDomainEventSafely = (event: ProviderIntentEvent) =>
     processDomainEvent(event).pipe(
-      Effect.timeoutOption(PROVIDER_COMMAND_EVENT_TIMEOUT),
+      Effect.timeoutOption(commandEventTimeout),
       Effect.flatMap((completed) =>
         Option.isSome(completed)
           ? Effect.void
@@ -3290,7 +3343,7 @@ const make = Effect.gen(function* () {
               eventType: event.type,
               eventSequence: event.sequence,
               threadId: event.payload.threadId,
-              timeoutMs: Duration.toMillis(PROVIDER_COMMAND_EVENT_TIMEOUT),
+              timeoutMs: Duration.toMillis(commandEventTimeout),
             }),
       ),
       Effect.catchCause((cause) => {
@@ -3541,7 +3594,7 @@ const make = Effect.gen(function* () {
 
         const workerResult = yield* runBoundedProviderCall({
           label: `The provider command '${event.type}'`,
-          timeout: PROVIDER_COMMAND_EVENT_TIMEOUT,
+          timeout: commandEventTimeout,
           call: processDomainEvent(event),
         });
         if (workerResult._tag === "timeout") {
@@ -3920,8 +3973,16 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make).pipe(
-  Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
-  Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
-  Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
-);
+export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorLiveOptions) =>
+  Layer.effect(ProviderCommandReactor, make).pipe(
+    Layer.provide(
+      Layer.succeed(ProviderCommandReactorConfig, {
+        commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,
+      }),
+    ),
+    Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
+    Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
+    Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
+  );
+
+export const ProviderCommandReactorLive = makeProviderCommandReactorLive();

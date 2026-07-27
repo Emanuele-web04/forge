@@ -124,7 +124,9 @@ export interface CheckpointStoreShape {
   /**
    * Delete the provided checkpoint refs.
    *
-   * Best-effort delete: missing refs are tolerated.
+   * Missing refs are tolerated (deleting an absent ref is a no-op for Git), but
+   * a ref that exists and could not be deleted fails the effect: callers use
+   * this to protect snapshots that are a user's only way back.
    */
   readonly deleteCheckpointRefs: (
     input: DeleteCheckpointRefsInput,
