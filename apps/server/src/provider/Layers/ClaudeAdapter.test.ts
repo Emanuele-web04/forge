@@ -33,6 +33,7 @@ import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import {
   buildEmbeddedClaudeSystemPromptAppend,
   makeClaudeAdapterLive,
+  toRemoteClaudeSpawnOptions,
   type ClaudeAdapterLiveOptions,
   type ClaudeOwnedProcess,
 } from "./ClaudeAdapter.ts";
@@ -8664,5 +8665,57 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+});
+
+describe("toRemoteClaudeSpawnOptions", () => {
+  const REMOTE = {
+    kind: "ssh" as const,
+    host: "deploy@build-box",
+    sshArgs: ["-p", "2222"],
+    shellInit: "source ~/.nvm/nvm.sh",
+    binaryPath: null,
+  };
+  const localSpawn = {
+    command: "claude",
+    args: ["--session-id", "s-1"],
+    cwd: "/srv/app",
+    env: {
+      PATH: "/usr/bin",
+      HOME: "/Users/dev",
+      CLAUDE_CODE_ENTRYPOINT: "sdk-ts",
+      CLAUDE_CONFIG_DIR: "/Users/dev/.claude",
+      ANTHROPIC_API_KEY: "sk-local",
+    },
+    signal: new AbortController().signal,
+  };
+
+  it("runs the CLI's own argv on the remote host", () => {
+    const remoteSpawn = toRemoteClaudeSpawnOptions(localSpawn, REMOTE, []);
+
+    assert.equal(remoteSpawn.command, "ssh");
+    assert.equal(remoteSpawn.args.at(-2), "deploy@build-box");
+    assert.equal(
+      remoteSpawn.args.at(-1),
+      "cd '/srv/app' && source ~/.nvm/nvm.sh && exec env CLAUDE_CODE_ENTRYPOINT='sdk-ts' 'claude' '--session-id' 's-1'",
+    );
+    assert.deepEqual(remoteSpawn.args.slice(0, 3), ["-T", "-p", "2222"]);
+  });
+
+  it("drops the remote cwd from the local spawn so ssh starts in a directory that exists", () => {
+    assert.equal(toRemoteClaudeSpawnOptions(localSpawn, REMOTE, []).cwd, undefined);
+  });
+
+  it("hands the local ssh client only its own environment", () => {
+    assert.deepEqual(toRemoteClaudeSpawnOptions(localSpawn, REMOTE, []).env, {
+      PATH: "/usr/bin",
+      HOME: "/Users/dev",
+    });
+  });
+
+  it("reverse-forwards the agent gateway port", () => {
+    const remoteSpawn = toRemoteClaudeSpawnOptions(localSpawn, REMOTE, [3773]);
+
+    assert.equal(remoteSpawn.args.includes("3773:127.0.0.1:3773"), true);
   });
 });

@@ -124,7 +124,9 @@ import {
   ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
   ProjectDiscoverScriptsInput,
+  ProjectProbeRemoteInput,
   ProjectDiscoverScriptsResult,
+  ProjectProbeRemoteResult,
   ProjectListDevServersResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
@@ -347,6 +349,12 @@ export const WsProjectsListDirectoriesRpc = Rpc.make(WS_METHODS.projectsListDire
 export const WsProjectsDiscoverScriptsRpc = Rpc.make(WS_METHODS.projectsDiscoverScripts, {
   payload: ProjectDiscoverScriptsInput,
   success: ProjectDiscoverScriptsResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsProbeRemoteRpc = Rpc.make(WS_METHODS.projectsProbeRemote, {
+  payload: ProjectProbeRemoteInput,
+  success: ProjectProbeRemoteResult,
   error: WsRpcError,
 });
 
@@ -997,6 +1005,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,
   WsProjectsDiscoverScriptsRpc,
+  WsProjectsProbeRemoteRpc,
   WsProjectsListDirectoriesRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,

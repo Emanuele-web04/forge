@@ -101,6 +101,8 @@ import type {
   ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
   ProjectDiscoverScriptsInput,
+  ProjectProbeRemoteInput,
+  ProjectProbeRemoteResult,
   ProjectDiscoverScriptsResult,
   ProjectListDevServersResult,
   ProjectListDirectoriesInput,
@@ -555,6 +557,7 @@ export interface NativeApi {
   };
   projects: {
     discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;
+    probeRemote: (input: ProjectProbeRemoteInput) => Promise<ProjectProbeRemoteResult>;
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     searchLocalEntries: (

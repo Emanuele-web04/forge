@@ -14,10 +14,170 @@ const PROJECT_READ_FILE_PATH_MAX_LENGTH = 2048;
 const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
 const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
+const PROJECT_REMOTE_HOST_MAX_LENGTH = 256;
+const PROJECT_REMOTE_SSH_ARG_MAX_LENGTH = 512;
+const PROJECT_REMOTE_SSH_ARGS_MAX_COUNT = 32;
+const PROJECT_REMOTE_SHELL_INIT_MAX_LENGTH = 1024;
+const PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH = 512;
 const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
 export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
 export type ProjectKind = typeof ProjectKind.Type;
+
+/**
+ * How the agent command is wrapped once ssh reaches the host.
+ *
+ * Every launcher must be **stdio-transparent**: it has to run the agent in place, keeping
+ * the inherited stdin/stdout, because the agent protocol is newline-delimited JSON on
+ * those descriptors. Terminal multiplexers (tmux, screen, zellij) and backgrounding
+ * wrappers (nohup, setsid) move the process onto their own pty or detach it, so the
+ * protocol never reaches Synara — `describeRejectedRemoteLauncher` refuses them by name
+ * instead of letting a session start and hang.
+ */
+export const ProjectRemoteLauncher = Schema.Union([
+  /** Run the agent as ssh's own command. */
+  Schema.Struct({ kind: Schema.Literal("direct") }),
+  /**
+   * Run it through a login shell so the user's profile (nvm, mise, asdf, rbenv, Herd)
+   * is loaded — the usual reason a setup works in a terminal but not over ssh.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("login-shell"),
+    shell: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+      ),
+    ).pipe(Schema.withDecodingDefault(() => null)),
+  }),
+  /**
+   * Run it inside a container on the host. Typed rather than left to the custom launcher
+   * because the interactive flag (`exec -i`, `compose exec -T`) is what keeps stdin open,
+   * and omitting it produces a session that connects and then silently never responds.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("container"),
+    engine: Schema.Literals(["docker", "podman", "docker-compose"]),
+    /** Container name, or compose service name for the `docker-compose` engine. */
+    target: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_HOST_MAX_LENGTH)),
+    user: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_HOST_MAX_LENGTH)),
+      ),
+    ).pipe(Schema.withDecodingDefault(() => null)),
+    /** Shell used inside the container to run the project script. */
+    shell: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+      ),
+    ).pipe(Schema.withDecodingDefault(() => null)),
+  }),
+  /**
+   * Anything else that runs a command in place: `mise exec --`, `nix develop -c`,
+   * `direnv exec .`, `distrobox enter --`, `toolbox run`. The project script is handed
+   * to it as a single shell-command argument.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("command"),
+    args: Schema.Array(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_SSH_ARG_MAX_LENGTH)),
+    )
+      .check(Schema.isMinLength(1), Schema.isMaxLength(PROJECT_REMOTE_SSH_ARGS_MAX_COUNT))
+      .annotate({ description: "Wrapper command and its arguments, already tokenized." }),
+    shell: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+      ),
+    ).pipe(Schema.withDecodingDefault(() => null)),
+  }),
+]);
+export type ProjectRemoteLauncher = typeof ProjectRemoteLauncher.Type;
+
+/**
+ * SSH target for a project whose workspace lives on another machine.
+ *
+ * Synara deliberately owns none of the connection setup: `host` is any ssh(1)
+ * destination, so a `~/.ssh/config` Host alias already carries the user's port,
+ * identity, jump hosts, ProxyCommand and multiplexing exactly as their terminal
+ * uses them. `sshArgs` is the escape hatch for people who do not keep an ssh
+ * config, and `shellInit` covers non-interactive shells that need a version
+ * manager or credential export before the agent binary is reachable.
+ */
+export const ProjectRemote = Schema.Struct({
+  kind: Schema.Literal("ssh"),
+  /** ssh destination: a `~/.ssh/config` Host alias or `[user@]hostname`. */
+  host: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_HOST_MAX_LENGTH)),
+  /** Extra ssh flags, already tokenized (e.g. `["-p", "2222", "-J", "bastion"]`). */
+  sshArgs: Schema.optional(
+    Schema.Array(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_SSH_ARG_MAX_LENGTH)),
+    ).check(Schema.isMaxLength(PROJECT_REMOTE_SSH_ARGS_MAX_COUNT)),
+  ).pipe(Schema.withDecodingDefault(() => [])),
+  /** Shell command run on the remote before the agent, e.g. `source ~/.nvm/nvm.sh`. */
+  shellInit: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_SHELL_INIT_MAX_LENGTH)),
+    ),
+  ).pipe(Schema.withDecodingDefault(() => null)),
+  /** What the agent command runs inside on the host. Defaults to running it directly. */
+  launcher: Schema.optional(ProjectRemoteLauncher).pipe(
+    Schema.withDecodingDefault(() => ({ kind: "direct" as const })),
+  ),
+  /** Agent binary as resolved on the remote host; defaults to the provider's own default. */
+  binaryPath: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+    ),
+  ).pipe(Schema.withDecodingDefault(() => null)),
+});
+export type ProjectRemote = typeof ProjectRemote.Type;
+
+/**
+ * Outcome of a remote probe, ordered from "nothing worked" to "ready".
+ *
+ * Each value maps to one thing the user has to fix, because every one of them is otherwise
+ * indistinguishable at session start: the session simply fails to produce a first turn.
+ */
+export const ProjectRemoteProbeStatus = Schema.Literals([
+  /** ssh itself never got a shell on the host: DNS, network, or authentication. */
+  "unreachable",
+  /** Connected, but the workspace root does not exist there. */
+  "missing-path",
+  /** Connected and the path exists, but the agent binary is not on the resolved PATH. */
+  "missing-binary",
+  /**
+   * The agent ran, but the shell wrote to stdout before it did. That output lands in the
+   * middle of the agent protocol, so the session would fail in a way that looks random.
+   */
+  "noisy-shell",
+  "ok",
+]);
+export type ProjectRemoteProbeStatus = typeof ProjectRemoteProbeStatus.Type;
+
+export const ProjectProbeRemoteInput = Schema.Struct({
+  remote: ProjectRemote,
+  workspaceRoot: TrimmedNonEmptyString,
+  /** Binary to look for; defaults to the Claude CLI. */
+  binaryName: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_REMOTE_BINARY_PATH_MAX_LENGTH)),
+  ),
+});
+export type ProjectProbeRemoteInput = typeof ProjectProbeRemoteInput.Type;
+
+export const ProjectProbeRemoteResult = Schema.Struct({
+  status: ProjectRemoteProbeStatus,
+  /** One sentence the UI can show as-is. */
+  summary: Schema.String,
+  /** Verbatim diagnostic output (ssh stderr, or the shell noise) when there is any. */
+  detail: Schema.NullOr(Schema.String),
+  /** Agent version reported by the host, when it ran. */
+  version: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * Set when the probe found the agent only after retrying through a login shell. The UI
+   * switches the launcher to this rather than making the user work out which one to pick.
+   */
+  suggestedLauncher: Schema.NullOr(ProjectRemoteLauncher),
+});
+export type ProjectProbeRemoteResult = typeof ProjectProbeRemoteResult.Type;
 
 export const ProjectSearchEntriesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,

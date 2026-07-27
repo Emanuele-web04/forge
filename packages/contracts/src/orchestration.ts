@@ -10,7 +10,7 @@ import {
   PiModelOptions,
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
-import { ProjectKind } from "./project";
+import { ProjectKind, ProjectRemote } from "./project";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -165,6 +165,12 @@ export const ClaudeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   permissionMode: Schema.optional(TrimmedNonEmptyString),
   maxThinkingTokens: Schema.optional(NonNegativeInt),
+  /**
+   * Resolved server-side from the thread's project. When present the CLI runs on
+   * that host over ssh instead of locally, and `binaryPath` (a local override)
+   * no longer applies — `remote.binaryPath` does.
+   */
+  remote: Schema.optional(ProjectRemote),
 });
 
 export const AntigravityProviderStartOptions = Schema.Struct({
@@ -439,6 +445,9 @@ export const OrchestrationProject = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  remote: Schema.optional(Schema.NullOr(ProjectRemote)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
@@ -454,6 +463,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  remote: Schema.optional(Schema.NullOr(ProjectRemote)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
@@ -975,6 +987,11 @@ export const ProjectCreateCommand = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  /**
+   * Makes this an SSH project: `workspaceRoot` is then a path on `remote.host`,
+   * never a local one, so the server skips local canonicalization entirely.
+   */
+  remote: Schema.optional(Schema.NullOr(ProjectRemote)),
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
@@ -996,6 +1013,8 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   kind: Schema.optional(ProjectKind),
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  /** `null` converts an SSH project back to a local one. */
+  remote: Schema.optional(Schema.NullOr(ProjectRemote)),
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
@@ -1673,6 +1692,9 @@ export const ProjectCreatedPayload = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  remote: Schema.optional(Schema.NullOr(ProjectRemote)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
@@ -1686,6 +1708,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   kind: Schema.optional(ProjectKind),
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  remote: Schema.optional(Schema.NullOr(ProjectRemote)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),

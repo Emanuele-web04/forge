@@ -80,6 +80,7 @@ import {
   type OrchestrationShellSnapshot,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
+  type ProjectRemote,
   SpaceId,
   type ProviderKind,
   ThreadId,
@@ -2313,7 +2314,11 @@ export default function Sidebar() {
   const addProjectFromPath = useCallback(
     async (
       rawCwd: string,
-      options: { createIfMissing?: boolean; spaceId?: SpaceId | null } = {},
+      options: {
+        createIfMissing?: boolean;
+        spaceId?: SpaceId | null;
+        remote?: ProjectRemote | null;
+      } = {},
     ) => {
       const cwd = rawCwd.trim();
       if (!cwd) {
@@ -2363,6 +2368,7 @@ export default function Sidebar() {
             ? {}
             : { createIfMissing: options.createIfMissing }),
           ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
+          ...(options.remote === undefined ? {} : { remote: options.remote }),
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -3142,6 +3148,7 @@ export default function Sidebar() {
         await addProjectFromPath(value.workspaceRoot, {
           createIfMissing: value.createIfMissing,
           spaceId: value.spaceId,
+          remote: value.remote,
         });
       } catch (error) {
         // Project creation is one UI transaction: a failed command must not

@@ -7,6 +7,7 @@ import {
   type NativeApi,
   type OrchestrationShellSnapshot,
   type ProjectId,
+  type ProjectRemote,
   type SpaceId,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
@@ -37,6 +38,8 @@ export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
   createIfMissing?: boolean;
+  /** SSH target when the workspace lives on another host; omitted/`null` keeps it local. */
+  remote?: ProjectRemote | null;
   /** Overrides the active-space default; `null` files the project in Void. */
   spaceId?: SpaceId | null;
   loadSnapshot: () => Promise<OrchestrationShellSnapshot | null>;
@@ -67,6 +70,7 @@ export async function createOrRecoverProjectFromPath(input: {
       kind: "project",
       title,
       workspaceRoot,
+      remote: input.remote ?? null,
       createWorkspaceRootIfMissing: input.createIfMissing === true,
       defaultModelSelection: {
         provider: "codex",

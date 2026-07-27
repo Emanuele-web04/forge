@@ -1,6 +1,11 @@
 # Remote Access Setup
 
-Use this when you want to open Synara from another device (phone, tablet, another laptop).
+Two different things are called "remote" here, and they compose:
+
+- **Remote access** (this document, below): Synara runs on this machine, and you open its UI
+  from another device.
+- **Remote projects over SSH** ([`docs/remote-ssh-projects.md`](docs/remote-ssh-projects.md)):
+  Synara runs here, and the coding agent runs on another host over ssh.
 
 ## CLI ↔ Env option map
 

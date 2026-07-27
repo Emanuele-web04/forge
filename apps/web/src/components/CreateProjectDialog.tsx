@@ -1,10 +1,16 @@
 // FILE: CreateProjectDialog.tsx
 // Purpose: Single entry point for adding a project — typed path, source folder
-//          (drag/drop or native browse), and destination Space.
+//          (drag/drop or native browse), optional SSH host, and destination Space.
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
-import { type SpaceId } from "@synara/contracts";
+import {
+  type ProjectProbeRemoteResult,
+  type ProjectRemote,
+  type ProjectRemoteLauncher,
+  type SpaceId,
+} from "@synara/contracts";
+import { describeRejectedRemoteLauncher, parseShellWords } from "@synara/shared/sshRemote";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 import { isElectron } from "../env";
@@ -24,6 +30,8 @@ import { describeAddProjectError } from "./Sidebar.logic";
 import { SpaceEditorDialog, type SpaceEditorValue } from "./SpaceEditorDialog";
 import { SpaceIcon } from "./SpaceIcon";
 import { Button } from "./ui/button";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
+import { DisclosureRegion } from "./ui/DisclosureRegion";
 import {
   Dialog,
   DialogFooter,
@@ -44,6 +52,79 @@ const fieldControlClassName = "h-9 rounded-lg border-foreground/12";
 
 function isFileDrag(event: globalThis.DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+
+type ProjectLocation = "local" | "ssh";
+
+type LauncherKind = ProjectRemoteLauncher["kind"];
+type ContainerEngine = Extract<ProjectRemoteLauncher, { kind: "container" }>["engine"];
+
+const LAUNCHER_LABELS: Record<LauncherKind, string> = {
+  direct: "Directly",
+  "login-shell": "A login shell",
+  container: "A container",
+  command: "A custom command",
+};
+
+const CONTAINER_ENGINE_LABELS: Record<ContainerEngine, string> = {
+  docker: "docker exec",
+  podman: "podman exec",
+  "docker-compose": "docker compose exec",
+};
+
+interface LauncherFormState {
+  readonly kind: LauncherKind;
+  readonly loginShell: string;
+  readonly containerEngine: ContainerEngine;
+  readonly containerTarget: string;
+  readonly containerUser: string;
+  readonly containerShell: string;
+  readonly command: string;
+}
+
+const EMPTY_LAUNCHER_FORM: LauncherFormState = {
+  kind: "direct",
+  loginShell: "",
+  containerEngine: "docker",
+  containerTarget: "",
+  containerUser: "",
+  containerShell: "",
+  command: "",
+};
+
+const trimmedOrNull = (value: string): string | null => value.trim() || null;
+
+function buildLauncher(form: LauncherFormState): ProjectRemoteLauncher {
+  switch (form.kind) {
+    case "direct":
+      return { kind: "direct" };
+    case "login-shell":
+      return { kind: "login-shell", shell: trimmedOrNull(form.loginShell) };
+    case "container":
+      return {
+        kind: "container",
+        engine: form.containerEngine,
+        target: form.containerTarget.trim(),
+        user: trimmedOrNull(form.containerUser),
+        shell: trimmedOrNull(form.containerShell),
+      };
+    case "command":
+      return {
+        kind: "command",
+        args: parseShellWords(form.command),
+        shell: null,
+      };
+  }
+}
+
+/** Configuration-time explanation, so a broken launcher never becomes a hung session. */
+function describeLauncherProblem(form: LauncherFormState): string | null {
+  if (form.kind === "container" && form.containerTarget.trim().length === 0) {
+    return form.containerEngine === "docker-compose"
+      ? "Type the compose service to run in."
+      : "Type the container to run in.";
+  }
+  return describeRejectedRemoteLauncher(buildLauncher(form));
 }
 
 type DroppedFolderResult = { readonly path: string } | { readonly error: string };
@@ -68,6 +149,8 @@ export interface CreateProjectSubmitValue {
   readonly spaceId: SpaceId | null;
   /** True when the path was typed/edited by hand, so a missing folder may be created. */
   readonly createIfMissing: boolean;
+  /** SSH target when the workspace lives on another machine; `null` for this one. */
+  readonly remote: ProjectRemote | null;
 }
 
 export function CreateProjectDialog(props: {
@@ -84,6 +167,20 @@ export function CreateProjectDialog(props: {
    * opt into create-if-missing — the same split the old Browse/Type-path pair had.
    */
   const [pickedPath, setPickedPath] = useState<string | null>(null);
+  const [location, setLocation] = useState<ProjectLocation>("local");
+  const [sshHost, setSshHost] = useState("");
+  const [sshArgs, setSshArgs] = useState("");
+  const [shellInit, setShellInit] = useState("");
+  const [remoteBinaryPath, setRemoteBinaryPath] = useState("");
+  const [launcherForm, setLauncherForm] = useState<LauncherFormState>(EMPTY_LAUNCHER_FORM);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
+  // Kept with the inputs it was produced for: a result is only ever shown while it still
+  // describes what the form currently says, so editing a field cannot leave a stale "ready".
+  const [probe, setProbe] = useState<{
+    readonly signature: string;
+    readonly result: ProjectProbeRemoteResult;
+  } | null>(null);
   const [selectedSpaceKey, setSelectedSpaceKey] = useState<string>(VOID_SPACE_KEY);
   const [spaceEditorOpen, setSpaceEditorOpen] = useState(false);
   /**
@@ -101,6 +198,9 @@ export function CreateProjectDialog(props: {
   const pathInputId = `${fieldId}-path`;
   const submitButtonId = `${fieldId}-submit`;
   const sourceFolderLabelId = `${fieldId}-source-folder`;
+  const locationLabelId = `${fieldId}-location`;
+  const sshHostInputId = `${fieldId}-ssh-host`;
+  const launcherLabelId = `${fieldId}-launcher`;
   const spaceLabelId = `${fieldId}-space`;
   const errorId = `${fieldId}-error`;
 
@@ -111,6 +211,15 @@ export function CreateProjectDialog(props: {
     if (!props.open) return;
     setPath("");
     setPickedPath(null);
+    setLocation("local");
+    setSshHost("");
+    setSshArgs("");
+    setShellInit("");
+    setRemoteBinaryPath("");
+    setLauncherForm(EMPTY_LAUNCHER_FORM);
+    setAdvancedOpen(false);
+    setChecking(false);
+    setProbe(null);
     setSelectedSpaceKey(spaceKey(props.activeSpaceId));
     setSpaceEditorOpen(false);
     setCreatedSpace(null);
@@ -125,6 +234,67 @@ export function CreateProjectDialog(props: {
   }, [pathInputId, props.activeSpaceId, props.open]);
 
   const trimmedPath = path.trim();
+  const isRemote = location === "ssh";
+  const trimmedSshHost = sshHost.trim();
+  const launcherProblem = isRemote ? describeLauncherProblem(launcherForm) : null;
+  const probeSignature = JSON.stringify([
+    trimmedPath,
+    trimmedSshHost,
+    sshArgs,
+    shellInit,
+    remoteBinaryPath,
+    launcherForm,
+  ]);
+  const probeResult = probe?.signature === probeSignature ? probe.result : null;
+  const buildRemote = (): ProjectRemote => ({
+    kind: "ssh",
+    host: trimmedSshHost,
+    sshArgs: parseShellWords(sshArgs),
+    shellInit: shellInit.trim() || null,
+    binaryPath: remoteBinaryPath.trim() || null,
+    launcher: buildLauncher(launcherForm),
+  });
+
+  // Runs the command a session would run, so the dialog can answer the one question the
+  // user cannot answer from here: does this host, path, and launcher combination work.
+  const checkConnection = async () => {
+    if (checking || trimmedPath.length === 0 || trimmedSshHost.length === 0) {
+      setFormError(
+        trimmedSshHost.length === 0
+          ? "Type the SSH host to connect to."
+          : "Type the project folder path on the host.",
+      );
+      return;
+    }
+    if (launcherProblem) {
+      setFormError(launcherProblem);
+      return;
+    }
+    const api = readNativeApi();
+    if (!api) {
+      setFormError("The app server is unavailable.");
+      return;
+    }
+    setChecking(true);
+    setFormError(null);
+    setProbe(null);
+    try {
+      const result = await api.projects.probeRemote({
+        remote: buildRemote(),
+        workspaceRoot: trimmedPath,
+      });
+      setProbe({ signature: probeSignature, result });
+      // The probe found the agent only through a login shell: apply that rather than
+      // leaving the user to map the finding onto a setting.
+      if (result.suggestedLauncher?.kind === "login-shell") {
+        setLauncherForm((form) => ({ ...form, kind: "login-shell" }));
+        setAdvancedOpen(true);
+      }
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Could not reach the host.");
+    }
+    setChecking(false);
+  };
   const formErrorMeaning = formError ? describeAddProjectError(formError) : null;
   const spaces =
     createdSpace && !props.spaces.some((space) => space.id === createdSpace.id)
@@ -213,7 +383,19 @@ export function CreateProjectDialog(props: {
     // The confirm button stays enabled (and white) like the reference dialog;
     // an empty submit explains what is missing instead of being unclickable.
     if (trimmedPath.length === 0) {
-      setFormError("Type a folder path, or drop a folder above.");
+      setFormError(
+        isRemote
+          ? "Type the project folder path on the host."
+          : "Type a folder path, or drop a folder above.",
+      );
+      return;
+    }
+    if (isRemote && trimmedSshHost.length === 0) {
+      setFormError("Type the SSH host to connect to.");
+      return;
+    }
+    if (launcherProblem) {
+      setFormError(launcherProblem);
       return;
     }
     setSubmitting(true);
@@ -222,7 +404,10 @@ export function CreateProjectDialog(props: {
       await props.onSubmit({
         workspaceRoot: trimmedPath,
         spaceId: spaces.find((space) => space.id === selectedSpaceKey)?.id ?? null,
-        createIfMissing: trimmedPath !== pickedPath,
+        // A remote folder is never scaffolded from here: Synara has no filesystem access
+        // on the host, so the path is taken as given.
+        createIfMissing: !isRemote && trimmedPath !== pickedPath,
+        remote: isRemote ? buildRemote() : null,
       });
       props.onOpenChange(false);
     } catch (error) {
@@ -280,10 +465,10 @@ export function CreateProjectDialog(props: {
             <InputGroupInput
               id={pathInputId}
               value={path}
-              aria-label="Project folder path"
+              aria-label={isRemote ? "Project folder path on the host" : "Project folder path"}
               aria-invalid={formError ? true : undefined}
               {...(formError ? { "aria-describedby": errorId } : {})}
-              placeholder="/path/to/project"
+              placeholder={isRemote ? "/srv/app" : "/path/to/project"}
               spellCheck={false}
               autoCorrect="off"
               autoCapitalize="off"
@@ -295,7 +480,7 @@ export function CreateProjectDialog(props: {
             />
           </InputGroup>
 
-          {isElectron ? (
+          {isElectron && !isRemote ? (
             <div className="space-y-2">
               <span
                 id={sourceFolderLabelId}
@@ -334,6 +519,316 @@ export function CreateProjectDialog(props: {
               </button>
             </div>
           ) : null}
+
+          <div className="space-y-2">
+            <span
+              id={locationLabelId}
+              className={cn(
+                "block",
+                dialogFieldLabelClassName,
+                "text-[length:var(--app-font-size-ui,12px)] text-foreground",
+              )}
+            >
+              Location
+            </span>
+            <Select
+              value={location}
+              onValueChange={(next) => {
+                if (next !== "local" && next !== "ssh") return;
+                setLocation(next);
+                setFormError(null);
+              }}
+            >
+              <SelectTrigger
+                aria-labelledby={locationLabelId}
+                className={cn(fieldControlClassName, "w-full")}
+              >
+                <SelectValue>
+                  {location === "ssh" ? "Remote over SSH" : "This computer"}
+                </SelectValue>
+              </SelectTrigger>
+              <ComposerPickerSelectPopup align="start">
+                <SelectItem value="local">This computer</SelectItem>
+                <SelectItem value="ssh">Remote over SSH</SelectItem>
+              </ComposerPickerSelectPopup>
+            </Select>
+          </div>
+
+          <DisclosureRegion open={isRemote}>
+            <div className="space-y-4 pt-0.5">
+              <div className="space-y-2">
+                <label
+                  htmlFor={sshHostInputId}
+                  className={cn(
+                    "block",
+                    dialogFieldLabelClassName,
+                    "text-[length:var(--app-font-size-ui,12px)] text-foreground",
+                  )}
+                >
+                  SSH host
+                </label>
+                <InputGroup className={fieldControlClassName}>
+                  <InputGroupInput
+                    id={sshHostInputId}
+                    value={sshHost}
+                    placeholder="deploy@build-box"
+                    spellCheck={false}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    onChange={(event) => {
+                      setSshHost(event.target.value);
+                      setFormError(null);
+                    }}
+                    onKeyDown={submitOnEnter}
+                  />
+                </InputGroup>
+                <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+                  Any ssh destination — a <code>~/.ssh/config</code> alias keeps your port, key, and
+                  jump hosts exactly as your terminal uses them.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Button
+                  variant="outline"
+                  className={cn(fieldControlClassName, "w-full")}
+                  disabled={checking || submitting}
+                  onClick={() => void checkConnection()}
+                >
+                  {checking ? "Checking…" : "Check connection"}
+                </Button>
+                {probeResult ? (
+                  <div
+                    role="status"
+                    className={cn(
+                      "space-y-1 rounded-lg border px-3 py-2",
+                      probeResult.status === "ok"
+                        ? "border-foreground/12"
+                        : "border-destructive/40",
+                    )}
+                  >
+                    <p
+                      className={cn(
+                        "text-[length:var(--app-font-size-ui-xs,10px)]",
+                        probeResult.status === "ok" ? "text-foreground" : "text-destructive",
+                      )}
+                    >
+                      {probeResult.summary}
+                    </p>
+                    {probeResult.detail ? (
+                      <pre className="max-h-24 overflow-auto text-[length:var(--app-font-size-ui-xs,10px)] whitespace-pre-wrap text-muted-foreground/70">
+                        {probeResult.detail}
+                      </pre>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  aria-expanded={advancedOpen}
+                  className="flex cursor-pointer items-center gap-1.5 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground transition-colors outline-none hover:text-foreground"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                >
+                  <DisclosureChevron open={advancedOpen} className="size-3.5" />
+                  Advanced
+                </button>
+                <DisclosureRegion open={advancedOpen}>
+                  <div className="space-y-3 pt-1">
+                    <div className="space-y-2">
+                      <span
+                        id={launcherLabelId}
+                        className="block text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70"
+                      >
+                        Run the agent through
+                      </span>
+                      <Select
+                        value={launcherForm.kind}
+                        onValueChange={(next) => {
+                          if (typeof next !== "string") return;
+                          setLauncherForm((form) => ({ ...form, kind: next as LauncherKind }));
+                          setFormError(null);
+                        }}
+                      >
+                        <SelectTrigger
+                          aria-labelledby={launcherLabelId}
+                          className={cn(fieldControlClassName, "w-full")}
+                        >
+                          <SelectValue>{LAUNCHER_LABELS[launcherForm.kind]}</SelectValue>
+                        </SelectTrigger>
+                        <ComposerPickerSelectPopup align="start">
+                          {(Object.keys(LAUNCHER_LABELS) as LauncherKind[]).map((kind) => (
+                            <SelectItem key={kind} value={kind}>
+                              {LAUNCHER_LABELS[kind]}
+                            </SelectItem>
+                          ))}
+                        </ComposerPickerSelectPopup>
+                      </Select>
+                    </div>
+
+                    <DisclosureRegion open={launcherForm.kind !== "direct"}>
+                      {launcherForm.kind === "login-shell" ? (
+                        <InputGroup className={fieldControlClassName}>
+                          <InputGroupInput
+                            value={launcherForm.loginShell}
+                            aria-label="Login shell on the host"
+                            placeholder="Login shell (default: bash)"
+                            spellCheck={false}
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            onChange={(event) =>
+                              setLauncherForm((form) => ({
+                                ...form,
+                                loginShell: event.target.value,
+                              }))
+                            }
+                          />
+                        </InputGroup>
+                      ) : launcherForm.kind === "container" ? (
+                        <div className="space-y-3">
+                          <Select
+                            value={launcherForm.containerEngine}
+                            onValueChange={(next) => {
+                              if (typeof next !== "string") return;
+                              setLauncherForm((form) => ({
+                                ...form,
+                                containerEngine: next as ContainerEngine,
+                              }));
+                            }}
+                          >
+                            <SelectTrigger
+                              aria-label="Container engine"
+                              className={cn(fieldControlClassName, "w-full")}
+                            >
+                              <SelectValue>
+                                {CONTAINER_ENGINE_LABELS[launcherForm.containerEngine]}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <ComposerPickerSelectPopup align="start">
+                              {(Object.keys(CONTAINER_ENGINE_LABELS) as ContainerEngine[]).map(
+                                (engine) => (
+                                  <SelectItem key={engine} value={engine}>
+                                    {CONTAINER_ENGINE_LABELS[engine]}
+                                  </SelectItem>
+                                ),
+                              )}
+                            </ComposerPickerSelectPopup>
+                          </Select>
+                          <InputGroup className={fieldControlClassName}>
+                            <InputGroupInput
+                              value={launcherForm.containerTarget}
+                              aria-label={
+                                launcherForm.containerEngine === "docker-compose"
+                                  ? "Compose service"
+                                  : "Container name"
+                              }
+                              placeholder={
+                                launcherForm.containerEngine === "docker-compose"
+                                  ? "Compose service, e.g. app"
+                                  : "Container, e.g. web"
+                              }
+                              spellCheck={false}
+                              autoCorrect="off"
+                              autoCapitalize="off"
+                              onChange={(event) => {
+                                setLauncherForm((form) => ({
+                                  ...form,
+                                  containerTarget: event.target.value,
+                                }));
+                                setFormError(null);
+                              }}
+                            />
+                          </InputGroup>
+                          <InputGroup className={fieldControlClassName}>
+                            <InputGroupInput
+                              value={launcherForm.containerUser}
+                              aria-label="User inside the container"
+                              placeholder="User inside the container (optional)"
+                              spellCheck={false}
+                              autoCorrect="off"
+                              autoCapitalize="off"
+                              onChange={(event) =>
+                                setLauncherForm((form) => ({
+                                  ...form,
+                                  containerUser: event.target.value,
+                                }))
+                              }
+                            />
+                          </InputGroup>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <InputGroup className={fieldControlClassName}>
+                            <InputGroupInput
+                              value={launcherForm.command}
+                              aria-label="Custom command to run the agent through"
+                              placeholder="e.g. mise exec --"
+                              spellCheck={false}
+                              autoCorrect="off"
+                              autoCapitalize="off"
+                              onChange={(event) => {
+                                setLauncherForm((form) => ({
+                                  ...form,
+                                  command: event.target.value,
+                                }));
+                                setFormError(null);
+                              }}
+                            />
+                          </InputGroup>
+                          <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+                            Runs in place and is handed the project command, like{" "}
+                            <code>nix develop -c</code> or <code>direnv exec .</code>. Terminal
+                            multiplexers cannot be used — see below.
+                          </p>
+                        </div>
+                      )}
+                    </DisclosureRegion>
+
+                    {launcherProblem ? (
+                      <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-destructive">
+                        {launcherProblem}
+                      </p>
+                    ) : null}
+
+                    <InputGroup className={fieldControlClassName}>
+                      <InputGroupInput
+                        value={sshArgs}
+                        aria-label="Extra ssh arguments"
+                        placeholder="Extra ssh arguments, e.g. -p 2222 -J bastion"
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        onChange={(event) => setSshArgs(event.target.value)}
+                      />
+                    </InputGroup>
+                    <InputGroup className={fieldControlClassName}>
+                      <InputGroupInput
+                        value={shellInit}
+                        aria-label="Remote shell setup command"
+                        placeholder="Shell setup, e.g. source ~/.nvm/nvm.sh"
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        onChange={(event) => setShellInit(event.target.value)}
+                      />
+                    </InputGroup>
+                    <InputGroup className={fieldControlClassName}>
+                      <InputGroupInput
+                        value={remoteBinaryPath}
+                        aria-label="Claude binary path on the host"
+                        placeholder="Claude binary on the host, e.g. /usr/local/bin/claude"
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        onChange={(event) => setRemoteBinaryPath(event.target.value)}
+                      />
+                    </InputGroup>
+                  </div>
+                </DisclosureRegion>
+              </div>
+            </div>
+          </DisclosureRegion>
 
           <div className="space-y-2">
             <span

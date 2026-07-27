@@ -33,6 +33,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         kind: "project" as const,
         title: projectId,
         workspaceRoot: `/tmp/${projectId}`,
+        remote: null,
         defaultModelSelection: null,
         scripts: [],
         isPinned: false,
@@ -88,6 +89,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         kind: "project",
         title: "Null options project",
         workspaceRoot: "/tmp/project-null-options",
+        remote: null,
         defaultModelSelection: {
           provider: "codex",
           model: "gpt-5.4",

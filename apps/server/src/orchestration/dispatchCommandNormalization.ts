@@ -138,7 +138,43 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       { discard: true },
     );
 
+  // A remote project's workspace root is a path on another host. Canonicalizing it here
+  // would resolve it against *this* filesystem — creating a stray local directory with
+  // `createIfMissing`, or rewriting the path through an unrelated local symlink.
+  const targetsRemoteHost = (
+    command: Extract<
+      ClientOrchestrationCommand,
+      { type: "project.create" | "project.meta.update" }
+    >,
+  ): boolean => command.remote != null;
+
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {
+    if (input.command.type === "project.create" && targetsRemoteHost(input.command)) {
+      return {
+        command: {
+          ...input.command,
+          workspaceRoot: input.command.workspaceRoot.trim(),
+          createWorkspaceRootIfMissing: false,
+        } satisfies OrchestrationCommand,
+        prepareWorkspaceRoot: null,
+      };
+    }
+
+    if (
+      input.command.type === "project.meta.update" &&
+      input.command.workspaceRoot !== undefined &&
+      targetsRemoteHost(input.command)
+    ) {
+      return {
+        command: {
+          ...input.command,
+          workspaceRoot: input.command.workspaceRoot.trim(),
+          createWorkspaceRootIfMissing: false,
+        } satisfies OrchestrationCommand,
+        prepareWorkspaceRoot: null,
+      };
+    }
+
     if (input.command.type === "project.create") {
       // Known trade-off: canonicalization may create the (empty) root directory before the
       // decider validates ownership — realpath-based canonicalization needs the directory to

@@ -4,6 +4,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationThread,
   ProjectKind,
+  ProjectRemote,
   ThreadMarker,
 } from "@synara/contracts";
 import {
@@ -20,6 +21,7 @@ import {
   deriveAssociatedWorktreeMetadataPatch,
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
+import { describeRejectedRemoteLauncher } from "@synara/shared/sshRemote";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import {
   collectTailTurnIds,
@@ -59,6 +61,23 @@ import {
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
+
+/**
+ * A launcher that detaches the agent from its stdio produces a session that connects and
+ * then waits forever, which is indistinguishable from a slow model. Rejecting it here means
+ * the failure is a message on the command that configured it, not a hung thread later.
+ */
+const requireUsableRemoteLauncher = (
+  command: OrchestrationCommand,
+  remote: ProjectRemote | null | undefined,
+): Effect.Effect<void, OrchestrationCommandInvariantError> => {
+  const rejection = remote?.launcher ? describeRejectedRemoteLauncher(remote.launcher) : null;
+  return rejection
+    ? Effect.fail(
+        new OrchestrationCommandInvariantError({ commandType: command.type, detail: rejection }),
+      )
+    : Effect.void;
+};
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "buffered" as const;
 const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 // Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
@@ -573,6 +592,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       const nextProjectKind = command.kind ?? "project";
+      // Chat and Studio containers are app-managed: the server scaffolds and reads their
+      // directories on this machine, so their root can never live on another host.
+      if (command.remote != null && nextProjectKind !== "project") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Managed '${nextProjectKind}' containers cannot target a remote host.`,
+        });
+      }
+      yield* requireUsableRemoteLauncher(command, command.remote);
       if (nextProjectKind === "project") {
         // The app-managed Studio container owns its root exclusively and is never retired here:
         // silently deleting it would orphan Studio threads, so adding its folder as a project
@@ -580,7 +608,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         const existingStudioProject = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
-          { kinds: STUDIO_PROJECT_KIND_SET },
+          { kinds: STUDIO_PROJECT_KIND_SET, remoteHost: command.remote?.host ?? null },
         )[0];
         if (existingStudioProject) {
           return yield* new OrchestrationCommandInvariantError({
@@ -591,6 +619,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         const existingProjects = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
+          { remoteHost: command.remote?.host ?? null },
         );
         for (const existingProject of existingProjects) {
           const remainingThreads = listThreadsByProjectId(readModel, existingProject.id).filter(
@@ -630,7 +659,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         const existingOwningProject = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
-          { kinds: WORKSPACE_OWNING_PROJECT_KIND_SET },
+          { kinds: WORKSPACE_OWNING_PROJECT_KIND_SET, remoteHost: command.remote?.host ?? null },
         )[0];
         if (existingOwningProject) {
           return yield* new OrchestrationCommandInvariantError({
@@ -677,6 +706,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           kind: nextProjectKind,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
+          remote: command.remote ?? null,
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],
           isPinned: command.isPinned,
@@ -695,6 +725,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
+      const nextRemote = command.remote !== undefined ? command.remote : existingProject.remote;
+      if (nextRemote != null && nextProjectKind !== "project") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Managed '${nextProjectKind}' containers cannot target a remote host.`,
+        });
+      }
+      yield* requireUsableRemoteLauncher(command, nextRemote);
       const requestedSpaceId =
         command.spaceId !== undefined
           ? command.spaceId
@@ -711,6 +749,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.kind !== undefined ||
         command.title !== undefined ||
         command.workspaceRoot !== undefined ||
+        command.remote !== undefined ||
         command.defaultModelSelection !== undefined ||
         command.scripts !== undefined ||
         command.isPinned !== undefined;
@@ -783,6 +822,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // claims, bypassing the same cross-kind rule project.create enforces.
       const ownershipMayChange =
         command.workspaceRoot !== undefined ||
+        command.remote !== undefined ||
         (command.kind !== undefined && command.kind !== (existingProject.kind ?? "project"));
       if (ownershipMayChange && nextProjectKind !== "chat") {
         yield* requireProjectWorkspaceRootAvailable({
@@ -791,6 +831,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
           excludeProjectId: command.projectId,
           kinds: WORKSPACE_OWNING_PROJECT_KIND_SET,
+          remoteHost: nextRemote?.host ?? null,
         });
       }
       yield* validateProjectPinLimit({
@@ -815,6 +856,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.kind !== undefined ? { kind: command.kind } : {}),
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.workspaceRoot !== undefined ? { workspaceRoot: command.workspaceRoot } : {}),
+          ...(command.remote !== undefined ? { remote: command.remote } : {}),
           ...(command.defaultModelSelection !== undefined
             ? { defaultModelSelection: command.defaultModelSelection }
             : {}),

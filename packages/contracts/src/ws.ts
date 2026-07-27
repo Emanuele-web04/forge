@@ -75,6 +75,7 @@ import {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectDevServerEvent,
   ProjectDiscoverScriptsInput,
+  ProjectProbeRemoteInput,
   ProjectListDirectoriesInput,
   ProjectReadFileInput,
   ProjectRunDevServerInput,
@@ -131,6 +132,7 @@ import {
 export const WS_METHODS = {
   // Project registry methods
   projectsDiscoverScripts: "projects.discoverScripts",
+  projectsProbeRemote: "projects.probeRemote",
   projectsListDirectories: "projects.listDirectories",
   projectsSearchEntries: "projects.searchEntries",
   projectsSearchLocalEntries: "projects.searchLocalEntries",
@@ -302,6 +304,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Project Search
   tagRequestBody(WS_METHODS.projectsDiscoverScripts, ProjectDiscoverScriptsInput),
+  tagRequestBody(WS_METHODS.projectsProbeRemote, ProjectProbeRemoteInput),
   tagRequestBody(WS_METHODS.projectsListDirectories, ProjectListDirectoriesInput),
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchLocalEntries, ProjectSearchLocalEntriesInput),

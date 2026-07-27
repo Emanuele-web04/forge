@@ -33,6 +33,7 @@ export const applyProjectMetadataProjection = (input: {
           kind: input.event.payload.kind ?? "project",
           title: input.event.payload.title,
           workspaceRoot: input.event.payload.workspaceRoot,
+          remote: input.event.payload.remote ?? null,
           defaultModelSelection: input.event.payload.defaultModelSelection,
           scripts: input.event.payload.scripts,
           isPinned: input.event.payload.isPinned ?? false,
@@ -56,6 +57,9 @@ export const applyProjectMetadataProjection = (input: {
               : {}),
             ...(input.event.payload.workspaceRoot !== undefined
               ? { workspaceRoot: input.event.payload.workspaceRoot }
+              : {}),
+            ...(input.event.payload.remote !== undefined
+              ? { remote: input.event.payload.remote }
               : {}),
             ...(input.event.payload.defaultModelSelection !== undefined
               ? { defaultModelSelection: input.event.payload.defaultModelSelection }

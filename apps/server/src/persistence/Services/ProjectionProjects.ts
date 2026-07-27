@@ -11,6 +11,7 @@ import {
   ModelSelection,
   ProjectId,
   ProjectKind,
+  ProjectRemote,
   ProjectScript,
   SpaceId,
 } from "@synara/contracts";
@@ -24,6 +25,7 @@ export const ProjectionProject = Schema.Struct({
   kind: ProjectKind.pipe(Schema.withDecodingDefault(() => "project")),
   title: Schema.String,
   workspaceRoot: Schema.String,
+  remote: Schema.NullOr(ProjectRemote).pipe(Schema.withDecodingDefault(() => null)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
