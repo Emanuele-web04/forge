@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Effect, FileSystem, Layer, Option, Path } from "effect";
 import type {
   GitActionProgressEvent,
   GitActionProgressPhase,
@@ -28,6 +28,7 @@ import {
 import { GitCore } from "../Services/GitCore.ts";
 import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
+import { detectPrTemplate } from "../PrTemplateDetection.ts";
 import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
 import { ServerConfig } from "../../config.ts";
 
@@ -1262,6 +1263,9 @@ export const makeGitManager = Effect.gen(function* () {
         );
       }
       const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
+      const prTemplate = Option.getOrUndefined(
+        yield* detectPrTemplate(cwd, baseBranch, gitCore.execute),
+      );
 
       const generated = yield* textGeneration.generatePrContent({
         cwd,
@@ -1270,6 +1274,7 @@ export const makeGitManager = Effect.gen(function* () {
         commitSummary: limitContext(rangeContext.commitSummary, 20_000),
         diffSummary: limitContext(rangeContext.diffSummary, 20_000),
         diffPatch: limitContext(rangeContext.diffPatch, 60_000),
+        ...(prTemplate !== undefined ? { prTemplate } : {}),
         ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
       });
 

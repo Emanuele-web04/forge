@@ -53,6 +53,7 @@ interface FakeGitTextGeneration {
     commitSummary: string;
     diffSummary: string;
     diffPatch: string;
+    prTemplate?: string | undefined;
     codexHomePath?: string;
     providerOptions?: ProviderStartOptions;
     model?: string;
@@ -1602,6 +1603,13 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
       yield* initRepo(repoDir);
+      fs.mkdirSync(path.join(repoDir, ".github"));
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "## What changed?\n\n## Verification",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Add pull request template"]);
       yield* runGit(repoDir, ["checkout", "-b", "feature-create-pr"]);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
@@ -1610,8 +1618,18 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature-create-pr"]);
       yield* runGit(repoDir, ["config", "branch.feature-create-pr.gh-merge-base", "main"]);
+      let generatedPrTemplate: string | undefined;
 
       const { manager, ghCalls } = yield* makeManager({
+        textGeneration: {
+          generatePrContent: (input) => {
+            generatedPrTemplate = input.prTemplate;
+            return Effect.succeed({
+              title: "Add stacked git actions",
+              body: "## What changed?\nAdded stacked git actions.",
+            });
+          },
+        },
         ghScenario: {
           prListSequence: [
             "[]",
@@ -1637,6 +1655,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.branch.status).toBe("skipped_not_requested");
       expect(result.pr.status).toBe("created");
       expect(result.pr.number).toBe(88);
+      expect(generatedPrTemplate).toBe("## What changed?\n\n## Verification");
       expect(
         ghCalls.some((call) => call.includes("pr create --base main --head feature-create-pr")),
       ).toBe(true);

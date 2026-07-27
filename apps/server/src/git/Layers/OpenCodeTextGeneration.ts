@@ -525,6 +525,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         commitSummary: input.commitSummary,
         diffSummary: input.diffSummary,
         diffPatch: input.diffPatch,
+        ...(input.prTemplate !== undefined ? { prTemplate: input.prTemplate } : {}),
       });
       const generated = yield* runOpenCodeJson({
         operation: "generatePrContent",

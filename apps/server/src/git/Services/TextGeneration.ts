@@ -48,6 +48,8 @@ export interface PrContentGenerationInput {
   commitSummary: string;
   diffSummary: string;
   diffPatch: string;
+  /** Optional repository pull request template to fill instead of the default body shape. */
+  prTemplate?: string | undefined;
   codexHomePath?: string;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
   model?: string;

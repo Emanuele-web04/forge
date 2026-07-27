@@ -246,6 +246,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       commitSummary: input.commitSummary,
       diffSummary: input.diffSummary,
       diffPatch: input.diffPatch,
+      ...(input.prTemplate !== undefined ? { prTemplate: input.prTemplate } : {}),
     });
     const generated = yield* runCursorJson({
       operation: "generatePrContent",

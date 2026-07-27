@@ -494,6 +494,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       commitSummary: input.commitSummary,
       diffSummary: input.diffSummary,
       diffPatch: input.diffPatch,
+      ...(input.prTemplate !== undefined ? { prTemplate: input.prTemplate } : {}),
     });
 
     return runCodexJson({
