@@ -90,6 +90,18 @@ it.effect.each(SINGLE_TEMPLATE_PATHS)("recognizes $0", (relativePath) =>
   ),
 );
 
+it.effect("recognizes case-insensitive template filenames with a .txt extension", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, ".github/PuLl_ReQuEsT_TeMpLaTe.TxT", "mixed-case text template");
+      yield* commitTemplates(cwd);
+
+      const template = yield* detectTemplate(cwd);
+      assert.strictEqual(Option.getOrUndefined(template), "mixed-case text template");
+    }),
+  ),
+);
+
 it.effect("reads templates from the requested base tree", () =>
   runWithTempDirectory((cwd) =>
     Effect.gen(function* () {
@@ -109,16 +121,41 @@ it.effect("reads templates from the requested base tree", () =>
   ),
 );
 
-it.effect("uses the first non-empty template in the configured path order", () =>
+it.effect("ignores uncommitted template changes", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, ".github/pull_request_template.md", "committed template");
+      yield* commitTemplates(cwd);
+      yield* writeTemplate(cwd, ".github/pull_request_template.md", "uncommitted replacement");
+
+      const template = yield* detectTemplate(cwd);
+      assert.strictEqual(Option.getOrUndefined(template), "committed template");
+    }),
+  ),
+);
+
+it.effect("ignores empty template candidates", () =>
   runWithTempDirectory((cwd) =>
     Effect.gen(function* () {
       yield* writeTemplate(cwd, ".github/pull_request_template.md", " \n");
       yield* writeTemplate(cwd, ".github/PULL_REQUEST_TEMPLATE.md", "  ## Preferred template  \n");
-      yield* writeTemplate(cwd, "pull_request_template.md", "## Later template");
       yield* commitTemplates(cwd);
 
       const template = yield* detectTemplate(cwd);
       assert.strictEqual(Option.getOrUndefined(template), "## Preferred template");
+    }),
+  ),
+);
+
+it.effect("does not guess between multiple templates in one single-template location", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, ".github/pull_request_template.md", "markdown template");
+      yield* writeTemplate(cwd, ".github/PULL_REQUEST_TEMPLATE.txt", "text template");
+      yield* commitTemplates(cwd);
+
+      const template = yield* detectTemplate(cwd);
+      assert.isTrue(Option.isNone(template));
     }),
   ),
 );
@@ -131,6 +168,30 @@ it.effect.each(TEMPLATE_DIRECTORIES)("recognizes the $0 directory", (relativeDir
 
       const template = yield* detectTemplate(cwd);
       assert.strictEqual(Option.getOrUndefined(template), "directory template");
+    }),
+  ),
+);
+
+it.effect("recognizes case-insensitive .txt files in template directories", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, "docs/PULL_REQUEST_TEMPLATE/FeAtUrE.TxT", "text template");
+      yield* commitTemplates(cwd);
+
+      const template = yield* detectTemplate(cwd);
+      assert.strictEqual(Option.getOrUndefined(template), "text template");
+    }),
+  ),
+);
+
+it.effect("ignores unsupported files in template directories", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, ".github/PULL_REQUEST_TEMPLATE/config.yml", "not a PR template");
+      yield* commitTemplates(cwd);
+
+      const template = yield* detectTemplate(cwd);
+      assert.isTrue(Option.isNone(template));
     }),
   ),
 );
@@ -168,6 +229,32 @@ it.effect("does not guess between multiple directory templates", () =>
 
       const template = yield* detectTemplate(cwd);
       assert.isTrue(Option.isNone(template));
+    }),
+  ),
+);
+
+it.effect("prefers GitHub's higher-priority default template location", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, ".github/pull_request_template.md", "github template");
+      yield* writeTemplate(cwd, "docs/pull_request_template.md", "docs template");
+      yield* commitTemplates(cwd);
+
+      const template = yield* detectTemplate(cwd);
+      assert.strictEqual(Option.getOrUndefined(template), "github template");
+    }),
+  ),
+);
+
+it.effect("prefers an automatic default file over chooser-only directory templates", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, "pull_request_template.md", "single template");
+      yield* writeTemplate(cwd, ".github/PULL_REQUEST_TEMPLATE/change.md", "directory template");
+      yield* commitTemplates(cwd);
+
+      const template = yield* detectTemplate(cwd);
+      assert.strictEqual(Option.getOrUndefined(template), "single template");
     }),
   ),
 );
@@ -239,6 +326,48 @@ it.effect("bounds template reads and marks truncated content", () =>
       assert.strictEqual(template, `${prefix}\n\n[truncated]`);
       assert.lengthOf(template.match(/\[truncated\]/g) ?? [], 1);
       assert.notInclude(template, "SECRET_SENTINEL");
+    }),
+  ),
+);
+
+it.effect("truncates multibyte template contents at a valid UTF-8 boundary", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(
+        cwd,
+        ".github/pull_request_template.md",
+        `${"a".repeat(7_999)}€SECRET_SENTINEL`,
+      );
+      yield* commitTemplates(cwd);
+
+      const template = Option.getOrThrow(yield* detectTemplate(cwd));
+      assert.strictEqual(template, `${"a".repeat(7_999)}\n\n[truncated]`);
+      assert.notInclude(template, "�");
+      assert.notInclude(template, "SECRET_SENTINEL");
+    }),
+  ),
+);
+
+it.effect("ignores binary template blobs", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, ".github/pull_request_template.md", "before\0after");
+      yield* commitTemplates(cwd);
+
+      const template = yield* detectTemplate(cwd);
+      assert.isTrue(Option.isNone(template));
+    }),
+  ),
+);
+
+it.effect("treats option-like tree names as data and falls back safely", () =>
+  runWithTempDirectory((cwd) =>
+    Effect.gen(function* () {
+      yield* writeTemplate(cwd, ".github/pull_request_template.md", "template");
+      yield* commitTemplates(cwd);
+
+      const template = yield* detectTemplate(cwd, "--help");
+      assert.isTrue(Option.isNone(template));
     }),
   ),
 );

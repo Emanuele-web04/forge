@@ -821,6 +821,20 @@ export const makeGitManager = Effect.gen(function* () {
   const readConfigValueNullable = (cwd: string, key: string) =>
     gitCore.readConfigValue(cwd, key).pipe(Effect.catch(() => Effect.succeed(null)));
 
+  const gitRefExists = (cwd: string, ref: string) =>
+    gitCore
+      .execute({
+        operation: "GitManager.gitRefExists",
+        cwd,
+        args: ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`],
+        allowNonZeroExit: true,
+        maxOutputBytes: 256,
+      })
+      .pipe(
+        Effect.map((result) => result.code === 0),
+        Effect.catch(() => Effect.succeed(false)),
+      );
+
   const resolveRemoteRepositoryContext = (cwd: string, remoteName: string | null) =>
     Effect.gen(function* () {
       if (!remoteName) {
@@ -1263,8 +1277,23 @@ export const makeGitManager = Effect.gen(function* () {
         );
       }
       const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
+      const originRemoteUrl = headContext.isCrossRepository
+        ? yield* readConfigValueNullable(cwd, "remote.origin.url")
+        : null;
+      const targetRemoteName = headContext.isCrossRepository
+        ? originRemoteUrl
+          ? "origin"
+          : null
+        : headContext.remoteName;
+      const remoteBaseRef = targetRemoteName
+        ? `refs/remotes/${targetRemoteName}/${baseBranch}`
+        : null;
+      const useRemoteBaseRef =
+        remoteBaseRef !== null &&
+        (headContext.isCrossRepository || (yield* gitRefExists(cwd, remoteBaseRef)));
+      const prTemplateTreeish = useRemoteBaseRef ? remoteBaseRef : baseBranch;
       const prTemplate = Option.getOrUndefined(
-        yield* detectPrTemplate(cwd, baseBranch, gitCore.execute),
+        yield* detectPrTemplate(cwd, prTemplateTreeish, gitCore.execute),
       );
 
       const generated = yield* textGeneration.generatePrContent({
