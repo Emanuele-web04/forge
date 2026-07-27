@@ -473,9 +473,14 @@ export function resolvePullActionAvailability(input: {
   return { canRun: true, hint: null };
 }
 
-/** Environment panel should promote Pull as the primary row when that is the quick action. */
-export function shouldShowEnvironmentPanelPullRow(quickAction: GitQuickAction): boolean {
-  return quickAction.kind === "run_pull" && !quickAction.disabled;
+/** Environment panel should promote Pull while it is available or already running. */
+export function shouldShowEnvironmentPanelPullRow(input: {
+  quickAction: GitQuickAction;
+  isPullRunning: boolean;
+}): boolean {
+  return (
+    input.isPullRunning || (input.quickAction.kind === "run_pull" && !input.quickAction.disabled)
+  );
 }
 
 export function shouldOfferCreateBranchPrompt(input: {

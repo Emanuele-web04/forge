@@ -431,7 +431,21 @@ describe("when: branch is behind upstream", () => {
 
   it("shouldShowEnvironmentPanelPullRow promotes the Pull primary row", () => {
     const quick = resolveQuickAction(status({ behindCount: 2 }), false);
-    assert.equal(shouldShowEnvironmentPanelPullRow(quick), true);
+    assert.equal(
+      shouldShowEnvironmentPanelPullRow({ quickAction: quick, isPullRunning: false }),
+      true,
+    );
+  });
+
+  it("shouldShowEnvironmentPanelPullRow keeps the Pull row visible while pulling", () => {
+    const busyQuickAction = resolveQuickAction(status({ behindCount: 2 }), true);
+    assert.equal(
+      shouldShowEnvironmentPanelPullRow({
+        quickAction: busyQuickAction,
+        isPullRunning: true,
+      }),
+      true,
+    );
   });
 
   it("buildMenuItems disables push and create PR", () => {
@@ -504,7 +518,10 @@ describe("when: branch is up to date", () => {
 
   it("shouldShowEnvironmentPanelPullRow stays hidden", () => {
     const quick = resolveQuickAction(status({ aheadCount: 0, behindCount: 0 }), false);
-    assert.equal(shouldShowEnvironmentPanelPullRow(quick), false);
+    assert.equal(
+      shouldShowEnvironmentPanelPullRow({ quickAction: quick, isPullRunning: false }),
+      false,
+    );
   });
 });
 

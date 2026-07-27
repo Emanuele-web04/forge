@@ -1667,7 +1667,10 @@ export default function GitActionsControl({
   );
 
   if (isPanel) {
-    const showPanelPullRow = shouldShowEnvironmentPanelPullRow(quickAction);
+    const showPanelPullRow = shouldShowEnvironmentPanelPullRow({
+      quickAction,
+      isPullRunning,
+    });
     const panelGitActionsMenu = (
       <Menu
         onOpenChange={(open) => {
