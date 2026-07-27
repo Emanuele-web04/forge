@@ -36,8 +36,6 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
-import { CheckpointStoreError } from "../../checkpointing/Errors.ts";
-import { OrchestrationDispatchError } from "../Errors.ts";
 import {
   CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
   checkpointRevertActiveTurnDetail,
@@ -67,6 +65,10 @@ function sameId(left: string | null | undefined, right: string | null | undefine
     return false;
   }
   return left === right;
+}
+
+function describeUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function providerSessionHasInFlightTurn(session: ProviderSession | undefined): boolean {
@@ -1122,18 +1124,17 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const ensuredSession = providerService.ensureRuntimeSession
-      ? yield* providerService
-          .ensureRuntimeSession({ threadId: sessionThreadId })
-          .pipe(Effect.option)
-      : yield* resolveSessionRuntimeForThread(event.payload.threadId).pipe(
-          Effect.map(
-            Option.map((runtime) => ({
-              threadId: runtime.threadId,
-              cwd: runtime.cwd,
-            })),
-          ),
-        );
+    let ensuredSession: Option.Option<{
+      readonly threadId: ThreadId;
+      readonly cwd?: string;
+    }>;
+    if (providerService.ensureRuntimeSession !== undefined) {
+      ensuredSession = yield* providerService
+        .ensureRuntimeSession({ threadId: sessionThreadId })
+        .pipe(Effect.option);
+    } else {
+      ensuredSession = yield* resolveSessionRuntimeForThread(event.payload.threadId);
+    }
     if (Option.isNone(ensuredSession)) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
@@ -1294,7 +1295,7 @@ const make = Effect.gen(function* () {
           Effect.logWarning("checkpoint revert ref cleanup failed after completion", {
             threadId: event.payload.threadId,
             turnCount: event.payload.turnCount,
-            detail: error.message,
+            detail: describeUnknownError(error),
           }),
         ),
       );
@@ -1327,7 +1328,7 @@ const make = Effect.gen(function* () {
           appendRevertFailureActivity({
             threadId: event.payload.threadId,
             turnCount: event.payload.turnCount,
-            detail: error.message,
+            detail: describeUnknownError(error),
             createdAt: new Date().toISOString(),
           }),
         ),
@@ -1375,10 +1376,13 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const processInput = (
-    input: ReactorInput,
-  ): Effect.Effect<void, CheckpointStoreError | OrchestrationDispatchError, never> =>
-    input.source === "domain" ? processDomainEvent(input.event) : processRuntimeEvent(input.event);
+  const processInput = Effect.fnUntraced(function* (input: ReactorInput) {
+    if (input.source === "domain") {
+      yield* processDomainEvent(input.event);
+    } else {
+      yield* processRuntimeEvent(input.event);
+    }
+  });
 
   const processInputSafely = (input: ReactorInput) =>
     processInput(input).pipe(
