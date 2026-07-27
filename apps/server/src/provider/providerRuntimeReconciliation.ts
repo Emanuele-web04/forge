@@ -7,13 +7,14 @@
  *
  * @module providerRuntimeReconciliation
  */
-import type {
-  OrchestrationSession,
-  OrchestrationThreadShell,
-  ProviderSession,
-  ThreadId,
+import {
   TurnId,
+  type OrchestrationSession,
+  type OrchestrationThreadShell,
+  type ProviderSession,
+  type ThreadId,
 } from "@synara/contracts";
+import { nonEmptyTrimmed } from "@synara/shared/text";
 
 import type { ProviderRuntimeEventPumpHealth } from "./Services/ProviderService.ts";
 import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory.ts";
@@ -70,6 +71,20 @@ type TerminalProjectedSession = Omit<OrchestrationSession, "status"> & {
   readonly status: "ready" | "interrupted" | "stopped" | "error";
 };
 
+/**
+ * A turn id as `OrchestrationSession.activeTurnId` and activity `turnId` require
+ * it: trimmed non-empty, or null.
+ *
+ * A blank id means "no turn"; it is not a turn named "". Both fields are branded
+ * `TurnId`s whose schema rejects `""`, and every value fed to this planner
+ * (projection rows, live Adapter sessions, durable binding payloads) is built in
+ * code with `makeUnsafe` and never re-decoded, so nothing upstream guarantees it.
+ */
+function turnIdOrNull(value: TurnId | string | null | undefined): TurnId | null {
+  const trimmed = nonEmptyTrimmed(value ?? undefined);
+  return trimmed === undefined ? null : TurnId.makeUnsafe(trimmed);
+}
+
 function terminalProjectedSession(
   thread: OrchestrationThreadShell,
 ): TerminalProjectedSession | null {
@@ -81,7 +96,16 @@ function terminalProjectedSession(
     case "interrupted":
     case "stopped":
     case "error":
-      return { ...session, status: session.status };
+      // Copied verbatim into `thread.session.set`, so it has to satisfy
+      // `OrchestrationSession` on the way out even when the persisted row does
+      // not: `providerName`/`lastError` are trimmed-non-empty-or-null.
+      return {
+        ...session,
+        status: session.status,
+        providerName: nonEmptyTrimmed(session.providerName ?? undefined) ?? null,
+        lastError: nonEmptyTrimmed(session.lastError ?? undefined) ?? null,
+        activeTurnId: turnIdOrNull(session.activeTurnId),
+      };
     case "idle":
     case "starting":
     case "running":
@@ -95,14 +119,16 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
   // can attach the new request to an older terminal (or ingestion-lagged) turn.
   if (
     session?.status === "starting" &&
-    session.activeTurnId === null &&
+    turnIdOrNull(session.activeTurnId) === null &&
     thread.latestTurn?.state !== "running"
   ) {
     return null;
   }
+  // A blank projected id is an absent id, so it must fall through to the latest
+  // running turn exactly like a missing one rather than short-circuiting on "".
   return (
-    session?.activeTurnId ??
-    (thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : null)
+    turnIdOrNull(session?.activeTurnId) ??
+    (thread.latestTurn?.state === "running" ? turnIdOrNull(thread.latestTurn.turnId) : null)
   );
 }
 
@@ -132,7 +158,7 @@ function bindingLastError(binding: ProviderRuntimeBinding | undefined): string |
     return null;
   }
   const lastError = payload.lastError;
-  return typeof lastError === "string" && lastError.trim().length > 0 ? lastError.trim() : null;
+  return typeof lastError === "string" ? (nonEmptyTrimmed(lastError) ?? null) : null;
 }
 
 export function bindingActiveTurnId(binding: ProviderRuntimeBinding | undefined): string | null {
@@ -141,7 +167,9 @@ export function bindingActiveTurnId(binding: ProviderRuntimeBinding | undefined)
   if (typeof payload !== "object" || payload === null || !("activeTurnId" in payload)) {
     return null;
   }
-  return typeof payload.activeTurnId === "string" ? payload.activeTurnId : null;
+  // A binding advertising a blank turn id owns no turn, and comparing it against
+  // a normalized projected turn id must not report spurious divergence.
+  return typeof payload.activeTurnId === "string" ? turnIdOrNull(payload.activeTurnId) : null;
 }
 
 export function planProviderRuntimeReconciliation(input: {
@@ -190,7 +218,7 @@ export function planProviderRuntimeReconciliation(input: {
     if (!binding && !abandoned) continue;
 
     const projectedTurnId = projectedInFlightTurnId(thread);
-    const liveTurnId = liveSession?.activeTurnId ?? null;
+    const liveTurnId = turnIdOrNull(liveSession?.activeTurnId);
 
     if (liveSession?.status === "running" && liveTurnId !== null && !abandoned) {
       if (liveTurnId === projectedTurnId) continue;
@@ -244,7 +272,7 @@ export function planProviderRuntimeReconciliation(input: {
     if (liveSession?.status === "error" || (missingLiveSession && binding?.status === "error")) {
       const errorTurnId =
         liveSession?.status === "error"
-          ? (liveSession.activeTurnId ?? null)
+          ? turnIdOrNull(liveSession.activeTurnId)
           : bindingActiveTurnId(binding);
       if (errorTurnId !== projectedTurnId) {
         plans.push({
@@ -259,8 +287,11 @@ export function planProviderRuntimeReconciliation(input: {
         });
         continue;
       }
+      // `lastError` is trimmed-non-empty-or-null on the session command, and `??`
+      // does not fall back on "". A provider that reported failure without a
+      // message still has to say so rather than settle with a blank error.
       const errorMessage =
-        liveSession?.lastError ??
+        nonEmptyTrimmed(liveSession?.lastError) ??
         bindingLastError(binding) ??
         "Provider runtime reported an error while reconciling a stale turn.";
       plans.push({

@@ -76,6 +76,19 @@ function waitForSync<A>(
   });
 }
 
+/**
+ * Stale checkpoint refs are pruned only after `thread.revert.complete` commits,
+ * so the projection can already show the trimmed thread while the refs are still
+ * on disk. Poll instead of asserting straight after `thread.reverted`.
+ */
+function waitForGitRefMissing(cwd: string, ref: string) {
+  return waitForSync(
+    () => gitRefExists(cwd, ref),
+    (exists) => !exists,
+    `git ref '${ref}' to be deleted`,
+  );
+}
+
 function runtimeBase(eventId: string, createdAt: string, provider: IntegrationProvider = "codex") {
   return {
     eventId: asEventId(eventId),
@@ -862,10 +875,7 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
         true,
       );
       assert.equal(fs.readFileSync(path.join(harness.workspaceDir, "README.md"), "utf8"), "v2\n");
-      assert.equal(
-        gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
-        false,
-      );
+      yield* waitForGitRefMissing(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2));
       assert.deepEqual(harness.adapterHarness!.getRollbackCalls(THREAD_ID), [1]);
 
       const checkpointRows = yield* harness.checkpointRepository.listByThreadId({
@@ -1366,13 +1376,10 @@ itLiveUnlessCi("reverts claudeAgent turns and rolls back provider conversation s
             entry.checkpoints.length === 1 && entry.checkpoints[0]?.checkpointTurnCount === 1,
         );
         assert.equal(revertedThread.checkpoints[0]?.checkpointTurnCount, 1);
+        yield* waitForGitRefMissing(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2));
         assert.equal(
           gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 1)),
           true,
-        );
-        assert.equal(
-          gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
-          false,
         );
         assert.deepEqual(harness.adapterHarness!.getRollbackCalls(THREAD_ID), [1]);
       }),

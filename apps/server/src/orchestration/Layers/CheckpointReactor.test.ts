@@ -24,7 +24,12 @@ import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effe
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
-import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
+import {
+  CheckpointStore,
+  type CheckpointStoreShape,
+} from "../../checkpointing/Services/CheckpointStore.ts";
+import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
+import { GitCommandError } from "../../git/Errors.ts";
 import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { CheckpointReactorLive } from "./CheckpointReactor.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
@@ -44,7 +49,9 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { ProviderSessionNotFoundError, type ProviderServiceError } from "../../provider/Errors.ts";
 import {
+  CHECKPOINT_REFS_PREFIX,
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
   checkpointRefForThreadTurnLive,
@@ -79,7 +86,10 @@ function createProviderServiceHarness(
   const now = new Date().toISOString();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const rollbackConversation = vi.fn(
-    (_input: { readonly threadId: ThreadId; readonly numTurns: number }) => Effect.void,
+    (_input: {
+      readonly threadId: ThreadId;
+      readonly numTurns: number;
+    }): Effect.Effect<void, ProviderServiceError> => Effect.void,
   );
 
   const unsupported = <A>() =>
@@ -141,7 +151,7 @@ async function waitForThread(
       assistantMessageId?: MessageId | null;
       files?: ReadonlyArray<{ path: string }>;
     }>;
-    activities: ReadonlyArray<{ kind: string }>;
+    activities: ReadonlyArray<{ kind: string; payload?: unknown }>;
   }) => boolean,
   timeoutMs = 30_000,
 ) {
@@ -154,7 +164,7 @@ async function waitForThread(
       assistantMessageId?: MessageId | null;
       files?: ReadonlyArray<{ path: string }>;
     }>;
-    activities: ReadonlyArray<{ kind: string }>;
+    activities: ReadonlyArray<{ kind: string; payload?: unknown }>;
   }> => {
     const readModel = await Effect.runPromise(engine.getReadModel());
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
@@ -200,6 +210,18 @@ function runGit(cwd: string, args: ReadonlyArray<string>) {
   });
 }
 
+/**
+ * Rescue refs live at `<prefix>/<encoded thread id>/revert-rescue/<token>`, so
+ * they cannot be found by scanning a fixed `revert-rescue` prefix — that would
+ * be a pattern `git for-each-ref` can never match, and a leak would go
+ * unnoticed. List the whole checkpoint namespace and filter instead.
+ */
+function listRevertRescueRefs(cwd: string): ReadonlyArray<string> {
+  return runGit(cwd, ["for-each-ref", "--format=%(refname)", CHECKPOINT_REFS_PREFIX])
+    .split("\n")
+    .filter((ref) => ref.includes("/revert-rescue/"));
+}
+
 function createGitRepository(hasInitialCommit = true) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-handler-"));
   runGit(cwd, ["init", "--initial-branch=main"]);
@@ -234,6 +256,21 @@ async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 30_000)
     }
     if (Date.now() >= deadline) {
       throw new Error(`Timed out waiting for git ref '${ref}'.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return poll();
+  };
+  return poll();
+}
+
+async function waitForGitRefMissing(cwd: string, ref: string, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  const poll = async (): Promise<void> => {
+    if (!gitRefExists(cwd, ref)) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for git ref '${ref}' to be deleted.`);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
     return poll();
@@ -287,12 +324,43 @@ describe("CheckpointReactor", () => {
       options?.providerStatus ?? "ready",
       options?.providerActiveTurnId,
     );
+
+    // Installed after the harness has seeded its checkpoints, so a test can fail
+    // one specific step of the revert saga without disturbing setup.
+    const failures: {
+      restoreCheckpoint?: (
+        input: Parameters<CheckpointStoreShape["restoreCheckpoint"]>[0],
+      ) => CheckpointStoreError | null;
+      deleteCheckpointRefs?: (
+        input: Parameters<CheckpointStoreShape["deleteCheckpointRefs"]>[0],
+      ) => CheckpointStoreError | null;
+    } = {};
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     );
+
+    const checkpointStoreLayer = Layer.effect(
+      CheckpointStore,
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return {
+          ...store,
+          restoreCheckpoint: (input) =>
+            Effect.suspend(() => {
+              const failure = failures.restoreCheckpoint?.(input) ?? null;
+              return failure === null ? store.restoreCheckpoint(input) : Effect.fail(failure);
+            }),
+          deleteCheckpointRefs: (input) =>
+            Effect.suspend(() => {
+              const failure = failures.deleteCheckpointRefs?.(input) ?? null;
+              return failure === null ? store.deleteCheckpointRefs(input) : Effect.fail(failure);
+            }),
+        } satisfies CheckpointStoreShape;
+      }),
+    ).pipe(Layer.provide(CheckpointStoreLive.pipe(Layer.provide(GitCoreLive))));
 
     const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
       prefix: "synara-checkpoint-reactor-test-",
@@ -304,7 +372,7 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(RuntimeReceiptBusLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
-      Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(GitCoreLive))),
+      Layer.provideMerge(checkpointStoreLayer),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -381,6 +449,7 @@ describe("CheckpointReactor", () => {
       checkpointStore,
       cwd,
       drain,
+      failures,
     };
   }
 
@@ -1919,9 +1988,326 @@ describe("CheckpointReactor", () => {
       numTurns: 1,
     });
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
+    // Stale refs are dropped only after the completion commits, so `thread.reverted`
+    // does not imply the cleanup already ran.
+    await waitForGitRefMissing(
+      harness.cwd,
+      checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
+    );
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
     ).toBe(false);
+    await harness.drain();
+    // The rescue snapshot is throwaway: a successful revert must not leave one
+    // behind, since nothing else ever sweeps them.
+    expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+  });
+
+  it("reverts a thread whose provider session is no longer running", async () => {
+    const harness = await createHarness({ hasSession: false });
+    const createdAt = new Date().toISOString();
+
+    for (const turnCount of [1, 2] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe(`cmd-sessionless-revert-diff-${turnCount}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: asTurnId(`turn-${turnCount}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: turnCount,
+          createdAt,
+        }),
+      );
+    }
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-sessionless-revert"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnCount: 1,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    // Checkpoints and the provider binding both outlive an idle stop, so the
+    // workspace must resolve from the thread/project instead of a live session.
+    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
+    expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      numTurns: 1,
+    });
+  });
+
+  it("restores the workspace when provider conversation rollback fails", async () => {
+    const harness = await createHarness();
+    const createdAt = new Date().toISOString();
+    fs.writeFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "preserve\n", "utf8");
+    harness.provider.rollbackConversation.mockImplementationOnce(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId: "thread-1" })),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-compensated-revert-session-set"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    for (const turnCount of [1, 2] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe(`cmd-compensated-revert-diff-${turnCount}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: asTurnId(`turn-${turnCount}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: turnCount,
+          createdAt,
+        }),
+      );
+    }
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-compensated-revert"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnCount: 1,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    );
+    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
+      true,
+    );
+    // Proves the revert was refused by the provider and not by an earlier
+    // precondition, so the worktree really was restored before compensation.
+    expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      numTurns: 1,
+    });
+    // The worktree — tracked and untracked alike — must land exactly where it
+    // started, because the conversation was never trimmed.
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+    expect(fs.readFileSync(path.join(harness.cwd, "untracked-before-revert.txt"), "utf8")).toBe(
+      "preserve\n",
+    );
+    // Cleanup runs only after the completion commits, which never happened.
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
+    ).toBe(true);
+    await harness.drain();
+    expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+  });
+
+  /**
+   * Bring a harness to the state every thread-scope revert test needs: a ready
+   * session and two completed turns whose filesystem checkpoints already exist.
+   */
+  async function seedRevertableThread(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    commandPrefix: string,
+  ) {
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe(`${commandPrefix}-session-set`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    for (const turnCount of [1, 2] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe(`${commandPrefix}-diff-${turnCount}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: asTurnId(`turn-${turnCount}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), turnCount),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: turnCount,
+          createdAt,
+        }),
+      );
+    }
+    return createdAt;
+  }
+
+  const simulatedRestoreFailure = (cwd: string, detail: string) =>
+    new GitCommandError({
+      operation: "CheckpointStore.restoreCheckpoint",
+      command: "git read-tree",
+      cwd,
+      detail,
+    });
+
+  it("puts the workspace back when the checkpoint restore fails partway through", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const untrackedPath = path.join(harness.cwd, "untracked-before-revert.txt");
+    fs.writeFileSync(untrackedPath, "preserve\n", "utf8");
+    const createdAt = await seedRevertableThread(harness, "cmd-partial-restore");
+
+    // A restore is not atomic: it can rewrite part of the tree and then fail.
+    // Nothing observable distinguishes that from "the checkpoint was missing and
+    // nothing was touched", so the saga has to treat a failure as destructive.
+    const targetCheckpointRef = checkpointRefForThreadTurn(threadId, 2);
+    harness.failures.restoreCheckpoint = (input) => {
+      if (input.checkpointRef !== targetCheckpointRef) {
+        return null;
+      }
+      fs.writeFileSync(path.join(harness.cwd, "README.md"), "half-restored\n", "utf8");
+      fs.rmSync(untrackedPath, { force: true });
+      return simulatedRestoreFailure(harness.cwd, "simulated mid-restore failure");
+    };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-partial-restore-revert"),
+        threadId,
+        turnCount: 2,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    );
+    // The rescue snapshot exists precisely for this: the pre-revert tree is the
+    // only correct outcome of a revert that could not finish.
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+    expect(fs.readFileSync(untrackedPath, "utf8")).toBe("preserve\n");
+    // Nothing was trimmed, so the conversation must be untouched too.
+    expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+    // Compensation succeeded, so the snapshot has done its job and must not leak.
+    await harness.drain();
+    expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+    const failure = thread.activities.find(
+      (activity) => activity.kind === "checkpoint.revert.failed",
+    );
+    expect(String((failure?.payload as { detail?: string } | undefined)?.detail)).toContain(
+      "the workspace was put back",
+    );
+  });
+
+  it("keeps and names the rescue snapshot when the workspace cannot be put back", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = await seedRevertableThread(harness, "cmd-uncompensated-restore");
+
+    // Every restore fails: the target one leaves the tree half-written, and the
+    // compensating one cannot undo it. The snapshot is now the only copy of the
+    // pre-revert workspace in existence.
+    harness.failures.restoreCheckpoint = (input) => {
+      if (input.checkpointRef === checkpointRefForThreadTurn(threadId, 1)) {
+        fs.writeFileSync(path.join(harness.cwd, "README.md"), "half-restored\n", "utf8");
+        return simulatedRestoreFailure(harness.cwd, "simulated mid-restore failure");
+      }
+      return input.checkpointRef.includes("/revert-rescue/")
+        ? simulatedRestoreFailure(harness.cwd, "simulated compensation failure")
+        : null;
+    };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-uncompensated-restore-revert"),
+        threadId,
+        turnCount: 1,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    );
+    const rescueRefs = listRevertRescueRefs(harness.cwd);
+    expect(rescueRefs).toHaveLength(1);
+    const failure = thread.activities.find(
+      (activity) => activity.kind === "checkpoint.revert.failed",
+    );
+    const payload = failure?.payload as { detail?: string } | undefined;
+    // Name it in the human-readable detail so a person can find and restore it.
+    expect(payload?.detail).toContain(rescueRefs[0]);
+  });
+
+  it("keeps a failed rescue cleanup recoverable after restoring the workspace", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = await seedRevertableThread(harness, "cmd-rescue-cleanup-failure");
+    const targetCheckpointRef = checkpointRefForThreadTurn(threadId, 2);
+
+    harness.failures.restoreCheckpoint = (input) =>
+      input.checkpointRef === targetCheckpointRef
+        ? simulatedRestoreFailure(harness.cwd, "simulated target restore failure")
+        : null;
+    harness.failures.deleteCheckpointRefs = (input) =>
+      input.checkpointRefs.some((checkpointRef) => checkpointRef.includes("/revert-rescue/"))
+        ? new GitCommandError({
+            operation: "CheckpointStore.deleteCheckpointRefs",
+            command: "git update-ref -d",
+            cwd: harness.cwd,
+            detail: "simulated rescue cleanup failure",
+          })
+        : null;
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-rescue-cleanup-failure-revert"),
+        threadId,
+        turnCount: 2,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    );
+    await harness.drain();
+
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+    expect(listRevertRescueRefs(harness.cwd)).toHaveLength(1);
   });
 
   it("restores turn zero from the persisted checkpoint family", async () => {
@@ -2243,27 +2629,38 @@ describe("CheckpointReactor", () => {
     ).toBe(false);
   });
 
-  it("appends an error activity when revert is requested without an active session", async () => {
+  it("appends an error activity when the requested turn count has no recorded checkpoint", async () => {
+    // No `thread.turn.diff.complete` is dispatched, so the thread's current turn
+    // count is zero. The missing provider session is deliberate but incidental:
+    // a sessionless thread reverts fine once its checkpoints exist.
     const harness = await createHarness({ hasSession: false });
     const createdAt = new Date().toISOString();
 
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
-        commandId: CommandId.makeUnsafe("cmd-revert-no-session"),
+        commandId: CommandId.makeUnsafe("cmd-revert-unknown-turn-count"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         turnCount: 1,
         createdAt,
       }),
     );
 
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    const events = await waitForEvent(
+      harness.engine,
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.kind === "checkpoint.revert.failed",
     );
+    const failure = events.find(
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.kind === "checkpoint.revert.failed",
+    ) as Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
 
-    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
-      true,
-    );
+    expect(failure.payload.activity.payload).toMatchObject({
+      detail: "Checkpoint turn count 1 exceeds current turn count 0.",
+    });
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
 });

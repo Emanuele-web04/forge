@@ -4043,6 +4043,63 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("invalidates a missing resumed conversation reported by the async stream", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        resumeCursor: {
+          threadId: THREAD_ID,
+          resume: "44c0b890-8775-4f30-b47f-0709d29cc9e1",
+          resumeSessionAt: "assistant-stale",
+          turnCount: 2,
+        },
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "continue",
+        attachments: [],
+      });
+
+      harness.query.fail(
+        new Error("No conversation found with session ID: 44c0b890-8775-4f30-b47f-0709d29cc9e1"),
+      );
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.map((event) => event.type),
+        [
+          "session.started",
+          "session.configured",
+          "session.state.changed",
+          "turn.started",
+          "runtime.error",
+          "turn.completed",
+          "session.exited",
+        ],
+      );
+      const turnCompleted = runtimeEvents[5];
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+        assert.equal(turnCompleted.payload.state, "failed");
+        assert.equal(turnCompleted.providerRefs?.providerThreadId, undefined);
+      }
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("retains Claude session ownership until subprocess-tree exit is proven", () => {
     const query = new FakeClaudeQuery();
     let proveExit: (() => void) | undefined;
