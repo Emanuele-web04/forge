@@ -473,6 +473,11 @@ export function resolvePullActionAvailability(input: {
   return { canRun: true, hint: null };
 }
 
+/** Environment panel should promote Pull as the primary row when that is the quick action. */
+export function shouldShowEnvironmentPanelPullRow(quickAction: GitQuickAction): boolean {
+  return quickAction.kind === "run_pull" && !quickAction.disabled;
+}
+
 export function shouldOfferCreateBranchPrompt(input: {
   activeWorktreePath: string | null;
   gitStatus: Pick<GitStatusResult, "branch" | "hasUpstream"> | null;
