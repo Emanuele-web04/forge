@@ -62,6 +62,16 @@ export const COMPOSER_STACKED_PANEL_META_CLASS_NAME =
 /** Horizontal padding for multi-line stacked panel bodies. */
 export const COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME = "px-2.5 pb-1.5";
 
+/**
+ * Bounded scroll region for unbounded row lists inside stacked panels (subagent
+ * strip, workflow agent list). Panels sit in normal flow above the composer, so
+ * without a cap a large agent fleet grows the panel past the viewport and pushes
+ * the composer input off-screen; capping here keeps the layout shift constant
+ * regardless of row count.
+ */
+export const COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME =
+  "max-h-56 overflow-y-auto overscroll-contain";
+
 /** Footer/meta row below stacked panel content (background agents). */
 export const COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME =
   "flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px] text-muted-foreground/70";

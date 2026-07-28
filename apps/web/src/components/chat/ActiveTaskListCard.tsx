@@ -26,6 +26,7 @@ import {
   COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
+  COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
 } from "./composerStackedPanelStyles";
 
 interface ActiveTaskListCardProps {
@@ -106,7 +107,13 @@ export function ActiveTaskListCard({
 
       {compact ? null : (
         <>
-          <ol className={cn("space-y-0", COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME)}>
+          <ol
+            className={cn(
+              "space-y-0",
+              COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
+              COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
+            )}
+          >
             {activeTaskList.tasks.map((task, index) => {
               const occurrence = (taskOccurrenceCount.get(task.task) ?? 0) + 1;
               taskOccurrenceCount.set(task.task, occurrence);

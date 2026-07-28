@@ -9,6 +9,7 @@ import {
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_LABEL_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ROW_CLASS_NAME,
+  COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
 } from "./composerStackedPanelStyles";
 
 describe("composerStackedPanelStyles", () => {
@@ -23,6 +24,11 @@ describe("composerStackedPanelStyles", () => {
     expect(COMPOSER_STACKED_PANEL_ROW_CLASS_NAME).toContain("px-2.5");
     expect(COMPOSER_STACKED_PANEL_ROW_CLASS_NAME).toContain("py-1.5");
     expect(COMPOSER_STACKED_PANEL_ROW_CLASS_NAME).toContain("text-[12px]");
+  });
+
+  it("keeps unbounded row lists capped so large agent fleets cannot push the composer off-screen", () => {
+    expect(COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME).toContain("max-h-");
+    expect(COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME).toContain("overflow-y-auto");
   });
 
   it("keeps icon and label treatments aligned across stacked panels", () => {

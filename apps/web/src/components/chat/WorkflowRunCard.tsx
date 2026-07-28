@@ -53,6 +53,7 @@ import {
   COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
+  COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
 } from "./composerStackedPanelStyles";
 
 interface WorkflowRunCardProps {
@@ -478,7 +479,10 @@ export function WorkflowRunCard({
               ))}
             </div>
           ) : null}
-          <div className="space-y-0" data-testid="workflow-phase-group">
+          <div
+            className={cn("space-y-0", COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME)}
+            data-testid="workflow-phase-group"
+          >
             {visibleGroups ? (
               visibleGroups.length > 0 ? (
                 visibleGroups.map(({ phase, agents }) => (
