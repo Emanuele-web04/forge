@@ -236,8 +236,7 @@ export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-b
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";
 
-export const RUNTIME_AUTO_ACCENT_CLASS_NAME =
-  "text-[var(--color-text-accent)] hover:opacity-85";
+export const RUNTIME_AUTO_ACCENT_CLASS_NAME = "text-[var(--color-text-accent)] hover:opacity-85";
 export const RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME = "text-[var(--color-text-accent)]";
 
 /** Minimum composer editor height — two lines at the element's line-height.
