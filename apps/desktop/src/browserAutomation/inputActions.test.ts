@@ -59,7 +59,7 @@ import { dragBrowserTarget, typeIntoBrowserTarget } from "./inputActions";
 
 const runtime = {
   threadId: "thread-input" as BrowserAutomationVisibleRuntime["threadId"],
-  tabId: "tab-input",
+  tabId: "551c4630-5817-4db1-ab9e-58e65cdd1d55",
   webContents: { isDestroyed: () => false } as unknown as WebContents,
 } satisfies BrowserAutomationVisibleRuntime;
 
@@ -137,6 +137,24 @@ describe("browser text input", () => {
       expect(mocks.releaseBrowserTarget).toHaveBeenCalledOnce();
     },
   );
+
+  it("requires human entry for password and verification fields", async () => {
+    mocks.callFunctionOn.mockResolvedValueOnce({ value: true });
+
+    await expect(
+      typeIntoBrowserTarget(
+        runtime,
+        {
+          target: { selector: "#password" as BrowserCssSelector },
+          text: "not-a-password",
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/human must enter passwords/i);
+
+    expect(mocks.dispatchTrustedText).not.toHaveBeenCalled();
+    expect(mocks.releaseBrowserTarget).toHaveBeenCalledOnce();
+  });
 });
 
 describe("browser drag input", () => {

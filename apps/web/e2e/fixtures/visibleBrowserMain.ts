@@ -3,10 +3,8 @@ import * as path from "node:path";
 import { app, BrowserWindow, ipcMain } from "electron";
 import type { BrowserAnnotationEvent, ThreadBrowserState, ThreadId } from "@synara/contracts";
 
-import {
-  BROWSER_SESSION_PARTITION,
-  DesktopBrowserManager,
-} from "../../../desktop/src/browserManager";
+import { DesktopBrowserManager } from "../../../desktop/src/browserManager";
+import { BrowserProfileStore, PERSONAL_BROWSER_PROFILE_ID } from "../../../desktop/src/browserProfiles";
 import { BrowserUsePipeServer } from "../../../desktop/src/browserUsePipeServer";
 import { BROWSER_IPC_CHANNELS } from "../../../desktop/src/ipcChannels";
 import { hardenBrowserAnnotationWebviewPreferences } from "../../../desktop/src/browserAnnotations/webviewSecurity";
@@ -25,10 +23,10 @@ if (!pipePath || !capability || !shellPath || !threadId || !synaraHome || !annot
 
 app.setPath("userData", path.join(synaraHome, "electron-userdata"));
 
-const browserManager = new DesktopBrowserManager();
 let mainWindow: BrowserWindow | null = null;
-let latestState: ThreadBrowserState | null = null;
-let shellReady = false;
+const profileStore = new BrowserProfileStore();
+profileStore.bindThread(threadId, PERSONAL_BROWSER_PROFILE_ID);
+const browserManager = new DesktopBrowserManager({ profileStore });
 const annotationEvents: BrowserAnnotationEvent[] = [];
 const rendererLifecycleHide = createBrowserPanelHideScheduler();
 function pushState(): void {
@@ -106,7 +104,7 @@ app.whenReady().then(async () => {
     if (
       !hardenBrowserAnnotationWebviewPreferences({
         partition: params.partition,
-        expectedPartition: BROWSER_SESSION_PARTITION,
+        expectedPartition: (candidate) => browserManager.isManagedProfilePartition(candidate),
         preloadPath: annotationPreloadPath,
         webPreferences,
       })

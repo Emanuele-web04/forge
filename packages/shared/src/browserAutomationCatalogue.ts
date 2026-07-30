@@ -283,7 +283,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
   ),
   defineTool(
     "browser_type",
-    "Type into browser target",
+    "Type into a non-credential browser target; humans enter passwords and verification codes",
     BrowserTypeInput,
     BrowserTypeOutput,
     DESTRUCTIVE_OPEN_WORLD,
@@ -335,8 +335,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
     BrowserEvaluateInput,
     BrowserEvaluateOutput,
     DESTRUCTIVE_OPEN_WORLD,
-    5_000,
-    { maximumTimeoutMs: 10_000 },
+    10_000,
   ),
   defineTool(
     "browser_close",

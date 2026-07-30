@@ -11,13 +11,15 @@ import {
   type Session,
   type WebContents,
 } from "electron";
+import type { BrowserProfile } from "@synara/contracts";
 import {
   buildAcceptLanguageHeader,
   buildChromeClientHints,
   deriveChromeUserAgent,
 } from "@synara/shared/browserSession";
+import { LEGACY_PERSONAL_BROWSER_PARTITION } from "./browserProfiles";
 
-export const BROWSER_SESSION_PARTITION = "persist:synara-browser";
+export const BROWSER_SESSION_PARTITION = LEGACY_PERSONAL_BROWSER_PARTITION;
 
 export interface BrowserSessionDownloadEvent {
   readonly event: Electron.Event;
@@ -26,6 +28,28 @@ export interface BrowserSessionDownloadEvent {
 }
 
 export type BrowserSessionDownloadListener = (event: BrowserSessionDownloadEvent) => void;
+
+export interface BrowserSessionWebAuthnEvent {
+  readonly profile: BrowserProfile;
+  readonly details: Electron.SelectWebauthnAccountDetails;
+  readonly callback: (credentialId?: string | null) => void;
+}
+
+export type BrowserSessionWebAuthnListener = (event: BrowserSessionWebAuthnEvent) => void;
+
+interface ManagedBrowserSession {
+  readonly session: Session;
+  readonly willDownloadListener:
+    | ((event: Electron.Event, item: DownloadItem, webContents: WebContents) => void)
+    | null;
+  readonly webAuthnListener:
+    | ((
+        event: Electron.Event,
+        details: Electron.SelectWebauthnAccountDetails,
+        callback: (credentialId?: string | null) => void,
+      ) => void)
+    | null;
+}
 
 function replaceRequestHeadersCaseInsensitive(
   headers: Record<string, string>,
@@ -47,13 +71,12 @@ function replaceRequestHeadersCaseInsensitive(
 
 export class BrowserSessionPolicy {
   private spoofedUserAgent: string | null = null;
-  private configured = false;
-  private configuredSession: Session | null = null;
-  private willDownloadListener:
-    | ((event: Electron.Event, item: DownloadItem, webContents: WebContents) => void)
-    | null = null;
+  private readonly configuredSessions = new Map<string, ManagedBrowserSession>();
 
-  constructor(private readonly onWillDownload?: BrowserSessionDownloadListener) {}
+  constructor(
+    private readonly onWillDownload?: BrowserSessionDownloadListener,
+    private readonly onWebAuthnAccountSelection?: BrowserSessionWebAuthnListener,
+  ) {}
 
   private resolveUserAgent(): string {
     if (this.spoofedUserAgent === null) {
@@ -62,64 +85,114 @@ export class BrowserSessionPolicy {
     return this.spoofedUserAgent;
   }
 
-  ensureConfigured(): void {
-    if (this.configured) {
-      return;
+  ensureConfigured(profile: BrowserProfile): Session {
+    const existing = this.configuredSessions.get(profile.partition);
+    if (existing) {
+      return existing.session;
     }
-    try {
-      const partitionSession = session.fromPartition(BROWSER_SESSION_PARTITION);
-      const userAgent = this.resolveUserAgent();
-      partitionSession.setUserAgent(userAgent);
 
-      const clientHints = buildChromeClientHints(userAgent, process.platform);
-      const acceptLanguage = buildAcceptLanguageHeader(app.getPreferredSystemLanguages());
-      partitionSession.webRequest.onBeforeSendHeaders((details, callback) => {
-        const requestHeaders = replaceRequestHeadersCaseInsensitive(details.requestHeaders, {
-          "User-Agent": userAgent,
-          ...(acceptLanguage ? { "Accept-Language": acceptLanguage } : {}),
-          ...(clientHints ?? {}),
-        });
-        callback({ requestHeaders });
-      });
-      const onWillDownload = this.onWillDownload;
-      if (onWillDownload) {
-        const listener = (event: Electron.Event, item: DownloadItem, webContents: WebContents) => {
-          onWillDownload({ event, item, webContents });
-        };
-        partitionSession.on("will-download", listener);
-        this.configuredSession = partitionSession;
-        this.willDownloadListener = listener;
-      }
-      this.configured = true;
+    let partitionSession: Session;
+    try {
+      partitionSession = session.fromPartition(profile.partition);
     } catch {
-      // Session creation can race Electron readiness. Retrying the next call preserves the
-      // per-WebContents fallback without permanently disabling partition configuration.
-      this.configured = false;
+      // Electron can briefly reject a partition while the app is still
+      // initializing. Retry once without recording a half-configured session.
+      partitionSession = session.fromPartition(profile.partition);
     }
+    const userAgent = this.resolveUserAgent();
+    partitionSession.setUserAgent(userAgent);
+
+    // Browser profiles render untrusted origins. They never inherit permissions
+    // granted to Synara's own renderer (for example voice-composer microphone
+    // access), and cannot prompt the agent into granting a device capability.
+    partitionSession.setPermissionCheckHandler(() => false);
+    partitionSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+      callback(false);
+    });
+
+    const clientHints = buildChromeClientHints(userAgent, process.platform);
+    const acceptLanguage = buildAcceptLanguageHeader(app.getPreferredSystemLanguages());
+    partitionSession.webRequest.onBeforeSendHeaders((details, callback) => {
+      const requestHeaders = replaceRequestHeadersCaseInsensitive(details.requestHeaders, {
+        "User-Agent": userAgent,
+        ...(acceptLanguage ? { "Accept-Language": acceptLanguage } : {}),
+        ...(clientHints ?? {}),
+      });
+      callback({ requestHeaders });
+    });
+
+    const onWillDownload = this.onWillDownload;
+    const willDownloadListener = onWillDownload
+      ? (event: Electron.Event, item: DownloadItem, webContents: WebContents) => {
+          onWillDownload({ event, item, webContents });
+        }
+      : null;
+    if (willDownloadListener) {
+      partitionSession.on("will-download", willDownloadListener);
+    }
+
+    const onWebAuthnAccountSelection = this.onWebAuthnAccountSelection;
+    const webAuthnListener = onWebAuthnAccountSelection
+      ? (
+          _event: Electron.Event,
+          details: Electron.SelectWebauthnAccountDetails,
+          callback: (credentialId?: string | null) => void,
+        ) => {
+          onWebAuthnAccountSelection({ profile, details, callback });
+        }
+      : null;
+    if (webAuthnListener) {
+      partitionSession.on("select-webauthn-account", webAuthnListener);
+    }
+
+
+    this.configuredSessions.set(profile.partition, {
+      session: partitionSession,
+      willDownloadListener,
+      webAuthnListener,
+    });
+    return partitionSession;
+  }
+  release(profile: BrowserProfile): void {
+    const managed = this.configuredSessions.get(profile.partition);
+    if (!managed) return;
+    try {
+      if (managed.willDownloadListener) {
+        managed.session.removeListener("will-download", managed.willDownloadListener);
+      }
+      if (managed.webAuthnListener) {
+        managed.session.removeListener("select-webauthn-account", managed.webAuthnListener);
+      }
+    } catch {
+      // Electron may already be tearing down the profile session.
+    }
+    this.configuredSessions.delete(profile.partition);
   }
 
   dispose(): void {
-    const partitionSession = this.configuredSession;
-    const listener = this.willDownloadListener;
-    this.configuredSession = null;
-    this.willDownloadListener = null;
-    this.configured = false;
-    if (!partitionSession || !listener) {
-      return;
+    for (const managed of this.configuredSessions.values()) {
+      try {
+        if (managed.willDownloadListener) {
+          managed.session.removeListener("will-download", managed.willDownloadListener);
+        }
+        if (managed.webAuthnListener) {
+          managed.session.removeListener("select-webauthn-account", managed.webAuthnListener);
+        }
+      } catch {
+        // Electron may already be tearing down sessions during app quit.
+      }
     }
-    try {
-      partitionSession.removeListener("will-download", listener);
-    } catch {
-      // Electron may already be tearing the session down during app quit.
-      // The manager reference is cleared above, so no retained callback remains here.
-    }
+    this.configuredSessions.clear();
   }
 
   applyUserAgent(webContents: Pick<WebContents, "setUserAgent">): void {
     webContents.setUserAgent(this.resolveUserAgent());
   }
 
-  buildOAuthPopupWindowOptions(parent: BrowserWindow | null): BrowserWindowConstructorOptions {
+  buildOAuthPopupWindowOptions(
+    parent: BrowserWindow | null,
+    profile: BrowserProfile,
+  ): BrowserWindowConstructorOptions {
     return {
       width: 480,
       height: 640,
@@ -132,7 +205,7 @@ export class BrowserSessionPolicy {
       title: "Sign in",
       ...(parent ? { parent } : {}),
       webPreferences: {
-        partition: BROWSER_SESSION_PARTITION,
+        partition: profile.partition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,

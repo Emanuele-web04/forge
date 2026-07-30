@@ -298,6 +298,45 @@ const PREPARE_EDITABLE_FUNCTION = String.raw`function(append) {
   return true;
 }`;
 
+const IS_CREDENTIAL_INPUT_FUNCTION = String.raw`function() {
+  if (!this || this.nodeType !== 1) return false;
+  const tagName = String(this.localName || "").toLowerCase();
+  if (tagName !== "input" && tagName !== "textarea" && this.isContentEditable !== true) return false;
+  const type = String(this.type || "").toLowerCase();
+  const autocomplete = String(this.autocomplete || this.getAttribute("autocomplete") || "").toLowerCase();
+  const attributes = [
+    type,
+    autocomplete,
+    this.name || "",
+    this.id || "",
+    this.getAttribute("aria-label") || "",
+    this.getAttribute("placeholder") || "",
+  ].join(" ").toLowerCase();
+  return type === "password" ||
+    ["current-password", "new-password", "one-time-code", "username"].includes(autocomplete) ||
+    /\b(password|passcode|pin|one[-\s]?time|verification|security|otp|2fa|mfa|username|user[-\s_]?name|email|login|sign[-\s_]?in|account|identifier)\b/.test(attributes);
+}`;
+
+const ACTIVE_CREDENTIAL_INPUT_EXPRESSION = String.raw`(() => {
+  const active = document.activeElement;
+  if (!active || active.nodeType !== 1) return false;
+  const tagName = String(active.localName || "").toLowerCase();
+  if (tagName !== "input" && tagName !== "textarea" && active.isContentEditable !== true) return false;
+  const type = String(active.type || "").toLowerCase();
+  const autocomplete = String(active.autocomplete || active.getAttribute("autocomplete") || "").toLowerCase();
+  const attributes = [
+    type,
+    autocomplete,
+    active.name || "",
+    active.id || "",
+    active.getAttribute("aria-label") || "",
+    active.getAttribute("placeholder") || "",
+  ].join(" ").toLowerCase();
+  return type === "password" ||
+    ["current-password", "new-password", "one-time-code", "username"].includes(autocomplete) ||
+    /\b(password|passcode|pin|one[-\s]?time|verification|security|otp|2fa|mfa|username|user[-\s_]?name|email|login|sign[-\s_]?in|account|identifier)\b/.test(attributes);
+})()`;
+
 const READ_EDITABLE_VALUE_FUNCTION = String.raw`function() {
   if (!this || this.nodeType !== 1 || this.isConnected !== true) return { kind: "unavailable", length: 0 };
   const raw = this.isContentEditable ? String(this.textContent || "") : String(this.value ?? "");
@@ -325,6 +364,18 @@ export const typeIntoBrowserTarget = async (
     signal,
   });
   try {
+    const credentialInput = await callFunctionOn<boolean>(
+      runtime,
+      target.resolved.objectId!,
+      IS_CREDENTIAL_INPUT_FUNCTION,
+      { effectMayHaveCommitted: false, signal },
+    );
+    if (credentialInput.value === true) {
+      browserHostError({
+        code: "BrowserCredentialInputRequired",
+        tabId: tabId(runtime),
+      });
+    }
     const prepared = await callFunctionOn<boolean>(
       runtime,
       target.resolved.objectId!,
@@ -488,6 +539,17 @@ export const pressBrowserKeys = async (
   signal?: AbortSignal,
 ): Promise<BrowserPressOutput> => {
   validateKeySequence(input.keys);
+  const credentialInputActive = await evaluateInContext<boolean>(
+    runtime,
+    ACTIVE_CREDENTIAL_INPUT_EXPRESSION,
+    { effectMayHaveCommitted: false, signal },
+  );
+  if (credentialInputActive?.value === true) {
+    browserHostError({
+      code: "BrowserCredentialInputRequired",
+      tabId: tabId(runtime),
+    });
+  }
   await dispatchTrustedKeySequence(runtime, input.keys, signal);
   return {
     tabId: tabId(runtime),

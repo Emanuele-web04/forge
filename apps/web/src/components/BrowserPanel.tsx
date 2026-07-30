@@ -12,6 +12,7 @@ import { IconPointer } from "@tabler/icons-react";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type BrowserProfile,
   type ServerLocalServerProcess,
   type ThreadBrowserState,
   type ThreadId,
@@ -78,10 +79,22 @@ import {
 } from "./browser/useBrowserAnnotations";
 import { LocalServerIdentity } from "./LocalServerIdentity";
 import { Button } from "./ui/button";
-import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Input } from "./ui/input";
-import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Skeleton } from "./ui/skeleton";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuSub,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "./ui/menu";
+import { RenameDialog } from "./RenameDialog";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./chat/ComposerPickerMenuPopup";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -620,6 +633,9 @@ export function BrowserPanel({
     threadBrowserState?.tabs.find((tab) => tab.id === threadBrowserState.activeTabId) ??
     threadBrowserState?.tabs[0] ??
     null;
+  const [profileDialog, setProfileDialog] = useState<
+    { mode: "create" } | { mode: "rename"; profile: BrowserProfile } | null
+  >(null);
   const activeTabId = activeTab?.id ?? null;
   const activeTabInitialUrl = activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
   activeTabInitialUrlRef.current = activeTabInitialUrl;
@@ -627,6 +643,21 @@ export function BrowserPanel({
   const activeTabIsBlank = isBlankBrowserTabUrl(activeTab);
   const showLocalServersHome = isLiveRuntime && workspaceReady && (!activeTab || activeTabIsBlank);
   const localServersQuery = useQuery(serverLocalServersQueryOptions(showLocalServersHome));
+  const browserProfileStateQuery = useQuery({
+    queryKey: ["browser-profile-state", threadId],
+    queryFn: () => {
+      if (!api) {
+        throw new Error("The desktop browser is unavailable.");
+      }
+      return api.browser.getProfileState({ threadId });
+    },
+    enabled: isElectron && isLiveRuntime && api !== undefined,
+    staleTime: 30_000,
+  });
+  const activeBrowserProfile = threadBrowserState?.profile ?? null;
+  const browserProfiles =
+    browserProfileStateQuery.data?.profiles ?? (activeBrowserProfile ? [activeBrowserProfile] : []);
+  const browserProfilePartition = activeBrowserProfile?.partition ?? BROWSER_WEBVIEW_PARTITION;
   const activeTabStatus = activeTab?.status ?? "suspended";
   const browserChromeStatus = resolveBrowserChromeStatus({
     localError,
@@ -678,6 +709,84 @@ export function BrowserPanel({
       return null;
     }
   }, []);
+
+  const selectBrowserProfile = useCallback(
+    (profileId: string) => {
+      if (!api || profileId === activeBrowserProfile?.id) return;
+      void runBrowserAction(() =>
+        api.browser.setThreadProfile({ threadId, profileId }),
+      ).then((state) => {
+        if (state) {
+          upsertThreadState(state);
+          void browserProfileStateQuery.refetch();
+        }
+      });
+    },
+    [
+      activeBrowserProfile?.id,
+      api,
+      browserProfileStateQuery,
+      runBrowserAction,
+      threadId,
+      upsertThreadState,
+    ],
+  );
+
+  const saveBrowserProfileName = useCallback(
+    async (label: string) => {
+      if (!api || !profileDialog) {
+        throw new Error("The desktop browser is unavailable.");
+      }
+      try {
+        if (profileDialog.mode === "create") {
+          await api.browser.createProfile({ label });
+        } else {
+          await api.browser.renameProfile({ profileId: profileDialog.profile.id, label });
+        }
+        await browserProfileStateQuery.refetch();
+        setLocalError(null);
+      } catch (error) {
+        setLocalError(formatBrowserActionError(error));
+        throw error;
+      }
+    },
+    [api, browserProfileStateQuery, profileDialog],
+  );
+
+  const clearActiveBrowserProfileData = useCallback(async () => {
+    if (!api || !activeBrowserProfile || activeBrowserProfile.kind !== "persistent") return;
+    const confirmed = await api.dialogs.confirm(
+      `Forget browser data?\nThis clears cookies, site storage, and cache for ${activeBrowserProfile.label}. Existing pages reload as signed out.`,
+    );
+    if (!confirmed) return;
+    const cleared = await runBrowserAction(async () => {
+      await api.browser.clearProfileData({
+        profileId: activeBrowserProfile.id,
+        clearCache: true,
+      });
+      return true;
+    });
+    if (cleared) {
+      toastManager.add({ type: "success", title: "Browser data cleared" });
+    }
+  }, [activeBrowserProfile, api, runBrowserAction]);
+
+  const deleteActiveBrowserProfile = useCallback(async () => {
+    if (!api || !activeBrowserProfile || activeBrowserProfile.builtIn) return;
+    const confirmed = await api.dialogs.confirm(
+      `Delete ${activeBrowserProfile.label}?\nThis permanently clears its cookies, site storage, cache, and browser profile. Threads using it move to Temporary.`,
+    );
+    if (!confirmed) return;
+    const state = await runBrowserAction(async () => {
+      await api.browser.deleteProfile({ profileId: activeBrowserProfile.id });
+      return api.browser.getState({ threadId });
+    });
+    if (state) {
+      upsertThreadState(state);
+      await browserProfileStateQuery.refetch();
+      toastManager.add({ type: "success", title: "Browser profile deleted" });
+    }
+  }, [activeBrowserProfile, api, browserProfileStateQuery, runBrowserAction, threadId, upsertThreadState]);
 
   // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
   // removing the DOM node so main never keeps a stale webContents runtime.
@@ -823,6 +932,10 @@ export function BrowserPanel({
     }
 
     let webview = browserWebviewRef.current;
+    if (webview?.dataset.profilePartition !== browserProfilePartition) {
+      detachRendererBrowserWebview(webview);
+      webview = null;
+    }
     if (!webview) {
       webview = document.createElement("webview") as BrowserWebviewElement;
       webview.className = "h-full w-full";
@@ -830,7 +943,8 @@ export function BrowserPanel({
       webview.style.width = "100%";
       webview.style.height = "100%";
       webview.style.backgroundColor = "#0d0d0d";
-      webview.setAttribute("partition", BROWSER_WEBVIEW_PARTITION);
+      webview.setAttribute("partition", browserProfilePartition);
+      webview.dataset.profilePartition = browserProfilePartition;
       webview.setAttribute("webpreferences", "contextIsolation=yes,nodeIntegration=no,sandbox=yes");
       // A <webview> blocks window.open() unless `allowpopups` is set. Without it, clicking
       // "Continue with Google" (and any OAuth/popup flow) is silently dropped before the main
@@ -838,9 +952,8 @@ export function BrowserPanel({
       // browserManager decide popup-vs-tab and keep the OAuth `window.opener` handshake alive.
       webview.setAttribute("allowpopups", "true");
       // No `useragent` attribute on purpose: the desktop main process spoofs a desktop Chrome
-      // UA on the shared persistent partition, so this webview (and OAuth popups) inherit the
-      // same identity. This keeps in-app Google/OAuth sign-in working without duplicating the
-      // UA string into the renderer.
+      // UA on the selected profile session, so this webview (and OAuth popups) inherit the
+      // same identity without duplicating the UA string into the renderer.
       webview.dataset.rendererGeneration = String(browserRendererGeneration);
       browserWebviewWebContentsIdRef.current = null;
       browserWebviewRef.current = webview;
@@ -988,6 +1101,7 @@ export function BrowserPanel({
     activeTabId,
     api,
     browserRendererGeneration,
+    browserProfilePartition,
     detachRendererBrowserWebview,
     isLiveRuntime,
     showLocalServersHome,
@@ -1487,8 +1601,8 @@ export function BrowserPanel({
   );
 
   const header = (
-    <div className="flex min-w-0 flex-1 items-center gap-2">
-      {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
+    <>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
       <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
         <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
           <Button
@@ -1716,6 +1830,72 @@ export function BrowserPanel({
               <span>Open externally</span>
             </MenuItem>
             <MenuSeparator />
+            {isElectron && activeBrowserProfile ? (
+              <>
+                <MenuSub>
+                  <MenuSubTrigger>
+                    <BrowserActionMenuIcon icon={GlobeIcon} />
+                    <span className="min-w-0 flex-1 truncate">
+                      Identity: {activeBrowserProfile.label}
+                    </span>
+                  </MenuSubTrigger>
+                  <ComposerPickerMenuSubPopup fixedWidth className="w-64 min-w-64">
+                    <MenuGroup>
+                      <MenuGroupLabel>Browser identity</MenuGroupLabel>
+                      <MenuRadioGroup
+                        value={activeBrowserProfile.id}
+                        onValueChange={selectBrowserProfile}
+                      >
+                        {browserProfiles.map((profile) => (
+                          <MenuRadioItem key={profile.id} value={profile.id} preserveChildLayout>
+                            <span className="min-w-0 flex-1 truncate">{profile.label}</span>
+                            <span className="shrink-0 text-[10px] text-muted-foreground">
+                              {profile.kind === "persistent" ? "Saved" : "This thread"}
+                            </span>
+                          </MenuRadioItem>
+                        ))}
+                      </MenuRadioGroup>
+                    </MenuGroup>
+                    <MenuSeparator />
+                    <MenuItem
+                      className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                      onClick={() => setProfileDialog({ mode: "create" })}
+                    >
+                      <BrowserActionMenuIcon icon={PlusIcon} />
+                      <span>New browser profile</span>
+                    </MenuItem>
+                    {!activeBrowserProfile.builtIn ? (
+                      <>
+                        <MenuItem
+                          className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                          onClick={() =>
+                            setProfileDialog({ mode: "rename", profile: activeBrowserProfile })
+                          }
+                        >
+                          <BrowserActionMenuIcon icon={GlobeIcon} />
+                          <span>Rename profile</span>
+                        </MenuItem>
+                        <MenuItem
+                          className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                          onClick={() => void deleteActiveBrowserProfile()}
+                        >
+                          <BrowserActionMenuIcon icon={XIcon} />
+                          <span>Delete profile</span>
+                        </MenuItem>
+                      </>
+                    ) : null}
+                  </ComposerPickerMenuSubPopup>
+                </MenuSub>
+                <MenuItem
+                  className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                  disabled={activeBrowserProfile.kind !== "persistent"}
+                  onClick={() => void clearActiveBrowserProfileData()}
+                >
+                  <BrowserActionMenuIcon icon={RefreshCwIcon} />
+                  <span>Forget cookies & cache</span>
+                </MenuItem>
+              </>
+            ) : null}
             <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
               <BrowserActionMenuIcon icon={XIcon} />
               <span>Close browser panel</span>
@@ -1723,7 +1903,24 @@ export function BrowserPanel({
           </ComposerPickerMenuPopup>
         </Menu>
       </div>
-    </div>
+      </div>
+      <RenameDialog
+        open={profileDialog !== null}
+        title={profileDialog?.mode === "rename" ? "Rename browser profile" : "New browser profile"}
+        description={
+          profileDialog?.mode === "rename"
+            ? "This changes the profile label only; its signed-in sites stay intact."
+            : "A separate saved browser identity for its own cookies and sign-ins."
+        }
+        initialValue={profileDialog?.mode === "rename" ? profileDialog.profile.label : ""}
+        placeholder="Profile name"
+        saveLabel={profileDialog?.mode === "rename" ? "Rename" : "Create profile"}
+        onOpenChange={(open) => {
+          if (!open) setProfileDialog(null);
+        }}
+        onSave={saveBrowserProfileName}
+      />
+    </>
   );
 
   if (!api && isLiveRuntime) {

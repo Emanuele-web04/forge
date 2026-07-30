@@ -191,6 +191,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     close: (input) => ipcRenderer.invoke(IPC.browser.close, input),
     hide: (input) => ipcRenderer.invoke(IPC.browser.hide, input),
     getState: (input) => ipcRenderer.invoke(IPC.browser.getState, input),
+    getProfileState: (input) => ipcRenderer.invoke(IPC.browser.getProfileState, input),
+    createProfile: (input) => ipcRenderer.invoke(IPC.browser.createProfile, input),
+    renameProfile: (input) => ipcRenderer.invoke(IPC.browser.renameProfile, input),
+    deleteProfile: (input) => ipcRenderer.invoke(IPC.browser.deleteProfile, input),
+    setThreadProfile: (input) => ipcRenderer.invoke(IPC.browser.setThreadProfile, input),
+    clearProfileData: (input) => ipcRenderer.invoke(IPC.browser.clearProfileData, input),
     setPanelBounds: async (input) => {
       ipcRenderer.send(IPC.browser.setBounds, input);
     },

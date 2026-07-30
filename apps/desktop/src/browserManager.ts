@@ -8,6 +8,7 @@ import * as Crypto from "node:crypto";
 import {
   BrowserWindow,
   clipboard,
+  dialog,
   nativeImage,
   session as electronSession,
   webContents as electronWebContents,
@@ -21,6 +22,13 @@ import type {
   BrowserAnnotationStartInput,
   BrowserAnnotationSyncMarkersInput,
   BrowserAttachWebviewInput,
+  BrowserClearProfileDataInput,
+  BrowserCreateProfileInput,
+  BrowserDeleteProfileInput,
+  BrowserProfile,
+  BrowserProfileState,
+  BrowserRenameProfileInput,
+  BrowserSetThreadProfileInput,
   BrowserCaptureScreenshotResult,
   BrowserCopyLinkEvent,
   BrowserDetachWebviewInput,
@@ -44,10 +52,11 @@ import {
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
 import {
-  BROWSER_SESSION_PARTITION,
   BrowserSessionPolicy,
   type BrowserSessionDownloadEvent,
+  type BrowserSessionWebAuthnEvent,
 } from "./browserSessionPolicy";
+import { BrowserProfileStore } from "./browserProfiles";
 import {
   BrowserAnnotationCoordinator,
   type BrowserAnnotationRuntime,
@@ -207,7 +216,8 @@ export interface BrowserAutomationDownloadEvent {
 }
 
 export interface DesktopBrowserManagerOptions {
-  beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
+  readonly beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
+  readonly profileStore?: BrowserProfileStore;
 }
 
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
@@ -225,13 +235,17 @@ function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
   };
 }
 
-function defaultThreadBrowserState(threadId: ThreadId): ThreadBrowserState {
+function defaultThreadBrowserState(
+  threadId: ThreadId,
+  profile: BrowserProfile,
+): ThreadBrowserState {
   return {
     threadId,
     version: 0,
     open: false,
     activeTabId: null,
     tabs: [],
+    profile,
     lastError: null,
   };
 }
@@ -239,6 +253,7 @@ function defaultThreadBrowserState(threadId: ThreadId): ThreadBrowserState {
 function cloneThreadState(state: ThreadBrowserState): ThreadBrowserState {
   return {
     ...state,
+    profile: { ...state.profile },
     tabs: state.tabs.map((tab) => ({ ...tab })),
   };
 }
@@ -330,6 +345,18 @@ function browserBoundsSignature(bounds: BrowserPanelBounds | null): string {
   return `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
 }
 
+function normalizeBrowserStorageOrigin(value: string): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("unsupported scheme");
+    }
+    return parsed.origin;
+  } catch {
+    throw new Error("Browser site data can only be cleared for an http(s) origin.");
+  }
+}
+
 function isAllowedBrowserRuntimeNavigation(url: string): boolean {
   if (url === ABOUT_BLANK_URL) return true;
   try {
@@ -414,6 +441,7 @@ export class DesktopBrowserManager {
   private readonly pendingStatePublicationsByKey = new Map<string, PendingStatePublication>();
   private readonly runtimes = new Map<string, LiveTabRuntime>();
   private readonly rendererOnlyRuntimeKeys = new Set<string>();
+  private readonly profileStore: BrowserProfileStore;
   private readonly runtimeLastActiveAtByKey = new Map<string, number>();
   private readonly pendingRuntimeSyncs = new Map<string, PendingRuntimeSync>();
   private readonly listeners = new Set<BrowserStateListener>();
@@ -443,9 +471,15 @@ export class DesktopBrowserManager {
   };
 
   constructor(private readonly options: DesktopBrowserManagerOptions = {}) {
-    this.sessionPolicy = new BrowserSessionPolicy((event) => {
-      this.handleSessionDownload(event);
-    });
+    this.profileStore = options.profileStore ?? new BrowserProfileStore();
+    this.sessionPolicy = new BrowserSessionPolicy(
+      (event) => {
+        this.handleSessionDownload(event);
+      },
+      (event) => {
+        this.handleWebAuthnAccountSelection(event);
+      },
+    );
     this.annotations = new BrowserAnnotationCoordinator({
       resolveVisibleRuntime: (input) => {
         const runtime = this.getVisibleAutomationRuntime(input);
@@ -500,6 +534,79 @@ export class DesktopBrowserManager {
     return this.annotations.subscribe(listener);
   }
 
+  getProfileState(input: BrowserThreadInput): BrowserProfileState {
+    return {
+      profiles: this.profileStore.list(input.threadId),
+      threadProfile: this.getOrCreateState(input.threadId).profile,
+    };
+  }
+
+  createProfile(input: BrowserCreateProfileInput): BrowserProfile {
+    return this.profileStore.create(input.label);
+  }
+
+  renameProfile(input: BrowserRenameProfileInput): BrowserProfile {
+    const profile = this.profileStore.rename(input.profileId, input.label);
+    for (const [threadId, state] of this.states) {
+      if (state.profile.id !== profile.id) continue;
+      state.profile = this.profileStore.profileForThread(threadId);
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+    }
+    return profile;
+  }
+
+  async deleteProfile(input: BrowserDeleteProfileInput): Promise<void> {
+    const profile = this.findProfile(input.profileId);
+    if (profile.builtIn) {
+      throw new Error("Built-in browser profiles cannot be deleted.");
+    }
+    await this.clearProfile(profile, undefined, true);
+    this.sessionPolicy.release(profile);
+    const affectedThreadIds = this.profileStore.delete(profile.id);
+    for (const threadId of affectedThreadIds) {
+      const wasOpen = this.states.get(threadId)?.open === true;
+      this.close({ threadId });
+      const state = this.getOrCreateState(threadId);
+      state.profile = this.profileStore.profileForThread(threadId);
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+      if (wasOpen) {
+        // Deleting an identity never resumes an authenticated surface automatically.
+        this.open({ threadId });
+      }
+    }
+  }
+
+  setThreadProfile(input: BrowserSetThreadProfileInput): ThreadBrowserState {
+    const current = this.getOrCreateState(input.threadId);
+    if (current.profile.id === input.profileId) {
+      return this.snapshotThreadState(input.threadId, current);
+    }
+    const profile = this.profileStore.bindThread(input.threadId, input.profileId);
+    const wasOpen = current.open;
+    this.close({ threadId: input.threadId });
+    const state = this.getOrCreateState(input.threadId);
+    state.profile = profile;
+    this.markThreadStateChanged(input.threadId);
+    this.emitState(input.threadId);
+    return wasOpen
+      ? this.open({ threadId: input.threadId })
+      : this.snapshotThreadState(input.threadId, state);
+  }
+
+  async clearProfileData(input: BrowserClearProfileDataInput): Promise<void> {
+    const profile = this.findProfile(input.profileId);
+    if (profile.kind !== "persistent") {
+      throw new Error("Temporary browser data is discarded when its thread is closed.");
+    }
+    await this.clearProfile(
+      profile,
+      input.origin === undefined ? undefined : normalizeBrowserStorageOrigin(input.origin),
+      input.clearCache,
+    );
+  }
+
   startAnnotation(input: BrowserAnnotationStartInput): BrowserAnnotationSession {
     return this.annotations.start(input);
   }
@@ -547,6 +654,13 @@ export class DesktopBrowserManager {
   isTrustedRenderer(webContentsId: number): boolean {
     return Boolean(
       this.window && !this.window.isDestroyed() && this.window.webContents.id === webContentsId,
+    );
+  }
+
+  isManagedProfilePartition(partition: string): boolean {
+    return (
+      /^synara-browser-temporary-[a-f0-9]{24}$/.test(partition) ||
+      this.profileStore.list("").some((profile) => profile.partition === partition)
     );
   }
 
@@ -701,6 +815,7 @@ export class DesktopBrowserManager {
           action: "allow",
           overrideBrowserWindowOptions: this.sessionPolicy.buildOAuthPopupWindowOptions(
             this.window,
+            this.getOrCreateState(threadId).profile,
           ),
         };
       }
@@ -740,6 +855,69 @@ export class DesktopBrowserManager {
       }
     }
     return null;
+  }
+
+  private handleWebAuthnAccountSelection(input: BrowserSessionWebAuthnEvent): void {
+    let completed = false;
+    const complete = (credentialId?: string | null) => {
+      if (completed) return;
+      completed = true;
+      input.callback(credentialId);
+    };
+
+    if (this.disposed || !input.details.frame) {
+      complete();
+      return;
+    }
+    const webContents = electronWebContents.fromFrame(input.details.frame);
+    const context = webContents ? this.findRuntimeContext(webContents) : null;
+    const state = context ? this.states.get(context.threadId) : null;
+    if (!webContents || !context || !state || state.profile.partition !== input.profile.partition) {
+      complete();
+      return;
+    }
+
+    try {
+      const host = new URL(webContents.getURL()).hostname.toLocaleLowerCase("en-US");
+      const relyingPartyId = input.details.relyingPartyId.toLocaleLowerCase("en-US");
+      if (host !== relyingPartyId && !host.endsWith(`.${relyingPartyId}`)) {
+        complete();
+        return;
+      }
+    } catch {
+      complete();
+      return;
+    }
+
+    const accounts = input.details.accounts;
+    if (accounts.length === 0) {
+      complete();
+      return;
+    }
+    const buttons = [
+      "Cancel",
+      ...accounts.map((account, index) => {
+        const label = account.displayName || account.name || `Passkey ${index + 1}`;
+        return label.slice(0, 96);
+      }),
+    ];
+    const options = {
+      type: "question" as const,
+      title: "Choose a passkey",
+      message: `${input.details.relyingPartyId} requests a passkey`,
+      detail: "Only you can choose or cancel this sign-in. Synara and its agents cannot access passkey material.",
+      buttons,
+      cancelId: 0,
+      defaultId: 0,
+      noLink: true,
+    };
+    const selection = this.window
+      ? dialog.showMessageBox(this.window, options)
+      : dialog.showMessageBox(options);
+    void selection.then(
+      (result) => complete(accounts[result.response - 1]?.credentialId),
+      () => complete(),
+    );
   }
 
   private handleSessionDownload(input: BrowserSessionDownloadEvent): void {
@@ -1417,6 +1595,14 @@ export class DesktopBrowserManager {
       this.annotations.clearProjection(input.threadId, tab.id);
       this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, tab.id));
     }
+    if (existingState?.profile.kind === "temporary") {
+      // The partition itself is in-memory, but it survives a thread close until
+      // Electron exits. Clear it explicitly so a reopened temporary thread never
+      // inherits cookies or site storage from its prior browser session.
+      void this.clearProfile(existingState.profile, undefined, true).catch(() => {
+        // Closing the browser remains reliable even while Chromium is shutting down.
+      });
+    }
 
     const state = this.getOrCreateState(input.threadId);
     state.open = false;
@@ -1537,13 +1723,14 @@ export class DesktopBrowserManager {
     if (!webContents || webContents.isDestroyed()) {
       throw new Error("The visible browser webview is not available.");
     }
+    const profile = this.getOrCreateState(input.threadId).profile;
     if (
       webContents.getType() !== "webview" ||
       webContents.hostWebContents?.id !== hostWebContentsId ||
       (this.window !== null && hostWebContentsId !== this.window.webContents.id) ||
-      webContents.session !== electronSession.fromPartition(BROWSER_SESSION_PARTITION)
+      webContents.session !== electronSession.fromPartition(profile.partition)
     ) {
-      throw new Error("The browser webview does not belong to this Synara window and partition.");
+      throw new Error("The browser webview does not belong to this Synara window and profile.");
     }
 
     const key = buildRuntimeKey(input.threadId, tab.id);
@@ -2244,9 +2431,11 @@ export class DesktopBrowserManager {
   }
 
   private createLiveRuntime(threadId: ThreadId, tabId: string): LiveTabRuntime {
+    const profile = this.getOrCreateState(threadId).profile;
+    this.sessionPolicy.ensureConfigured(profile);
     const view = new WebContentsView({
       webPreferences: {
-        partition: BROWSER_SESSION_PARTITION,
+        partition: profile.partition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -2680,6 +2869,31 @@ export class DesktopBrowserManager {
     return null;
   }
 
+  private findProfile(profileId: string): BrowserProfile {
+    const profile = this.profileStore.list("").find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      throw new Error("The requested browser profile does not exist.");
+    }
+    return profile;
+  }
+
+  private async clearProfile(
+    profile: BrowserProfile,
+    origin: string | undefined,
+    clearCache: boolean,
+  ): Promise<void> {
+    const profileSession = this.sessionPolicy.ensureConfigured(profile);
+    if (origin === undefined) {
+      await profileSession.clearStorageData();
+    } else {
+      await profileSession.clearStorageData({ origin });
+    }
+    if (clearCache) {
+      await profileSession.clearCache();
+    }
+    await profileSession.flushStorageData();
+  }
+
   private toAnnotationRuntime(runtime: LiveTabRuntime | null): BrowserAnnotationRuntime | null {
     if (!runtime || runtime.ownsWebContents || runtime.webContents.isDestroyed()) return null;
     return {
@@ -2695,7 +2909,7 @@ export class DesktopBrowserManager {
       return existing;
     }
 
-    const initial = defaultThreadBrowserState(threadId);
+    const initial = defaultThreadBrowserState(threadId, this.profileStore.profileForThread(threadId));
     this.states.set(threadId, initial);
     this.threadVersionById.set(threadId, 0);
     return initial;
@@ -2879,8 +3093,8 @@ export class DesktopBrowserManager {
   }
 
   private ensureWorkspace(threadId: ThreadId, initialUrl?: string): ThreadBrowserState {
-    this.sessionPolicy.ensureConfigured();
     const state = this.getOrCreateState(threadId);
+    this.sessionPolicy.ensureConfigured(state.profile);
     if (state.tabs.length === 0) {
       const initialTab = createBrowserTab(normalizeUrlInput(initialUrl));
       state.tabs = [initialTab];

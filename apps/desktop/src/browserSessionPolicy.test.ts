@@ -14,6 +14,8 @@ const electronMocks = vi.hoisted(() => ({
   partitionSetUserAgent: vi.fn(),
   onBeforeSendHeaders: vi.fn(),
   sessionOn: vi.fn(),
+  setPermissionCheckHandler: vi.fn(),
+  setPermissionRequestHandler: vi.fn(),
   sessionRemoveListener: vi.fn(),
   willDownloadListener: {
     current: null as null | ((event: object, item: object, webContents: object) => void),
@@ -34,6 +36,14 @@ vi.mock("electron", () => ({
 
 import { BROWSER_SESSION_PARTITION, BrowserSessionPolicy } from "./browserSessionPolicy";
 
+const PERSONAL_PROFILE = {
+  id: "personal",
+  label: "Personal",
+  kind: "persistent" as const,
+  partition: BROWSER_SESSION_PARTITION,
+  builtIn: true,
+};
+
 describe("BrowserSessionPolicy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -44,6 +54,8 @@ describe("BrowserSessionPolicy", () => {
     });
     electronMocks.fromPartition.mockReturnValue({
       setUserAgent: electronMocks.partitionSetUserAgent,
+      setPermissionCheckHandler: electronMocks.setPermissionCheckHandler,
+      setPermissionRequestHandler: electronMocks.setPermissionRequestHandler,
       webRequest: { onBeforeSendHeaders: electronMocks.onBeforeSendHeaders },
       on: electronMocks.sessionOn,
       removeListener: electronMocks.sessionRemoveListener,
@@ -56,8 +68,8 @@ describe("BrowserSessionPolicy", () => {
   it("configures the persistent partition only once", () => {
     const policy = new BrowserSessionPolicy();
 
-    policy.ensureConfigured();
-    policy.ensureConfigured();
+    policy.ensureConfigured(PERSONAL_PROFILE);
+    policy.ensureConfigured(PERSONAL_PROFILE);
 
     expect(electronMocks.fromPartition).toHaveBeenCalledOnce();
     expect(electronMocks.fromPartition).toHaveBeenCalledWith(BROWSER_SESSION_PARTITION);
@@ -67,7 +79,7 @@ describe("BrowserSessionPolicy", () => {
 
   it("replaces identity headers case-insensitively without Electron product tokens", () => {
     const policy = new BrowserSessionPolicy();
-    policy.ensureConfigured();
+    policy.ensureConfigured(PERSONAL_PROFILE);
     const listener = electronMocks.headerListener.current;
     expect(listener).not.toBeNull();
     if (!listener) return;
@@ -100,8 +112,8 @@ describe("BrowserSessionPolicy", () => {
     });
     const policy = new BrowserSessionPolicy();
 
-    policy.ensureConfigured();
-    policy.ensureConfigured();
+    policy.ensureConfigured(PERSONAL_PROFILE);
+    policy.ensureConfigured(PERSONAL_PROFILE);
 
     expect(electronMocks.fromPartition).toHaveBeenCalledTimes(2);
     expect(electronMocks.partitionSetUserAgent).toHaveBeenCalledOnce();
@@ -115,7 +127,7 @@ describe("BrowserSessionPolicy", () => {
     const item = { getURL: () => "https://example.test/file.zip" };
     const webContents = { id: 42 };
 
-    policy.ensureConfigured();
+    policy.ensureConfigured(PERSONAL_PROFILE);
     electronMocks.willDownloadListener.current?.(event, item, webContents);
 
     expect(onDownload).toHaveBeenCalledWith({ event, item, webContents });
@@ -134,7 +146,7 @@ describe("BrowserSessionPolicy", () => {
     const policy = new BrowserSessionPolicy();
     const parent = {} as BrowserWindow;
 
-    expect(policy.buildOAuthPopupWindowOptions(parent)).toMatchObject({
+    expect(policy.buildOAuthPopupWindowOptions(parent, PERSONAL_PROFILE)).toMatchObject({
       parent,
       webPreferences: {
         partition: BROWSER_SESSION_PARTITION,
@@ -143,7 +155,7 @@ describe("BrowserSessionPolicy", () => {
         sandbox: true,
       },
     });
-    expect(policy.buildOAuthPopupWindowOptions(null)).not.toHaveProperty("parent");
+    expect(policy.buildOAuthPopupWindowOptions(null, PERSONAL_PROFILE)).not.toHaveProperty("parent");
   });
 
   it("applies the same derived identity to the partition, tabs, and popups", () => {
@@ -151,7 +163,7 @@ describe("BrowserSessionPolicy", () => {
     const firstContents = { setUserAgent: vi.fn() };
     const secondContents = { setUserAgent: vi.fn() };
 
-    policy.ensureConfigured();
+    policy.ensureConfigured(PERSONAL_PROFILE);
     policy.applyUserAgent(firstContents);
     policy.applyUserAgent(secondContents);
 
