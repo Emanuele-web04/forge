@@ -5,7 +5,7 @@
 
 import type { ThreadId } from "@synara/contracts";
 import { useEffect, useRef } from "react";
-import { hasThreadDetailResumeCursor } from "./threadDetailResumeCursors";
+import { localThreadDetailResumeCursors } from "./threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "./threadDetailSubscriptionRetention";
 
 export const THREAD_DETAIL_PREWARM_RELEASE_MS = 10_000;
@@ -78,7 +78,9 @@ export function createThreadDetailPrewarmController(
   // A speculative prewarm subscription is only cheap when it resumes from a
   // cursor: without cached detail it would open a full-history snapshot stream
   // and compete with real navigation for the per-client thread-stream budget.
-  const canPrewarmThreadDetail = options.canPrewarmThreadDetail ?? hasThreadDetailResumeCursor;
+  const canPrewarmThreadDetail =
+    options.canPrewarmThreadDetail ??
+    ((threadId) => localThreadDetailResumeCursors().has(threadId));
   const releaseMs = options.releaseMs ?? THREAD_DETAIL_PREWARM_RELEASE_MS;
   const maxRetainedThreads = options.maxRetainedThreads ?? THREAD_DETAIL_PREWARM_LIMIT;
   const clock = options.clock ?? DEFAULT_CLOCK;

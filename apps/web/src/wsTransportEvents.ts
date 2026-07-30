@@ -1,9 +1,11 @@
 // FILE: wsTransportEvents.ts
-// Purpose: Publish renderer-local WebSocket transport state changes to UI runtimes.
+// Purpose: Publish renderer-local WebSocket transport state changes per environment.
 // Layer: Web transport utility
-// Exports: event helpers used by wsNativeApi and terminal runtime recovery.
+// Exports: event helpers used by the transport registry and terminal runtime recovery.
 
-import type { WsCompatibilityError } from "@synara/contracts";
+import type { EnvironmentId, WsCompatibilityError } from "@synara/contracts";
+
+import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
 
 export type WsTransportState = "connecting" | "open" | "closed" | "incompatible" | "disposed";
 
@@ -20,21 +22,37 @@ export interface WsBuildSkewState {
   readonly serverBuild: string;
 }
 
-let latestCompatibilityIssue: WsCompatibilityError | null = null;
-let latestBuildSkew: WsBuildSkewState | null = null;
-let latestTransportState: WsTransportState | null = null;
+// Per-environment: a remote environment going offline must not make the local
+// server's UI claim it is disconnected, and vice versa. Build skew is scoped
+// the same way — one server running an older build says nothing about another.
+const latestCompatibilityIssueByEnvironmentId = new Map<EnvironmentId, WsCompatibilityError | null>(
+  [],
+);
+const latestTransportStateByEnvironmentId = new Map<EnvironmentId, WsTransportState>();
+const latestBuildSkewByEnvironmentId = new Map<EnvironmentId, WsBuildSkewState | null>();
 
 export interface WsTransportStateEventDetail {
+  environmentId: EnvironmentId;
   state: WsTransportState;
 }
 
 export interface WsCompatibilityIssueEventDetail {
+  environmentId: EnvironmentId;
   issue: WsCompatibilityError | null;
 }
 
+export interface WsTransportEventScopeOptions {
+  /** Defaults to the local server, so existing single-server UI is unaffected. */
+  readonly environmentId?: EnvironmentId;
+}
+
 // Emits a browser-local event without leaking transport internals into UI code.
-export function emitWsTransportState(state: WsTransportState): void {
-  latestTransportState = state;
+export function emitWsTransportState(
+  state: WsTransportState,
+  options?: WsTransportEventScopeOptions,
+): void {
+  const environmentId = options?.environmentId ?? LOCAL_ENVIRONMENT_ID;
+  latestTransportStateByEnvironmentId.set(environmentId, state);
   if (
     typeof window === "undefined" ||
     typeof window.dispatchEvent !== "function" ||
@@ -45,16 +63,18 @@ export function emitWsTransportState(state: WsTransportState): void {
 
   window.dispatchEvent(
     new CustomEvent<WsTransportStateEventDetail>(SYNARA_WS_TRANSPORT_STATE_EVENT, {
-      detail: { state },
+      detail: { environmentId, state },
     }),
   );
 }
 
-// Subscribes to the shared transport state event. Returns an idempotent cleanup.
+// Subscribes to one environment's transport state. Returns an idempotent cleanup.
 export function addWsTransportStateListener(
   listener: (state: WsTransportState) => void,
-  options?: { readonly replayCurrent?: boolean },
+  options?: WsTransportEventScopeOptions & { readonly replayCurrent?: boolean },
 ): () => void {
+  const environmentId = options?.environmentId ?? LOCAL_ENVIRONMENT_ID;
+  const latestTransportState = latestTransportStateByEnvironmentId.get(environmentId);
   if (options?.replayCurrent && latestTransportState) {
     listener(latestTransportState);
   }
@@ -64,7 +84,7 @@ export function addWsTransportStateListener(
 
   const handleStateChange = (event: Event) => {
     const detail = (event as CustomEvent<WsTransportStateEventDetail>).detail;
-    if (!detail) return;
+    if (!detail || detail.environmentId !== environmentId) return;
     listener(detail.state);
   };
 
@@ -74,12 +94,21 @@ export function addWsTransportStateListener(
   };
 }
 
-export function readLatestWsCompatibilityIssue(): WsCompatibilityError | null {
-  return latestCompatibilityIssue;
+export function readLatestWsCompatibilityIssue(
+  options?: WsTransportEventScopeOptions,
+): WsCompatibilityError | null {
+  return (
+    latestCompatibilityIssueByEnvironmentId.get(options?.environmentId ?? LOCAL_ENVIRONMENT_ID) ??
+    null
+  );
 }
 
-export function emitWsCompatibilityIssue(issue: WsCompatibilityError | null): void {
-  latestCompatibilityIssue = issue;
+export function emitWsCompatibilityIssue(
+  issue: WsCompatibilityError | null,
+  options?: WsTransportEventScopeOptions,
+): void {
+  const environmentId = options?.environmentId ?? LOCAL_ENVIRONMENT_ID;
+  latestCompatibilityIssueByEnvironmentId.set(environmentId, issue);
   if (
     typeof window === "undefined" ||
     typeof window.dispatchEvent !== "function" ||
@@ -89,22 +118,23 @@ export function emitWsCompatibilityIssue(issue: WsCompatibilityError | null): vo
   }
   window.dispatchEvent(
     new CustomEvent<WsCompatibilityIssueEventDetail>(SYNARA_WS_COMPATIBILITY_ISSUE_EVENT, {
-      detail: { issue },
+      detail: { environmentId, issue },
     }),
   );
 }
 
 export function addWsCompatibilityIssueListener(
   listener: (issue: WsCompatibilityError | null) => void,
-  options?: { readonly replayCurrent?: boolean },
+  options?: WsTransportEventScopeOptions & { readonly replayCurrent?: boolean },
 ): () => void {
-  if (options?.replayCurrent) listener(latestCompatibilityIssue);
+  const environmentId = options?.environmentId ?? LOCAL_ENVIRONMENT_ID;
+  if (options?.replayCurrent) listener(readLatestWsCompatibilityIssue({ environmentId }));
   if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
     return () => undefined;
   }
   const handleIssue = (event: Event) => {
     const detail = (event as CustomEvent<WsCompatibilityIssueEventDetail>).detail;
-    if (!detail) return;
+    if (!detail || detail.environmentId !== environmentId) return;
     listener(detail.issue);
   };
   window.addEventListener(SYNARA_WS_COMPATIBILITY_ISSUE_EVENT, handleIssue);
@@ -114,15 +144,16 @@ export function addWsCompatibilityIssueListener(
 }
 
 export interface WsBuildSkewEventDetail {
+  environmentId: EnvironmentId;
   skew: WsBuildSkewState | null;
 }
 
-export function readLatestWsBuildSkew(): WsBuildSkewState | null {
-  return latestBuildSkew;
+export function readLatestWsBuildSkew(environmentId: EnvironmentId): WsBuildSkewState | null {
+  return latestBuildSkewByEnvironmentId.get(environmentId) ?? null;
 }
 
-export function emitWsBuildSkew(skew: WsBuildSkewState | null): void {
-  latestBuildSkew = skew;
+export function emitWsBuildSkew(environmentId: EnvironmentId, skew: WsBuildSkewState | null): void {
+  latestBuildSkewByEnvironmentId.set(environmentId, skew);
   if (
     typeof window === "undefined" ||
     typeof window.dispatchEvent !== "function" ||
@@ -132,26 +163,33 @@ export function emitWsBuildSkew(skew: WsBuildSkewState | null): void {
   }
   window.dispatchEvent(
     new CustomEvent<WsBuildSkewEventDetail>(SYNARA_WS_BUILD_SKEW_EVENT, {
-      detail: { skew },
+      detail: { environmentId, skew },
     }),
   );
 }
 
 export function addWsBuildSkewListener(
+  environmentId: EnvironmentId,
   listener: (skew: WsBuildSkewState | null) => void,
   options?: { readonly replayCurrent?: boolean },
 ): () => void {
-  if (options?.replayCurrent) listener(latestBuildSkew);
+  if (options?.replayCurrent) listener(readLatestWsBuildSkew(environmentId));
   if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
     return () => undefined;
   }
   const handleSkew = (event: Event) => {
     const detail = (event as CustomEvent<WsBuildSkewEventDetail>).detail;
-    if (!detail) return;
+    if (!detail || detail.environmentId !== environmentId) return;
     listener(detail.skew);
   };
   window.addEventListener(SYNARA_WS_BUILD_SKEW_EVENT, handleSkew);
   return () => {
     window.removeEventListener(SYNARA_WS_BUILD_SKEW_EVENT, handleSkew);
   };
+}
+
+export function resetWsTransportEventsForTests(): void {
+  latestTransportStateByEnvironmentId.clear();
+  latestCompatibilityIssueByEnvironmentId.clear();
+  latestBuildSkewByEnvironmentId.clear();
 }

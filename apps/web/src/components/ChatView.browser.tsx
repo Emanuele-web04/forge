@@ -62,7 +62,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
-import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { resetWsEnvironmentRegistry } from "../wsEnvironmentRegistry";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
@@ -1858,12 +1858,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterAll(async () => {
-    await resetWsNativeApiForTest();
+    await resetWsEnvironmentRegistry();
     await worker.stop();
   });
 
   beforeEach(async () => {
-    await resetWsNativeApiForTest();
+    await resetWsEnvironmentRegistry();
     resetRetainedThreadDetailSubscriptionsForTests();
     await resetHomeChatProjectPrewarmStateForTests();
     await resetStudioProjectPrewarmStateForTests();
@@ -1888,6 +1888,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
     useStore.setState({
       shellSnapshotSequence: 0,
+      shellSnapshotSequenceByEnvironmentId: {},
+      environmentIdByThreadId: {},
       spaces: [],
       projects: [],
       threadIds: [],

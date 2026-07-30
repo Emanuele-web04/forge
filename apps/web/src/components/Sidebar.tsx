@@ -362,7 +362,7 @@ import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
-import { hasThreadDetailResumeCursor } from "../threadDetailResumeCursors";
+import { localThreadDetailResumeCursors } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import type {
@@ -4050,7 +4050,7 @@ export default function Sidebar() {
     // snapshot stream speculatively; only cursor-resumable threads are cheap
     // enough to keep warm from scroll position alone.
     const releaseCallbacks = threadIdsToPrewarm
-      .filter((threadId) => hasThreadDetailResumeCursor(threadId))
+      .filter((threadId) => localThreadDetailResumeCursors().has(threadId))
       .map((threadId) => retainThreadDetailSubscription(threadId));
 
     return () => {

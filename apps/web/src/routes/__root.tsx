@@ -59,13 +59,17 @@ import { useStore } from "../store";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
+import { createShellAggregator } from "../shellAggregation";
 import {
+  listWsEnvironmentClients,
   onServerConfigUpdated,
   onServerProviderStatusesUpdated,
   onServerSettingsUpdated,
   onServerWelcome,
   onThreadStreamFailure,
-} from "../wsNativeApi";
+  onWsEnvironmentRegistryChange,
+} from "../wsEnvironmentRegistry";
+import { LOCAL_ENVIRONMENT_ID } from "~/environmentIdentity";
 import {
   addWsBuildSkewListener,
   addWsCompatibilityIssueListener,
@@ -88,13 +92,7 @@ import {
   subscribeThreadDetailEvictions,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
-import {
-  advanceThreadDetailResumeCursor,
-  buildThreadSubscribeInput,
-  clearThreadDetailResumeCursor,
-  getThreadDetailResumeCursor,
-  setThreadDetailResumeCursor,
-} from "../threadDetailResumeCursors";
+import { localThreadDetailResumeCursors } from "../threadDetailResumeCursors";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
@@ -274,8 +272,15 @@ function RootRouteView() {
  * for the whole session rather than being dismissible.
  */
 function TransportBuildSkewNotice() {
-  const [skew, setSkew] = useState<WsBuildSkewState | null>(() => readLatestWsBuildSkew());
-  useEffect(() => addWsBuildSkewListener(setSkew, { replayCurrent: true }), []);
+  // Skew is per-environment; this notice covers the local server, which is the
+  // only environment that can currently dispatch writes (see issue #18).
+  const [skew, setSkew] = useState<WsBuildSkewState | null>(() =>
+    readLatestWsBuildSkew(LOCAL_ENVIRONMENT_ID),
+  );
+  useEffect(
+    () => addWsBuildSkewListener(LOCAL_ENVIRONMENT_ID, setSkew, { replayCurrent: true }),
+    [],
+  );
   if (!skew) return null;
 
   return (
@@ -1073,7 +1078,7 @@ function EventRouter() {
       // immediately instead of buffering while waiting for a snapshot — which
       // is also what previously triggered the unsubscribe-resubscribe race that
       // re-shipped full history.
-      const resumeCursor = getThreadDetailResumeCursor(threadId);
+      const resumeCursor = localThreadDetailResumeCursors().get(threadId);
       if (resumeCursor === undefined) {
         threadSnapshotSequenceById.delete(threadId);
       } else {
@@ -1101,7 +1106,7 @@ function EventRouter() {
         if (event.sequence > latestThreadSequence) {
           latestThreadSequence = event.sequence;
           threadSnapshotSequenceById.set(threadId, latestThreadSequence);
-          advanceThreadDetailResumeCursor(threadId, latestThreadSequence);
+          localThreadDetailResumeCursors().advance(threadId, latestThreadSequence);
           queueDomainEvent(event);
         }
       }
@@ -1157,7 +1162,7 @@ function EventRouter() {
       await Promise.all(
         additions.map((threadId) =>
           api.orchestration
-            .subscribeThread(buildThreadSubscribeInput(threadId))
+            .subscribeThread(localThreadDetailResumeCursors().buildSubscribeInput(threadId))
             .catch(() => undefined),
         ),
       );
@@ -1195,7 +1200,7 @@ function EventRouter() {
         // Every caller of this restart wants authoritative history (wiped or
         // never-synced detail), so a cursor resume would skip exactly the
         // snapshot being requested.
-        clearThreadDetailResumeCursor(threadId);
+        localThreadDetailResumeCursors().clear(threadId);
         await api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
       }).finally(() => {
         threadSnapshotRequestInFlight.delete(threadId);
@@ -1447,7 +1452,7 @@ function EventRouter() {
               continue;
             }
             threadSnapshotSequenceById.set(threadId, event.sequence);
-            advanceThreadDetailResumeCursor(threadId, event.sequence);
+            localThreadDetailResumeCursors().advance(threadId, event.sequence);
             queueDomainEvent(event);
           }
         })
@@ -1498,7 +1503,7 @@ function EventRouter() {
           threadId,
           Math.max(currentSequence, snapshot.snapshotSequence),
         );
-        advanceThreadDetailResumeCursor(threadId, snapshot.snapshotSequence);
+        localThreadDetailResumeCursors().advance(threadId, snapshot.snapshotSequence);
         // Apply even when the cursor did not advance. The projection is
         // authoritative and can repair a client that advanced its cursor while
         // dropping or failing to reduce one of the corresponding live events.
@@ -1614,7 +1619,7 @@ function EventRouter() {
         if (!canApplyThreadSnapshot({ threadId, leasedThreadIds: subscribedThreadIds })) {
           threadSnapshotSequenceById.delete(threadId);
           pendingThreadEventsById.delete(threadId);
-          clearThreadDetailResumeCursor(threadId);
+          localThreadDetailResumeCursors().clear(threadId);
           return;
         }
         syncServerThreadDetailHotPath(item.snapshot.thread);
@@ -1626,14 +1631,14 @@ function EventRouter() {
         if (useStore.getState().threadDetailSyncById?.[threadId] !== "synced") {
           threadSnapshotSequenceById.delete(threadId);
           pendingThreadEventsById.delete(threadId);
-          clearThreadDetailResumeCursor(threadId);
+          localThreadDetailResumeCursors().clear(threadId);
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
         // Snapshots replace cached detail wholesale, so overwrite the cursor
         // even when it is lower than the previous one (server-side reset).
-        setThreadDetailResumeCursor(threadId, item.snapshot.snapshotSequence);
+        localThreadDetailResumeCursors().set(threadId, item.snapshot.snapshotSequence);
         nextThreadProjectionReconcileAtById.set(
           threadId,
           Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
@@ -1668,7 +1673,7 @@ function EventRouter() {
         return;
       }
       threadSnapshotSequenceById.set(threadId, item.event.sequence);
-      advanceThreadDetailResumeCursor(threadId, item.event.sequence);
+      localThreadDetailResumeCursors().advance(threadId, item.event.sequence);
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
@@ -1683,7 +1688,7 @@ function EventRouter() {
       // The stream is dead with retries and reconnects exhausted: forget its
       // cursor so a future resubscribe requests a fresh snapshot, and surface
       // the failure so the thread view stops posing as an empty conversation.
-      clearThreadDetailResumeCursor(threadId);
+      localThreadDetailResumeCursors().clear(threadId);
       threadSnapshotSequenceById.delete(threadId);
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
@@ -1979,6 +1984,24 @@ function EventRouter() {
     syncServerShellSnapshot,
     syncServerThreadDetailHotPath,
   ]);
+
+  // Remote environments' shells merge into the same store, keyed by environment.
+  // The local environment is streamed by the effect above; this covers the rest,
+  // which is what makes the sidebar aggregate across servers.
+  useEffect(() => {
+    const aggregator = createShellAggregator({
+      syncServerShellSnapshot: (snapshot, environmentId) =>
+        useStore.getState().syncServerShellSnapshot(snapshot, environmentId),
+    });
+    aggregator.sync(listWsEnvironmentClients());
+    const unsubscribe = onWsEnvironmentRegistryChange(() => {
+      aggregator.sync(listWsEnvironmentClients());
+    });
+    return () => {
+      unsubscribe();
+      aggregator.detachAll();
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const reconcile = reconcileThreadSubscriptionsRef.current;

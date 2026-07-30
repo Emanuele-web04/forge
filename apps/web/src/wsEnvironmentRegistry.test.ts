@@ -1,5 +1,5 @@
-// FILE: wsNativeApi.test.ts
-// Purpose: Verifies the WebSocket-backed NativeApi adapter and push listener fanout.
+// FILE: wsEnvironmentRegistry.test.ts
+// Purpose: Verifies the environment-keyed WS client registry and its push listener fanout.
 // Layer: Web transport tests
 // Depends on: wsTransport mock plus contracts channel constants.
 
@@ -9,6 +9,7 @@ import {
   AutomationRunId,
   CommandId,
   type ContextMenuItem,
+  EnvironmentId,
   EventId,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -25,6 +26,10 @@ import {
 } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
+
+const REMOTE_ENVIRONMENT_ID = EnvironmentId.makeUnsafe("remote-environment");
+
 const requestMock = vi.fn<(...args: Array<unknown>) => Promise<unknown>>();
 const disposeMock = vi.fn();
 const showContextMenuFallbackMock =
@@ -34,35 +39,74 @@ const showContextMenuFallbackMock =
       position?: { x: number; y: number },
     ) => Promise<T | null>
   >();
-const channelListeners = new Map<string, Set<(message: WsPush) => void>>();
-const latestPushByChannel = new Map<string, WsPush>();
-const subscribeMock = vi.fn<
-  (
-    channel: string,
-    listener: (message: WsPush) => void,
-    options?: { replayLatest?: boolean },
-  ) => () => void
->((channel, listener, options) => {
-  const listeners = channelListeners.get(channel) ?? new Set<(message: WsPush) => void>();
-  listeners.add(listener);
-  channelListeners.set(channel, listeners);
-  const latest = latestPushByChannel.get(channel);
-  if (latest && options?.replayLatest) {
-    listener(latest);
-  }
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
-      channelListeners.delete(channel);
-    }
-  };
-});
+// Each mock transport owns its own push state, mirroring the real transport:
+// channel identity is (environmentId, channel), so two environments must not
+// share listener sets or replay caches.
+interface MockTransportState {
+  readonly environmentId: string;
+  readonly channelListeners: Map<string, Set<(message: WsPush) => void>>;
+  readonly latestPushByChannel: Map<string, WsPush>;
+  readonly threadStreamFailureListeners: Set<(failure: unknown) => void>;
+}
+
+const mockTransportsByEnvironmentId = new Map<string, MockTransportState>();
+// Lets a test drive one environment's transport into "disposed" to exercise the
+// registry's replacement path.
+const mockTransportStateByEnvironmentId = new Map<string, "open" | "disposed">();
+
+function mockTransportFor(environmentId = "local"): MockTransportState {
+  const state = mockTransportsByEnvironmentId.get(environmentId);
+  if (!state) throw new Error(`No mock transport for environment ${environmentId}`);
+  return state;
+}
+
+const channelListeners = {
+  get: (channel: string) => mockTransportFor().channelListeners.get(channel),
+  has: (channel: string) => mockTransportFor().channelListeners.has(channel),
+};
+const subscribeMock = vi.fn();
 
 vi.mock("./wsTransport", () => {
   return {
     WsTransport: class MockWsTransport {
+      readonly environmentId: string;
+      private readonly state: MockTransportState;
       request = requestMock;
-      subscribe = subscribeMock;
+      dispose = disposeMock;
+
+      constructor(options?: string | { environmentId?: string }) {
+        this.environmentId =
+          (typeof options === "string" ? undefined : options?.environmentId) ?? "local";
+        this.state = {
+          environmentId: this.environmentId,
+          channelListeners: new Map(),
+          latestPushByChannel: new Map(),
+          threadStreamFailureListeners: new Set(),
+        };
+        mockTransportsByEnvironmentId.set(this.environmentId, this.state);
+      }
+
+      subscribe(
+        channel: string,
+        listener: (message: WsPush) => void,
+        options?: { replayLatest?: boolean },
+      ) {
+        subscribeMock(channel, listener, options);
+        const listeners =
+          this.state.channelListeners.get(channel) ?? new Set<(message: WsPush) => void>();
+        listeners.add(listener);
+        this.state.channelListeners.set(channel, listeners);
+        const latest = this.state.latestPushByChannel.get(channel);
+        if (latest && options?.replayLatest) {
+          listener(latest);
+        }
+        return () => {
+          listeners.delete(listener);
+          if (listeners.size === 0) {
+            this.state.channelListeners.delete(channel);
+          }
+        };
+      }
       onStateChange() {
         return () => undefined;
       }
@@ -72,16 +116,18 @@ vi.mock("./wsTransport", () => {
       onBuildSkew() {
         return () => undefined;
       }
-      onThreadStreamFailure() {
-        return () => undefined;
+      onThreadStreamFailure(listener: (failure: unknown) => void) {
+        this.state.threadStreamFailureListeners.add(listener);
+        return () => {
+          this.state.threadStreamFailureListeners.delete(listener);
+        };
       }
       getLatestPush(channel: string) {
-        return latestPushByChannel.get(channel) ?? null;
+        return this.state.latestPushByChannel.get(channel) ?? null;
       }
       getState() {
-        return "open" as const;
+        return mockTransportStateByEnvironmentId.get(this.state.environmentId) ?? "open";
       }
-      dispose = disposeMock;
     },
   };
 });
@@ -92,17 +138,20 @@ vi.mock("./contextMenuFallback", () => ({
 
 let nextPushSequence = 1;
 
-function emitPush<C extends WsPushChannel>(channel: C, data: WsPushData<C>): void {
-  const listeners = channelListeners.get(channel);
+function emitPush<C extends WsPushChannel>(
+  channel: C,
+  data: WsPushData<C>,
+  options?: { readonly environmentId?: string; readonly sequence?: number },
+): void {
+  const state = mockTransportFor(options?.environmentId);
   const message = {
     type: "push" as const,
-    sequence: nextPushSequence++,
+    sequence: options?.sequence ?? nextPushSequence++,
     channel,
     data,
   } as WsPushMessage<C>;
-  latestPushByChannel.set(channel, message);
-  if (!listeners) return;
-  for (const listener of listeners) {
+  state.latestPushByChannel.set(channel, message);
+  for (const listener of state.channelListeners.get(channel) ?? []) {
     listener(message);
   }
 }
@@ -133,8 +182,8 @@ beforeEach(() => {
   disposeMock.mockReset();
   showContextMenuFallbackMock.mockReset();
   subscribeMock.mockClear();
-  channelListeners.clear();
-  latestPushByChannel.clear();
+  mockTransportsByEnvironmentId.clear();
+  mockTransportStateByEnvironmentId.clear();
   nextPushSequence = 1;
   Reflect.deleteProperty(getWindowForTest(), "desktopBridge");
 });
@@ -144,11 +193,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("wsNativeApi", () => {
+describe("wsEnvironmentRegistry", () => {
   it("delivers and caches valid server.welcome payloads", async () => {
-    const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient, onServerWelcome } = await import("./wsEnvironmentRegistry");
 
-    createWsNativeApi();
+    localWsEnvironmentClient();
     const listener = vi.fn();
     onServerWelcome(listener);
 
@@ -166,9 +215,9 @@ describe("wsNativeApi", () => {
   });
 
   it("preserves bootstrap ids from server.welcome payloads", async () => {
-    const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient, onServerWelcome } = await import("./wsEnvironmentRegistry");
 
-    createWsNativeApi();
+    localWsEnvironmentClient();
     const listener = vi.fn();
     onServerWelcome(listener);
 
@@ -193,9 +242,9 @@ describe("wsNativeApi", () => {
   });
 
   it("delivers successive server.welcome payloads to active listeners", async () => {
-    const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient, onServerWelcome } = await import("./wsEnvironmentRegistry");
 
-    createWsNativeApi();
+    localWsEnvironmentClient();
     const listener = vi.fn();
     onServerWelcome(listener);
 
@@ -221,9 +270,10 @@ describe("wsNativeApi", () => {
   });
 
   it("delivers and caches valid server.configUpdated payloads", async () => {
-    const { createWsNativeApi, onServerConfigUpdated } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient, onServerConfigUpdated } =
+      await import("./wsEnvironmentRegistry");
 
-    createWsNativeApi();
+    localWsEnvironmentClient();
     const listener = vi.fn();
     onServerConfigUpdated(listener);
 
@@ -249,9 +299,10 @@ describe("wsNativeApi", () => {
   });
 
   it("delivers successive server.configUpdated payloads to active listeners", async () => {
-    const { createWsNativeApi, onServerConfigUpdated } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient, onServerConfigUpdated } =
+      await import("./wsEnvironmentRegistry");
 
-    createWsNativeApi();
+    localWsEnvironmentClient();
     const listener = vi.fn();
     onServerConfigUpdated(listener);
 
@@ -272,9 +323,10 @@ describe("wsNativeApi", () => {
   });
 
   it("delivers and caches provider-only status updates", async () => {
-    const { createWsNativeApi, onServerProviderStatusesUpdated } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient, onServerProviderStatusesUpdated } =
+      await import("./wsEnvironmentRegistry");
 
-    createWsNativeApi();
+    localWsEnvironmentClient();
     const listener = vi.fn();
     onServerProviderStatusesUpdated(listener);
 
@@ -293,9 +345,10 @@ describe("wsNativeApi", () => {
   });
 
   it("delivers and caches server settings updates", async () => {
-    const { createWsNativeApi, onServerSettingsUpdated } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient, onServerSettingsUpdated } =
+      await import("./wsEnvironmentRegistry");
 
-    createWsNativeApi();
+    localWsEnvironmentClient();
     const listener = vi.fn();
     onServerSettingsUpdated(listener);
 
@@ -345,9 +398,9 @@ describe("wsNativeApi", () => {
   });
 
   it("forwards valid terminal and orchestration events", async () => {
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     const onTerminalEvent = vi.fn();
     const onDomainEvent = vi.fn();
     const onActionProgress = vi.fn();
@@ -418,9 +471,9 @@ describe("wsNativeApi", () => {
 
   it("forwards automation requests and events", async () => {
     requestMock.mockResolvedValue({ definitions: [], runs: [] });
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     const onAutomationEvent = vi.fn();
     const unsubscribe = api.automation.onEvent(onAutomationEvent);
 
@@ -480,9 +533,9 @@ describe("wsNativeApi", () => {
 
   it("wraps orchestration dispatch commands in the command envelope", async () => {
     requestMock.mockResolvedValue(undefined);
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     const command = {
       type: "project.create",
       commandId: CommandId.makeUnsafe("cmd-1"),
@@ -505,9 +558,9 @@ describe("wsNativeApi", () => {
 
   it("forwards terminal output ACKs to the websocket transport", async () => {
     requestMock.mockResolvedValue(undefined);
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     const input = { threadId: "thread-1", terminalId: "default", bytes: 4096 };
     await api.terminal.ackOutput(input);
 
@@ -516,9 +569,9 @@ describe("wsNativeApi", () => {
 
   it("omits null user-input answers before dispatching to orchestration", async () => {
     requestMock.mockResolvedValue(undefined);
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
 
     const command = {
       type: "thread.user-input.respond",
@@ -545,9 +598,9 @@ describe("wsNativeApi", () => {
 
   it("forwards workspace file writes to the websocket project method", async () => {
     requestMock.mockResolvedValue({ relativePath: "plan.md" });
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     await api.projects.writeFile({
       cwd: "/tmp/project",
       relativePath: "plan.md",
@@ -567,9 +620,9 @@ describe("wsNativeApi", () => {
       contents: "export {};\n",
       truncated: false,
     });
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     await api.projects.readFile({
       cwd: "/tmp/project",
       relativePath: "src/app.ts",
@@ -586,9 +639,9 @@ describe("wsNativeApi", () => {
       grant: "grant-token",
       expiresAt: "2026-01-01T00:00:00.000Z",
     });
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     await api.projects.createLocalFilePreviewGrant({
       path: "/Users/tester/Downloads/shot.png",
     });
@@ -600,9 +653,9 @@ describe("wsNativeApi", () => {
 
   it("forwards project script discovery to the websocket project method", async () => {
     requestMock.mockResolvedValue({ targets: [] });
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     await api.projects.discoverScripts({
       cwd: "/tmp/project",
       depth: 2,
@@ -622,9 +675,9 @@ describe("wsNativeApi", () => {
       serverVersion: "0.0.38",
       capabilities: { repositoryIdentity: true },
     });
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     await api.server.getEnvironment();
 
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverGetEnvironment);
@@ -638,8 +691,8 @@ describe("wsNativeApi", () => {
       .mockResolvedValueOnce({ integration: { integrationId: "integration-1" } });
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
     const createInput = {
       name: "Desktop MCP",
       capabilities: ["projects:read", "tasks:create", "tasks:read"] as const,
@@ -682,9 +735,9 @@ describe("wsNativeApi", () => {
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     const result = await api.server.getAuthSession();
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -707,9 +760,9 @@ describe("wsNativeApi", () => {
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     const result = await api.server.bootstrapAuth({ credential: "PAIRINGTOKEN" });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -731,9 +784,9 @@ describe("wsNativeApi", () => {
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     await expect(api.server.logoutAuthSession()).resolves.toEqual({ revoked: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -754,9 +807,9 @@ describe("wsNativeApi", () => {
       push: { status: "skipped_not_requested" },
       pr: { status: "skipped_not_requested" },
     });
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     await api.git.runStackedAction({ actionId: "action-1", cwd: "/repo", action: "commit" });
 
     expect(requestMock).toHaveBeenCalledWith(
@@ -768,9 +821,9 @@ describe("wsNativeApi", () => {
 
   it("forwards full-thread diff requests to the orchestration websocket method", async () => {
     requestMock.mockResolvedValue({ diff: "patch" });
-    const { createWsNativeApi } = await import("./wsNativeApi");
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
 
-    const api = createWsNativeApi();
+    const api = localWsEnvironmentClient().api;
     await api.orchestration.getFullThreadDiff({
       threadId: ThreadId.makeUnsafe("thread-1"),
       toTurnCount: 1,
@@ -784,8 +837,8 @@ describe("wsNativeApi", () => {
 
   it("forwards provider delivery inspection and reconciliation", async () => {
     requestMock.mockResolvedValue([]);
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
 
     await api.orchestration.listProviderDeliveryBlockers({
       threadId: ThreadId.makeUnsafe("thread-1"),
@@ -824,8 +877,8 @@ describe("wsNativeApi", () => {
       },
     });
 
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
     const input = {
       threadId: ThreadId.makeUnsafe("thread-1"),
       tabId: "tab-1",
@@ -865,8 +918,8 @@ describe("wsNativeApi", () => {
       },
     });
 
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
     const startInput = {
       threadId,
       tabId: "tab-a",
@@ -902,8 +955,8 @@ describe("wsNativeApi", () => {
   });
 
   it("keeps a blank fallback browser tab after closing the last tab", async () => {
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
     const threadId = ThreadId.makeUnsafe("thread-1");
     const opened = await api.browser.open({ threadId });
     const tabId = opened.activeTabId;
@@ -927,8 +980,8 @@ describe("wsNativeApi", () => {
       },
     });
 
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
     await api.contextMenu.show(
       [
         { id: "rename", label: "Rename thread" },
@@ -950,8 +1003,8 @@ describe("wsNativeApi", () => {
     showContextMenuFallbackMock.mockResolvedValue("delete");
     Reflect.deleteProperty(getWindowForTest(), "desktopBridge");
 
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
     await api.contextMenu.show([{ id: "delete", label: "Delete", destructive: true }], {
       x: 20,
       y: 30,
@@ -975,8 +1028,8 @@ describe("wsNativeApi", () => {
       },
     });
 
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
     await api.server.transcribeVoice({
       provider: "codex",
       cwd: "/repo",
@@ -1014,8 +1067,8 @@ describe("wsNativeApi", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const { createWsNativeApi } = await import("./wsNativeApi");
-    const api = createWsNativeApi();
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const api = localWsEnvironmentClient().api;
     const result = await api.server.transcribeVoice({
       provider: "codex",
       cwd: "/repo",
@@ -1034,5 +1087,330 @@ describe("wsNativeApi", () => {
       WS_METHODS.serverTranscribeVoice,
       expect.anything(),
     );
+  });
+  it("keeps one client per environment and reuses the local entry", async () => {
+    const { ensureWsEnvironmentClient, localWsEnvironmentClient, listWsEnvironmentClients } =
+      await import("./wsEnvironmentRegistry");
+
+    const local = localWsEnvironmentClient();
+    const remote = ensureWsEnvironmentClient({
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      url: "wss://remote.example/",
+    });
+
+    expect(localWsEnvironmentClient()).toBe(local);
+    expect(remote).not.toBe(local);
+    expect(listWsEnvironmentClients()).toEqual([local, remote]);
+    expect(local.environmentId).toBe("local");
+    expect(remote.environmentId).toBe(REMOTE_ENVIRONMENT_ID);
+  });
+
+  it("never crosses push channels between environments", async () => {
+    const { ensureWsEnvironmentClient, localWsEnvironmentClient, onServerWelcome } =
+      await import("./wsEnvironmentRegistry");
+
+    localWsEnvironmentClient();
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://remote/" });
+
+    const localListener = vi.fn();
+    const remoteListener = vi.fn();
+    onServerWelcome(localListener);
+    onServerWelcome(remoteListener, { environmentId: REMOTE_ENVIRONMENT_ID });
+
+    emitPush(
+      WS_CHANNELS.serverWelcome,
+      { cwd: "/remote", homeDir: "/home/remote", projectName: "remote" },
+      { environmentId: REMOTE_ENVIRONMENT_ID },
+    );
+
+    expect(remoteListener).toHaveBeenCalledTimes(1);
+    expect(localListener).not.toHaveBeenCalled();
+  });
+
+  it("replays only the subscribed environment's cached push to late subscribers", async () => {
+    const { ensureWsEnvironmentClient, localWsEnvironmentClient, onServerWelcome } =
+      await import("./wsEnvironmentRegistry");
+
+    localWsEnvironmentClient();
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://remote/" });
+
+    emitPush(WS_CHANNELS.serverWelcome, {
+      cwd: "/local",
+      homeDir: "/home/local",
+      projectName: "local",
+    });
+    emitPush(
+      WS_CHANNELS.serverWelcome,
+      { cwd: "/remote", homeDir: "/home/remote", projectName: "remote" },
+      { environmentId: REMOTE_ENVIRONMENT_ID },
+    );
+
+    const lateRemote = vi.fn();
+    onServerWelcome(lateRemote, { environmentId: REMOTE_ENVIRONMENT_ID });
+
+    expect(lateRemote).toHaveBeenCalledTimes(1);
+    expect(lateRemote).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/remote" }));
+  });
+
+  it("keeps sequence spaces separate: identical sequences on both environments both deliver", async () => {
+    // Sequences are per-server autoincrement values. A shared counter would let
+    // one environment's number suppress the other's push as a duplicate.
+    const { ensureWsEnvironmentClient, localWsEnvironmentClient, onServerSettingsUpdated } =
+      await import("./wsEnvironmentRegistry");
+
+    localWsEnvironmentClient();
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://remote/" });
+
+    const localListener = vi.fn();
+    const remoteListener = vi.fn();
+    onServerSettingsUpdated(localListener);
+    onServerSettingsUpdated(remoteListener, { environmentId: REMOTE_ENVIRONMENT_ID });
+
+    const settings = { settings: {} } as WsPushData<typeof WS_CHANNELS.serverSettingsUpdated>;
+    emitPush(WS_CHANNELS.serverSettingsUpdated, settings, { sequence: 1 });
+    emitPush(WS_CHANNELS.serverSettingsUpdated, settings, {
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      sequence: 1,
+    });
+
+    expect(localListener).toHaveBeenCalledTimes(1);
+    expect(remoteListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes one environment without touching the others", async () => {
+    const {
+      ensureWsEnvironmentClient,
+      getWsEnvironmentClient,
+      localWsEnvironmentClient,
+      removeWsEnvironmentClient,
+      onServerWelcome,
+    } = await import("./wsEnvironmentRegistry");
+
+    const local = localWsEnvironmentClient();
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://remote/" });
+    const localListener = vi.fn();
+    onServerWelcome(localListener);
+
+    await removeWsEnvironmentClient(REMOTE_ENVIRONMENT_ID);
+
+    expect(getWsEnvironmentClient(REMOTE_ENVIRONMENT_ID)).toBeUndefined();
+    expect(getWsEnvironmentClient(LOCAL_ENVIRONMENT_ID)).toBe(local);
+    expect(disposeMock).toHaveBeenCalledTimes(1);
+
+    emitPush(WS_CHANNELS.serverWelcome, {
+      cwd: "/local",
+      homeDir: "/home/local",
+      projectName: "local",
+    });
+    expect(localListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("yields an inert subscription for an unregistered remote environment", async () => {
+    // Auto-connecting an unknown id would open a socket to the wrong server:
+    // only the local environment is addressable without registration.
+    const { onServerWelcome, getWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+
+    const listener = vi.fn();
+    const unsubscribe = onServerWelcome(listener, { environmentId: REMOTE_ENVIRONMENT_ID });
+
+    expect(getWsEnvironmentClient(REMOTE_ENVIRONMENT_ID)).toBeUndefined();
+    expect(listener).not.toHaveBeenCalled();
+    expect(() => unsubscribe()).not.toThrow();
+  });
+
+  it("routes thread stream failures to the owning environment only", async () => {
+    const { ensureWsEnvironmentClient, localWsEnvironmentClient, onThreadStreamFailure } =
+      await import("./wsEnvironmentRegistry");
+
+    localWsEnvironmentClient();
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://remote/" });
+
+    const localListener = vi.fn();
+    const remoteListener = vi.fn();
+    onThreadStreamFailure(localListener);
+    onThreadStreamFailure(remoteListener, { environmentId: REMOTE_ENVIRONMENT_ID });
+
+    const failure = { threadId: "thread-1", code: null, error: new Error("dead") };
+    for (const listener of mockTransportFor(REMOTE_ENVIRONMENT_ID).threadStreamFailureListeners) {
+      listener(failure);
+    }
+
+    expect(remoteListener).toHaveBeenCalledWith(failure);
+    expect(localListener).not.toHaveBeenCalled();
+  });
+
+  it("replaces a disposed entry instead of handing out a dead socket", async () => {
+    const { localWsEnvironmentClient, resetWsEnvironmentRegistry } =
+      await import("./wsEnvironmentRegistry");
+
+    const first = localWsEnvironmentClient();
+    await resetWsEnvironmentRegistry();
+    const second = localWsEnvironmentClient();
+
+    expect(second).not.toBe(first);
+  });
+
+  it("sends every HTTP-backed server method to the environment's own host", async () => {
+    // A remote client resolving HTTP through the page's ambient WS URL would
+    // post its payload — session credentials, recorded audio — to the LOCAL
+    // server. Every HTTP-backed route must address its own environment.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ authenticated: false, revoked: true, text: "hi" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { ensureWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+
+    const remote = ensureWsEnvironmentClient({
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      url: "wss://b.example/",
+    });
+
+    await remote.api.server.getAuthSession();
+    await remote.api.server.bootstrapAuth({ credential: "TOKEN" });
+    await remote.api.server.logoutAuthSession().catch(() => undefined);
+    await remote.api.server
+      .transcribeVoice({
+        provider: "codex",
+        cwd: "/tmp",
+        mimeType: "audio/webm",
+        sampleRateHz: 48_000,
+        durationMs: 1_000,
+        audioBase64: "",
+      })
+      .catch(() => undefined);
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(4);
+    for (const [url] of fetchMock.mock.calls) {
+      expect(String(url)).toMatch(/^https:\/\/b\.example\//);
+    }
+  });
+
+  it("leaves the local environment's HTTP requests on their existing relative paths", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ authenticated: false }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { localWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+
+    await localWsEnvironmentClient().api.server.getAuthSession();
+
+    // Regression bar: the single-local-server case is byte-identical.
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/session", expect.anything());
+  });
+
+  it("discards an environment's resume cursors when it is removed", async () => {
+    const { ensureWsEnvironmentClient, removeWsEnvironmentClient } =
+      await import("./wsEnvironmentRegistry");
+    const { threadDetailResumeCursors, resetThreadDetailResumeCursorsForTests } =
+      await import("./threadDetailResumeCursors");
+    resetThreadDetailResumeCursorsForTests();
+
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://e/" });
+    threadDetailResumeCursors(REMOTE_ENVIRONMENT_ID).set(threadId, 100);
+
+    await removeWsEnvironmentClient(REMOTE_ENVIRONMENT_ID);
+    // Re-registered as a different server instance whose journal is unrelated:
+    // the fresh transport has never seen the old instance id, so it cannot
+    // detect the change. The cursor must already be gone.
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://e/" });
+
+    expect(threadDetailResumeCursors(REMOTE_ENVIRONMENT_ID).buildSubscribeInput(threadId)).toEqual({
+      threadId,
+    });
+  });
+
+  it("discards resume cursors when a disposed entry is replaced automatically", async () => {
+    const { ensureWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const { threadDetailResumeCursors, resetThreadDetailResumeCursorsForTests } =
+      await import("./threadDetailResumeCursors");
+    resetThreadDetailResumeCursorsForTests();
+
+    const threadId = ThreadId.makeUnsafe("thread-2");
+    const client = ensureWsEnvironmentClient({
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      url: "wss://e/",
+    });
+    threadDetailResumeCursors(REMOTE_ENVIRONMENT_ID).set(threadId, 100);
+    mockTransportStateByEnvironmentId.set(REMOTE_ENVIRONMENT_ID, "disposed");
+
+    const replacement = ensureWsEnvironmentClient({
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      url: "wss://e/",
+    });
+
+    expect(replacement).not.toBe(client);
+    expect(threadDetailResumeCursors(REMOTE_ENVIRONMENT_ID).buildSubscribeInput(threadId)).toEqual({
+      threadId,
+    });
+  });
+
+  it("notifies registry listeners so aggregation can re-derive", async () => {
+    const { ensureWsEnvironmentClient, onWsEnvironmentRegistryChange, removeWsEnvironmentClient } =
+      await import("./wsEnvironmentRegistry");
+
+    const listener = vi.fn();
+    onWsEnvironmentRegistryChange(listener);
+
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://e/" });
+    expect(listener).toHaveBeenCalled();
+
+    listener.mockClear();
+    await removeWsEnvironmentClient(REMOTE_ENVIRONMENT_ID);
+    expect(listener).toHaveBeenCalled();
+  });
+
+  it("resolves the env-unaware default to the local environment entry", async () => {
+    // Pins the single-local-server path directly: an env-unaware subscription
+    // and an explicitly-local one must reach the same client and the same
+    // channel registry, not merely "both happen to work".
+    const { ensureWsEnvironmentClient, localWsEnvironmentClient, onServerWelcome } =
+      await import("./wsEnvironmentRegistry");
+
+    const viaDefault = localWsEnvironmentClient();
+    const viaExplicit = ensureWsEnvironmentClient({ environmentId: LOCAL_ENVIRONMENT_ID });
+    expect(viaExplicit).toBe(viaDefault);
+
+    const defaultListener = vi.fn();
+    const explicitListener = vi.fn();
+    onServerWelcome(defaultListener);
+    onServerWelcome(explicitListener, { environmentId: LOCAL_ENVIRONMENT_ID });
+
+    emitPush(WS_CHANNELS.serverWelcome, {
+      cwd: "/tmp",
+      homeDir: "/home/tester",
+      projectName: "synara",
+    });
+
+    expect(defaultListener).toHaveBeenCalledTimes(1);
+    expect(explicitListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops registry-change subscribers on reset instead of notifying them", async () => {
+    // Regression: reset notified listeners while disposing. A subscriber from
+    // the outgoing generation (a React effect whose unmount had not run yet)
+    // would re-attach against clients already being torn down, leaving stale
+    // stream wiring that made the next mount's snapshots never reach the
+    // store. The browser suite saw this as tests hanging on UI that could not
+    // render. Reset is a full teardown: subscribers go with it.
+    const { ensureWsEnvironmentClient, onWsEnvironmentRegistryChange, resetWsEnvironmentRegistry } =
+      await import("./wsEnvironmentRegistry");
+
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://e/" });
+    const listener = vi.fn();
+    onWsEnvironmentRegistryChange(listener);
+
+    await resetWsEnvironmentRegistry();
+    expect(listener).not.toHaveBeenCalled();
+
+    // And the subscription is gone, not merely quiet during the reset.
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://e/" });
+    expect(listener).not.toHaveBeenCalled();
   });
 });

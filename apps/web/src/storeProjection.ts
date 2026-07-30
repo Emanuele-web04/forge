@@ -3,6 +3,7 @@
 // Exports: Pure projection transitions used by the facade and orchestration reducer.
 
 import {
+  type EnvironmentId,
   type MessageId,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
@@ -13,10 +14,10 @@ import {
 } from "@synara/contracts";
 import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 
+import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
 import {
-  clearThreadDetailResumeCursor,
-  resetThreadDetailResumeCursors,
-  retainThreadDetailResumeCursors,
+  localThreadDetailResumeCursors,
+  threadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import {
@@ -567,6 +568,8 @@ function writeThreadShellProjection(
 function rebuildThreadShellRecords(
   state: AppState,
   snapshotThreads: readonly OrchestrationShellSnapshot["threads"][number][],
+  /** Threads owned by other environments, carried over untouched. */
+  foreignThreadIds: ReadonlySet<ThreadId> = new Set(),
 ): {
   threadShellById: Record<ThreadId, ThreadShell>;
   threadSessionById: Record<ThreadId, ThreadSession | null>;
@@ -579,6 +582,17 @@ function rebuildThreadShellRecords(
   const threadShellById = {} as Record<ThreadId, ThreadShell>;
   const threadSessionById = {} as Record<ThreadId, ThreadSession | null>;
   const threadTurnStateById = {} as Record<ThreadId, ThreadTurnState>;
+
+  // These records are rebuilt from scratch, so another environment's rows have
+  // to be copied forward explicitly or this snapshot would erase them.
+  for (const threadId of foreignThreadIds) {
+    const shell = previousShellById[threadId];
+    if (shell) threadShellById[threadId] = shell;
+    const session = previousSessionById[threadId];
+    if (session !== undefined) threadSessionById[threadId] = session;
+    const turnState = previousTurnStateById[threadId];
+    if (turnState) threadTurnStateById[threadId] = turnState;
+  }
 
   for (const thread of snapshotThreads) {
     const next = normalizeThreadShellSnapshot(thread, getThreadFromState(state, thread.id));
@@ -634,8 +648,9 @@ function clearThreadDetailSyncState(state: AppState, threadId: ThreadId): AppSta
   // invariant is enforced — wiped detail must never leave a cursor that would
   // let a resubscribe gap-replay on top of missing history. The full-sync
   // paths cover their bulk invalidations separately: the shell snapshot prunes
-  // with `retainThreadDetailResumeCursors`, the read-model resync resets all.
-  clearThreadDetailResumeCursor(threadId);
+  // with `retain`, the read-model resync retains its own threads and clears
+  // their cursors.
+  localThreadDetailResumeCursors().clear(threadId);
   if (
     state.threadDetailSyncById === undefined ||
     !Object.hasOwn(state.threadDetailSyncById, threadId)
@@ -989,8 +1004,101 @@ function retireDeletionTombstones<TId extends string>(
  * the row silently comes back. The tombstone map cannot tell "never deleted" from "deleted and
  * already confirmed gone", so the whole stale payload has to be rejected before it is merged.
  */
-function isStaleSnapshot(state: AppState, snapshotSequence: number): boolean {
-  return snapshotSequence < (state.shellSnapshotSequence ?? 0);
+function isStaleSnapshot(
+  state: AppState,
+  snapshotSequence: number,
+  environmentId: EnvironmentId,
+): boolean {
+  // Compared only against the same environment's high-water mark: sequences from
+  // different servers are unrelated counters, and a shared one would reject a
+  // second server's first snapshot as "stale".
+  return snapshotSequence < snapshotFenceFor(state, environmentId);
+}
+
+/**
+ * The high-water snapshot sequence for one environment.
+ *
+ * The local environment reads `shellSnapshotSequence` rather than carrying a
+ * duplicate entry in the per-environment map. Two fields holding the same fact
+ * can drift, and they did: any caller that reset `shellSnapshotSequence` alone
+ * (every store reset written before this map existed, including the browser
+ * suite's) left a stale local fence behind that silently rejected the next
+ * snapshot as out of date. Keeping one source of truth per environment makes
+ * that class of bug unrepresentable — the map holds remote environments only.
+ */
+function snapshotFenceFor(state: AppState, environmentId: EnvironmentId): number {
+  if (environmentId === LOCAL_ENVIRONMENT_ID) return state.shellSnapshotSequence ?? 0;
+  return state.shellSnapshotSequenceByEnvironmentId?.[environmentId] ?? 0;
+}
+
+/**
+ * Records an environment's new high-water mark. Local advances
+ * `shellSnapshotSequence`; remote environments advance their map entry.
+ */
+function advanceSnapshotFence(
+  state: AppState,
+  environmentId: EnvironmentId,
+  snapshotSequence: number,
+): Pick<AppState, "shellSnapshotSequence" | "shellSnapshotSequenceByEnvironmentId"> {
+  if (environmentId === LOCAL_ENVIRONMENT_ID) {
+    return {
+      shellSnapshotSequence: Math.max(state.shellSnapshotSequence ?? 0, snapshotSequence),
+      ...(state.shellSnapshotSequenceByEnvironmentId
+        ? { shellSnapshotSequenceByEnvironmentId: state.shellSnapshotSequenceByEnvironmentId }
+        : {}),
+    };
+  }
+  const previous = state.shellSnapshotSequenceByEnvironmentId ?? {};
+  return {
+    ...(state.shellSnapshotSequence === undefined
+      ? {}
+      : { shellSnapshotSequence: state.shellSnapshotSequence }),
+    shellSnapshotSequenceByEnvironmentId: {
+      ...previous,
+      [environmentId]: Math.max(previous[environmentId] ?? 0, snapshotSequence),
+    },
+  };
+}
+
+/**
+ * Ownership map after a snapshot: this environment claims the threads it just
+ * reported, threads it no longer reports lose their entry, and other
+ * environments' claims are preserved. Local-owned threads are left unmapped so
+ * the single-server store keeps an empty record and its existing identity.
+ */
+function nextEnvironmentIdByThreadId(
+  state: AppState,
+  environmentId: EnvironmentId,
+  ownedThreadIds: ReadonlySet<ThreadId>,
+  survivingThreadIds: ReadonlySet<ThreadId>,
+): Record<string, string> {
+  const previous = state.environmentIdByThreadId ?? {};
+  const next: Record<string, string> = {};
+  for (const [threadId, owner] of Object.entries(previous)) {
+    if (survivingThreadIds.has(threadId as ThreadId) && owner !== environmentId) {
+      next[threadId] = owner;
+    }
+  }
+  if (environmentId !== LOCAL_ENVIRONMENT_ID) {
+    for (const threadId of ownedThreadIds) {
+      next[threadId] = environmentId;
+    }
+  }
+  return recordsShallowEqual(previous, next) ? previous : next;
+}
+
+/** Threads the store holds for environments other than `environmentId`. */
+function threadIdsOutsideEnvironment(
+  state: AppState,
+  environmentId: EnvironmentId,
+): ReadonlySet<ThreadId> {
+  const ownerByThreadId = state.environmentIdByThreadId ?? {};
+  const foreign = new Set<ThreadId>();
+  for (const threadId of state.threadIds ?? EMPTY_THREAD_IDS) {
+    const owner = ownerByThreadId[threadId] ?? LOCAL_ENVIRONMENT_ID;
+    if (owner !== environmentId) foreign.add(threadId);
+  }
+  return foreign;
 }
 
 /**
@@ -1004,8 +1112,9 @@ function retireConfirmedDeletionTombstones(
   snapshotSequence: number,
   presentThreadIds: ReadonlySet<string>,
   presentProjectIds: ReadonlySet<string>,
+  environmentId: EnvironmentId = LOCAL_ENVIRONMENT_ID,
 ): AppState {
-  if (snapshotSequence < (state.shellSnapshotSequence ?? 0)) {
+  if (snapshotSequence < snapshotFenceFor(state, environmentId)) {
     return state;
   }
   const deletedThreadIdsById = retireDeletionTombstones(
@@ -1222,10 +1331,15 @@ export function applyThreadUpdate(
 export function syncServerShellSnapshot(
   state: AppState,
   snapshot: OrchestrationShellSnapshot,
+  environmentId: EnvironmentId = LOCAL_ENVIRONMENT_ID,
 ): AppState {
-  if (isStaleSnapshot(state, snapshot.snapshotSequence)) {
+  if (isStaleSnapshot(state, snapshot.snapshotSequence, environmentId)) {
     return state;
   }
+  // A snapshot is authoritative only for its own server, so every prune below is
+  // widened with the threads owned by other environments. Without this, each
+  // environment's snapshot would delete the others' threads from the sidebar.
+  const foreignThreadIds = threadIdsOutsideEnvironment(state, environmentId);
   rememberProjectUiState(state.projects);
   rememberProjectLocalNames(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
@@ -1240,15 +1354,24 @@ export function syncServerShellSnapshot(
   );
   const spaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
   const projects = mapProjects(snapshotProjects, state.projects);
-  const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
-  // The retains below prune detail slices down to the snapshot's threads; any
-  // resume cursor for a pruned thread must fall with its detail.
-  retainThreadDetailResumeCursors(nextThreadIds);
+  const ownedThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
+  const nextThreadIds = new Set([...ownedThreadIds, ...foreignThreadIds]);
+  // The retains below prune detail slices down to the surviving threads; any
+  // resume cursor for a pruned thread must fall with its detail. Scoped to this
+  // environment's cursor space and its own threads — another environment's
+  // cursors are indexed by its own journal and are not this snapshot's business.
+  threadDetailResumeCursors(environmentId).retain(ownedThreadIds);
 
   const normalizedState: AppState = {
     ...state,
     threadIds: reuseThreadIdRegistry(state.threadIds, nextThreadIds),
-    ...rebuildThreadShellRecords(state, snapshotThreads),
+    ...rebuildThreadShellRecords(state, snapshotThreads, foreignThreadIds),
+    environmentIdByThreadId: nextEnvironmentIdByThreadId(
+      state,
+      environmentId,
+      ownedThreadIds,
+      nextThreadIds,
+    ),
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     activityIdsByThreadId: retainThreadScopedRecord(state.activityIdsByThreadId, nextThreadIds),
@@ -1283,7 +1406,7 @@ export function syncServerShellSnapshot(
   return retireConfirmedDeletionTombstones(
     {
       ...normalizedState,
-      shellSnapshotSequence: Math.max(state.shellSnapshotSequence ?? 0, snapshot.snapshotSequence),
+      ...advanceSnapshotFence(state, environmentId, snapshot.snapshotSequence),
       spaces,
       projects,
       sidebarThreadSummaryById,
@@ -1292,6 +1415,7 @@ export function syncServerShellSnapshot(
     snapshot.snapshotSequence,
     new Set(snapshot.threads.map((thread) => thread.id)),
     new Set(snapshot.projects.map((project) => project.id)),
+    environmentId,
   );
 }
 
@@ -1374,10 +1498,16 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
   }
 }
 
+/**
+ * Full read-model sync. Local-only: it is served by the page's own server
+ * (bootstrap and local-state repair), so it owns the local environment's
+ * sequence space and prunes only local threads.
+ */
 export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
-  if (isStaleSnapshot(state, readModel.snapshotSequence)) {
+  if (isStaleSnapshot(state, readModel.snapshotSequence, LOCAL_ENVIRONMENT_ID)) {
     return state;
   }
+  const foreignThreadIds = threadIdsOutsideEnvironment(state, LOCAL_ENVIRONMENT_ID);
   rememberProjectUiState(state.projects);
   rememberProjectLocalNames(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
@@ -1411,13 +1541,25 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       const existing = getThreadFromState(state, thread.id);
       return normalizeThreadFromReadModel(thread, existing);
     });
-  const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
-  // This full resync (including the "Repair local state" action) replaces
-  // every thread's detail wholesale: pruned threads lose their detail, and a
-  // surviving thread's cursor would vouch for history the replacement does not
-  // contain. No cursor survives — the next subscribe takes a snapshot and
+  const localThreadIds = new Set(nextThreads.map((thread) => thread.id));
+  // Threads on other servers are outside this read model's authority and must
+  // survive its prunes.
+  const nextThreadIds = new Set([...localThreadIds, ...foreignThreadIds]);
+  // This full resync (including the "Repair local state" action) prunes detail
+  // slices down to the read model's threads; any resume cursor for a pruned
+  // thread must fall with its detail or a later resubscribe would gap-replay
+  // on top of history this prune just discarded.
+  localThreadDetailResumeCursors().retain(localThreadIds);
+  // A surviving thread's detail is replaced wholesale by this read model, so a
+  // cursor ahead of the replacement would resume past history the new detail
+  // does not contain. Drop them all: the next subscribe takes a snapshot and
   // re-establishes one that matches what is actually cached.
-  resetThreadDetailResumeCursors();
+  //
+  // Upstream simplified this pair to a bare `resetThreadDetailResumeCursors()`
+  // when every cursor was local. It cannot be that here: a reset would also
+  // drop cursors for threads on OTHER environments, which this read model has
+  // no authority over, so the retain/clear pair is scoped to local threads.
+  localThreadDetailResumeCursors().clearMany([...localThreadIds]);
   let normalizedState: AppState = {
     ...state,
     threadIds: reuseThreadIdRegistry(state.threadIds, nextThreadIds),
@@ -1488,7 +1630,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     // by a snapshot that predates the deletion.
     const advanced =
       readModel.snapshotSequence > (state.shellSnapshotSequence ?? 0)
-        ? { ...state, shellSnapshotSequence: readModel.snapshotSequence }
+        ? {
+            ...state,
+            shellSnapshotSequence: readModel.snapshotSequence,
+          }
         : state;
     return retireConfirmedDeletionTombstones(
       advanced,

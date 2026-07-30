@@ -1,6 +1,6 @@
 import type { NativeApi } from "@synara/contracts";
 
-import { createWsNativeApi } from "./wsNativeApi";
+import { localWsEnvironmentClient } from "./wsEnvironmentRegistry";
 
 let cachedDesktopApi: NativeApi | undefined;
 
@@ -13,7 +13,7 @@ export function readNativeApi(): NativeApi | undefined {
     return cachedDesktopApi;
   }
 
-  return createWsNativeApi();
+  return localWsEnvironmentClient().api;
 }
 
 export function ensureNativeApi(): NativeApi {

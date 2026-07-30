@@ -215,7 +215,7 @@ import {
   createComposerThreadMentionSourcesSelector,
   createThreadSelector,
 } from "../storeSelectors";
-import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
+import { localThreadDetailResumeCursors } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import {
   canOfferForkSlashCommand,
@@ -3317,7 +3317,7 @@ export default function ChatView({
     useStore.getState().clearThreadDetailSyncFailure(threadId);
     const api = readNativeApi();
     void api?.orchestration
-      .subscribeThread(buildThreadSubscribeInput(threadId))
+      .subscribeThread(localThreadDetailResumeCursors().buildSubscribeInput(threadId))
       .catch(() => undefined);
   }, [threadId]);
   // Stable identity: this element is forwarded to the memoized MessagesTimeline, so

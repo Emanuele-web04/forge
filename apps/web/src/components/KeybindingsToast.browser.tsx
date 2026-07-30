@@ -28,7 +28,7 @@ import {
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
 import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
-import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { resetWsEnvironmentRegistry } from "../wsEnvironmentRegistry";
 
 const THREAD_ID = "thread-kb-toast-test" as ThreadId;
 const PROJECT_ID = "project-1" as ProjectId;
@@ -333,12 +333,12 @@ describe("Keybindings update toast", () => {
   });
 
   afterAll(async () => {
-    await resetWsNativeApiForTest();
+    await resetWsEnvironmentRegistry();
     await worker.stop();
   });
 
   beforeEach(async () => {
-    await resetWsNativeApiForTest();
+    await resetWsEnvironmentRegistry();
     localStorage.clear();
     document.body.innerHTML = "";
     serverConfigStreamClient = null;

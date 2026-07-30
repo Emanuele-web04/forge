@@ -6,8 +6,8 @@ import { ThreadId } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createThreadDetailPrewarmController } from "./threadDetailPrewarm";
 import {
+  localThreadDetailResumeCursors,
   resetThreadDetailResumeCursorsForTests,
-  setThreadDetailResumeCursor,
 } from "./threadDetailResumeCursors";
 
 function threadId(value: string): ThreadId {
@@ -140,7 +140,7 @@ describe("thread detail prewarm", () => {
     const retain = makeRetainSpy();
     const cachedThread = threadId("thread-with-cursor");
     const coldThread = threadId("thread-without-cursor");
-    setThreadDetailResumeCursor(cachedThread, 7);
+    localThreadDetailResumeCursors().set(cachedThread, 7);
     const controller = createThreadDetailPrewarmController({
       retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
       releaseMs: 1000,
@@ -157,7 +157,7 @@ describe("thread detail prewarm", () => {
     const retain = makeRetainSpy();
     const coldThreadIds = Array.from({ length: 6 }, (_, index) => threadId(`cold-${index}`));
     const cachedThread = threadId("cached-after-cold");
-    setThreadDetailResumeCursor(cachedThread, 10);
+    localThreadDetailResumeCursors().set(cachedThread, 10);
     const controller = createThreadDetailPrewarmController({
       retainThreadDetailSubscription: retain.retainThreadDetailSubscription,
       releaseMs: 1000,

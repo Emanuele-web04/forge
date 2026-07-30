@@ -4,6 +4,7 @@
 
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
+  type EnvironmentId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
@@ -262,7 +263,11 @@ export function setThreadWorkspace(
 // ── Zustand store ────────────────────────────────────────────────────
 
 interface AppStore extends AppState {
-  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+  /** `environmentId` defaults to the local server, so existing callers are unaffected. */
+  syncServerShellSnapshot: (
+    snapshot: OrchestrationShellSnapshot,
+    environmentId?: EnvironmentId,
+  ) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
   syncServerThreadDetailHotPath: (thread: ReadModelThread) => void;
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
@@ -290,7 +295,8 @@ interface AppStore extends AppState {
 
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(initialState),
-  syncServerShellSnapshot: (snapshot) => set((state) => syncServerShellSnapshot(state, snapshot)),
+  syncServerShellSnapshot: (snapshot, environmentId) =>
+    set((state) => syncServerShellSnapshot(state, snapshot, environmentId)),
   syncServerThreadDetail: (thread) => set((state) => syncServerThreadDetail(state, thread)),
   syncServerThreadDetailHotPath: (thread) =>
     set((state) => syncServerThreadDetailHotPath(state, thread)),
