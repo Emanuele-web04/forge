@@ -54,12 +54,14 @@ import {
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
+import { classifyBuildSkew, isReadOnlySafeWsMethod } from "@synara/shared/buildSkew";
+
 import { APP_VERSION } from "./branding";
 import {
   buildThreadSubscribeInput,
   resetThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
-import type { WsTransportState } from "./wsTransportEvents";
+import type { WsBuildSkewState, WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
 
@@ -70,6 +72,18 @@ type RpcClientInstance =
 class WsTransportRpcError extends Data.TaggedError("WsTransportRpcError")<{
   readonly message: string;
   readonly cause?: unknown;
+}> {}
+
+/**
+ * Thrown instead of issuing a write on a version-skewed connection. Distinct
+ * from a transport failure so UI can present the degraded state rather than a
+ * retryable network error.
+ */
+export class WsBuildSkewReadOnlyError extends Data.TaggedError("WsBuildSkewReadOnlyError")<{
+  readonly message: string;
+  readonly method: string;
+  readonly clientBuild: string;
+  readonly serverBuild: string;
 }> {}
 
 export class WsTransportRequestInterruptedError extends Data.TaggedError(
@@ -539,6 +553,7 @@ export class WsTransport {
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
   private readonly stateListeners = new Set<(state: WsTransportState) => void>();
   private readonly compatibilityListeners = new Set<(issue: WsCompatibilityError | null) => void>();
+  private readonly buildSkewListeners = new Set<(skew: WsBuildSkewState | null) => void>();
   private readonly threadStreamFailureListeners = new Set<
     (failure: WsThreadStreamFailure) => void
   >();
@@ -576,6 +591,7 @@ export class WsTransport {
   // reconnects still reset replayed push state even after the negotiation
   // cache was cleared by an intervening failure.
   private lastServerInstanceId: string | null = null;
+  private buildSkew: WsBuildSkewState | null = null;
 
   constructor(url?: string) {
     this.explicitUrl = url ?? null;
@@ -588,6 +604,10 @@ export class WsTransport {
     options?: WsRequestOptions,
   ): Promise<T> {
     if (this.disposed) throw new Error("Transport disposed");
+    // Fail fast when the skew is already known. This is only the first of two
+    // checks: the authoritative one runs after the connection resolves, since
+    // the skew is adopted during negotiation.
+    this.assertNotSkewedWrite(method);
     const requestOptions: WsRequestOptions =
       options?.timeoutMs === undefined ? { ...options, timeoutMs: REQUEST_TIMEOUT_MS } : options;
     const abortScope = makeRequestAbortScope(requestOptions);
@@ -608,6 +628,11 @@ export class WsTransport {
       }
 
       const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+      // Authoritative check. The skew is adopted while the connection resolves,
+      // so a write started during initial connect or a reconnect passes the
+      // pre-connect check with no skew known yet. Re-checking here is what
+      // actually keeps a skewed build from mutating.
+      this.assertNotSkewedWrite(method);
 
       if (method === WS_METHODS.gitRunStackedAction) {
         return (await this.runGitActionStream(client, params, abortScope.signal)) as T;
@@ -830,6 +855,59 @@ export class WsTransport {
     }
   }
 
+  /**
+   * Version handshake. A build mismatch degrades the session to read-only
+   * rather than hard-failing: cached state stays readable and every write is
+   * refused client-side so a skewed client can never write cross-version.
+   */
+  private adoptBuildSkew(serverBuild: string): void {
+    const next =
+      classifyBuildSkew({ clientBuild: APP_VERSION, serverBuild }) === "compatible"
+        ? null
+        : ({ clientBuild: APP_VERSION, serverBuild } satisfies WsBuildSkewState);
+    if (this.buildSkew?.serverBuild === next?.serverBuild) return;
+    this.buildSkew = next;
+    for (const listener of this.buildSkewListeners) {
+      try {
+        listener(next);
+      } catch {
+        // Skew UI listeners must not break transport setup.
+      }
+    }
+  }
+
+  /**
+   * Refuses a mutating method while the session is version-skewed. Called both
+   * before and after the connection resolves, because the skew is only adopted
+   * during negotiation.
+   */
+  private assertNotSkewedWrite(method: string): void {
+    const skew = this.buildSkew;
+    if (!skew || isReadOnlySafeWsMethod(method)) return;
+    throw new WsBuildSkewReadOnlyError({
+      message: `${method} is unavailable while this client (${skew.clientBuild}) and server (${skew.serverBuild}) run mismatched builds.`,
+      method,
+      clientBuild: skew.clientBuild,
+      serverBuild: skew.serverBuild,
+    });
+  }
+
+  /** Current degraded read-only state, or null when builds match. */
+  getBuildSkew(): WsBuildSkewState | null {
+    return this.buildSkew;
+  }
+
+  onBuildSkew(
+    listener: (skew: WsBuildSkewState | null) => void,
+    options?: { readonly replayCurrent?: boolean },
+  ): () => void {
+    this.buildSkewListeners.add(listener);
+    if (options?.replayCurrent) listener(this.buildSkew);
+    return () => {
+      this.buildSkewListeners.delete(listener);
+    };
+  }
+
   private adoptNegotiation(compatibility: WsBootstrapNegotiateResult): void {
     if (serverIdentityChanged(this.lastServerInstanceId, compatibility.serverInstanceId)) {
       this.latestPushByChannel.clear();
@@ -847,6 +925,7 @@ export class WsTransport {
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.compatibility = compatibility;
     this.setCompatibilityIssue(null);
+    this.adoptBuildSkew(compatibility.serverBuild);
   }
 
   /**

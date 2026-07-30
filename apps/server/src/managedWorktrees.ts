@@ -239,6 +239,20 @@ export function pruneArchivedManagedWorktrees(input: {
   });
 }
 
+/**
+ * Read-only inventory of managed worktrees. This is the counterpart to
+ * {@link pruneProjectedArchivedManagedWorktrees}: same result shape, but it
+ * never snapshots or removes anything. Query paths (`server.listWorktrees`)
+ * must use this so that reading the list cannot mutate the filesystem —
+ * retention is driven by thread archival, which is what creates the garbage.
+ */
+export function listProjectedManagedWorktrees(input: {
+  readonly worktreesDir: string;
+  readonly git: GitCoreShape;
+}): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
+  return listManagedWorktrees(input);
+}
+
 export function pruneProjectedArchivedManagedWorktrees(input: {
   readonly homeDir: string;
   readonly worktreesDir: string;

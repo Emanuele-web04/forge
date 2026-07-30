@@ -4,8 +4,38 @@ import {
   formatHostForUrl,
   isLoopbackHost,
   isWildcardHost,
+  resolveBindHost,
   resolveListeningPort,
 } from "./startupAccess";
+
+/**
+ * Host values that are present but blank. Node's listen() treats these as the
+ * unspecified address and binds every interface, so classifying any of them as
+ * loopback would disable authentication on a publicly reachable socket.
+ */
+const BLANK_HOSTS = ["", " ", "  ", "\t", "\n", " \t\n "] as const;
+
+describe("blank host is the unspecified address, never loopback", () => {
+  it.each(BLANK_HOSTS)("classifies %j as remote-reachable, not loopback", (host) => {
+    expect(isLoopbackHost(host)).toBe(false);
+    expect(isWildcardHost(host)).toBe(true);
+  });
+
+  it.each(BLANK_HOSTS)("binds %j to the wildcard address it actually listens on", (host) => {
+    expect(resolveBindHost(host)).toBe("0.0.0.0");
+  });
+
+  it("keeps an absent host on the loopback default", () => {
+    expect(isLoopbackHost(undefined)).toBe(true);
+    expect(resolveBindHost(undefined)).toBe("127.0.0.1");
+  });
+
+  it("does not let surrounding whitespace smuggle a host past classification", () => {
+    expect(isLoopbackHost(" 127.0.0.1 ")).toBe(true);
+    expect(isLoopbackHost(" 0.0.0.0 ")).toBe(false);
+    expect(resolveBindHost(" 192.168.1.50 ")).toBe("192.168.1.50");
+  });
+});
 
 describe("startupAccess", () => {
   it("detects wildcard hosts", () => {

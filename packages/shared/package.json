@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./buildSkew": {
+      "types": "./src/buildSkew.ts",
+      "import": "./src/buildSkew.ts"
+    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"

@@ -69,6 +69,9 @@ vi.mock("./wsTransport", () => {
       onCompatibilityIssue() {
         return () => undefined;
       }
+      onBuildSkew() {
+        return () => undefined;
+      }
       onThreadStreamFailure() {
         return () => undefined;
       }

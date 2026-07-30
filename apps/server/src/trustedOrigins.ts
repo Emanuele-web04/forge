@@ -114,10 +114,3 @@ export function shouldRejectAuthMutationOrigin(input: {
   }
   return shouldRejectUntrustedRequestOrigin(input);
 }
-
-/** Remote-reachable sockets always require a real authenticated session. */
-export function requiresWebSocketAuthentication(
-  config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">,
-): boolean {
-  return Boolean(config.authToken) || Boolean(config.publicUrl) || !isLoopbackHost(config.host);
-}

@@ -2,13 +2,13 @@ import type { ServerAuthDescriptor } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 
 import { ServerConfig } from "../../config";
-import { isLoopbackHost, isWildcardHost } from "../../startupAccess";
+import { isRemoteReachableDeployment } from "../../remoteAccessPolicy";
 import { ServerAuthPolicy, type ServerAuthPolicyShape } from "../Services/ServerAuthPolicy";
 import { resolveSessionCookieName } from "../utils";
 
 export const makeServerAuthPolicy = Effect.gen(function* () {
   const config = yield* ServerConfig;
-  const remoteReachable = isWildcardHost(config.host) || !isLoopbackHost(config.host);
+  const remoteReachable = isRemoteReachableDeployment(config);
 
   const policy: ServerAuthDescriptor["policy"] =
     config.mode === "desktop"

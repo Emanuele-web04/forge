@@ -15,13 +15,14 @@ const WRONG_TOKEN = "b".repeat(64);
 
 type ShutdownConfig = Pick<
   ServerConfigShape,
-  "mode" | "host" | "publicUrl" | "desktopShutdownToken"
+  "mode" | "host" | "publicUrl" | "allowInsecureRemote" | "desktopShutdownToken"
 >;
 
 const desktopConfig: ShutdownConfig = {
   mode: "desktop",
   host: "127.0.0.1",
   publicUrl: undefined,
+  allowInsecureRemote: false,
   desktopShutdownToken: SHUTDOWN_TOKEN,
 };
 
@@ -94,6 +95,7 @@ describe("desktop shutdown authorization", () => {
     ["a wildcard IPv6 bind", { host: "::" }],
     ["a non-loopback bind", { host: "192.168.1.50" }],
     ["a public URL", { publicUrl: new URL("https://synara.example.test/") }],
+    ["an explicit insecure-remote opt-in", { allowInsecureRemote: true }],
     ["a missing token", { desktopShutdownToken: undefined }],
     ["an empty token", { desktopShutdownToken: "   " }],
   ] satisfies ReadonlyArray<readonly [string, Partial<ShutdownConfig>]>)(

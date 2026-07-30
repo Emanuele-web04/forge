@@ -283,6 +283,7 @@ describe("ServerAuthLive", () => {
           host: "0.0.0.0",
           authToken: "remote-startup-secret",
           publicUrl: undefined,
+          allowInsecureRemote: false,
         } as const;
 
         const legacyError = yield* authenticateRpcWebSocketUpgrade({

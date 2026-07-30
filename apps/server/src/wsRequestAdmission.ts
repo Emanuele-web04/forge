@@ -179,3 +179,6 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
 
   return { acquire, release, guard, snapshot } as const;
 });
+
+export type WsRequestAdmission =
+  typeof makeWsRequestAdmission extends Effect.Effect<infer A, any, any> ? A : never;

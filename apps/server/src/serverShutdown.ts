@@ -3,7 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Deferred, Effect } from "effect";
 
 import type { ServerConfigShape } from "./config";
-import { isLoopbackHost } from "./startupAccess";
+import { isLocalOnlyDeployment } from "./remoteAccessPolicy";
 
 export const DESKTOP_SHUTDOWN_ROUTE_PATH = "/api/desktop/shutdown";
 
@@ -60,15 +60,17 @@ function readBearerToken(authorization: string | undefined): string | undefined 
  * response.
  */
 export function authorizeDesktopShutdown(input: {
-  readonly config: Pick<ServerConfigShape, "mode" | "host" | "publicUrl" | "desktopShutdownToken">;
+  readonly config: Pick<
+    ServerConfigShape,
+    "mode" | "host" | "publicUrl" | "allowInsecureRemote" | "desktopShutdownToken"
+  >;
   readonly remoteAddress: string | null | undefined;
   readonly authorization: string | undefined;
 }): DesktopShutdownAuthorization {
   const expectedToken = input.config.desktopShutdownToken;
   if (
     input.config.mode !== "desktop" ||
-    !isLoopbackHost(input.config.host) ||
-    input.config.publicUrl !== undefined ||
+    !isLocalOnlyDeployment(input.config) ||
     !isDesktopShutdownLoopbackPeer(input.remoteAddress) ||
     !expectedToken?.trim()
   ) {

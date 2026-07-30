@@ -12,6 +12,8 @@ import {
   type OrchestrationShellSnapshot,
 } from "@synara/contracts";
 
+import { APP_VERSION } from "../branding";
+
 export interface EffectRpcWebSocketClient {
   readonly send: (data: string) => void;
   readonly url?: URL;
@@ -54,7 +56,10 @@ export function readEffectRpcClientMessage(
       sendEffectRpcExit(client, frame.id, {
         protocolEpoch: WS_PROTOCOL_EPOCH,
         negotiatedRevision: WS_PROTOCOL_MAX_REVISION,
-        serverBuild: "browser-test",
+        // Must be the client's own build: an unparseable or mismatched value
+        // degrades the session to read-only and every write in the suite is
+        // refused before it reaches the wire.
+        serverBuild: APP_VERSION,
         serverInstanceId: "browser-test-server",
         capabilities: [...WS_SERVER_CAPABILITIES],
       });

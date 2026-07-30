@@ -10,6 +10,7 @@ import type { GitCoreShape } from "./git/Services/GitCore.ts";
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   listManagedWorktrees,
+  listProjectedManagedWorktrees,
   MANAGED_WORKTREE_RETENTION_COUNT,
   pruneArchivedManagedWorktrees,
   pruneProjectedArchivedManagedWorktrees,
@@ -51,6 +52,97 @@ describe("managed worktrees", () => {
     ).resolves.toEqual(
       paths.map((worktreePath) => ({ path: worktreePath, workspaceRoot: "/repo/project" })),
     );
+  });
+
+  // server.listWorktrees is allowlisted as skew-safe and reachable by any
+  // paired client. That is only sound while listing is a pure read: it used to
+  // run retention pruning, so a client merely hydrating its UI could delete
+  // worktrees. This pins the property, with the same over-retention inventory
+  // that makes the prune path remove something.
+  it("never snapshots or removes anything on the list path", async () => {
+    const count = MANAGED_WORKTREE_RETENTION_COUNT + 5;
+    const { root, paths } = await makeManagedRoot(count);
+    const snapshots: string[] = [];
+    const removals: string[] = [];
+    const git = {
+      execute: ({ cwd }: { cwd: string }) =>
+        Effect.succeed({
+          code: 0,
+          stdout: `worktree /repo/project\nHEAD abc\nbranch refs/heads/main\n\nworktree ${cwd}\nHEAD abc\ndetached\n`,
+          stderr: "",
+        }),
+      withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
+      snapshotWorktree: ({ outputPath }: { outputPath: string }) =>
+        Effect.sync(() => snapshots.push(outputPath)),
+      removeWorktree: ({ path: worktreePath }: { path: string }) =>
+        Effect.sync(() => removals.push(worktreePath)),
+    } as unknown as GitCoreShape;
+
+    const listed = await Effect.runPromise(
+      listProjectedManagedWorktrees({ worktreesDir: root, git }),
+    );
+
+    expect(removals).toEqual([]);
+    expect(snapshots).toEqual([]);
+    // Every worktree is still reported: listing prunes nothing, so the caller
+    // sees the full inventory rather than a retention-trimmed view.
+    expect(listed).toHaveLength(count);
+    expect(listed.map((entry) => entry.path).toSorted()).toEqual(paths.toSorted());
+  });
+
+  // Stronger form of the purity check: the same inputs that make the prune path
+  // remove something must still remove nothing when routed through the list
+  // path. Without the archived threads, a mutation that swaps list back to
+  // prune would pass unnoticed (nothing would be eligible for removal).
+  it("removes nothing on the list path even with prunable archived threads", async () => {
+    const count = MANAGED_WORKTREE_RETENTION_COUNT + 3;
+    const { root, paths } = await makeManagedRoot(count);
+    const snapshots: string[] = [];
+    const removals: string[] = [];
+    const git = {
+      execute: ({ cwd }: { cwd: string }) =>
+        Effect.succeed({
+          code: 0,
+          stdout: `worktree /repo/project\nHEAD abc\nbranch refs/heads/main\n\nworktree ${cwd}\nHEAD abc\ndetached\n`,
+          stderr: "",
+        }),
+      withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
+      snapshotWorktree: ({ outputPath }: { outputPath: string }) =>
+        Effect.sync(() => snapshots.push(outputPath)),
+      removeWorktree: ({ path: worktreePath }: { path: string }) =>
+        Effect.sync(() => removals.push(worktreePath)),
+    } as unknown as GitCoreShape;
+    const threads = paths.map(
+      (worktreePath, index) =>
+        ({
+          id: `thread-${index}`,
+          worktreePath,
+          associatedWorktreePath: worktreePath,
+          archivedAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+        }) as unknown as OrchestrationThread,
+    );
+
+    // Sanity: these inputs DO cause removal on the prune path.
+    await Effect.runPromise(
+      pruneArchivedManagedWorktrees({
+        worktreesDir: root,
+        snapshotsDir: path.join(root, "snapshots"),
+        threads,
+        git,
+      }),
+    );
+    expect(removals.length).toBeGreaterThan(0);
+
+    removals.length = 0;
+    snapshots.length = 0;
+
+    const listed = await Effect.runPromise(
+      listProjectedManagedWorktrees({ worktreesDir: root, git }),
+    );
+
+    expect(removals).toEqual([]);
+    expect(snapshots).toEqual([]);
+    expect(listed).toHaveLength(count);
   });
 
   it("snapshots and removes only archived worktrees beyond the retention limit", async () => {

@@ -19,9 +19,7 @@ import {
 import {
   DEFAULT_PORT,
   deriveServerPaths,
-  normalizeHttpsPublicOrigin,
   preparePrivateServerPaths,
-  remoteAccessPolicyError,
   resolveCanonicalWorkspaceRoots,
   resolveStaticDir,
   ServerConfig,
@@ -29,6 +27,7 @@ import {
   type ServerConfigShape,
 } from "./config";
 import { fixPath, resolveBaseDir } from "./os-jank";
+import { normalizeHttpsPublicOrigin, remoteAccessPolicyError } from "./remoteAccessPolicy";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
@@ -41,7 +40,7 @@ import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntime
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
-import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
+import { formatHostForUrl, isLoopbackHost, isWildcardHost, resolveBindHost } from "./startupAccess";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
@@ -249,7 +248,10 @@ const ServerConfigLive = (input: CliInput) =>
       // Omitting Node's host listens on an unspecified address, which exposes
       // the server beyond the local machine on common platforms. Keep every
       // mode loopback-only unless remote access is explicit and authenticated.
-      const host = Option.getOrUndefined(input.host) ?? env.host ?? "127.0.0.1";
+      // Resolved through resolveBindHost so a blank SYNARA_HOST/--host becomes
+      // the wildcard it actually binds as, rather than a value the policy gate
+      // would mistake for loopback.
+      const host = resolveBindHost(Option.getOrUndefined(input.host) ?? env.host);
       const remotePolicyError = remoteAccessPolicyError({
         host,
         authToken,

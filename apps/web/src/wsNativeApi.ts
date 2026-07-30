@@ -49,7 +49,11 @@ import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
-import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
+import {
+  emitWsBuildSkew,
+  emitWsCompatibilityIssue,
+  emitWsTransportState,
+} from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
 export type { WsThreadStreamFailure } from "./wsTransport";
@@ -397,6 +401,7 @@ export function createWsNativeApi(): NativeApi {
   transport.onCompatibilityIssue((issue) => emitWsCompatibilityIssue(issue), {
     replayCurrent: true,
   });
+  transport.onBuildSkew((skew) => emitWsBuildSkew(skew), { replayCurrent: true });
 
   transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
     welcomeListeners.emit(message.data);

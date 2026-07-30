@@ -19,52 +19,11 @@ import {
   repairPrivateTreeSync,
 } from "./privatePathPermissions";
 import { realpathNearestExisting } from "./realpathNearestExisting";
-import { isLoopbackHost } from "./startupAccess";
 
 export const DEFAULT_PORT = 3773;
 export const PRIVATE_STATE_REPAIR_MARKER = ".permissions-v1";
 
 export type RuntimeMode = "web" | "desktop";
-
-export function normalizeHttpsPublicOrigin(publicUrl: URL): URL | null {
-  if (
-    publicUrl.protocol !== "https:" ||
-    publicUrl.username !== "" ||
-    publicUrl.password !== "" ||
-    publicUrl.pathname !== "/" ||
-    publicUrl.search !== "" ||
-    publicUrl.hash !== ""
-  ) {
-    return null;
-  }
-  return new URL(publicUrl.origin);
-}
-
-export function remoteAccessPolicyError(
-  config: Pick<
-    ServerConfigShape,
-    "host" | "authToken" | "devUrl" | "publicUrl" | "allowInsecureRemote"
-  >,
-): string | null {
-  const isRemoteBind = !isLoopbackHost(config.host);
-  if (config.publicUrl && !normalizeHttpsPublicOrigin(config.publicUrl)) {
-    return "SYNARA_PUBLIC_URL/--public-url must be an HTTPS root origin without credentials, path, query, or fragment (for example https://synara.example.com).";
-  }
-  const isPubliclyExposed = isRemoteBind || Boolean(config.publicUrl);
-  if (!isPubliclyExposed) return null;
-  if (!config.authToken?.trim()) {
-    return config.publicUrl
-      ? "Refusing to publish Synara through SYNARA_PUBLIC_URL/--public-url without SYNARA_AUTH_TOKEN/--auth-token."
-      : `Refusing to bind Synara to non-loopback host ${config.host ?? "<unspecified>"} without SYNARA_AUTH_TOKEN/--auth-token.`;
-  }
-  if (config.devUrl) {
-    return "Remote server binds cannot be combined with VITE_DEV_SERVER_URL/--dev-url yet; use a loopback host for development or run the built web UI for remote access.";
-  }
-  if (isRemoteBind && !config.publicUrl && !config.allowInsecureRemote) {
-    return "Refusing plaintext remote access. Configure an HTTPS reverse-proxy origin with SYNARA_PUBLIC_URL/--public-url, or explicitly accept unencrypted LAN traffic with SYNARA_ALLOW_INSECURE_REMOTE/--allow-insecure-remote.";
-  }
-  return null;
-}
 
 /**
  * ServerDerivedPaths - Derived paths from the base directory.

@@ -8,7 +8,6 @@ import type { ServerConfigShape } from "./config";
 import {
   isTrustedAppOrigin,
   normalizeCorsOrigin,
-  requiresWebSocketAuthentication,
   shouldRejectAuthMutationOrigin,
   shouldRejectUntrustedRequestOrigin,
 } from "./trustedOrigins";
@@ -153,50 +152,6 @@ describe("trustedOrigins", () => {
         config: { ...config, host: "0.0.0.0" },
       }),
     ).toBe(false);
-  });
-
-  it("requires websocket authentication for every non-loopback exposure", () => {
-    expect(
-      requiresWebSocketAuthentication({
-        host: "127.0.0.1",
-        authToken: undefined,
-        publicUrl: undefined,
-      }),
-    ).toBe(false);
-    expect(
-      requiresWebSocketAuthentication({ host: "::1", authToken: undefined, publicUrl: undefined }),
-    ).toBe(false);
-    expect(
-      requiresWebSocketAuthentication({
-        host: "0.0.0.0",
-        authToken: undefined,
-        publicUrl: undefined,
-      }),
-    ).toBe(true);
-    expect(
-      requiresWebSocketAuthentication({ host: "::", authToken: undefined, publicUrl: undefined }),
-    ).toBe(true);
-    expect(
-      requiresWebSocketAuthentication({
-        host: "192.168.1.50",
-        authToken: undefined,
-        publicUrl: undefined,
-      }),
-    ).toBe(true);
-    expect(
-      requiresWebSocketAuthentication({
-        host: "127.0.0.1",
-        authToken: "secret",
-        publicUrl: undefined,
-      }),
-    ).toBe(true);
-    expect(
-      requiresWebSocketAuthentication({
-        host: "127.0.0.1",
-        authToken: undefined,
-        publicUrl: new URL("https://synara.example.test/"),
-      }),
-    ).toBe(true);
   });
 
   it("requires browser mutations to have a trusted origin or explicit bearer provenance", () => {

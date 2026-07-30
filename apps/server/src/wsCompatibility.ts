@@ -14,6 +14,8 @@ import {
 } from "@synara/contracts";
 import { Effect } from "effect";
 
+import { classifyBuildSkew } from "@synara/shared/buildSkew";
+
 import { version as serverBuild } from "../package.json" with { type: "json" };
 
 const serverInstanceId = randomUUID();
@@ -167,6 +169,21 @@ export function validateWsFeatureCompatibility(
     );
   }
   return null;
+}
+
+/**
+ * Classifies the connecting client's build against this server's. The client
+ * enforces the same policy for UX, but that guard lives in code the client
+ * controls: an older official client predating it, or any direct client, is
+ * only stopped by this classification feeding the admission middleware.
+ */
+export function isWsClientBuildSkewed(searchParams: URLSearchParams): boolean {
+  return (
+    classifyBuildSkew({
+      clientBuild: searchParams.get(WS_COMPATIBILITY_QUERY.clientBuild) ?? undefined,
+      serverBuild,
+    }) !== "compatible"
+  );
 }
 
 export function makeCurrentWsFeatureCompatibilitySearchParams(

@@ -39,7 +39,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
-import { isLoopbackHost } from "./startupAccess";
+import { isLocalOnlyDeployment } from "./remoteAccessPolicy";
 import {
   attachmentPrincipalForSession,
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
@@ -303,11 +303,16 @@ function trustedMutationCorsHeaders(input: {
   };
 }
 
+/**
+ * The legacy `?token=` query credential is a local-only affordance. Any
+ * remote-reachable deployment must present a real session credential instead,
+ * regardless of whether an auth token is configured.
+ */
 export function isLegacyTokenAuthorized(input: {
   readonly config: ServerConfigShape;
   readonly url: URL;
 }): boolean {
-  if (!isLoopbackHost(input.config.host) || input.config.publicUrl) {
+  if (!isLocalOnlyDeployment(input.config)) {
     return false;
   }
   const legacyToken = input.url.searchParams.get("token");

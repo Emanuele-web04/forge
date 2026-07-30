@@ -67,9 +67,12 @@ import {
   onThreadStreamFailure,
 } from "../wsNativeApi";
 import {
+  addWsBuildSkewListener,
   addWsCompatibilityIssueListener,
   addWsTransportStateListener,
+  readLatestWsBuildSkew,
   readLatestWsCompatibilityIssue,
+  type WsBuildSkewState,
 } from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
@@ -245,6 +248,7 @@ function RootRouteView() {
     <>
       <ToastProvider position="top-center">
         <AnchoredToastProvider>
+          <TransportBuildSkewNotice />
           <GitProgressToastPreviewDev />
           <EventRouter />
           <ProviderStatusRefreshCoordinator />
@@ -261,6 +265,29 @@ function RootRouteView() {
       </ToastProvider>
       {desktopWindowControls}
     </>
+  );
+}
+
+/**
+ * Version skew degrades the session instead of hard-failing it: the app stays
+ * readable and the transport refuses writes, so this notice must stay visible
+ * for the whole session rather than being dismissible.
+ */
+function TransportBuildSkewNotice() {
+  const [skew, setSkew] = useState<WsBuildSkewState | null>(() => readLatestWsBuildSkew());
+  useEffect(() => addWsBuildSkewListener(setSkew, { replayCurrent: true }), []);
+  if (!skew) return null;
+
+  return (
+    <div
+      role="status"
+      className="pointer-events-none fixed inset-x-0 top-0 z-[240] flex justify-center px-3 pt-2"
+    >
+      <p className="pointer-events-auto rounded-full border border-amber-500/40 bg-card/95 px-3 py-1 text-[11px] text-muted-foreground shadow-lg backdrop-blur-md">
+        Read-only: this client ({skew.clientBuild}) and server ({skew.serverBuild}) run mismatched
+        builds. Update both to the same version to make changes.
+      </p>
+    </div>
   );
 }
 

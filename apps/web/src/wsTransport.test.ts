@@ -36,6 +36,7 @@ import {
   resolveStreamAdmissionRetry,
   shouldReconnectAfterStreamFailure,
   threadStreamInputsEqual,
+  WsBuildSkewReadOnlyError,
   WsTransport,
   type WsThreadStreamFailure,
 } from "./wsTransport";
@@ -44,6 +45,7 @@ import {
   emitWsCompatibilityIssue,
   readLatestWsCompatibilityIssue,
 } from "./wsTransportEvents";
+import { APP_VERSION } from "./branding";
 
 type WsEventType = "open" | "message" | "close" | "error";
 type WsListener = (event?: { data?: unknown }) => void;
@@ -1043,5 +1045,118 @@ describe("WsTransport", () => {
     await transport.dispose();
 
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("WsTransport version handshake", () => {
+  const matchingBuild = { ...NEGOTIATION_RESULT, serverBuild: APP_VERSION };
+  const skewedBuild = { ...NEGOTIATION_RESULT, serverBuild: "999.0.0" };
+
+  it("stays fully usable when the server build matches", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, matchingBuild))),
+    );
+    const transport = new WsTransport("ws://localhost:3020");
+    await waitForSockets(1);
+
+    expect(transport.getBuildSkew()).toBeNull();
+
+    await transport.dispose();
+  });
+
+  it("degrades to read-only and refuses writes on a version-skewed server", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, skewedBuild))),
+    );
+    const observed: Array<unknown> = [];
+    const transport = new WsTransport("ws://localhost:3020");
+    transport.onBuildSkew((skew) => observed.push(skew));
+    await waitForSockets(1);
+
+    expect(transport.getBuildSkew()).toEqual({
+      clientBuild: APP_VERSION,
+      serverBuild: "999.0.0",
+    });
+    expect(observed).toContainEqual({ clientBuild: APP_VERSION, serverBuild: "999.0.0" });
+
+    // The write never reaches the wire: it fails before any RPC is dispatched.
+    const sentBefore = sockets[0]?.sent.length ?? 0;
+    await expect(
+      transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command: {} }),
+    ).rejects.toBeInstanceOf(WsBuildSkewReadOnlyError);
+    expect(sockets[0]?.sent.length ?? 0).toBe(sentBefore);
+
+    await transport.dispose();
+  });
+
+  // Regression: the pre-connect check alone cannot catch this. A write issued
+  // before negotiation completes sees no skew yet, awaits the connection, and
+  // would then dispatch unchecked against a mismatched server.
+  it("refuses a write started before the skew is known", async () => {
+    let releaseNegotiation: (() => void) | undefined;
+    const negotiationGate = new Promise<void>((resolve) => {
+      releaseNegotiation = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await negotiationGate;
+        return jsonResponse(200, skewedBuild);
+      }),
+    );
+
+    const transport = new WsTransport("ws://localhost:3020");
+    // No skew is known at this point — the pre-connect check cannot refuse it.
+    expect(transport.getBuildSkew()).toBeNull();
+    const pending = transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command: {} });
+    const assertion = expect(pending).rejects.toBeInstanceOf(WsBuildSkewReadOnlyError);
+
+    releaseNegotiation?.();
+    await assertion;
+
+    await transport.dispose();
+  });
+
+  it("still admits read methods while degraded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, skewedBuild))),
+    );
+    const transport = new WsTransport("ws://localhost:3020");
+    await waitForSockets(1);
+
+    // Reads are dispatched (they fail later on the mock socket, but never with
+    // the read-only refusal).
+    await expect(
+      transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot, {}, { timeoutMs: 10 }),
+    ).rejects.not.toBeInstanceOf(WsBuildSkewReadOnlyError);
+
+    await transport.dispose();
+  });
+
+  it("clears the degraded state after reconnecting to a matching server", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, skewedBuild)));
+    vi.stubGlobal("fetch", fetchMock);
+    const transport = new WsTransport("ws://localhost:3020");
+    const internals = transport as unknown as {
+      createSession(): { clientPromise: Promise<unknown> };
+      compatibility: WsBootstrapNegotiateResult | null;
+    };
+    await waitForSockets(1);
+    expect(transport.getBuildSkew()).not.toBeNull();
+
+    internals.compatibility = null;
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse(200, { ...matchingBuild, serverInstanceId: "server-instance-2" }),
+      ),
+    );
+    await internals.createSession().clientPromise;
+
+    expect(transport.getBuildSkew()).toBeNull();
+
+    await transport.dispose();
   });
 });

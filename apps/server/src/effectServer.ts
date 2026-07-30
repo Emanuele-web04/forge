@@ -15,8 +15,9 @@ import {
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
 } from "./serverRuntimeState";
-import { remoteAccessPolicyError, ServerConfig } from "./config";
-import { resolveListeningPort } from "./startupAccess";
+import { ServerConfig } from "./config";
+import { remoteAccessPolicyError } from "./remoteAccessPolicy";
+import { resolveBindHost, resolveListeningPort } from "./startupAccess";
 import { patchBunWebSocketCloseEventCompatibility } from "./bunWebSocketCompatibility";
 import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
@@ -152,7 +153,7 @@ export const createEffectServer = Effect.fn(function* (
   patchBunWebSocketCloseEventCompatibility();
   // Keep embedded/test callers safe if they construct ServerConfig without
   // passing through the CLI's loopback-default resolution.
-  const listenOptions = { host: config.host ?? "127.0.0.1", port: config.port };
+  const listenOptions = { host: resolveBindHost(config.host), port: config.port };
   const httpServer = yield* makeBoundedNodeHttpServer(() => {
     nodeServer = http.createServer();
     return nodeServer;

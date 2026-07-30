@@ -40,6 +40,7 @@ import {
   type WsConnectionSessionsShape,
 } from "./wsConnectionSessions";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
+import serverPackage from "../package.json" with { type: "json" };
 
 const PingRpc = Rpc.make("test.ping", {
   payload: Schema.Struct({ label: Schema.String }),
@@ -363,7 +364,10 @@ async function connectExistingSession(
 }
 
 function featureSocketUrl(server: RunningTestServer, token: string): string {
-  const searchParams = makeCurrentWsFeatureCompatibilitySearchParams("test-client");
+  // Present the server's own build: an unparseable placeholder is classified
+  // as skewed (by design) and would degrade every connection in this suite to
+  // read-only. Skew itself is covered in wsMethodAuthorization.test.ts.
+  const searchParams = makeCurrentWsFeatureCompatibilitySearchParams(serverPackage.version);
   searchParams.set("wsToken", token);
   return `${server.origin}/ws?${searchParams.toString()}`;
 }
@@ -824,6 +828,10 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       expect(server.connectionSessions.lookup(sessionKey)).toEqual({
         role: "owner",
         attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
+        // The upgrade records the client's build classification so the
+        // admission middleware can refuse cross-version mutations. This
+        // harness connects with the server's own build, so it is compatible.
+        buildSkewed: false,
       });
 
       socket.close();
