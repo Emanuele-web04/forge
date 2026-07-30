@@ -13,6 +13,9 @@ describe("WsRequestAdmission", () => {
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.getTurnDiff)).toBe("expensive-read");
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.repairState)).toBe("expensive-read");
     expect(classifyWsRequest(WS_METHODS.terminalAckOutput)).toBe("control");
+    // Probing a remote host spawns ssh and waits on a network round-trip, so it
+    // must not share the standard lane with cheap in-memory reads.
+    expect(classifyWsRequest(WS_METHODS.serverProbeRemoteHost)).toBe("expensive-read");
   });
 
   it("reserves independent capacity for control traffic during an expensive-read flood", async () => {

@@ -31,6 +31,7 @@ import {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import { RemoteHostProbeInput, RemoteHostProbeRpcResult } from "./remoteHost";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
@@ -762,6 +763,12 @@ export const WsServerStopLocalServerRpc = Rpc.make(WS_METHODS.serverStopLocalSer
   error: WsRpcError,
 });
 
+export const WsServerProbeRemoteHostRpc = Rpc.make(WS_METHODS.serverProbeRemoteHost, {
+  payload: RemoteHostProbeInput,
+  success: RemoteHostProbeRpcResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
   WS_METHODS.serverGetProviderUsageSnapshot,
   {
@@ -1062,6 +1069,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
+  WsServerProbeRemoteHostRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerListProviderUsageRpc,
   WsStatsGetProfileStatsRpc,

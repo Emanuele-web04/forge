@@ -44,6 +44,7 @@ import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuer
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
+import { RemoteHostRateLimitError, sharedRemoteHostBroker } from "./remoteHostBroker";
 import { listStudioThreadOutputs } from "./studioOutputs";
 import {
   ensureStudioWorkspaceInstructionsFiles,
@@ -1372,6 +1373,25 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverStopLocalServer]: (input) =>
           rpcEffect(stopLocalServerAndTrackedProjectRun(input), "Failed to stop local server"),
+        [WS_METHODS.serverProbeRemoteHost]: (input) =>
+          Effect.gen(function* () {
+            const broker = sharedRemoteHostBroker();
+            const probe = yield* Effect.tryPromise({
+              try: () => broker.probe(input.host, input.target),
+              catch: (cause) => cause,
+            }).pipe(
+              Effect.mapError((cause) =>
+                cause instanceof RemoteHostRateLimitError
+                  ? new WsRpcError({
+                      message: cause.message,
+                      retryable: true,
+                      retryAfterMs: cause.retryAfterMs,
+                    })
+                  : toWsRpcError(cause, "Failed to check the remote host"),
+              ),
+            );
+            return { probe, connectivity: broker.connectivity(input.host.hostId) };
+          }),
         [WS_METHODS.statsGetProfileStats]: (input) =>
           rpcEffect(profileStatsQuery.getProfileStats(input), "Failed to load profile stats"),
         [WS_METHODS.statsGetProfileTokenStats]: (input) =>

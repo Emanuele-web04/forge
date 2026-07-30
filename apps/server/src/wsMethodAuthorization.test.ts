@@ -30,8 +30,22 @@ describe("owner-only enforcement", () => {
         WS_METHODS.serverUpdateProvider,
         WS_METHODS.serverUpsertKeybinding,
         WS_METHODS.serverStopLocalServer,
+        WS_METHODS.serverProbeRemoteHost,
       ].toSorted(),
     );
+  });
+
+  it("keeps remote-host probing owner-only on every deployment shape", () => {
+    // The probe makes THIS server dial an address the caller chose. Reachable
+    // from a paired non-owner client it would be an outbound amplifier.
+    for (const config of [loopback, remote, published]) {
+      expect(
+        authorizeWsMethod({ method: WS_METHODS.serverProbeRemoteHost, role: "client", config }),
+      ).not.toBeNull();
+      expect(
+        authorizeWsMethod({ method: WS_METHODS.serverProbeRemoteHost, role: "owner", config }),
+      ).toBeNull();
+    }
   });
 
   it.each([...OWNER_ONLY_WS_METHODS])("rejects %s for a non-owner client", (method) => {

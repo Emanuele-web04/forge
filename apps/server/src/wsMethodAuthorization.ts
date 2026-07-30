@@ -164,6 +164,10 @@ const OWNER_ONLY_WS_METHOD_LIST = [
   WS_METHODS.serverUpdateProvider,
   WS_METHODS.serverUpsertKeybinding,
   WS_METHODS.serverStopLocalServer,
+  // Probing a remote host makes this server dial an arbitrary address chosen by
+  // the caller. That is an outbound capability of the operator's machine, not
+  // work inside a thread, so a paired non-owner client may not trigger it.
+  WS_METHODS.serverProbeRemoteHost,
 ] as const satisfies readonly WsFeatureMethod[];
 
 export const OWNER_ONLY_WS_METHODS: ReadonlySet<string> = new Set<string>(

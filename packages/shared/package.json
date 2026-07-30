@@ -267,6 +267,22 @@
     "./browserAnnotations": {
       "types": "./src/browserAnnotations.ts",
       "import": "./src/browserAnnotations.ts"
+    },
+    "./remoteCommand": {
+      "types": "./src/remoteCommand.ts",
+      "import": "./src/remoteCommand.ts"
+    },
+    "./remoteHostProbe": {
+      "types": "./src/remoteHostProbe.ts",
+      "import": "./src/remoteHostProbe.ts"
+    },
+    "./remoteHostConnectivity": {
+      "types": "./src/remoteHostConnectivity.ts",
+      "import": "./src/remoteHostConnectivity.ts"
+    },
+    "./rateLimiter": {
+      "types": "./src/rateLimiter.ts",
+      "import": "./src/rateLimiter.ts"
     }
   },
   "scripts": {

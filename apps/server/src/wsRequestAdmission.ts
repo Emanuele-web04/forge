@@ -45,6 +45,8 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   WS_METHODS.serverGetProviderUsageSnapshot,
   WS_METHODS.serverListProviderUsage,
   WS_METHODS.serverGetDiagnostics,
+  // Spawns an ssh process and waits on a remote round-trip.
+  WS_METHODS.serverProbeRemoteHost,
   WS_METHODS.serverGenerateThreadRecap,
   WS_METHODS.serverGenerateAutomationIntent,
   WS_METHODS.serverTranscribeVoice,

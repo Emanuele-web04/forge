@@ -83,6 +83,7 @@ import {
   ProjectStopDevServerInput,
   ProjectWriteFileInput,
 } from "./project";
+import { RemoteHostProbeInput } from "./remoteHost";
 import { StudioListThreadOutputsInput } from "./studio";
 import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
@@ -209,6 +210,7 @@ export const WS_METHODS = {
   serverListWorktrees: "server.listWorktrees",
   serverListLocalServers: "server.listLocalServers",
   serverStopLocalServer: "server.stopLocalServer",
+  serverProbeRemoteHost: "server.probeRemoteHost",
   serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
   serverListProviderUsage: "server.listProviderUsage",
   statsGetProfileStats: "stats.getProfileStats",
@@ -383,6 +385,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListLocalServers, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),
+  tagRequestBody(WS_METHODS.serverProbeRemoteHost, RemoteHostProbeInput),
   tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverListProviderUsage, ServerListProviderUsageInput),
   tagRequestBody(WS_METHODS.statsGetProfileStats, StatsGetProfileStatsInput),
