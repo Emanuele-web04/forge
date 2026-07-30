@@ -801,7 +801,7 @@ export function BrowserPanel({
   // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
   // removing the DOM node so main never keeps a stale webContents runtime.
   const detachRendererBrowserWebview = useCallback(
-    (expectedWebview?: BrowserWebviewElement) => {
+    (expectedWebview?: BrowserWebviewElement | null) => {
       const webview = browserWebviewRef.current;
       if (
         !webview ||
@@ -942,7 +942,7 @@ export function BrowserPanel({
     }
 
     let webview = browserWebviewRef.current;
-    if (webview?.dataset.profilePartition !== browserProfilePartition) {
+    if (webview != null && webview.dataset.profilePartition !== browserProfilePartition) {
       detachRendererBrowserWebview(webview);
       webview = null;
     }
