@@ -36,6 +36,10 @@
       "types": "./src/errorMessages.ts",
       "import": "./src/errorMessages.ts"
     },
+    "./posixShell": {
+      "types": "./src/posixShell.ts",
+      "import": "./src/posixShell.ts"
+    },
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"

@@ -155,7 +155,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useLatestProjectStore } from "../latestProjectStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
-import { quotePosixShellArgument } from "../lib/shellQuote";
+import { quotePosixShellArgument } from "@synara/shared/posixShell";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import {
   applyAutomationEvent,
