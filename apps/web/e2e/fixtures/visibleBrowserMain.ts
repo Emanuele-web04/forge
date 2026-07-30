@@ -4,7 +4,10 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import type { BrowserAnnotationEvent, ThreadBrowserState, ThreadId } from "@synara/contracts";
 
 import { DesktopBrowserManager } from "../../../desktop/src/browserManager";
-import { BrowserProfileStore, PERSONAL_BROWSER_PROFILE_ID } from "../../../desktop/src/browserProfiles";
+import {
+  BrowserProfileStore,
+  PERSONAL_BROWSER_PROFILE_ID,
+} from "../../../desktop/src/browserProfiles";
 import { BrowserUsePipeServer } from "../../../desktop/src/browserUsePipeServer";
 import { BROWSER_IPC_CHANNELS } from "../../../desktop/src/ipcChannels";
 import { hardenBrowserAnnotationWebviewPreferences } from "../../../desktop/src/browserAnnotations/webviewSecurity";

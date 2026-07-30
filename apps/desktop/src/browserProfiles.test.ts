@@ -31,7 +31,10 @@ describe("BrowserProfileStore", () => {
     expect(store.profileForThread("thread-a").id).toBe(TEMPORARY_BROWSER_PROFILE_ID);
     expect(store.list("thread-a")).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: PERSONAL_BROWSER_PROFILE_ID, partition: "persist:synara-browser" }),
+        expect.objectContaining({
+          id: PERSONAL_BROWSER_PROFILE_ID,
+          partition: "persist:synara-browser",
+        }),
         expect.objectContaining({
           id: TEMPORARY_BROWSER_PROFILE_ID,
           kind: "temporary",
@@ -41,7 +44,9 @@ describe("BrowserProfileStore", () => {
     );
 
     const work = store.create("Work");
-    expect(work.partition).toBe("persist:synara-browser-profile-e7a0a2ef-5a6d-4f70-a15d-7e6d3b27a1a9");
+    expect(work.partition).toBe(
+      "persist:synara-browser-profile-e7a0a2ef-5a6d-4f70-a15d-7e6d3b27a1a9",
+    );
     store.bindThread("thread-a", work.id);
 
     const restartedStore = new BrowserProfileStore({ storagePath });

@@ -155,7 +155,9 @@ describe("BrowserSessionPolicy", () => {
         sandbox: true,
       },
     });
-    expect(policy.buildOAuthPopupWindowOptions(null, PERSONAL_PROFILE)).not.toHaveProperty("parent");
+    expect(policy.buildOAuthPopupWindowOptions(null, PERSONAL_PROFILE)).not.toHaveProperty(
+      "parent",
+    );
   });
 
   it("applies the same derived identity to the partition, tabs, and popups", () => {

@@ -89,7 +89,8 @@ function emptyState(): BrowserProfileStoreState {
 function parseStoredState(value: unknown): BrowserProfileStoreState | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  if (record.version !== BROWSER_PROFILE_STORE_VERSION || !Array.isArray(record.profiles)) return null;
+  if (record.version !== BROWSER_PROFILE_STORE_VERSION || !Array.isArray(record.profiles))
+    return null;
   const profiles: StoredCustomBrowserProfile[] = [];
   const ids = new Set<string>();
   for (const item of record.profiles) {
@@ -110,7 +111,8 @@ function parseStoredState(value: unknown): BrowserProfileStoreState | null {
   if (!rawBindings || typeof rawBindings !== "object" || Array.isArray(rawBindings)) return null;
   const threadProfileIds: Record<string, string> = {};
   for (const [threadId, profileId] of Object.entries(rawBindings)) {
-    if (threadId.length === 0 || threadId.length > 256 || typeof profileId !== "string") return null;
+    if (threadId.length === 0 || threadId.length > 256 || typeof profileId !== "string")
+      return null;
     if (
       profileId !== PERSONAL_BROWSER_PROFILE_ID &&
       profileId !== TEMPORARY_BROWSER_PROFILE_ID &&
@@ -140,7 +142,11 @@ export class BrowserProfileStore {
   }
 
   list(threadId: string): BrowserProfile[] {
-    return [personalProfile(), temporaryProfile(threadId), ...this.state.profiles.map(customProfile)];
+    return [
+      personalProfile(),
+      temporaryProfile(threadId),
+      ...this.state.profiles.map(customProfile),
+    ];
   }
 
   profileForThread(threadId: string): BrowserProfile {
@@ -150,11 +156,18 @@ export class BrowserProfileStore {
 
   create(label: string): BrowserProfile {
     const normalizedLabel = normalizeLabel(label);
-    if (this.list("").some((profile) => profile.label.toLocaleLowerCase() === normalizedLabel.toLocaleLowerCase())) {
+    if (
+      this.list("").some(
+        (profile) => profile.label.toLocaleLowerCase() === normalizedLabel.toLocaleLowerCase(),
+      )
+    ) {
       throw new Error("A browser profile with that name already exists.");
     }
     const id = this.createId();
-    if (!CUSTOM_PROFILE_ID_PATTERN.test(id) || this.state.profiles.some((profile) => profile.id === id)) {
+    if (
+      !CUSTOM_PROFILE_ID_PATTERN.test(id) ||
+      this.state.profiles.some((profile) => profile.id === id)
+    ) {
       throw new Error("Could not create a safe browser profile identifier.");
     }
     const next = cloneState(this.state);
@@ -171,7 +184,8 @@ export class BrowserProfileStore {
     if (
       this.list("").some(
         (profile) =>
-          profile.id !== profileId && profile.label.toLocaleLowerCase() === normalizedLabel.toLocaleLowerCase(),
+          profile.id !== profileId &&
+          profile.label.toLocaleLowerCase() === normalizedLabel.toLocaleLowerCase(),
       )
     ) {
       throw new Error("A browser profile with that name already exists.");

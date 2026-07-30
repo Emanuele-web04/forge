@@ -905,7 +905,8 @@ export class DesktopBrowserManager {
       type: "question" as const,
       title: "Choose a passkey",
       message: `${input.details.relyingPartyId} requests a passkey`,
-      detail: "Only you can choose or cancel this sign-in. Synara and its agents cannot access passkey material.",
+      detail:
+        "Only you can choose or cancel this sign-in. Synara and its agents cannot access passkey material.",
       buttons,
       cancelId: 0,
       defaultId: 0,
@@ -2909,7 +2910,10 @@ export class DesktopBrowserManager {
       return existing;
     }
 
-    const initial = defaultThreadBrowserState(threadId, this.profileStore.profileForThread(threadId));
+    const initial = defaultThreadBrowserState(
+      threadId,
+      this.profileStore.profileForThread(threadId),
+    );
     this.states.set(threadId, initial);
     this.threadVersionById.set(threadId, 0);
     return initial;

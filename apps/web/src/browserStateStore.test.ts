@@ -95,7 +95,7 @@ describe("browserStateStore selectors", () => {
       version: 2,
       tabs: [{ url: "https://new.example/", title: "New visible page" }],
     });
-});
+  });
 });
 
 describe("createDedupedBrowserStateStorage", () => {

@@ -92,22 +92,31 @@ export function registerBrowserIpcHandlers(
   });
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.createProfile);
-  ipcMain.handle(BROWSER_IPC_CHANNELS.createProfile, async (event, input: BrowserCreateProfileInput) => {
-    requireTrustedRenderer(event.sender.id);
-    return browserManager.createProfile(input);
-  });
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.createProfile,
+    async (event, input: BrowserCreateProfileInput) => {
+      requireTrustedRenderer(event.sender.id);
+      return browserManager.createProfile(input);
+    },
+  );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.renameProfile);
-  ipcMain.handle(BROWSER_IPC_CHANNELS.renameProfile, async (event, input: BrowserRenameProfileInput) => {
-    requireTrustedRenderer(event.sender.id);
-    return browserManager.renameProfile(input);
-  });
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.renameProfile,
+    async (event, input: BrowserRenameProfileInput) => {
+      requireTrustedRenderer(event.sender.id);
+      return browserManager.renameProfile(input);
+    },
+  );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.deleteProfile);
-  ipcMain.handle(BROWSER_IPC_CHANNELS.deleteProfile, async (event, input: BrowserDeleteProfileInput) => {
-    requireTrustedRenderer(event.sender.id);
-    await browserManager.deleteProfile(input);
-  });
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.deleteProfile,
+    async (event, input: BrowserDeleteProfileInput) => {
+      requireTrustedRenderer(event.sender.id);
+      await browserManager.deleteProfile(input);
+    },
+  );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.setThreadProfile);
   ipcMain.handle(

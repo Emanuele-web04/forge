@@ -94,7 +94,10 @@ import {
   MenuTrigger,
 } from "./ui/menu";
 import { RenameDialog } from "./RenameDialog";
-import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./chat/ComposerPickerMenuPopup";
+import {
+  ComposerPickerMenuPopup,
+  ComposerPickerMenuSubPopup,
+} from "./chat/ComposerPickerMenuPopup";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -713,14 +716,14 @@ export function BrowserPanel({
   const selectBrowserProfile = useCallback(
     (profileId: string) => {
       if (!api || profileId === activeBrowserProfile?.id) return;
-      void runBrowserAction(() =>
-        api.browser.setThreadProfile({ threadId, profileId }),
-      ).then((state) => {
-        if (state) {
-          upsertThreadState(state);
-          void browserProfileStateQuery.refetch();
-        }
-      });
+      void runBrowserAction(() => api.browser.setThreadProfile({ threadId, profileId })).then(
+        (state) => {
+          if (state) {
+            upsertThreadState(state);
+            void browserProfileStateQuery.refetch();
+          }
+        },
+      );
     },
     [
       activeBrowserProfile?.id,
@@ -786,7 +789,14 @@ export function BrowserPanel({
       await browserProfileStateQuery.refetch();
       toastManager.add({ type: "success", title: "Browser profile deleted" });
     }
-  }, [activeBrowserProfile, api, browserProfileStateQuery, runBrowserAction, threadId, upsertThreadState]);
+  }, [
+    activeBrowserProfile,
+    api,
+    browserProfileStateQuery,
+    runBrowserAction,
+    threadId,
+    upsertThreadState,
+  ]);
 
   // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
   // removing the DOM node so main never keeps a stale webContents runtime.
@@ -1603,306 +1613,306 @@ export function BrowserPanel({
   const header = (
     <>
       <div className="flex min-w-0 flex-1 items-center gap-2">
-      <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-        <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7 shrink-0"
-            disabled={!activeTab?.canGoBack}
-            onClick={() => {
-              if (!ensureLiveRuntime()) return;
-              if (!api || !activeTab) return;
-              void runBrowserAction(() =>
-                api.browser.goBack({ threadId, tabId: activeTab.id }),
-              ).then((state) => {
-                if (state) {
-                  upsertThreadState(state);
-                }
-              });
-            }}
-          >
-            <ArrowLeftIcon className="size-3.5" />
-            <span className="sr-only">Go back</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7 shrink-0"
-            disabled={!activeTab?.canGoForward}
-            onClick={() => {
-              if (!ensureLiveRuntime()) return;
-              if (!api || !activeTab) return;
-              void runBrowserAction(() =>
-                api.browser.goForward({ threadId, tabId: activeTab.id }),
-              ).then((state) => {
-                if (state) {
-                  upsertThreadState(state);
-                }
-              });
-            }}
-          >
-            <ArrowRightIcon className="size-3.5" />
-            <span className="sr-only">Go forward</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-7 shrink-0"
-            disabled={!activeTab}
-            onClick={() => {
-              if (!ensureLiveRuntime()) return;
-              if (!api || !activeTab) return;
-              void runBrowserAction(() =>
-                api.browser.reload({ threadId, tabId: activeTab.id }),
-              ).then((state) => {
-                if (state) {
-                  upsertThreadState(state);
-                }
-              });
-            }}
-          >
-            {loading ? (
-              <LoaderCircleIcon className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCwIcon className="size-3.5" />
-            )}
-            <span className="sr-only">Reload</span>
-          </Button>
-        </div>
-        <form
-          className="min-w-0 flex-1 [-webkit-app-region:no-drag]"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmitAddress();
-          }}
-        >
-          <Input
-            ref={addressInputRef}
-            value={addressValue}
-            onChange={(event) => {
-              if (!isLiveRuntime) {
-                requestLiveRuntime();
-              }
-              const nextValue = event.target.value;
-              isAddressEditingRef.current = true;
-              setAddressValue(nextValue);
-              if (activeTab) {
-                addressDraftsByTabIdRef.current.set(activeTab.id, nextValue);
-              }
-            }}
-            onFocus={() => {
-              if (!isLiveRuntime) {
-                requestLiveRuntime();
-              }
-              isAddressEditingRef.current = true;
-              setIsAddressFocused(true);
-            }}
-            onBlur={() => {
-              isAddressEditingRef.current = false;
-              setIsAddressFocused(false);
-            }}
-            placeholder="Search or enter a URL"
-            className={cn(
-              "min-w-0 [-webkit-app-region:no-drag]",
-              BROWSER_CHROME_CONTROL_CLASS_NAME,
-              BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
-            )}
-          />
-        </form>
-        {showBrowserAddressSuggestions ? (
-          <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-lg border border-border bg-popover shadow-lg [-webkit-app-region:no-drag]">
-            <div className="max-h-64 overflow-auto p-1">
-              {browserAddressSuggestions.map((suggestion) => (
-                <button
-                  key={suggestion.id}
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    onChooseSuggestion(suggestion);
-                  }}
-                >
-                  <span className="flex size-4 shrink-0 items-center justify-center rounded-sm bg-background/80">
-                    {suggestion.kind === "navigate" ? (
-                      <ExternalLinkIcon className="size-3 text-muted-foreground" />
-                    ) : suggestion.faviconUrl ? (
-                      <img alt="" src={suggestion.faviconUrl} className="size-3 rounded-[2px]" />
-                    ) : (
-                      <GlobeIcon className="size-3 text-muted-foreground" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{suggestion.title}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
-                      {suggestion.detail}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-      <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        <BrowserAnnotationButton
-          controller={annotationController}
-          disabled={
-            !isLiveRuntime ||
-            !isElectron ||
-            !workspaceReady ||
-            !activeTab ||
-            showLocalServersHome ||
-            !annotationMethods
-          }
-        />
-        <Button
-          ref={copyScreenshotButtonRef}
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          aria-label="Copy screenshot"
-          title="Copy screenshot"
-          onClick={onCopyScreenshotToClipboard}
-        >
-          <CameraIcon className="size-3.5" />
-          <span className="sr-only">Copy screenshot</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          aria-label="Copy link"
-          title="Copy link"
-          onClick={copyActiveTabLink}
-        >
-          <LinkIcon className="size-3.5" />
-          <span className="sr-only">Copy link</span>
-        </Button>
-        <Menu modal={false}>
-          <MenuTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="size-7"
-                aria-label="Browser actions"
-              />
-            }
-          >
-            <EllipsisIcon className="size-3.5" />
-          </MenuTrigger>
-          <ComposerPickerMenuPopup
-            align="end"
-            side="bottom"
-            className={BROWSER_ACTION_MENU_PANEL_CLASS_NAME}
-          >
-            <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
-              <BrowserActionMenuIcon icon={PlusIcon} />
-              <span>New tab</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-              disabled={!activeTab}
-              onClick={onCaptureScreenshot}
+        <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
+          <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="size-7 shrink-0"
+              disabled={!activeTab?.canGoBack}
+              onClick={() => {
+                if (!ensureLiveRuntime()) return;
+                if (!api || !activeTab) return;
+                void runBrowserAction(() =>
+                  api.browser.goBack({ threadId, tabId: activeTab.id }),
+                ).then((state) => {
+                  if (state) {
+                    upsertThreadState(state);
+                  }
+                });
+              }}
             >
-              <BrowserActionMenuIcon icon={CameraIcon} />
-              <span>Capture screenshot</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+              <ArrowLeftIcon className="size-3.5" />
+              <span className="sr-only">Go back</span>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="size-7 shrink-0"
+              disabled={!activeTab?.canGoForward}
+              onClick={() => {
+                if (!ensureLiveRuntime()) return;
+                if (!api || !activeTab) return;
+                void runBrowserAction(() =>
+                  api.browser.goForward({ threadId, tabId: activeTab.id }),
+                ).then((state) => {
+                  if (state) {
+                    upsertThreadState(state);
+                  }
+                });
+              }}
+            >
+              <ArrowRightIcon className="size-3.5" />
+              <span className="sr-only">Go forward</span>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="size-7 shrink-0"
               disabled={!activeTab}
               onClick={() => {
                 if (!ensureLiveRuntime()) return;
                 if (!api || !activeTab) return;
-                void api.shell.openExternal(activeTab.url);
+                void runBrowserAction(() =>
+                  api.browser.reload({ threadId, tabId: activeTab.id }),
+                ).then((state) => {
+                  if (state) {
+                    upsertThreadState(state);
+                  }
+                });
               }}
             >
-              <BrowserActionMenuIcon icon={ExternalLinkIcon} />
-              <span>Open externally</span>
-            </MenuItem>
-            <MenuSeparator />
-            {isElectron && activeBrowserProfile ? (
-              <>
-                <MenuSub>
-                  <MenuSubTrigger>
-                    <BrowserActionMenuIcon icon={GlobeIcon} />
-                    <span className="min-w-0 flex-1 truncate">
-                      Identity: {activeBrowserProfile.label}
+              {loading ? (
+                <LoaderCircleIcon className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCwIcon className="size-3.5" />
+              )}
+              <span className="sr-only">Reload</span>
+            </Button>
+          </div>
+          <form
+            className="min-w-0 flex-1 [-webkit-app-region:no-drag]"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitAddress();
+            }}
+          >
+            <Input
+              ref={addressInputRef}
+              value={addressValue}
+              onChange={(event) => {
+                if (!isLiveRuntime) {
+                  requestLiveRuntime();
+                }
+                const nextValue = event.target.value;
+                isAddressEditingRef.current = true;
+                setAddressValue(nextValue);
+                if (activeTab) {
+                  addressDraftsByTabIdRef.current.set(activeTab.id, nextValue);
+                }
+              }}
+              onFocus={() => {
+                if (!isLiveRuntime) {
+                  requestLiveRuntime();
+                }
+                isAddressEditingRef.current = true;
+                setIsAddressFocused(true);
+              }}
+              onBlur={() => {
+                isAddressEditingRef.current = false;
+                setIsAddressFocused(false);
+              }}
+              placeholder="Search or enter a URL"
+              className={cn(
+                "min-w-0 [-webkit-app-region:no-drag]",
+                BROWSER_CHROME_CONTROL_CLASS_NAME,
+                BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
+              )}
+            />
+          </form>
+          {showBrowserAddressSuggestions ? (
+            <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-lg border border-border bg-popover shadow-lg [-webkit-app-region:no-drag]">
+              <div className="max-h-64 overflow-auto p-1">
+                {browserAddressSuggestions.map((suggestion) => (
+                  <button
+                    key={suggestion.id}
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground"
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onChooseSuggestion(suggestion);
+                    }}
+                  >
+                    <span className="flex size-4 shrink-0 items-center justify-center rounded-sm bg-background/80">
+                      {suggestion.kind === "navigate" ? (
+                        <ExternalLinkIcon className="size-3 text-muted-foreground" />
+                      ) : suggestion.faviconUrl ? (
+                        <img alt="" src={suggestion.faviconUrl} className="size-3 rounded-[2px]" />
+                      ) : (
+                        <GlobeIcon className="size-3 text-muted-foreground" />
+                      )}
                     </span>
-                  </MenuSubTrigger>
-                  <ComposerPickerMenuSubPopup fixedWidth className="w-64 min-w-64">
-                    <MenuGroup>
-                      <MenuGroupLabel>Browser identity</MenuGroupLabel>
-                      <MenuRadioGroup
-                        value={activeBrowserProfile.id}
-                        onValueChange={selectBrowserProfile}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{suggestion.title}</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {suggestion.detail}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+          <BrowserAnnotationButton
+            controller={annotationController}
+            disabled={
+              !isLiveRuntime ||
+              !isElectron ||
+              !workspaceReady ||
+              !activeTab ||
+              showLocalServersHome ||
+              !annotationMethods
+            }
+          />
+          <Button
+            ref={copyScreenshotButtonRef}
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-7"
+            disabled={!activeTab}
+            aria-label="Copy screenshot"
+            title="Copy screenshot"
+            onClick={onCopyScreenshotToClipboard}
+          >
+            <CameraIcon className="size-3.5" />
+            <span className="sr-only">Copy screenshot</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-7"
+            disabled={!activeTab}
+            aria-label="Copy link"
+            title="Copy link"
+            onClick={copyActiveTabLink}
+          >
+            <LinkIcon className="size-3.5" />
+            <span className="sr-only">Copy link</span>
+          </Button>
+          <Menu modal={false}>
+            <MenuTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-7"
+                  aria-label="Browser actions"
+                />
+              }
+            >
+              <EllipsisIcon className="size-3.5" />
+            </MenuTrigger>
+            <ComposerPickerMenuPopup
+              align="end"
+              side="bottom"
+              className={BROWSER_ACTION_MENU_PANEL_CLASS_NAME}
+            >
+              <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
+                <BrowserActionMenuIcon icon={PlusIcon} />
+                <span>New tab</span>
+              </MenuItem>
+              <MenuItem
+                className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                disabled={!activeTab}
+                onClick={onCaptureScreenshot}
+              >
+                <BrowserActionMenuIcon icon={CameraIcon} />
+                <span>Capture screenshot</span>
+              </MenuItem>
+              <MenuItem
+                className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                disabled={!activeTab}
+                onClick={() => {
+                  if (!ensureLiveRuntime()) return;
+                  if (!api || !activeTab) return;
+                  void api.shell.openExternal(activeTab.url);
+                }}
+              >
+                <BrowserActionMenuIcon icon={ExternalLinkIcon} />
+                <span>Open externally</span>
+              </MenuItem>
+              <MenuSeparator />
+              {isElectron && activeBrowserProfile ? (
+                <>
+                  <MenuSub>
+                    <MenuSubTrigger>
+                      <BrowserActionMenuIcon icon={GlobeIcon} />
+                      <span className="min-w-0 flex-1 truncate">
+                        Identity: {activeBrowserProfile.label}
+                      </span>
+                    </MenuSubTrigger>
+                    <ComposerPickerMenuSubPopup fixedWidth className="w-64 min-w-64">
+                      <MenuGroup>
+                        <MenuGroupLabel>Browser identity</MenuGroupLabel>
+                        <MenuRadioGroup
+                          value={activeBrowserProfile.id}
+                          onValueChange={selectBrowserProfile}
+                        >
+                          {browserProfiles.map((profile) => (
+                            <MenuRadioItem key={profile.id} value={profile.id} preserveChildLayout>
+                              <span className="min-w-0 flex-1 truncate">{profile.label}</span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                                {profile.kind === "persistent" ? "Saved" : "This thread"}
+                              </span>
+                            </MenuRadioItem>
+                          ))}
+                        </MenuRadioGroup>
+                      </MenuGroup>
+                      <MenuSeparator />
+                      <MenuItem
+                        className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                        onClick={() => setProfileDialog({ mode: "create" })}
                       >
-                        {browserProfiles.map((profile) => (
-                          <MenuRadioItem key={profile.id} value={profile.id} preserveChildLayout>
-                            <span className="min-w-0 flex-1 truncate">{profile.label}</span>
-                            <span className="shrink-0 text-[10px] text-muted-foreground">
-                              {profile.kind === "persistent" ? "Saved" : "This thread"}
-                            </span>
-                          </MenuRadioItem>
-                        ))}
-                      </MenuRadioGroup>
-                    </MenuGroup>
-                    <MenuSeparator />
-                    <MenuItem
-                      className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-                      onClick={() => setProfileDialog({ mode: "create" })}
-                    >
-                      <BrowserActionMenuIcon icon={PlusIcon} />
-                      <span>New browser profile</span>
-                    </MenuItem>
-                    {!activeBrowserProfile.builtIn ? (
-                      <>
-                        <MenuItem
-                          className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-                          onClick={() =>
-                            setProfileDialog({ mode: "rename", profile: activeBrowserProfile })
-                          }
-                        >
-                          <BrowserActionMenuIcon icon={GlobeIcon} />
-                          <span>Rename profile</span>
-                        </MenuItem>
-                        <MenuItem
-                          className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-                          onClick={() => void deleteActiveBrowserProfile()}
-                        >
-                          <BrowserActionMenuIcon icon={XIcon} />
-                          <span>Delete profile</span>
-                        </MenuItem>
-                      </>
-                    ) : null}
-                  </ComposerPickerMenuSubPopup>
-                </MenuSub>
-                <MenuItem
-                  className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-                  disabled={activeBrowserProfile.kind !== "persistent"}
-                  onClick={() => void clearActiveBrowserProfileData()}
-                >
-                  <BrowserActionMenuIcon icon={RefreshCwIcon} />
-                  <span>Forget cookies & cache</span>
-                </MenuItem>
-              </>
-            ) : null}
-            <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
-              <BrowserActionMenuIcon icon={XIcon} />
-              <span>Close browser panel</span>
-            </MenuItem>
-          </ComposerPickerMenuPopup>
-        </Menu>
-      </div>
+                        <BrowserActionMenuIcon icon={PlusIcon} />
+                        <span>New browser profile</span>
+                      </MenuItem>
+                      {!activeBrowserProfile.builtIn ? (
+                        <>
+                          <MenuItem
+                            className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                            onClick={() =>
+                              setProfileDialog({ mode: "rename", profile: activeBrowserProfile })
+                            }
+                          >
+                            <BrowserActionMenuIcon icon={GlobeIcon} />
+                            <span>Rename profile</span>
+                          </MenuItem>
+                          <MenuItem
+                            className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                            onClick={() => void deleteActiveBrowserProfile()}
+                          >
+                            <BrowserActionMenuIcon icon={XIcon} />
+                            <span>Delete profile</span>
+                          </MenuItem>
+                        </>
+                      ) : null}
+                    </ComposerPickerMenuSubPopup>
+                  </MenuSub>
+                  <MenuItem
+                    className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                    disabled={activeBrowserProfile.kind !== "persistent"}
+                    onClick={() => void clearActiveBrowserProfileData()}
+                  >
+                    <BrowserActionMenuIcon icon={RefreshCwIcon} />
+                    <span>Forget cookies & cache</span>
+                  </MenuItem>
+                </>
+              ) : null}
+              <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
+                <BrowserActionMenuIcon icon={XIcon} />
+                <span>Close browser panel</span>
+              </MenuItem>
+            </ComposerPickerMenuPopup>
+          </Menu>
+        </div>
       </div>
       <RenameDialog
         open={profileDialog !== null}

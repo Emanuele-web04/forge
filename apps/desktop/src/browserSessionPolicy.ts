@@ -145,7 +145,6 @@ export class BrowserSessionPolicy {
       partitionSession.on("select-webauthn-account", webAuthnListener);
     }
 
-
     this.configuredSessions.set(profile.partition, {
       session: partitionSession,
       willDownloadListener,
