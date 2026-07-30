@@ -33,6 +33,11 @@ interface BrowserProfileStoreState {
   readonly threadProfileIds: Readonly<Record<string, string>>;
 }
 
+interface MutableBrowserProfileStoreState {
+  profiles: StoredCustomBrowserProfile[];
+  threadProfileIds: Record<string, string>;
+}
+
 export interface BrowserProfileStoreOptions {
   /** Omit for an in-memory store, used by isolated tests. */
   readonly storagePath?: string | undefined;
@@ -125,7 +130,7 @@ function parseStoredState(value: unknown): BrowserProfileStoreState | null {
   return { profiles, threadProfileIds };
 }
 
-function cloneState(state: BrowserProfileStoreState): BrowserProfileStoreState {
+function cloneState(state: BrowserProfileStoreState): MutableBrowserProfileStoreState {
   return {
     profiles: state.profiles.map((profile) => ({ ...profile })),
     threadProfileIds: { ...state.threadProfileIds },

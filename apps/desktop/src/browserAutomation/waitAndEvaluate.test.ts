@@ -19,6 +19,7 @@ interface TargetState {
   readonly count?: number;
   readonly attached?: boolean;
   readonly visible?: boolean;
+  readonly enabled?: boolean;
   readonly credentialSurface?: boolean;
   readonly editable?: boolean;
 }

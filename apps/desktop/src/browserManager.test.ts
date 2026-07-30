@@ -19,7 +19,7 @@ const { browserSession, rendererWebContentsById, rendererWebContentsFromId, sess
         clearCache: vi.fn(),
         flushStorageData: vi.fn(),
       },
-      sessionFromPartition: vi.fn(() => browserSession),
+      sessionFromPartition: vi.fn((_partition: string) => browserSession),
       rendererWebContentsById,
       rendererWebContentsFromId: vi.fn((id: number) => rendererWebContentsById.get(id) ?? null),
     };

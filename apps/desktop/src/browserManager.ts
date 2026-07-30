@@ -15,33 +15,33 @@ import {
   WebContentsView,
 } from "electron";
 import type { WebContents } from "electron";
-import type {
-  BrowserAnnotationCancelInput,
-  BrowserAnnotationEvent,
-  BrowserAnnotationSession,
-  BrowserAnnotationStartInput,
-  BrowserAnnotationSyncMarkersInput,
-  BrowserAttachWebviewInput,
-  BrowserClearProfileDataInput,
-  BrowserCreateProfileInput,
-  BrowserDeleteProfileInput,
-  BrowserProfile,
-  BrowserProfileState,
-  BrowserRenameProfileInput,
-  BrowserSetThreadProfileInput,
-  BrowserCaptureScreenshotResult,
-  BrowserCopyLinkEvent,
-  BrowserDetachWebviewInput,
-  BrowserNavigateInput,
-  BrowserNewTabInput,
-  BrowserOpenInput,
-  BrowserPanelBounds,
-  BrowserSetPanelBoundsInput,
-  BrowserTabInput,
-  BrowserTabState,
-  BrowserThreadInput,
-  ThreadBrowserState,
+import {
   ThreadId,
+  type BrowserAnnotationCancelInput,
+  type BrowserAnnotationEvent,
+  type BrowserAnnotationSession,
+  type BrowserAnnotationStartInput,
+  type BrowserAnnotationSyncMarkersInput,
+  type BrowserAttachWebviewInput,
+  type BrowserClearProfileDataInput,
+  type BrowserCreateProfileInput,
+  type BrowserDeleteProfileInput,
+  type BrowserProfile,
+  type BrowserProfileState,
+  type BrowserRenameProfileInput,
+  type BrowserSetThreadProfileInput,
+  type BrowserCaptureScreenshotResult,
+  type BrowserCopyLinkEvent,
+  type BrowserDetachWebviewInput,
+  type BrowserNavigateInput,
+  type BrowserNewTabInput,
+  type BrowserOpenInput,
+  type BrowserPanelBounds,
+  type BrowserSetPanelBoundsInput,
+  type BrowserTabInput,
+  type BrowserTabState,
+  type BrowserThreadInput,
+  type ThreadBrowserState,
 } from "@synara/contracts";
 import { isBrowserCopyLinkChord } from "@synara/shared/browserShortcuts";
 import {
@@ -564,7 +564,8 @@ export class DesktopBrowserManager {
     await this.clearProfile(profile, undefined, true);
     this.sessionPolicy.release(profile);
     const affectedThreadIds = this.profileStore.delete(profile.id);
-    for (const threadId of affectedThreadIds) {
+    for (const rawThreadId of affectedThreadIds) {
+      const threadId = ThreadId.makeUnsafe(rawThreadId);
       const wasOpen = this.states.get(threadId)?.open === true;
       this.close({ threadId });
       const state = this.getOrCreateState(threadId);
