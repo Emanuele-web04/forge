@@ -52,7 +52,17 @@ export function attachEnvironmentShellStream(
  * the root route's subscription, and attaching it twice would double-apply.
  */
 export function createShellAggregator(store: ShellAggregationTarget) {
-  const detachByEnvironmentId = new Map<EnvironmentId, () => void>();
+  // Keyed by environment id, but the CLIENT is held alongside the detach: the
+  // registry replaces a disposed entry with a new client object under the same
+  // id (a logout disposes the transport without deregistering, so this is a
+  // normal occurrence). Keying attachment on the id alone made a replacement
+  // look already-attached, leaving the stored detach pointing at a dead client
+  // whose listener registries `dispose()` had cleared — so the replacement was
+  // never subscribed and that environment's sidebar silently stopped updating.
+  const attachedByEnvironmentId = new Map<
+    EnvironmentId,
+    { readonly client: WsEnvironmentClient; readonly detach: () => void }
+  >();
 
   return {
     sync(clients: readonly WsEnvironmentClient[]): void {
@@ -60,24 +70,28 @@ export function createShellAggregator(store: ShellAggregationTarget) {
       for (const client of clients) {
         if (client.environmentId === LOCAL_ENVIRONMENT_ID) continue;
         present.add(client.environmentId);
-        if (detachByEnvironmentId.has(client.environmentId)) continue;
-        detachByEnvironmentId.set(
-          client.environmentId,
-          attachEnvironmentShellStream(client, store),
-        );
+        const attached = attachedByEnvironmentId.get(client.environmentId);
+        if (attached?.client === client) continue;
+        // A different instance under the same id is a replacement: release the
+        // old subscription before taking one on the new client.
+        attached?.detach();
+        attachedByEnvironmentId.set(client.environmentId, {
+          client,
+          detach: attachEnvironmentShellStream(client, store),
+        });
       }
-      for (const [environmentId, detach] of [...detachByEnvironmentId]) {
+      for (const [environmentId, attached] of [...attachedByEnvironmentId]) {
         if (present.has(environmentId)) continue;
-        detachByEnvironmentId.delete(environmentId);
-        detach();
+        attachedByEnvironmentId.delete(environmentId);
+        attached.detach();
       }
     },
     detachAll(): void {
-      for (const detach of detachByEnvironmentId.values()) detach();
-      detachByEnvironmentId.clear();
+      for (const attached of attachedByEnvironmentId.values()) attached.detach();
+      attachedByEnvironmentId.clear();
     },
     get attachedCount(): number {
-      return detachByEnvironmentId.size;
+      return attachedByEnvironmentId.size;
     },
   };
 }

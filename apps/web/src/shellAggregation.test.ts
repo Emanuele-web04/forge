@@ -104,6 +104,36 @@ describe("shellAggregation", () => {
     expect(store.syncServerShellSnapshot).not.toHaveBeenCalled();
   });
 
+  /**
+   * The registry replaces a disposed entry with a NEW client object under the
+   * SAME environment id (a logout disposes the transport without deregistering,
+   * so this happens in normal use). Keying attachment on the id alone made the
+   * aggregator treat the replacement as already attached: its stored detach
+   * closure still pointed at the dead client, whose listener registries
+   * `dispose()` had cleared, so the replacement's shell stream was never
+   * subscribed and that environment's sidebar section silently froze.
+   */
+  it("re-attaches when a replacement client appears under the same environment id", () => {
+    const store = { syncServerShellSnapshot: vi.fn() };
+    const aggregator = createShellAggregator(store);
+    const first = makeClient(ENVIRONMENT_B);
+
+    aggregator.sync([first.client]);
+    first.emitSnapshot(1, ThreadId.makeUnsafe("thread-1"));
+    expect(store.syncServerShellSnapshot).toHaveBeenCalledTimes(1);
+
+    // The registry disposed the old entry and created a replacement.
+    const replacement = makeClient(ENVIRONMENT_B);
+    aggregator.sync([replacement.client]);
+
+    replacement.emitSnapshot(2, ThreadId.makeUnsafe("thread-1"));
+    expect(store.syncServerShellSnapshot).toHaveBeenCalledTimes(2);
+    // The dead client must be released rather than leaked.
+    expect(first.listenerCount).toBe(0);
+
+    aggregator.detachAll();
+  });
+
   it("attaches new environments and detaches removed ones without touching the rest", () => {
     const store = { syncServerShellSnapshot: vi.fn() };
     const a = makeClient(ENVIRONMENT_A);
