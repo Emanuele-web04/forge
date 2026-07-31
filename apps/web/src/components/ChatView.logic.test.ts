@@ -1802,6 +1802,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
             role: "user",
             text: "an unrelated message",
             createdAt: "2026-04-13T00:00:00.000Z",
+            streaming: false,
           },
         ],
         session: {
@@ -1880,6 +1881,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
             role: "user",
             text: "the submitted message",
             createdAt: "2026-04-13T00:00:01.000Z",
+            streaming: false,
           },
         ],
         session: {
