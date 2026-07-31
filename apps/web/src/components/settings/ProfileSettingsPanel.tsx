@@ -2,24 +2,29 @@
 // Purpose: Local-first profile / stats dashboard rendered inside Settings → Profile. Core
 // stats render instantly from a fast SQL RPC; lifetime/peak token figures and the tokens/day
 // heatmap stream in from a second DB-backed RPC. Centered, low-chrome layout
-// with an explicit edit mode for the local name + handle.
+// with an explicit edit mode for the local name + handle. Chart accents use
+// lightweight SVG (donut mix, insight rings, token sparkline) rather than a chart library.
 // Layer: web profile feature (settings panel body).
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { type ProfileStats, type ProfileTokenStats, type ProviderKind } from "@synara/contracts";
+import { type ProfileStats, type ProfileTokenStats } from "@synara/contracts";
 import {
   serverProfileStatsQueryOptions,
   serverProfileTokenStatsQueryOptions,
 } from "~/lib/serverReactQuery";
 import { CentralIcon } from "~/lib/central-icons";
-import { ProviderIcon } from "~/components/ProviderIcon";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { ActivityHeatmap } from "../profile/ActivityHeatmap";
+import { InsightProgressRings } from "../profile/InsightProgressRings";
+import { ModelUsageDonut } from "../profile/ModelUsageDonut";
 import {
+  formatProviderKindLabel,
   selectProfileHeatmap,
+  selectProfileInsightRings,
   selectProfileModelUsage,
+  selectProfileSparkline,
   selectProfileTopProvider,
 } from "../profile/profileSelectors";
 import { ShareDialog } from "../profile/ShareDialog";
@@ -35,6 +40,7 @@ import {
   formatNumber,
   toDisplayName,
 } from "../profile/profileFormatting";
+import { TokenSparkline } from "../profile/TokenSparkline";
 
 export function ProfileSettingsPanel() {
   const coreQuery = useQuery(serverProfileStatsQueryOptions());
@@ -85,163 +91,201 @@ function ProfileContent({
   const heatmap = selectProfileHeatmap(stats, tokenStats);
   const topProvider = selectProfileTopProvider(stats, tokenStats);
   const modelUsage = selectProfileModelUsage(stats, tokenStats);
+  const sparkline = selectProfileSparkline(stats, tokenStats, 28);
+  const insightRings = selectProfileInsightRings(stats, tokenStats);
   const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour);
   const mostWorkedProjectLabel = formatMostWorkedProjectLabel(stats.mostWorkedProject);
 
   return (
-    <div className="flex min-w-0 flex-col gap-7">
-      {/* Action row */}
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
-          <CentralIcon name="share-os" />
-          Share
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-          <CentralIcon name="pencil" />
-          Edit
-        </Button>
-      </div>
-
-      {/* Centered identity header */}
-      <header className="flex flex-col items-center gap-3 text-center">
-        <ProfileAvatar
-          initials={stats.identity.initials}
-          color={avatarColor}
-          image={avatarImage}
-          className="size-16 shadow-sm"
-          textClassName="text-xl"
-        />
-        <div className="flex flex-col items-center gap-1.5">
-          <h2 className="text-2xl font-semibold tracking-tight">{name}</h2>
-          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <span>{handle}</span>
-            <span aria-hidden>·</span>
-            <span className="rounded-full border px-1.5 py-px text-xs text-muted-foreground">
-              Synara
-            </span>
+    <div className="flex min-w-0 flex-col gap-5">
+      {/* Profile overview */}
+      <section className="overflow-hidden rounded-lg border border-border/60 bg-background/30">
+        <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <header className="flex min-w-0 items-center gap-3">
+            <ProfileAvatar
+              initials={stats.identity.initials}
+              color={avatarColor}
+              image={avatarImage}
+              className="size-12 shadow-sm sm:size-14"
+              textClassName="text-lg"
+            />
+            <div className="flex min-w-0 flex-col gap-1">
+              <h2 className="truncate text-lg font-semibold tracking-tight text-foreground">
+                {name}
+              </h2>
+              <div className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                <span>{handle}</span>
+                <span aria-hidden>·</span>
+                <span className="rounded-full border px-1.5 py-px text-xs text-muted-foreground">
+                  Synara
+                </span>
+              </div>
+            </div>
+          </header>
+          <div className="flex shrink-0 gap-2">
+            <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
+              <CentralIcon name="share-os" />
+              Share
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+              <CentralIcon name="pencil" />
+              Edit
+            </Button>
           </div>
         </div>
-      </header>
 
-      {/* Stat tiles */}
-      <div className="grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
-        <StatTile
-          label="Lifetime tokens"
-          value={tokensPending ? null : formatCompact(tokenStats?.lifetimeTotalTokens ?? null)}
-        />
-        <StatTile
-          label="Peak day"
-          value={tokensPending ? null : formatCompact(tokenStats?.peakDayTokens ?? null)}
-        />
-        <StatTile label="Total prompts" value={formatNumber(stats.activity.totalPromptsSent)} />
-        <StatTile label="Current streak" value={formatDays(stats.activity.currentStreakDays)} />
-        <StatTile label="Longest streak" value={formatDays(stats.activity.longestStreakDays)} />
-      </div>
-
-      {/* Heatmap */}
-      <section className="flex min-w-0 flex-col gap-3">
-        <h3 className="text-sm font-medium">Activity</h3>
-        {tokensPending ? (
-          <Skeleton className="h-28 w-full rounded-lg" />
-        ) : (
-          <ActivityHeatmap
-            cells={heatmap.cells}
-            fill
-            radius={5}
-            gap={3}
-            tooltip
-            tooltipUnit={heatmap.unit}
-            showMonths
-            monthsPosition="bottom"
+        {/* Primary metrics */}
+        <div className="grid grid-cols-2 divide-x divide-y divide-border/50 sm:grid-cols-4 sm:divide-y-0">
+          <StatTile
+            label="Lifetime tokens"
+            value={tokensPending ? null : formatCompact(tokenStats?.lifetimeTotalTokens ?? null)}
+            footer={
+              tokensPending ? (
+                <Skeleton className="h-7 w-full rounded-sm" />
+              ) : (
+                <TokenSparkline
+                  values={sparkline.values}
+                  aria-label={
+                    sparkline.unit === "tokens"
+                      ? "Daily token usage, last 28 days"
+                      : "Daily prompt activity, last 28 days"
+                  }
+                />
+              )
+            }
           />
-        )}
+
+          <StatTile label="Total prompts" value={formatNumber(stats.activity.totalPromptsSent)} />
+          <StatTile label="Current streak" value={formatDays(stats.activity.currentStreakDays)} />
+          <StatTile label="Longest streak" value={formatDays(stats.activity.longestStreakDays)} />
+        </div>
       </section>
 
-      {/* Insights + plugins */}
-      <div className="grid gap-x-12 gap-y-7 md:grid-cols-2">
-        <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium">Activity insights</h3>
-          <dl className="flex flex-col gap-2.5">
-            <InsightRow
-              label="Most used provider"
-              value={
-                topProvider.provider
-                  ? `${formatProviderLabel(topProvider.provider)}${
-                      topProvider.percent !== null ? ` · ${topProvider.percent}%` : ""
-                    }`
-                  : "—"
-              }
+      {/* Activity */}
+      <section className="flex min-w-0 flex-col gap-2">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="text-sm font-medium">Activity</h3>
+          <span className="text-xs text-muted-foreground">Daily activity</span>
+        </div>
+        <div className="rounded-lg border border-border/60 p-4 sm:p-5">
+          {tokensPending ? (
+            <Skeleton className="h-28 w-full rounded-lg" />
+          ) : (
+            <ActivityHeatmap
+              cells={heatmap.cells}
+              fill
+              radius={5}
+              gap={3}
+              tooltip
+              tooltipUnit={heatmap.unit}
+              showMonths
+              monthsPosition="bottom"
             />
-            <InsightRow
-              label="Most used reasoning"
-              value={
-                stats.insights.topReasoning
-                  ? `${capitalize(stats.insights.topReasoning)}${
-                      stats.insights.topReasoningPercent !== null
-                        ? ` · ${stats.insights.topReasoningPercent}%`
-                        : ""
-                    }`
-                  : "—"
-              }
-            />
-            <InsightRow label="Most active hour" value={peakHourLabel} />
-            <InsightRow label="Most worked project" value={mostWorkedProjectLabel} />
-            <InsightRow
-              label="Skills explored"
-              value={formatNumber(stats.insights.skillsExplored)}
-            />
-            <InsightRow
-              label="Total skills used"
-              value={formatNumber(stats.insights.totalSkillsUsed)}
-            />
-            <InsightRow label="Total threads" value={formatNumber(stats.activity.totalThreads)} />
-          </dl>
+          )}
+        </div>
+      </section>
+
+      {/* Insights + skills */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="flex flex-col gap-2">
+          <h3 className="text-sm font-medium">Insights</h3>
+          <div className="flex flex-col gap-4 rounded-lg border border-border/60 p-4 sm:p-5">
+            <InsightProgressRings rings={insightRings.rings} />
+            <dl className="flex flex-col gap-2.5">
+              {/* Rings already carry provider / reasoning share — only fall back to rows when missing. */}
+              {!insightRings.rings.some((ring) => ring.id === "provider") ? (
+                <InsightRow
+                  label="Most used provider"
+                  value={
+                    topProvider.provider
+                      ? `${formatProviderKindLabel(topProvider.provider)}${
+                          topProvider.percent !== null
+                            ? ` · ${formatSharePercent(topProvider.percent)}`
+                            : ""
+                        }`
+                      : "—"
+                  }
+                />
+              ) : null}
+              {!insightRings.rings.some((ring) => ring.id === "reasoning") ? (
+                <InsightRow
+                  label="Most used reasoning"
+                  value={
+                    stats.insights.topReasoning
+                      ? `${capitalize(stats.insights.topReasoning)}${
+                          stats.insights.topReasoningPercent !== null
+                            ? ` · ${formatSharePercent(stats.insights.topReasoningPercent)}`
+                            : ""
+                        }`
+                      : "—"
+                  }
+                />
+              ) : null}
+              <InsightRow label="Most active hour" value={peakHourLabel} />
+              <InsightRow label="Most worked project" value={mostWorkedProjectLabel} />
+              <InsightRow
+                label="Skills explored"
+                value={formatNumber(stats.insights.skillsExplored)}
+              />
+              <InsightRow
+                label="Total skills used"
+                value={formatNumber(stats.insights.totalSkillsUsed)}
+              />
+              <InsightRow label="Total threads" value={formatNumber(stats.activity.totalThreads)} />
+            </dl>
+          </div>
         </section>
 
-        <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium">Most used plugins</h3>
-          {stats.skills.length > 0 ? (
-            <ul className="flex flex-col gap-2.5">
-              {stats.skills.slice(0, 6).map((skill) => (
-                <li
-                  key={`${skill.kind}:${skill.name}`}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <span className="flex min-w-0 items-center gap-2.5">
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
-                      <CentralIcon
-                        name={skill.kind === "agent" ? "agent" : "building-blocks"}
-                        className="size-3"
-                      />
+        <section className="flex flex-col gap-2">
+          <h3 className="text-sm font-medium">Skills and agents</h3>
+          <div className="rounded-lg border border-border/60 p-4 sm:p-5">
+            {stats.skills.length > 0 ? (
+              <ul className="flex flex-col gap-2.5">
+                {stats.skills.slice(0, 6).map((skill) => (
+                  <li
+                    key={`${skill.kind}:${skill.name}`}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
+                        <CentralIcon
+                          name={skill.kind === "agent" ? "agent" : "building-blocks"}
+                          className="size-3"
+                        />
+                      </span>
+                      <span className="truncate text-sm">{skill.displayName}</span>
                     </span>
-                    <span className="truncate text-sm">{skill.displayName}</span>
-                  </span>
-                  <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                    {formatNumber(skill.runCount)} runs
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">No skills or agents used yet.</p>
-          )}
+                    <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+                      {formatNumber(skill.runCount)} runs
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">No skills or agents used yet.</p>
+            )}
+          </div>
         </section>
       </div>
 
       {/* Model usage */}
-      <section className="flex flex-col gap-3">
-        <h3 className="text-sm font-medium">Model usage</h3>
+      <section className="flex flex-col gap-2">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="text-sm font-medium">Model usage</h3>
+          {modelUsage.entries.length > 0 ? (
+            <span className="text-xs text-muted-foreground">
+              by {modelUsage.metric === "tokens" ? "tokens" : "turns"}
+            </span>
+          ) : null}
+        </div>
         {modelUsage.entries.length > 0 ? (
-          <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
-            {modelUsage.entries.slice(0, 6).map((entry) => (
-              <ModelUsageRow
-                key={`${entry.provider}:${entry.model}`}
-                provider={entry.provider}
-                model={entry.model}
-                percent={entry.percent}
-              />
-            ))}
-          </ul>
+          <div className="rounded-lg border border-border/60 p-4 sm:p-5">
+            <ModelUsageDonut
+              entries={modelUsage.entries}
+              metric={modelUsage.metric}
+              totalWeight={modelUsage.totalWeight}
+            />
+          </div>
         ) : (
           <p className="text-sm text-muted-foreground">No model activity yet.</p>
         )}
@@ -284,15 +328,24 @@ function ProfileContent({
 
 // ── Small pieces ───────────────────────────────────────────────────────
 
-function StatTile({ label, value }: { label: string; value: string | null }) {
+function StatTile({
+  label,
+  value,
+  footer,
+}: {
+  label: string;
+  value: string | null;
+  footer?: ReactNode;
+}) {
   return (
-    <div className="flex flex-col items-center gap-0.5 px-3 py-3">
+    <div className="flex flex-col items-center gap-1.5 px-3 py-3">
       {value === null ? (
         <Skeleton className="h-4 w-12" />
       ) : (
         <span className="text-sm font-normal tabular-nums text-foreground">{value}</span>
       )}
       <span className="text-sm font-normal text-muted-foreground">{label}</span>
+      {footer ? <div className="mt-0.5 w-full max-w-30">{footer}</div> : null}
     </div>
   );
 }
@@ -327,59 +380,9 @@ function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]
   return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
 }
 
-function formatProviderLabel(provider: ProviderKind): string {
-  switch (provider) {
-    case "codex":
-      return "Codex";
-    case "claudeAgent":
-      return "Claude";
-    case "cursor":
-      return "Cursor";
-    case "antigravity":
-      return "Antigravity";
-    case "grok":
-      return "Grok";
-    case "droid":
-      return "Droid";
-    case "kilo":
-      return "Kilo";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "Pi";
-  }
-}
-
-function ModelUsageRow({
-  provider,
-  model,
-  percent,
-}: {
-  provider: ProviderKind | "unknown";
-  model: string;
-  percent: number;
-}) {
-  return (
-    <li className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="flex min-w-0 items-center gap-2">
-          {provider !== "unknown" ? (
-            <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
-          ) : (
-            <CentralIcon name="chart-2" className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate">{model}</span>
-        </span>
-        <span className="shrink-0 tabular-nums text-muted-foreground">{percent}%</span>
-      </div>
-      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full rounded-full bg-[var(--info)]"
-          style={{ width: `${Math.min(100, Math.max(2, percent))}%` }}
-        />
-      </div>
-    </li>
-  );
+function formatSharePercent(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
 }
 
 function ProfileSkeleton() {
@@ -390,12 +393,13 @@ function ProfileSkeleton() {
         <Skeleton className="h-6 w-40" />
         <Skeleton className="h-3 w-24" />
       </div>
-      <Skeleton className="h-[72px] w-full rounded-2xl" />
+      <Skeleton className="h-18 w-full rounded-2xl" />
       <Skeleton className="h-24 w-full rounded-lg" />
       <div className="grid w-full gap-7 md:grid-cols-2">
         <Skeleton className="h-40 w-full rounded-lg" />
         <Skeleton className="h-40 w-full rounded-lg" />
       </div>
+      <Skeleton className="h-48 w-full rounded-2xl" />
     </div>
   );
 }

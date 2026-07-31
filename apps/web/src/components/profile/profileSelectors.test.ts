@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   selectProfileHeatmap,
+  selectProfileInsightRings,
   selectProfileModelUsage,
+  selectProfileSparkline,
   selectProfileTopProvider,
 } from "./profileSelectors";
 
@@ -43,8 +45,8 @@ const baseStats = {
   insights: {
     topProvider: "codex",
     topProviderPercent: 66.7,
-    topReasoning: null,
-    topReasoningPercent: null,
+    topReasoning: "high",
+    topReasoningPercent: 54.2,
     skillsExplored: 0,
     totalSkillsUsed: 0,
   },
@@ -94,8 +96,22 @@ describe("profile selectors", () => {
       unit: "tokens",
     });
     expect(selectProfileModelUsage(baseStats, tokenStats)).toEqual({
-      entries: tokenStats.models,
+      entries: [
+        {
+          provider: "claudeAgent",
+          model: "claude-sonnet-4-6",
+          percent: 83.3,
+          weight: 5000,
+        },
+        {
+          provider: "codex",
+          model: "gpt-5-codex",
+          percent: 16.7,
+          weight: 1000,
+        },
+      ],
       metric: "tokens",
+      totalWeight: 6000,
     });
   });
 
@@ -110,15 +126,95 @@ describe("profile selectors", () => {
       unit: "prompts",
     });
     expect(selectProfileModelUsage(baseStats, null)).toEqual({
-      entries: baseStats.providerModels,
+      entries: [
+        {
+          provider: "codex",
+          model: "gpt-5-codex",
+          percent: 66.7,
+          weight: 2,
+        },
+        {
+          provider: "claudeAgent",
+          model: "claude-sonnet-4-6",
+          percent: 33.3,
+          weight: 1,
+        },
+      ],
       metric: "turns",
+      totalWeight: 3,
     });
   });
 
   it("falls back to turn-based model usage when token telemetry has no model rows", () => {
     expect(selectProfileModelUsage(baseStats, { ...tokenStats, models: [] })).toEqual({
-      entries: baseStats.providerModels,
+      entries: [
+        {
+          provider: "codex",
+          model: "gpt-5-codex",
+          percent: 66.7,
+          weight: 2,
+        },
+        {
+          provider: "claudeAgent",
+          model: "claude-sonnet-4-6",
+          percent: 33.3,
+          weight: 1,
+        },
+      ],
       metric: "turns",
+      totalWeight: 3,
     });
+  });
+
+  it("builds a sparkline window from the preferred heatmap series", () => {
+    expect(selectProfileSparkline(baseStats, tokenStats, 28)).toEqual({
+      values: [6000],
+      unit: "tokens",
+      hasActivity: true,
+    });
+    expect(selectProfileSparkline(baseStats, null, 28)).toEqual({
+      values: [3],
+      unit: "prompts",
+      hasActivity: true,
+    });
+  });
+
+  it("selects percentage insight rings for provider and reasoning", () => {
+    expect(selectProfileInsightRings(baseStats, tokenStats)).toEqual({
+      rings: [
+        {
+          id: "provider",
+          label: "Claude",
+          detail: "Most used provider",
+          percent: 83.3,
+        },
+        {
+          id: "reasoning",
+          label: "High",
+          detail: "Most used reasoning",
+          percent: 54.2,
+        },
+      ],
+    });
+  });
+
+  it("omits insight rings when percentages are missing", () => {
+    const statsWithoutShares = {
+      ...baseStats,
+      insights: {
+        ...baseStats.insights,
+        topProvider: null,
+        topProviderPercent: null,
+        topReasoning: null,
+        topReasoningPercent: null,
+      },
+    } satisfies ProfileStats;
+    expect(
+      selectProfileInsightRings(statsWithoutShares, {
+        ...tokenStats,
+        topProvider: null,
+        topProviderPercent: null,
+      }),
+    ).toEqual({ rings: [] });
   });
 });
