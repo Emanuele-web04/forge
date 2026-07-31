@@ -46,7 +46,13 @@ export function isLocalOnlyDeployment(config: RemoteAccessDeployment): boolean {
  * deployment; it can never remove it.
  */
 export function requiresSessionAuthentication(config: AuthenticatedDeployment): boolean {
-  return isRemoteReachableDeployment(config) || Boolean(config.authToken);
+  // Trimmed to match `remoteAccessPolicyError` below, which also tests the
+  // trimmed token. Config construction already normalizes whitespace away, so
+  // this is defense in depth: if the two disagreed, a whitespace-only token
+  // would be absent to the startup gate (loopback startup succeeds, no pairing
+  // link printed) and present here (every request needs a session), locking a
+  // loopback user out with no way back in.
+  return isRemoteReachableDeployment(config) || Boolean(config.authToken?.trim());
 }
 
 export function normalizeHttpsPublicOrigin(publicUrl: URL): URL | null {

@@ -194,6 +194,30 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
+  // A stray space in a .env or a shell quoting slip must not produce a token
+  // that the startup gate reads as absent (it trims) while enforcement reads it
+  // as present (it does not). On a loopback bind that combination locks the user
+  // out: auth is required, no pairing link is printed, and the browser is
+  // refused with no recovery path. Normalizing at construction is what keeps
+  // every reader agreeing that whitespace is no token.
+  it.effect("treats a whitespace-only auth token as no token at all", () =>
+    Effect.gen(function* () {
+      yield* runCli(["--auth-token", "   "]);
+
+      assert.equal(start.mock.calls.length, 1);
+      assert.equal(resolvedConfig?.authToken, undefined);
+    }),
+  );
+
+  it.effect("trims surrounding whitespace from a real auth token", () =>
+    Effect.gen(function* () {
+      yield* runCli(["--auth-token", "  padded-secret  "]);
+
+      assert.equal(start.mock.calls.length, 1);
+      assert.equal(resolvedConfig?.authToken, "padded-secret");
+    }),
+  );
+
   it.effect("passes the root --home-dir flag to MCP subcommands", () =>
     Effect.gen(function* () {
       const flagHome = makeTempHome("synara-main-mcp-flag-");

@@ -2,6 +2,29 @@
 // Purpose: Keep recently used thread-detail subscriptions warm across route/sidebar switches.
 // Layer: Web subscription retention utility
 // Exports: retain/release helpers, the connection lease selector, and a React listener.
+//
+// KNOWN GAP — this module is single-environment while the shell layer is not.
+// The shell snapshot fence, thread ownership and resume cursors are all keyed by
+// EnvironmentId, but everything here is keyed by ThreadId alone and every cursor
+// read resolves through `localThreadDetailResumeCursors()`. That is safe only
+// because no product code registers a remote environment yet (the settings UI is
+// issue #7); `ensureWsEnvironmentClient` with a non-local id appears only in
+// tests.
+//
+// It is already reachable in principle: `serverThreadIds` in routes/__root.tsx
+// comes from `createAllThreadsSelector`, which reads `state.threadIds` — and the
+// shell aggregator deliberately merges every environment's threads into that one
+// list. So this selector is handed remote thread ids today and answers them with
+// local cursor state.
+//
+// Before any remote environment can be registered, retention/prewarm/lease must
+// be keyed by (EnvironmentId, ThreadId), resolving the scope via
+// `state.environmentIdByThreadId`. Sequences are per-server SQLite autoincrement
+// values with no cross-server ordering, so a cursor written into the wrong
+// environment's map resumes against an unrelated sequence space — the server's
+// gap check accepts it and streams nothing, leaving a silently empty
+// conversation. ThreadId is not proven unique across servers either, so the
+// thread-keyed maps here would conflate two servers' threads outright.
 
 import { WS_STREAM_LIMITS, type ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
@@ -359,6 +382,7 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
     // reset can invalidate a speculative hold with nothing re-rendering. A
     // speculative-only entry without a cursor would open a full-history stream —
     // one per prewarmed thread on every restart.
+    // Local-only cursor read; see the KNOWN GAP note at the top of this file.
     if (isSpeculativeOnlyRetain(threadId) && !localThreadDetailResumeCursors().has(threadId)) {
       continue;
     }

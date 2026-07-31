@@ -38,7 +38,10 @@ export interface SpeculativeThreadDetailRetainOptions {
  *
  * Cursors and their reset notice are environment-scoped; this reads the local
  * environment because sidebar prewarm is not environment-aware yet. Injecting
- * both hooks keeps the seam explicit for when it becomes so.
+ * both hooks keeps the seam explicit for when it becomes so. That seam must be
+ * closed — the retain keyed by (EnvironmentId, ThreadId) — before any remote
+ * environment can be registered; see the KNOWN GAP note at the top of
+ * threadDetailSubscriptionRetention.ts.
  *
  * Returns null when the thread is not eligible, so callers cannot accidentally
  * hold a retain they never took.

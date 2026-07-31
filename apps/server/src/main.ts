@@ -223,7 +223,15 @@ const ServerConfigLive = (input: CliInput) =>
           new StartupError({ message: "Failed to secure Synara's local state directory", cause }),
       });
       const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
-      const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+      // Normalized once, here, because three call sites disagree otherwise: the
+      // startup gate tests `!authToken?.trim()` while enforcement and the legacy
+      // query-token check test the raw value. A whitespace-only token would then
+      // be absent to the gate (so startup succeeds and no pairing link is
+      // printed) but present to enforcement (so every request needs a session) —
+      // a loopback user locked out with no recovery path by a stray space in a
+      // .env. A token that is only whitespace is no token, everywhere.
+      const authToken =
+        (Option.getOrUndefined(input.authToken) ?? env.authToken)?.trim() || undefined;
       const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
       const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,

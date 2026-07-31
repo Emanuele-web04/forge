@@ -80,6 +80,9 @@ export function createThreadDetailPrewarmController(
   // A speculative prewarm subscription is only cheap when it resumes from a
   // cursor: without cached detail it would open a full-history snapshot stream
   // and compete with real navigation for the per-client thread-stream budget.
+  // Local-only cursor read: this must be keyed by (EnvironmentId, ThreadId)
+  // before a remote environment can be registered — see the KNOWN GAP note at
+  // the top of threadDetailSubscriptionRetention.ts.
   const canRetainThreadDetail =
     options.canPrewarmThreadDetail ??
     ((threadId) => localThreadDetailResumeCursors().has(threadId));

@@ -92,6 +92,25 @@ describe("session authentication policy", () => {
       true,
     );
   });
+
+  /**
+   * The counterpart to the remote-bind whitespace case in the startup-policy
+   * block below, and the axis that was uncovered: whitespace on a LOOPBACK
+   * bind. The startup gate trims, so it reads "   " as absent and lets the
+   * server boot with no pairing link. If enforcement did not also trim it would
+   * read the same value as present and demand a session — on a bind that prints
+   * no pairing link and whose legacy `?token=` path only matches the literal
+   * spaces. That is a total lockout produced by a stray space in a .env.
+   *
+   * Config construction normalizes this away; both predicates trim as well, so
+   * the lockout cannot be reintroduced by a reader that bypasses construction.
+   */
+  it("keeps a loopback bind implicit-owner when the token is only whitespace", () => {
+    for (const authToken of ["   ", "\t", "\n", " \t\n "]) {
+      expect(requiresSessionAuthentication({ ...loopbackBase, authToken })).toBe(false);
+      expect(remoteAccessPolicyError({ ...loopbackBase, authToken })).toBeNull();
+    }
+  });
 });
 
 describe("remote access startup policy", () => {
