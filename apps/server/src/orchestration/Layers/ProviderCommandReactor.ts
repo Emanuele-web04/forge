@@ -710,9 +710,7 @@ const make = Effect.gen(function* () {
         lastError: input.detail,
         updatedAt: input.createdAt,
       },
-      ...(input.expectedSession !== undefined
-        ? { expectedSession: input.expectedSession }
-        : {}),
+      ...(input.expectedSession !== undefined ? { expectedSession: input.expectedSession } : {}),
       createdAt: input.createdAt,
     });
   });
