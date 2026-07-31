@@ -48,6 +48,7 @@ import {
   localThreadDetailResumeCursors,
   resetThreadDetailResumeCursorsForTests,
   threadDetailResumeCursors,
+  type ThreadDetailResumeCursorScope,
 } from "./threadDetailResumeCursors";
 import {
   addWsCompatibilityIssueListener,
@@ -149,6 +150,8 @@ interface WsTransportInternals {
   readonly activeThreadStreamInputs: Map<string, unknown>;
   readonly threadSubscriptions: Map<string, unknown>;
   readonly threadStreamFailureListeners: Set<(failure: WsThreadStreamFailure) => void>;
+  resumeCursors: ThreadDetailResumeCursorScope;
+  refreshThreadSubscriptionInput(threadId: string): unknown;
   disposed: boolean;
   sessionVersion: number;
   reconnect(): Promise<unknown>;
@@ -593,6 +596,41 @@ describe("WsTransport", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * The reconnect path rebuilds each live subscription's input from the CURRENT
+   * cursor state rather than replaying what it last sent. That matters most
+   * right after a server-generation change: `adoptNegotiation` has just wiped
+   * the cursors, so a replayed input would ask the replacement server to resume
+   * from a sequence in the previous journal's space — the resume it accepts
+   * while having no such history, which streams nothing.
+   *
+   * The helper was pre-existing; this reconnect call site is new and was
+   * unpinned — mutating it to reuse the stored input left all transport tests
+   * green.
+   */
+  it("rebuilds a thread subscription input after the cursors are reset", () => {
+    const { internals } = makeBareTransport();
+    const threadId = "thread-regenerated";
+    const cursors = threadDetailResumeCursors(LOCAL_ENVIRONMENT_ID);
+    internals.resumeCursors = cursors;
+
+    cursors.set(ThreadId.makeUnsafe(threadId), 42);
+    internals.threadSubscriptions.set(threadId, { threadId, afterSequence: 42 });
+    expect(internals.refreshThreadSubscriptionInput(threadId)).toEqual({
+      threadId,
+      afterSequence: 42,
+    });
+
+    // The server generation changed; every cursor is dropped.
+    cursors.resetAll();
+
+    // The next resubscribe must ask for a full snapshot, not replay 42.
+    expect(internals.refreshThreadSubscriptionInput(threadId)).toEqual({ threadId });
+    expect(internals.threadSubscriptions.get(threadId)).toEqual({ threadId });
+
+    resetThreadDetailResumeCursorsForTests();
   });
 
   it("does not let stale or duplicate thread restarts replace the active stream", async () => {

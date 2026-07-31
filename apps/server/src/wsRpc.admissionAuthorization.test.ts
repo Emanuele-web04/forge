@@ -10,7 +10,7 @@ import {
 } from "@synara/contracts";
 import { Effect, Schema } from "effect";
 import { Headers } from "effect/unstable/http";
-import { Rpc } from "effect/unstable/rpc";
+import { Rpc, RpcSchema } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
 
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "./managedAttachmentPrincipal";
@@ -43,6 +43,7 @@ function runMiddleware(input: {
   readonly config: RemoteAccessDeployment;
   readonly registerSession?: boolean;
   readonly buildSkewed?: boolean;
+  readonly stream?: boolean;
 }) {
   let handlerRan = false;
   const session: WsConnectionSession = {
@@ -60,10 +61,21 @@ function runMiddleware(input: {
     },
     config: input.config,
   });
-  const rpc = Rpc.make(input.method, {
-    payload: Schema.Struct({}),
-    success: Schema.String,
-  }) as unknown as Rpc.AnyWithProps;
+  // Streaming rpcs take a different branch in the middleware — authorization
+  // runs first, then only NON-stream rpcs are wrapped in `admission.guard`. The
+  // harness built non-stream rpcs only, so the whole stream path was unpinned
+  // while the code comment claimed central enforcement covers "including
+  // streaming ones". Streams are where it matters most: subscribeThread and
+  // gitRunStackedAction are streams.
+  const rpc = (input.stream === true
+    ? Rpc.make(input.method, {
+        payload: Schema.Struct({}),
+        success: RpcSchema.Stream(Schema.String, Schema.Never),
+      })
+    : Rpc.make(input.method, {
+        payload: Schema.Struct({}),
+        success: Schema.String,
+      })) as unknown as Rpc.AnyWithProps;
   const effect = Effect.sync(() => {
     handlerRan = true;
     return "ok";
@@ -86,6 +98,71 @@ function runMiddleware(input: {
  * so this step — the only server-side classification there is — was unpinned:
  * making it return `false` left 92 tests green across six files.
  */
+/**
+ * The same authorization decisions, on the streaming branch. The middleware
+ * runs `authorizeWsMethod` before it decides whether to wrap in
+ * `admission.guard`, so a stream must be refused on exactly the same terms —
+ * but nothing proved that, because the harness only ever built non-stream rpcs.
+ */
+describe("ws admission middleware authorization for streaming rpcs", () => {
+  it("admits a client-allowed stream", () => {
+    const { exit, handlerRan } = runMiddleware({
+      method: ORCHESTRATION_WS_METHODS.subscribeThread,
+      role: "client",
+      config: remote,
+      stream: true,
+    });
+    expect(exit._tag).toBe("Success");
+    expect(handlerRan).toBe(true);
+  });
+
+  it("refuses an owner-only stream for a non-owner", () => {
+    const { exit, handlerRan } = runMiddleware({
+      method: WS_METHODS.serverStopLocalServer,
+      role: "client",
+      config: loopback,
+      stream: true,
+    });
+    expect(exit._tag).toBe("Failure");
+    expect(handlerRan).toBe(false);
+  });
+
+  it("refuses an unclassified stream for a client", () => {
+    const { exit, handlerRan } = runMiddleware({
+      method: "orchestration.someFutureStream",
+      role: "client",
+      config: loopback,
+      stream: true,
+    });
+    expect(exit._tag).toBe("Failure");
+    expect(handlerRan).toBe(false);
+  });
+
+  it("refuses a mutating stream from a skewed session", () => {
+    const { exit, handlerRan } = runMiddleware({
+      method: WS_METHODS.gitRunStackedAction,
+      role: "owner",
+      config: loopback,
+      buildSkewed: true,
+      stream: true,
+    });
+    expect(exit._tag).toBe("Failure");
+    expect(handlerRan).toBe(false);
+  });
+
+  it("still admits a read-only stream from a skewed session", () => {
+    const { exit, handlerRan } = runMiddleware({
+      method: ORCHESTRATION_WS_METHODS.subscribeThread,
+      role: "owner",
+      config: loopback,
+      buildSkewed: true,
+      stream: true,
+    });
+    expect(exit._tag).toBe("Success");
+    expect(handlerRan).toBe(true);
+  });
+});
+
 describe("ws upgrade build-skew classification", () => {
   const paramsFor = (clientBuild: string) =>
     new URLSearchParams({ [WS_COMPATIBILITY_QUERY.clientBuild]: clientBuild });
