@@ -43,6 +43,7 @@ import {
   type WsThreadStreamFailure,
 } from "./wsTransport";
 import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
+import { useStore } from "./store";
 import {
   localThreadDetailResumeCursors,
   resetThreadDetailResumeCursorsForTests,
@@ -1063,6 +1064,47 @@ describe("WsTransport", () => {
     await transport.dispose();
   }, 10_000);
 
+  /**
+   * The session-version half of `openSession`'s guard. A superseded attempt must
+   * not adopt its negotiation or announce itself open over the session that
+   * replaced it: the newer session owns the runtime and the streams, and a late
+   * `setState("open")` from a dead attempt would report a socket nobody holds.
+   *
+   * Pinned because the guard was previously unpinned — deleting the
+   * `sessionVersion` comparison left the whole transport suite green.
+   */
+  it("abandons a session that a newer one superseded mid-negotiation", async () => {
+    // Captured via the resolver itself rather than a closure variable: TS
+    // narrows a `let` assigned only inside a callback to its initializer.
+    const negotiationResolvers: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          negotiationResolvers.push(resolve);
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport("ws://localhost:3020");
+    const internals = transport as unknown as {
+      sessionVersion: number;
+      compatibility: WsBootstrapNegotiateResult | null;
+      clientPromise: Promise<unknown>;
+    };
+    void internals.clientPromise.catch(() => undefined);
+
+    // A newer session starts while the first is still negotiating.
+    internals.sessionVersion += 1;
+    negotiationResolvers[0]?.(jsonResponse(200, NEGOTIATION_RESULT));
+
+    await expect(internals.clientPromise).rejects.toThrow("superseded");
+    // The superseded attempt must not have adopted anything.
+    expect(internals.compatibility).toBeNull();
+    expect(transport.getState()).not.toBe("open");
+
+    await transport.dispose();
+  }, 10_000);
+
   it("mirrors the negotiate endpoint onto the WS host with an HTTP scheme", () => {
     const url = new URL(makeNegotiateHttpUrl("wss://remote.example:8443/?token=old"));
 
@@ -1133,6 +1175,8 @@ describe("WsTransport", () => {
     const thread = ThreadId.makeUnsafe("thread-shared");
     localCursors.set(thread, 42);
     remoteCursors.set(thread, 7);
+    // A fence the old journal issued; the restart must invalidate it.
+    useStore.setState({ shellSnapshotSequence: 500 });
 
     const transport = new WsTransport({ url: "ws://localhost:3020" });
     const internals = transport as unknown as {
@@ -1153,6 +1197,11 @@ describe("WsTransport", () => {
 
     expect(localCursors.get(thread)).toBeUndefined();
     expect(remoteCursors.get(thread)).toBe(7);
+    // The shell fence is invalidated by the same event and for the same reason:
+    // it is a high-water mark in the journal that just went away. Left behind,
+    // the replacement server's lower snapshots are all rejected as stale and the
+    // sidebar keeps rendering content that server no longer holds.
+    expect(useStore.getState().shellSnapshotSequence).toBe(0);
 
     await transport.dispose();
     resetThreadDetailResumeCursorsForTests();

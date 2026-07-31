@@ -1102,6 +1102,69 @@ function threadIdsOutsideEnvironment(
 }
 
 /**
+ * Clears one environment's shell snapshot fence.
+ *
+ * The fence is generation-sensitive state exactly like a resume cursor: it is a
+ * high-water mark in a journal's sequence space, and a replacement server may
+ * serve a journal whose sequences restart low. Keeping it across a generation
+ * change makes every snapshot from the new server look stale, so the store
+ * silently rejects them and keeps rendering content the server no longer holds
+ * — a sidebar that is not merely frozen but wrong, with no error surfaced.
+ *
+ * Only the fence: on a generation change a fresh snapshot is already in flight,
+ * and accepting it prunes the stale rows naturally. Dropping the rows here as
+ * well would blank the sidebar for the round trip and buy nothing.
+ */
+export function clearEnvironmentShellFence(
+  state: AppState,
+  environmentId: EnvironmentId,
+): AppState {
+  if (environmentId === LOCAL_ENVIRONMENT_ID) {
+    return state.shellSnapshotSequence === 0 ? state : { ...state, shellSnapshotSequence: 0 };
+  }
+  const previous = state.shellSnapshotSequenceByEnvironmentId ?? {};
+  if (!(environmentId in previous)) return state;
+  const { [environmentId]: _dropped, ...rest } = previous;
+  return { ...state, shellSnapshotSequenceByEnvironmentId: rest };
+}
+
+/**
+ * Drops an environment entirely: its fence and the rows it owned.
+ *
+ * Teardown differs from a generation change in the one way that matters — no
+ * snapshot is coming. Rows left behind would keep showing threads attributed to
+ * a server that is gone, and nothing would ever prune them, so they are dropped
+ * here rather than waiting for a sync that never arrives.
+ */
+export function discardEnvironmentProjection(
+  state: AppState,
+  environmentId: EnvironmentId,
+): AppState {
+  const survivingThreadIds = threadIdsOutsideEnvironment(state, environmentId);
+  const withoutFence = clearEnvironmentShellFence(state, environmentId);
+  const ownerByThreadId = withoutFence.environmentIdByThreadId ?? {};
+  const nextOwnerByThreadId: Record<string, string> = {};
+  for (const [threadId, owner] of Object.entries(ownerByThreadId)) {
+    if (owner !== environmentId) nextOwnerByThreadId[threadId] = owner;
+  }
+  return {
+    ...withoutFence,
+    threadIds: reuseThreadIdRegistry(withoutFence.threadIds, survivingThreadIds),
+    threadShellById: retainThreadScopedRecord(withoutFence.threadShellById, survivingThreadIds),
+    threadSessionById: retainThreadScopedRecord(withoutFence.threadSessionById, survivingThreadIds),
+    threadTurnStateById: retainThreadScopedRecord(
+      withoutFence.threadTurnStateById,
+      survivingThreadIds,
+    ),
+    sidebarThreadSummaryById: retainThreadScopedRecord(
+      withoutFence.sidebarThreadSummaryById,
+      survivingThreadIds,
+    ),
+    environmentIdByThreadId: nextOwnerByThreadId,
+  };
+}
+
+/**
  * Drops thread/project tombstones that `snapshot` has authoritatively confirmed absent.
  *
  * The sequence guard here only keeps retirement honest; it is not what stops a stale snapshot from

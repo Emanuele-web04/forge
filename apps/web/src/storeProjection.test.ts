@@ -18,7 +18,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   applyShellEvent,
+  clearEnvironmentShellFence,
   clearThreadDetailSyncFailureInClientState,
+  discardEnvironmentProjection,
   evictThreadDetailFromClientState,
   markThreadDetailSyncFailedInClientState,
   removeDeletedProjectFromClientState,
@@ -2374,16 +2376,91 @@ describe("multi-environment shell aggregation", () => {
     expect(rehydrated.threadIds).toContain(localThreadId);
   });
 
+  /**
+   * Replaces a test that was named for teardown but never performed any: it
+   * hydrated a remote fence at 500 and then asserted the fence WAS 500, so it
+   * pinned the bug rather than the fix.
+   */
   it("clears a remote fence with the environment's own registry teardown", () => {
-    // The remote half of the same concern: a remote fence lives in the map, and
-    // nothing in a local store reset should be expected to clear it.
     const hydrated = syncServerShellSnapshot(
       emptyState(),
       { ...makeShellSnapshot(shellThread(remoteThreadId, "Remote")), snapshotSequence: 500 },
       remoteEnvironmentId,
     );
-
     expect(hydrated.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId]).toBe(500);
-    expect(hydrated.shellSnapshotSequence).toBe(0);
+
+    const afterTeardown = discardEnvironmentProjection(hydrated, remoteEnvironmentId);
+
+    // The fence is gone, so a re-registered server starting low is believed.
+    expect(
+      afterTeardown.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId],
+    ).toBeUndefined();
+    // ...and so are the rows it owned: no snapshot is coming to prune them.
+    expect(afterTeardown.threadIds).not.toContain(remoteThreadId);
+    expect(afterTeardown.sidebarThreadSummaryById?.[remoteThreadId]).toBeUndefined();
+    expect(afterTeardown.environmentIdByThreadId?.[remoteThreadId]).toBeUndefined();
+  });
+
+  it("keeps the local environment's rows and fence when a remote is torn down", () => {
+    const withLocal = syncServerShellSnapshot(emptyState(), {
+      ...makeShellSnapshot(shellThread(localThreadId, "Local")),
+      snapshotSequence: 42,
+    });
+    const withBoth = syncServerShellSnapshot(
+      withLocal,
+      { ...makeShellSnapshot(shellThread(remoteThreadId, "Remote")), snapshotSequence: 500 },
+      remoteEnvironmentId,
+    );
+
+    const afterTeardown = discardEnvironmentProjection(withBoth, remoteEnvironmentId);
+
+    // Teardown is scoped: the surviving environment's journal did not change.
+    expect(afterTeardown.threadIds).toContain(localThreadId);
+    expect(afterTeardown.shellSnapshotSequence).toBe(42);
+  });
+
+  /**
+   * The critical this pair exists for: a server restored from backup restarts
+   * its journal low. Without clearing the fence the store silently rejects
+   * every snapshot from the replacement and keeps rendering content that server
+   * no longer holds — stale, not merely frozen, and with no error surfaced.
+   */
+  it("believes a restored server's low snapshot once the generation change clears the fence", () => {
+    const before = syncServerShellSnapshot(emptyState(), {
+      ...makeShellSnapshot(shellThread(localThreadId, "Before restore")),
+      snapshotSequence: 500,
+    });
+    expect(before.shellSnapshotSequence).toBe(500);
+
+    // adoptNegotiation observes a new serverInstanceId and clears the fence.
+    const reset = clearEnvironmentShellFence(before, LOCAL_ENVIRONMENT_ID);
+
+    const after = syncServerShellSnapshot(reset, {
+      ...makeShellSnapshot(shellThread(localThreadId, "After restore")),
+      snapshotSequence: 2,
+    });
+
+    expect(after.shellSnapshotSequence).toBe(2);
+    expect(after.sidebarThreadSummaryById?.[localThreadId]?.title).toBe("After restore");
+  });
+
+  it("clears a remote environment's fence without touching the local one", () => {
+    const withLocal = syncServerShellSnapshot(emptyState(), {
+      ...makeShellSnapshot(shellThread(localThreadId, "Local")),
+      snapshotSequence: 42,
+    });
+    const withBoth = syncServerShellSnapshot(
+      withLocal,
+      { ...makeShellSnapshot(shellThread(remoteThreadId, "Remote")), snapshotSequence: 500 },
+      remoteEnvironmentId,
+    );
+
+    const reset = clearEnvironmentShellFence(withBoth, remoteEnvironmentId);
+
+    expect(reset.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId]).toBeUndefined();
+    expect(reset.shellSnapshotSequence).toBe(42);
+    // A generation change leaves the rows: the replacement's snapshot is in
+    // flight and will prune them itself.
+    expect(reset.threadIds).toContain(remoteThreadId);
   });
 });

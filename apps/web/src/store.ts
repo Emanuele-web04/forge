@@ -21,7 +21,9 @@ import {
   applySpaceOrder,
   applyShellEvent,
   applyThreadUpdate,
+  clearEnvironmentShellFence,
   clearThreadDetailSyncFailureInClientState,
+  discardEnvironmentProjection,
   evictThreadDetailFromClientState,
   markThreadDetailSyncFailedInClientState,
   removeDeletedProjectFromClientState,
@@ -268,6 +270,13 @@ interface AppStore extends AppState {
     snapshot: OrchestrationShellSnapshot,
     environmentId?: EnvironmentId,
   ) => void;
+  /**
+   * Server-generation change: drop this environment's stale snapshot fence so
+   * the replacement server's snapshots are not rejected as out of date.
+   */
+  clearEnvironmentShellFence: (environmentId: EnvironmentId) => void;
+  /** Environment torn down for good: drop its fence and the rows it owned. */
+  discardEnvironmentProjection: (environmentId: EnvironmentId) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
   syncServerThreadDetailHotPath: (thread: ReadModelThread) => void;
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
@@ -297,6 +306,10 @@ export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(initialState),
   syncServerShellSnapshot: (snapshot, environmentId) =>
     set((state) => syncServerShellSnapshot(state, snapshot, environmentId)),
+  clearEnvironmentShellFence: (environmentId) =>
+    set((state) => clearEnvironmentShellFence(state, environmentId)),
+  discardEnvironmentProjection: (environmentId) =>
+    set((state) => discardEnvironmentProjection(state, environmentId)),
   syncServerThreadDetail: (thread) => set((state) => syncServerThreadDetail(state, thread)),
   syncServerThreadDetailHotPath: (thread) =>
     set((state) => syncServerThreadDetailHotPath(state, thread)),

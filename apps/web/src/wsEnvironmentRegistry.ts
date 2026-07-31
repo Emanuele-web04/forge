@@ -88,6 +88,20 @@ export function getWsEnvironmentClient(
   return clientsByEnvironmentId.get(environmentId);
 }
 
+/**
+ * Drops the environment's projected rows and snapshot fence.
+ *
+ * The store is resolved lazily rather than imported at module scope: this
+ * module sits underneath the store in the import graph (the store's own
+ * transport reaches back here), and it is exercised by node-environment tests
+ * that a top-level store import would break on its `window` side effects.
+ */
+function discardEnvironmentProjectionState(environmentId: EnvironmentId): void {
+  void import("./store").then(({ useStore }) => {
+    useStore.getState().discardEnvironmentProjection(environmentId);
+  });
+}
+
 /** Tears down one environment. The remaining environments are untouched. */
 export async function removeWsEnvironmentClient(environmentId: EnvironmentId): Promise<void> {
   const client = clientsByEnvironmentId.get(environmentId);
@@ -98,6 +112,11 @@ export async function removeWsEnvironmentClient(environmentId: EnvironmentId): P
   // whose journal has an unrelated sequence space, and the fresh transport has
   // no memory of the old instance id with which to detect that.
   discardEnvironmentResumeCursors(environmentId);
+  // The projected rows and the snapshot fence outlive it too, and unlike a
+  // generation change no snapshot is coming to supersede them: the sidebar
+  // would keep listing threads owned by a server that is gone, and a stale
+  // fence would reject the first snapshot if it were ever re-registered.
+  discardEnvironmentProjectionState(environmentId);
   registryListeners.emit();
   await client.dispose();
 }

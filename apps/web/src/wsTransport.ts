@@ -59,6 +59,7 @@ import { classifyBuildSkew, isReadOnlySafeWsMethod } from "@synara/shared/buildS
 
 import { APP_VERSION } from "./branding";
 import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
+import { useStore } from "./store";
 import {
   threadDetailResumeCursors,
   type ThreadDetailResumeCursorScope,
@@ -976,6 +977,14 @@ export class WsTransport {
       // carries a durable journal epoch. Scoped to this environment: another
       // server's journal did not change, and its sequences are unrelated.
       this.resumeCursors.resetAll();
+      // The shell snapshot fence is the same kind of state as a cursor: a
+      // high-water mark in the old journal's sequence space. Left behind, a
+      // replacement server whose journal restarts lower has every snapshot
+      // rejected as stale, and the sidebar keeps rendering content that server
+      // no longer holds — stale, not merely frozen, with no error surfaced.
+      // Reset alongside the cursors: one generation change, one place that
+      // decides what it invalidates.
+      useStore.getState().clearEnvironmentShellFence(this.environmentId);
     }
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.compatibility = compatibility;
