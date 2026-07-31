@@ -24,8 +24,11 @@ import { render } from "vitest-browser-react";
 const threadSnapshotFailureListeners = vi.hoisted(
   () =>
     new Set<
-      (failure: { readonly threadId: string; readonly code: string | null; readonly error: Error }) =>
-        void
+      (failure: {
+        readonly threadId: string;
+        readonly code: string | null;
+        readonly error: Error;
+      }) => void
     >(),
 );
 
@@ -34,7 +37,7 @@ vi.mock("../wsNativeApi", async (importOriginal) => {
   return {
     ...actual,
     onThreadStreamFailure: (
-      listener: (typeof threadSnapshotFailureListeners extends Set<infer T> ? T : never),
+      listener: typeof threadSnapshotFailureListeners extends Set<infer T> ? T : never,
     ) => {
       threadSnapshotFailureListeners.add(listener);
       return () => threadSnapshotFailureListeners.delete(listener);
