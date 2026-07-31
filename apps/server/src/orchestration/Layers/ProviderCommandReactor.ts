@@ -1123,7 +1123,7 @@ const make = Effect.gen(function* () {
       thread.session && thread.session.status !== "stopped" && activeSessionBeforeEnsure
         ? thread.id
         : null;
-    if (existingSessionThreadId) {
+    if (thread.session && thread.session.status !== "stopped" && activeSessionBeforeEnsure) {
       const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
       const providerChanged =
         requestedModelSelection !== undefined &&
