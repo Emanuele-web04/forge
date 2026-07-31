@@ -1415,6 +1415,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Existence only: reads the primary-key column and nothing else, so a caller
+  // that just needs "is this thread still here" never touches the detail tables.
+  const getThreadIdRowById = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadIdLookupRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+          AND deleted_at IS NULL
+        LIMIT 1
+      `,
+  });
+
   const getSyntheticSubagentParentThreadRow = SqlSchema.findOneOption({
     Request: SyntheticSubagentParentLookupInput,
     Result: ProjectionThreadDbRowSchema,
@@ -2865,6 +2881,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
+  const threadExistsById: ProjectionSnapshotQueryShape["threadExistsById"] = (threadId) =>
+    getThreadIdRowById({ threadId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.threadExistsById:query",
+          "ProjectionSnapshotQuery.threadExistsById:decodeRow",
+        ),
+      ),
+      Effect.map(Option.isSome),
+    );
+
   return {
     getCommandReadModel,
     getSnapshot,
@@ -2886,6 +2913,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadDetailById,
     getThreadDetailForExportById,
     getThreadDetailSnapshotById,
+    threadExistsById,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

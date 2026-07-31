@@ -254,6 +254,17 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailSnapshotById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
+   * Whether an active thread exists, without materialising any of its detail.
+   * Cursor resume needs only this: it replays the event gap on top of detail the
+   * client already holds, so loading the message window, plans, activities, turn
+   * and session state just to answer "does this thread still exist" would pay
+   * nearly the whole snapshot cost the resume exists to avoid.
+   */
+  readonly threadExistsById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
 }
 
 /**

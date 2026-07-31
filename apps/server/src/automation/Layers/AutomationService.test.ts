@@ -432,6 +432,7 @@ const projectionSnapshotQuery = {
   getThreadDetailById: () => Effect.succeed(threadDetail as never),
   getThreadDetailForExportById: () => Effect.succeed(threadDetail as never),
   getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
+  threadExistsById: () => Effect.succeed(false),
 } as unknown as ProjectionSnapshotQueryShape;
 
 const textGeneration = {

@@ -1084,40 +1084,90 @@ export class WsTransport {
     this.heartbeatTimer = timerId;
   }
 
+  /**
+   * Opens one feature socket against `cachedCompatibility`, or against a fresh
+   * HTTP negotiation when none is supplied. Only a cached-negotiation session
+   * probes for liveness — a freshly negotiated generation was just proven alive
+   * by the negotiation itself.
+   */
+  private async openSession(
+    sessionVersion: number,
+    cachedCompatibility: WsBootstrapNegotiateResult | null,
+  ): Promise<RpcClientInstance> {
+    const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
+    if (this.disposed || this.sessionVersion !== sessionVersion) {
+      throw new Error("WebSocket session superseded during compatibility negotiation.");
+    }
+
+    const featureRuntime = ManagedRuntime.make(
+      makeProtocolLayer(makeFeatureSocketUrl(this.explicitUrl, compatibility)),
+    );
+    const featureScope = featureRuntime.runSync(Scope.make());
+    this.runtime = featureRuntime;
+    this.clientScope = featureScope;
+    const client = await featureRuntime.runPromise(Scope.provide(featureScope)(makeRpcClient));
+    this.runtimeByClient.set(client, featureRuntime);
+    if (cachedCompatibility) {
+      await this.probeFeatureConnection(client, featureRuntime);
+    }
+    if (!this.disposed && this.sessionVersion === sessionVersion) {
+      this.adoptNegotiation(compatibility);
+      this.setState("open");
+      // A new socket starts with a clean liveness record; misses counted
+      // against the previous one say nothing about this one. Inbound time
+      // stays unset so the first probe always runs — a new socket has not yet
+      // proven it carries traffic.
+      this.missedHeartbeats = 0;
+      this.lastInboundAt = 0;
+      this.scheduleHeartbeat(client, featureRuntime, sessionVersion);
+    }
+    return client;
+  }
+
+  /** Tears down the runtime a failed session attempt left installed. */
+  private async discardSessionRuntime(): Promise<void> {
+    const runtime = this.runtime;
+    const clientScope = this.clientScope;
+    this.runtime = null;
+    this.clientScope = null;
+    if (!runtime) return;
+    if (clientScope) {
+      await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
+    }
+    await runtime.dispose().catch(() => undefined);
+  }
+
   private createSession() {
     const sessionVersion = ++this.sessionVersion;
     // Reconnects reuse the cached negotiation while the server generation is
     // unchanged, so a reconnect costs exactly one WebSocket handshake.
     const cachedCompatibility = this.compatibility;
     const clientPromise = (async () => {
-      const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
-      if (this.disposed || this.sessionVersion !== sessionVersion) {
-        throw new Error("WebSocket session superseded during compatibility negotiation.");
+      try {
+        return await this.openSession(sessionVersion, cachedCompatibility);
+      } catch (error) {
+        // A cached-negotiation session only fails because the cached generation
+        // is gone (the restarted server refuses the stale `/ws` upgrade with
+        // 426). The replacement is usually already listening, and nothing else
+        // would retry: the reconnect promise is shared, so rejecting here just
+        // hands every caller the same failure and leaves the client closed
+        // against a healthy server. Renegotiate once inside this same session.
+        //
+        // Exactly one retry, and only from a cache: the retry negotiates fresh,
+        // so it has no stale state left to invalidate. A second failure is a
+        // real outage and belongs to openReconnectSession's backoff rather than
+        // to an unbounded loop here.
+        if (
+          cachedCompatibility === null ||
+          this.disposed ||
+          this.sessionVersion !== sessionVersion ||
+          isTerminalCompatibilityFailure(error)
+        ) {
+          throw error;
+        }
+        await this.discardSessionRuntime();
+        return await this.openSession(sessionVersion, null);
       }
-
-      const featureRuntime = ManagedRuntime.make(
-        makeProtocolLayer(makeFeatureSocketUrl(this.explicitUrl, compatibility)),
-      );
-      const featureScope = featureRuntime.runSync(Scope.make());
-      this.runtime = featureRuntime;
-      this.clientScope = featureScope;
-      const client = await featureRuntime.runPromise(Scope.provide(featureScope)(makeRpcClient));
-      this.runtimeByClient.set(client, featureRuntime);
-      if (cachedCompatibility) {
-        await this.probeFeatureConnection(client, featureRuntime);
-      }
-      if (!this.disposed && this.sessionVersion === sessionVersion) {
-        this.adoptNegotiation(compatibility);
-        this.setState("open");
-        // A new socket starts with a clean liveness record; misses counted
-        // against the previous one say nothing about this one. Inbound time
-        // stays unset so the first probe always runs — a new socket has not yet
-        // proven it carries traffic.
-        this.missedHeartbeats = 0;
-        this.lastInboundAt = 0;
-        this.scheduleHeartbeat(client, featureRuntime, sessionVersion);
-      }
-      return client;
     })().catch((error) => {
       if (!this.disposed && this.sessionVersion === sessionVersion) {
         this.stopHeartbeat();

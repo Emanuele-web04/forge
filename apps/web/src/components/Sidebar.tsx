@@ -362,8 +362,7 @@ import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
-import { localThreadDetailResumeCursors } from "../threadDetailResumeCursors";
-import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
+import { retainSpeculativeThreadDetail } from "../threadDetailSpeculativeRetain";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import type {
   SidebarSearchAction,
@@ -4048,10 +4047,13 @@ export default function Sidebar() {
     });
     // Retaining a thread without cached detail would open a full-history
     // snapshot stream speculatively; only cursor-resumable threads are cheap
-    // enough to keep warm from scroll position alone.
-    const releaseCallbacks = threadIdsToPrewarm
-      .filter((threadId) => localThreadDetailResumeCursors().has(threadId))
-      .map((threadId) => retainThreadDetailSubscription(threadId));
+    // enough to keep warm from scroll position alone. The shared helper also
+    // drops the retain when the cursors reset under this render, so a server
+    // restart cannot resubscribe every prewarmed thread as a full snapshot.
+    const releaseCallbacks = threadIdsToPrewarm.flatMap((threadId) => {
+      const release = retainSpeculativeThreadDetail(threadId);
+      return release ? [release] : [];
+    });
 
     return () => {
       for (const release of releaseCallbacks) {

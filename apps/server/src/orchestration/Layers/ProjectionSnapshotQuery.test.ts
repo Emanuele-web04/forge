@@ -1497,6 +1497,55 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (firstThreadId._tag === "Some") {
         assert.equal(firstThreadId.value, ThreadId.makeUnsafe("thread-first"));
       }
+
+      // The cursor-resume fence, and it must honour soft deletes like every
+      // other active-row lookup here.
+      assert.isTrue(yield* snapshotQuery.threadExistsById(ThreadId.makeUnsafe("thread-first")));
+      assert.isFalse(yield* snapshotQuery.threadExistsById(ThreadId.makeUnsafe("thread-deleted")));
+      assert.isFalse(yield* snapshotQuery.threadExistsById(ThreadId.makeUnsafe("thread-missing")));
+    }),
+  );
+
+  it.effect("answers thread existence without hydrating any thread detail", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_turns`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        )
+        VALUES (
+          'project-exists', 'Exists', '/tmp/exists', NULL, '[]',
+          '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:01.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, env_mode, branch, worktree_path, latest_turn_id,
+          handoff_json, created_at, updated_at, archived_at, deleted_at
+        )
+        VALUES (
+          'thread-bare', 'project-exists', 'Bare Thread',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          'local', NULL, NULL, NULL, NULL,
+          '2026-03-01T00:00:02.000Z', '2026-03-01T00:00:03.000Z', NULL, NULL
+        )
+      `;
+
+      // Deliberately no message, activity, session or turn rows: the thread
+      // exists but has no detail to hydrate. The resume fence must still say
+      // "yes", which is what lets an accepted cursor skip the snapshot entirely.
+      assert.isTrue(yield* snapshotQuery.threadExistsById(ThreadId.makeUnsafe("thread-bare")));
     }),
   );
 

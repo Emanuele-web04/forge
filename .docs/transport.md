@@ -67,7 +67,9 @@ Resume is fenced by a high-water mark. The server trusts a cursor only when the 
 
 The `afterSequence` field is optional on the subscribe input, so an older client simply never sends it and receives full snapshots exactly as before.
 
-Cursor state also gates sidebar prewarming: a speculative prewarm subscription is only cheap when it can resume from a cursor, so threads without cached detail are not prewarmed from scroll position and pay their first full snapshot when actually opened. That trades a slightly colder first open of a never-viewed thread for not spending the per-client thread-stream budget on full-history streams the user may never look at.
+Cursor state also gates sidebar prewarming: a speculative prewarm subscription is only cheap when it can resume from a cursor, so threads without cached detail are not prewarmed from scroll position and pay their first full snapshot when actually opened. That trades a slightly colder first open of a never-viewed thread for not spending the per-client thread-stream budget on full-history streams the user may never look at. The gate has to hold for the whole life of the retain, not just at admission: the cursor map is not reactive, so a speculative retain subscribes to the cursor reset and releases itself when a server-generation change wipes the cursor that justified it. Otherwise every prewarmed thread would survive the reset and be resubscribed without a cursor, turning a restart into exactly the full-snapshot burst the gate prevents.
+
+The server answers the resume fence's existence check with a projection-level thread lookup, not the detail snapshot: an accepted resume never reads the detail, so deriving that boolean from `getThreadDetailSnapshotById` would make the resume path pay nearly the whole snapshot it exists to avoid — and would make a rejected cursor pay it twice, once for the check and again on the fallback.
 
 [1]: ../apps/server/src/nodeHttpServer.ts
 [2]: ../apps/server/src/wsCompatibility.ts

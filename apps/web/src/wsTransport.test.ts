@@ -974,7 +974,49 @@ describe("WsTransport", () => {
     await transport.dispose();
   });
 
-  it("clears cached negotiation when the reconnect liveness probe fails", async () => {
+  it("renegotiates in the same reconnect when the liveness probe finds a restarted server", async () => {
+    const restarted = { ...NEGOTIATION_RESULT, serverInstanceId: "server-instance-2" };
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transport = new WsTransport("ws://localhost:3020");
+    const internals = transport as unknown as {
+      reconnect(): Promise<unknown>;
+      probeFeatureConnection: (...args: unknown[]) => Promise<void>;
+      compatibility: WsBootstrapNegotiateResult | null;
+    };
+    await waitForSockets(1);
+    expect(internals.compatibility).toEqual(NEGOTIATION_RESULT);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The server restarts: it refuses the stale `/ws` upgrade, so the cached
+    // generation's probe fails. Renegotiation answers the new generation.
+    let probeCalls = 0;
+    internals.probeFeatureConnection = async function (this: typeof internals) {
+      probeCalls += 1;
+      this.compatibility = null;
+      throw new Error("stale server generation");
+    }.bind(internals);
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, restarted)));
+
+    // Nothing external nudges the transport: the reconnect itself must land on
+    // the replacement server rather than rejecting and leaving the client shut.
+    await internals.reconnect();
+
+    expect(probeCalls).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(internals.compatibility).toEqual(restarted);
+    expect(transport.getState()).toBe("open");
+    const reconnectUrl = new URL(sockets.at(-1)!.url);
+    expect(reconnectUrl.pathname).toBe("/ws");
+    expect(reconnectUrl.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId)).toBe(
+      "server-instance-2",
+    );
+
+    await transport.dispose();
+  }, 10_000);
+
+  it("gives up after one fresh negotiation so a server that keeps refusing is not retried forever", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -985,20 +1027,41 @@ describe("WsTransport", () => {
       compatibility: WsBootstrapNegotiateResult | null;
     };
     await waitForSockets(1);
-    expect(internals.compatibility).toEqual(NEGOTIATION_RESULT);
 
-    internals.probeFeatureConnection = async function (this: typeof internals) {
-      this.compatibility = null;
+    internals.probeFeatureConnection = async () => {
       throw new Error("stale server generation");
-    }.bind(internals);
-    await expect(internals.createSession().clientPromise).rejects.toThrow(
-      "stale server generation",
+    };
+    // The renegotiated session is refused too, so the session rejects after
+    // exactly one fresh negotiation instead of looping; further attempts (with
+    // backoff) belong to openReconnectSession.
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse(
+          426,
+          JSON.parse(
+            JSON.stringify(
+              new WsCompatibilityError({
+                message: "Update this client.",
+                code: "WS_PROTOCOL_INCOMPATIBLE",
+                retryable: false,
+                action: "update-client",
+                serverBuild: "0.5.2",
+                protocolEpoch: WS_PROTOCOL_EPOCH,
+                minRevision: WS_PROTOCOL_MIN_REVISION,
+                maxRevision: WS_PROTOCOL_MAX_REVISION,
+              }),
+            ),
+          ),
+        ),
+      ),
     );
 
+    await expect(internals.createSession().clientPromise).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(internals.compatibility).toBeNull();
 
     await transport.dispose();
-  });
+  }, 10_000);
 
   it("mirrors the negotiate endpoint onto the WS host with an HTTP scheme", () => {
     const url = new URL(makeNegotiateHttpUrl("wss://remote.example:8443/?token=old"));

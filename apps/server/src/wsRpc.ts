@@ -21,8 +21,6 @@ import {
   type ProjectDevServerEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
-  type OrchestrationThreadDetailSnapshot,
-  type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
@@ -138,6 +136,11 @@ import {
 } from "./remoteAccessPolicy";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
+import {
+  makeThreadDetailStream,
+  makeThreadDetailStreamQueries,
+  type ThreadDetailStreamDependencies,
+} from "./wsThreadDetailStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 
@@ -710,6 +713,34 @@ const makeWsRpcHandlersLayer = () =>
         ),
       );
 
+      const threadDetailStreamDependencies: ThreadDetailStreamDependencies = {
+        // Which query answers the resume fence is the whole point of the cheap
+        // path, so it lives in a factory a test can pin — not inline here.
+        ...makeThreadDetailStreamQueries(projectionReadModelQuery, toWsRpcError),
+        subscribeLive: (threadId) =>
+          orchestrationEngine.subscribeDomainEvents.pipe(
+            Effect.map((stream) =>
+              bufferLiveUiStream(
+                stream.pipe(Stream.filter((event) => isThreadDetailEventFor(threadId, event))),
+                {
+                  label: "orchestration.thread-detail",
+                  onDroppedEvents: (report) => recordThreadStreamDrop(threadId, report),
+                },
+              ),
+            ),
+          ),
+        getHighWaterSequence: getOrchestrationHighWaterSequence,
+        replay: (threadId, fromSequenceExclusive, throughSequenceInclusive) =>
+          orchestrationEngine
+            .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
+            .pipe(
+              Stream.filter((event) => isThreadDetailEventFor(threadId, event)),
+              Stream.mapError((cause) => toWsRpcError(cause, "Failed to replay thread events")),
+            ),
+        onResnapshotRequired: (threadId, report) =>
+          recordThreadResnapshotRequired(threadId, report),
+      };
+
       const toShellStreamEvent = (
         event: OrchestrationEvent,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never> => {
@@ -939,92 +970,7 @@ const makeWsRpcHandlersLayer = () =>
               key: `orchestration.thread:${input.threadId}`,
               threadId: input.threadId,
             },
-            makeCursorSafeSnapshotLiveStream({
-              // Cursor resume: a client holding cached detail replays only the
-              // gap. Out-of-range cursors (negative or overflowing gap) fall
-              // back to the snapshot inside the stream factory.
-              resumeFromSequence: input.afterSequence,
-              // A hard-purged thread leaves no rows to replay while the journal
-              // head stays above the cursor, so the gap check alone would
-              // accept the resume and stream nothing. Falling through to the
-              // snapshot path surfaces THREAD_SNAPSHOT_NOT_FOUND instead.
-              resumeSubjectExists: projectionReadModelQuery
-                .getThreadDetailSnapshotById(input.threadId)
-                .pipe(
-                  Effect.map(Option.isSome),
-                  Effect.mapError((cause) =>
-                    toWsRpcError(cause, "Failed to verify thread before cursor resume"),
-                  ),
-                ),
-              onResnapshotRequired: (report) =>
-                recordThreadResnapshotRequired(input.threadId, report),
-              subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
-                Effect.map((stream) =>
-                  bufferLiveUiStream(
-                    stream.pipe(
-                      Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
-                    ),
-                    {
-                      label: "orchestration.thread-detail",
-                      onDroppedEvents: (report) => recordThreadStreamDrop(input.threadId, report),
-                    },
-                  ),
-                ),
-              ),
-              snapshot: projectionReadModelQuery.getThreadDetailSnapshotById(input.threadId).pipe(
-                Effect.flatMap(
-                  Option.match({
-                    onNone: () =>
-                      projectionReadModelQuery.getSnapshotSequence().pipe(
-                        Effect.map(({ snapshotSequence }) => ({
-                          detail: Option.none<OrchestrationThreadDetailSnapshot>(),
-                          snapshotSequence,
-                        })),
-                      ),
-                    onSome: (detail) =>
-                      Effect.succeed({
-                        detail: Option.some(detail),
-                        snapshotSequence: detail.snapshotSequence,
-                      }),
-                  }),
-                ),
-                Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
-              ),
-              snapshotSequence: (snapshot) => snapshot.snapshotSequence,
-              getHighWaterSequence: getOrchestrationHighWaterSequence,
-              replay: (fromSequenceExclusive, throughSequenceInclusive) =>
-                orchestrationEngine
-                  .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
-                  .pipe(
-                    Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
-                    Stream.mapError((cause) =>
-                      toWsRpcError(cause, "Failed to replay thread events"),
-                    ),
-                  ),
-            }).pipe(
-              Stream.flatMap((item) => {
-                if (item.kind === "event") {
-                  return Stream.succeed<OrchestrationThreadStreamItem>({
-                    kind: "event",
-                    event: item.event,
-                  });
-                }
-                // A silently empty snapshot would leave the client waiting forever
-                // for thread history; fail identifiably so it can surface the state.
-                return Option.isSome(item.snapshot.detail)
-                  ? Stream.succeed<OrchestrationThreadStreamItem>({
-                      kind: "snapshot",
-                      snapshot: item.snapshot.detail.value,
-                    })
-                  : Stream.fail(
-                      new WsRpcError({
-                        message: `Thread detail snapshot not found for thread ${input.threadId}.`,
-                        code: "THREAD_SNAPSHOT_NOT_FOUND",
-                        retryable: false,
-                      }),
-                    );
-              }),
-            ),
+            makeThreadDetailStream(threadDetailStreamDependencies, input),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
         [WS_METHODS.subscribeOrchestrationDomainEvents]: (_, { clientId }) =>

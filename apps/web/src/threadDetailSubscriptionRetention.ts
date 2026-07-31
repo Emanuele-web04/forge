@@ -7,6 +7,7 @@ import { WS_STREAM_LIMITS, type ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
 import { useStore } from "./store";
 import { getThreadFromState } from "./threadDerivation";
+import { localThreadDetailResumeCursors } from "./threadDetailResumeCursors";
 
 const THREAD_DETAIL_RETENTION_EVICTION_MS = 15 * 60 * 1000;
 // This is a client-side memory cache, not a stream budget: concurrent server
@@ -19,6 +20,10 @@ export const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = 32;
 
 type RetainedThreadEntry = {
   refCount: number;
+  // How many of `refCount` are speculative (prewarm) holds. An entry held only
+  // speculatively is not evidence that anything needs a live stream, so the
+  // lease selector re-checks its cursor instead of leasing it on sight.
+  speculativeRefCount: number;
   lastAccessedAt: number;
   evictionTimeout: ReturnType<typeof setTimeout> | null;
 };
@@ -227,23 +232,32 @@ useStore.subscribe(() => {
   reconcileRetentionEntries();
 });
 
-export function retainThreadDetailSubscription(threadId: ThreadId): () => void {
+export function retainThreadDetailSubscription(
+  threadId: ThreadId,
+  options?: { readonly speculative?: boolean },
+): () => void {
+  const speculative = options?.speculative === true;
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
-    releaseThreadDetailSubscription(threadId);
+    releaseThreadDetailSubscription(threadId, { speculative });
   };
   const existing = retainedThreadEntries.get(threadId);
   if (existing) {
     clearEvictionTimeout(existing);
     existing.refCount += 1;
+    if (speculative) existing.speculativeRefCount += 1;
     existing.lastAccessedAt = Date.now();
+    // Leasing keys off speculativeness, so a first non-speculative retain over
+    // a speculative entry has to re-publish the snapshot to be picked up.
+    if (!speculative) emitChange();
     return release;
   }
 
   retainedThreadEntries.set(threadId, {
     refCount: 1,
+    speculativeRefCount: speculative ? 1 : 0,
     lastAccessedAt: Date.now(),
     evictionTimeout: null,
   });
@@ -253,20 +267,33 @@ export function retainThreadDetailSubscription(threadId: ThreadId): () => void {
   return release;
 }
 
-export function releaseThreadDetailSubscription(threadId: ThreadId): void {
+export function releaseThreadDetailSubscription(
+  threadId: ThreadId,
+  options?: { readonly speculative?: boolean },
+): void {
   const entry = retainedThreadEntries.get(threadId);
   if (!entry) {
     return;
   }
 
   entry.refCount = Math.max(0, entry.refCount - 1);
+  if (options?.speculative === true) {
+    entry.speculativeRefCount = Math.max(0, entry.speculativeRefCount - 1);
+  }
   entry.lastAccessedAt = Date.now();
   if (entry.refCount > 0) {
+    // A dropped speculative hold can leave real holders behind; republish so
+    // the lease selector stops treating the entry as speculative-only.
+    if (entry.speculativeRefCount === 0) emitChange();
     return;
   }
 
   scheduleEviction(threadId, entry);
   evictIdleEntriesToCapacity();
+  // The entry survives with refCount 0 (it is the warm detail cache), so a
+  // released speculative hold must be published: nothing else tells the lease
+  // selector this thread no longer wants a stream.
+  emitChange();
 }
 
 export function subscribeRetainedThreadDetailIds(listener: () => void): () => void {
@@ -302,6 +329,16 @@ export function isThreadDetailRetained(threadId: ThreadId): boolean {
   return retainedThreadEntries.has(threadId);
 }
 
+/**
+ * Whether every hold on this thread is speculative — a prewarm, not something
+ * currently rendering it.
+ */
+function isSpeculativeOnlyRetain(threadId: ThreadId): boolean {
+  const entry = retainedThreadEntries.get(threadId);
+  if (!entry) return false;
+  return entry.speculativeRefCount >= entry.refCount;
+}
+
 export function resolveThreadDetailSubscriptionLeaseIds(input: {
   readonly visibleThreadIds: readonly ThreadId[];
   readonly retainedThreadIds: readonly ThreadId[];
@@ -316,9 +353,16 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
   }
   for (const threadId of input.retainedThreadIds) {
     if (threadIds.size >= WS_STREAM_LIMITS.threadPerClient) break;
-    if (input.serverThreadIds.has(threadId)) {
-      threadIds.add(threadId);
+    if (!input.serverThreadIds.has(threadId)) continue;
+    // Eligibility is re-checked here rather than trusted from the render that
+    // admitted the retain: the cursor map is not reactive, so a server-generation
+    // reset can invalidate a speculative hold with nothing re-rendering. A
+    // speculative-only entry without a cursor would open a full-history stream —
+    // one per prewarmed thread on every restart.
+    if (isSpeculativeOnlyRetain(threadId) && !localThreadDetailResumeCursors().has(threadId)) {
+      continue;
     }
+    threadIds.add(threadId);
   }
   return [...threadIds];
 }

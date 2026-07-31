@@ -61,6 +61,20 @@ export interface ThreadDetailResumeCursorScope {
    */
   resetAll(): void;
   /**
+   * Fires after every cursor in this environment is dropped. Speculative
+   * (prewarm) retains are admitted only because a cursor made them cheap, and
+   * the map backing those cursors is not reactive — nothing re-renders when it
+   * is wiped. Without this notice those retains would survive the reset and be
+   * rebuilt as full-snapshot streams on the next resubscribe, which is exactly
+   * the burst the eligibility gate exists to prevent.
+   *
+   * Scoped to the environment rather than global for the same reason the
+   * cursors are: environment A's server restarting says nothing about
+   * environment B's journal, so releasing B's leases would throw away resume
+   * state that is still valid.
+   */
+  subscribeReset(listener: () => void): () => void;
+  /**
    * Subscription input for a thread stream: cursor resume when cached detail is
    * still valid, full-history snapshot otherwise. Every subscribeThread call
    * must go through this so the cursor decision lives in exactly one place.
@@ -69,6 +83,18 @@ export interface ThreadDetailResumeCursorScope {
 }
 
 const scopeByEnvironmentId = new Map<EnvironmentId, ThreadDetailResumeCursorScope>();
+
+// Keyed alongside the cursors rather than captured per scope so the test reset
+// below can drop them in the same step it drops the cursors they describe.
+const resetListenersByEnvironmentId = new Map<EnvironmentId, Set<() => void>>();
+
+function resetListenersFor(environmentId: EnvironmentId): Set<() => void> {
+  const existing = resetListenersByEnvironmentId.get(environmentId);
+  if (existing) return existing;
+  const created = new Set<() => void>();
+  resetListenersByEnvironmentId.set(environmentId, created);
+  return created;
+}
 
 /**
  * Cursor accessor for one environment. Scopes are memoized so callers can hold
@@ -119,6 +145,20 @@ export function threadDetailResumeCursors(
     },
     resetAll() {
       cursorsByEnvironmentId.get(environmentId)?.clear();
+      for (const listener of resetListenersFor(environmentId)) {
+        try {
+          listener();
+        } catch {
+          // A reset listener must not break the cursor invariant it observes.
+        }
+      }
+    },
+    subscribeReset(listener) {
+      const listeners = resetListenersFor(environmentId);
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
     buildSubscribeInput(threadId) {
       const afterSequence = cursorsByEnvironmentId.get(environmentId)?.get(threadId);
@@ -152,9 +192,20 @@ export function localThreadDetailResumeCursors(): ThreadDetailResumeCursorScope 
  * possibility.
  */
 export function discardEnvironmentResumeCursors(environmentId: EnvironmentId): void {
+  // Same wipe, same notice: anything holding a lease only because a cursor made
+  // it cheap has to hear about this too. The scope object outlives the cursor
+  // map (it is memoized), so its listeners are still registered here.
+  scopeByEnvironmentId.get(environmentId)?.resetAll();
   cursorsByEnvironmentId.delete(environmentId);
+  // Every listener unsubscribed itself while releasing above; drop the set so a
+  // long-lived page cycling environments does not accumulate empty ones.
+  resetListenersByEnvironmentId.delete(environmentId);
 }
 
 export function resetThreadDetailResumeCursorsForTests(): void {
   cursorsByEnvironmentId.clear();
+  // Deliberately not notified: this wipes global state between tests rather
+  // than modelling a server-generation change, and firing would reach listeners
+  // that belong to whatever ran before.
+  resetListenersByEnvironmentId.clear();
 }
