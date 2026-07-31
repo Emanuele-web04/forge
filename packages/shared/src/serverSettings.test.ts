@@ -51,6 +51,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "",
           agentDir: "",
         },
+        omp: {
+          ...DEFAULT_SERVER_SETTINGS.providers.omp,
+          binaryPath: "",
+          agentDir: "",
+        },
       },
     };
 
@@ -73,6 +78,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.kilo).toEqual({});
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
     expect(providerOptions.pi).toEqual({});
+    expect(providerOptions.omp).toEqual({});
   });
 
   it("preserves configured launch settings", () => {

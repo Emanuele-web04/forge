@@ -10,6 +10,8 @@ import {
   type OrchestrationShellSnapshot,
   type ProjectScript,
   type ModelSlug,
+  type OmpModelOptions,
+  type OmpModelSelection,
   type ProviderKind,
   type ProjectEntry,
   type ProjectId,
@@ -899,6 +901,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
     case "pi":
       return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
+    case "omp":
+      return normalizeCustomBinaryPath(providerOptions?.omp?.binaryPath);
   }
 }
 
@@ -2186,6 +2190,7 @@ export default function ChatView({
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
+      omp: resolveHint("omp"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -2264,7 +2269,10 @@ export default function ChatView({
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(() => {
-    if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
+    if (
+      (selectedProvider === "pi" || selectedProvider === "omp") &&
+      draftModelSelectionForSelectedProvider?.provider === selectedProvider
+    ) {
       return buildModelSelection(
         selectedProvider,
         draftModelSelectionForSelectedProvider.model,
@@ -2308,7 +2316,8 @@ export default function ChatView({
     selectedProvider === "droid" ||
     selectedProvider === "kilo" ||
     selectedProvider === "opencode" ||
-    selectedProvider === "pi";
+    selectedProvider === "pi" ||
+    selectedProvider === "omp";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -5931,6 +5940,36 @@ export default function ChatView({
     ],
   );
 
+  const onProviderModelRoleSelect = useCallback(
+    (model: ModelSlug, options: OmpModelOptions) => {
+      if (!activeThread) return;
+      if (lockedProvider !== null && lockedProvider !== "omp") {
+        scheduleComposerFocus();
+        return;
+      }
+      const resolvedModel = resolveCommittedProviderModel({
+        selectedModel: model,
+        availableOptions: modelOptionsByProvider.omp,
+        fallback: () => resolveAppModelSelection("omp", customModelsByProvider, model),
+      });
+      const nextModelSelection: OmpModelSelection = {
+        provider: "omp",
+        model: resolvedModel,
+        options,
+      };
+      setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
+      scheduleComposerFocus();
+    },
+    [
+      activeThread,
+      lockedProvider,
+      scheduleComposerFocus,
+      setComposerDraftModelSelectionAndSticky,
+      customModelsByProvider,
+      modelOptionsByProvider,
+    ],
+  );
+
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -9014,6 +9053,7 @@ export default function ChatView({
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
         onProviderModelChange={onProviderModelSelect}
+        onProviderModelRoleSelect={onProviderModelRoleSelect}
         onSelectionCommitted={scheduleComposerFocus}
         open={isModelPickerOpen}
         onOpenChange={handleModelPickerOpenChange}
@@ -9057,6 +9097,7 @@ export default function ChatView({
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
       onProviderModelChange={onProviderModelSelect}
+      onProviderModelRoleSelect={onProviderModelRoleSelect}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
       onOpenChange={handleComposerModelEffortPickerOpenChange}

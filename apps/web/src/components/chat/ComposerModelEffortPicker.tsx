@@ -6,6 +6,7 @@
 
 import {
   type ModelSlug,
+  type OmpModelOptions,
   type ProviderAgentDescriptor,
   type ProviderKind,
   type ProviderModelDescriptor,
@@ -59,6 +60,7 @@ type ComposerModelEffortPickerProps = {
   hideStatusLabel?: boolean;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderModelRoleSelect?: (model: ModelSlug, options: OmpModelOptions) => void;
   onSelectionCommitted?: () => void;
 
   // Traits/effort/speed data.
@@ -259,6 +261,9 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
               {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
               {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
               onProviderModelChange={props.onProviderModelChange}
+              {...(props.onProviderModelRoleSelect
+                ? { onProviderModelRoleSelect: props.onProviderModelRoleSelect }
+                : {})}
               onAfterSelection={handleAfterModelSelection}
             />
           </ComposerPickerMenuSubPopup>

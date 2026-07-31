@@ -205,13 +205,19 @@ export function providerModelsQueryOptions(input: {
   cwd?: string | null;
   enabled?: boolean;
 }) {
+  // OMP's catalog is global (`omp models --json` is not project-scoped — the
+  // server caches it by binary path only), so cwd is intentionally excluded
+  // from its query key and request. This keeps a single cache entry shared
+  // across threads/projects and lets an app-startup warm land on the exact key
+  // the composer reads.
+  const cwd = input.provider === "omp" ? null : (input.cwd ?? null);
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.models(
       input.provider,
       input.binaryPath ?? null,
       input.apiEndpoint ?? null,
       input.agentDir ?? null,
-      input.cwd ?? null,
+      cwd,
     ),
     queryFn: async (): Promise<ProviderListModelsResult> => {
       const api = ensureNativeApi();
@@ -220,16 +226,29 @@ export function providerModelsQueryOptions(input: {
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(cwd ? { cwd } : {}),
       });
     },
     enabled: input.enabled ?? true,
     // Cursor/droid failures are permanent for a session (missing CLI/auth): fail
     // fast so the picker settles to static options instead of spinning (#103).
+    // OMP retries like pi (not fail-fast): it has no static model fallback, so a
+    // transient `omp models` cold-start failure must retry under the loading
+    // skeleton rather than settling instantly to a false "No matches".
     retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
-    staleTime: input.provider === "droid" ? 5 * 60_000 : 60_000,
-    ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
-    placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
+    staleTime: input.provider === "droid" || input.provider === "omp" ? 5 * 60_000 : 60_000,
+    ...(input.provider === "droid" || input.provider === "omp"
+      ? { refetchOnWindowFocus: false }
+      : {}),
+    // OMP has no static model fallback, so masking its first `omp models` fetch
+    // with an empty placeholder would surface a false "No matches" during the
+    // ~3s discovery. Omit placeholderData for OMP so React Query reports a
+    // genuine `isLoading` pending state and the catalog renders the loading
+    // skeleton instead. Other providers keep the placeholder to suppress
+    // refetch flicker against their static catalogs.
+    ...(input.provider !== "omp"
+      ? { placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT }
+      : {}),
   });
 }
 

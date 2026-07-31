@@ -33,6 +33,33 @@ describe("Antigravity model options", () => {
     });
   });
 });
+describe("OMP model options", () => {
+  it("builds an OMP model selection carrying a max thinking level", () => {
+    expect(
+      buildModelSelection("omp", "anthropic/claude-sonnet-4", { thinkingLevel: "max" }),
+    ).toEqual({
+      provider: "omp",
+      model: "anthropic/claude-sonnet-4",
+      options: { thinkingLevel: "max" },
+    });
+  });
+
+  it("builds an OMP model selection without options when none are provided", () => {
+    expect(buildModelSelection("omp", "anthropic/claude-sonnet-4")).toEqual({
+      provider: "omp",
+      model: "anthropic/claude-sonnet-4",
+    });
+  });
+
+  it("strips the upstream provider prefix from OMP slugs in display names", () => {
+    // omp sits in the slug-prefix condition alongside pi/opencode/kilo, so the
+    // "anthropic/" prefix must be stripped; regressing omp out of that condition
+    // would leave the slash in the display name.
+    const name = formatProviderModelOptionName({ provider: "omp", slug: "anthropic/claude-sonnet-4" });
+    expect(name).not.toContain("/");
+    expect(name.length).toBeGreaterThan(0);
+  });
+});
 
 describe("Claude model selections", () => {
   it("preserves the discovered Auto capability with the selected model", () => {

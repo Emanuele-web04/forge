@@ -3,6 +3,7 @@ import {
   MODEL_CAPABILITIES_INDEX,
   MODEL_OPTIONS_BY_PROVIDER,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
+  OMP_THINKING_LEVEL_OPTIONS,
   type AntigravityModelOptions,
   type ClaudeApiEffort,
   type ClaudeModelOptions,
@@ -18,6 +19,8 @@ import {
   type ProviderOptionSelection,
   type PiModelOptions,
   type PiThinkingLevel,
+  type OmpModelOptions,
+  type OmpThinkingLevel,
   type ProviderKind,
   type ProviderWithDefaultModel,
   CodexReasoningEffort,
@@ -34,6 +37,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
+  omp: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -49,6 +53,7 @@ const PI_THINKING_LEVEL_SET = new Set<PiThinkingLevel>([
   "high",
   "xhigh",
 ]);
+const OMP_THINKING_LEVEL_SET = new Set<OmpThinkingLevel>(OMP_THINKING_LEVEL_OPTIONS);
 export const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [],
   supportsFastMode: false,
@@ -61,7 +66,7 @@ export function getModelOptions(provider: ProviderKind = "codex") {
 }
 
 function hasDefaultModel(provider: ProviderKind): provider is ProviderWithDefaultModel {
-  return provider !== "pi";
+  return provider !== "pi" && provider !== "omp";
 }
 
 export function getDefaultModel(provider: "pi"): null;
@@ -284,7 +289,7 @@ function reasoningDescriptorId(provider: ProviderKind): string {
   if (provider === "kilo" || provider === "opencode") {
     return "variant";
   }
-  if (provider === "pi") {
+  if (provider === "pi" || provider === "omp") {
     return "thinkingLevel";
   }
   return "reasoningEffort";
@@ -495,7 +500,7 @@ export function resolveModelSlug(
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
   const normalized = normalizeModelSlug(model, provider);
-  if (provider === "pi") {
+  if (provider === "pi" || provider === "omp") {
     return normalized;
   }
   if (!normalized) {
@@ -676,6 +681,14 @@ export function normalizePiModelOptions(
   const thinkingLevel = trimOrNull(modelOptions?.thinkingLevel);
   return thinkingLevel && PI_THINKING_LEVEL_SET.has(thinkingLevel as PiThinkingLevel)
     ? { thinkingLevel: thinkingLevel as PiThinkingLevel }
+    : undefined;
+}
+export function normalizeOmpModelOptions(
+  modelOptions: OmpModelOptions | null | undefined,
+): OmpModelOptions | undefined {
+  const thinkingLevel = trimOrNull(modelOptions?.thinkingLevel);
+  return thinkingLevel && OMP_THINKING_LEVEL_SET.has(thinkingLevel as OmpThinkingLevel)
+    ? { thinkingLevel: thinkingLevel as OmpThinkingLevel }
     : undefined;
 }
 

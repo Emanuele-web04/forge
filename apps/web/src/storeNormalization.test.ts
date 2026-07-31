@@ -1,11 +1,15 @@
 // FILE: storeNormalization.test.ts
-// Purpose: Pins the incremental activity accumulator to the `normalizeActivities` fold it replaces.
+// Purpose: pins the incremental activity accumulator to the `normalizeActivities` fold it
+// replaces, and locks the legacy session provider-name → ProviderKind mapping.
 
 import { describe, expect, it } from "vitest";
+
+import type { ProviderKind } from "@synara/contracts";
 
 import {
   createThreadActivityAccumulator,
   normalizeActivities,
+  toLegacyProvider,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity } from "./storeTestFixtures";
@@ -64,6 +68,19 @@ const richPayload = {
   detail: "echo hello",
   data: { item: { type: "commandExecution", command: "echo hello" } },
 };
+
+const KNOWN_PROVIDERS: ReadonlyArray<ProviderKind> = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "antigravity",
+  "grok",
+  "droid",
+  "kilo",
+  "opencode",
+  "pi",
+  "omp",
+];
 
 describe("createThreadActivityAccumulator", () => {
   it("matches the normalizeActivities fold for appends, in-place merges and exact duplicates", () => {
@@ -171,5 +188,28 @@ describe("createThreadActivityAccumulator", () => {
 
     expect(previous).toEqual(snapshot);
     expect(accumulator.result()).not.toBe(previous);
+  });
+});
+
+describe("toLegacyProvider", () => {
+  it("maps each known provider name to itself", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      expect(toLegacyProvider(provider)).toBe(provider);
+    }
+  });
+
+  it("maps omp to omp (regression: omp threads were coerced to codex)", () => {
+    // The server stamps providerName "omp" for OMP threads; before the fix this
+    // fell through to "codex", mislabeling every OMP thread across the UI
+    // (ChatHeader, Sidebar, ChatView activeProvider, kanban, threadDisplay).
+    expect(toLegacyProvider("omp")).toBe("omp");
+  });
+
+  it("falls back to codex for an unknown provider name", () => {
+    expect(toLegacyProvider("unknown-provider")).toBe("codex");
+  });
+
+  it("falls back to codex for null", () => {
+    expect(toLegacyProvider(null)).toBe("codex");
   });
 });

@@ -114,6 +114,7 @@ export function useProviderModelCatalog(input: {
   const kiloModelDiscoveryEnabled = shouldDiscoverProvider("kilo");
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
+  const ompModelDiscoveryEnabled = shouldDiscoverProvider("omp");
 
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
@@ -184,6 +185,17 @@ export function useProviderModelCatalog(input: {
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
       enabled: piModelDiscoveryEnabled,
+    }),
+  );
+  const ompDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "omp",
+      binaryPath: settings.ompBinaryPath || null,
+      agentDir: settings.ompAgentDir || null,
+      cwd: discoveryCwd,
+      // Eager-warmed at app startup (ProviderModelDiscoveryWarmer in __root); this observer
+      // shares the warmed cwd-agnostic cache entry (React Query dedupes by query key).
+      enabled: ompModelDiscoveryEnabled,
     }),
   );
 
@@ -260,6 +272,23 @@ export function useProviderModelCatalog(input: {
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
+  const hasResolvedOmpModelDiscovery =
+    ompDynamicModelsQuery.data?.source === "omp-cli" &&
+    (ompDynamicModelsQuery.data.models.length ?? 0) > 0;
+  // OMP has no static model fallback. A terminal discovery failure (retries
+  // exhausted — isError true) must NOT park the picker on the loading skeleton:
+  // isInitialModelDiscoveryPending's contract is "a failed provider must not
+  // park the model control on a skeleton" (see providerDiscoveryReactQuery).
+  // Instead modelOptionsByProvider clears OMP's options on failure so the picker
+  // surfaces a load-failure message rather than the hint-only static list
+  // (previously-selected model shown as the sole OMP entry — the "collapsed to
+  // one model" symptom). Pending stays true only while the first fetch is
+  // outstanding or retrying; transient cold-start failures retry under the
+  // skeleton before this flag ever flips.
+  const ompDiscoveryFailed =
+    ompModelDiscoveryEnabled && !hasResolvedOmpModelDiscovery && ompDynamicModelsQuery.isError;
+  const ompModelDiscoveryPending =
+    ompModelDiscoveryEnabled && !hasResolvedOmpModelDiscovery && !ompDiscoveryFailed;
   const antigravityModelDiscoveryPending =
     antigravityModelDiscoveryEnabled &&
     !(
@@ -295,6 +324,7 @@ export function useProviderModelCatalog(input: {
         modelHintByProvider?.opencode,
       ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
+      omp: getAppModelOptions("omp", customModelsByProvider.omp, modelHintByProvider?.omp),
     };
     const result: Record<
       ProviderKind,
@@ -313,6 +343,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
+      omp: ompDynamicModelsQuery.data,
     };
     for (const provider of [
       "claudeAgent",
@@ -324,6 +355,7 @@ export function useProviderModelCatalog(input: {
       "kilo",
       "opencode",
       "pi",
+      "omp",
     ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
@@ -333,6 +365,27 @@ export function useProviderModelCatalog(input: {
           dynamicModels,
         });
       }
+    }
+    const ompRoles = ompDynamicModelsQuery.data?.roles ?? [];
+    if (ompRoles.length > 0) {
+      const roleOptions: ProviderModelOption[] = ompRoles.map((role) => ({
+        slug: `role:${role.name}`,
+        name: role.name.replace(/[-_]/g, " "),
+        upstreamProviderName: "Roles",
+        upstreamProviderId: "roles",
+        role: {
+          name: role.name,
+          model: role.model,
+          ...(role.thinkingLevel ? { thinkingLevel: role.thinkingLevel } : {}),
+        },
+      }));
+      result.omp = [...roleOptions, ...result.omp];
+    }
+    // Terminal OMP discovery failure: clear options so the picker surfaces a
+    // load-failure message instead of the hint-only static list (OMP has no
+    // built-in catalog to fall back to).
+    if (ompDiscoveryFailed) {
+      result.omp = [];
     }
     return result;
   }, [
@@ -348,6 +401,8 @@ export function useProviderModelCatalog(input: {
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
+    ompDynamicModelsQuery.data,
+    ompDiscoveryFailed,
   ]);
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
@@ -358,6 +413,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
+      omp: ompModelDiscoveryPending,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -366,6 +422,7 @@ export function useProviderModelCatalog(input: {
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
+      ompModelDiscoveryPending,
     ],
   );
 
@@ -382,6 +439,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
+      omp: ompDynamicModelsQuery.data?.models ?? [],
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -393,6 +451,7 @@ export function useProviderModelCatalog(input: {
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
+      ompDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -443,7 +502,9 @@ export function useProviderModelCatalog(input: {
                   ? kiloDynamicModelsQuery
                   : selectedProvider === "opencode"
                     ? openCodeDynamicModelsQuery
-                    : piDynamicModelsQuery;
+                    : selectedProvider === "omp"
+                      ? ompDynamicModelsQuery
+                      : piDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&
