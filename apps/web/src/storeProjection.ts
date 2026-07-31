@@ -963,8 +963,15 @@ function nextTombstoneSequence<TId extends string>(
   id: TId,
   state: AppState,
   deletedAtSequence: number | undefined,
+  /**
+   * The environment whose sequence space this tombstone lives in. Derived from
+   * the row's owner rather than assumed local: a remote row's tombstone must be
+   * stamped against ITS server's fence, or it would be compared against a
+   * counter it has no relationship to when retirement runs.
+   */
+  environmentId: EnvironmentId = LOCAL_ENVIRONMENT_ID,
 ): number {
-  const candidate = deletedAtSequence ?? (state.shellSnapshotSequence ?? 0) + 1;
+  const candidate = deletedAtSequence ?? snapshotFenceFor(state, environmentId) + 1;
   const existing = tombstones?.[id];
   return existing === undefined ? candidate : Math.max(existing, candidate);
 }
@@ -980,6 +987,17 @@ function retireDeletionTombstones<TId extends string>(
   tombstones: Record<TId, number> | undefined,
   snapshotSequence: number,
   presentIds: ReadonlySet<string>,
+  /**
+   * Ids this snapshot's environment actually owns. A tombstone is recorded in
+   * ONE environment's sequence space, so comparing it against another server's
+   * counter is meaningless — a remote server idling at sequence 5000 would
+   * retire a local tombstone written at 101 purely because 5000 >= 101, and
+   * because a remote snapshot never lists local ids the "still present" check
+   * passes too. The next local snapshot then resurrects a thread the user
+   * deleted. Restricting retirement to the sending environment's own ids makes
+   * that unrepresentable.
+   */
+  retirableIds: ReadonlySet<string>,
 ): Record<TId, number> | undefined {
   if (tombstones === undefined) {
     return tombstones;
@@ -987,7 +1005,7 @@ function retireDeletionTombstones<TId extends string>(
   let retiredAny = false;
   const retained = {} as Record<TId, number>;
   for (const [id, deletedAtSequence] of Object.entries(tombstones) as [TId, number][]) {
-    if (snapshotSequence >= deletedAtSequence && !presentIds.has(id)) {
+    if (retirableIds.has(id) && snapshotSequence >= deletedAtSequence && !presentIds.has(id)) {
       retiredAny = true;
       continue;
     }
@@ -1087,6 +1105,54 @@ function nextEnvironmentIdByThreadId(
   return recordsShallowEqual(previous, next) ? previous : next;
 }
 
+/**
+ * Ownership map after a snapshot, for projects. Exactly the thread rule above:
+ * the sending environment claims what it reported, drops what it no longer
+ * reports, and never touches another environment's claims. Local-owned projects
+ * stay unmapped so a single-server store keeps an empty record.
+ */
+function nextEnvironmentIdByProjectId(
+  state: AppState,
+  environmentId: EnvironmentId,
+  ownedProjectIds: ReadonlySet<string>,
+  survivingProjectIds: ReadonlySet<string>,
+): Record<string, string> {
+  const previous = state.environmentIdByProjectId ?? {};
+  const next: Record<string, string> = {};
+  for (const [projectId, owner] of Object.entries(previous)) {
+    if (survivingProjectIds.has(projectId) && owner !== environmentId) {
+      next[projectId] = owner;
+    }
+  }
+  if (environmentId !== LOCAL_ENVIRONMENT_ID) {
+    for (const projectId of ownedProjectIds) {
+      next[projectId] = environmentId;
+    }
+  }
+  return recordsShallowEqual(previous, next) ? previous : next;
+}
+
+/**
+ * Projects the store holds for environments other than `environmentId`.
+ *
+ * The counterpart to `threadIdsOutsideEnvironment`, and the reason it exists:
+ * `projects` was rebuilt from the incoming snapshot alone, so every
+ * environment's snapshot deleted every other environment's projects — leaving
+ * their threads present but pointing at projects no longer in the store.
+ */
+function projectIdsOutsideEnvironment(
+  state: AppState,
+  environmentId: EnvironmentId,
+): ReadonlySet<string> {
+  const ownerByProjectId = state.environmentIdByProjectId ?? {};
+  const foreign = new Set<string>();
+  for (const project of state.projects ?? []) {
+    const owner = ownerByProjectId[project.id] ?? LOCAL_ENVIRONMENT_ID;
+    if (owner !== environmentId) foreign.add(project.id);
+  }
+  return foreign;
+}
+
 /** Threads the store holds for environments other than `environmentId`. */
 function threadIdsOutsideEnvironment(
   state: AppState,
@@ -1180,15 +1246,32 @@ function retireConfirmedDeletionTombstones(
   if (snapshotSequence < snapshotFenceFor(state, environmentId)) {
     return state;
   }
+  // Only this environment's own rows may be retired. A tombstone belongs to the
+  // sequence space of the server that recorded the deletion; another server's
+  // counter says nothing about it. Ownership is "mapped to me, or unmapped and
+  // I am local" — the same default the ownership maps use everywhere else.
+  const threadOwner = state.environmentIdByThreadId ?? {};
+  const projectOwner = state.environmentIdByProjectId ?? {};
+  const ownsThread = (id: string) =>
+    (threadOwner[id as ThreadId] ?? LOCAL_ENVIRONMENT_ID) === environmentId;
+  const ownsProject = (id: string) => (projectOwner[id] ?? LOCAL_ENVIRONMENT_ID) === environmentId;
+  const retirableThreadIds = new Set(
+    Object.keys(state.deletedThreadIdsById ?? {}).filter(ownsThread),
+  );
+  const retirableProjectIds = new Set(
+    Object.keys(state.deletedProjectIdsById ?? {}).filter(ownsProject),
+  );
   const deletedThreadIdsById = retireDeletionTombstones(
     state.deletedThreadIdsById,
     snapshotSequence,
     presentThreadIds,
+    retirableThreadIds,
   );
   const deletedProjectIdsById = retireDeletionTombstones(
     state.deletedProjectIdsById,
     snapshotSequence,
     presentProjectIds,
+    retirableProjectIds,
   );
   if (
     deletedThreadIdsById === state.deletedThreadIdsById &&
@@ -1213,6 +1296,8 @@ export function removeDeletedThreadFromClientState(
     threadId,
     state,
     deletedAtSequence,
+    (state.environmentIdByThreadId?.[threadId] as EnvironmentId | undefined) ??
+      LOCAL_ENVIRONMENT_ID,
   );
   const deletedThreadIdsById =
     state.deletedThreadIdsById?.[threadId] === sequence
@@ -1267,6 +1352,8 @@ export function removeDeletedProjectFromClientState(
     projectId,
     state,
     deletedAtSequence,
+    (state.environmentIdByProjectId?.[projectId] as EnvironmentId | undefined) ??
+      LOCAL_ENVIRONMENT_ID,
   );
   const deletedProjectIdsById =
     state.deletedProjectIdsById?.[projectId] === sequence
@@ -1415,8 +1502,33 @@ export function syncServerShellSnapshot(
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] === undefined,
   );
-  const spaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
-  const projects = mapProjects(snapshotProjects, state.projects);
+  // Projects and spaces get the same treatment as threads: a snapshot is
+  // authoritative only for its own server, so the other environments' projects
+  // are carried through rather than rebuilt away. Without this, the FIRST
+  // cross-environment snapshot already deletes the other's projects while its
+  // threads survive — rows pointing at projects no longer in the store.
+  const foreignProjectIds = projectIdsOutsideEnvironment(state, environmentId);
+  const foreignProjects = (state.projects ?? []).filter((project) =>
+    foreignProjectIds.has(project.id),
+  );
+  const ownedProjectIds = new Set(snapshotProjects.map((project) => project.id));
+  const localProjects = mapProjects(snapshotProjects, state.projects);
+  // Identity-stable on a no-op resync; see the read-model path for the reasoning.
+  const projects =
+    foreignProjects.length === 0 ? localProjects : [...localProjects, ...foreignProjects];
+  // Spaces are scoped through their projects: a space no surviving project
+  // references has nothing left to render, and the incoming snapshot has no
+  // authority over another server's spaces.
+  const survivingSpaceIds = new Set<string>(
+    projects.flatMap((project) => (project.spaceId ? [String(project.spaceId)] : [])),
+  );
+  const foreignSpaces = (state.spaces ?? []).filter(
+    (space) =>
+      survivingSpaceIds.has(space.id) &&
+      !(snapshot.spaces ?? []).some((incoming) => incoming.id === space.id),
+  );
+  const localSpaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
+  const spaces = foreignSpaces.length === 0 ? localSpaces : [...localSpaces, ...foreignSpaces];
   const ownedThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
   const nextThreadIds = new Set([...ownedThreadIds, ...foreignThreadIds]);
   // The retains below prune detail slices down to the surviving threads; any
@@ -1434,6 +1546,12 @@ export function syncServerShellSnapshot(
       environmentId,
       ownedThreadIds,
       nextThreadIds,
+    ),
+    environmentIdByProjectId: nextEnvironmentIdByProjectId(
+      state,
+      environmentId,
+      ownedProjectIds,
+      new Set([...ownedProjectIds, ...foreignProjectIds]),
     ),
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
@@ -1473,7 +1591,15 @@ export function syncServerShellSnapshot(
       spaces,
       projects,
       sidebarThreadSummaryById,
-      threadsHydrated: true,
+      // Hydration means the LOCAL server's data has arrived, not that any
+      // server's has. Every consumer is local-scoped UI, and three of them
+      // PRUNE on it: pinned projects, pinned threads and recent views. A remote
+      // snapshot landing first would flip this true while local rows are still
+      // absent, and those pruners would drop pins whose targets simply have not
+      // loaded — deleting user data that no later snapshot restores, because
+      // the pruned set is what gets persisted.
+      threadsHydrated:
+        environmentId === LOCAL_ENVIRONMENT_ID ? true : (state.threadsHydrated ?? false),
     },
     snapshot.snapshotSequence,
     new Set(snapshot.threads.map((thread) => thread.id)),
@@ -1587,12 +1713,25 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     (readModel.spaces ?? []).filter((space) => space.deletedAt === null),
     state.spaces ?? [],
   );
-  const projects = mapProjects(
+  // Same carryover as the shell path: this read model is authoritative for the
+  // local server only, so remote environments' projects survive it. Without
+  // this, "Repair local state" and desktop bootstrap recovery delete every
+  // remote project while leaving their threads behind.
+  const foreignProjectIds = projectIdsOutsideEnvironment(state, LOCAL_ENVIRONMENT_ID);
+  const foreignProjects = (state.projects ?? []).filter((project) =>
+    foreignProjectIds.has(project.id),
+  );
+  const localProjects = mapProjects(
     readModel.projects.filter(
       (project) => project.deletedAt === null && deletedProjectIdsById[project.id] === undefined,
     ),
     state.projects,
   );
+  // Reuse the previous array when nothing moved: `mapProjects` already returns
+  // its input on a no-op resync, and re-spreading it would churn identity for
+  // every selector downstream.
+  const projects =
+    foreignProjects.length === 0 ? localProjects : [...localProjects, ...foreignProjects];
   const nextThreads = readModel.threads
     .filter(
       (thread) =>

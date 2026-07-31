@@ -2,13 +2,20 @@
 // authorization table is consulted for every RPC, and a rejected method never
 // reaches its handler. A mutation that drops the authorizeWsMethod call, or
 // that defaults an unresolved connection session to "owner", fails here.
-import { ORCHESTRATION_WS_METHODS, WS_METHODS, WsRpcError } from "@synara/contracts";
+import {
+  ORCHESTRATION_WS_METHODS,
+  WS_COMPATIBILITY_QUERY,
+  WS_METHODS,
+  WsRpcError,
+} from "@synara/contracts";
 import { Effect, Schema } from "effect";
 import { Headers } from "effect/unstable/http";
 import { Rpc } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
 
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "./managedAttachmentPrincipal";
+import { resolveWsUpgradeBuildSkew } from "./wsRpc";
+import { version as serverBuild } from "../package.json" with { type: "json" };
 import type { RemoteAccessDeployment } from "./remoteAccessPolicy";
 import {
   WS_CONNECTION_SESSION_HEADER,
@@ -72,6 +79,42 @@ function runMiddleware(input: {
   );
   return { exit, handlerRan };
 }
+
+/**
+ * The upgrade-URL classification that produces `buildSkewed` for the session
+ * the middleware above reads. Every other skew test injects that flag directly,
+ * so this step — the only server-side classification there is — was unpinned:
+ * making it return `false` left 92 tests green across six files.
+ */
+describe("ws upgrade build-skew classification", () => {
+  const paramsFor = (clientBuild: string) =>
+    new URLSearchParams({ [WS_COMPATIBILITY_QUERY.clientBuild]: clientBuild });
+
+  it("does not classify a matching build as skewed", () => {
+    expect(resolveWsUpgradeBuildSkew(paramsFor(serverBuild))).toBe(false);
+  });
+
+  it("classifies a mismatched build as skewed", () => {
+    const [major = "0", minor = "0"] = serverBuild.split(".");
+    expect(resolveWsUpgradeBuildSkew(paramsFor(`${Number(major) + 1}.${minor}.0`))).toBe(true);
+  });
+
+  it("classifies a missing or unparseable client build as skewed", () => {
+    expect(resolveWsUpgradeBuildSkew(new URLSearchParams())).toBe(true);
+    expect(resolveWsUpgradeBuildSkew(paramsFor("test-client"))).toBe(true);
+  });
+
+  it("refuses a mutation for the session such a classification produces", () => {
+    const { exit, handlerRan } = runMiddleware({
+      method: ORCHESTRATION_WS_METHODS.dispatchCommand,
+      role: "owner",
+      config: loopback,
+      buildSkewed: resolveWsUpgradeBuildSkew(paramsFor("test-client")),
+    });
+    expect(exit._tag).toBe("Failure");
+    expect(handlerRan).toBe(false);
+  });
+});
 
 describe("ws admission middleware authorization", () => {
   it("runs an unrestricted method for a paired client", () => {

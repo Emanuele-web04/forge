@@ -1725,6 +1725,23 @@ function trustedWebSocketRequestUrl(
  * configured) matches. Auth enforcement is never derived from `--auth-token`
  * presence, so removing the token cannot open a remote socket.
  */
+/**
+ * Classifies the connecting client's build from the upgrade URL, for the
+ * connection session the admission middleware then reads.
+ *
+ * Extracted so this step is reachable by a test. Every existing skew test
+ * injects `buildSkewed` into a session directly, so the URL -> classification
+ * -> session wiring had no coverage at all: replacing the call below with
+ * `false` left 92 tests green across six skew-related files. That matters
+ * because this is the only server-side classification there is — the code it
+ * feeds exists precisely because a client's own guard cannot be trusted, so a
+ * silent regression here disarms enforcement for every client while the
+ * client-side read-only banner keeps claiming writes are blocked.
+ */
+export function resolveWsUpgradeBuildSkew(searchParams: URLSearchParams): boolean {
+  return isWsClientBuildSkewed(searchParams);
+}
+
 export function authenticateRpcWebSocketUpgrade(input: {
   readonly config: AuthenticatedDeployment;
   readonly legacyToken: string | null;
@@ -1798,7 +1815,7 @@ export function makeWebsocketRpcRouteLayer<R>(
           }
           // Server-side skew enforcement, so the middleware can refuse
           // mutations regardless of whether the client honors its own guard.
-          const buildSkewed = isWsClientBuildSkewed(url.searchParams);
+          const buildSkewed = resolveWsUpgradeBuildSkew(url.searchParams);
           const legacyToken = url.searchParams.get("token");
           const authenticatedSession = yield* authenticateRpcWebSocketUpgrade({
             config,

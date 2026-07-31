@@ -8,10 +8,48 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
+  isWsClientBuildSkewed,
   makeCurrentWsFeatureCompatibilitySearchParams,
   negotiateWsCompatibility,
   validateWsFeatureCompatibility,
 } from "./wsCompatibility";
+import { version as serverBuild } from "../package.json" with { type: "json" };
+import { WS_COMPATIBILITY_QUERY } from "@synara/contracts";
+
+/**
+ * The classification step that feeds the admission middleware's skew guard.
+ *
+ * Enforcement is well covered, but every enforcement test injects `buildSkewed`
+ * directly — so the upgrade-URL -> classification -> session wiring had no test
+ * at all: mutating this function to `return false` left wsRpc.auth,
+ * wsRpc.admissionAuthorization, wsRpc.connectionLifecycle and this file all
+ * green. That matters because the server-side guard exists precisely because
+ * the client's own guard cannot be trusted; a classification that silently
+ * regresses to never-classifying makes the client's read-only notice a lie
+ * while every enforcement assertion still passes.
+ */
+describe("client build skew classification", () => {
+  const paramsFor = (clientBuild: string) =>
+    new URLSearchParams({ [WS_COMPATIBILITY_QUERY.clientBuild]: clientBuild });
+
+  it("does not classify this server's own build as skewed", () => {
+    expect(isWsClientBuildSkewed(paramsFor(serverBuild))).toBe(false);
+    expect(isWsClientBuildSkewed(makeCurrentWsFeatureCompatibilitySearchParams(serverBuild))).toBe(
+      false,
+    );
+  });
+
+  it("classifies a major/minor mismatch as skewed", () => {
+    const [major = "0", minor = "0"] = serverBuild.split(".");
+    expect(isWsClientBuildSkewed(paramsFor(`${Number(major) + 1}.${minor}.0`))).toBe(true);
+    expect(isWsClientBuildSkewed(paramsFor(`${major}.${Number(minor) + 1}.0`))).toBe(true);
+  });
+
+  it("treats a missing or unparseable client build as skewed", () => {
+    expect(isWsClientBuildSkewed(new URLSearchParams())).toBe(true);
+    expect(isWsClientBuildSkewed(paramsFor("not-a-version"))).toBe(true);
+  });
+});
 
 describe("WebSocket compatibility bootstrap", () => {
   it("negotiates the stable epoch/range and returns process/build capabilities", async () => {

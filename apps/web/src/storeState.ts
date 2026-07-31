@@ -48,6 +48,17 @@ export interface AppState {
    * belonging to the environment that sent it.
    */
   environmentIdByThreadId?: Record<ThreadId, string>;
+  /**
+   * Owning environment per project, with the same contract as
+   * `environmentIdByThreadId`: absent means the local server, and a snapshot may
+   * only prune projects belonging to the environment that sent it. Without this
+   * every environment's snapshot rebuilt `projects` from itself alone and
+   * deleted every other environment's.
+   *
+   * Spaces are scoped through the projects that reference them rather than
+   * mapped separately: a space with no surviving project has nothing to render.
+   */
+  environmentIdByProjectId?: Record<string, string>;
   spaces: Space[];
   projects: Project[];
   sidebarThreadSummaryById: Record<string, SidebarThreadSummary>;
@@ -105,6 +116,7 @@ export const initialState: AppState = {
   shellSnapshotSequence: 0,
   shellSnapshotSequenceByEnvironmentId: {},
   environmentIdByThreadId: {},
+  environmentIdByProjectId: {},
   spaces: [],
   projects: [],
   sidebarThreadSummaryById: {},

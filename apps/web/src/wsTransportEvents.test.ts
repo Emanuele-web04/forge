@@ -7,10 +7,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
 import {
+  addWsBuildSkewListener,
   addWsCompatibilityIssueListener,
   addWsTransportStateListener,
+  emitWsBuildSkew,
   emitWsCompatibilityIssue,
   emitWsTransportState,
+  readLatestWsBuildSkew,
   readLatestWsCompatibilityIssue,
   resetWsTransportEventsForTests,
 } from "./wsTransportEvents";
@@ -103,6 +106,47 @@ describe("WebSocket transport state events", () => {
 
     unsubscribeLocal();
     unsubscribeRemote();
+  });
+
+  /**
+   * The skew channel's sibling filters (transport state, compatibility issue)
+   * are both covered; this one was not, and it is the one attached to a
+   * user-facing claim. `TransportBuildSkewNotice` reads LOCAL_ENVIRONMENT_ID
+   * only, so an unfiltered event would show "Read-only: this client and server
+   * run mismatched builds" — naming the LOCAL build pair — because a different
+   * server is on another version, and local writes would then be refused. A
+   * read-only banner that is not true is worse than no banner.
+   */
+  it("scopes build skew to its environment", () => {
+    stubWindow();
+    const localListener = vi.fn();
+    const unsubscribe = addWsBuildSkewListener(LOCAL_ENVIRONMENT_ID, localListener);
+
+    emitWsBuildSkew(REMOTE_ENVIRONMENT_ID, {
+      clientBuild: "0.6.0",
+      serverBuild: "0.5.2",
+    });
+
+    expect(localListener).not.toHaveBeenCalled();
+    expect(readLatestWsBuildSkew(LOCAL_ENVIRONMENT_ID)).toBeNull();
+    expect(readLatestWsBuildSkew(REMOTE_ENVIRONMENT_ID)).toEqual({
+      clientBuild: "0.6.0",
+      serverBuild: "0.5.2",
+    });
+
+    unsubscribe();
+  });
+
+  it("delivers build skew to the environment that owns it", () => {
+    stubWindow();
+    const localListener = vi.fn();
+    const unsubscribe = addWsBuildSkewListener(LOCAL_ENVIRONMENT_ID, localListener);
+
+    emitWsBuildSkew(LOCAL_ENVIRONMENT_ID, { clientBuild: "0.6.0", serverBuild: "0.5.2" });
+
+    expect(localListener).toHaveBeenCalledWith({ clientBuild: "0.6.0", serverBuild: "0.5.2" });
+
+    unsubscribe();
   });
 
   it("scopes compatibility issues to their environment", () => {
