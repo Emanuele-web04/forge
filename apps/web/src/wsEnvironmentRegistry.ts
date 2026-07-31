@@ -91,10 +91,22 @@ export function getWsEnvironmentClient(
 /**
  * Drops the environment's projected rows and snapshot fence.
  *
- * The store is resolved lazily rather than imported at module scope: this
- * module sits underneath the store in the import graph (the store's own
- * transport reaches back here), and it is exercised by node-environment tests
- * that a top-level store import would break on its `window` side effects.
+ * The lazy `import()` is load-bearing — do not "clean it up" into a top-level
+ * import. This module sits underneath the store in the import graph
+ * (`store -> wsEnvironmentRegistry -> wsNativeApi -> ... -> store`), and it is
+ * exercised by node-environment tests. Both direct wirings were tried and both
+ * fail loudly:
+ *
+ * - A top-level `import { useStore } from "./store"` drags the store's
+ *   import-time `window.addEventListener` into every node-environment suite:
+ *   46 failures, `window.addEventListener is not a function`.
+ * - Inverting it — a setter exported here, called from the store — closes the
+ *   cycle the other way and initializes in the wrong order: 44 files / 107
+ *   failures, `Cannot access 'environmentProjectionDiscard' before
+ *   initialization`.
+ *
+ * Resolving at call time avoids both: nothing loads until an environment is
+ * actually torn down, by which point every module is initialized.
  */
 function discardEnvironmentProjectionState(environmentId: EnvironmentId): void {
   void import("./store").then(({ useStore }) => {
