@@ -806,6 +806,7 @@ function makeHarnessLayer(
     "kilo",
     "opencode",
     "pi",
+    "omp",
   ];
   let providerStatuses =
     options.providerStatuses ??

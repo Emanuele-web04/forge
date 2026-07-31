@@ -108,6 +108,7 @@ import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import { providerModelsPrefetchQueryOptions } from "../lib/providerModelPrefetch";
 import { useAppSettings } from "../appSettings";
 import {
   getVisibleProviderUpdateStatuses,
@@ -248,6 +249,7 @@ function RootRouteView() {
           <GitProgressToastPreviewDev />
           <EventRouter />
           <ProviderStatusRefreshCoordinator />
+          <ProviderModelDiscoveryWarmer />
           <GlobalShortcutsDialog />
           <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
@@ -328,6 +330,26 @@ function ProviderStatusRefreshCoordinator() {
     intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
   });
 
+  return null;
+}
+
+function ProviderModelDiscoveryWarmer() {
+  // OMP is the only provider with no static model fallback whose catalog also
+  // takes ~3s to fetch (`omp models --json` cold-start), so it is the lone
+  // provider that doesn't render instantly when the model picker opens. Warm it
+  // at app startup — ahead of the picker opening — so the catalog is ready by
+  // the time the user browses to OMP. React Query dedupes by query key, and
+  // OMP's key is cwd-agnostic, so this prefetch lands on the exact cache entry
+  // the composer reads on mount.
+  const { settings } = useAppSettings();
+  const queryClient = useQueryClient();
+  const ompHidden = settings.hiddenProviders.includes("omp");
+  useEffect(() => {
+    if (ompHidden) return;
+    void queryClient.prefetchQuery(
+      providerModelsPrefetchQueryOptions({ provider: "omp", settings, cwd: null }),
+    );
+  }, [queryClient, settings, ompHidden]);
   return null;
 }
 

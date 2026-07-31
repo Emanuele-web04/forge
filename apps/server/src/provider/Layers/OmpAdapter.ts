@@ -1,7 +1,7 @@
 /**
- * DroidAdapterLive - Factory Droid CLI (`droid exec --output-format acp`) via ACP.
+ * OmpAdapterLive - Oh My Pi (OMP) CLI (`omp acp`) via ACP.
  *
- * @module DroidAdapterLive
+ * @module OmpAdapterLive
  */
 import {
   ApprovalRequestId,
@@ -36,8 +36,10 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as Acp from "@agentclientprotocol/sdk";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import {
@@ -48,16 +50,12 @@ import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewa
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
-  cancelAgentGatewayTurn,
   startAgentGatewaySessionLeaseExitWatcher,
   type AgentGatewaySessionLease,
-  withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
-import { listFactoryPlugins, readFactoryPlugin } from "../FactoryPluginDiscovery.ts";
-import { readFactorySessionHistory } from "../FactorySessionHistory.ts";
 import { appendProviderReferencesPromptBlock } from "../promptReferenceProjection.ts";
 import {
   ProviderAdapterRequestError,
@@ -105,12 +103,13 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
-  applyDroidAcpInteractionMode,
-  applyDroidAcpModelSelection,
-  discoverDroidAcpModels,
-  makeDroidAcpRuntime,
-  type DroidAcpRuntimeSettings,
-} from "../acp/DroidAcpSupport.ts";
+  applyOmpAcpInteractionMode,
+  applyOmpAcpModelSelection,
+  makeOmpAcpRuntime,
+  parseOmpCliModelList,
+  resolveOmpCliBinaryPath,
+  type OmpAcpRuntimeSettings,
+} from "../acp/OmpAcpSupport.ts";
 import { makeSessionTeardownGate } from "../acp/SessionTeardownGate.ts";
 import { cancelTurnAndWait } from "../acp/TurnCancellation.ts";
 import {
@@ -118,12 +117,14 @@ import {
   elicitationResponseFromAnswers,
   isFormElicitationRequest,
 } from "../acp/AcpElicitationSupport.ts";
-import { DroidAdapter, type DroidAdapterShape } from "../Services/DroidAdapter.ts";
+import { OmpAdapter, type OmpAdapterShape } from "../Services/OmpAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { createLogger } from "../../logger.ts";
 
-const PROVIDER = "droid" as const;
+const PROVIDER = "omp" as const;
+const log = createLogger(PROVIDER);
 
-export const takeDroidSynaraHarnessPolicyTextPart = (
+export const takeOmpSynaraHarnessPolicyTextPart = (
   state: SynaraHarnessPolicyDeliveryState,
   scopedGatewayConnectionAvailable: boolean,
 ) =>
@@ -131,58 +132,52 @@ export const takeDroidSynaraHarnessPolicyTextPart = (
     provider: PROVIDER,
     scopedGatewayConnectionAvailable,
   });
-const DROID_RESUME_VERSION = 1 as const;
-const DROID_ACP_TRANSPORT_DEBUG_MARKER = "droid-acp-meta-stripper-v2";
-const DROID_ACP_LOG_PAYLOAD_LIMIT = 4_000;
-const DROID_ACP_DEBUG_ENV = "SYNARA_DROID_ACP_DEBUG";
-const LEGACY_DROID_ACP_DEBUG_ENV = "DP_DROID_ACP_DEBUG";
-const DROID_RESUME_REPLAY_QUIET_MS = 350;
+const OMP_RESUME_VERSION = 1 as const;
+const OMP_ACP_TRANSPORT_DEBUG_MARKER = "omp-acp-meta-stripper-v2";
+const OMP_ACP_LOG_PAYLOAD_LIMIT = 4_000;
+const OMP_ACP_DEBUG_ENV = "SYNARA_OMP_ACP_DEBUG";
+const OMP_RESUME_REPLAY_QUIET_MS = 350;
 // Bounds how long startSession blocks on the replay settling; the background
 // settle loop keeps suppression alive past this until the hard timeout.
-const DROID_RESUME_REPLAY_MAX_WAIT_MS = 3_000;
-const DROID_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
-const DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
-const DROID_TURN_SETTLE_DRAIN_POLL_MS = 25;
-// Backstop for an alive-but-silent droid child: if a turn produces no ACP
+const OMP_RESUME_REPLAY_MAX_WAIT_MS = 3_000;
+const OMP_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
+const OMP_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
+const OMP_TURN_SETTLE_DRAIN_POLL_MS = 25;
+// Backstop for an alive-but-silent omp child: if a turn produces no ACP
 // activity for this long, force-fail it instead of showing "Working" forever.
 // Generous by design so legitimate long, quiet tool runs are not killed;
-// override with SYNARA_DROID_TURN_IDLE_TIMEOUT_MS when a workload needs longer.
-const DROID_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
-  envVar: "SYNARA_DROID_TURN_IDLE_TIMEOUT_MS",
+// override with SYNARA_OMP_TURN_IDLE_TIMEOUT_MS when a workload needs longer.
+const OMP_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
+  envVar: "SYNARA_OMP_TURN_IDLE_TIMEOUT_MS",
   defaultMs: 600_000,
 });
-const DROID_TURN_WATCHDOG_INTERVAL_MS = 15_000;
-const DROID_NESTED_TASK_IDLE_TIMEOUT_MS = 60 * 60_000;
-const DROID_CANCEL_GRACE_MS = 5_000;
-const DROID_PLAN_CAPTURE_CANCEL_FALLBACK_MS = 1_000;
-const DROID_ACP_REQUEST_TIMEOUT_MS = 30_000;
-const DROID_MODEL_DISCOVERY_CACHE_MS = 5 * 60_000;
-const DROID_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
-const DROID_DISCOVERY_CACHE_MAX_ENTRIES = 16;
-const DROID_RESOURCE_DISCIPLINE_PROMPT =
-  "Keep CPU-intensive validation work serial: never overlap builds, typechecks, linters, tests, package audits, or package-manager commands, including across background agents. Wait for one CPU-intensive command to finish before starting the next. Read-only code inspection may still run in parallel.";
-const DROID_PLAN_MODE_PROMPT_PREFIX = [
-  "Synara Droid plan mode is active.",
+const OMP_TURN_WATCHDOG_INTERVAL_MS = 15_000;
+const OMP_NESTED_TASK_IDLE_TIMEOUT_MS = 60 * 60_000;
+const OMP_CANCEL_GRACE_MS = 5_000;
+const OMP_ACP_REQUEST_TIMEOUT_MS = 30_000;
+const OMP_MODEL_DISCOVERY_CACHE_MS = 5 * 60_000;
+const OMP_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
+const OMP_DISCOVERY_CACHE_MAX_ENTRIES = 16;
+const OMP_PLAN_MODE_PROMPT_PREFIX = [
+  "Synara OMP plan mode is active.",
   "Do not implement or mutate files in this turn.",
   "Do not ask follow-up questions or wait for confirmation; if scope is ambiguous, choose a reasonable default and state the assumption in the plan.",
   "When ready, create the final implementation plan.",
 ].join("\n");
 
-function droidAcpTimeoutError(method: string): ProviderAdapterRequestError {
+function ompAcpTimeoutError(method: string): ProviderAdapterRequestError {
   return new ProviderAdapterRequestError({
     provider: PROVIDER,
     method,
-    detail: `Droid ACP did not respond to ${method} within ${DROID_ACP_REQUEST_TIMEOUT_MS / 1000}s.`,
+    detail: `Omp ACP did not respond to ${method} within ${OMP_ACP_REQUEST_TIMEOUT_MS / 1000}s.`,
   });
 }
 
-function isDroidAcpDebugEnabled(): boolean {
-  return (
-    process.env[DROID_ACP_DEBUG_ENV] === "1" || process.env[LEGACY_DROID_ACP_DEBUG_ENV] === "1"
-  );
+function isOmpAcpDebugEnabled(): boolean {
+  return process.env[OMP_ACP_DEBUG_ENV] === "1";
 }
 
-export interface DroidAdapterLiveOptions {
+export interface OmpAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
@@ -196,7 +191,7 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
-interface DroidSessionContext {
+interface OmpSessionContext {
   harnessPolicyDelivered?: boolean;
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   readonly threadId: ThreadId;
@@ -215,8 +210,6 @@ interface DroidSessionContext {
   readonly activeAssistantItemsWithContent: Set<string>;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
-  /** Turns cancelled by Synara only because their Plan proposal was captured. */
-  readonly planCapturedTurnIds: Set<TurnId>;
   // Epoch-ms of the last inbound ACP activity for the active turn; drives the
   // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
@@ -226,7 +219,7 @@ interface DroidSessionContext {
   // its originating turn instead of dropping it as an orphan. Cleared when the
   // next turn dispatches.
   readonly turnToolCallIds: Map<string, TurnId>;
-  // Droid executes `Task` subagents outside the parent ACP event stream. Track
+  // Omp executes `Task` subagents outside the parent ACP event stream. Track
   // their parent tool rows so the watchdog can use a longer, still-finite cap.
   readonly activeNestedTaskToolCallIds: Set<string>;
   readonly nestedTaskLifecycleByToolCallId: Map<string, "active" | "completed">;
@@ -261,36 +254,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function scopeDroidRuntimeItemIdForTurn(turnId: TurnId, itemId: string): string {
+export function scopeOmpRuntimeItemIdForTurn(turnId: TurnId, itemId: string): string {
   return scopeAcpRuntimeItemIdForTurn(PROVIDER, turnId, itemId);
 }
 
-// Droid can close a stale assistant segment before any visible text arrives.
-export function isRenderableDroidAssistantDelta(input: {
+// Omp can close a stale assistant segment before any visible text arrives.
+export function isRenderableOmpAssistantDelta(input: {
   readonly streamKind?: string | undefined;
   readonly text: string;
 }): boolean {
   return input.streamKind !== "reasoning_text" && input.text.trim().length > 0;
 }
 
-export function classifyDroidPromptTurnCompletion(input: {
-  readonly planCaptured: boolean;
+export function classifyOmpPromptTurnCompletion(input: {
   readonly stopReason: string | null | undefined;
   readonly failedToolDetail?: string | undefined;
 }): { readonly state: "completed" | "cancelled" | "failed"; readonly errorMessage?: string } {
-  return input.planCaptured
-    ? { state: "completed" }
-    : classifyAcpPromptTurnCompletion({
-        stopReason: input.stopReason,
-        ...(input.failedToolDetail !== undefined
-          ? { failedToolDetail: input.failedToolDetail }
-          : {}),
-      });
+  return classifyAcpPromptTurnCompletion({
+    stopReason: input.stopReason,
+    ...(input.failedToolDetail !== undefined ? { failedToolDetail: input.failedToolDetail } : {}),
+  });
 }
 
-// Identifies Factory's parent `Task` tool row; child-session progress is not
+// Identifies OMP's parent `Task` tool row; child-session progress is not
 // forwarded over ACP, so this marker is the only reliable liveness signal.
-export function isDroidNestedTaskToolCall(toolCall: AcpToolCallState): boolean {
+export function isOmpNestedTaskToolCall(toolCall: AcpToolCallState): boolean {
   if (toolCall.title?.trim().toLowerCase() === "task") {
     return true;
   }
@@ -305,51 +293,29 @@ export function isDroidNestedTaskToolCall(toolCall: AcpToolCallState): boolean {
 
 // A turn-specific stop is valid only while that exact turn is active. During
 // startup no caller can know the new provider turn id yet, so a supplied id is stale.
-export function shouldIgnoreDroidInterrupt(
+export function shouldIgnoreOmpInterrupt(
   requestedTurnId: TurnId | undefined,
   activeTurnId: TurnId | undefined,
 ): boolean {
   return requestedTurnId !== undefined && requestedTurnId !== activeTurnId;
 }
 
-export function extractDroidApproveSpecPlanMarkdown(
-  toolCall: AcpToolCallState,
-): string | undefined {
-  if (toolCall.title?.trim().toLowerCase() !== "approve spec") {
-    return undefined;
-  }
-  const rawInput = toolCall.data.rawInput;
-  if (typeof rawInput !== "object" || rawInput === null || !("plan" in rawInput)) {
-    return undefined;
-  }
-  const plan = rawInput.plan;
-  return typeof plan === "string" && plan.trim().length > 0 ? plan.trim() : undefined;
-}
-
-export function isExpectedDroidPlanRejection(toolCall: AcpToolCallState): boolean {
-  return (
-    toolCall.title?.trim().toLowerCase() === "approve spec" &&
-    toolCall.status === "failed" &&
-    /plan not approved\s*-\s*remaining in spec mode/iu.test(toolCall.detail ?? "")
-  );
-}
-
-// Droid may reuse ACP item ids across resumed history; DP runtime ids must stay turn-local.
-export function scopeDroidToolCallStateForTurn(
+// Omp may reuse ACP item ids across resumed history; DP runtime ids must stay turn-local.
+export function scopeOmpToolCallStateForTurn(
   turnId: TurnId,
   toolCall: AcpToolCallState,
 ): AcpToolCallState {
   return scopeAcpToolCallStateForTurn(PROVIDER, turnId, toolCall);
 }
 
-function parseDroidResume(raw: unknown): { sessionId: string } | undefined {
+function parseOmpResume(raw: unknown): { sessionId: string } | undefined {
   if (!isRecord(raw)) return undefined;
-  if (raw.schemaVersion !== DROID_RESUME_VERSION) return undefined;
+  if (raw.schemaVersion !== OMP_RESUME_VERSION) return undefined;
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
   return { sessionId: raw.sessionId.trim() };
 }
 
-export function resolveDroidSessionCwd(
+export function resolveOmpSessionCwd(
   inputCwd: string | undefined,
   serverConfig: ServerConfigShape,
   sessionCwd?: string,
@@ -362,19 +328,19 @@ export function resolveDroidSessionCwd(
   });
 }
 
-function setDroidDiscoveryCacheEntry<T>(cache: Map<string, T>, key: string, value: T): void {
+function setOmpDiscoveryCacheEntry<T>(cache: Map<string, T>, key: string, value: T): void {
   cache.delete(key);
   cache.set(key, value);
-  while (cache.size > DROID_DISCOVERY_CACHE_MAX_ENTRIES) {
+  while (cache.size > OMP_DISCOVERY_CACHE_MAX_ENTRIES) {
     const oldestKey = cache.keys().next().value;
     if (oldestKey === undefined) break;
     cache.delete(oldestKey);
   }
 }
 
-export function makeDroidAdapter(
-  droidSettings: DroidAcpRuntimeSettings,
-  options?: DroidAdapterLiveOptions,
+export function makeOmpAdapter(
+  ompSettings: OmpAcpRuntimeSettings,
+  options?: OmpAdapterLiveOptions,
 ) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -391,7 +357,7 @@ export function makeDroidAdapter(
     const managedNativeEventLogger =
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
-    const sessions = new Map<ThreadId, DroidSessionContext>();
+    const sessions = new Map<ThreadId, OmpSessionContext>();
     const sessionTeardownGate = makeSessionTeardownGate();
     const modelDiscoveryCache = new Map<
       string,
@@ -421,20 +387,86 @@ export function makeDroidAdapter(
       ).pipe(Effect.asVoid);
 
     // Discovery sessions are disposable and never enter the live session directory.
-    const makeDroidDiscoveryRuntime = (input: {
+    const makeOmpDiscoveryRuntime = (input: {
       readonly binaryPath?: string;
       readonly cwd: string;
       readonly clientName: string;
     }) =>
-      makeDroidAcpRuntime({
-        droidSettings: {
-          ...(droidSettings.binaryPath ? { binaryPath: droidSettings.binaryPath } : {}),
+      makeOmpAcpRuntime({
+        ompSettings: {
+          ...(ompSettings.binaryPath ? { binaryPath: ompSettings.binaryPath } : {}),
           ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         },
         childProcessSpawner,
         cwd: input.cwd,
         clientInfo: { name: input.clientName, version: "0.0.0" },
       });
+    const collectDiscoveryStreamAsString = <E>(
+      stream: Stream.Stream<Uint8Array, E>,
+    ): Effect.Effect<string, E> =>
+      Stream.runFold(
+        stream,
+        () => "",
+        (acc, chunk) => acc + new TextDecoder().decode(chunk),
+      );
+
+    // OMP publishes its full multi-provider catalog via `omp models --json` in a
+    // single subprocess call; each model carries its own `thinking` efforts
+    // inline. This is O(1) round-trips and scales to OMP's 300+ model catalogs.
+    // The ACP model option exposes only slug/name and would need one
+    // session/set_config_option round-trip per model to read per-model thinking.
+    const runOmpCliModelList = (binaryPath: string) =>
+      Effect.gen(function* () {
+        const executable = resolveOmpCliBinaryPath(binaryPath);
+        log.info("model/list cli start", { binaryPath, executable });
+        const env = buildProviderChildEnvironment({ provider: "omp" });
+        const prepared = prepareWindowsSafeProcess(executable, ["models", "--json"], {
+          env,
+        });
+        const command = ChildProcess.make(prepared.command, prepared.args, {
+          shell: prepared.shell,
+          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          env,
+          stdin: "ignore",
+        });
+        const child = yield* childProcessSpawner.spawn(command);
+        const [stdout, stderr, exitCode] = yield* Effect.all(
+          [
+            collectDiscoveryStreamAsString(child.stdout),
+            collectDiscoveryStreamAsString(child.stderr),
+            child.exitCode.pipe(Effect.map(Number)),
+          ],
+          { concurrency: "unbounded" },
+        );
+        log.info("model/list cli spawned", {
+          exitCode,
+          stdoutBytes: stdout.length,
+          stdoutHead: stdout.slice(0, 240),
+          stderr,
+        });
+        if (exitCode !== 0) {
+          log.warn("model/list cli non-zero exit", { exitCode, stderr });
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: stderr.trim() || `'${executable} models --json' exited with code ${exitCode}.`,
+          });
+        }
+        const models = parseOmpCliModelList(stdout);
+        log.info("model/list cli parsed", { parsedCount: models.length });
+        if (models.length === 0) {
+          log.warn("model/list cli returned zero models", {
+            stdoutHead: stdout.slice(0, 500),
+          });
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail:
+              "OMP model discovery returned no models. Run `omp` to authenticate so ~/.omp credentials exist.",
+          });
+        }
+        return { models, source: "omp-cli", cached: false } satisfies ProviderListModelsResult;
+      }).pipe(Effect.scoped);
 
     const logNative = (threadId: ThreadId, method: string, payload: unknown) =>
       Effect.gen(function* () {
@@ -458,7 +490,7 @@ export function makeDroidAdapter(
       });
 
     const emitPlanUpdate = (
-      ctx: DroidSessionContext,
+      ctx: OmpSessionContext,
       payload: {
         readonly explanation?: string | null;
         readonly plan: ReadonlyArray<{
@@ -486,12 +518,12 @@ export function makeDroidAdapter(
       });
 
     const emitNestedTaskLifecycle = (
-      ctx: DroidSessionContext,
+      ctx: OmpSessionContext,
       toolCall: AcpToolCallState,
       turnId: TurnId,
     ) =>
       Effect.gen(function* () {
-        if (!isDroidNestedTaskToolCall(toolCall)) {
+        if (!isOmpNestedTaskToolCall(toolCall)) {
           return;
         }
         const previous = ctx.nestedTaskLifecycleByToolCallId.get(toolCall.toolCallId);
@@ -546,7 +578,7 @@ export function makeDroidAdapter(
 
     const requireSession = (
       threadId: ThreadId,
-    ): Effect.Effect<DroidSessionContext, ProviderAdapterSessionNotFoundError> => {
+    ): Effect.Effect<OmpSessionContext, ProviderAdapterSessionNotFoundError> => {
       const ctx = sessions.get(threadId);
       if (!ctx || ctx.stopped) {
         return Effect.fail(
@@ -557,7 +589,7 @@ export function makeDroidAdapter(
     };
 
     const stopSessionInternal = (
-      ctx: DroidSessionContext,
+      ctx: OmpSessionContext,
       options?: {
         readonly exitKind?: "graceful" | "error";
         readonly reason?: string;
@@ -568,7 +600,6 @@ export function makeDroidAdapter(
         Effect.gen(function* () {
           if (!ctx.stopped) {
             ctx.stopped = true;
-            yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
             ctx.gatewaySessionLease?.release();
             sessionTeardownGate.track(ctx.threadId, ctx.teardownComplete);
             sessions.delete(ctx.threadId);
@@ -617,8 +648,8 @@ export function makeDroidAdapter(
         }),
       );
 
-    const noteSuppressedDroidRuntimeEvent = (
-      ctx: DroidSessionContext,
+    const noteSuppressedOmpRuntimeEvent = (
+      ctx: OmpSessionContext,
       eventTag: string,
       reason: "resume-replay" | "orphan-turn-event",
     ) =>
@@ -626,10 +657,10 @@ export function makeDroidAdapter(
         if (reason === "resume-replay") {
           ctx.resumeReplayLastSuppressedAt = Date.now();
         }
-        if (!isDroidAcpDebugEnabled()) {
+        if (!isOmpAcpDebugEnabled()) {
           return;
         }
-        yield* Effect.logInfo("droid.acp.runtime_event_suppressed", {
+        yield* Effect.logInfo("omp.acp.runtime_event_suppressed", {
           threadId: ctx.threadId,
           turnId: ctx.activeTurnId,
           eventTag,
@@ -637,18 +668,18 @@ export function makeDroidAdapter(
         });
       });
 
-    const cancelDroidPromptWithGrace = (
-      ctx: DroidSessionContext,
+    const cancelOmpPromptWithGrace = (
+      ctx: OmpSessionContext,
       promptFiber: Fiber.Fiber<void, never> | undefined,
     ) =>
       Effect.gen(function* () {
         const result = yield* cancelTurnAndWait({
           cancel: ctx.acp.cancel,
           promptFiber,
-          graceMs: DROID_CANCEL_GRACE_MS,
+          graceMs: OMP_CANCEL_GRACE_MS,
         });
         if (result.cancelRequest !== "sent" || result.prompt === "timedOut") {
-          yield* Effect.logWarning("droid.acp.cancel_escalated", {
+          yield* Effect.logWarning("omp.acp.cancel_escalated", {
             threadId: ctx.threadId,
             turnId: ctx.activeTurnId,
             cancelRequest: result.cancelRequest,
@@ -659,53 +690,14 @@ export function makeDroidAdapter(
         return result;
       });
 
-    const settleCapturedDroidPlanTurn = (
-      ctx: DroidSessionContext,
-      turnId: TurnId,
-      delayMs: number,
-    ) =>
-      Effect.gen(function* () {
-        if (ctx.activeTurnId !== turnId || ctx.stopped) {
-          return;
-        }
-        // Capture ownership immediately. The fallback delay is only for the
-        // cancellation attempt; the prompt may settle during that delay and
-        // must still complete as a successfully captured Plan turn.
-        ctx.planCapturedTurnIds.add(turnId);
-        // Only the cancellation work runs in the background. Keeping the marker
-        // in this caller fiber closes the scheduler window where the prompt
-        // could settle before a forked child executed its first instruction.
-        yield* Effect.gen(function* () {
-          // The expected rejected-tool update normally starts this immediately.
-          // The delayed capture path is a fallback for providers that omit it.
-          if (delayMs > 0) {
-            yield* Effect.sleep(delayMs);
-          }
-          if (ctx.activeTurnId !== turnId || ctx.stopped) {
-            return;
-          }
-          const result = yield* cancelDroidPromptWithGrace(ctx, ctx.activePromptFiber);
-          if (
-            result.prompt === "timedOut" ||
-            (result.prompt === "notStarted" && result.cancelRequest !== "sent")
-          ) {
-            yield* stopSessionInternal(ctx, {
-              exitKind: "error",
-              reason: "Droid Plan turn did not settle after its proposal was captured.",
-              awaitTermination: false,
-            });
-          }
-        }).pipe(Effect.forkIn(ctx.scope));
-      });
-
-    const activeTurnIdForDroidRuntimeEvent = (ctx: DroidSessionContext, eventTag: string) =>
+    const activeTurnIdForOmpRuntimeEvent = (ctx: OmpSessionContext, eventTag: string) =>
       Effect.gen(function* () {
         if (ctx.resumeReplayReady !== undefined) {
-          yield* noteSuppressedDroidRuntimeEvent(ctx, eventTag, "resume-replay");
+          yield* noteSuppressedOmpRuntimeEvent(ctx, eventTag, "resume-replay");
           return undefined;
         }
         if (ctx.activeTurnId === undefined) {
-          yield* noteSuppressedDroidRuntimeEvent(ctx, eventTag, "orphan-turn-event");
+          yield* noteSuppressedOmpRuntimeEvent(ctx, eventTag, "orphan-turn-event");
           return undefined;
         }
         return ctx.activeTurnId;
@@ -719,23 +711,23 @@ export function makeDroidAdapter(
     // to catch up is immune to stream chunk buffering and in-flight handlers,
     // unlike a queue-size probe. Returns immediately when the consumer kept
     // up; bounded so a chatty stream cannot stall settlement past the cap.
-    const waitForDroidQueuedTurnEventsDrained = (ctx: DroidSessionContext) =>
+    const waitForOmpQueuedTurnEventsDrained = (ctx: OmpSessionContext) =>
       Effect.gen(function* () {
         const target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
         const startedAt = Date.now();
         while (
           ctx.sessionUpdatesProcessed < target &&
-          Date.now() - startedAt < DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS
+          Date.now() - startedAt < OMP_TURN_SETTLE_DRAIN_MAX_WAIT_MS
         ) {
-          yield* Effect.sleep(DROID_TURN_SETTLE_DRAIN_POLL_MS);
+          yield* Effect.sleep(OMP_TURN_SETTLE_DRAIN_POLL_MS);
         }
       });
 
-    // On session/load, Droid can replay old ACP updates after the session is "ready".
+    // On session/load, Omp can replay old ACP updates after the session is "ready".
     // Keep suppression active until that stream actually goes quiet — clearing it
     // on a fixed timeout lets late historical deltas leak into the first turn as
     // its content. The hard cap only guards against a replay that never settles.
-    const settleDroidResumeReplayWhenQuiet = (ctx: DroidSessionContext) =>
+    const settleOmpResumeReplayWhenQuiet = (ctx: OmpSessionContext) =>
       Effect.gen(function* () {
         const ready = ctx.resumeReplayReady;
         if (ready === undefined) {
@@ -749,14 +741,14 @@ export function makeDroidAdapter(
           const quietForMs = now - lastSuppressedAt;
           const elapsedMs = now - startedAt;
           if (
-            quietForMs >= DROID_RESUME_REPLAY_QUIET_MS ||
-            elapsedMs >= DROID_RESUME_REPLAY_HARD_TIMEOUT_MS
+            quietForMs >= OMP_RESUME_REPLAY_QUIET_MS ||
+            elapsedMs >= OMP_RESUME_REPLAY_HARD_TIMEOUT_MS
           ) {
-            const timedOut = elapsedMs >= DROID_RESUME_REPLAY_HARD_TIMEOUT_MS;
+            const timedOut = elapsedMs >= OMP_RESUME_REPLAY_HARD_TIMEOUT_MS;
             ctx.resumeReplayReady = undefined;
             ctx.resumeReplayLastSuppressedAt = undefined;
             if (timedOut) {
-              yield* Effect.logWarning("droid.acp.resume_replay_quiet_wait_timeout", {
+              yield* Effect.logWarning("omp.acp.resume_replay_quiet_wait_timeout", {
                 threadId: ctx.threadId,
                 elapsedMs,
               });
@@ -764,12 +756,12 @@ export function makeDroidAdapter(
             yield* Deferred.succeed(ready, undefined);
             return;
           }
-          yield* Effect.sleep(Math.min(DROID_RESUME_REPLAY_QUIET_MS - quietForMs, 50));
+          yield* Effect.sleep(Math.min(OMP_RESUME_REPLAY_QUIET_MS - quietForMs, 50));
         }
         yield* Deferred.succeed(ready, undefined);
       });
 
-    const startSession: DroidAdapterShape["startSession"] = (input) =>
+    const startSession: OmpAdapterShape["startSession"] = (input) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -781,7 +773,7 @@ export function makeDroidAdapter(
             });
           }
           yield* sessionTeardownGate.awaitPending(input.threadId);
-          const cwd = resolveDroidSessionCwd(input.cwd, serverConfig);
+          const cwd = resolveOmpSessionCwd(input.cwd, serverConfig);
           if (cwd === undefined) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
@@ -790,7 +782,7 @@ export function makeDroidAdapter(
             });
           }
 
-          const droidModelSelection =
+          const ompModelSelection =
             input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
@@ -814,9 +806,9 @@ export function makeDroidAdapter(
               ? Effect.void
               : Effect.sync(gatewaySessionLease.release),
           );
-          let ctx!: DroidSessionContext;
+          let ctx!: OmpSessionContext;
 
-          const resumeSessionId = parseDroidResume(input.resumeCursor)?.sessionId;
+          const resumeSessionId = parseOmpResume(input.resumeCursor)?.sessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -824,40 +816,31 @@ export function makeDroidAdapter(
           });
           const acpRuntimeLoggers = makeAcpDebugLoggers({
             base: acpNativeLoggers,
-            enabled: isDroidAcpDebugEnabled(),
+            enabled: isOmpAcpDebugEnabled(),
             provider: PROVIDER,
-            marker: DROID_ACP_TRANSPORT_DEBUG_MARKER,
-            payloadLimit: DROID_ACP_LOG_PAYLOAD_LIMIT,
-            shouldMirrorIncomingRaw: (payload) => payload.includes("droidShell"),
+            marker: OMP_ACP_TRANSPORT_DEBUG_MARKER,
+            payloadLimit: OMP_ACP_LOG_PAYLOAD_LIMIT,
+            shouldMirrorIncomingRaw: () => false,
           });
-          const providerDroidOptions = input.providerOptions?.droid;
-          const effectiveDroidSettings: DroidAcpRuntimeSettings = {
-            appendSystemPrompt: DROID_RESOURCE_DISCIPLINE_PROMPT,
-            ...(droidSettings.binaryPath !== undefined
-              ? { binaryPath: droidSettings.binaryPath }
-              : {}),
-            ...(providerDroidOptions?.binaryPath !== undefined
-              ? { binaryPath: providerDroidOptions.binaryPath }
-              : {}),
-            ...(droidModelSelection?.model ? { model: droidModelSelection.model } : {}),
-            ...(droidModelSelection?.options?.reasoningEffort
-              ? { reasoningEffort: droidModelSelection.options.reasoningEffort }
+          const providerOmpOptions = input.providerOptions?.omp;
+          const effectiveOmpSettings: OmpAcpRuntimeSettings = {
+            ...(ompSettings.binaryPath !== undefined ? { binaryPath: ompSettings.binaryPath } : {}),
+            ...(providerOmpOptions?.binaryPath !== undefined
+              ? { binaryPath: providerOmpOptions.binaryPath }
               : {}),
           };
 
-          yield* Effect.logInfo("droid.acp.start", {
-            marker: DROID_ACP_TRANSPORT_DEBUG_MARKER,
-            debugEnv: DROID_ACP_DEBUG_ENV,
+          yield* Effect.logInfo("omp.acp.start", {
+            marker: OMP_ACP_TRANSPORT_DEBUG_MARKER,
+            debugEnv: OMP_ACP_DEBUG_ENV,
             threadId: input.threadId,
             cwd,
             resume: resumeSessionId !== undefined,
-            model: effectiveDroidSettings.model,
-            reasoningEffort: effectiveDroidSettings.reasoningEffort,
-            binaryPath: effectiveDroidSettings.binaryPath ?? "droid",
+            binaryPath: effectiveOmpSettings.binaryPath ?? "omp",
           });
 
-          const acp = yield* makeDroidAcpRuntime({
-            droidSettings: effectiveDroidSettings,
+          const acp = yield* makeOmpAcpRuntime({
+            ompSettings: effectiveOmpSettings,
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
@@ -893,8 +876,8 @@ export function makeDroidAdapter(
                 });
                 if (policyOutcome !== undefined) {
                   if (policyOutcome.outcome === "selected") {
-                    if (isDroidAcpDebugEnabled()) {
-                      yield* Effect.logInfo("droid.acp.permission_policy_applied", {
+                    if (isOmpAcpDebugEnabled()) {
+                      yield* Effect.logInfo("omp.acp.permission_policy_applied", {
                         threadId: input.threadId,
                         turnId: ctx?.activeTurnId,
                         interactionMode: ctx?.activeInteractionMode,
@@ -1014,9 +997,9 @@ export function makeDroidAdapter(
             );
             const startedOption = yield* acp
               .start()
-              .pipe(Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS));
+              .pipe(Effect.timeoutOption(OMP_ACP_REQUEST_TIMEOUT_MS));
             return yield* Option.match(startedOption, {
-              onNone: () => Effect.fail(droidAcpTimeoutError("session/start")),
+              onNone: () => Effect.fail(ompAcpTimeoutError("session/start")),
               onSome: Effect.succeed,
             });
           }).pipe(
@@ -1032,7 +1015,7 @@ export function makeDroidAdapter(
               provider: PROVIDER,
               method: "session/resume",
               detail:
-                "Droid could not resume the requested native session. Synara refused the fresh fallback to avoid silently losing conversation context.",
+                "Omp could not resume the requested native session. Synara refused the fresh fallback to avoid silently losing conversation context.",
             });
           }
 
@@ -1048,10 +1031,10 @@ export function makeDroidAdapter(
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            model: droidModelSelection?.model,
+            model: ompModelSelection?.model,
             threadId: input.threadId,
             resumeCursor: {
-              schemaVersion: DROID_RESUME_VERSION,
+              schemaVersion: OMP_RESUME_VERSION,
               sessionId: started.sessionId,
             },
             createdAt: now,
@@ -1078,7 +1061,6 @@ export function makeDroidAdapter(
             activeAssistantItemsWithContent: new Set(),
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
-            planCapturedTurnIds: new Set(),
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
             activeNestedTaskToolCallIds: new Set(),
@@ -1105,7 +1087,7 @@ export function makeDroidAdapter(
                     return;
                   case "AssistantItemStarted":
                     {
-                      const activeTurnId = yield* activeTurnIdForDroidRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
@@ -1114,17 +1096,14 @@ export function makeDroidAdapter(
                     return;
                   case "AssistantItemCompleted":
                     {
-                      const activeTurnId = yield* activeTurnIdForDroidRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
-                      const scopedItemId = scopeDroidRuntimeItemIdForTurn(
-                        activeTurnId,
-                        event.itemId,
-                      );
+                      const scopedItemId = scopeOmpRuntimeItemIdForTurn(activeTurnId, event.itemId);
                       if (!ctx.activeAssistantItemsWithContent.has(scopedItemId)) {
-                        if (isDroidAcpDebugEnabled()) {
-                          yield* Effect.logInfo("droid.acp.empty_assistant_item_suppressed", {
+                        if (isOmpAcpDebugEnabled()) {
+                          yield* Effect.logInfo("omp.acp.empty_assistant_item_suppressed", {
                             threadId: ctx.threadId,
                             turnId: activeTurnId,
                             itemId: scopedItemId,
@@ -1148,7 +1127,7 @@ export function makeDroidAdapter(
                     return;
                   case "PlanUpdated":
                     {
-                      const activeTurnId = yield* activeTurnIdForDroidRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
@@ -1169,9 +1148,6 @@ export function makeDroidAdapter(
                           : undefined;
                       if (lateTurnId !== undefined) {
                         yield* logNative(ctx.threadId, "session/update", event.rawPayload);
-                        if (isExpectedDroidPlanRejection(event.toolCall)) {
-                          return;
-                        }
                         yield* emitNestedTaskLifecycle(ctx, event.toolCall, lateTurnId);
                         yield* offerRuntimeEvent(
                           input.lifecycleGeneration,
@@ -1180,58 +1156,18 @@ export function makeDroidAdapter(
                             provider: PROVIDER,
                             threadId: ctx.threadId,
                             turnId: lateTurnId,
-                            toolCall: scopeDroidToolCallStateForTurn(lateTurnId, event.toolCall),
+                            toolCall: scopeOmpToolCallStateForTurn(lateTurnId, event.toolCall),
                             rawPayload: event.rawPayload,
                           }),
                         );
                         return;
                       }
-                      const activeTurnId = yield* activeTurnIdForDroidRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
                       ctx.turnToolCallIds.set(event.toolCall.toolCallId, activeTurnId);
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
-                      const approveSpecPlan = extractDroidApproveSpecPlanMarkdown(event.toolCall);
-                      if (ctx.activeInteractionMode === "plan" && approveSpecPlan !== undefined) {
-                        if (ctx.lastPlanFingerprint !== approveSpecPlan) {
-                          ctx.lastPlanFingerprint = approveSpecPlan;
-                          yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
-                            type: "turn.proposed.completed",
-                            ...(yield* makeEventStamp()),
-                            provider: PROVIDER,
-                            threadId: ctx.threadId,
-                            turnId: activeTurnId,
-                            itemId: RuntimeItemId.makeUnsafe(
-                              `droid-plan-approval:${event.toolCall.toolCallId}`,
-                            ),
-                            payload: { planMarkdown: approveSpecPlan },
-                            raw: {
-                              source: "acp.jsonrpc",
-                              method: "session/update",
-                              payload: event.rawPayload,
-                            },
-                          });
-                          yield* settleCapturedDroidPlanTurn(
-                            ctx,
-                            activeTurnId,
-                            DROID_PLAN_CAPTURE_CANCEL_FALLBACK_MS,
-                          );
-                        }
-                        if (
-                          event.toolCall.status === "pending" ||
-                          event.toolCall.status === "inProgress"
-                        ) {
-                          return;
-                        }
-                      }
-                      if (
-                        ctx.activeInteractionMode === "plan" &&
-                        isExpectedDroidPlanRejection(event.toolCall)
-                      ) {
-                        yield* settleCapturedDroidPlanTurn(ctx, activeTurnId, 0);
-                        return;
-                      }
                       yield* emitNestedTaskLifecycle(ctx, event.toolCall, activeTurnId);
                       const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
                       if (failedToolDetail !== undefined) {
@@ -1244,7 +1180,7 @@ export function makeDroidAdapter(
                           provider: PROVIDER,
                           threadId: ctx.threadId,
                           turnId: activeTurnId,
-                          toolCall: scopeDroidToolCallStateForTurn(activeTurnId, event.toolCall),
+                          toolCall: scopeOmpToolCallStateForTurn(activeTurnId, event.toolCall),
                           rawPayload: event.rawPayload,
                         }),
                       );
@@ -1252,15 +1188,15 @@ export function makeDroidAdapter(
                     return;
                   case "ContentDelta":
                     {
-                      const activeTurnId = yield* activeTurnIdForDroidRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                       const scopedItemId = event.itemId
-                        ? scopeDroidRuntimeItemIdForTurn(activeTurnId, event.itemId)
+                        ? scopeOmpRuntimeItemIdForTurn(activeTurnId, event.itemId)
                         : undefined;
-                      if (isRenderableDroidAssistantDelta(event)) {
+                      if (isRenderableOmpAssistantDelta(event)) {
                         ctx.activeTurnHadAssistantContent = true;
                         if (scopedItemId !== undefined) {
                           ctx.activeAssistantItemsWithContent.add(scopedItemId);
@@ -1283,7 +1219,7 @@ export function makeDroidAdapter(
                     return;
                   case "UsageUpdated":
                     {
-                      const activeTurnId = yield* activeTurnIdForDroidRuntimeEvent(ctx, event._tag);
+                      const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
@@ -1305,7 +1241,7 @@ export function makeDroidAdapter(
                 }
               }).pipe(
                 // Bump the processed count only after the handler fully ran, so
-                // waitForDroidQueuedTurnEventsDrained cannot observe an event as
+                // waitForOmpQueuedTurnEventsDrained cannot observe an event as
                 // consumed while its state updates are still being applied.
                 Effect.ensuring(
                   Effect.sync(() => {
@@ -1326,11 +1262,11 @@ export function makeDroidAdapter(
           // failure OR interruption of the remaining startup steps must tear the
           // session down explicitly instead of leaking a live child.
           yield* Effect.gen(function* () {
-            if (droidModelSelection?.model) {
-              yield* applyDroidAcpModelSelection({
+            if (ompModelSelection?.model) {
+              yield* applyOmpAcpModelSelection({
                 runtime: acp,
-                model: droidModelSelection.model,
-                reasoningEffort: droidModelSelection.options?.reasoningEffort,
+                model: ompModelSelection.model,
+                thinkingLevel: ompModelSelection.options?.thinkingLevel,
                 mapError: ({ cause, method }) =>
                   mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
               });
@@ -1346,9 +1282,9 @@ export function makeDroidAdapter(
               // a long replay cannot hold session startup hostage. sendTurn awaits
               // the deferred, so the first turn stays gated until the replay has
               // actually finished.
-              yield* settleDroidResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
+              yield* settleOmpResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
               yield* Deferred.await(resumeReplayReady).pipe(
-                Effect.timeoutOption(DROID_RESUME_REPLAY_MAX_WAIT_MS),
+                Effect.timeoutOption(OMP_RESUME_REPLAY_MAX_WAIT_MS),
               );
             }
 
@@ -1364,7 +1300,7 @@ export function makeDroidAdapter(
               ...(yield* makeEventStamp()),
               provider: PROVIDER,
               threadId: input.threadId,
-              payload: { state: "ready", reason: "Droid ACP session ready" },
+              payload: { state: "ready", reason: "Omp ACP session ready" },
             });
             yield* offerRuntimeEvent(input.lifecycleGeneration, {
               type: "thread.started",
@@ -1374,10 +1310,10 @@ export function makeDroidAdapter(
               payload: { providerThreadId: started.sessionId },
             });
           }).pipe(
-            Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS),
+            Effect.timeoutOption(OMP_ACP_REQUEST_TIMEOUT_MS),
             Effect.flatMap(
               Option.match({
-                onNone: () => Effect.fail(droidAcpTimeoutError("session/set_config_option")),
+                onNone: () => Effect.fail(ompAcpTimeoutError("session/set_config_option")),
                 onSome: Effect.succeed,
               }),
             ),
@@ -1390,24 +1326,19 @@ export function makeDroidAdapter(
         }).pipe(Effect.scoped),
       );
 
-    // Idle-progress watchdog escape hatch: force-fail a turn whose droid child
+    // Idle-progress watchdog escape hatch: force-fail a turn whose omp child
     // is alive but has gone completely silent. Mirrors the prompt-fiber
     // onFailure branch and stays idempotent via clearAcpActiveTurn, so it is a
     // no-op if the turn settled normally first (whichever fires first wins).
-    const failDroidTurnAsTimedOut = (ctx: DroidSessionContext, turnId: TurnId, idleMs: number) =>
+    const failOmpTurnAsTimedOut = (ctx: OmpSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
-        if (ctx.activeTurnId !== turnId) {
-          return;
-        }
-        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-        ctx.planCapturedTurnIds.delete(turnId);
         if (!clearAcpActiveTurn(ctx, turnId)) {
           return;
         }
         const completedCost = finalizeAcpActiveTurnCost(ctx);
         const idleSeconds = Math.round(idleMs / 1000);
-        const detail = `Droid stopped responding (no activity for ${idleSeconds}s); the turn was timed out.`;
+        const detail = `Omp stopped responding (no activity for ${idleSeconds}s); the turn was timed out.`;
         ctx.turns.push({ id: turnId, items: [{ prompt: turnId, timedOut: true, idleMs }] });
         ctx.session = {
           ...ctx.session,
@@ -1415,7 +1346,7 @@ export function makeDroidAdapter(
           updatedAt: yield* nowIso,
           lastError: detail,
         };
-        yield* Effect.logWarning("droid.acp.turn_idle_timeout", {
+        yield* Effect.logWarning("omp.acp.turn_idle_timeout", {
           threadId: ctx.threadId,
           turnId,
           idleMs,
@@ -1433,9 +1364,9 @@ export function makeDroidAdapter(
             ...completedCost,
           },
         });
-        // Let Droid flush final ACP updates and settle session/prompt before
+        // Let Omp flush final ACP updates and settle session/prompt before
         // escalating to process teardown for a silent nested worker.
-        yield* cancelDroidPromptWithGrace(ctx, promptFiber);
+        yield* cancelOmpPromptWithGrace(ctx, promptFiber);
         yield* stopSessionInternal(ctx, {
           exitKind: "error",
           reason: detail,
@@ -1443,7 +1374,7 @@ export function makeDroidAdapter(
         });
       });
 
-    const sendTurn: DroidAdapterShape["sendTurn"] = (input) =>
+    const sendTurn: OmpAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
         // A second sendTurn entering while another turn is still starting would
@@ -1453,12 +1384,12 @@ export function makeDroidAdapter(
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
-            issue: "Another Droid turn is still starting for this thread.",
+            issue: "Another Omp turn is still starting for this thread.",
           });
         }
         ctx.turnStarting = true;
         ctx.pendingTurnInterrupted = false;
-        return yield* startDroidTurn(ctx, input).pipe(
+        return yield* startOmpTurn(ctx, input).pipe(
           Effect.ensuring(
             Effect.sync(() => {
               ctx.turnStarting = false;
@@ -1467,9 +1398,9 @@ export function makeDroidAdapter(
         );
       });
 
-    const startDroidTurn = (
-      ctx: DroidSessionContext,
-      input: Parameters<DroidAdapterShape["sendTurn"]>[0],
+    const startOmpTurn = (
+      ctx: OmpSessionContext,
+      input: Parameters<OmpAdapterShape["sendTurn"]>[0],
     ) =>
       Effect.gen(function* () {
         // Startup registers the session before its config RPCs settle; a turn
@@ -1508,15 +1439,15 @@ export function makeDroidAdapter(
         // shared runtime skips the RPC when the value already matches).
         yield* Effect.gen(function* () {
           if (model !== undefined) {
-            yield* applyDroidAcpModelSelection({
+            yield* applyOmpAcpModelSelection({
               runtime: ctx.acp,
               model,
-              reasoningEffort: turnModelSelection?.options?.reasoningEffort,
+              thinkingLevel: turnModelSelection?.options?.thinkingLevel,
               mapError: ({ cause, method }) =>
                 mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
             });
           }
-          yield* applyDroidAcpInteractionMode({
+          yield* applyOmpAcpInteractionMode({
             runtime: ctx.acp,
             interactionMode,
             runtimeMode,
@@ -1524,10 +1455,10 @@ export function makeDroidAdapter(
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
         }).pipe(
-          Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS),
+          Effect.timeoutOption(OMP_ACP_REQUEST_TIMEOUT_MS),
           Effect.flatMap(
             Option.match({
-              onNone: () => Effect.fail(droidAcpTimeoutError("session/set_config_option")),
+              onNone: () => Effect.fail(ompAcpTimeoutError("session/set_config_option")),
               onSome: Effect.succeed,
             }),
           ),
@@ -1545,7 +1476,7 @@ export function makeDroidAdapter(
               ? withAcpPlanModePrompt({
                   text: input.input.trim(),
                   interactionMode,
-                  promptPrefix: DROID_PLAN_MODE_PROMPT_PREFIX,
+                  promptPrefix: OMP_PLAN_MODE_PROMPT_PREFIX,
                 })
               : undefined,
             mentions: input.mentions,
@@ -1577,7 +1508,7 @@ export function makeDroidAdapter(
             issue: "Turn requires non-empty text or attachments.",
           });
         }
-        const harnessPolicy = takeDroidSynaraHarnessPolicyTextPart(
+        const harnessPolicy = takeOmpSynaraHarnessPolicyTextPart(
           ctx,
           agentGatewayCredentials !== undefined,
         );
@@ -1640,12 +1571,7 @@ export function makeDroidAdapter(
           Effect.matchEffect({
             onFailure: (error) =>
               Effect.gen(function* () {
-                yield* waitForDroidQueuedTurnEventsDrained(ctx);
-                if (ctx.activeTurnId !== turnId) {
-                  return;
-                }
-                yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-                ctx.planCapturedTurnIds.delete(turnId);
+                yield* waitForOmpQueuedTurnEventsDrained(ctx);
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1685,14 +1611,9 @@ export function makeDroidAdapter(
               Effect.gen(function* () {
                 // Drain BEFORE snapshotting turn state: queued events may still
                 // set activeTurnFailedToolDetail or assistant-content flags.
-                yield* waitForDroidQueuedTurnEventsDrained(ctx);
+                yield* waitForOmpQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
-                if (ctx.activeTurnId !== turnId) {
-                  return;
-                }
-                yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-                const planCaptured = ctx.planCapturedTurnIds.delete(turnId);
                 if (!clearAcpActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1706,15 +1627,14 @@ export function makeDroidAdapter(
                   ...(model ? { model } : {}),
                 };
                 if (!hadAssistantContent && result.stopReason !== "cancelled") {
-                  yield* Effect.logWarning("droid.acp.turn_completed_without_content", {
+                  yield* Effect.logWarning("omp.acp.turn_completed_without_content", {
                     threadId: input.threadId,
                     turnId,
                     stopReason: result.stopReason ?? null,
                     hasUsage: result.usage !== undefined,
                   });
                 }
-                const completion = classifyDroidPromptTurnCompletion({
-                  planCaptured,
+                const completion = classifyOmpPromptTurnCompletion({
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
@@ -1738,7 +1658,6 @@ export function makeDroidAdapter(
           }),
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
-              const planCaptured = ctx.planCapturedTurnIds.delete(turnId);
               if (!clearAcpActiveTurn(ctx, turnId)) {
                 return;
               }
@@ -1758,7 +1677,7 @@ export function makeDroidAdapter(
                 threadId: input.threadId,
                 turnId,
                 payload: {
-                  state: planCaptured ? "completed" : "cancelled",
+                  state: "cancelled",
                   stopReason: "cancelled",
                   ...completedCost,
                 },
@@ -1774,12 +1693,12 @@ export function makeDroidAdapter(
         // instead of leaving it "Working" forever. Self-terminates when the
         // turn settles; pauses while a human approval is pending.
         yield* forkAcpTurnIdleWatchdog({
-          idleTimeoutMs: DROID_TURN_IDLE_TIMEOUT_MS,
+          idleTimeoutMs: OMP_TURN_IDLE_TIMEOUT_MS,
           currentIdleTimeoutMs: () =>
             ctx.activeNestedTaskToolCallIds.size > 0
-              ? DROID_NESTED_TASK_IDLE_TIMEOUT_MS
-              : DROID_TURN_IDLE_TIMEOUT_MS,
-          checkIntervalMs: DROID_TURN_WATCHDOG_INTERVAL_MS,
+              ? OMP_NESTED_TASK_IDLE_TIMEOUT_MS
+              : OMP_TURN_IDLE_TIMEOUT_MS,
+          checkIntervalMs: OMP_TURN_WATCHDOG_INTERVAL_MS,
           scope: ctx.scope,
           isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
           isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
@@ -1787,7 +1706,7 @@ export function makeDroidAdapter(
           touchActivity: () => {
             ctx.lastTurnActivityAt = Date.now();
           },
-          onIdleTimeout: (idleMs) => failDroidTurnAsTimedOut(ctx, turnId, idleMs),
+          onIdleTimeout: (idleMs) => failOmpTurnAsTimedOut(ctx, turnId, idleMs),
         });
 
         return {
@@ -1799,11 +1718,11 @@ export function makeDroidAdapter(
         };
       });
 
-    const interruptTurn: DroidAdapterShape["interruptTurn"] = (threadId, turnId) =>
+    const interruptTurn: OmpAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        if (shouldIgnoreDroidInterrupt(turnId, ctx.activeTurnId)) {
-          yield* Effect.logWarning("droid.acp.stale_interrupt_ignored", {
+        if (shouldIgnoreOmpInterrupt(turnId, ctx.activeTurnId)) {
+          yield* Effect.logWarning("omp.acp.stale_interrupt_ignored", {
             threadId,
             requestedTurnId: turnId,
             activeTurnId: ctx.activeTurnId,
@@ -1813,36 +1732,25 @@ export function makeDroidAdapter(
         if (!ctx.turnStarting && ctx.activeTurnId === undefined) {
           return;
         }
-        const activeTurnId = turnId ?? ctx.activeTurnId;
         // A turn that is still starting has no prompt fiber to interrupt yet
-        // (it may be gated on resume replay); flag it so startDroidTurn aborts
+        // (it may be gated on resume replay); flag it so startOmpTurn aborts
         // before prompting instead of running the cancelled turn anyway.
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
         }
-        yield* withAgentGatewayTurnCancellation(
-          ctx.gatewaySessionLease,
-          activeTurnId,
-          Effect.gen(function* () {
-            yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
-            yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
-            const activePromptFiber = ctx.activePromptFiber;
-            yield* cancelDroidPromptWithGrace(ctx, activePromptFiber);
-            // Closing the process group is intentional: Factory can acknowledge
-            // cancel before nested workers quiesce, so session reuse is unsafe.
-            yield* stopSessionInternal(ctx, {
-              exitKind: "graceful",
-              reason: "Droid turn cancelled; runtime closed to stop nested work.",
-            });
-          }),
-        );
+        yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+        yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        const activePromptFiber = ctx.activePromptFiber;
+        yield* cancelOmpPromptWithGrace(ctx, activePromptFiber);
+        // Closing the process group is intentional: OMP can acknowledge
+        // cancel before nested workers quiesce, so session reuse is unsafe.
+        yield* stopSessionInternal(ctx, {
+          exitKind: "graceful",
+          reason: "Omp turn cancelled; runtime closed to stop nested work.",
+        });
       });
 
-    const respondToRequest: DroidAdapterShape["respondToRequest"] = (
-      threadId,
-      requestId,
-      decision,
-    ) =>
+    const respondToRequest: OmpAdapterShape["respondToRequest"] = (threadId, requestId, decision) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         const pending = ctx.pendingApprovals.get(requestId);
@@ -1856,7 +1764,7 @@ export function makeDroidAdapter(
         yield* Deferred.succeed(pending.decision, decision);
       });
 
-    const respondToUserInput: DroidAdapterShape["respondToUserInput"] = (
+    const respondToUserInput: OmpAdapterShape["respondToUserInput"] = (
       threadId,
       requestId,
       answers,
@@ -1874,44 +1782,13 @@ export function makeDroidAdapter(
         yield* Deferred.succeed(pending.answers, answers);
       });
 
-    const readThread: DroidAdapterShape["readThread"] = (threadId) =>
+    const readThread: OmpAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         return { threadId, turns: ctx.turns };
       });
 
-    const readExternalThread: NonNullable<DroidAdapterShape["readExternalThread"]> = (input) =>
-      Effect.tryPromise({
-        try: () => readFactorySessionHistory(serverConfig.homeDir, input.externalThreadId),
-        catch: (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "thread/read",
-            detail: cause instanceof Error ? cause.message : "Failed to read the Droid session.",
-            cause,
-          }),
-      }).pipe(
-        Effect.flatMap((history) =>
-          history
-            ? Effect.succeed({
-                threadId: ThreadId.makeUnsafe(history.sessionId),
-                ...(history.cwd ? { cwd: history.cwd } : {}),
-                turns: history.messages.map((message, index) => ({
-                  id: TurnId.makeUnsafe(`factory:${message.id}:${index}`),
-                  items: [{ type: "factoryMessage", ...message }],
-                })),
-              })
-            : Effect.fail(
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "thread/read",
-                  detail: `Droid session '${input.externalThreadId}' was not found locally.`,
-                }),
-              ),
-        ),
-      );
-
-    const rollbackThread: DroidAdapterShape["rollbackThread"] = (threadId, numTurns) =>
+    const rollbackThread: OmpAdapterShape["rollbackThread"] = (threadId, numTurns) =>
       Effect.gen(function* () {
         yield* requireSession(threadId);
         if (!Number.isInteger(numTurns) || numTurns < 1) {
@@ -1925,19 +1802,19 @@ export function makeDroidAdapter(
           provider: PROVIDER,
           operation: "rollbackThread",
           issue:
-            "Droid does not expose a native rewind cursor; rollback must restart the session with retained transcript context.",
+            "Omp does not expose a native rewind cursor; rollback must restart the session with retained transcript context.",
         });
       });
 
-    const forkThread: NonNullable<DroidAdapterShape["forkThread"]> = (input) =>
+    const forkThread: NonNullable<OmpAdapterShape["forkThread"]> = (input) =>
       Effect.gen(function* () {
-        const sourceCwd = resolveDroidSessionCwd(input.sourceCwd ?? input.cwd, serverConfig);
-        const targetCwd = resolveDroidSessionCwd(input.cwd ?? input.sourceCwd, serverConfig);
+        const sourceCwd = resolveOmpSessionCwd(input.sourceCwd ?? input.cwd, serverConfig);
+        const targetCwd = resolveOmpSessionCwd(input.cwd ?? input.sourceCwd, serverConfig);
         if (!sourceCwd || !targetCwd) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "forkThread",
-            issue: "A source and target cwd are required to fork a Droid session.",
+            issue: "A source and target cwd are required to fork a Omp session.",
           });
         }
 
@@ -1948,15 +1825,15 @@ export function makeDroidAdapter(
                 provider: PROVIDER,
                 operation: "forkThread",
                 issue:
-                  "This Droid ACP version does not advertise session/fork; Synara will rebuild the fork from its retained transcript.",
+                  "This Omp ACP version does not advertise session/fork; Synara will rebuild the fork from its retained transcript.",
               });
             }
             return yield* runtime.forkSession({ cwd: targetCwd, mcpServers: [] });
           }).pipe(
-            Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS),
+            Effect.timeoutOption(OMP_ACP_REQUEST_TIMEOUT_MS),
             Effect.flatMap(
               Option.match({
-                onNone: () => Effect.fail(droidAcpTimeoutError("session/fork")),
+                onNone: () => Effect.fail(ompAcpTimeoutError("session/fork")),
                 onSome: Effect.succeed,
               }),
             ),
@@ -1966,19 +1843,19 @@ export function makeDroidAdapter(
         const forked = activeSource
           ? yield* forkRuntime(activeSource.acp)
           : yield* Effect.gen(function* () {
-              const sourceSessionId = parseDroidResume(input.sourceResumeCursor)?.sessionId;
+              const sourceSessionId = parseOmpResume(input.sourceResumeCursor)?.sessionId;
               if (!sourceSessionId) {
                 return yield* new ProviderAdapterValidationError({
                   provider: PROVIDER,
                   operation: "forkThread",
-                  issue: "The source Droid session has no resumable native cursor.",
+                  issue: "The source Omp session has no resumable native cursor.",
                 });
               }
-              const runtime = yield* makeDroidAcpRuntime({
-                droidSettings: {
-                  ...(droidSettings.binaryPath ? { binaryPath: droidSettings.binaryPath } : {}),
-                  ...(input.providerOptions?.droid?.binaryPath
-                    ? { binaryPath: input.providerOptions.droid.binaryPath }
+              const runtime = yield* makeOmpAcpRuntime({
+                ompSettings: {
+                  ...(ompSettings.binaryPath ? { binaryPath: ompSettings.binaryPath } : {}),
+                  ...(input.providerOptions?.omp?.binaryPath
+                    ? { binaryPath: input.providerOptions.omp.binaryPath }
                     : {}),
                 },
                 childProcessSpawner,
@@ -1987,10 +1864,10 @@ export function makeDroidAdapter(
                 clientInfo: { name: "Synara Fork", version: "0.0.0" },
               });
               yield* runtime.start().pipe(
-                Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS),
+                Effect.timeoutOption(OMP_ACP_REQUEST_TIMEOUT_MS),
                 Effect.flatMap(
                   Option.match({
-                    onNone: () => Effect.fail(droidAcpTimeoutError("session/resume")),
+                    onNone: () => Effect.fail(ompAcpTimeoutError("session/resume")),
                     onSome: Effect.succeed,
                   }),
                 ),
@@ -1999,7 +1876,7 @@ export function makeDroidAdapter(
             }).pipe(Effect.scoped);
 
         const resumeCursor = {
-          schemaVersion: DROID_RESUME_VERSION,
+          schemaVersion: OMP_RESUME_VERSION,
           sessionId: forked.sessionId,
         };
         yield* startSession({
@@ -2024,7 +1901,7 @@ export function makeDroidAdapter(
         ),
       );
 
-    const stopSession: DroidAdapterShape["stopSession"] = (threadId) =>
+    const stopSession: OmpAdapterShape["stopSession"] = (threadId) =>
       withThreadLock(
         threadId,
         Effect.gen(function* () {
@@ -2041,155 +1918,103 @@ export function makeDroidAdapter(
         }),
       );
 
-    const listSessions: DroidAdapterShape["listSessions"] = () =>
+    const listSessions: OmpAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values(), (ctx) => ({ ...ctx.session })));
 
-    const hasSession: DroidAdapterShape["hasSession"] = (threadId) =>
+    const hasSession: OmpAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => {
         const ctx = sessions.get(threadId);
         return ctx !== undefined && !ctx.stopped;
       });
 
-    const getComposerCapabilities: NonNullable<DroidAdapterShape["getComposerCapabilities"]> = () =>
+    const getComposerCapabilities: NonNullable<OmpAdapterShape["getComposerCapabilities"]> = () =>
       Effect.succeed({
         provider: PROVIDER,
         supportsSkillMentions: false,
         supportsSkillDiscovery: false,
         supportsNativeSlashCommandDiscovery: true,
-        supportsPluginMentions: true,
-        supportsPluginDiscovery: true,
+        supportsPluginMentions: false,
+        supportsPluginDiscovery: false,
         supportsRuntimeModelList: true,
-        // Droid's TUI has /compact, but ACP currently exposes no compaction RPC
+        // Omp's TUI has /compact, but ACP currently exposes no compaction RPC
         // and treats that text as an ordinary model prompt.
         supportsThreadCompaction: false,
-        supportsThreadImport: true,
+        supportsThreadImport: false,
       } satisfies ProviderComposerCapabilities);
 
-    const listModels: NonNullable<DroidAdapterShape["listModels"]> = (input) =>
+    const listModels: NonNullable<OmpAdapterShape["listModels"]> = (input) =>
       discoveryLock.withPermits(1)(
         Effect.gen(function* () {
-          const cwd = resolveDroidSessionCwd(input.cwd, serverConfig);
-          if (!cwd) {
-            return yield* new ProviderAdapterValidationError({
-              provider: PROVIDER,
-              operation: "listModels",
-              issue: "cwd is required and no server cwd fallback is available.",
-            });
-          }
-          const cacheKey = `${input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid"}\u0000${cwd}`;
+          log.info("model/list enter", {
+            inputBinaryPath: input.binaryPath ?? null,
+            ompSettingsBinaryPath: ompSettings.binaryPath ?? null,
+          });
+          const binaryPath = input.binaryPath?.trim() || ompSettings.binaryPath?.trim() || "omp";
+          const cacheKey = binaryPath;
           const cached = modelDiscoveryCache.get(cacheKey);
           if (cached && cached.expiresAt > Date.now()) {
+            log.info("model/list cache hit", {
+              cacheKey,
+              modelCount: cached.result.models.length,
+            });
             return { ...cached.result, cached: true };
           }
-          const runtime = yield* makeDroidDiscoveryRuntime({
-            ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
-            cwd,
-            clientName: "Synara Model Discovery",
+          const result = yield* runOmpCliModelList(binaryPath).pipe(
+            Effect.timeoutOption(OMP_MODEL_DISCOVERY_TIMEOUT_MS),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "model/list",
+                      detail: "Timed out while discovering Omp models via CLI.",
+                    }),
+                  ),
+                onSome: (discovered) => Effect.succeed(discovered),
+              }),
+            ),
+            Effect.mapError((cause) =>
+              cause instanceof ProviderAdapterRequestError
+                ? cause
+                : new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "model/list",
+                    detail:
+                      cause instanceof Error && cause.message
+                        ? cause.message
+                        : "OMP model discovery failed unexpectedly.",
+                  }),
+            ),
+            Effect.tapError((cause) =>
+              Effect.sync(() => {
+                if (cause instanceof ProviderAdapterRequestError) {
+                  log.warn("model/list failed", {
+                    method: cause.method,
+                    detail: cause.detail,
+                  });
+                } else {
+                  log.warn("model/list failed", { detail: String(cause) });
+                }
+              }),
+            ),
+          );
+          log.info("model/list success", {
+            modelCount: result.models.length,
+            source: result.source,
           });
-          yield* runtime.start();
-          const result = yield* discoverDroidAcpModels(runtime);
-          const commands = yield* runtime.getAvailableCommands;
-          setDroidDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
-            expiresAt: Date.now() + DROID_MODEL_DISCOVERY_CACHE_MS,
-            result: {
-              commands: commands.map((command) => ({
-                name: command.name,
-                ...(command.description ? { description: command.description } : {}),
-              })),
-              source: "droid-acp",
-              cached: false,
-            },
-          });
-          setDroidDiscoveryCacheEntry(modelDiscoveryCache, cacheKey, {
-            expiresAt: Date.now() + DROID_MODEL_DISCOVERY_CACHE_MS,
+          setOmpDiscoveryCacheEntry(modelDiscoveryCache, cacheKey, {
+            expiresAt: Date.now() + OMP_MODEL_DISCOVERY_CACHE_MS,
             result,
           });
           return result;
-        }).pipe(
-          Effect.scoped,
-          Effect.mapError((cause) =>
-            cause instanceof ProviderAdapterValidationError
-              ? cause
-              : mapAcpToAdapterError(
-                  PROVIDER,
-                  ThreadId.makeUnsafe("droid-model-discovery"),
-                  "model/list",
-                  cause,
-                ),
-          ),
-          Effect.timeoutOption(DROID_MODEL_DISCOVERY_TIMEOUT_MS),
-          Effect.flatMap(
-            Option.match({
-              onNone: () =>
-                Effect.fail(
-                  new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "model/list",
-                    detail: "Timed out while discovering Droid models over ACP.",
-                  }),
-                ),
-              onSome: (result) => Effect.succeed(result),
-            }),
-          ),
-        ),
+        }),
       );
 
-    const listPlugins: NonNullable<DroidAdapterShape["listPlugins"]> = (input) => {
-      const sessionCwd = input.threadId
-        ? sessions.get(ThreadId.makeUnsafe(input.threadId))?.session.cwd
-        : undefined;
-      const cwd = resolveDroidSessionCwd(input.cwd, serverConfig, sessionCwd);
-      return Effect.tryPromise({
-        try: () => listFactoryPlugins(serverConfig.homeDir, cwd),
-        catch: (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "plugin/list",
-            detail: cause instanceof Error ? cause.message : "Failed to read Factory plugins.",
-            cause,
-          }),
-      });
-    };
-
-    const readPlugin: NonNullable<DroidAdapterShape["readPlugin"]> = (input) => {
-      const sessionCwd = input.threadId
-        ? sessions.get(ThreadId.makeUnsafe(input.threadId))?.session.cwd
-        : undefined;
-      const cwd = resolveDroidSessionCwd(input.cwd, serverConfig, sessionCwd);
-      return Effect.tryPromise({
-        try: () =>
-          readFactoryPlugin({
-            homeDir: serverConfig.homeDir,
-            marketplacePath: input.marketplacePath,
-            pluginName: input.pluginName,
-            ...(cwd !== undefined ? { cwd } : {}),
-          }),
-        catch: (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "plugin/read",
-            detail: cause instanceof Error ? cause.message : "Failed to read the Factory plugin.",
-            cause,
-          }),
-      }).pipe(
-        Effect.flatMap((result) =>
-          result
-            ? Effect.succeed(result)
-            : Effect.fail(
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "plugin/read",
-                  detail: `Factory plugin '${input.pluginName}' was not found.`,
-                }),
-              ),
-        ),
-      );
-    };
-
-    const listCommands: NonNullable<DroidAdapterShape["listCommands"]> = (input) =>
+    const listCommands: NonNullable<OmpAdapterShape["listCommands"]> = (input) =>
       discoveryLock.withPermits(1)(
         Effect.gen(function* () {
-          const cwd = resolveDroidSessionCwd(input.cwd, serverConfig);
+          const cwd = resolveOmpSessionCwd(input.cwd, serverConfig);
           if (!cwd) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
@@ -2197,12 +2022,12 @@ export function makeDroidAdapter(
               issue: "cwd is required and no server cwd fallback is available.",
             });
           }
-          const cacheKey = `${input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid"}\u0000${cwd}`;
+          const cacheKey = `${input.binaryPath?.trim() || ompSettings.binaryPath?.trim() || "omp"}\u0000${cwd}`;
           const cached = commandDiscoveryCache.get(cacheKey);
           if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
           }
-          const runtime = yield* makeDroidDiscoveryRuntime({
+          const runtime = yield* makeOmpDiscoveryRuntime({
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
             cwd,
             clientName: "Synara Command Discovery",
@@ -2219,11 +2044,11 @@ export function makeDroidAdapter(
               name: command.name,
               ...(command.description ? { description: command.description } : {}),
             })),
-            source: "droid-acp",
+            source: "omp-acp",
             cached: false,
           } satisfies ProviderListCommandsResult;
-          setDroidDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
-            expiresAt: Date.now() + DROID_MODEL_DISCOVERY_CACHE_MS,
+          setOmpDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
+            expiresAt: Date.now() + OMP_MODEL_DISCOVERY_CACHE_MS,
             result,
           });
           return result;
@@ -2234,12 +2059,12 @@ export function makeDroidAdapter(
               ? cause
               : mapAcpToAdapterError(
                   PROVIDER,
-                  ThreadId.makeUnsafe("droid-command-discovery"),
+                  ThreadId.makeUnsafe("omp-command-discovery"),
                   "command/list",
                   cause,
                 ),
           ),
-          Effect.timeoutOption(DROID_MODEL_DISCOVERY_TIMEOUT_MS),
+          Effect.timeoutOption(OMP_MODEL_DISCOVERY_TIMEOUT_MS),
           Effect.flatMap(
             Option.match({
               onNone: () =>
@@ -2247,7 +2072,7 @@ export function makeDroidAdapter(
                   new ProviderAdapterRequestError({
                     provider: PROVIDER,
                     method: "command/list",
-                    detail: "Timed out while discovering Droid commands over ACP.",
+                    detail: "Timed out while discovering Omp commands over ACP.",
                   }),
                 ),
               onSome: (result) => Effect.succeed(result),
@@ -2256,7 +2081,7 @@ export function makeDroidAdapter(
         ),
       );
 
-    const stopAll: DroidAdapterShape["stopAll"] = () =>
+    const stopAll: OmpAdapterShape["stopAll"] = () =>
       Effect.forEach(Array.from(sessions.values()), (ctx) => stopSessionInternal(ctx), {
         discard: true,
       });
@@ -2282,7 +2107,6 @@ export function makeDroidAdapter(
       sendTurn,
       interruptTurn,
       readThread,
-      readExternalThread,
       rollbackThread,
       forkThread,
       respondToRequest,
@@ -2292,20 +2116,18 @@ export function makeDroidAdapter(
       getComposerCapabilities,
       listCommands,
       listModels,
-      listPlugins,
-      readPlugin,
       hasSession,
       stopAll,
       streamEvents,
-    } satisfies DroidAdapterShape;
+    } satisfies OmpAdapterShape;
   });
 }
 
-export const DroidAdapterLive = Layer.effect(DroidAdapter, makeDroidAdapter({}));
+export const OmpAdapterLive = Layer.effect(OmpAdapter, makeOmpAdapter({}));
 
-export function makeDroidAdapterLive(
-  droidSettings: DroidAcpRuntimeSettings = {},
-  options?: DroidAdapterLiveOptions,
+export function makeOmpAdapterLive(
+  ompSettings: OmpAcpRuntimeSettings = {},
+  options?: OmpAdapterLiveOptions,
 ) {
-  return Layer.effect(DroidAdapter, makeDroidAdapter(droidSettings, options));
+  return Layer.effect(OmpAdapter, makeOmpAdapter(ompSettings, options));
 }

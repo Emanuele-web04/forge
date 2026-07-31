@@ -27,6 +27,7 @@ describe("ComposerModelEffortPicker", () => {
           kilo: [],
           opencode: [],
           pi: [],
+          omp: [],
         }}
         hideStatusLabel
         onProviderModelChange={vi.fn()}

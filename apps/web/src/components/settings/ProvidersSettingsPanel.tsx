@@ -79,7 +79,9 @@ type ProviderInstallTextKey =
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
   | "piBinaryPath"
-  | "piAgentDir";
+  | "piAgentDir"
+  | "ompBinaryPath"
+  | "ompAgentDir";
 type ProviderInstallPasswordKey = "kiloServerPassword" | "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey =
   | "kiloServerPasswordConfigured"
@@ -370,6 +372,35 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         label: "Pi agent directory",
         placeholder: "Pi agent directory",
         description: "Optional custom Pi agent directory for auth, models, skills, and commands.",
+      },
+    ],
+  },
+  {
+    provider: "omp",
+    docs: [
+      { label: "Docs", href: "https://omp.sh/docs" },
+      { label: "Install", href: "https://omp.sh/docs/quickstart" },
+      { label: "Source", href: "https://github.com/can1357/oh-my-pi" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "ompBinaryPath",
+        label: "Oh My Pi binary path",
+        placeholder: "Oh My Pi binary path",
+        description: (
+          <>
+            Leave blank to use <code>omp</code> from your PATH.
+          </>
+        ),
+      },
+      {
+        kind: "text",
+        settingsKey: "ompAgentDir",
+        label: "Oh My Pi agent directory",
+        placeholder: "Oh My Pi agent directory",
+        description:
+          "Optional custom Oh My Pi agent directory for auth, models, skills, and commands.",
       },
     ],
   },

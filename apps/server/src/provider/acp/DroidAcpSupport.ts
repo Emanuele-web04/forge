@@ -24,6 +24,12 @@ import {
   type AcpSessionRuntimeShape,
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
+import {
+  availableAuthMethodIds,
+  buildAcpModelDescriptor,
+  findSelectConfig,
+  flattenConfigOptions,
+} from "./AcpConfigOptions.ts";
 
 export interface DroidAcpRuntimeSettings {
   readonly appendSystemPrompt?: string;
@@ -126,10 +132,6 @@ export function buildDroidAcpSpawnInput(
   };
 }
 
-function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): ReadonlySet<string> {
-  return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
-}
-
 export const resolveDroidAcpAuthMethodId = (
   initializeResult: Acp.InitializeResponse,
 ): Effect.Effect<string, AcpErrors.AcpError> =>
@@ -224,57 +226,6 @@ export function applyDroidAcpInteractionMode<E>(input: {
   );
 }
 
-export function flattenDroidConfigOptions(
-  options: Acp.SessionConfigSelectOptions,
-): ReadonlyArray<Acp.SessionConfigSelectOption> {
-  return options.flatMap((entry) => ("options" in entry ? entry.options : [entry]));
-}
-
-function findDroidSelectConfig(
-  options: ReadonlyArray<Acp.SessionConfigOption>,
-  input: { readonly id: string; readonly category: string },
-): Extract<Acp.SessionConfigOption, { readonly type: "select" }> | undefined {
-  return options.find(
-    (option): option is Extract<Acp.SessionConfigOption, { readonly type: "select" }> =>
-      option.type === "select" && (option.id === input.id || option.category === input.category),
-  );
-}
-
-function droidModelDescriptor(
-  model: Acp.SessionConfigSelectOption,
-  reasoning: Extract<Acp.SessionConfigOption, { readonly type: "select" }> | undefined,
-): ProviderModelDescriptor {
-  const efforts = reasoning ? flattenDroidConfigOptions(reasoning.options) : [];
-  const optionDescriptors = reasoning
-    ? [
-        {
-          id: "reasoningEffort",
-          label: reasoning.name,
-          type: "select" as const,
-          options: efforts.map((effort) => ({
-            id: effort.value,
-            label: effort.name,
-            ...(effort.description ? { description: effort.description } : {}),
-          })),
-          ...(reasoning.currentValue ? { currentValue: reasoning.currentValue } : {}),
-        },
-      ]
-    : undefined;
-  return {
-    slug: model.value,
-    name: model.name,
-    ...(model.description ? { description: model.description } : {}),
-    supportedReasoningEfforts: efforts.map((effort) => ({
-      value: effort.value,
-      label: effort.name,
-      ...(effort.description ? { description: effort.description } : {}),
-    })),
-    ...(optionDescriptors ? { optionDescriptors } : {}),
-    supportsFastMode: false,
-    supportsThinkingToggle: false,
-  };
-}
-
 /**
  * Reads the model catalog from ACP and reselects each model so Droid returns that
  * model's current reasoning choices. Discovery runs in a disposable session.
@@ -284,7 +235,7 @@ export function discoverDroidAcpModels(
 ): Effect.Effect<ProviderListModelsResult, AcpErrors.AcpError> {
   return Effect.gen(function* () {
     const initialOptions = yield* runtime.getConfigOptions;
-    const modelConfig = findDroidSelectConfig(initialOptions, {
+    const modelConfig = findSelectConfig(initialOptions, {
       id: DROID_MODEL_CONFIG_ID,
       category: "model",
     });
@@ -296,27 +247,27 @@ export function discoverDroidAcpModels(
     }
 
     const originalModel = modelConfig.currentValue;
-    const originalReasoning = findDroidSelectConfig(initialOptions, {
+    const originalReasoning = findSelectConfig(initialOptions, {
       id: DROID_REASONING_EFFORT_CONFIG_ID,
       category: "thought_level",
     })?.currentValue;
-    const models = flattenDroidConfigOptions(modelConfig.options);
+    const models = flattenConfigOptions(modelConfig.options);
     const descriptors = yield* Effect.forEach(
       models,
       (model) =>
         runtime.setConfigOption(modelConfig.id, model.value).pipe(
           Effect.andThen(runtime.getConfigOptions),
           Effect.map((updatedOptions) =>
-            droidModelDescriptor(
+            buildAcpModelDescriptor(
               model,
-              findDroidSelectConfig(updatedOptions, {
+              findSelectConfig(updatedOptions, {
                 id: DROID_REASONING_EFFORT_CONFIG_ID,
                 category: "thought_level",
               }),
             ),
           ),
           // A newly announced model should remain selectable even if its option probe fails.
-          Effect.catch(() => Effect.succeed(droidModelDescriptor(model, undefined))),
+          Effect.catch(() => Effect.succeed(buildAcpModelDescriptor(model, undefined))),
         ),
       { concurrency: 1 },
     );

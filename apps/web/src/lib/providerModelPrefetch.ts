@@ -29,6 +29,8 @@ export type ProviderModelPrefetchSettings = Pick<
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
+  | "ompBinaryPath"
+  | "ompAgentDir"
 >;
 
 export function resolveNewThreadModelPrefetchProvider(input: {
@@ -115,6 +117,13 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "pi",
         binaryPath: settings.piBinaryPath || null,
         agentDir: settings.piAgentDir || null,
+        cwd,
+      });
+    case "omp":
+      return providerModelsQueryOptions({
+        provider: "omp",
+        binaryPath: settings.ompBinaryPath || null,
+        agentDir: settings.ompAgentDir || null,
         cwd,
       });
   }

@@ -1,15 +1,15 @@
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { cancelDroidTurnAndWait } from "./DroidTurnCancellation.ts";
+import { cancelTurnAndWait } from "./TurnCancellation.ts";
 
-describe("cancelDroidTurnAndWait", () => {
-  it("keeps the prompt fiber alive until Droid settles it", async () => {
+describe("cancelTurnAndWait", () => {
+  it("keeps the prompt fiber alive until the provider settles it", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const promptComplete = yield* Deferred.make<void>();
         const promptFiber = yield* Deferred.await(promptComplete).pipe(Effect.forkChild);
-        const cancellationFiber = yield* cancelDroidTurnAndWait({
+        const cancellationFiber = yield* cancelTurnAndWait({
           cancel: Effect.void,
           promptFiber,
           graceMs: 5_000,
@@ -31,7 +31,7 @@ describe("cancelDroidTurnAndWait", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const promptFiber = yield* Effect.never.pipe(Effect.forkChild);
-        const result = yield* cancelDroidTurnAndWait({
+        const result = yield* cancelTurnAndWait({
           cancel: Effect.void,
           promptFiber,
           graceMs: 10,

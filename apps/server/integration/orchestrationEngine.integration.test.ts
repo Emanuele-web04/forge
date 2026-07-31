@@ -122,8 +122,8 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
   Effect.gen(function* () {
     const createdAt = nowIso();
     const provider = harness.adapterHarness?.provider ?? "codex";
-    if (provider === "pi") {
-      throw new Error("Pi integration tests require an explicit model selection.");
+    if (provider === "pi" || provider === "omp") {
+      throw new Error("Pi/OMP integration tests require an explicit model selection.");
     }
     const defaultModel = DEFAULT_MODEL_BY_PROVIDER[provider];
 

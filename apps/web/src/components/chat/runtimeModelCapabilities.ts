@@ -103,7 +103,8 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "droid" &&
       input.provider !== "kilo" &&
       input.provider !== "opencode" &&
-      input.provider !== "pi") ||
+      input.provider !== "pi" &&
+      input.provider !== "omp") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {
