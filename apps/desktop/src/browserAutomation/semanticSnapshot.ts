@@ -14,6 +14,7 @@ import {
   sendCdpCommand,
   throwIfAborted,
 } from "./cdpRuntime";
+import { CREDENTIAL_INPUT_CLASSIFIER_SNIPPET } from "./credentialDetection";
 import { browserHostError } from "./hostErrors";
 
 const MAX_STRUCTURED_SNAPSHOT_BYTES = 512 * 1024;
@@ -232,6 +233,10 @@ export const BROWSER_SEMANTIC_SNAPSHOT_EXPRESSION = String.raw`(() => {
   };
   const nameFor = (element, role) => explicitNameFor(element) ||
     (textNameRoles.has(role) ? clean(boundedDescendantText(element)) : "");
+  const classifyCredentialInput = ${CREDENTIAL_INPUT_CLASSIFIER_SNIPPET};
+  // Redaction fails closed with the shared classifier: any non-false
+  // classification (including a detection error) hides the value.
+  const isCredentialElement = (element) => classifyCredentialInput(element) !== false;
   const actionableRoles = new Set("button checkbox combobox link listbox menuitem menuitemcheckbox menuitemradio option radio scrollbar searchbox slider spinbutton switch tab textbox treeitem".split(" "));
   const informativeRoles = new Set("alert alertdialog article dialog document figure form heading img main navigation note status table toolbar".split(" "));
   const round = (value) => Math.round(value * 10) / 10;
@@ -299,9 +304,7 @@ export const BROWSER_SEMANTIC_SNAPSHOT_EXPRESSION = String.raw`(() => {
     }
     if (element.isContentEditable) states.push("editable");
     const rawValue = "value" in element ? element.value : undefined;
-    const value = element.localName === "input" && element.type === "password"
-      ? "redacted"
-      : clean(rawValue, 1024);
+    const value = isCredentialElement(element) ? "redacted" : clean(rawValue, 1024);
     const item = {
       ref, role, name, context,
       bounds: { x: round(rect.x), y: round(rect.y), width: round(rect.width), height: round(rect.height) }, states,
@@ -316,6 +319,32 @@ export const BROWSER_SEMANTIC_SNAPSHOT_EXPRESSION = String.raw`(() => {
   let collectedTextLength = 0;
   let visitedTextNodes = 0;
   let textTraversalTruncated = false;
+  // Credential surfaces render their content as ordinary text nodes (textarea
+  // default values, contenteditable secrets), so redacting element values is
+  // not enough: the visible-text walk must skip any node whose ancestry
+  // classifies as a credential input. Memoized per element because ancestor
+  // chains overlap heavily across sibling text nodes.
+  const credentialAncestry = new Map();
+  const withinCredentialElement = (element) => {
+    const chain = [];
+    let current = element;
+    let result = false;
+    while (current) {
+      const cached = credentialAncestry.get(current);
+      if (cached !== undefined) {
+        result = cached;
+        break;
+      }
+      chain.push(current);
+      if (isCredentialElement(current)) {
+        result = true;
+        break;
+      }
+      current = composedParent(current);
+    }
+    for (const visited of chain) credentialAncestry.set(visited, result);
+    return result;
+  };
   const collectVisibleText = (root) => {
     if (collectedTextLength >= 9000 || visitedTextNodes >= ${MAX_VISIBLE_TEXT_NODES_VISITED}) return;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -326,6 +355,7 @@ export const BROWSER_SEMANTIC_SNAPSHOT_EXPRESSION = String.raw`(() => {
       const text = clean(node.nodeValue, 512);
       const parent = node.parentElement;
       if (!text || !parent || !visible(parent) || seenText.has(text)) continue;
+      if (withinCredentialElement(parent)) continue;
       const range = document.createRange();
       range.selectNodeContents(node);
       const rect = range.getBoundingClientRect();

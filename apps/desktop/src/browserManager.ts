@@ -8,32 +8,40 @@ import * as Crypto from "node:crypto";
 import {
   BrowserWindow,
   clipboard,
+  dialog,
   nativeImage,
   session as electronSession,
   webContents as electronWebContents,
   WebContentsView,
 } from "electron";
 import type { WebContents } from "electron";
-import type {
-  BrowserAnnotationCancelInput,
-  BrowserAnnotationEvent,
-  BrowserAnnotationSession,
-  BrowserAnnotationStartInput,
-  BrowserAnnotationSyncMarkersInput,
-  BrowserAttachWebviewInput,
-  BrowserCaptureScreenshotResult,
-  BrowserCopyLinkEvent,
-  BrowserDetachWebviewInput,
-  BrowserNavigateInput,
-  BrowserNewTabInput,
-  BrowserOpenInput,
-  BrowserPanelBounds,
-  BrowserSetPanelBoundsInput,
-  BrowserTabInput,
-  BrowserTabState,
-  BrowserThreadInput,
-  ThreadBrowserState,
+import {
   ThreadId,
+  type BrowserAnnotationCancelInput,
+  type BrowserAnnotationEvent,
+  type BrowserAnnotationSession,
+  type BrowserAnnotationStartInput,
+  type BrowserAnnotationSyncMarkersInput,
+  type BrowserAttachWebviewInput,
+  type BrowserClearProfileDataInput,
+  type BrowserCreateProfileInput,
+  type BrowserDeleteProfileInput,
+  type BrowserProfile,
+  type BrowserProfileState,
+  type BrowserRenameProfileInput,
+  type BrowserSetThreadProfileInput,
+  type BrowserCaptureScreenshotResult,
+  type BrowserCopyLinkEvent,
+  type BrowserDetachWebviewInput,
+  type BrowserNavigateInput,
+  type BrowserNewTabInput,
+  type BrowserOpenInput,
+  type BrowserPanelBounds,
+  type BrowserSetPanelBoundsInput,
+  type BrowserTabInput,
+  type BrowserTabState,
+  type BrowserThreadInput,
+  type ThreadBrowserState,
 } from "@synara/contracts";
 import { isBrowserCopyLinkChord } from "@synara/shared/browserShortcuts";
 import {
@@ -44,10 +52,11 @@ import {
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
 import {
-  BROWSER_SESSION_PARTITION,
   BrowserSessionPolicy,
   type BrowserSessionDownloadEvent,
+  type BrowserSessionWebAuthnEvent,
 } from "./browserSessionPolicy";
+import { BrowserProfileStore } from "./browserProfiles";
 import {
   BrowserAnnotationCoordinator,
   type BrowserAnnotationRuntime,
@@ -207,7 +216,8 @@ export interface BrowserAutomationDownloadEvent {
 }
 
 export interface DesktopBrowserManagerOptions {
-  beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
+  readonly beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
+  readonly profileStore?: BrowserProfileStore;
 }
 
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
@@ -225,13 +235,17 @@ function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
   };
 }
 
-function defaultThreadBrowserState(threadId: ThreadId): ThreadBrowserState {
+function defaultThreadBrowserState(
+  threadId: ThreadId,
+  profile: BrowserProfile,
+): ThreadBrowserState {
   return {
     threadId,
     version: 0,
     open: false,
     activeTabId: null,
     tabs: [],
+    profile,
     lastError: null,
   };
 }
@@ -239,6 +253,7 @@ function defaultThreadBrowserState(threadId: ThreadId): ThreadBrowserState {
 function cloneThreadState(state: ThreadBrowserState): ThreadBrowserState {
   return {
     ...state,
+    profile: { ...state.profile },
     tabs: state.tabs.map((tab) => ({ ...tab })),
   };
 }
@@ -330,6 +345,56 @@ function browserBoundsSignature(bounds: BrowserPanelBounds | null): string {
   return `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
 }
 
+function normalizeBrowserStorageOrigin(value: string): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("unsupported scheme");
+    }
+    return parsed.origin;
+  } catch {
+    throw new Error("Browser site data can only be cleared for an http(s) origin.");
+  }
+}
+
+/**
+ * Host a WebAuthn request must be scoped to, taken from the requesting frame
+ * itself. Returns null whenever the origin cannot be established (opaque or
+ * sandboxed frames, non-web schemes) so callers stay fail-closed.
+ */
+function webAuthnRequestingHost(frame: { readonly origin?: unknown; readonly url?: unknown }): {
+  readonly host: string;
+  readonly origin: string;
+} | null {
+  const frameOrigin = typeof frame.origin === "string" ? frame.origin.trim() : "";
+  // `origin` is the value WebAuthn scopes a credential to. An older runtime can
+  // leave it empty, in which case the frame URL is the only description of the
+  // requester; an explicitly opaque origin ("null") stays unresolvable.
+  const source =
+    frameOrigin.length > 0 ? frameOrigin : typeof frame.url === "string" ? frame.url.trim() : "";
+  if (source.length === 0 || source === "null") {
+    return null;
+  }
+  try {
+    const parsed = new URL(source);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return null;
+    }
+    const host = parsed.hostname.toLocaleLowerCase("en-US");
+    return host.length > 0 ? { host, origin: parsed.origin } : null;
+  } catch {
+    return null;
+  }
+}
+
+function browserContentsOrigin(webContents: Pick<WebContents, "getURL">): string | null {
+  try {
+    return new URL(webContents.getURL()).origin;
+  } catch {
+    return null;
+  }
+}
+
 function isAllowedBrowserRuntimeNavigation(url: string): boolean {
   if (url === ABOUT_BLANK_URL) return true;
   try {
@@ -414,6 +479,9 @@ export class DesktopBrowserManager {
   private readonly pendingStatePublicationsByKey = new Map<string, PendingStatePublication>();
   private readonly runtimes = new Map<string, LiveTabRuntime>();
   private readonly rendererOnlyRuntimeKeys = new Set<string>();
+  private readonly profileStore: BrowserProfileStore;
+  private readonly temporaryPartitionEpochByThreadId = new Map<ThreadId, number>();
+  private readonly pendingTemporaryPartitionCleanups = new Map<string, Promise<void>>();
   private readonly runtimeLastActiveAtByKey = new Map<string, number>();
   private readonly pendingRuntimeSyncs = new Map<string, PendingRuntimeSync>();
   private readonly listeners = new Set<BrowserStateListener>();
@@ -443,9 +511,15 @@ export class DesktopBrowserManager {
   };
 
   constructor(private readonly options: DesktopBrowserManagerOptions = {}) {
-    this.sessionPolicy = new BrowserSessionPolicy((event) => {
-      this.handleSessionDownload(event);
-    });
+    this.profileStore = options.profileStore ?? new BrowserProfileStore();
+    this.sessionPolicy = new BrowserSessionPolicy(
+      (event) => {
+        this.handleSessionDownload(event);
+      },
+      (event) => {
+        this.handleWebAuthnAccountSelection(event);
+      },
+    );
     this.annotations = new BrowserAnnotationCoordinator({
       resolveVisibleRuntime: (input) => {
         const runtime = this.getVisibleAutomationRuntime(input);
@@ -500,6 +574,87 @@ export class DesktopBrowserManager {
     return this.annotations.subscribe(listener);
   }
 
+  getProfileState(input: BrowserThreadInput): BrowserProfileState {
+    return {
+      profiles: this.profileStore
+        .list(input.threadId)
+        .map((profile) => this.withTemporaryPartitionEpoch(input.threadId, profile)),
+      threadProfile: this.getOrCreateState(input.threadId).profile,
+    };
+  }
+
+  createProfile(input: BrowserCreateProfileInput): BrowserProfile {
+    return this.profileStore.create(input.label);
+  }
+
+  renameProfile(input: BrowserRenameProfileInput): BrowserProfile {
+    const profile = this.profileStore.rename(input.profileId, input.label);
+    for (const [threadId, state] of this.states) {
+      if (state.profile.id !== profile.id) continue;
+      state.profile = this.resolveThreadProfile(threadId);
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+    }
+    return profile;
+  }
+
+  async deleteProfile(input: BrowserDeleteProfileInput): Promise<void> {
+    const profile = this.findProfile(input.profileId);
+    if (profile.builtIn) {
+      throw new Error("Built-in browser profiles cannot be deleted.");
+    }
+    await this.clearProfile(profile, undefined, true);
+    this.sessionPolicy.release(profile);
+    const affectedThreadIds = this.profileStore.delete(profile.id);
+    for (const rawThreadId of affectedThreadIds) {
+      const threadId = ThreadId.makeUnsafe(rawThreadId);
+      const wasOpen = this.states.get(threadId)?.open === true;
+      this.close({ threadId });
+      const state = this.getOrCreateState(threadId);
+      state.profile = this.resolveThreadProfile(threadId);
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+      if (wasOpen) {
+        // Deleting an identity never resumes an authenticated surface automatically.
+        this.open({ threadId });
+      }
+    }
+  }
+
+  setThreadProfile(input: BrowserSetThreadProfileInput): ThreadBrowserState {
+    const current = this.getOrCreateState(input.threadId);
+    if (current.profile.id === input.profileId) {
+      return this.snapshotThreadState(input.threadId, current);
+    }
+    const profile = this.withTemporaryPartitionEpoch(
+      input.threadId,
+      this.profileStore.bindThread(input.threadId, input.profileId),
+    );
+    const wasOpen = current.open;
+    this.close({ threadId: input.threadId });
+    const state = this.getOrCreateState(input.threadId);
+    state.profile = profile;
+    this.markThreadStateChanged(input.threadId);
+    this.emitState(input.threadId);
+    return wasOpen
+      ? this.open({ threadId: input.threadId })
+      : this.snapshotThreadState(input.threadId, state);
+  }
+
+  async clearProfileData(input: BrowserClearProfileDataInput): Promise<void> {
+    const profile = this.findProfile(input.profileId);
+    if (profile.kind !== "persistent") {
+      throw new Error("Temporary browser data is discarded when its thread is closed.");
+    }
+    const origin =
+      input.origin === undefined ? undefined : normalizeBrowserStorageOrigin(input.origin);
+    await this.clearProfile(profile, origin, input.clearCache);
+    // Pages already running on this partition keep their in-memory session
+    // (live documents, service workers, in-page tokens) until they reload, so
+    // clearing storage alone would leave them signed in.
+    this.reloadProfileContents(profile, origin);
+  }
+
   startAnnotation(input: BrowserAnnotationStartInput): BrowserAnnotationSession {
     return this.annotations.start(input);
   }
@@ -547,6 +702,15 @@ export class DesktopBrowserManager {
   isTrustedRenderer(webContentsId: number): boolean {
     return Boolean(
       this.window && !this.window.isDestroyed() && this.window.webContents.id === webContentsId,
+    );
+  }
+
+  isManagedProfilePartition(partition: string): boolean {
+    return (
+      // The optional trailing counter is the rotation a reopened temporary
+      // thread takes while its previous partition is still being cleared.
+      /^synara-browser-temporary-[a-f0-9]{24}(?:-[0-9a-f]{1,8})?$/.test(partition) ||
+      this.profileStore.list("").some((profile) => profile.partition === partition)
     );
   }
 
@@ -701,6 +865,7 @@ export class DesktopBrowserManager {
           action: "allow",
           overrideBrowserWindowOptions: this.sessionPolicy.buildOAuthPopupWindowOptions(
             this.window,
+            this.getOrCreateState(threadId).profile,
           ),
         };
       }
@@ -740,6 +905,80 @@ export class DesktopBrowserManager {
       }
     }
     return null;
+  }
+
+  private handleWebAuthnAccountSelection(input: BrowserSessionWebAuthnEvent): void {
+    let completed = false;
+    const complete = (credentialId?: string | null) => {
+      if (completed) return;
+      completed = true;
+      input.callback(credentialId);
+    };
+
+    const frame = input.details.frame;
+    if (this.disposed || !frame) {
+      complete();
+      return;
+    }
+    const webContents = electronWebContents.fromFrame(frame);
+    const context = webContents ? this.findRuntimeContext(webContents) : null;
+    const state = context ? this.states.get(context.threadId) : null;
+    if (!webContents || !context || !state || state.profile.partition !== input.profile.partition) {
+      complete();
+      return;
+    }
+
+    // A WebAuthn request belongs to the frame that issued it, which can legitimately
+    // be a cross-origin sign-in iframe inside an unrelated top-level page. Validate
+    // the relying party against that frame's own origin, never the top-level URL,
+    // and refuse whenever the requesting origin cannot be established.
+    const requester = webAuthnRequestingHost(frame);
+    const relyingPartyId = input.details.relyingPartyId.trim().toLocaleLowerCase("en-US");
+    if (!requester || relyingPartyId.length === 0) {
+      complete();
+      return;
+    }
+    if (requester.host !== relyingPartyId && !requester.host.endsWith(`.${relyingPartyId}`)) {
+      complete();
+      return;
+    }
+
+    const accounts = input.details.accounts;
+    if (accounts.length === 0) {
+      complete();
+      return;
+    }
+    const buttons = [
+      "Cancel",
+      ...accounts.map((account, index) => {
+        const label = account.displayName || account.name || `Passkey ${index + 1}`;
+        return label.slice(0, 96);
+      }),
+    ];
+    // The page a passkey prompt appears on can differ from the origin asking for
+    // it, so name the embedding page whenever the request comes from a frame.
+    const topLevelOrigin = browserContentsOrigin(webContents);
+    const embeddingNotice =
+      topLevelOrigin && topLevelOrigin !== requester.origin
+        ? `${requester.origin} is asking from inside ${topLevelOrigin}.\n\n`
+        : "";
+    const options = {
+      type: "question" as const,
+      title: "Choose a passkey",
+      message: `${input.details.relyingPartyId} requests a passkey`,
+      detail: `${embeddingNotice}Only you can choose or cancel this sign-in. Synara and its agents cannot access passkey material.`,
+      buttons,
+      cancelId: 0,
+      defaultId: 0,
+      noLink: true,
+    };
+    const selection = this.window
+      ? dialog.showMessageBox(this.window, options)
+      : dialog.showMessageBox(options);
+    void selection.then(
+      (result) => complete(accounts[result.response - 1]?.credentialId),
+      () => complete(),
+    );
   }
 
   private handleSessionDownload(input: BrowserSessionDownloadEvent): void {
@@ -1132,6 +1371,8 @@ export class DesktopBrowserManager {
     this.automationWindowOpenListenersByRuntimeKey.clear();
     this.automationDownloadListenersByRuntimeKey.clear();
     this.automationSideEffectProvenanceByRuntimeKey.clear();
+    this.temporaryPartitionEpochByThreadId.clear();
+    this.pendingTemporaryPartitionCleanups.clear();
     this.window = null;
     this.activeThreadId = null;
     this.activeBounds = null;
@@ -1417,6 +1658,9 @@ export class DesktopBrowserManager {
       this.annotations.clearProjection(input.threadId, tab.id);
       this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, tab.id));
     }
+    if (existingState?.profile.kind === "temporary") {
+      this.scheduleTemporaryProfileCleanup(input.threadId, existingState.profile);
+    }
 
     const state = this.getOrCreateState(input.threadId);
     state.open = false;
@@ -1537,13 +1781,14 @@ export class DesktopBrowserManager {
     if (!webContents || webContents.isDestroyed()) {
       throw new Error("The visible browser webview is not available.");
     }
+    const profile = this.getOrCreateState(input.threadId).profile;
     if (
       webContents.getType() !== "webview" ||
       webContents.hostWebContents?.id !== hostWebContentsId ||
       (this.window !== null && hostWebContentsId !== this.window.webContents.id) ||
-      webContents.session !== electronSession.fromPartition(BROWSER_SESSION_PARTITION)
+      webContents.session !== electronSession.fromPartition(profile.partition)
     ) {
-      throw new Error("The browser webview does not belong to this Synara window and partition.");
+      throw new Error("The browser webview does not belong to this Synara window and profile.");
     }
 
     const key = buildRuntimeKey(input.threadId, tab.id);
@@ -2244,9 +2489,11 @@ export class DesktopBrowserManager {
   }
 
   private createLiveRuntime(threadId: ThreadId, tabId: string): LiveTabRuntime {
+    const profile = this.getOrCreateState(threadId).profile;
+    this.sessionPolicy.ensureConfigured(profile);
     const view = new WebContentsView({
       webPreferences: {
-        partition: BROWSER_SESSION_PARTITION,
+        partition: profile.partition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -2680,6 +2927,116 @@ export class DesktopBrowserManager {
     return null;
   }
 
+  private findProfile(profileId: string): BrowserProfile {
+    const profile = this.profileStore.list("").find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      throw new Error("The requested browser profile does not exist.");
+    }
+    return profile;
+  }
+
+  private async clearProfile(
+    profile: BrowserProfile,
+    origin: string | undefined,
+    clearCache: boolean,
+  ): Promise<void> {
+    const profileSession = this.sessionPolicy.ensureConfigured(profile);
+    if (origin === undefined) {
+      await profileSession.clearStorageData();
+    } else {
+      await profileSession.clearStorageData({ origin });
+    }
+    if (clearCache) {
+      await profileSession.clearCache();
+    }
+    await profileSession.flushStorageData();
+  }
+
+  /**
+   * Reloads every live page still running on a cleared profile. Storage removal
+   * does not touch documents already loaded from it, so without this a cleared
+   * identity would stay signed in until the user navigated by hand.
+   */
+  private reloadProfileContents(profile: BrowserProfile, origin: string | undefined): void {
+    if (this.disposed) return;
+    const targets = new Set<WebContents>();
+    for (const runtime of this.runtimes.values()) {
+      if (this.states.get(runtime.threadId)?.profile.partition !== profile.partition) continue;
+      targets.add(runtime.webContents);
+    }
+    for (const popup of this.popupRuntimes.values()) {
+      if (popup.window.isDestroyed()) continue;
+      if (this.states.get(popup.threadId)?.profile.partition !== profile.partition) continue;
+      targets.add(popup.window.webContents);
+    }
+    for (const webContents of targets) {
+      if (webContents.isDestroyed()) continue;
+      // An origin-scoped clear only invalidates pages served by that origin.
+      if (origin !== undefined && browserContentsOrigin(webContents) !== origin) continue;
+      try {
+        webContents.reload();
+      } catch {
+        // A guest torn down while its profile was clearing needs no reload.
+      }
+    }
+  }
+
+  /**
+   * Clears a temporary partition once its thread closes, and records the pending
+   * cleanup so a thread reopened before it settles rotates onto a fresh
+   * partition instead of having its new session wiped mid-flight.
+   */
+  private scheduleTemporaryProfileCleanup(threadId: ThreadId, profile: BrowserProfile): void {
+    const { partition } = profile;
+    const cleanup: Promise<void> = this.clearProfile(profile, undefined, true)
+      .catch(() => {
+        // Closing the browser remains reliable even while Chromium is shutting down.
+      })
+      .finally(() => {
+        if (this.pendingTemporaryPartitionCleanups.get(partition) !== cleanup) return;
+        this.pendingTemporaryPartitionCleanups.delete(partition);
+        if (this.disposed || this.states.get(threadId)?.profile.partition === partition) return;
+        // The thread rotated onto a new partition while this one was clearing;
+        // the abandoned session keeps no policy listeners.
+        this.sessionPolicy.release(profile);
+      });
+    this.pendingTemporaryPartitionCleanups.set(partition, cleanup);
+  }
+
+  /** Thread profile from the store, carrying any temporary partition rotation. */
+  private resolveThreadProfile(threadId: ThreadId): BrowserProfile {
+    return this.withTemporaryPartitionEpoch(threadId, this.profileStore.profileForThread(threadId));
+  }
+
+  private withTemporaryPartitionEpoch(threadId: ThreadId, profile: BrowserProfile): BrowserProfile {
+    const epoch = this.temporaryPartitionEpochByThreadId.get(threadId) ?? 0;
+    if (profile.kind !== "temporary" || epoch === 0) {
+      return profile;
+    }
+    return { ...profile, partition: `${profile.partition}-${epoch.toString(16)}` };
+  }
+
+  /**
+   * Moves a reopened temporary thread onto a fresh partition while its previous
+   * session is still being cleared. The deterministic partition name is only
+   * reused once no cleanup can still clobber the new session's state.
+   */
+  private rotateTemporaryPartitionAwayFromCleanup(
+    threadId: ThreadId,
+    state: ThreadBrowserState,
+  ): void {
+    if (state.profile.kind !== "temporary") return;
+    if (!this.pendingTemporaryPartitionCleanups.has(state.profile.partition)) return;
+    this.temporaryPartitionEpochByThreadId.set(
+      threadId,
+      (this.temporaryPartitionEpochByThreadId.get(threadId) ?? 0) + 1,
+    );
+    const rotated = this.resolveThreadProfile(threadId);
+    if (rotated.partition === state.profile.partition) return;
+    state.profile = rotated;
+    this.markThreadStateChanged(threadId);
+  }
+
   private toAnnotationRuntime(runtime: LiveTabRuntime | null): BrowserAnnotationRuntime | null {
     if (!runtime || runtime.ownsWebContents || runtime.webContents.isDestroyed()) return null;
     return {
@@ -2695,7 +3052,7 @@ export class DesktopBrowserManager {
       return existing;
     }
 
-    const initial = defaultThreadBrowserState(threadId);
+    const initial = defaultThreadBrowserState(threadId, this.resolveThreadProfile(threadId));
     this.states.set(threadId, initial);
     this.threadVersionById.set(threadId, 0);
     return initial;
@@ -2879,8 +3236,9 @@ export class DesktopBrowserManager {
   }
 
   private ensureWorkspace(threadId: ThreadId, initialUrl?: string): ThreadBrowserState {
-    this.sessionPolicy.ensureConfigured();
     const state = this.getOrCreateState(threadId);
+    this.rotateTemporaryPartitionAwayFromCleanup(threadId, state);
+    this.sessionPolicy.ensureConfigured(state.profile);
     if (state.tabs.length === 0) {
       const initialTab = createBrowserTab(normalizeUrlInput(initialUrl));
       state.tabs = [initialTab];

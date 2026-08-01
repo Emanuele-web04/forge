@@ -4,15 +4,32 @@ import { ThreadId } from "@synara/contracts";
 import type { BrowserWindow, WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { browserSession, rendererWebContentsById, rendererWebContentsFromId } = vi.hoisted(() => {
+const {
+  browserSession,
+  rendererWebContentsById,
+  rendererWebContentsFromId,
+  rendererWebContentsFromFrame,
+  sessionFromPartition,
+  showMessageBox,
+} = vi.hoisted(() => {
   const rendererWebContentsById = new Map<number, unknown>();
   return {
     browserSession: {
       setUserAgent: vi.fn(),
+      setPermissionCheckHandler: vi.fn(),
+      setPermissionRequestHandler: vi.fn(),
       webRequest: { onBeforeSendHeaders: vi.fn() },
+      on: vi.fn(),
+      removeListener: vi.fn(),
+      clearStorageData: vi.fn(),
+      clearCache: vi.fn(),
+      flushStorageData: vi.fn(),
     },
+    sessionFromPartition: vi.fn((_partition: string) => browserSession),
     rendererWebContentsById,
     rendererWebContentsFromId: vi.fn((id: number) => rendererWebContentsById.get(id) ?? null),
+    rendererWebContentsFromFrame: vi.fn((frame: { contents?: unknown }) => frame.contents ?? null),
+    showMessageBox: vi.fn(async () => ({ response: 0 })),
   };
 });
 
@@ -25,15 +42,17 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: class {},
   clipboard: { writeImage: vi.fn(), writeText: vi.fn() },
+  dialog: { showMessageBox },
   nativeImage: { createFromBuffer: vi.fn() },
   session: {
-    fromPartition: () => browserSession,
+    fromPartition: sessionFromPartition,
   },
-  webContents: { fromId: rendererWebContentsFromId },
+  webContents: { fromId: rendererWebContentsFromId, fromFrame: rendererWebContentsFromFrame },
   WebContentsView: class {},
 }));
 
 import { DesktopBrowserManager } from "./browserManager";
+import { BrowserProfileStore } from "./browserProfiles";
 
 interface WindowOpenDetails {
   url: string;
@@ -55,6 +74,7 @@ class FakeWebContents extends EventEmitter {
   windowOpenHandler: WindowOpenHandler | null = null;
 
   setUserAgent = vi.fn();
+  reload = vi.fn();
   isDestroyed = () => false;
 
   setWindowOpenHandler(handler: WindowOpenHandler): void {
@@ -70,11 +90,12 @@ class FakeRendererWebContents extends FakeWebContents {
     detach: vi.fn(),
   };
   readonly hostWebContents = { id: 41 };
-  readonly session = browserSession;
+  session: unknown = browserSession;
+  url = "about:blank";
 
   override isDestroyed = () => this.destroyed;
   getType = () => "webview";
-  getURL = () => "about:blank";
+  getURL = () => this.url;
   getTitle = () => "New tab";
   isLoading = () => false;
   canGoBack = () => false;
@@ -143,6 +164,11 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     rendererWebContentsById.clear();
+    // Keep partition and storage behaviour identical for every test regardless
+    // of the implementations an earlier test installed.
+    sessionFromPartition.mockImplementation(() => browserSession);
+    browserSession.clearStorageData.mockImplementation(() => undefined);
+    showMessageBox.mockImplementation(async () => ({ response: 0 }));
   });
 
   it("invalidates a destroyed renderer and reattaches the same tab to a new guest", async () => {
@@ -451,5 +477,242 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
 
     expect(beforeInputEvent).toHaveBeenCalledWith(event, input);
     expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("switches thread browser identities without sharing the old profile session", async () => {
+    const profileStore = new BrowserProfileStore({
+      createId: () => "e7a0a2ef-5a6d-4f70-a15d-7e6d3b27a1a9",
+    });
+    const workProfile = profileStore.create("Work");
+    const workSession = {
+      ...browserSession,
+      clearStorageData: vi.fn(),
+      clearCache: vi.fn(),
+      flushStorageData: vi.fn(),
+    };
+    sessionFromPartition.mockImplementation((partition: string) =>
+      partition === workProfile.partition ? workSession : browserSession,
+    );
+    const manager = new DesktopBrowserManager({ profileStore });
+
+    const initiallyOpened = manager.open({ threadId: THREAD_ID });
+    expect(initiallyOpened.profile).toMatchObject({ id: "temporary", kind: "temporary" });
+
+    const switched = manager.setThreadProfile({ threadId: THREAD_ID, profileId: workProfile.id });
+    expect(switched).toMatchObject({
+      open: true,
+      profile: { id: workProfile.id, partition: workProfile.partition },
+    });
+    expect(manager.getProfileState({ threadId: THREAD_ID })).toMatchObject({
+      threadProfile: { id: workProfile.id },
+      profiles: expect.arrayContaining([expect.objectContaining({ id: workProfile.id })]),
+    });
+    expect(sessionFromPartition).toHaveBeenCalledWith(workProfile.partition);
+    await manager.clearProfileData({ profileId: workProfile.id, clearCache: true });
+
+    expect(workSession.clearStorageData).toHaveBeenCalledWith();
+    expect(workSession.clearCache).toHaveBeenCalledOnce();
+
+    await manager.deleteProfile({ profileId: workProfile.id });
+    expect(manager.getState({ threadId: THREAD_ID }).profile).toMatchObject({
+      id: "temporary",
+      kind: "temporary",
+    });
+  });
+
+  it("rotates a reopened temporary partition away from an unfinished cleanup", async () => {
+    const manager = new DesktopBrowserManager();
+    let finishCleanup = (): void => {};
+    browserSession.clearStorageData.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCleanup = resolve;
+        }),
+    );
+
+    const opened = manager.open({ threadId: THREAD_ID });
+    const temporaryPartition = opened.profile.partition;
+    expect(opened.profile).toMatchObject({ id: "temporary", kind: "temporary" });
+    expect(manager.isManagedProfilePartition(temporaryPartition)).toBe(true);
+
+    manager.close({ threadId: THREAD_ID });
+    expect(browserSession.clearStorageData).toHaveBeenCalledOnce();
+
+    // Reopening while the previous session is still being cleared must never
+    // land on the partition that cleanup is about to wipe.
+    const reopened = manager.open({ threadId: THREAD_ID });
+    expect(reopened.profile.partition).not.toBe(temporaryPartition);
+    expect(reopened.profile.partition.startsWith(`${temporaryPartition}-`)).toBe(true);
+    expect(manager.isManagedProfilePartition(reopened.profile.partition)).toBe(true);
+    expect(sessionFromPartition).toHaveBeenCalledWith(reopened.profile.partition);
+    expect(manager.getProfileState({ threadId: THREAD_ID }).profiles).toContainEqual(
+      expect.objectContaining({ id: "temporary", partition: reopened.profile.partition }),
+    );
+
+    finishCleanup();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // The abandoned partition drops its session policy listeners once cleared.
+    expect(browserSession.removeListener).toHaveBeenCalledWith(
+      "select-webauthn-account",
+      expect.any(Function),
+    );
+    expect(manager.getState({ threadId: THREAD_ID }).profile.partition).toBe(
+      reopened.profile.partition,
+    );
+  });
+
+  it("keeps the temporary partition stable once its cleanup has settled", async () => {
+    const manager = new DesktopBrowserManager();
+    const opened = manager.open({ threadId: THREAD_ID });
+
+    manager.close({ threadId: THREAD_ID });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(manager.open({ threadId: THREAD_ID }).profile.partition).toBe(opened.profile.partition);
+  });
+
+  it("reloads the pages still running on a profile whose data was cleared", async () => {
+    const profileStore = new BrowserProfileStore({
+      createId: () => "c41b8f5d-1a2e-4b3c-9d8e-6f5a4b3c2d1e",
+    });
+    const workProfile = profileStore.create("Work");
+    const workSession = {
+      ...browserSession,
+      on: vi.fn(),
+      removeListener: vi.fn(),
+      clearStorageData: vi.fn(),
+      clearCache: vi.fn(),
+      flushStorageData: vi.fn(),
+    };
+    sessionFromPartition.mockImplementation((partition: string) =>
+      partition === workProfile.partition ? workSession : browserSession,
+    );
+    const manager = new DesktopBrowserManager({ profileStore });
+    manager.setThreadProfile({ threadId: THREAD_ID, profileId: workProfile.id });
+
+    const opened = manager.open({ threadId: THREAD_ID });
+    const tabId = opened.activeTabId;
+    expect(tabId).not.toBeNull();
+    if (!tabId) return;
+    const guest = new FakeRendererWebContents(21);
+    guest.session = workSession;
+    guest.url = "https://mail.example/inbox";
+    rendererWebContentsById.set(guest.id, guest);
+    manager.attachWebview(
+      { threadId: THREAD_ID, tabId, webContentsId: guest.id },
+      guest.hostWebContents.id,
+    );
+
+    const otherThreadId = ThreadId.makeUnsafe("thread-2");
+    const otherOpened = manager.open({ threadId: otherThreadId });
+    const otherTabId = otherOpened.activeTabId;
+    expect(otherTabId).not.toBeNull();
+    if (!otherTabId) return;
+    const otherGuest = new FakeRendererWebContents(22);
+    otherGuest.url = "https://mail.example/inbox";
+    rendererWebContentsById.set(otherGuest.id, otherGuest);
+    manager.attachWebview(
+      { threadId: otherThreadId, tabId: otherTabId, webContentsId: otherGuest.id },
+      otherGuest.hostWebContents.id,
+    );
+
+    await manager.clearProfileData({ profileId: workProfile.id, clearCache: true });
+
+    expect(workSession.clearStorageData).toHaveBeenCalledWith();
+    expect(guest.reload).toHaveBeenCalledOnce();
+    // A page on a different profile keeps its session.
+    expect(otherGuest.reload).not.toHaveBeenCalled();
+
+    guest.reload.mockClear();
+    await manager.clearProfileData({
+      profileId: workProfile.id,
+      clearCache: false,
+      origin: "https://other.example",
+    });
+    expect(guest.reload).not.toHaveBeenCalled();
+
+    await manager.clearProfileData({
+      profileId: workProfile.id,
+      clearCache: false,
+      origin: "https://mail.example/settings",
+    });
+    expect(guest.reload).toHaveBeenCalledOnce();
+  });
+
+  it("scopes passkey prompts to the requesting frame instead of the top-level page", async () => {
+    const manager = new DesktopBrowserManager();
+    const opened = manager.open({ threadId: THREAD_ID });
+    const tabId = opened.activeTabId;
+    expect(tabId).not.toBeNull();
+    if (!tabId) return;
+    const guest = new FakeRendererWebContents(31);
+    // The top-level page is a third-party site embedding an identity provider.
+    guest.url = "https://news.example/article";
+    rendererWebContentsById.set(guest.id, guest);
+    manager.attachWebview(
+      { threadId: THREAD_ID, tabId, webContentsId: guest.id },
+      guest.hostWebContents.id,
+    );
+
+    const selectAccount = browserSession.on.mock.calls
+      .filter(([event]) => event === "select-webauthn-account")
+      .at(-1)?.[1] as
+      | ((
+          event: unknown,
+          details: unknown,
+          callback: (credentialId?: string | null) => void,
+        ) => void)
+      | undefined;
+    expect(selectAccount).toBeDefined();
+    if (!selectAccount) return;
+
+    const accounts = [{ credentialId: "cred-1", name: "user", displayName: "User" }];
+    const requestPasskey = async (frame: object, relyingPartyId = "idp.example") => {
+      const callback = vi.fn();
+      selectAccount({}, { relyingPartyId, accounts, frame }, callback);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return callback;
+    };
+
+    // Cross-origin sign-in frame: the relying party matches the frame's origin.
+    showMessageBox.mockImplementation(async () => ({ response: 1 }));
+    const accepted = await requestPasskey({
+      origin: "https://login.idp.example",
+      url: "https://login.idp.example/webauthn",
+      contents: guest,
+    });
+    expect(accepted).toHaveBeenCalledWith("cred-1");
+    expect(showMessageBox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: expect.stringContaining("https://login.idp.example is asking from inside"),
+      }),
+    );
+
+    showMessageBox.mockClear();
+    const spoofed = await requestPasskey({
+      origin: "https://evil.example",
+      url: "https://evil.example/steal",
+      contents: guest,
+    });
+    expect(spoofed).toHaveBeenCalledWith(undefined);
+    expect(showMessageBox).not.toHaveBeenCalled();
+
+    // An opaque (sandboxed) frame origin can never be matched to a relying party.
+    const opaque = await requestPasskey({
+      origin: "null",
+      url: "https://idp.example/webauthn",
+      contents: guest,
+    });
+    expect(opaque).toHaveBeenCalledWith(undefined);
+    expect(showMessageBox).not.toHaveBeenCalled();
+
+    const unknownFrame = await requestPasskey({
+      origin: "https://idp.example",
+      url: "https://idp.example/webauthn",
+      contents: null,
+    });
+    expect(unknownFrame).toHaveBeenCalledWith(undefined);
+    expect(showMessageBox).not.toHaveBeenCalled();
   });
 });

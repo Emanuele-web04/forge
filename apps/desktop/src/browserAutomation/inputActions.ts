@@ -26,6 +26,13 @@ import {
   observePage,
   throwIfAborted,
 } from "./cdpRuntime";
+import {
+  ACTIVE_CREDENTIAL_INPUT_EXPRESSION,
+  type BrowserCredentialInputClassification,
+  CREDENTIAL_INPUT_CLASSIFIER_SNIPPET,
+  credentialInputMatchFrom,
+  IS_CREDENTIAL_INPUT_FUNCTION,
+} from "./credentialDetection";
 import { browserHostError } from "./hostErrors";
 import type { BrowserSnapshotHandle } from "./semanticSnapshot";
 import { releaseBrowserTarget, resolveBrowserTarget, type ResolvedBrowserTarget } from "./targets";
@@ -274,9 +281,15 @@ export const dragBrowserTarget = async (
 };
 
 const PREPARE_EDITABLE_FUNCTION = String.raw`function(append) {
-  if (!this || this.nodeType !== 1 || this.isConnected !== true) return false;
+  const classifyCredentialInput = ${CREDENTIAL_INPUT_CLASSIFIER_SNIPPET};
+  if (!this || this.nodeType !== 1 || this.isConnected !== true) return { ok: false };
   this.focus({ preventScroll: true });
-  if (document.activeElement !== this) return false;
+  if (document.activeElement !== this) return { ok: false };
+  // A focus handler can morph the field after the host's pre-focus check (for
+  // example by flipping it to type=password), so reclassify in the same
+  // injected call once focus has settled.
+  const credential = classifyCredentialInput(this);
+  if (credential !== false) return { ok: false, credential };
   if (this.isContentEditable) {
     const selection = getSelection();
     const range = document.createRange();
@@ -287,15 +300,15 @@ const PREPARE_EDITABLE_FUNCTION = String.raw`function(append) {
     if (append === true) range.collapse(false);
     selection?.removeAllRanges();
     selection?.addRange(range);
-    return true;
+    return { ok: true };
   }
   const value = String(this.value ?? "");
   try {
     if (append === true) this.setSelectionRange(value.length, value.length);
     else if (typeof this.select === "function") this.select();
     else this.setSelectionRange(0, value.length);
-  } catch { return false; }
-  return true;
+  } catch { return { ok: false }; }
+  return { ok: true };
 }`;
 
 const READ_EDITABLE_VALUE_FUNCTION = String.raw`function() {
@@ -325,17 +338,40 @@ export const typeIntoBrowserTarget = async (
     signal,
   });
   try {
-    const prepared = await callFunctionOn<boolean>(
+    const credentialInput = await callFunctionOn<BrowserCredentialInputClassification>(
       runtime,
       target.resolved.objectId!,
-      PREPARE_EDITABLE_FUNCTION,
-      {
-        arguments: [input.append ?? false],
-        effectMayHaveCommitted: true,
-        signal,
-      },
+      IS_CREDENTIAL_INPUT_FUNCTION,
+      { effectMayHaveCommitted: false, signal },
     );
-    if (prepared.value !== true) {
+    // Fail closed: only a literal `false` classification allows agent typing.
+    if (credentialInput.value !== false) {
+      browserHostError(
+        {
+          code: "BrowserCredentialInputRequired",
+          tabId: tabId(runtime),
+        },
+        credentialInputMatchFrom(credentialInput.value),
+      );
+    }
+    const prepared = await callFunctionOn<{
+      readonly ok?: boolean;
+      readonly credential?: BrowserCredentialInputClassification;
+    }>(runtime, target.resolved.objectId!, PREPARE_EDITABLE_FUNCTION, {
+      arguments: [input.append ?? false],
+      effectMayHaveCommitted: true,
+      signal,
+    });
+    if (prepared.value?.credential !== undefined && prepared.value.credential !== false) {
+      browserHostError(
+        {
+          code: "BrowserCredentialInputRequired",
+          tabId: tabId(runtime),
+        },
+        credentialInputMatchFrom(prepared.value.credential),
+      );
+    }
+    if (prepared.value?.ok !== true) {
       browserHostError({
         code: "BrowserTargetNotEditable",
         retryable: false,
@@ -343,6 +379,23 @@ export const typeIntoBrowserTarget = async (
         effectMayHaveCommitted: false,
         tabId: tabId(runtime),
       });
+    }
+    // The prepare step runs page-visible focus handlers, so re-check the
+    // focused element the trusted events will actually reach right before
+    // dispatch — mirroring pressBrowserKeys.
+    const credentialInputActive = await evaluateInContext<BrowserCredentialInputClassification>(
+      runtime,
+      ACTIVE_CREDENTIAL_INPUT_EXPRESSION,
+      { effectMayHaveCommitted: true, signal },
+    );
+    if (credentialInputActive?.value !== false) {
+      browserHostError(
+        {
+          code: "BrowserCredentialInputRequired",
+          tabId: tabId(runtime),
+        },
+        credentialInputMatchFrom(credentialInputActive?.value),
+      );
     }
     if (input.text.length > 0) {
       await withTrustedGuestFocus(
@@ -488,6 +541,21 @@ export const pressBrowserKeys = async (
   signal?: AbortSignal,
 ): Promise<BrowserPressOutput> => {
   validateKeySequence(input.keys);
+  const credentialInputActive = await evaluateInContext<BrowserCredentialInputClassification>(
+    runtime,
+    ACTIVE_CREDENTIAL_INPUT_EXPRESSION,
+    { effectMayHaveCommitted: false, signal },
+  );
+  // Fail closed: only a literal `false` classification allows trusted keys.
+  if (credentialInputActive?.value !== false) {
+    browserHostError(
+      {
+        code: "BrowserCredentialInputRequired",
+        tabId: tabId(runtime),
+      },
+      credentialInputMatchFrom(credentialInputActive?.value),
+    );
+  }
   await dispatchTrustedKeySequence(runtime, input.keys, signal);
   return {
     tabId: tabId(runtime),

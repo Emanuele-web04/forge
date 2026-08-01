@@ -179,7 +179,8 @@ import {
 } from "./updateArtifactIdentity";
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
-import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
+import { DesktopBrowserManager } from "./browserManager";
+import { BrowserProfileStore, resolveBrowserProfileStorePath } from "./browserProfiles";
 import {
   registerBrowserIpcHandlers,
   sendBrowserAnnotationEvent,
@@ -338,6 +339,9 @@ let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager({
+  profileStore: new BrowserProfileStore({
+    storagePath: resolveBrowserProfileStorePath(userDataPath),
+  }),
   beforeInputEvent: (event, input) => {
     if (
       isKeyboardShortcutsHelpChord(
@@ -3911,7 +3915,7 @@ function createWindow(): BrowserWindow {
       partition === undefined ||
       !hardenBrowserAnnotationWebviewPreferences({
         partition,
-        expectedPartition: BROWSER_SESSION_PARTITION,
+        expectedPartition: (candidate) => browserManager.isManagedProfilePartition(candidate),
         preloadPath: annotationGuestPreload,
         webPreferences,
       })
@@ -4159,12 +4163,6 @@ function configureMediaPermissions(): void {
     {
       targetSession: session.defaultSession,
       trustedRequester: trustedMainRenderer,
-    },
-    {
-      // Browser pages are untrusted web origins. They must never inherit the
-      // microphone grant used by Synara's own voice-composer renderer.
-      targetSession: session.fromPartition(BROWSER_SESSION_PARTITION),
-      trustedRequester: () => null,
     },
   ];
 

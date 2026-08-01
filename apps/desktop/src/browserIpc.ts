@@ -12,12 +12,17 @@ import type {
   BrowserAnnotationStartInput,
   BrowserAnnotationSyncMarkersInput,
   BrowserCaptureScreenshotResult,
+  BrowserClearProfileDataInput,
+  BrowserCreateProfileInput,
+  BrowserDeleteProfileInput,
   BrowserCopyLinkEvent,
   BrowserDetachWebviewInput,
   BrowserNavigateInput,
   BrowserNewTabInput,
   BrowserOpenInput,
   BrowserSetPanelBoundsInput,
+  BrowserRenameProfileInput,
+  BrowserSetThreadProfileInput,
   BrowserTabInput,
   BrowserThreadInput,
   ThreadBrowserState,
@@ -78,6 +83,57 @@ export function registerBrowserIpcHandlers(
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.getState);
   ipcMain.handle(BROWSER_IPC_CHANNELS.getState, async (_event, input: BrowserThreadInput) =>
     browserManager.getState(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.getProfileState);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.getProfileState, async (event, input: BrowserThreadInput) => {
+    requireTrustedRenderer(event.sender.id);
+    return browserManager.getProfileState(input);
+  });
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.createProfile);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.createProfile,
+    async (event, input: BrowserCreateProfileInput) => {
+      requireTrustedRenderer(event.sender.id);
+      return browserManager.createProfile(input);
+    },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.renameProfile);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.renameProfile,
+    async (event, input: BrowserRenameProfileInput) => {
+      requireTrustedRenderer(event.sender.id);
+      return browserManager.renameProfile(input);
+    },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.deleteProfile);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.deleteProfile,
+    async (event, input: BrowserDeleteProfileInput) => {
+      requireTrustedRenderer(event.sender.id);
+      await browserManager.deleteProfile(input);
+    },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.setThreadProfile);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.setThreadProfile,
+    async (event, input: BrowserSetThreadProfileInput) => {
+      requireTrustedRenderer(event.sender.id);
+      return browserManager.setThreadProfile(input);
+    },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.clearProfileData);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.clearProfileData,
+    async (event, input: BrowserClearProfileDataInput) => {
+      requireTrustedRenderer(event.sender.id);
+      await browserManager.clearProfileData(input);
+    },
   );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.setBounds);

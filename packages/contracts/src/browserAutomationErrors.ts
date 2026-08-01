@@ -34,6 +34,7 @@ export const BrowserErrorCode = Schema.Literals([
   "BrowserTargetNotEnabled",
   "BrowserTargetObscured",
   "BrowserTargetNotEditable",
+  "BrowserCredentialInputRequired",
   "BrowserInvalidLocator",
   "BrowserInputUnsupported",
   "BrowserNavigationBlocked",
@@ -79,6 +80,7 @@ type BrowserFixedAutomationErrorCode =
   | "BrowserTargetAmbiguous"
   | "BrowserTargetNotEnabled"
   | "BrowserTargetObscured"
+  | "BrowserCredentialInputRequired"
   | "BrowserInputUnsupported"
   | "BrowserScreenshotTooLarge"
   | "BrowserUploadPathOutsideWorkspace"
@@ -135,6 +137,8 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserTargetNotEnabled: "The matched browser element is disabled.",
   BrowserTargetObscured: "The matched browser element is covered by another page element.",
   BrowserTargetNotEditable: "The matched browser element is not editable.",
+  BrowserCredentialInputRequired:
+    "A human must enter passwords, verification codes, and other credentials directly in the browser.",
   BrowserInvalidLocator: "The browser locator is invalid.",
   BrowserInputUnsupported:
     "The requested browser input is unsupported. Use a supported browser action.",
@@ -170,6 +174,7 @@ export const BrowserFixedAutomationErrorInvariants = Object.freeze({
   BrowserTargetNotEnabled: fixedBrowserErrorInvariant(false, "target", false),
   BrowserTargetObscured: fixedBrowserErrorInvariant(true, "target", false),
   BrowserInputUnsupported: fixedBrowserErrorInvariant(false, "input", false),
+  BrowserCredentialInputRequired: fixedBrowserErrorInvariant(false, "input", false),
   BrowserScreenshotTooLarge: fixedBrowserErrorInvariant(false, "snapshot", false),
   BrowserUploadPathOutsideWorkspace: fixedBrowserErrorInvariant(false, "input", false),
   BrowserUploadWorkspaceUnavailable: fixedBrowserErrorInvariant(false, "input", false),

@@ -16,6 +16,11 @@ import {
   throwIfAborted,
   type BrowserPageObservation,
 } from "./cdpRuntime";
+import {
+  type BrowserCredentialInputClassification,
+  credentialInputMatchFrom,
+  HAS_CREDENTIAL_INPUT_EXPRESSION,
+} from "./credentialDetection";
 import { BrowserAutomationHostError, browserHostError } from "./hostErrors";
 import {
   browserLoadMilestoneSatisfied,
@@ -256,6 +261,24 @@ export const evaluateBrowserExpression = async (
   input: BrowserEvaluateInput,
   signal?: AbortSignal,
 ): Promise<BrowserEvaluateOutput> => {
+  const credentialSurface = await evaluateInContext<BrowserCredentialInputClassification>(
+    runtime,
+    HAS_CREDENTIAL_INPUT_EXPRESSION,
+    {
+      returnByValue: true,
+      effectMayHaveCommitted: false,
+      signal,
+    },
+  );
+  if (credentialSurface.value !== false) {
+    browserHostError(
+      {
+        code: "BrowserCredentialInputRequired",
+        tabId: runtime.tabId as BrowserTabId,
+      },
+      credentialInputMatchFrom(credentialSurface.value),
+    );
+  }
   let value: unknown;
   try {
     const response = await evaluateInContext(runtime, input.expression, {

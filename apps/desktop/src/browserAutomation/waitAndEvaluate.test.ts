@@ -7,6 +7,7 @@ import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { beginBrowserNavigation } from "./navigationTracker";
 import {
   boundedGlobMatches,
+  evaluateBrowserExpression,
   waitForBrowserConditions,
   waitForLoadMilestone,
 } from "./waitAndEvaluate";
@@ -19,6 +20,7 @@ interface TargetState {
   readonly attached?: boolean;
   readonly visible?: boolean;
   readonly enabled?: boolean;
+  readonly credentialSurface?: boolean;
   readonly editable?: boolean;
 }
 
@@ -32,6 +34,13 @@ const createRuntime = (state: TargetState): BrowserAutomationVisibleRuntime => {
     }
     if (method === "Runtime.evaluate") {
       const expression = String(params?.expression ?? "");
+      if (expression.includes("classifyCredentialInput")) {
+        return {
+          result: {
+            value: state.credentialSurface ? { reason: "password-type", field: "password" } : false,
+          },
+        };
+      }
       if (expression.includes("performance.getEntriesByType")) return { result: { value: 0 } };
       if (expression.includes("document.body?.innerText")) {
         const encodedNeedle = expression.match(/\.includes\((.*)\)$/)?.[1] ?? '""';
@@ -395,6 +404,22 @@ describe("browser_wait target states", () => {
     ).resolves.toMatchObject({
       url: "https://example.test/page#details",
       state: "load",
+    });
+  });
+});
+
+describe("browser_evaluate credential boundary", () => {
+  it("does not expose an alternate credential entry channel", async () => {
+    const runtime = createRuntime({ credentialSurface: true });
+
+    await expect(
+      evaluateBrowserExpression(runtime, {
+        idempotencyKey: "credential-evaluation" as never,
+        expression: "document.querySelector('input').value = 'secret'; true",
+      }),
+    ).rejects.toMatchObject({
+      browserError: { code: "BrowserCredentialInputRequired" },
+      credentialContext: { reason: "password-type", field: "password" },
     });
   });
 });

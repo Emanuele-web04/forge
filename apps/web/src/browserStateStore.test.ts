@@ -59,6 +59,13 @@ describe("browserStateStore selectors", () => {
       open: true,
       activeTabId: tab.id,
       tabs: [tab],
+      profile: {
+        id: "temporary",
+        label: "Temporary",
+        kind: "temporary",
+        partition: "synara-browser-temporary-test",
+        builtIn: true,
+      },
       lastError: null,
     });
     upsert({
@@ -74,6 +81,13 @@ describe("browserStateStore selectors", () => {
           lastCommittedUrl: "https://stale.example/",
         },
       ],
+      profile: {
+        id: "temporary",
+        label: "Temporary",
+        kind: "temporary",
+        partition: "synara-browser-temporary-test",
+        builtIn: true,
+      },
       lastError: null,
     });
 
