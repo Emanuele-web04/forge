@@ -63,7 +63,11 @@ import {
   emitWsCompatibilityIssue,
   emitWsTransportState,
 } from "./wsTransportEvents";
-import { relativePathFallback, resolveEnvironmentHttpUrl } from "./lib/wsHttpUrl";
+import {
+  relativePathFallback,
+  resolveEnvironmentHttpUrl,
+  withClientBuildIdentity,
+} from "./lib/wsHttpUrl";
 
 export type { WsThreadStreamFailure } from "./wsTransport";
 
@@ -164,7 +168,7 @@ async function requestVoiceTranscriptionUpload(
   const response = await fetch(
     resolveEnvironmentHttpUrl(
       explicitUrl,
-      `${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`,
+      withClientBuildIdentity(`${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`),
     ),
     { method: "POST", credentials: "include", body: bytes },
   );

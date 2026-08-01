@@ -2,7 +2,27 @@
 // Purpose: Resolves server HTTP URLs from the active WebSocket bridge so desktop <img>/download
 // requests carry the same legacy startup token already used for the WS connection.
 // Layer: Web utility
-// Exports: resolveWsHttpUrl, toAttachmentPreviewUrl
+// Exports: resolveWsHttpUrl, toAttachmentPreviewUrl, withClientBuildIdentity
+
+import { WS_COMPATIBILITY_QUERY } from "@synara/contracts";
+
+import { APP_VERSION } from "../branding";
+
+/**
+ * Stamps this client's build onto an HTTP write path so the server can apply
+ * the same skew policy it applies to the WebSocket transport. The identity
+ * travels under the existing WS compatibility key — one carrier, both
+ * transports — instead of an HTTP-only header invented for the purpose.
+ *
+ * Applied to the path BEFORE URL resolution so it survives every resolution
+ * branch (relative, ambient WS host, explicit remote environment).
+ */
+export function withClientBuildIdentity(rawPath: string): string {
+  const separator = rawPath.includes("?") ? "&" : "?";
+  return `${rawPath}${separator}${encodeURIComponent(
+    WS_COMPATIBILITY_QUERY.clientBuild,
+  )}=${encodeURIComponent(APP_VERSION)}`;
+}
 
 // Maps a WS URL onto the HTTP URL for `rawPath` on that same server, forwarding the legacy
 // token query param so authenticated GET routes can authorize without touching cookies.

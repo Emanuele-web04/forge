@@ -17,6 +17,7 @@ import {
   VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
+import { addBuildSkewGuardedWriteRoute } from "./httpBuildSkewGuard";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { Cause, DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -1012,11 +1013,20 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   ),
 );
 
+// Registered through addBuildSkewGuardedWriteRoute rather than HttpRouter.add:
+// these are HTTP writes, and build-skew degradation has to hold on this
+// transport too, or the client's read-only banner is a false claim for
+// everything sent by `fetch`. A future HTTP write route inherits the guard by
+// registering the same way.
 export const binaryUploadEffectRouteLayer = Layer.merge(
-  HttpRouter.add("*", ATTACHMENT_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
+  addBuildSkewGuardedWriteRoute("*", ATTACHMENT_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
   Layer.merge(
-    HttpRouter.add("*", ATTACHMENT_CANCEL_ROUTE_PATH, binaryUploadEffectHandler),
-    HttpRouter.add("*", VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
+    addBuildSkewGuardedWriteRoute("*", ATTACHMENT_CANCEL_ROUTE_PATH, binaryUploadEffectHandler),
+    addBuildSkewGuardedWriteRoute(
+      "*",
+      VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
+      binaryUploadEffectHandler,
+    ),
   ),
 );
 
