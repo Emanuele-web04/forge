@@ -1221,6 +1221,11 @@ describe("WsTransport", () => {
       updateEnvironment(state, LOCAL_ENVIRONMENT_ID, (local) => ({
         ...local,
         shellSnapshotSequence: 500,
+        // Stamped in the SAME journal as the fence, so the generation change
+        // has to invalidate it too. Left behind, it filters the restored
+        // server's rows out before any pruning runs and the thread stays
+        // invisible with no error surfaced.
+        deletedThreadIdsById: { [ThreadId.makeUnsafe("thread-tombstoned")]: 501 },
       })),
     );
 
@@ -1248,6 +1253,7 @@ describe("WsTransport", () => {
     // the replacement server's lower snapshots are all rejected as stale and the
     // sidebar keeps rendering content that server no longer holds.
     expect(useStore.getState().shellSnapshotSequence).toBe(0);
+    expect(useStore.getState().deletedThreadIdsById).toEqual({});
 
     await transport.dispose();
     resetThreadDetailResumeCursorsForTests();

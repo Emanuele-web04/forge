@@ -185,7 +185,7 @@ describe("threadDetailSubscriptionRetention", () => {
       sidebarThreadSummaryById: {
         ...selectLocalEnvironment(useStore.getState()).sidebarThreadSummaryById,
         [threadId]: {
-          ...useStore.getState().sidebarThreadSummaryById[threadId]!,
+          ...selectLocalEnvironment(useStore.getState()).sidebarThreadSummaryById[threadId]!,
           hasLiveTailWork: false,
         },
       },
@@ -294,7 +294,7 @@ describe("threadDetailSubscriptionRetention", () => {
             [threadId]: {},
           },
           threadSessionById: {
-            ...useStore.getState().threadSessionById,
+            ...selectLocalEnvironment(useStore.getState()).threadSessionById,
             [threadId]: {
               provider: "claudeAgent",
               status: "ready",

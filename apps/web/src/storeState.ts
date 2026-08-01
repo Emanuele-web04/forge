@@ -39,6 +39,17 @@ export type ThreadDetailSyncState = "synced" | "failed";
  * The corollary is the rule the aggregation layer enforces: sequences, cursors
  * and fences are only ever compared INSIDE one of these records. Cross-server
  * combination happens at the list level, over already-reduced values.
+ *
+ * WHAT THIS GUARANTEES, PRECISELY — the distinction matters when reading the
+ * projection. TYPES enforce the inner layer: a helper that takes an
+ * `EnvironmentState` cannot reach a second environment, so the four ownership
+ * bugs this shape replaced are unwritable there, not merely fixed. TYPES DO NOT
+ * enforce the ROUTING layer: `environmentIdForThread` /
+ * `environmentIdForProject` and their call sites are ordinary runtime logic, and
+ * a transition routed to the wrong environment is a plain bug caught only by a
+ * test — which is exactly how a hardcoded local scope survived review here.
+ * Treat any new routing decision as needing a test, and mutation-check the call
+ * site as well as the lookup: they fail independently.
  */
 export interface EnvironmentState {
   /**

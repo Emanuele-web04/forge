@@ -3,12 +3,19 @@
 // Exports: Pure projection transitions used by the facade and orchestration reducer.
 //
 // Everything below the exported boundary operates on ONE `EnvironmentState` —
-// a single server's rows. That is the point of the shape: a transition
+// a single server's rows. That is the point of the shape: such a transition
 // physically cannot reach another environment's data, so the "scoped this
-// collection but not its sibling" class of bug has nowhere to live, and the
-// `*OutsideEnvironment` carry-over filters the flat store needed are gone
-// because there is nothing foreign left to carry. The exported functions form
-// the routing layer: they pick the owning environment and hand its slice down.
+// collection but not its sibling" class of bug has nowhere to live there, and
+// the `*OutsideEnvironment` carry-over filters the flat store needed are gone
+// because there is nothing foreign left to carry.
+//
+// The exported functions are the ROUTING layer, and they carry a weaker
+// guarantee: they pick an owning environment by runtime lookup, so routing to
+// the wrong one is an ordinary bug that only a test catches. Two live examples
+// got through review — a detail-wipe helper that hardcoded the local cursor
+// scope, and `environmentIdForProject` whose every call site could be mutated
+// to LOCAL with the full suite still green. When adding a routed transition,
+// test it, and mutate BOTH the lookup and the call site: they fail separately.
 
 import {
   type EnvironmentId,
@@ -1036,7 +1043,8 @@ function isStaleSnapshot(state: EnvironmentState, snapshotSequence: number): boo
 }
 
 /**
- * Clears this environment's shell snapshot fence.
+ * Clears this environment's journal-scoped state: its shell snapshot fence and
+ * its deletion tombstones.
  *
  * The fence is generation-sensitive state exactly like a resume cursor: it is a
  * high-water mark in a journal's sequence space, and a replacement server may
@@ -1045,19 +1053,42 @@ function isStaleSnapshot(state: EnvironmentState, snapshotSequence: number): boo
  * silently rejects them and keeps rendering content the server no longer holds
  * — a sidebar that is not merely frozen but wrong, with no error surfaced.
  *
- * Only the fence: on a generation change a fresh snapshot is already in flight,
- * and accepting it prunes the stale rows naturally. Dropping the rows here as
- * well would blank the sidebar for the round trip and buy nothing.
+ * The TOMBSTONES are the same class of state and were previously left behind,
+ * which is reachable today on a plain single-server install. They are stamped
+ * with sequences from the journal that just went away, and they filter rows in
+ * `syncServerShellSnapshotInEnvironment` BEFORE any pruning happens — so the
+ * older reasoning here ("a fresh snapshot is already in flight and prunes the
+ * stale rows naturally") does not reach them. Concretely: hydrate at 500,
+ * delete a thread (tombstone 501), restore the server from backup so its
+ * journal restarts at 3, and the thread stays invisible with no error until the
+ * new journal happens to pass 501. The inverse polarity is worse — a low
+ * tombstone is retired by an unrelated new sequence and a deleted row comes
+ * back. Either way it is an old-journal number compared against new-journal
+ * sequences, the cross-space comparison this store shape exists to prevent.
+ *
+ * Still not the ROWS: a fresh snapshot is genuinely in flight on a generation
+ * change and will prune them, whereas dropping them here would blank the
+ * sidebar for that round trip and buy nothing. Rows are derived from the new
+ * journal; the fence and tombstones are assertions about the old one.
  */
 export function clearEnvironmentShellFence(
   state: AppState,
   environmentId: EnvironmentId,
 ): AppState {
-  return updateEnvironment(state, environmentId, (environment) =>
-    (environment.shellSnapshotSequence ?? 0) === 0
-      ? environment
-      : { ...environment, shellSnapshotSequence: 0 },
-  );
+  return updateEnvironment(state, environmentId, (environment) => {
+    const hasFence = (environment.shellSnapshotSequence ?? 0) !== 0;
+    const hasThreadTombstones = Object.keys(environment.deletedThreadIdsById ?? {}).length > 0;
+    const hasProjectTombstones = Object.keys(environment.deletedProjectIdsById ?? {}).length > 0;
+    if (!hasFence && !hasThreadTombstones && !hasProjectTombstones) {
+      return environment;
+    }
+    return {
+      ...environment,
+      shellSnapshotSequence: 0,
+      deletedThreadIdsById: {},
+      deletedProjectIdsById: {},
+    };
+  });
 }
 
 /**

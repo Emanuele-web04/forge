@@ -25,6 +25,34 @@
 // gap check accepts it and streams nothing, leaving a silently empty
 // conversation. ThreadId is not proven unique across servers either, so the
 // thread-keyed maps here would conflate two servers' threads outright.
+// (The ownership side table named above is gone; ownership is now positional,
+// so the scope resolves via `environmentIdForThread` in storeAggregation.)
+//
+// TWO MORE PATHS BELONG TO THIS GAP, both latent for the same reason and both
+// to be fixed when issue #7 lands rather than piecemeal:
+//
+// 1. `clearThreadDetailSyncState` in storeProjection.ts calls
+//    `localThreadDetailResumeCursors().clear(threadId)` unconditionally, and it
+//    is reached for REMOTE threads through evictThreadDetailFromClientState,
+//    removeDeletedThreadFromClientState and the sync-failure resets. Those
+//    wrappers route correctly to the owning environment; the inner helper then
+//    clears the LOCAL cursor, so a remote cursor outlives the detail it vouches
+//    for and the next resubscribe resumes on top of history that is gone. The
+//    BULK paths are correctly scoped already (the snapshot retain passes its
+//    environment, and the read-model resync is local by definition), so this is
+//    the single-thread wipe path alone. It is not threaded through today
+//    because the environment id would have to reach eleven in-environment
+//    helpers — removeThreadState and the detail-sync writers among them — and
+//    that refactor belongs with the (EnvironmentId, ThreadId) rekey above, not
+//    ahead of it.
+//
+// 2. The pinned-thread and space-bookmark pruners (Sidebar.tsx,
+//    hooks/useSidebarThreadActions.ts) correctly gate on the LOCAL environment's
+//    hydration flag but iterate the MERGED sidebar list. Once a remote
+//    environment can be registered, a pinned REMOTE thread is prunable in the
+//    window after local hydration but before that environment's first snapshot
+//    lands — and the pruned set is what gets persisted, so the pin does not come
+//    back. The gate needs to become per-environment along with the rekey.
 
 import { WS_STREAM_LIMITS, type ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
