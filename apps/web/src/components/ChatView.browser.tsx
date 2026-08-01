@@ -51,6 +51,8 @@ import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
+import { updateEnvironment } from "../storeAggregation";
+import { LOCAL_ENVIRONMENT_ID } from "../environmentIdentity";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -4797,7 +4799,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      useStore.setState({ projects: [], threadsHydrated: false });
+      // Through the environment record, not the aggregate: `projects` and
+      // `threadsHydrated` are derived from `environmentById` and recomputed on
+      // every write, so assigning them directly is discarded by the next
+      // transition and the pre-hydration state this test needs never holds.
+      useStore.setState((state) =>
+        updateEnvironment(state, LOCAL_ENVIRONMENT_ID, (environment) => ({
+          ...environment,
+          projects: [],
+          threadsHydrated: false,
+        })),
+      );
       await waitForLayout();
       const initialPath = mounted.router.state.location.pathname;
       const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
