@@ -48,6 +48,7 @@ vi.mock("../wsNativeApi", async (importOriginal) => {
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
+import { initialState } from "../storeState";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -469,30 +470,13 @@ describe("EventRouter scoped orchestration sync", () => {
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
     });
-    useStore.setState({
-      // The snapshot fence must fall with the state it guards. Left behind, it
-      // carries a high-water mark from an earlier file into this one and every
-      // fixture snapshot here is rejected as stale, so the store never
-      // hydrates and the assertions below wait on UI that cannot appear.
-      shellSnapshotSequence: 0,
-      shellSnapshotSequenceByEnvironmentId: {},
-      environmentIdByThreadId: {},
-      projects: [],
-      threadIds: [],
-      threadShellById: {},
-      threadSessionById: {},
-      threadTurnStateById: {},
-      messageIdsByThreadId: {},
-      messageByThreadId: {},
-      activityIdsByThreadId: {},
-      activityByThreadId: {},
-      proposedPlanIdsByThreadId: {},
-      proposedPlanByThreadId: {},
-      turnDiffIdsByThreadId: {},
-      turnDiffSummaryByThreadId: {},
-      sidebarThreadSummaryById: {},
-      threadsHydrated: false,
-    });
+    // The snapshot fence must fall with the state it guards. Left behind, it
+    // carries a high-water mark from an earlier file into this one and every
+    // fixture snapshot here is rejected as stale, so the store never hydrates
+    // and the assertions below wait on UI that cannot appear. Resetting
+    // `environmentById` wholesale is what makes that impossible to get wrong:
+    // the fences live inside the records being replaced.
+    useStore.setState(initialState);
     useWorkspacePathsStore.setState({
       homeDir: null,
       chatWorkspaceRoot: null,

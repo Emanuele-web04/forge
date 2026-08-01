@@ -50,6 +50,7 @@ import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
+import { initialState } from "../storeState";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -1886,30 +1887,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
     });
-    useStore.setState({
-      shellSnapshotSequence: 0,
-      shellSnapshotSequenceByEnvironmentId: {},
-      environmentIdByThreadId: {},
-      spaces: [],
-      projects: [],
-      threadIds: [],
-      threadShellById: {},
-      threadSessionById: {},
-      threadTurnStateById: {},
-      messageIdsByThreadId: {},
-      messageByThreadId: {},
-      activityIdsByThreadId: {},
-      activityByThreadId: {},
-      proposedPlanIdsByThreadId: {},
-      proposedPlanByThreadId: {},
-      turnDiffIdsByThreadId: {},
-      turnDiffSummaryByThreadId: {},
-      threadDetailSyncById: {},
-      deletedProjectIdsById: {},
-      deletedThreadIdsById: {},
-      sidebarThreadSummaryById: {},
-      threadsHydrated: false,
-    });
+    // One assignment resets every server's rows AND every fence: the state a
+    // reset has to clear is exactly the state `environmentById` holds, so a
+    // field added later cannot be forgotten here. Enumerating the collections
+    // by hand is what once left a stale fence behind and stopped this suite
+    // from hydrating at all.
+    useStore.setState(initialState);
     useTemporaryThreadStore.setState({
       temporaryThreadIds: {},
     });

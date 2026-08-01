@@ -3,7 +3,7 @@
 // Exports: cached collection helpers and thread derivation for the web store hot path.
 
 import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
-import type { AppState } from "./storeState";
+import type { AggregatedView, EnvironmentState } from "./storeState";
 import type {
   ChatMessage,
   ProposedPlan,
@@ -13,6 +13,18 @@ import type {
   ThreadTurnState,
   TurnDiffSummary,
 } from "./types";
+
+/**
+ * Any holder of the normalized thread slices.
+ *
+ * Derivation is identical whether it runs over ONE environment's record (the
+ * projection's own writes) or over the merged cross-environment view (what the
+ * UI reads), so it is typed against the slices rather than against the store.
+ * That is also the seam that keeps aggregation honest: a thread is rebuilt
+ * inside the environment that owns it, and only the finished object is
+ * concatenated.
+ */
+type ThreadSliceSource = EnvironmentState | AggregatedView;
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_ACTIVITIES: Thread["activities"] = [];
@@ -72,7 +84,7 @@ export function collectByIds<TKey extends string, TValue>(
   return nextValues;
 }
 
-function selectThreadMessages(state: AppState, threadId: ThreadId): Thread["messages"] {
+function selectThreadMessages(state: ThreadSliceSource, threadId: ThreadId): Thread["messages"] {
   return collectByIds(
     state.messageIdsByThreadId?.[threadId] ?? EMPTY_MESSAGE_IDS_BY_THREAD[threadId],
     state.messageByThreadId?.[threadId] ?? EMPTY_MESSAGE_MAP,
@@ -80,7 +92,10 @@ function selectThreadMessages(state: AppState, threadId: ThreadId): Thread["mess
   );
 }
 
-function selectThreadActivities(state: AppState, threadId: ThreadId): Thread["activities"] {
+function selectThreadActivities(
+  state: ThreadSliceSource,
+  threadId: ThreadId,
+): Thread["activities"] {
   return collectByIds(
     state.activityIdsByThreadId?.[threadId] ?? EMPTY_ACTIVITY_IDS_BY_THREAD[threadId],
     state.activityByThreadId?.[threadId] ?? EMPTY_ACTIVITY_MAP,
@@ -88,7 +103,10 @@ function selectThreadActivities(state: AppState, threadId: ThreadId): Thread["ac
   );
 }
 
-function selectThreadProposedPlans(state: AppState, threadId: ThreadId): Thread["proposedPlans"] {
+function selectThreadProposedPlans(
+  state: ThreadSliceSource,
+  threadId: ThreadId,
+): Thread["proposedPlans"] {
   return collectByIds(
     state.proposedPlanIdsByThreadId?.[threadId] ?? EMPTY_PROPOSED_PLAN_IDS_BY_THREAD[threadId],
     state.proposedPlanByThreadId?.[threadId] ?? EMPTY_PROPOSED_PLAN_MAP,
@@ -97,7 +115,7 @@ function selectThreadProposedPlans(state: AppState, threadId: ThreadId): Thread[
 }
 
 function selectThreadTurnDiffSummaries(
-  state: AppState,
+  state: ThreadSliceSource,
   threadId: ThreadId,
 ): Thread["turnDiffSummaries"] {
   return collectByIds(
@@ -107,7 +125,10 @@ function selectThreadTurnDiffSummaries(
   );
 }
 
-export function getThreadFromState(state: AppState, threadId: ThreadId): Thread | undefined {
+export function getThreadFromState(
+  state: ThreadSliceSource,
+  threadId: ThreadId,
+): Thread | undefined {
   const shell = state.threadShellById?.[threadId] ?? EMPTY_THREAD_SHELL_MAP[threadId];
   if (!shell) {
     return undefined;
@@ -157,7 +178,7 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
   return thread;
 }
 
-export function getThreadsFromState(state: AppState): Thread[] {
+export function getThreadsFromState(state: ThreadSliceSource): Thread[] {
   const threadIds = state.threadIds ?? EMPTY_THREAD_IDS;
   return threadIds.flatMap((threadId) => {
     const thread = getThreadFromState(state, threadId);

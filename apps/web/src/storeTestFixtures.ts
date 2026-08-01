@@ -7,6 +7,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  type EnvironmentId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
@@ -14,7 +15,9 @@ import {
 } from "@synara/contracts";
 
 import { getThreadsFromState } from "./threadDerivation";
-import type { AppState } from "./storeState";
+import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
+import { withAggregatedView } from "./storeAggregation";
+import type { AppState, EnvironmentState } from "./storeState";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 export function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -104,7 +107,49 @@ export function makeActivity(overrides: {
   };
 }
 
-export function makeState(thread: Thread): AppState {
+/**
+ * Lifts a partial environment slice into a full store.
+ *
+ * The fixture equivalent of a single-server session: the given fields become
+ * the local environment's record and the aggregate is derived from it, so a
+ * test that describes one server's rows does not have to restate them twice.
+ */
+export function makeStoreState(
+  environment: Partial<EnvironmentState> = {},
+  environmentId: EnvironmentId = LOCAL_ENVIRONMENT_ID,
+): AppState {
+  return withAggregatedView({
+    environmentById: {
+      [environmentId]: {
+        spaces: [],
+        projects: [],
+        sidebarThreadSummaryById: {},
+        threadsHydrated: false,
+        ...environment,
+      },
+    },
+  } as AppState);
+}
+
+/**
+ * A store holding one thread in one environment.
+ *
+ * Builds the environment record and derives the aggregate from it, so fixtures
+ * exercise the same path production writes take. Passing `environmentId` puts
+ * the thread on a remote server instead — which is how the cross-environment
+ * isolation tests state which server owns what, rather than by populating an
+ * ownership side table.
+ */
+export function makeState(
+  thread: Thread,
+  environmentId: EnvironmentId = LOCAL_ENVIRONMENT_ID,
+): AppState {
+  return withAggregatedView({
+    environmentById: { [environmentId]: makeEnvironmentState(thread) },
+  } as AppState);
+}
+
+export function makeEnvironmentState(thread: Thread): EnvironmentState {
   const {
     session,
     latestTurn,

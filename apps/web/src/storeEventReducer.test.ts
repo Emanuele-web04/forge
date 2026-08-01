@@ -28,6 +28,7 @@ import {
   makeDomainEvent,
   makeActivity,
   makeState,
+  makeStoreState,
   makeProject,
   makeReadModelThread,
   makeReadModel,
@@ -211,12 +212,12 @@ describe("store event reducer", () => {
 
   it("adds projects immediately from live project.created events", () => {
     const next = applyOrchestrationEvents(
-      {
+      makeStoreState({
         spaces: [],
         projects: [],
         sidebarThreadSummaryById: {},
         threadsHydrated: false,
-      },
+      }),
       [
         makeDomainEvent(
           "project.created",
@@ -250,7 +251,7 @@ describe("store event reducer", () => {
   });
 
   it("updates existing projects immediately from live project.meta-updated events", () => {
-    const initialState: AppState = {
+    const initialState: AppState = makeStoreState({
       spaces: [],
       projects: [
         makeProject({
@@ -266,7 +267,7 @@ describe("store event reducer", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
 
     const next = applyOrchestrationEvents(initialState, [
       makeDomainEvent(
@@ -314,12 +315,12 @@ describe("store event reducer", () => {
 
   it("removes projects immediately from live project.deleted events", () => {
     const next = applyOrchestrationEvents(
-      {
+      makeStoreState({
         spaces: [],
         projects: [makeProject({ id: ProjectId.makeUnsafe("project-live") })],
         sidebarThreadSummaryById: {},
         threadsHydrated: true,
-      },
+      }),
       [
         makeDomainEvent(
           "project.deleted",

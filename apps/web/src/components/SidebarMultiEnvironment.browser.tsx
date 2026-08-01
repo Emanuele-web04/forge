@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { LOCAL_ENVIRONMENT_ID } from "../environmentIdentity";
+import { selectEnvironment, selectLocalEnvironment } from "../storeAggregation";
 import { createShellAggregator } from "../shellAggregation";
 import { useStore } from "../store";
 import { createSidebarThreadSummariesSelector } from "../storeSelectors";
@@ -130,10 +131,11 @@ describe("sidebar aggregation across environments", () => {
       .element(screen.getByTestId(`thread-title-${REMOTE_THREAD_ID}`))
       .toHaveTextContent("Remote server thread");
 
-    // Ownership is recorded so later snapshots prune only their own server's rows.
-    expect(useStore.getState().environmentIdByThreadId?.[REMOTE_THREAD_ID]).toBe(
-      REMOTE_ENVIRONMENT_ID,
-    );
+    // Ownership is positional, so later snapshots prune only their own server's
+    // rows: the thread lives in that environment's record and nowhere else.
+    const state = useStore.getState();
+    expect(selectEnvironment(state, REMOTE_ENVIRONMENT_ID).threadIds).toContain(REMOTE_THREAD_ID);
+    expect(selectLocalEnvironment(state).threadIds).not.toContain(REMOTE_THREAD_ID);
     aggregator.detachAll();
   });
 

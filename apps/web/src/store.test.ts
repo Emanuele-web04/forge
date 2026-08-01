@@ -22,9 +22,11 @@ import {
   useStore,
 } from "./store";
 import type { AppState } from "./storeState";
+import type { Space } from "./types";
 import {
   makeThread,
   makeState,
+  makeStoreState,
   makeProject,
   makeReadModelThread,
   makeReadModel,
@@ -40,10 +42,12 @@ describe("store facade", () => {
     const second = ThreadId.makeUnsafe("thread-batch-2");
     const kept = ThreadId.makeUnsafe("thread-batch-kept");
     const initialState = useStore.getState();
-    useStore.setState({
-      messageIdsByThreadId: { [first]: [], [second]: [], [kept]: [] },
-      messageByThreadId: { [first]: {}, [second]: {}, [kept]: {} },
-    });
+    useStore.setState(
+      makeStoreState({
+        messageIdsByThreadId: { [first]: [], [second]: [], [kept]: [] },
+        messageByThreadId: { [first]: {}, [second]: {}, [kept]: {} },
+      }),
+    );
 
     const updates = vi.fn();
     const unsubscribe = useStore.subscribe(updates);
@@ -65,8 +69,7 @@ describe("store facade", () => {
   it("applies a Space order immediately for optimistic drag feedback", () => {
     const workSpaceId = SpaceId.makeUnsafe("space-work");
     const sideSpaceId = SpaceId.makeUnsafe("space-side");
-    const state = makeState(makeThread());
-    state.spaces = [
+    const spaces: Space[] = [
       {
         id: workSpaceId,
         name: "Work",
@@ -84,6 +87,7 @@ describe("store facade", () => {
         updatedAt: "2026-07-15T10:00:00.000Z",
       },
     ];
+    const state = makeStoreState({ spaces });
 
     const reordered = applySpaceOrder(state, [sideSpaceId, workSpaceId]);
 
@@ -187,7 +191,7 @@ describe("store facade", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
     const project3 = ProjectId.makeUnsafe("project-3");
-    const state: AppState = {
+    const state: AppState = makeStoreState({
       spaces: [],
       projects: [
         makeProject({
@@ -214,7 +218,7 @@ describe("store facade", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
 
     const next = reorderProjects(state, project1, project3);
 
@@ -224,7 +228,7 @@ describe("store facade", () => {
   it("expands every project when toggled on", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
-    const state: AppState = {
+    const state: AppState = makeStoreState({
       spaces: [],
       projects: [
         makeProject({
@@ -245,7 +249,7 @@ describe("store facade", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
 
     const next = setAllProjectsExpanded(state, true);
 
@@ -256,7 +260,7 @@ describe("store facade", () => {
   });
 
   it("collapses all projects when toggled off", () => {
-    const state: AppState = {
+    const state: AppState = makeStoreState({
       spaces: [],
       projects: [
         makeProject({
@@ -276,7 +280,7 @@ describe("store facade", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
 
     const next = setAllProjectsExpanded(state, false);
 
@@ -286,7 +290,7 @@ describe("store facade", () => {
   it("collapses every project except the active one", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
-    const state: AppState = {
+    const state: AppState = makeStoreState({
       spaces: [],
       projects: [
         makeProject({
@@ -306,7 +310,7 @@ describe("store facade", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
 
     const next = collapseProjectsExcept(state, project2);
 
@@ -333,7 +337,7 @@ describe("store facade", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
     const project3 = ProjectId.makeUnsafe("project-3");
-    const initialState: AppState = {
+    const initialState: AppState = makeStoreState({
       spaces: [],
       projects: [
         makeProject({
@@ -353,7 +357,7 @@ describe("store facade", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
     const readModel: OrchestrationReadModel = {
       snapshotSequence: 2,
       updatedAt: "2026-02-27T00:00:00.000Z",
@@ -386,7 +390,7 @@ describe("store facade", () => {
   it("preserves expanded project state when a project briefly disappears from the snapshot", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
-    const initialState: AppState = {
+    const initialState: AppState = makeStoreState({
       spaces: [],
       projects: [
         makeProject({
@@ -406,7 +410,7 @@ describe("store facade", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
 
     const snapshotWithoutProject2: OrchestrationReadModel = {
       snapshotSequence: 2,
@@ -501,18 +505,18 @@ describe("store facade", () => {
 
       const freshStore = await import("./store");
       const projectId = ProjectId.makeUnsafe("project-1");
-      freshStore.useStore.setState((state) => ({
-        ...state,
-        projects: [
-          makeProject({
-            id: projectId,
-            name: "synara",
-            localName: "synara",
-          }),
-        ],
-        sidebarThreadSummaryById: {},
-        threadsHydrated: true,
-      }));
+      freshStore.useStore.setState(
+        makeStoreState({
+          projects: [
+            makeProject({
+              id: projectId,
+              name: "synara",
+              localName: "synara",
+            }),
+          ],
+          threadsHydrated: true,
+        }),
+      );
 
       freshStore.useStore.getState().renameProjectLocally(projectId, null);
 
@@ -559,17 +563,17 @@ describe("store facade", () => {
 
       const freshStore = await import("./store");
       const projectId = ProjectId.makeUnsafe("project-1");
-      freshStore.useStore.setState((state) => ({
-        ...state,
-        projects: [
-          makeProject({
-            id: projectId,
-            cwd: "/tmp/project",
-          }),
-        ],
-        sidebarThreadSummaryById: {},
-        threadsHydrated: true,
-      }));
+      freshStore.useStore.setState(
+        makeStoreState({
+          projects: [
+            makeProject({
+              id: projectId,
+              cwd: "/tmp/project",
+            }),
+          ],
+          threadsHydrated: true,
+        }),
+      );
 
       freshStore.useStore.getState().renameProjectLocally(projectId, "synara");
 

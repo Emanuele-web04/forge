@@ -30,6 +30,7 @@ import {
   syncServerThreadDetailHotPath,
 } from "./storeProjection";
 import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
+import { selectEnvironment, selectLocalEnvironment } from "./storeAggregation";
 import {
   localThreadDetailResumeCursors,
   resetThreadDetailResumeCursorsForTests,
@@ -41,6 +42,7 @@ import {
   makeThread,
   makeActivity,
   makeState,
+  makeStoreState,
   makeProject,
   makeReadModelThread,
   makeReadModel,
@@ -232,7 +234,7 @@ describe("store projection", () => {
   });
 
   it("reuses the existing project slot for shell upserts that keep the same workspace root", () => {
-    const initialState: AppState = {
+    const initialState: AppState = makeStoreState({
       spaces: [],
       projects: [
         makeProject({
@@ -245,7 +247,7 @@ describe("store projection", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
 
     const next = applyShellEvent(initialState, {
       kind: "project-upserted",
@@ -273,7 +275,7 @@ describe("store projection", () => {
 
   it("moves shell projects to Void with the deletion timestamp", () => {
     const spaceId = SpaceId.makeUnsafe("space-shell-delete");
-    const initialState: AppState = {
+    const initialState: AppState = makeStoreState({
       spaces: [
         {
           id: spaceId,
@@ -293,7 +295,7 @@ describe("store projection", () => {
       ],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
-    };
+    });
 
     const next = applyShellEvent(initialState, {
       kind: "space-removed",
@@ -311,8 +313,7 @@ describe("store projection", () => {
 
   it("drops descendant thread state when a shell project removal arrives", () => {
     const initialState = syncServerReadModel(
-      {
-        spaces: [],
+      makeStoreState({
         projects: [
           makeProject({
             id: ProjectId.makeUnsafe("project-shell"),
@@ -323,9 +324,8 @@ describe("store projection", () => {
             cwd: "/tmp/project-other",
           }),
         ],
-        sidebarThreadSummaryById: {},
         threadsHydrated: true,
-      },
+      }),
       {
         snapshotSequence: 1,
         updatedAt: "2026-02-27T00:00:00.000Z",
@@ -1265,11 +1265,11 @@ describe("store projection", () => {
 
   it("creates an initial sidebar summary when hot-path detail sync sees a new thread first", () => {
     const threadId = ThreadId.makeUnsafe("thread-detail-before-shell");
-    const initialState: AppState = {
+    const initialState: AppState = makeStoreState({
       ...makeState(makeThread()),
       threadIds: [],
       sidebarThreadSummaryById: {},
-    };
+    });
 
     const next = syncServerThreadDetailHotPath(
       initialState,
@@ -2188,16 +2188,7 @@ describe("multi-environment shell aggregation", () => {
   });
 
   // A store with no threads yet; these cases build their own state from snapshots.
-  const emptyState = (): AppState => ({
-    spaces: [],
-    projects: [],
-    sidebarThreadSummaryById: {},
-    threadsHydrated: false,
-    threadIds: [],
-    shellSnapshotSequence: 0,
-    shellSnapshotSequenceByEnvironmentId: {},
-    environmentIdByThreadId: {},
-  });
+  const emptyState = (): AppState => makeStoreState();
 
   beforeEach(() => {
     resetThreadDetailResumeCursorsForTests();
@@ -2221,9 +2212,13 @@ describe("multi-environment shell aggregation", () => {
 
     expect(afterRemote.threadIds).toContain(localThreadId);
     expect(afterRemote.threadIds).toContain(remoteThreadId);
-    expect(afterRemote.environmentIdByThreadId?.[remoteThreadId]).toBe(remoteEnvironmentId);
-    // Local threads stay unmapped so the single-server store keeps an empty record.
-    expect(afterRemote.environmentIdByThreadId?.[localThreadId]).toBeUndefined();
+    // Ownership is positional: each thread lives in exactly one environment's
+    // record, so there is no side table that can disagree with where the rows are.
+    expect(selectEnvironment(afterRemote, remoteEnvironmentId).threadIds).toContain(remoteThreadId);
+    expect(selectEnvironment(afterRemote, remoteEnvironmentId).threadIds).not.toContain(
+      localThreadId,
+    );
+    expect(selectLocalEnvironment(afterRemote).threadIds).toContain(localThreadId);
   });
 
   it("does not let one environment's snapshot prune another's threads", () => {
@@ -2263,7 +2258,7 @@ describe("multi-environment shell aggregation", () => {
     });
 
     expect(afterLocalLow.threadIds).toContain(localThreadId);
-    expect(afterLocalLow.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId]).toBe(500);
+    expect(selectEnvironment(afterLocalLow, remoteEnvironmentId).shellSnapshotSequence).toBe(500);
   });
 
   it("still rejects a genuinely stale snapshot within one environment", () => {
@@ -2341,13 +2336,11 @@ describe("multi-environment shell aggregation", () => {
 
     expect(afterRemoteLow.threadIds).toContain(remoteThreadId);
     expect(afterRemoteLow.threadIds).toContain(localThreadId);
-    expect(afterRemoteLow.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId]).toBe(2);
-    // The local fence lives in shellSnapshotSequence alone, never duplicated
-    // into the map, so a reset that only knows the old field fully clears it.
+    expect(selectEnvironment(afterRemoteLow, remoteEnvironmentId).shellSnapshotSequence).toBe(2);
+    // The local fence lives in the local environment's record and nowhere else,
+    // so there is no second copy that a partial reset could leave behind.
+    expect(selectLocalEnvironment(afterRemoteLow).shellSnapshotSequence).toBe(500);
     expect(afterRemoteLow.shellSnapshotSequence).toBe(500);
-    expect(
-      afterRemoteLow.shellSnapshotSequenceByEnvironmentId?.[LOCAL_ENVIRONMENT_ID],
-    ).toBeUndefined();
   });
 
   it("keeps the local fence in shellSnapshotSequence so a partial reset fully clears it", () => {
@@ -2362,11 +2355,10 @@ describe("multi-environment shell aggregation", () => {
     });
 
     // The local fence must live in exactly one place.
-    expect(hydrated.shellSnapshotSequence).toBe(500);
-    expect(hydrated.shellSnapshotSequenceByEnvironmentId?.[LOCAL_ENVIRONMENT_ID]).toBeUndefined();
+    expect(selectLocalEnvironment(hydrated).shellSnapshotSequence).toBe(500);
 
-    // A reset that knows nothing about the per-environment map must be enough.
-    const afterReset = { ...hydrated, shellSnapshotSequence: 0, threadsHydrated: false };
+    // Resetting that one place must be enough; there is no duplicate to miss.
+    const afterReset = clearEnvironmentShellFence(hydrated, LOCAL_ENVIRONMENT_ID);
     const rehydrated = syncServerShellSnapshot(afterReset, {
       ...makeShellSnapshot(shellThread(localThreadId, "Local again")),
       snapshotSequence: 2,
@@ -2417,9 +2409,13 @@ describe("multi-environment shell aggregation", () => {
       "project-1",
       "project-remote",
     ]);
-    expect(afterRemote.environmentIdByProjectId?.["project-remote"]).toBe(remoteEnvironmentId);
-    // Local-owned projects stay unmapped, matching the thread map's contract.
-    expect(afterRemote.environmentIdByProjectId?.["project-1"]).toBeUndefined();
+    // Positional ownership, as for threads.
+    expect(
+      selectEnvironment(afterRemote, remoteEnvironmentId).projects.map((project) => project.id),
+    ).toEqual(["project-remote"]);
+    expect(selectLocalEnvironment(afterRemote).projects.map((project) => project.id)).toEqual([
+      "project-1",
+    ]);
 
     // ...and the local server resyncing must not delete the remote's project.
     const afterLocalResync = syncServerShellSnapshot(afterRemote, {
@@ -2470,7 +2466,9 @@ describe("multi-environment shell aggregation", () => {
       remoteEnvironmentId,
     );
     expect(afterRemoteDrop.projects.map((project) => project.id)).not.toContain("project-remote");
-    expect(afterRemoteDrop.environmentIdByProjectId?.["project-remote"]).toBeUndefined();
+    expect(
+      selectEnvironment(afterRemoteDrop, remoteEnvironmentId).projects.map((project) => project.id),
+    ).not.toContain("project-remote");
   });
 
   /**
@@ -2556,7 +2554,9 @@ describe("multi-environment shell aggregation", () => {
 
     expect(afterReadModel.threadIds).toContain(remoteThreadId);
     expect(afterReadModel.threadIds).toContain(localThreadId);
-    expect(afterReadModel.environmentIdByThreadId?.[remoteThreadId]).toBe(remoteEnvironmentId);
+    expect(selectEnvironment(afterReadModel, remoteEnvironmentId).threadIds).toContain(
+      remoteThreadId,
+    );
   });
 
   it("keeps remote environments' projects through a local read-model resync", () => {
@@ -2666,18 +2666,18 @@ describe("multi-environment shell aggregation", () => {
       { ...makeShellSnapshot(shellThread(remoteThreadId, "Remote")), snapshotSequence: 500 },
       remoteEnvironmentId,
     );
-    expect(hydrated.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId]).toBe(500);
+    expect(selectEnvironment(hydrated, remoteEnvironmentId).shellSnapshotSequence).toBe(500);
 
     const afterTeardown = discardEnvironmentProjection(hydrated, remoteEnvironmentId);
 
     // The fence is gone, so a re-registered server starting low is believed.
-    expect(
-      afterTeardown.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId],
-    ).toBeUndefined();
+    expect(selectEnvironment(afterTeardown, remoteEnvironmentId).shellSnapshotSequence ?? 0).toBe(
+      0,
+    );
     // ...and so are the rows it owned: no snapshot is coming to prune them.
     expect(afterTeardown.threadIds).not.toContain(remoteThreadId);
     expect(afterTeardown.sidebarThreadSummaryById?.[remoteThreadId]).toBeUndefined();
-    expect(afterTeardown.environmentIdByThreadId?.[remoteThreadId]).toBeUndefined();
+    expect(afterTeardown.environmentById[remoteEnvironmentId]).toBeUndefined();
   });
 
   /**
@@ -2693,7 +2693,7 @@ describe("multi-environment shell aggregation", () => {
       { ...makeShellSnapshot(shellThread(remoteThreadId, "Remote")), snapshotSequence: 500 },
       remoteEnvironmentId,
     );
-    expect(hydrated.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId]).toBe(500);
+    expect(selectEnvironment(hydrated, remoteEnvironmentId).shellSnapshotSequence).toBe(500);
 
     // removeWsEnvironmentClient -> discardEnvironmentProjection.
     const afterTeardown = discardEnvironmentProjection(hydrated, remoteEnvironmentId);
@@ -2708,7 +2708,7 @@ describe("multi-environment shell aggregation", () => {
 
     expect(afterReregister.threadIds).toContain(remoteThreadId);
     expect(afterReregister.sidebarThreadSummaryById?.[remoteThreadId]?.title).toBe("Remote again");
-    expect(afterReregister.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId]).toBe(1);
+    expect(selectEnvironment(afterReregister, remoteEnvironmentId).shellSnapshotSequence).toBe(1);
   });
 
   it("keeps the local environment's rows and fence when a remote is torn down", () => {
@@ -2767,8 +2767,8 @@ describe("multi-environment shell aggregation", () => {
 
     const reset = clearEnvironmentShellFence(withBoth, remoteEnvironmentId);
 
-    expect(reset.shellSnapshotSequenceByEnvironmentId?.[remoteEnvironmentId]).toBeUndefined();
-    expect(reset.shellSnapshotSequence).toBe(42);
+    expect(selectEnvironment(reset, remoteEnvironmentId).shellSnapshotSequence ?? 0).toBe(0);
+    expect(selectLocalEnvironment(reset).shellSnapshotSequence).toBe(42);
     // A generation change leaves the rows: the replacement's snapshot is in
     // flight and will prune them itself.
     expect(reset.threadIds).toContain(remoteThreadId);

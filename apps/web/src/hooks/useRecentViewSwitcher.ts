@@ -26,6 +26,7 @@ import { useRecentViewsStore } from "../recentViewsStore";
 import { collectLeaves } from "../splitView.logic";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
+import { selectLocalThreadsHydrated } from "../storeAggregation";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import {
@@ -71,7 +72,9 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const openChatThreadPage = useTerminalStateStore((state) => state.openChatThreadPage);
   const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
-  const threadsHydrated = useStore((state) => state.threadsHydrated);
+  // Local-scoped on purpose: gates the recent-view pruner, which drops
+  // persisted views whose targets are absent.
+  const threadsHydrated = useStore(selectLocalThreadsHydrated);
   const routeSplitViewId =
     typeof routeSearch.splitViewId === "string" ? routeSearch.splitViewId : undefined;
   const settingsSection = typeof routeSearch.section === "string" ? routeSearch.section : undefined;

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadId, TurnId, WS_STREAM_LIMITS } from "@synara/contracts";
 import { useStore } from "./store";
+import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
+import { selectLocalEnvironment, updateEnvironment } from "./storeAggregation";
+import type { EnvironmentState } from "./storeState";
 import {
   MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS,
   getRetainedThreadDetailIdsSnapshot,
@@ -15,10 +18,24 @@ import {
 describe("threadDetailSubscriptionRetention", () => {
   const initialStoreState = useStore.getState();
 
+  /**
+   * Seeds the LOCAL environment's slice.
+   *
+   * The store's flat collections are a derived cross-environment view now, so
+   * writing them directly would be overwritten by the next recomputation.
+   * Every seed here goes through the environment record the production code
+   * writes, which is also what keeps these assertions honest.
+   */
+  const seedLocalEnvironment = (environment: Partial<EnvironmentState>) => {
+    useStore.setState((state) =>
+      updateEnvironment(state, LOCAL_ENVIRONMENT_ID, (local) => ({ ...local, ...environment })),
+    );
+  };
+
   const registerIdleSidebarThread = (threadId: ThreadId) => {
-    useStore.setState({
+    seedLocalEnvironment({
       sidebarThreadSummaryById: {
-        ...useStore.getState().sidebarThreadSummaryById,
+        ...selectLocalEnvironment(useStore.getState()).sidebarThreadSummaryById,
         [threadId]: {
           id: threadId,
           projectId: "project-1" as never,
@@ -120,7 +137,9 @@ describe("threadDetailSubscriptionRetention", () => {
     release();
 
     vi.advanceTimersByTime(14 * 60 * 1000);
-    useStore.setState({ threadsHydrated: !useStore.getState().threadsHydrated });
+    seedLocalEnvironment({
+      threadsHydrated: !selectLocalEnvironment(useStore.getState()).threadsHydrated,
+    });
     vi.advanceTimersByTime(60 * 1000);
 
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
@@ -130,7 +149,7 @@ describe("threadDetailSubscriptionRetention", () => {
     vi.useFakeTimers();
     const threadId = ThreadId.makeUnsafe("thread-busy");
 
-    useStore.setState({
+    seedLocalEnvironment({
       ...useStore.getState(),
       sidebarThreadSummaryById: {
         ...useStore.getState().sidebarThreadSummaryById,
@@ -163,7 +182,7 @@ describe("threadDetailSubscriptionRetention", () => {
 
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([threadId]);
 
-    useStore.setState({
+    seedLocalEnvironment({
       ...useStore.getState(),
       sidebarThreadSummaryById: {
         ...useStore.getState().sidebarThreadSummaryById,
@@ -214,7 +233,7 @@ describe("threadDetailSubscriptionRetention", () => {
   it("evicts released terminal detail without a shell row or sidebar summary", () => {
     vi.useFakeTimers();
     const threadId = ThreadId.makeUnsafe("thread-subagent-child");
-    useStore.setState({
+    seedLocalEnvironment({
       messageIdsByThreadId: { [threadId]: [] },
       messageByThreadId: { [threadId]: {} },
       threadSessionById: {
@@ -239,7 +258,7 @@ describe("threadDetailSubscriptionRetention", () => {
   it("keeps a released hidden subagent while its normalized turn is still running", () => {
     vi.useFakeTimers();
     const threadId = ThreadId.makeUnsafe("thread-running-subagent-child");
-    useStore.setState({
+    seedLocalEnvironment({
       messageIdsByThreadId: { [threadId]: [] },
       messageByThreadId: { [threadId]: {} },
       threadSessionById: {
@@ -267,13 +286,13 @@ describe("threadDetailSubscriptionRetention", () => {
       { length: MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS + 10 },
       (_, index) => {
         const threadId = ThreadId.makeUnsafe(`thread-terminal-subagent-${index}`);
-        useStore.setState({
+        seedLocalEnvironment({
           messageIdsByThreadId: {
-            ...useStore.getState().messageIdsByThreadId,
+            ...selectLocalEnvironment(useStore.getState()).messageIdsByThreadId,
             [threadId]: [],
           },
           messageByThreadId: {
-            ...useStore.getState().messageByThreadId,
+            ...selectLocalEnvironment(useStore.getState()).messageByThreadId,
             [threadId]: {},
           },
           threadSessionById: {
@@ -343,7 +362,7 @@ describe("threadDetailSubscriptionRetention", () => {
     vi.useFakeTimers();
     const threadId = ThreadId.makeUnsafe("thread-detail-eviction");
     registerIdleSidebarThread(threadId);
-    useStore.setState({
+    seedLocalEnvironment({
       messageIdsByThreadId: { [threadId]: [] },
       messageByThreadId: { [threadId]: {} },
       activityIdsByThreadId: { [threadId]: [] },
@@ -390,7 +409,7 @@ describe("threadDetailSubscriptionRetention", () => {
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
 
     // The refreshed snapshot lands and repopulates the store.
-    useStore.setState({
+    seedLocalEnvironment({
       messageIdsByThreadId: { [threadId]: [] },
       messageByThreadId: { [threadId]: {} },
     });

@@ -15,6 +15,7 @@ import {
   shouldInvalidateProviderQueriesForEvent,
 } from "./-rootEventInvalidation";
 import type { AppState } from "../store";
+import { makeStoreState } from "../storeTestFixtures";
 import type { Thread } from "../types";
 
 function event(type: OrchestrationEvent["type"], payload: object = {}): OrchestrationEvent {
@@ -138,7 +139,7 @@ describe("root event invalidation", () => {
       envMode: "worktree",
       worktreePath: "/repo/worktree",
     });
-    const state: AppState = {
+    const state: AppState = makeStoreState({
       spaces: [],
       projects: [{ id: projectId, cwd: "/repo/main" }] as AppState["projects"],
       sidebarThreadSummaryById: {},
@@ -148,7 +149,7 @@ describe("root event invalidation", () => {
         [localThreadId]: localThread,
         [worktreeThreadId]: worktreeThread,
       },
-    };
+    });
 
     expect(resolveGitInvalidationCwdForThreadId(state, localThreadId)).toBe("/repo/main");
     expect(resolveGitInvalidationCwdForThreadId(state, worktreeThreadId)).toBe("/repo/worktree");

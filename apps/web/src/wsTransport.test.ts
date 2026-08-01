@@ -43,6 +43,7 @@ import {
   type WsThreadStreamFailure,
 } from "./wsTransport";
 import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
+import { updateEnvironment } from "./storeAggregation";
 import { useStore } from "./store";
 import {
   localThreadDetailResumeCursors,
@@ -1213,8 +1214,15 @@ describe("WsTransport", () => {
     const thread = ThreadId.makeUnsafe("thread-shared");
     localCursors.set(thread, 42);
     remoteCursors.set(thread, 7);
-    // A fence the old journal issued; the restart must invalidate it.
-    useStore.setState({ shellSnapshotSequence: 500 });
+    // A fence the old journal issued; the restart must invalidate it. Seeded
+    // through the local environment's record, which is where the fence lives —
+    // the store's top-level `shellSnapshotSequence` is derived from it.
+    useStore.setState((state) =>
+      updateEnvironment(state, LOCAL_ENVIRONMENT_ID, (local) => ({
+        ...local,
+        shellSnapshotSequence: 500,
+      })),
+    );
 
     const transport = new WsTransport({ url: "ws://localhost:3020" });
     const internals = transport as unknown as {

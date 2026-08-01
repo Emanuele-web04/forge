@@ -105,6 +105,7 @@ import { isOrdinarySpaceProject } from "../lib/spaces";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
+import { selectLocalThreadsHydrated } from "../storeAggregation";
 import { getThreadFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
@@ -1289,7 +1290,10 @@ export default function Sidebar() {
     (store) => store.pendingActiveSpace?.spaceId ?? null,
   );
   const activeSpaceId = resolveActiveSpaceId(storedActiveSpaceId, spaces, pendingActiveSpaceId);
-  const threadsHydrated = useStore((store) => store.threadsHydrated);
+  // Local-scoped on purpose: this value gates `prunePinnedProjects` below,
+  // which deletes persisted pins whose targets are absent. It must mean "the
+  // LOCAL server's rows have loaded", never "some server has reported".
+  const threadsHydrated = useStore(selectLocalThreadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
