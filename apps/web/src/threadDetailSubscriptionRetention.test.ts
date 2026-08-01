@@ -150,9 +150,8 @@ describe("threadDetailSubscriptionRetention", () => {
     const threadId = ThreadId.makeUnsafe("thread-busy");
 
     seedLocalEnvironment({
-      ...useStore.getState(),
       sidebarThreadSummaryById: {
-        ...useStore.getState().sidebarThreadSummaryById,
+        ...selectLocalEnvironment(useStore.getState()).sidebarThreadSummaryById,
         [threadId]: {
           id: threadId,
           projectId: "project-1" as never,
@@ -183,9 +182,8 @@ describe("threadDetailSubscriptionRetention", () => {
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([threadId]);
 
     seedLocalEnvironment({
-      ...useStore.getState(),
       sidebarThreadSummaryById: {
-        ...useStore.getState().sidebarThreadSummaryById,
+        ...selectLocalEnvironment(useStore.getState()).sidebarThreadSummaryById,
         [threadId]: {
           ...useStore.getState().sidebarThreadSummaryById[threadId]!,
           hasLiveTailWork: false,

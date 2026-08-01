@@ -67,6 +67,18 @@ export function ensureWsEnvironmentClient(
     // one. Dropping the scope here keeps the "a cursor is only valid against the
     // journal that issued it" invariant across a dispose/recreate cycle.
     discardEnvironmentResumeCursors(input.environmentId);
+    // The snapshot fence is the same kind of state and fails the same way, and
+    // it was missed here while both other lifecycle transitions handled it
+    // (explicit teardown, and a generation change on a live transport). A
+    // replacement cannot detect a restored server whose journal restarts low —
+    // it has no earlier instance id to compare — so a surviving high-water mark
+    // rejects every snapshot from the new server as stale and the sidebar keeps
+    // rendering rows that server no longer holds.
+    //
+    // Fence only, not the rows: unlike teardown, the replacement immediately
+    // resubscribes, so a snapshot is already on its way to prune them. Dropping
+    // rows here would blank the sidebar for that round trip and buy nothing.
+    clearEnvironmentShellFenceState(input.environmentId);
   }
   const created = createWsEnvironmentClient({
     environmentId: input.environmentId,
@@ -111,6 +123,19 @@ export function getWsEnvironmentClient(
 function discardEnvironmentProjectionState(environmentId: EnvironmentId): void {
   void import("./store").then(({ useStore }) => {
     useStore.getState().discardEnvironmentProjection(environmentId);
+  });
+}
+
+/**
+ * Drops one environment's snapshot fence, deferred for the same cycle reason.
+ *
+ * The fence-only counterpart to the discard above, for the case where a fresh
+ * snapshot IS coming: the rows stay so the sidebar does not blank for the round
+ * trip, and the incoming snapshot prunes them itself.
+ */
+function clearEnvironmentShellFenceState(environmentId: EnvironmentId): void {
+  void import("./store").then(({ useStore }) => {
+    useStore.getState().clearEnvironmentShellFence(environmentId);
   });
 }
 

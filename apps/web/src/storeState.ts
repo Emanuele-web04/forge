@@ -42,6 +42,18 @@ export type ThreadDetailSyncState = "synced" | "failed";
  */
 export interface EnvironmentState {
   /**
+   * Never present. This is a nominal boundary, not a field.
+   *
+   * `AppState` structurally contains every field below, so without this it is
+   * assignable to `EnvironmentState` and `updateEnvironment(state, id, () =>
+   * state)` type-checks — nesting the whole store inside one environment
+   * record and mixing every server's fences and tombstones together. Declaring
+   * the one field `AppState` has and an environment must not makes that
+   * assignment a type error instead of a runtime corruption caught only by
+   * tests.
+   */
+  environmentById?: never;
+  /**
    * Highest authoritative snapshot integrated for THIS environment, and the
    * sole fence for it. Snapshot sequences are per-server SQLite autoincrement
    * values, so comparing one environment's sequence against another's is

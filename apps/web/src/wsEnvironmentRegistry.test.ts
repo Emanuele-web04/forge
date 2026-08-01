@@ -66,6 +66,22 @@ const channelListeners = {
 };
 const subscribeMock = vi.fn();
 
+// The registry reaches the store through a deferred dynamic import to avoid a
+// module cycle (see wsEnvironmentRegistry). Importing the real store in this
+// node-environment suite fails at its top-level `window.addEventListener`, so
+// the store is mocked and the registry's calls are observed directly.
+const clearEnvironmentShellFenceMock = vi.fn();
+const discardEnvironmentProjectionMock = vi.fn();
+
+vi.mock("./store", () => ({
+  useStore: {
+    getState: () => ({
+      clearEnvironmentShellFence: clearEnvironmentShellFenceMock,
+      discardEnvironmentProjection: discardEnvironmentProjectionMock,
+    }),
+  },
+}));
+
 vi.mock("./wsTransport", () => {
   return {
     WsTransport: class MockWsTransport {
@@ -1349,6 +1365,58 @@ describe("wsEnvironmentRegistry", () => {
     expect(threadDetailResumeCursors(REMOTE_ENVIRONMENT_ID).buildSubscribeInput(threadId)).toEqual({
       threadId,
     });
+  });
+
+  it("discards an environment's projected rows when it is torn down", async () => {
+    // The counterpart to the replacement case below: on explicit teardown no
+    // snapshot is coming, so the rows must go with the fence or the sidebar
+    // keeps listing threads owned by a server that is gone, with nothing left
+    // to prune them. A reviewer added this call to the replacement path and
+    // every test still passed, so the lifecycle was unpinned in both
+    // directions.
+    const { ensureWsEnvironmentClient, removeWsEnvironmentClient } =
+      await import("./wsEnvironmentRegistry");
+    discardEnvironmentProjectionMock.mockClear();
+
+    ensureWsEnvironmentClient({ environmentId: REMOTE_ENVIRONMENT_ID, url: "wss://e/" });
+    await removeWsEnvironmentClient(REMOTE_ENVIRONMENT_ID);
+
+    await vi.waitFor(() => {
+      expect(discardEnvironmentProjectionMock).toHaveBeenCalledWith(REMOTE_ENVIRONMENT_ID);
+    });
+  });
+
+  it("clears the snapshot fence when a disposed entry is replaced automatically", async () => {
+    // The fence is the same generation-sensitive state as the resume cursors
+    // above and fails the same way, but this lifecycle transition handled only
+    // the cursors. A replacement transport has no earlier server-instance id to
+    // compare against, so it cannot detect a restored server whose journal
+    // restarts low: a surviving high-water mark rejects every snapshot from the
+    // replacement as stale and the sidebar renders rows that server no longer
+    // has, with no error surfaced.
+    const { ensureWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    clearEnvironmentShellFenceMock.mockClear();
+    discardEnvironmentProjectionMock.mockClear();
+
+    const client = ensureWsEnvironmentClient({
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      url: "wss://e/",
+    });
+    mockTransportStateByEnvironmentId.set(REMOTE_ENVIRONMENT_ID, "disposed");
+
+    const replacement = ensureWsEnvironmentClient({
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      url: "wss://e/",
+    });
+    expect(replacement).not.toBe(client);
+
+    await vi.waitFor(() => {
+      expect(clearEnvironmentShellFenceMock).toHaveBeenCalledWith(REMOTE_ENVIRONMENT_ID);
+    });
+    // Fence only: the replacement resubscribes immediately, so discarding the
+    // rows would blank the sidebar for that round trip and buy nothing. That is
+    // what separates this path from an explicit teardown.
+    expect(discardEnvironmentProjectionMock).not.toHaveBeenCalled();
   });
 
   it("notifies registry listeners so aggregation can re-derive", async () => {

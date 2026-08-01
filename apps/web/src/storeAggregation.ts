@@ -126,18 +126,40 @@ function concatAcrossEnvironments<T>(
   select: (environment: EnvironmentState) => readonly T[] | undefined,
   previous: readonly T[] | undefined,
   empty: T[],
+  /**
+   * Identity for de-duplication, when the list holds ids two environments can
+   * legitimately share. Omitted for lists whose values are objects that cannot
+   * collide meaningfully.
+   */
+  identity?: (value: T) => string,
 ): T[] {
   let only: readonly T[] | undefined;
   let merged: T[] | undefined;
+  const seen = identity ? new Set<string>() : undefined;
+  // Keeps the first environment's copy, matching the record merge and the
+  // ownership lookups. Without it a shared id appeared TWICE in `threadIds`,
+  // so the sidebar rendered the row twice and every `flatMap` over it produced
+  // a duplicate.
+  const take = (values: readonly T[]): T[] => {
+    if (!seen || !identity) return [...values];
+    const kept: T[] = [];
+    for (const value of values) {
+      const key = identity(value);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      kept.push(value);
+    }
+    return kept;
+  };
   for (const [, environment] of environments) {
     const values = select(environment);
     if (!values || values.length === 0) continue;
     if (merged) {
-      merged.push(...values);
+      merged.push(...take(values));
       continue;
     }
     if (only) {
-      merged = [...only, ...values];
+      merged = [...take(only), ...take(values)];
       continue;
     }
     only = values;
@@ -152,12 +174,24 @@ function concatAcrossEnvironments<T>(
 }
 
 /**
- * Merges one record-valued slice across environments.
+ * Merges one record-valued slice across environments, FIRST WINS.
  *
- * Thread and project ids are server-issued UUIDs, so keys from two environments
- * do not collide in practice; if they ever did, the ordering above makes the
- * winner deterministic (later environment wins) rather than dependent on
- * enumeration order.
+ * Ids are server-issued UUIDs and normally unique, but two servers can hold the
+ * same one — a clone, or a restore from another server's backup, sharing
+ * database identifiers. The precedence therefore has to be pinned, and pinned
+ * to the SAME rule `environmentIdForThread` / `environmentIdForProject` use,
+ * which return the first owner in this same order.
+ *
+ * They disagreed before: merging was last-wins while ownership was first-found,
+ * so a colliding thread rendered the remote's row while a delete on it wrote a
+ * tombstone into the LOCAL environment's sequence space — one server's data
+ * spliced onto another's identity, the exact class this store shape exists to
+ * exclude. One rule, used by both, is what keeps "what you see" and "what you
+ * act on" the same environment.
+ *
+ * This does not make ids globally unique; it makes a collision resolve
+ * consistently and locally-first. A colliding row from a later environment is
+ * hidden rather than interleaved.
  */
 function mergeAcrossEnvironments<T>(
   environments: ReadonlyArray<readonly [string, EnvironmentState]>,
@@ -170,11 +204,14 @@ function mergeAcrossEnvironments<T>(
     const record = select(environment);
     if (!record) continue;
     if (merged) {
-      Object.assign(merged, record);
+      // First wins: an earlier environment's entry is not overwritten.
+      for (const [key, value] of Object.entries(record)) {
+        if (!Object.hasOwn(merged, key)) merged[key] = value;
+      }
       continue;
     }
     if (only) {
-      merged = { ...only, ...record };
+      merged = { ...record, ...only };
       continue;
     }
     if (Object.keys(record).length === 0) continue;
@@ -211,18 +248,21 @@ export function withAggregatedView(state: AppState): AppState {
       (environment) => environment.spaces,
       state.spaces,
       EMPTY_SPACES,
+      (space) => space.id,
     ),
     projects: concatAcrossEnvironments<Project>(
       environments,
       (environment) => environment.projects,
       state.projects,
       EMPTY_PROJECTS,
+      (project) => project.id,
     ),
     threadIds: concatAcrossEnvironments<ThreadId>(
       environments,
       (environment) => environment.threadIds,
       state.threadIds,
       EMPTY_THREAD_IDS,
+      (threadId) => threadId,
     ),
     sidebarThreadSummaryById: mergeAcrossEnvironments<SidebarThreadSummary>(
       environments,
@@ -312,7 +352,11 @@ export function withAggregatedView(state: AppState): AppState {
  * that receive only a thread id and must find its home before writing.
  */
 export function environmentIdForThread(state: AppState, threadId: ThreadId): EnvironmentId {
-  for (const [environmentId, environment] of Object.entries(state.environmentById)) {
+  // Same order the aggregate merges in, so the environment that OWNS a
+  // colliding id is the one whose row is on screen. Scanning in raw `Record`
+  // order while the merge took the last writer meant a shared id rendered one
+  // server's row and routed writes to another's.
+  for (const [environmentId, environment] of orderedEnvironmentEntries(state)) {
     if (environment.threadShellById?.[threadId]) {
       return environmentId as EnvironmentId;
     }
@@ -322,7 +366,8 @@ export function environmentIdForThread(state: AppState, threadId: ThreadId): Env
 
 /** The environment that owns a project, or the local one when no record claims it. */
 export function environmentIdForProject(state: AppState, projectId: Project["id"]): EnvironmentId {
-  for (const [environmentId, environment] of Object.entries(state.environmentById)) {
+  // First-wins in aggregate order; see `environmentIdForThread`.
+  for (const [environmentId, environment] of orderedEnvironmentEntries(state)) {
     if (environment.projects.some((project) => project.id === projectId)) {
       return environmentId as EnvironmentId;
     }

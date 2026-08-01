@@ -208,6 +208,77 @@ describe("storeAggregation", () => {
     });
   });
 
+  describe("colliding ids across environments", () => {
+    // Two servers can hold the same id: a clone, or a restore from another
+    // server's backup, sharing database UUIDs. The merge and the ownership
+    // lookups must then agree, or the row on screen belongs to one server
+    // while a delete on it writes into another's sequence space.
+    // REMOTE is inserted FIRST on purpose: raw `Record` enumeration would then
+    // resolve ownership to it, while the aggregate renders local's row. Only an
+    // adversarial insertion order can catch a lookup that forgets to sort.
+    const collided = () =>
+      storeWith({
+        [REMOTE]: environment({
+          threadIds: [LOCAL_THREAD],
+          threadShellById: { [LOCAL_THREAD]: { ...shell(LOCAL_THREAD), title: "remote copy" } },
+          projects: [makeProject({ name: "remote copy" })],
+        }),
+        [LOCAL_ENVIRONMENT_ID]: environment({
+          threadIds: [LOCAL_THREAD],
+          threadShellById: { [LOCAL_THREAD]: { ...shell(LOCAL_THREAD), title: "local copy" } },
+          projects: [makeProject({ name: "local copy" })],
+        }),
+      });
+
+    it("renders the row belonging to the environment that owns it", () => {
+      const state = collided();
+
+      expect(state.threadShellById?.[LOCAL_THREAD]?.title).toBe("local copy");
+      expect(environmentIdForThread(state, LOCAL_THREAD)).toBe(LOCAL_ENVIRONMENT_ID);
+    });
+
+    it("resolves project ownership to the environment whose project is rendered", () => {
+      const state = collided();
+      const projectId = ProjectId.makeUnsafe("project-1");
+
+      expect(state.projects.find((project) => project.id === projectId)?.name).toBe("local copy");
+      expect(environmentIdForProject(state, projectId)).toBe(LOCAL_ENVIRONMENT_ID);
+    });
+
+    it("keeps the first environment's copy when three environments collide", () => {
+      // Two environments exercise only the merge's initial pairing; a third is
+      // what drives the accumulating branch, where a last-wins Object.assign
+      // would silently take over.
+      const state = storeWith({
+        [OTHER_REMOTE]: environment({
+          threadIds: [LOCAL_THREAD],
+          threadShellById: { [LOCAL_THREAD]: { ...shell(LOCAL_THREAD), title: "other copy" } },
+        }),
+        [REMOTE]: environment({
+          threadIds: [LOCAL_THREAD],
+          threadShellById: { [LOCAL_THREAD]: { ...shell(LOCAL_THREAD), title: "remote copy" } },
+        }),
+        [LOCAL_ENVIRONMENT_ID]: environment({
+          threadIds: [LOCAL_THREAD],
+          threadShellById: { [LOCAL_THREAD]: { ...shell(LOCAL_THREAD), title: "local copy" } },
+        }),
+      });
+
+      expect(state.threadShellById?.[LOCAL_THREAD]?.title).toBe("local copy");
+      expect(environmentIdForThread(state, LOCAL_THREAD)).toBe(LOCAL_ENVIRONMENT_ID);
+      expect(state.threadIds).toEqual([LOCAL_THREAD]);
+    });
+
+    it("lists a colliding id once, not once per environment", () => {
+      // A duplicate here rendered the sidebar row twice and made every
+      // flatMap over threadIds emit the thread twice.
+      expect(collided().threadIds).toEqual([LOCAL_THREAD]);
+      expect(collided().projects.map((project) => project.id)).toEqual([
+        ProjectId.makeUnsafe("project-1"),
+      ]);
+    });
+  });
+
   describe("positional ownership lookup", () => {
     it("finds the environment holding a thread", () => {
       const state = storeWith({

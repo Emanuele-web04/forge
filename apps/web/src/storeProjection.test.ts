@@ -42,6 +42,7 @@ import {
   makeThread,
   makeActivity,
   makeState,
+  makeEnvironmentState,
   makeStoreState,
   makeProject,
   makeReadModelThread,
@@ -1266,7 +1267,7 @@ describe("store projection", () => {
   it("creates an initial sidebar summary when hot-path detail sync sees a new thread first", () => {
     const threadId = ThreadId.makeUnsafe("thread-detail-before-shell");
     const initialState: AppState = makeStoreState({
-      ...makeState(makeThread()),
+      ...makeEnvironmentState(makeThread()),
       threadIds: [],
       sidebarThreadSummaryById: {},
     });
@@ -2390,13 +2391,31 @@ describe("multi-environment shell aggregation", () => {
       scripts: [],
       spaceId: null,
     };
+    const localSpace = {
+      id: SpaceId.makeUnsafe("space-local"),
+      name: "Local Space",
+      icon: "bag" as const,
+      sortOrder: 0,
+      createdAt: "2026-02-27T00:00:00.000Z",
+      updatedAt: "2026-02-27T00:00:00.000Z",
+    };
+    const remoteSpace = {
+      id: SpaceId.makeUnsafe("space-remote"),
+      name: "Remote Space",
+      icon: "rocket" as const,
+      sortOrder: 0,
+      createdAt: "2026-02-27T00:00:00.000Z",
+      updatedAt: "2026-02-27T00:00:00.000Z",
+    };
     const localSnapshot = {
       ...makeShellSnapshot(shellThread(localThreadId, "Local")),
+      spaces: [localSpace],
       snapshotSequence: 1,
     };
     const remoteSnapshot = {
       ...makeShellSnapshot(shellThread(remoteThreadId, "Remote")),
       projects: [remoteProject],
+      spaces: [remoteSpace],
       snapshotSequence: 1,
     };
 
@@ -2416,6 +2435,17 @@ describe("multi-environment shell aggregation", () => {
     expect(selectLocalEnvironment(afterRemote).projects.map((project) => project.id)).toEqual([
       "project-1",
     ]);
+    // SPACES, which this test is named for and never exercised: the remote
+    // snapshot rebuilt `spaces` from itself exactly as it did `projects`, so
+    // the local space vanished on the first cross-environment snapshot.
+    expect(afterRemote.spaces.map((space) => space.id).toSorted()).toEqual([
+      "space-local",
+      "space-remote",
+    ]);
+    expect(selectEnvironment(afterRemote, remoteEnvironmentId).spaces.map((s) => s.id)).toEqual([
+      "space-remote",
+    ]);
+    expect(selectLocalEnvironment(afterRemote).spaces.map((s) => s.id)).toEqual(["space-local"]);
 
     // ...and the local server resyncing must not delete the remote's project.
     const afterLocalResync = syncServerShellSnapshot(afterRemote, {
@@ -2425,6 +2455,11 @@ describe("multi-environment shell aggregation", () => {
     expect(afterLocalResync.projects.map((project) => project.id).toSorted()).toEqual([
       "project-1",
       "project-remote",
+    ]);
+    // ...and the remote's space survives a local resync too.
+    expect(afterLocalResync.spaces.map((space) => space.id).toSorted()).toEqual([
+      "space-local",
+      "space-remote",
     ]);
     // Threads survived throughout; the point is that their projects now do too.
     expect(afterLocalResync.threadIds).toContain(localThreadId);
@@ -2651,13 +2686,30 @@ describe("multi-environment shell aggregation", () => {
     const afterDelete = removeDeletedProjectFromClientState(hydrated, projectId, 101);
     expect(afterDelete.deletedProjectIdsById?.[projectId]).toBe(101);
 
+    // The remote snapshot must NOT list the tombstoned project id. Sharing
+    // `project-1` between both snapshots made this test pass for the wrong
+    // reason: retirement was blocked by the "still present" check rather than
+    // by the sequence-space scoping it claims to pin, so a mutation that
+    // retired local tombstones on a remote sequence survived it.
     const afterRemote = syncServerShellSnapshot(
       afterDelete,
-      { ...makeShellSnapshot(shellThread(remoteThreadId, "Remote")), snapshotSequence: 5000 },
+      {
+        ...makeShellSnapshot(shellThread(remoteThreadId, "Remote")),
+        projects: [],
+        snapshotSequence: 5000,
+      },
       remoteEnvironmentId,
     );
     // The project half of the same defect, which the thread-only report missed.
     expect(afterRemote.deletedProjectIdsById?.[projectId]).toBe(101);
+
+    // And the tombstone still does its job: a later local snapshot carrying the
+    // project must not resurrect it.
+    const afterLocalResync = syncServerShellSnapshot(afterRemote, {
+      ...makeShellSnapshot(shellThread(localThreadId, "Local")),
+      snapshotSequence: 100,
+    });
+    expect(afterLocalResync.projects.map((project) => project.id)).not.toContain(projectId);
   });
 
   it("clears a remote fence with the environment's own registry teardown", () => {
