@@ -197,6 +197,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     deleteProfile: (input) => ipcRenderer.invoke(IPC.browser.deleteProfile, input),
     setThreadProfile: (input) => ipcRenderer.invoke(IPC.browser.setThreadProfile, input),
     clearProfileData: (input) => ipcRenderer.invoke(IPC.browser.clearProfileData, input),
+    getChromeProfileState: () => ipcRenderer.invoke(IPC.browser.getChromeProfileState),
+    openChromeSignIn: (input) => ipcRenderer.invoke(IPC.browser.openChromeSignIn, input),
+    importChromeSession: (input) => ipcRenderer.invoke(IPC.browser.importChromeSession, input),
     setPanelBounds: async (input) => {
       ipcRenderer.send(IPC.browser.setBounds, input);
     },

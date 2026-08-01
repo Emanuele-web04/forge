@@ -11,8 +11,12 @@ const {
   rendererWebContentsFromFrame,
   sessionFromPartition,
   showMessageBox,
+  cookiesSet,
+  cookiesFlushStore,
 } = vi.hoisted(() => {
   const rendererWebContentsById = new Map<number, unknown>();
+  const cookiesSet = vi.fn();
+  const cookiesFlushStore = vi.fn();
   return {
     browserSession: {
       setUserAgent: vi.fn(),
@@ -24,12 +28,15 @@ const {
       clearStorageData: vi.fn(),
       clearCache: vi.fn(),
       flushStorageData: vi.fn(),
+      cookies: { set: cookiesSet, flushStore: cookiesFlushStore },
     },
     sessionFromPartition: vi.fn((_partition: string) => browserSession),
     rendererWebContentsById,
     rendererWebContentsFromId: vi.fn((id: number) => rendererWebContentsById.get(id) ?? null),
     rendererWebContentsFromFrame: vi.fn((frame: { contents?: unknown }) => frame.contents ?? null),
     showMessageBox: vi.fn(async () => ({ response: 0 })),
+    cookiesSet,
+    cookiesFlushStore,
   };
 });
 
@@ -53,6 +60,7 @@ vi.mock("electron", () => ({
 
 import { DesktopBrowserManager } from "./browserManager";
 import { BrowserProfileStore } from "./browserProfiles";
+import { ChromeSessionBridge } from "./chromeSessionBridge";
 
 interface WindowOpenDetails {
   url: string;
@@ -72,10 +80,12 @@ class FakeWebContents extends EventEmitter {
   }
 
   windowOpenHandler: WindowOpenHandler | null = null;
+  url = "about:blank";
 
   setUserAgent = vi.fn();
   reload = vi.fn();
   isDestroyed = () => false;
+  getURL = () => this.url;
 
   setWindowOpenHandler(handler: WindowOpenHandler): void {
     this.windowOpenHandler = handler;
@@ -91,11 +101,8 @@ class FakeRendererWebContents extends FakeWebContents {
   };
   readonly hostWebContents = { id: 41 };
   session: unknown = browserSession;
-  url = "about:blank";
-
   override isDestroyed = () => this.destroyed;
   getType = () => "webview";
-  getURL = () => this.url;
   getTitle = () => "New tab";
   isLoading = () => false;
   canGoBack = () => false;
@@ -111,6 +118,7 @@ class FakePopupWindow extends EventEmitter {
   readonly webContents = new FakeWebContents();
   isDestroyed = () => false;
   destroy = vi.fn();
+  setMenuBarVisibility = vi.fn();
 }
 
 interface BrowserManagerCharacterizationAccess {
@@ -150,6 +158,10 @@ interface BrowserManagerCharacterizationAccess {
     window: BrowserWindow;
     listenerDisposers: Array<() => void>;
   }): void;
+  registerOAuthPopupWindow(
+    popup: BrowserWindow,
+    context: { threadId: ThreadId; tabId: string },
+  ): void;
 }
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
@@ -518,6 +530,156 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
       id: "temporary",
       kind: "temporary",
     });
+  });
+
+  it("imports only the Chrome site cookies into a saved browser identity", async () => {
+    const profileStore = new BrowserProfileStore({
+      createId: () => "e7a0a2ef-5a6d-4f70-a15d-7e6d3b27a1a9",
+    });
+    const workProfile = profileStore.create("Work");
+    const chromeSessionBridge = new ChromeSessionBridge({ platform: "darwin" });
+    vi.spyOn(chromeSessionBridge, "getProfileState").mockReturnValue({
+      supported: true,
+      profiles: [{ id: "Default", label: "Chrome" }],
+      preferredProfileId: "Default",
+      unavailableReason: null,
+    });
+    const openSignIn = vi.spyOn(chromeSessionBridge, "openSignIn").mockResolvedValue();
+    const readSiteCookies = vi.spyOn(chromeSessionBridge, "readSiteCookies").mockResolvedValue({
+      cookies: [
+        {
+          url: "https://accounts.google.com/",
+          name: "SID",
+          value: "local-session",
+          domain: ".google.com",
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "unspecified",
+        },
+      ],
+      skippedCookieCount: 2,
+      site: "accounts.google.com",
+      sourceProfileLabel: "Chrome",
+    });
+    const manager = new DesktopBrowserManager({ profileStore, chromeSessionBridge });
+    manager.setThreadProfile({ threadId: THREAD_ID, profileId: workProfile.id });
+    const opened = manager.open({ threadId: THREAD_ID });
+    const tabId = opened.activeTabId;
+    expect(tabId).not.toBeNull();
+    if (!tabId) return;
+    const guest = new FakeRendererWebContents(24);
+    guest.url = "https://accounts.google.com/signin";
+    rendererWebContentsById.set(guest.id, guest);
+    manager.attachWebview(
+      { threadId: THREAD_ID, tabId, webContentsId: guest.id },
+      guest.hostWebContents.id,
+    );
+
+    expect(manager.getChromeProfileState().preferredProfileId).toBe("Default");
+    await manager.openChromeSignIn({ url: guest.url });
+    expect(openSignIn).toHaveBeenCalledWith(guest.url);
+    await expect(
+      manager.importChromeSession({
+        profileId: "temporary",
+        chromeProfileId: "Default",
+        url: guest.url,
+      }),
+    ).rejects.toThrow(/saved browser identity/i);
+
+    const result = await manager.importChromeSession({
+      profileId: workProfile.id,
+      chromeProfileId: "Default",
+      url: guest.url,
+    });
+
+    expect(readSiteCookies).toHaveBeenCalledWith("Default", guest.url);
+    expect(cookiesSet).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: "SID", domain: ".google.com" }),
+    );
+    expect(cookiesFlushStore).toHaveBeenCalledOnce();
+    expect(browserSession.flushStorageData).toHaveBeenCalled();
+    expect(guest.reload).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      importedCookieCount: 1,
+      skippedCookieCount: 2,
+      site: "accounts.google.com",
+      sourceProfileLabel: "Chrome",
+    });
+  });
+
+  it("continues a Google passkey popup in Chrome and imports the popup site on return", async () => {
+    const profileStore = new BrowserProfileStore();
+    const chromeSessionBridge = new ChromeSessionBridge({ platform: "darwin" });
+    vi.spyOn(chromeSessionBridge, "getProfileState").mockReturnValue({
+      supported: true,
+      profiles: [{ id: "Default", label: "Emanuele" }],
+      preferredProfileId: "Default",
+      unavailableReason: null,
+    });
+    const openSignIn = vi.spyOn(chromeSessionBridge, "openSignIn").mockResolvedValue();
+    const readSiteCookies = vi.spyOn(chromeSessionBridge, "readSiteCookies").mockResolvedValue({
+      cookies: [
+        {
+          url: "https://accounts.google.com/",
+          name: "SID",
+          value: "updated-google-session",
+          domain: ".google.com",
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "unspecified",
+        },
+      ],
+      skippedCookieCount: 0,
+      site: "accounts.google.com",
+      sourceProfileLabel: "Emanuele",
+    });
+    showMessageBox.mockResolvedValueOnce({ response: 0 }).mockResolvedValueOnce({ response: 0 });
+
+    const manager = new DesktopBrowserManager({ profileStore, chromeSessionBridge });
+    manager.setThreadProfile({ threadId: THREAD_ID, profileId: "personal" });
+    const opened = manager.open({ threadId: THREAD_ID });
+    const tabId = opened.activeTabId!;
+    const popup = new FakePopupWindow();
+    asCharacterizationAccess(manager).registerOAuthPopupWindow(popup as unknown as BrowserWindow, {
+      threadId: THREAD_ID,
+      tabId,
+    });
+    const challengeUrl =
+      "https://accounts.google.com/v3/signin/challenge/pk?continue=https%3A%2F%2Fx.com%2Fcallback";
+    popup.webContents.url = challengeUrl;
+
+    popup.webContents.emit("did-navigate", {}, challengeUrl);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(showMessageBox).toHaveBeenNthCalledWith(
+      1,
+      popup,
+      expect.objectContaining({
+        title: "Use your passkey in Chrome",
+        buttons: ["Open in Chrome", "Use Chrome session now", "Not now"],
+      }),
+    );
+    expect(openSignIn).toHaveBeenCalledExactlyOnceWith(challengeUrl);
+
+    popup.emit("focus");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(showMessageBox).toHaveBeenNthCalledWith(
+      2,
+      popup,
+      expect.objectContaining({
+        title: "Finish the sign-in",
+        buttons: ["Import sign-in", "Open Chrome again", "Cancel"],
+      }),
+    );
+    expect(readSiteCookies).toHaveBeenCalledExactlyOnceWith("Default", challengeUrl);
+    expect(cookiesSet).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "SID", domain: ".google.com" }),
+    );
+    expect(popup.webContents.reload).toHaveBeenCalledOnce();
   });
 
   it("rotates a reopened temporary partition away from an unfinished cleanup", async () => {

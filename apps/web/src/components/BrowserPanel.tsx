@@ -73,6 +73,7 @@ import {
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import { ChromeSignInDialog } from "./browser/ChromeSignInDialog";
 import {
   useBrowserAnnotations,
   type BrowserAnnotationsController,
@@ -648,6 +649,7 @@ export function BrowserPanel({
   const [profileDialog, setProfileDialog] = useState<
     { mode: "create" } | { mode: "rename"; profile: BrowserProfile } | null
   >(null);
+  const [chromeSignInDialogOpen, setChromeSignInDialogOpen] = useState(false);
   const activeTabId = activeTab?.id ?? null;
   const activeTabInitialUrl = activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
   activeTabInitialUrlRef.current = activeTabInitialUrl;
@@ -833,6 +835,21 @@ export function BrowserPanel({
     threadId,
     upsertThreadState,
   ]);
+
+  const activeTabWebUrl = (() => {
+    if (!activeTab) return null;
+    try {
+      const parsed = new URL(activeTab.url);
+      return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : null;
+    } catch {
+      return null;
+    }
+  })();
+  const canImportChromeSignIn =
+    isElectron &&
+    isMacPlatform(navigator.platform) &&
+    activeBrowserProfile?.kind === "persistent" &&
+    activeTabWebUrl !== null;
 
   // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
   // removing the DOM node so main never keeps a stale webContents runtime.
@@ -1940,6 +1957,14 @@ export function BrowserPanel({
                     <BrowserActionMenuIcon icon={RefreshCwIcon} />
                     <span>Forget cookies & cache</span>
                   </MenuItem>
+                  <MenuItem
+                    className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                    disabled={!canImportChromeSignIn}
+                    onClick={() => setChromeSignInDialogOpen(true)}
+                  >
+                    <BrowserActionMenuIcon icon={ExternalLinkIcon} />
+                    <span>Use Chrome sign-in…</span>
+                  </MenuItem>
                 </>
               ) : null}
               <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
@@ -1966,6 +1991,22 @@ export function BrowserPanel({
         }}
         onSave={saveBrowserProfileName}
       />
+      {api && activeBrowserProfile && activeTabWebUrl ? (
+        <ChromeSignInDialog
+          open={chromeSignInDialogOpen}
+          url={activeTabWebUrl}
+          targetProfile={activeBrowserProfile}
+          methods={api.browser}
+          onOpenChange={setChromeSignInDialogOpen}
+          onImported={(result) => {
+            reloadRendererBrowserWebview(activeBrowserProfile.partition);
+            toastManager.add({
+              type: "success",
+              title: `Chrome sign-in imported for ${result.site}`,
+            });
+          }}
+        />
+      ) : null}
     </>
   );
 

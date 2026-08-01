@@ -23,6 +23,7 @@ import {
   type BrowserAnnotationStartInput,
   type BrowserAnnotationSyncMarkersInput,
   type BrowserAttachWebviewInput,
+  type BrowserChromeProfileState,
   type BrowserClearProfileDataInput,
   type BrowserCreateProfileInput,
   type BrowserDeleteProfileInput,
@@ -36,7 +37,10 @@ import {
   type BrowserNavigateInput,
   type BrowserNewTabInput,
   type BrowserOpenInput,
+  type BrowserOpenChromeSignInInput,
   type BrowserPanelBounds,
+  type BrowserImportChromeSessionInput,
+  type BrowserImportChromeSessionResult,
   type BrowserSetPanelBoundsInput,
   type BrowserTabInput,
   type BrowserTabState,
@@ -57,6 +61,7 @@ import {
   type BrowserSessionWebAuthnEvent,
 } from "./browserSessionPolicy";
 import { BrowserProfileStore } from "./browserProfiles";
+import { ChromeSessionBridge } from "./chromeSessionBridge";
 import {
   BrowserAnnotationCoordinator,
   type BrowserAnnotationRuntime,
@@ -128,6 +133,8 @@ interface OAuthPopupContext {
 interface OAuthPopupRuntime extends OAuthPopupContext {
   window: BrowserWindow;
   listenerDisposers: Array<() => void>;
+  chromeSignInHandledUrl?: string;
+  chromeSignInFlowActive?: boolean;
 }
 
 interface NativeBrowserViewVisibility {
@@ -218,6 +225,7 @@ export interface BrowserAutomationDownloadEvent {
 export interface DesktopBrowserManagerOptions {
   readonly beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
   readonly profileStore?: BrowserProfileStore;
+  readonly chromeSessionBridge?: ChromeSessionBridge;
 }
 
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
@@ -395,6 +403,22 @@ function browserContentsOrigin(webContents: Pick<WebContents, "getURL">): string
   }
 }
 
+function googlePasskeyChallengeUrl(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "https:" || url.hostname !== "accounts.google.com") return null;
+    return /(?:^|\/)signin\/challenge\/pk(?:\/|$)/u.test(url.pathname) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function describeBrowserManagerError(error: unknown): string {
+  return error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : "An unexpected error occurred.";
+}
+
 function isAllowedBrowserRuntimeNavigation(url: string): boolean {
   if (url === ABOUT_BLANK_URL) return true;
   try {
@@ -480,6 +504,7 @@ export class DesktopBrowserManager {
   private readonly runtimes = new Map<string, LiveTabRuntime>();
   private readonly rendererOnlyRuntimeKeys = new Set<string>();
   private readonly profileStore: BrowserProfileStore;
+  private readonly chromeSessionBridge: ChromeSessionBridge;
   private readonly temporaryPartitionEpochByThreadId = new Map<ThreadId, number>();
   private readonly pendingTemporaryPartitionCleanups = new Map<string, Promise<void>>();
   private readonly runtimeLastActiveAtByKey = new Map<string, number>();
@@ -512,6 +537,7 @@ export class DesktopBrowserManager {
 
   constructor(private readonly options: DesktopBrowserManagerOptions = {}) {
     this.profileStore = options.profileStore ?? new BrowserProfileStore();
+    this.chromeSessionBridge = options.chromeSessionBridge ?? new ChromeSessionBridge();
     this.sessionPolicy = new BrowserSessionPolicy(
       (event) => {
         this.handleSessionDownload(event);
@@ -653,6 +679,48 @@ export class DesktopBrowserManager {
     // (live documents, service workers, in-page tokens) until they reload, so
     // clearing storage alone would leave them signed in.
     this.reloadProfileContents(profile, origin);
+  }
+
+  getChromeProfileState(): BrowserChromeProfileState {
+    return this.chromeSessionBridge.getProfileState();
+  }
+
+  async openChromeSignIn(input: BrowserOpenChromeSignInInput): Promise<void> {
+    await this.chromeSessionBridge.openSignIn(input.url);
+  }
+
+  async importChromeSession(
+    input: BrowserImportChromeSessionInput,
+  ): Promise<BrowserImportChromeSessionResult> {
+    const profile = this.findProfile(input.profileId);
+    if (profile.kind !== "persistent") {
+      throw new Error("Chrome sign-in can only be imported into a saved browser identity.");
+    }
+    const source = await this.chromeSessionBridge.readSiteCookies(input.chromeProfileId, input.url);
+    if (source.cookies.length === 0) {
+      throw new Error(
+        `No current ${source.site} sign-in was found in ${source.sourceProfileLabel}. Sign in with Chrome, then try the import again.`,
+      );
+    }
+
+    const profileSession = this.sessionPolicy.ensureConfigured(profile);
+    const writes = await Promise.allSettled(
+      source.cookies.map((cookie) => profileSession.cookies.set(cookie)),
+    );
+    const importedCookieCount = writes.filter((write) => write.status === "fulfilled").length;
+    const skippedCookieCount = source.skippedCookieCount + (writes.length - importedCookieCount);
+    if (importedCookieCount === 0) {
+      throw new Error(`Chrome cookies for ${source.site} could not be imported.`);
+    }
+    await profileSession.cookies.flushStore();
+    await profileSession.flushStorageData();
+    this.reloadProfileContents(profile, undefined);
+    return {
+      importedCookieCount,
+      skippedCookieCount,
+      site: source.site,
+      sourceProfileLabel: source.sourceProfileLabel,
+    };
   }
 
   startAnnotation(input: BrowserAnnotationStartInput): BrowserAnnotationSession {
@@ -1262,9 +1330,172 @@ export class DesktopBrowserManager {
 
     this.configureWindowOpenHandling(webContents, runtime, runtime.listenerDisposers);
 
+    const offerChromePasskeyFlow = (_event: Electron.Event, url: string) => {
+      this.maybeOfferChromePasskeyFlow(runtime, url);
+    };
+    const offerChromePasskeyFlowForCurrentPage = () => {
+      this.maybeOfferChromePasskeyFlow(runtime, webContents.getURL());
+    };
+    webContents.on("did-navigate", offerChromePasskeyFlow);
+    webContents.on("did-navigate-in-page", offerChromePasskeyFlow);
+    webContents.on("dom-ready", offerChromePasskeyFlowForCurrentPage);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-navigate", offerChromePasskeyFlow);
+      webContents.removeListener("did-navigate-in-page", offerChromePasskeyFlow);
+      webContents.removeListener("dom-ready", offerChromePasskeyFlowForCurrentPage);
+    });
+
     popup.once("closed", () => {
       this.removePopupRuntime(runtime);
     });
+  }
+
+  private maybeOfferChromePasskeyFlow(runtime: OAuthPopupRuntime, url: string): void {
+    const challengeUrl = googlePasskeyChallengeUrl(url);
+    if (
+      !challengeUrl ||
+      runtime.chromeSignInFlowActive ||
+      runtime.chromeSignInHandledUrl === challengeUrl
+    ) {
+      return;
+    }
+    runtime.chromeSignInHandledUrl = challengeUrl;
+    runtime.chromeSignInFlowActive = true;
+    void this.runChromePasskeyFlow(runtime, challengeUrl)
+      .catch(() => {
+        // runChromePasskeyFlow already presents actionable failures. A native
+        // dialog can still reject if its parent closes during presentation.
+      })
+      .finally(() => {
+        runtime.chromeSignInFlowActive = false;
+      });
+  }
+
+  private async runChromePasskeyFlow(
+    runtime: OAuthPopupRuntime,
+    challengeUrl: string,
+  ): Promise<void> {
+    try {
+      if (!this.isPopupRuntimeLive(runtime)) return;
+      const state = this.states.get(runtime.threadId);
+      if (!state) return;
+
+      if (state.profile.kind !== "persistent") {
+        const selection = await dialog.showMessageBox(runtime.window, {
+          type: "info",
+          title: "Use a saved browser identity",
+          message: "Passkey sign-in needs a saved Synara identity",
+          detail:
+            "Switch this browser to Personal, then start the Google sign-in again. Synara will keep the imported session so you do not have to repeat it next time.",
+          buttons: ["Switch to Personal", "Not now"],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        });
+        if (selection.response === 0 && this.isPopupRuntimeLive(runtime)) {
+          this.setThreadProfile({ threadId: runtime.threadId, profileId: "personal" });
+        }
+        return;
+      }
+
+      const chromeState = this.chromeSessionBridge.getProfileState();
+      const chromeProfileId = chromeState.preferredProfileId;
+      const chromeProfile = chromeState.profiles.find((profile) => profile.id === chromeProfileId);
+      if (!chromeState.supported || !chromeProfileId || !chromeProfile) return;
+
+      const selection = await dialog.showMessageBox(runtime.window, {
+        type: "question",
+        title: "Use your passkey in Chrome",
+        message: "Continue this Google sign-in in Chrome",
+        detail: `Chrome can show the phone passkey QR that this window cannot. Open the same Google step in ${chromeProfile.label}, finish it there, then return to Synara. Only Google cookies will be copied into ${state.profile.label}.`,
+        buttons: ["Open in Chrome", "Use Chrome session now", "Not now"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+      if (!this.isPopupRuntimeLive(runtime) || selection.response === 2) return;
+      if (selection.response === 1) {
+        await this.importChromePopupSession(runtime, state.profile, chromeProfileId, challengeUrl);
+        return;
+      }
+
+      while (this.isPopupRuntimeLive(runtime)) {
+        await this.chromeSessionBridge.openSignIn(challengeUrl);
+        const returned = await this.waitForPopupFocus(runtime);
+        if (!returned || !this.isPopupRuntimeLive(runtime)) return;
+        const completed = await dialog.showMessageBox(runtime.window, {
+          type: "question",
+          title: "Finish the sign-in",
+          message: "Did you finish with your passkey in Chrome?",
+          detail: `Import the updated Google session from ${chromeProfile.label} into ${state.profile.label}. The Google popup will reload and continue the X sign-in.`,
+          buttons: ["Import sign-in", "Open Chrome again", "Cancel"],
+          defaultId: 0,
+          cancelId: 2,
+          noLink: true,
+        });
+        if (completed.response === 1) continue;
+        if (completed.response !== 0) return;
+        await this.importChromePopupSession(runtime, state.profile, chromeProfileId, challengeUrl);
+        return;
+      }
+    } catch (error) {
+      if (!this.isPopupRuntimeLive(runtime)) return;
+      await dialog.showMessageBox(runtime.window, {
+        type: "error",
+        title: "Chrome sign-in was not imported",
+        message: "Synara could not continue the Chrome sign-in",
+        detail: describeBrowserManagerError(error),
+        buttons: ["OK"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+    }
+  }
+
+  private async importChromePopupSession(
+    runtime: OAuthPopupRuntime,
+    profile: BrowserProfile,
+    chromeProfileId: string,
+    challengeUrl: string,
+  ): Promise<void> {
+    await this.importChromeSession({
+      profileId: profile.id,
+      chromeProfileId,
+      url: challengeUrl,
+    });
+    // Importing reloads every live surface on this identity, including the
+    // OAuth popup. Do not add another success dialog on top of that transition.
+    runtime.chromeSignInHandledUrl = challengeUrl;
+  }
+
+  private waitForPopupFocus(runtime: OAuthPopupRuntime): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!this.isPopupRuntimeLive(runtime)) {
+        resolve(false);
+        return;
+      }
+      let settled = false;
+      const finish = (focused: boolean) => {
+        if (settled) return;
+        settled = true;
+        runtime.window.removeListener("focus", onFocus);
+        runtime.window.removeListener("closed", onClosed);
+        resolve(focused);
+      };
+      const onFocus = () => finish(true);
+      const onClosed = () => finish(false);
+      runtime.window.once("focus", onFocus);
+      runtime.window.once("closed", onClosed);
+    });
+  }
+
+  private isPopupRuntimeLive(runtime: OAuthPopupRuntime): boolean {
+    return (
+      !this.disposed &&
+      !runtime.window.isDestroyed() &&
+      this.popupRuntimes.get(runtime.window) === runtime
+    );
   }
 
   private removePopupRuntime(runtime: OAuthPopupRuntime): void {

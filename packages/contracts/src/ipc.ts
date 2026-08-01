@@ -305,6 +305,38 @@ export interface BrowserClearProfileDataInput {
   clearCache: boolean;
 }
 
+/** Non-secret metadata for a local Google Chrome browser profile. */
+export interface BrowserChromeProfile {
+  id: string;
+  label: string;
+}
+
+export interface BrowserChromeProfileState {
+  supported: boolean;
+  profiles: BrowserChromeProfile[];
+  preferredProfileId: string | null;
+  unavailableReason: string | null;
+}
+
+export interface BrowserOpenChromeSignInInput {
+  url: string;
+}
+
+export interface BrowserImportChromeSessionInput {
+  /** Persistent Synara browser profile that receives the site-scoped cookies. */
+  profileId: string;
+  chromeProfileId: string;
+  /** http(s) page whose matching cookie domains may be imported. */
+  url: string;
+}
+
+export interface BrowserImportChromeSessionResult {
+  importedCookieCount: number;
+  skippedCookieCount: number;
+  site: string;
+  sourceProfileLabel: string;
+}
+
 export interface BrowserTabState {
   id: string;
   url: string;
@@ -471,6 +503,11 @@ interface BrowserControlMethods {
   deleteProfile: (input: BrowserDeleteProfileInput) => Promise<void>;
   setThreadProfile: (input: BrowserSetThreadProfileInput) => Promise<ThreadBrowserState>;
   clearProfileData: (input: BrowserClearProfileDataInput) => Promise<void>;
+  getChromeProfileState: () => Promise<BrowserChromeProfileState>;
+  openChromeSignIn: (input: BrowserOpenChromeSignInInput) => Promise<void>;
+  importChromeSession: (
+    input: BrowserImportChromeSessionInput,
+  ) => Promise<BrowserImportChromeSessionResult>;
   close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
   hide: (input: BrowserThreadInput) => Promise<void>;
   getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;

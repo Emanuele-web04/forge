@@ -784,6 +784,25 @@ export function createWsNativeApi(): NativeApi {
         }
         throw new Error("Browser profiles require the desktop app.");
       },
+      getChromeProfileState: async () => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.getChromeProfileState();
+        }
+        throw new Error("Chrome sign-in import requires the desktop app.");
+      },
+      openChromeSignIn: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.openChromeSignIn(input);
+          return;
+        }
+        throw new Error("Chrome sign-in import requires the desktop app.");
+      },
+      importChromeSession: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.importChromeSession(input);
+        }
+        throw new Error("Chrome sign-in import requires the desktop app.");
+      },
       open: async (input) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.open(input);

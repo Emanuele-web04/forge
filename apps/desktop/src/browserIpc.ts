@@ -12,6 +12,7 @@ import type {
   BrowserAnnotationStartInput,
   BrowserAnnotationSyncMarkersInput,
   BrowserCaptureScreenshotResult,
+  BrowserImportChromeSessionInput,
   BrowserClearProfileDataInput,
   BrowserCreateProfileInput,
   BrowserDeleteProfileInput,
@@ -20,6 +21,7 @@ import type {
   BrowserNavigateInput,
   BrowserNewTabInput,
   BrowserOpenInput,
+  BrowserOpenChromeSignInInput,
   BrowserSetPanelBoundsInput,
   BrowserRenameProfileInput,
   BrowserSetThreadProfileInput,
@@ -133,6 +135,30 @@ export function registerBrowserIpcHandlers(
     async (event, input: BrowserClearProfileDataInput) => {
       requireTrustedRenderer(event.sender.id);
       await browserManager.clearProfileData(input);
+    },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.getChromeProfileState);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.getChromeProfileState, async (event) => {
+    requireTrustedRenderer(event.sender.id);
+    return browserManager.getChromeProfileState();
+  });
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.openChromeSignIn);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.openChromeSignIn,
+    async (event, input: BrowserOpenChromeSignInInput) => {
+      requireTrustedRenderer(event.sender.id);
+      await browserManager.openChromeSignIn(input);
+    },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.importChromeSession);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.importChromeSession,
+    async (event, input: BrowserImportChromeSessionInput) => {
+      requireTrustedRenderer(event.sender.id);
+      return browserManager.importChromeSession(input);
     },
   );
 
