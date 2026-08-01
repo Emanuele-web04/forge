@@ -282,6 +282,22 @@ describe("ws admission middleware authorization", () => {
     expect(handlerRan).toBe(false);
   });
 
+  // The owner half of default-deny, pinned at the call site as well as in
+  // authorizeWsMethod: the middleware is where an unclassified method would
+  // actually reach a handler, and an owner session must not be the exception.
+  it.each([loopback, remote])(
+    "refuses an unclassified method for an owner session (%o)",
+    (config) => {
+      const { exit, handlerRan } = runMiddleware({
+        method: "server.someFutureHostLocalMethod",
+        role: "owner",
+        config,
+      });
+      expect(exit._tag).toBe("Failure");
+      expect(handlerRan).toBe(false);
+    },
+  );
+
   it("admits an owner-only method for a registered owner session", () => {
     const { exit, handlerRan } = runMiddleware({
       method: WS_METHODS.serverUpdateSettings,

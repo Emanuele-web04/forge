@@ -1,4 +1,4 @@
-import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@synara/contracts";
+import { ORCHESTRATION_WS_METHODS, WS_METHODS, WsFeatureRpcGroup } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -95,16 +95,49 @@ it("leaves ordinary thread work authorized for a paired client", () => {
 });
 
 describe("default deny", () => {
-  // The failure class this table exists to remove: a privileged handler added
-  // to the RPC group without a decision recorded must NOT be reachable.
-  it.each([
+  const unclassifiedMethods = [
     "server.someFutureUnclassifiedMethod",
     "orchestration.someFutureUnclassifiedMethod",
+    "server.someFutureHostLocalMethod",
     "",
-  ])("refuses unregistered method %j for a client session", (method) => {
+  ];
+
+  // The failure class these tables exist to remove: a privileged handler added
+  // to the RPC group without a decision recorded must NOT be reachable — and
+  // that has to hold for EVERY role. An owner pass placed above this check made
+  // the default-deny client-only, so a forgotten handler stayed remotely
+  // callable by an owner on a remote-reachable deployment.
+  it.each(unclassifiedMethods)("refuses unclassified method %j for a client session", (method) => {
     const rejection = authorizeWsMethod({ method, role: "client", config: loopback });
     expect(rejection).not.toBeNull();
-    expect(rejection?.message).toContain("not available to this session");
+    expect(rejection?.message).toContain("not classified");
+  });
+
+  it.each(unclassifiedMethods)("refuses unclassified method %j for an owner session", (method) => {
+    for (const config of [loopback, remote, published]) {
+      const rejection = authorizeWsMethod({ method, role: "owner", config });
+      expect(rejection, `${method} was admitted for an owner`).not.toBeNull();
+      expect(rejection?.message).toContain("not classified");
+    }
+  });
+
+  // The two refusals must stay distinguishable. A developer who forgets the
+  // table should read "unclassified", not a permission error that sends them
+  // looking at session roles.
+  it("distinguishes an unclassified method from a privilege refusal", () => {
+    const unclassified = authorizeWsMethod({
+      method: "server.someFutureUnclassifiedMethod",
+      role: "client",
+      config: loopback,
+    });
+    const privileged = authorizeWsMethod({
+      method: WS_METHODS.serverUpdateSettings,
+      role: "client",
+      config: loopback,
+    });
+    expect(unclassified?.message).toContain("not classified");
+    expect(privileged?.message).toContain("Owner authorization");
+    expect(unclassified?.message).not.toEqual(privileged?.message);
   });
 
   /**
@@ -236,6 +269,42 @@ describe("default deny", () => {
     for (const method of OWNER_ONLY_WS_METHODS) {
       expect(CLIENT_ALLOWED_WS_METHODS.has(method), `${method} is client-allowed`).toBe(false);
     }
+  });
+
+  /**
+   * The runtime twin of the build-time exhaustiveness gate in
+   * wsMethodAuthorization.ts. The type-level check proves the tables cover the
+   * group; this proves the same for the values actually consulted at runtime,
+   * and would catch a table populated through a cast that defeats the types.
+   */
+  it("classifies every method the feature RPC group can dispatch", () => {
+    const dispatchableMethods = [
+      ...(
+        WsFeatureRpcGroup as unknown as { readonly requests: ReadonlyMap<string, unknown> }
+      ).requests.keys(),
+    ];
+    expect(dispatchableMethods.length).toBeGreaterThan(0);
+    const unclassified = dispatchableMethods.filter(
+      (method) =>
+        !CLIENT_ALLOWED_WS_METHODS.has(method) &&
+        !OWNER_ONLY_WS_METHODS.has(method) &&
+        !LOCAL_ONLY_WS_METHODS.has(method),
+    );
+    expect(unclassified).toEqual([]);
+  });
+
+  it("lists no method that the feature RPC group cannot dispatch", () => {
+    const dispatchableMethods = new Set(
+      (
+        WsFeatureRpcGroup as unknown as { readonly requests: ReadonlyMap<string, unknown> }
+      ).requests.keys(),
+    );
+    const stale = [
+      ...CLIENT_ALLOWED_WS_METHODS,
+      ...OWNER_ONLY_WS_METHODS,
+      ...LOCAL_ONLY_WS_METHODS,
+    ].filter((method) => !dispatchableMethods.has(method));
+    expect(stale).toEqual([]);
   });
 });
 

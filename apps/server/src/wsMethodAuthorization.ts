@@ -3,13 +3,29 @@
 //          centrally by the admission middleware instead of per handler.
 // Layer: Server transport security
 // Exports: CLIENT_ALLOWED_WS_METHODS, OWNER_ONLY_WS_METHODS,
-//          LOCAL_ONLY_WS_METHODS, authorizeWsMethod
+//          LOCAL_ONLY_WS_METHODS, WsFeatureMethod, authorizeWsMethod
 
-import { ORCHESTRATION_WS_METHODS, WS_METHODS, WsRpcError } from "@synara/contracts";
+import {
+  ORCHESTRATION_WS_METHODS,
+  WS_METHODS,
+  WsFeatureRpcGroup,
+  WsRpcError,
+} from "@synara/contracts";
 import { isReadOnlySafeWsMethod } from "@synara/shared/buildSkew";
+import type { RpcGroup } from "effect/unstable/rpc";
 
 import { isLocalOnlyDeployment, type RemoteAccessDeployment } from "./remoteAccessPolicy";
 import type { WsSessionRole } from "./wsConnectionSessions";
+
+/**
+ * Every method name the feature RPC group can dispatch, derived from the group
+ * itself rather than restated here. This is what makes the coverage assertion
+ * at the bottom of this file a real build-time gate: adding an RPC to the group
+ * widens this union, and any method left out of all three tables below then
+ * fails to typecheck.
+ */
+export type WsFeatureMethod =
+  typeof WsFeatureRpcGroup extends RpcGroup.RpcGroup<infer Rpcs> ? Rpcs["_tag"] : never;
 
 /**
  * Methods a non-owner ("client") session may invoke. This is an ALLOWLIST and
@@ -20,7 +36,7 @@ import type { WsSessionRole } from "./wsConnectionSessions";
  * Owners are not filtered by this list — they are gated by the owner-only and
  * local-only tables below.
  */
-export const CLIENT_ALLOWED_WS_METHODS: ReadonlySet<string> = new Set<string>([
+const CLIENT_ALLOWED_WS_METHOD_LIST = [
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   ORCHESTRATION_WS_METHODS.getFullThreadDiff,
   ORCHESTRATION_WS_METHODS.getShellSnapshot,
@@ -128,14 +144,18 @@ export const CLIENT_ALLOWED_WS_METHODS: ReadonlySet<string> = new Set<string>([
   WS_METHODS.terminalResize,
   WS_METHODS.terminalRestart,
   WS_METHODS.terminalWrite,
-]);
+] as const satisfies readonly WsFeatureMethod[];
+
+export const CLIENT_ALLOWED_WS_METHODS: ReadonlySet<string> = new Set<string>(
+  CLIENT_ALLOWED_WS_METHOD_LIST,
+);
 
 /**
  * Methods that administer the machine the server runs on rather than the work
  * happening inside a thread. A paired non-owner client may run turns and read
  * state, but may not reconfigure the host.
  */
-export const OWNER_ONLY_WS_METHODS: ReadonlySet<string> = new Set<string>([
+const OWNER_ONLY_WS_METHOD_LIST = [
   WS_METHODS.serverListExternalMcpIntegrations,
   WS_METHODS.serverCreateExternalMcpIntegration,
   WS_METHODS.serverRevokeExternalMcpIntegration,
@@ -144,18 +164,59 @@ export const OWNER_ONLY_WS_METHODS: ReadonlySet<string> = new Set<string>([
   WS_METHODS.serverUpdateProvider,
   WS_METHODS.serverUpsertKeybinding,
   WS_METHODS.serverStopLocalServer,
-]);
+] as const satisfies readonly WsFeatureMethod[];
+
+export const OWNER_ONLY_WS_METHODS: ReadonlySet<string> = new Set<string>(
+  OWNER_ONLY_WS_METHOD_LIST,
+);
 
 /**
  * Methods whose blast radius is the operator's own machine and which therefore
  * stay unavailable on any remote-reachable deployment, regardless of role.
  */
-export const LOCAL_ONLY_WS_METHODS: ReadonlySet<string> = new Set<string>([
+const LOCAL_ONLY_WS_METHOD_LIST = [
   WS_METHODS.serverListExternalMcpIntegrations,
   WS_METHODS.serverCreateExternalMcpIntegration,
   WS_METHODS.serverRevokeExternalMcpIntegration,
   WS_METHODS.serverRefreshExternalMcpPairing,
-]);
+] as const satisfies readonly WsFeatureMethod[];
+
+export const LOCAL_ONLY_WS_METHODS: ReadonlySet<string> = new Set<string>(
+  LOCAL_ONLY_WS_METHOD_LIST,
+);
+
+/**
+ * BUILD-TIME EXHAUSTIVENESS GATE.
+ *
+ * Every method the RPC group can dispatch must appear in at least one table
+ * above. `UnclassifiedWsMethod` is the remainder of that subtraction, and the
+ * assignment below only compiles while the remainder is empty — so adding an
+ * RPC without recording an authorization decision is a type error at the point
+ * the method is introduced, not a permission mystery at runtime.
+ *
+ * The runtime default-deny in `authorizeWsMethod` stays as the backstop: this
+ * check covers the statically-known group, while the runtime guard also covers
+ * method strings that never came from the group at all.
+ */
+type UnclassifiedWsMethod = Exclude<
+  WsFeatureMethod,
+  | (typeof CLIENT_ALLOWED_WS_METHOD_LIST)[number]
+  | (typeof OWNER_ONLY_WS_METHOD_LIST)[number]
+  | (typeof LOCAL_ONLY_WS_METHOD_LIST)[number]
+>;
+
+// If this line fails to compile, the methods named in the error are missing an
+// authorization decision. Add each to the table that matches its blast radius.
+const _WS_METHOD_AUTHORIZATION_IS_EXHAUSTIVE: never[] = [] as UnclassifiedWsMethod[];
+void _WS_METHOD_AUTHORIZATION_IS_EXHAUSTIVE;
+
+function isClassifiedWsMethod(method: string): boolean {
+  return (
+    CLIENT_ALLOWED_WS_METHODS.has(method) ||
+    OWNER_ONLY_WS_METHODS.has(method) ||
+    LOCAL_ONLY_WS_METHODS.has(method)
+  );
+}
 
 /**
  * Returns the rejection for a method/role/deployment combination, or null when
@@ -175,6 +236,17 @@ export function authorizeWsMethod(input: {
     return new WsRpcError({
       message:
         "This client runs a different Synara build than the server. Update both to the same version to make changes.",
+    });
+  }
+  // Unknown methods are refused for EVERY role, owners included. The tables are
+  // the whole record of what this transport exposes, so a handler added without
+  // an entry must fail closed rather than inherit the owner pass. The message
+  // names the real cause — an unclassified method, not a lacking privilege — so
+  // a developer who forgot the table is not sent hunting through session roles.
+  if (!isClassifiedWsMethod(input.method)) {
+    return new WsRpcError({
+      message:
+        "This operation is not classified in the WebSocket authorization tables and is refused.",
     });
   }
   if (LOCAL_ONLY_WS_METHODS.has(input.method) && !isLocalOnlyDeployment(input.config)) {
