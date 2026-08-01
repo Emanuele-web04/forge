@@ -32,8 +32,14 @@ const threadSnapshotFailureListeners = vi.hoisted(
     >(),
 );
 
-vi.mock("../wsNativeApi", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../wsNativeApi")>();
+// `__root` subscribes through the environment registry, not `wsNativeApi`
+// directly — the registry became the entry point when the transport layer was
+// keyed by environment (#16), and this mock kept pointing at the old module.
+// A mock that misses its target is silent: the listener set stayed empty, the
+// resubscribe under test could never fire, and the assertion read as a missing
+// request rather than as an unwired mock.
+vi.mock("../wsEnvironmentRegistry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../wsEnvironmentRegistry")>();
   return {
     ...actual,
     onThreadStreamFailure: (
