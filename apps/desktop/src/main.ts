@@ -1904,9 +1904,11 @@ function configureAppIdentity(): void {
   }
 }
 
-// The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
-// the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
-// a runtime dock override because it does not apply the modern system mask itself.
+// Bundle icon.icns is built from the legacy mark (alpha flattened solid) so
+// closed-state Dock / Finder / Launchpad stay pre-rounded on Darwin < 25 and
+// avoid transparent-corner Liquid Glass on Tahoe. Older macOS also gets the
+// soft-edged dock-icon.png as a runtime dock override while the app is running,
+// because it does not apply the modern system mask itself.
 function usesLegacyMacDockIcon(): boolean {
   if (process.platform !== "darwin") return false;
   const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
