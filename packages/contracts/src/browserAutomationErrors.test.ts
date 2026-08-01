@@ -42,6 +42,7 @@ const browserErrorCodes = [
   "BrowserTargetNotEnabled",
   "BrowserTargetObscured",
   "BrowserTargetNotEditable",
+  "BrowserCredentialInputRequired",
   "BrowserInvalidLocator",
   "BrowserInputUnsupported",
   "BrowserNavigationBlocked",
@@ -97,6 +98,13 @@ const specialPolicies = {
     message: "The matched browser element is covered by another page element.",
     retryable: true,
     phase: "target",
+    effectMayHaveCommitted: false,
+  },
+  BrowserCredentialInputRequired: {
+    message:
+      "A human must enter passwords, verification codes, and other credentials directly in the browser.",
+    retryable: false,
+    phase: "input",
     effectMayHaveCommitted: false,
   },
   BrowserInputUnsupported: {

@@ -264,6 +264,47 @@ export interface DesktopUpdateActionResult {
   state: DesktopUpdateState;
 }
 
+export type BrowserProfileKind = "persistent" | "temporary";
+
+export interface BrowserProfile {
+  id: string;
+  label: string;
+  kind: BrowserProfileKind;
+  /** Electron partition used only by Synara's trusted renderer-owned WebView. */
+  partition: string;
+  builtIn: boolean;
+}
+
+export interface BrowserProfileState {
+  profiles: BrowserProfile[];
+  threadProfile: BrowserProfile;
+}
+
+export interface BrowserCreateProfileInput {
+  label: string;
+}
+
+export interface BrowserRenameProfileInput {
+  profileId: string;
+  label: string;
+}
+
+export interface BrowserDeleteProfileInput {
+  profileId: string;
+}
+
+export interface BrowserSetThreadProfileInput {
+  threadId: ThreadId;
+  profileId: string;
+}
+
+export interface BrowserClearProfileDataInput {
+  profileId: string;
+  /** An http(s) URL or origin. Omit to clear every site in the profile. */
+  origin?: string;
+  clearCache: boolean;
+}
+
 export interface BrowserTabState {
   id: string;
   url: string;
@@ -283,6 +324,8 @@ export interface ThreadBrowserState {
   open: boolean;
   activeTabId: string | null;
   tabs: BrowserTabState[];
+  /** Profile selected by the user for this thread's visible browser session. */
+  profile: BrowserProfile;
   lastError: string | null;
 }
 
@@ -422,6 +465,12 @@ export interface BrowserUseOpenPanelRequest {
 
 interface BrowserControlMethods {
   open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
+  getProfileState: (input: BrowserThreadInput) => Promise<BrowserProfileState>;
+  createProfile: (input: BrowserCreateProfileInput) => Promise<BrowserProfile>;
+  renameProfile: (input: BrowserRenameProfileInput) => Promise<BrowserProfile>;
+  deleteProfile: (input: BrowserDeleteProfileInput) => Promise<void>;
+  setThreadProfile: (input: BrowserSetThreadProfileInput) => Promise<ThreadBrowserState>;
+  clearProfileData: (input: BrowserClearProfileDataInput) => Promise<void>;
   close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
   hide: (input: BrowserThreadInput) => Promise<void>;
   getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;

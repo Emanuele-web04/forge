@@ -27,6 +27,29 @@ import { releaseBrowserTarget, resolveBrowserTarget } from "./targets";
 
 const POLL_INTERVAL_MS = 50;
 
+// Arbitrary page expressions are useful for diagnostics, but must not become an
+// alternate input channel on a login or verification page.
+const HAS_CREDENTIAL_INPUT_EXPRESSION = String.raw`(() => {
+  const isCredentialElement = (element) => {
+    const tagName = String(element.localName || "").toLowerCase();
+    if (tagName !== "input" && tagName !== "textarea" && element.isContentEditable !== true) return false;
+    const type = String(element.type || "").toLowerCase();
+    const autocomplete = String(element.autocomplete || element.getAttribute("autocomplete") || "").toLowerCase();
+    const attributes = [
+      type,
+      autocomplete,
+      element.name || "",
+      element.id || "",
+      element.getAttribute("aria-label") || "",
+      element.getAttribute("placeholder") || "",
+    ].join(" ").toLowerCase();
+    return type === "password" ||
+      ["current-password", "new-password", "one-time-code", "username"].includes(autocomplete) ||
+      /\b(password|passcode|pin|one[-\s]?time|verification|security|otp|2fa|mfa|username|user[-\s_]?name|email|login|sign[-\s_]?in|account|identifier)\b/.test(attributes);
+  };
+  return Array.from(document.querySelectorAll("input, textarea, [contenteditable]")).some(isCredentialElement);
+})()`;
+
 const delay = (milliseconds: number, signal?: AbortSignal): Promise<void> => {
   if (!signal) return new Promise((resolve) => setTimeout(resolve, milliseconds));
   throwIfAborted(signal);
@@ -256,6 +279,21 @@ export const evaluateBrowserExpression = async (
   input: BrowserEvaluateInput,
   signal?: AbortSignal,
 ): Promise<BrowserEvaluateOutput> => {
+  const credentialSurface = await evaluateInContext<boolean>(
+    runtime,
+    HAS_CREDENTIAL_INPUT_EXPRESSION,
+    {
+      returnByValue: true,
+      effectMayHaveCommitted: false,
+      signal,
+    },
+  );
+  if (credentialSurface.value !== false) {
+    browserHostError({
+      code: "BrowserCredentialInputRequired",
+      tabId: runtime.tabId as BrowserTabId,
+    });
+  }
   let value: unknown;
   try {
     const response = await evaluateInContext(runtime, input.expression, {

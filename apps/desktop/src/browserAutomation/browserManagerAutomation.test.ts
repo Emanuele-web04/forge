@@ -12,6 +12,8 @@ const { browserSession, fromId, webContentsViewConstructor, willDownloadListener
     return {
       browserSession: {
         setUserAgent: vi.fn(),
+        setPermissionCheckHandler: vi.fn(),
+        setPermissionRequestHandler: vi.fn(),
         webRequest: { onBeforeSendHeaders: vi.fn() },
         on: vi.fn((event: string, listener: typeof willDownloadListener.current) => {
           if (event === "will-download") willDownloadListener.current = listener;

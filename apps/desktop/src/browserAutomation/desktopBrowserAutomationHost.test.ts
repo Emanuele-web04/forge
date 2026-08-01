@@ -110,6 +110,7 @@ const createWebContents = () => {
     }
     if (method === "Runtime.evaluate") {
       const expression = String(params?.expression ?? "");
+      if (expression.includes("isCredentialInput")) return { result: { value: false } };
       if (expression.includes("performance.getEntriesByType")) return { result: { value: 0 } };
       if (
         expression.includes('const key = "__synaraBrowserAutomationV1"') &&

@@ -157,6 +157,13 @@ function defaultBrowserState(threadId: ThreadId): ThreadBrowserState {
     open: false,
     activeTabId: null,
     tabs: [],
+    profile: {
+      id: "temporary",
+      label: "Temporary",
+      kind: "temporary",
+      partition: "synara-browser-temporary-remote",
+      builtIn: true,
+    },
     lastError: null,
   };
 }
@@ -739,6 +746,44 @@ export function createWsNativeApi(): NativeApi {
       onEvent: automationEventListeners.subscribe,
     },
     browser: {
+      getProfileState: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.getProfileState(input);
+        }
+        throw new Error("Browser profiles require the desktop app.");
+      },
+      createProfile: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.createProfile(input);
+        }
+        throw new Error("Browser profiles require the desktop app.");
+      },
+      renameProfile: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.renameProfile(input);
+        }
+        throw new Error("Browser profiles require the desktop app.");
+      },
+      deleteProfile: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.deleteProfile(input);
+          return;
+        }
+        throw new Error("Browser profiles require the desktop app.");
+      },
+      setThreadProfile: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.setThreadProfile(input);
+        }
+        throw new Error("Browser profiles require the desktop app.");
+      },
+      clearProfileData: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.clearProfileData(input);
+          return;
+        }
+        throw new Error("Browser profiles require the desktop app.");
+      },
       open: async (input) => {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.open(input);

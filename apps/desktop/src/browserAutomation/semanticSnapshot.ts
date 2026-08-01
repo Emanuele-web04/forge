@@ -232,6 +232,23 @@ export const BROWSER_SEMANTIC_SNAPSHOT_EXPRESSION = String.raw`(() => {
   };
   const nameFor = (element, role) => explicitNameFor(element) ||
     (textNameRoles.has(role) ? clean(boundedDescendantText(element)) : "");
+  const isCredentialElement = (element) => {
+    const tagName = String(element.localName || "").toLowerCase();
+    if (tagName !== "input" && tagName !== "textarea" && element.isContentEditable !== true) return false;
+    const type = String(element.type || "").toLowerCase();
+    const autocomplete = String(element.autocomplete || element.getAttribute("autocomplete") || "").toLowerCase();
+    const attributes = [
+      type,
+      autocomplete,
+      element.name || "",
+      element.id || "",
+      element.getAttribute("aria-label") || "",
+      element.getAttribute("placeholder") || "",
+    ].join(" ").toLowerCase();
+    return type === "password" ||
+      ["current-password", "new-password", "one-time-code", "username"].includes(autocomplete) ||
+      /\b(password|passcode|pin|one[-\s]?time|verification|security|otp|2fa|mfa|username|user[-\s_]?name|email|login|sign[-\s_]?in|account|identifier)\b/.test(attributes);
+  };
   const actionableRoles = new Set("button checkbox combobox link listbox menuitem menuitemcheckbox menuitemradio option radio scrollbar searchbox slider spinbutton switch tab textbox treeitem".split(" "));
   const informativeRoles = new Set("alert alertdialog article dialog document figure form heading img main navigation note status table toolbar".split(" "));
   const round = (value) => Math.round(value * 10) / 10;
@@ -299,9 +316,7 @@ export const BROWSER_SEMANTIC_SNAPSHOT_EXPRESSION = String.raw`(() => {
     }
     if (element.isContentEditable) states.push("editable");
     const rawValue = "value" in element ? element.value : undefined;
-    const value = element.localName === "input" && element.type === "password"
-      ? "redacted"
-      : clean(rawValue, 1024);
+    const value = isCredentialElement(element) ? "redacted" : clean(rawValue, 1024);
     const item = {
       ref, role, name, context,
       bounds: { x: round(rect.x), y: round(rect.y), width: round(rect.width), height: round(rect.height) }, states,

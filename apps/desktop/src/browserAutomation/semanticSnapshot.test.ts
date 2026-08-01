@@ -87,6 +87,16 @@ class FakeInputElement extends FakeElement {
   }
 }
 
+class FakeTextAreaElement extends FakeElement {
+  constructor(attributes: Readonly<Record<string, string>>) {
+    super("textarea", "", attributes);
+  }
+
+  get value(): string {
+    return this.getAttribute("value") ?? "";
+  }
+}
+
 class FakeDocument {
   readonly host = null;
   textWalkerVisits = 0;
@@ -240,6 +250,39 @@ describe("semantic snapshot context", () => {
     expect(snapshot.elements).toHaveLength(1);
     expect(snapshot.elements[0]).toMatchObject({ role: "textbox", value: "redacted" });
     expect(JSON.stringify(snapshot)).not.toContain("correct horse battery staple");
+  });
+
+  it("redacts one-time verification codes in text inputs", () => {
+    const verificationCode = new FakeInputElement({
+      "aria-label": "Verification code",
+      autocomplete: "one-time-code",
+      value: "123456",
+    });
+    const harness = snapshotHarness(verificationCode);
+
+    const snapshot = evaluatePageExpression(
+      harness,
+      BROWSER_SEMANTIC_SNAPSHOT_EXPRESSION,
+    ) as SemanticSnapshotResult;
+
+    expect(snapshot.elements[0]).toMatchObject({ role: "textbox", value: "redacted" });
+    expect(JSON.stringify(snapshot)).not.toContain("123456");
+  });
+
+  it("redacts verification codes in labeled textareas", () => {
+    const verificationCode = new FakeTextAreaElement({
+      "aria-label": "Verification code",
+      value: "654321",
+    });
+    const harness = snapshotHarness(verificationCode);
+
+    const snapshot = evaluatePageExpression(
+      harness,
+      BROWSER_SEMANTIC_SNAPSHOT_EXPRESSION,
+    ) as SemanticSnapshotResult;
+
+    expect(snapshot.elements[0]).toMatchObject({ role: "textbox", value: "redacted" });
+    expect(JSON.stringify(snapshot)).not.toContain("654321");
   });
 
   it("strictly bounds element and text-node traversal on adversarial pages", () => {

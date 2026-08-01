@@ -4,17 +4,26 @@ import { ThreadId } from "@synara/contracts";
 import type { BrowserWindow, WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { browserSession, rendererWebContentsById, rendererWebContentsFromId } = vi.hoisted(() => {
-  const rendererWebContentsById = new Map<number, unknown>();
-  return {
-    browserSession: {
-      setUserAgent: vi.fn(),
-      webRequest: { onBeforeSendHeaders: vi.fn() },
-    },
-    rendererWebContentsById,
-    rendererWebContentsFromId: vi.fn((id: number) => rendererWebContentsById.get(id) ?? null),
-  };
-});
+const { browserSession, rendererWebContentsById, rendererWebContentsFromId, sessionFromPartition } =
+  vi.hoisted(() => {
+    const rendererWebContentsById = new Map<number, unknown>();
+    return {
+      browserSession: {
+        setUserAgent: vi.fn(),
+        setPermissionCheckHandler: vi.fn(),
+        setPermissionRequestHandler: vi.fn(),
+        webRequest: { onBeforeSendHeaders: vi.fn() },
+        on: vi.fn(),
+        removeListener: vi.fn(),
+        clearStorageData: vi.fn(),
+        clearCache: vi.fn(),
+        flushStorageData: vi.fn(),
+      },
+      sessionFromPartition: vi.fn((_partition: string) => browserSession),
+      rendererWebContentsById,
+      rendererWebContentsFromId: vi.fn((id: number) => rendererWebContentsById.get(id) ?? null),
+    };
+  });
 
 vi.mock("electron", () => ({
   app: {
@@ -27,13 +36,14 @@ vi.mock("electron", () => ({
   clipboard: { writeImage: vi.fn(), writeText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn() },
   session: {
-    fromPartition: () => browserSession,
+    fromPartition: sessionFromPartition,
   },
   webContents: { fromId: rendererWebContentsFromId },
   WebContentsView: class {},
 }));
 
 import { DesktopBrowserManager } from "./browserManager";
+import { BrowserProfileStore } from "./browserProfiles";
 
 interface WindowOpenDetails {
   url: string;
@@ -451,5 +461,46 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
 
     expect(beforeInputEvent).toHaveBeenCalledWith(event, input);
     expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("switches thread browser identities without sharing the old profile session", async () => {
+    const profileStore = new BrowserProfileStore({
+      createId: () => "e7a0a2ef-5a6d-4f70-a15d-7e6d3b27a1a9",
+    });
+    const workProfile = profileStore.create("Work");
+    const workSession = {
+      ...browserSession,
+      clearStorageData: vi.fn(),
+      clearCache: vi.fn(),
+      flushStorageData: vi.fn(),
+    };
+    sessionFromPartition.mockImplementation((partition: string) =>
+      partition === workProfile.partition ? workSession : browserSession,
+    );
+    const manager = new DesktopBrowserManager({ profileStore });
+
+    const initiallyOpened = manager.open({ threadId: THREAD_ID });
+    expect(initiallyOpened.profile).toMatchObject({ id: "temporary", kind: "temporary" });
+
+    const switched = manager.setThreadProfile({ threadId: THREAD_ID, profileId: workProfile.id });
+    expect(switched).toMatchObject({
+      open: true,
+      profile: { id: workProfile.id, partition: workProfile.partition },
+    });
+    expect(manager.getProfileState({ threadId: THREAD_ID })).toMatchObject({
+      threadProfile: { id: workProfile.id },
+      profiles: expect.arrayContaining([expect.objectContaining({ id: workProfile.id })]),
+    });
+    expect(sessionFromPartition).toHaveBeenCalledWith(workProfile.partition);
+    await manager.clearProfileData({ profileId: workProfile.id, clearCache: true });
+
+    expect(workSession.clearStorageData).toHaveBeenCalledWith();
+    expect(workSession.clearCache).toHaveBeenCalledOnce();
+
+    await manager.deleteProfile({ profileId: workProfile.id });
+    expect(manager.getState({ threadId: THREAD_ID }).profile).toMatchObject({
+      id: "temporary",
+      kind: "temporary",
+    });
   });
 });
