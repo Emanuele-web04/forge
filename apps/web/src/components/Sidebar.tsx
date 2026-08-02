@@ -615,20 +615,26 @@ function resolveWorktreeBadgeLabel(
 }
 
 type ThreadMetaChip = {
-  id: "automation" | "handoff" | "fork" | "worktree";
+  id: "automation" | "handoff" | "fork" | "worktree" | "race";
   tooltip: string;
   icon: ReactNode;
 };
 
 /**
  * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/temporary
+ * Priority lowest -> highest: handoff -> fork -> race -> worktree. Sidechats skip fork/temporary
  * badges because the "Sidechat:" title already identifies them.
  */
 function resolveThreadRowMetaChips(input: {
   thread: Pick<
     Thread,
-    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
+    | "forkSourceThreadId"
+    | "sidechatSourceThreadId"
+    | "envMode"
+    | "worktreePath"
+    | "handoff"
+    | "creationSource"
+    | "raceId"
   >;
   includeHandoffBadge: boolean;
   /**
@@ -684,6 +690,21 @@ function resolveThreadRowMetaChips(input: {
           variant="meta"
           className="text-emerald-600 dark:text-emerald-300/90"
         />
+      ),
+    });
+  }
+
+  if (input.thread.creationSource === "race" || Boolean(input.thread.raceId)) {
+    chips.push({
+      id: "race",
+      tooltip: "Model Race candidate",
+      icon: (
+        <span
+          className="inline-flex h-3.5 items-center rounded px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300/90"
+          aria-hidden
+        >
+          Race
+        </span>
       ),
     });
   }

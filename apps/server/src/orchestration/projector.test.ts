@@ -179,6 +179,7 @@ describe("orchestration projector", () => {
         sourceTurnId: null,
         gatewayOperationId: null,
         gatewayOperationIndex: null,
+        raceId: null,
         subagentAgentId: null,
         subagentNickname: null,
         subagentRole: null,

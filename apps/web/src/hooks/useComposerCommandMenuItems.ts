@@ -250,6 +250,7 @@ export function useComposerCommandMenuItems(input: {
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
   canOfferSideCommand: boolean;
+  canOfferRaceCommand: boolean;
   canOfferExportCommand: boolean;
   surfaceAppSlashCommands?: ReadonlySet<string>;
   dynamicAgents: readonly ProviderAgentDescriptor[];
@@ -272,6 +273,7 @@ export function useComposerCommandMenuItems(input: {
     canOfferReviewCommand,
     canOfferForkCommand,
     canOfferSideCommand,
+    canOfferRaceCommand,
     canOfferExportCommand,
     surfaceAppSlashCommands,
     dynamicAgents,
@@ -367,6 +369,7 @@ export function useComposerCommandMenuItems(input: {
       canOfferReviewCommand,
       canOfferForkCommand,
       canOfferSideCommand,
+      canOfferRaceCommand,
       canOfferExportCommand,
       providerNativeCommandNames: providerNativeCommands.map((command) => command.name),
     });

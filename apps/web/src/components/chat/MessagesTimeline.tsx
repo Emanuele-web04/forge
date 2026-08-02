@@ -698,7 +698,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // anchor is cleared, when no config object exists to receive a callback.
   useEffect(() => {
     const state = resolvedListRef.current?.getState?.();
-    return state?.listen?.("anchoredEndSpaceSize", (size) => {
+    const listen = state?.listen as
+      | ((event: "anchoredEndSpaceSize", cb: (size: number) => void) => (() => void) | void)
+      | undefined;
+    return listen?.("anchoredEndSpaceSize", (size) => {
       timelineRootRef.current?.setAttribute("data-anchored-end-space", String(Math.round(size)));
     });
   }, [resolvedListRef]);

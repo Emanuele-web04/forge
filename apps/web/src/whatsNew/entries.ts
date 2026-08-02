@@ -26,6 +26,14 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     date: "Aug 1",
     features: [
       {
+        id: "model-race",
+        title: "Race models side by side",
+        description:
+          "Use /race to run the same prompt on 2–3 models in isolated worktrees, review them in a split view, and Keep the winner.",
+        details:
+          "Each candidate gets its own detached worktree and approval-required thread. Keep this archives the losers and removes their worktrees; the winner stays on its worktree.",
+      },
+      {
         id: "visible-browser-control",
         title: "Agents can use the visible browser",
         description:

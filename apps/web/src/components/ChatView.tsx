@@ -221,11 +221,18 @@ import { retainThreadDetailSubscription } from "../threadDetailSubscriptionReten
 import {
   canOfferForkSlashCommand,
   canOfferSideSlashCommand,
+  canOfferRaceSlashCommand,
   canOfferReviewSlashCommand,
   hasProviderNativeSlashCommand,
   providerSupportsTextNativeReviewCommand,
   resolveComposerSlashRootBranch,
 } from "../composerSlashCommands";
+import { createRace } from "../race/createRace";
+import { keepRaceWinner } from "../race/keepRaceWinner";
+import { openRaceSplitView } from "../race/openRaceSplit";
+import type { RaceSession } from "../race/raceSessionStore";
+import { RaceCandidateBanner } from "./race/RaceCandidateBanner";
+import { RaceModelPicker } from "./race/RaceModelPicker";
 import {
   derivePendingApprovals,
   derivePendingUserInputs,
@@ -255,6 +262,8 @@ import {
 } from "../pendingUserInput";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
 import { useStore } from "../store";
+import { getThreadsFromState } from "../threadDerivation";
+import { collectLeaves } from "../splitView.logic";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { getThreadFromState } from "../threadDerivation";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
@@ -1401,6 +1410,8 @@ export default function ChatView({
   const [composerCommandPicker, setComposerCommandPicker] = useState<
     null | "fork-target" | "review-target"
   >(null);
+  const [raceModelPickerOpen, setRaceModelPickerOpen] = useState(false);
+  const [racePromptDraft, setRacePromptDraft] = useState("");
   const [secondaryChromePlaceholderHeight, setSecondaryChromePlaceholderHeight] = useState(88);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
@@ -3604,6 +3615,19 @@ export default function ChatView({
       interactionMode,
       isSidechat: Boolean(activeThread.sidechatSourceThreadId),
     });
+  const canOfferRaceCommand =
+    isServerThread &&
+    activeThread !== undefined &&
+    Boolean(activeProject?.cwd?.trim()) &&
+    activeProject?.kind !== "studio" &&
+    canOfferRaceSlashCommand({
+      imageCount: composerImages.length,
+      terminalContextCount: composerTerminalContexts.length,
+      selectedSkillCount: selectedComposerSkills.length,
+      selectedMentionCount: selectedComposerMentions.length,
+      interactionMode,
+      hasGitProjectCwd: Boolean(activeProject?.cwd?.trim()),
+    });
   // Export is hidden while the thread is running so archives cannot capture a
   // partial assistant response. Same shared predicate as the server's 409
   // guard, so the composer and the export route cannot drift.
@@ -3628,6 +3652,7 @@ export default function ChatView({
     canOfferReviewCommand,
     canOfferForkCommand,
     canOfferSideCommand,
+    canOfferRaceCommand,
     canOfferExportCommand,
     dynamicAgents,
     threadMentionSources: {
@@ -9618,6 +9643,7 @@ export default function ChatView({
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
     canOfferSideCommand,
+    canOfferRaceCommand,
     canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
@@ -9657,9 +9683,156 @@ export default function ChatView({
       setComposerCommandPicker("review-target");
       setComposerHighlightedItemId("review-target:changes");
     },
+    openRaceModelPicker: (prompt) => {
+      setRacePromptDraft(prompt);
+      setRaceModelPickerOpen(true);
+    },
     setComposerDraftProviderModelOptions,
     editorActions: slashEditorActions,
   });
+
+  const startModelRace = useCallback(
+    async (modelSelections: ModelSelection[]) => {
+      const api = readNativeApi();
+      if (!api || !activeProject?.cwd || !activeThread) {
+        toastManager.add({
+          type: "warning",
+          title: "Race is unavailable",
+          description: "Open a git project thread before starting a Model Race.",
+        });
+        return;
+      }
+      const prompt = racePromptDraft.trim();
+      if (prompt.length === 0) {
+        toastManager.add({
+          type: "warning",
+          title: "Prompt required",
+          description: "Add a prompt before starting a Model Race.",
+        });
+        return;
+      }
+      const worktreeRef = activeRootBranch ?? activeThread.branch;
+      if (!worktreeRef) {
+        toastManager.add({
+          type: "warning",
+          title: "Git ref unavailable",
+          description: "Could not resolve a branch or ref for race worktrees.",
+        });
+        return;
+      }
+
+      try {
+        const result = await createRace(
+          {
+            projectId: activeProject.id,
+            sourceThreadId: isServerThread ? activeThread.id : null,
+            projectCwd: activeProject.cwd,
+            worktreeRef,
+            copyChangesFrom:
+              !activeThread.worktreePath || activeThread.envMode === "local"
+                ? activeProject.cwd
+                : null,
+            prompt,
+            modelSelections,
+          },
+          {
+            api,
+            syncServerShellSnapshot,
+          },
+        );
+        const splitViewId = openRaceSplitView({
+          ownerProjectId: activeProject.id,
+          candidateThreadIds: result.candidateThreadIds,
+        });
+        const focusThreadId = result.candidateThreadIds[0];
+        if (focusThreadId) {
+          await navigate({
+            to: "/$threadId",
+            params: { threadId: focusThreadId },
+            ...(splitViewId ? { search: (previous) => ({ ...previous, splitViewId }) } : {}),
+          });
+        }
+        clearComposerSlashDraft();
+        setComposerPromptValue("");
+        toastManager.add({
+          type: "success",
+          title: "Model Race started",
+          description: `Running ${result.candidateThreadIds.length} candidates in isolated worktrees.`,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not start Model Race",
+          description:
+            error instanceof Error ? error.message : "An error occurred while starting the race.",
+        });
+      }
+    },
+    [
+      activeProject,
+      activeRootBranch,
+      activeThread,
+      clearComposerSlashDraft,
+      isServerThread,
+      navigate,
+      racePromptDraft,
+      setComposerPromptValue,
+      syncServerShellSnapshot,
+    ],
+  );
+
+  const keepModelRaceWinner = useCallback(
+    async (session: RaceSession) => {
+      const api = readNativeApi();
+      if (!api || !activeProject) {
+        toastManager.add({
+          type: "warning",
+          title: "Keep unavailable",
+          description: "Reconnect before keeping a race winner.",
+        });
+        return;
+      }
+      try {
+        const threads = getThreadsFromState(useStore.getState());
+        const result = await keepRaceWinner(
+          {
+            raceId: session.raceId,
+            winnerThreadId: threadId,
+            project: activeProject,
+            threads,
+          },
+          { api },
+        );
+        const memberIds = new Set(session.candidates.map((candidate) => candidate.threadId));
+        const splitViews = useSplitViewStore.getState().splitViewsById;
+        for (const [splitViewId, splitView] of Object.entries(splitViews)) {
+          if (!splitView) continue;
+          const leaves = collectLeaves(splitView.root);
+          if (leaves.some((leaf) => leaf.threadId !== null && memberIds.has(leaf.threadId))) {
+            useSplitViewStore.getState().removeSplitView(splitViewId);
+          }
+        }
+        await navigate({
+          to: "/$threadId",
+          params: { threadId: result.winnerThreadId },
+          search: (previous) => ({ ...previous, splitViewId: undefined }),
+        });
+        toastManager.add({
+          type: "success",
+          title: "Race winner kept",
+          description: "Other candidates were archived and their worktrees removed.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not keep winner",
+          description:
+            error instanceof Error ? error.message : "An error occurred while keeping the winner.",
+        });
+      }
+    },
+    [activeProject, navigate, threadId],
+  );
 
   // Refreshed on every commit, in a layout effect rather than a passive one: the queued
   // dispatcher can run from the same commit's follow-up work, so there must be no window
@@ -11273,6 +11446,17 @@ export default function ChatView({
       ) : null}
 
       {/* Error banner */}
+      <RaceCandidateBanner
+        threadId={threadId}
+        onKeep={keepModelRaceWinner}
+        onOpenCandidate={(candidateThreadId) => {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: candidateThreadId },
+            search: (previous) => previous,
+          });
+        }}
+      />
       <ProviderHealthBanner
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
@@ -11599,6 +11783,18 @@ export default function ChatView({
         rateLimitStatus={activeRateLimitStatus}
         activeContextWindowLabel={contextWindowSelectionStatus.activeLabel}
         pendingContextWindowLabel={contextWindowSelectionStatus.pendingSelectedLabel}
+      />
+      <RaceModelPicker
+        open={raceModelPickerOpen}
+        onOpenChange={setRaceModelPickerOpen}
+        providers={providerStatuses}
+        providerOrder={settings.providerOrder}
+        modelOptionsByProvider={modelOptionsByProvider}
+        buildModelSelection={(provider, model) => buildModelSelection(provider, model)}
+        initialSelections={[selectedModelSelection]}
+        onConfirm={(selections) => {
+          void startModelRace(selections);
+        }}
       />
       <ThreadWorktreeHandoffDialog
         open={worktreeHandoffDialogOpen}

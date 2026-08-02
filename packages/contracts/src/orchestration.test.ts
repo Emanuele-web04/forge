@@ -1005,3 +1005,32 @@ it.effect("preserves user-input answer values through the RPC JSON codec", () =>
     );
   }),
 );
+
+it.effect("decodes race creationSource and raceId on thread.created payloads", () =>
+  Effect.gen(function* () {
+    const payload = yield* decodeThreadCreatedPayload({
+      threadId: "thread-race-1",
+      projectId: "project-1",
+      title: "Race · gpt-5",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5",
+        options: { reasoningEffort: "medium", fastMode: false },
+      },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      envMode: "worktree",
+      branch: "synara/race-1",
+      worktreePath: "/tmp/race-1",
+      creationSource: "race",
+      raceId: "race-op-1",
+      sourceThreadId: "thread-source",
+      handoff: null,
+      createdAt: "2026-08-02T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+    });
+    assert.equal(payload.creationSource, "race");
+    assert.equal(payload.raceId, "race-op-1");
+    assert.equal(payload.sourceThreadId, "thread-source");
+  }),
+);

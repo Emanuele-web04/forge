@@ -505,6 +505,7 @@ export function projectEvent(
             sourceTurnId: payload.sourceTurnId ?? null,
             gatewayOperationId: payload.gatewayOperationId ?? null,
             gatewayOperationIndex: payload.gatewayOperationIndex ?? null,
+            raceId: payload.raceId ?? null,
             subagentAgentId: payload.subagentAgentId,
             subagentNickname: payload.subagentNickname,
             subagentRole: payload.subagentRole,

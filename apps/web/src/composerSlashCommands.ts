@@ -181,6 +181,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Open a guarded Side from this thread",
     source: "app",
   },
+  race: {
+    command: "race",
+    label: "/race",
+    description: "Race 2–3 models on the same prompt in isolated worktrees",
+    source: "app",
+  },
   status: {
     command: "status",
     label: "/status",
@@ -303,6 +309,24 @@ export function canOfferSideSlashCommand(input: {
   );
 }
 
+export function canOfferRaceSlashCommand(input: {
+  imageCount: number;
+  terminalContextCount: number;
+  selectedSkillCount: number;
+  selectedMentionCount: number;
+  interactionMode: "default" | "plan";
+  hasGitProjectCwd: boolean;
+}): boolean {
+  return (
+    input.imageCount === 0 &&
+    input.terminalContextCount === 0 &&
+    input.selectedSkillCount === 0 &&
+    input.selectedMentionCount === 0 &&
+    input.interactionMode === "default" &&
+    input.hasGitProjectCwd
+  );
+}
+
 export function canOfferReviewSlashCommand(input: {
   prompt: string;
   imageCount: number;
@@ -382,6 +406,7 @@ export function getAvailableComposerSlashCommands(input: {
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
   canOfferSideCommand: boolean;
+  canOfferRaceCommand: boolean;
   canOfferExportCommand: boolean;
   providerNativeCommandNames?: ReadonlyArray<string>;
 }): ComposerSlashCommand[] {
@@ -408,6 +433,7 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferReviewCommand ? (["review"] as const) : []),
           ...(input.canOfferForkCommand ? (["fork"] as const) : []),
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
+          ...(input.canOfferRaceCommand ? (["race"] as const) : []),
           "status",
           "subagents",
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
@@ -420,6 +446,7 @@ export function getAvailableComposerSlashCommands(input: {
           // /export is app-level too — Synara owns the thread transcript, so the download
           // happens in the app rather than being forwarded to Claude's native /export.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
+          ...(input.canOfferRaceCommand ? (["race"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "feedback",
           "automation",

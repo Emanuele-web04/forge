@@ -6,6 +6,7 @@ import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
   canOfferSideSlashCommand,
+  canOfferRaceSlashCommand,
   filterComposerSlashCommands,
   getAvailableComposerSlashCommands,
   hasProviderNativeSlashCommand,
@@ -21,6 +22,7 @@ import {
 describe("composerSlashCommands", () => {
   it("recognizes built-in slash commands", () => {
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("race")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
     expect(isBuiltInComposerSlashCommand("export")).toBe(true);
@@ -170,6 +172,30 @@ describe("composerSlashCommands", () => {
     ).toBe(false);
   });
 
+  it("offers /race for git project composers without attachments", () => {
+    expect(
+      canOfferRaceSlashCommand({
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+        hasGitProjectCwd: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      canOfferRaceSlashCommand({
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+        hasGitProjectCwd: false,
+      }),
+    ).toBe(false);
+  });
+
   it("only offers /review for an otherwise empty composer", () => {
     expect(
       canOfferReviewSlashCommand({
@@ -207,6 +233,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferRaceCommand: true,
       canOfferExportCommand: true,
       providerNativeCommandNames: ["fast", "/model", "status"],
     });
@@ -226,6 +253,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferRaceCommand: true,
       canOfferExportCommand: true,
       providerNativeCommandNames: ["review"],
     });
@@ -244,6 +272,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferRaceCommand: true,
       canOfferExportCommand: true,
       providerNativeCommandNames: ["review", "status"],
     });
@@ -264,6 +293,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferRaceCommand: true,
       canOfferExportCommand: true,
       providerNativeCommandNames: ["automation"],
     });
@@ -280,6 +310,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferRaceCommand: true,
       canOfferExportCommand: true,
       providerNativeCommandNames: ["feedback"],
     });
@@ -297,9 +328,10 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferRaceCommand: true,
         canOfferExportCommand: true,
       }),
-    ).toEqual(["side", "export", "feedback", "automation"]);
+    ).toEqual(["side", "race", "export", "feedback", "automation"]);
   });
 
   it("offers the app-level /export command on every provider", () => {
@@ -311,6 +343,7 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferRaceCommand: true,
         canOfferExportCommand: true,
       }),
     ).toContain("export");
@@ -325,6 +358,7 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferRaceCommand: true,
         canOfferExportCommand: false,
       }),
     ).not.toContain("export");
@@ -338,6 +372,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferRaceCommand: true,
       canOfferExportCommand: true,
       providerNativeCommandNames: ["export"],
     });
@@ -371,6 +406,7 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferRaceCommand: true,
         canOfferExportCommand: true,
       }),
     ).toContain("compact");
@@ -383,6 +419,7 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferRaceCommand: true,
         canOfferExportCommand: true,
       }),
     ).not.toContain("compact");
@@ -397,6 +434,7 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferRaceCommand: true,
         canOfferExportCommand: true,
       }),
     ).toEqual([
@@ -407,6 +445,7 @@ describe("composerSlashCommands", () => {
       "review",
       "fork",
       "side",
+      "race",
       "status",
       "subagents",
       "export",

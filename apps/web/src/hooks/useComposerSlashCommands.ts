@@ -58,6 +58,7 @@ export function useComposerSlashCommands(input: {
   supportsFastSlashCommand: boolean;
   canOfferCompactCommand: boolean;
   canOfferSideCommand: boolean;
+  canOfferRaceCommand: boolean;
   canOfferExportCommand: boolean;
   supportsTextNativeReviewCommand: boolean;
   fastModeEnabled: boolean;
@@ -76,6 +77,7 @@ export function useComposerSlashCommands(input: {
   handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
   openForkTargetPicker: () => void;
   openReviewTargetPicker: () => void;
+  openRaceModelPicker: (prompt: string) => void;
   setComposerDraftProviderModelOptions: (
     threadId: ThreadId,
     provider: ProviderKind,
@@ -109,6 +111,7 @@ export function useComposerSlashCommands(input: {
     supportsFastSlashCommand,
     canOfferCompactCommand,
     canOfferSideCommand,
+    canOfferRaceCommand,
     canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
@@ -127,6 +130,7 @@ export function useComposerSlashCommands(input: {
     handleInteractionModeChange,
     openForkTargetPicker,
     openReviewTargetPicker,
+    openRaceModelPicker,
     setComposerDraftProviderModelOptions,
     editorActions,
   } = input;
@@ -138,6 +142,7 @@ export function useComposerSlashCommands(input: {
     canOfferReviewCommand: true,
     canOfferForkCommand: true,
     canOfferSideCommand: true,
+    canOfferRaceCommand,
     canOfferExportCommand,
     providerNativeCommandNames,
   });
@@ -768,10 +773,40 @@ export function useComposerSlashCommands(input: {
         }
         return true;
       }
+      if (slashInvocation.command === "race") {
+        if (!canOfferRaceCommand) {
+          toastManager.add({
+            type: "warning",
+            title: "Race is unavailable",
+            description: "Open a git project thread before starting a Model Race.",
+          });
+          return true;
+        }
+        const promptFromArgs = slashInvocation.args.trim();
+        const prompt =
+          promptFromArgs.length > 0
+            ? promptFromArgs
+            : editorActions
+                .resolveActiveComposerTrigger()
+                .snapshot.value.replace(/^\/race\b/i, "")
+                .trim();
+        if (prompt.length === 0) {
+          toastManager.add({
+            type: "warning",
+            title: "Prompt required",
+            description: "Add a prompt, then run /race — or use /race <prompt>.",
+          });
+          return true;
+        }
+        editorActions.clearComposerSlashDraft();
+        openRaceModelPicker(prompt);
+        return true;
+      }
       return false;
     },
     [
       availableBuiltInSlashCommands,
+      canOfferRaceCommand,
       checkClaudeFastSlashCommandAvailability,
       compactProviderThread,
       createForkThreadFromSlashCommand,
@@ -781,6 +816,7 @@ export function useComposerSlashCommands(input: {
       handleInteractionModeChange,
       openForkTargetPicker,
       openFeedbackDialog,
+      openRaceModelPicker,
       openReviewTargetPicker,
       selectedProvider,
       supportsTextNativeReviewCommand,
@@ -990,9 +1026,41 @@ export function useComposerSlashCommands(input: {
               error instanceof Error ? error.message : "An error occurred while creating Side.",
           });
         });
+        return;
+      }
+
+      if (item.command === "race") {
+        if (!canOfferRaceCommand) {
+          toastManager.add({
+            type: "warning",
+            title: "Race is unavailable",
+            description: "Open a git project thread before starting a Model Race.",
+          });
+          return;
+        }
+        const prompt = snapshot.value
+          .slice(0, trigger.rangeStart)
+          .concat(snapshot.value.slice(trigger.rangeEnd))
+          .trim();
+        const applied = clearSlashCommandFromComposer();
+        if (!wasPromptReplacementApplied(applied)) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        if (prompt.length === 0) {
+          toastManager.add({
+            type: "warning",
+            title: "Prompt required",
+            description: "Add a prompt, then run /race — or use /race <prompt>.",
+          });
+          return;
+        }
+        openRaceModelPicker(prompt);
+        editorActions.scheduleComposerFocus();
       }
     },
     [
+      canOfferRaceCommand,
       compactProviderThread,
       createSidechatFromSlashCommand,
       editorActions,
@@ -1000,6 +1068,7 @@ export function useComposerSlashCommands(input: {
       handleInteractionModeChange,
       openForkTargetPicker,
       openFeedbackDialog,
+      openRaceModelPicker,
       openReviewTargetPicker,
       selectedProvider,
       supportsTextNativeReviewCommand,

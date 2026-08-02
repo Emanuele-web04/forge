@@ -245,6 +245,7 @@ export const ThreadCreationSource = Schema.Literals([
   "synara_mcp",
   "external_mcp",
   "provider_native",
+  "race",
 ]);
 export type ThreadCreationSource = typeof ThreadCreationSource.Type;
 export const ProviderReviewTarget = Schema.Union([
@@ -747,6 +748,9 @@ export const OrchestrationThread = Schema.Struct({
   gatewayOperationIndex: Schema.optional(Schema.NullOr(NonNegativeInt)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  raceId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -829,6 +833,9 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   gatewayOperationIndex: Schema.optional(Schema.NullOr(NonNegativeInt)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  raceId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
@@ -1047,6 +1054,7 @@ const ThreadCreateCommand = Schema.Struct({
   sourceTurnId: Schema.optional(TurnId),
   gatewayOperationId: Schema.optional(TrimmedNonEmptyString),
   gatewayOperationIndex: Schema.optional(NonNegativeInt),
+  raceId: Schema.optional(TrimmedNonEmptyString),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1742,6 +1750,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   sourceTurnId: Schema.optional(Schema.NullOr(TurnId)),
   gatewayOperationId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   gatewayOperationIndex: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  raceId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),

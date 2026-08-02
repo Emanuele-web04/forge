@@ -911,6 +911,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 sourceTurnId: command.sourceTurnId ?? null,
                 gatewayOperationId: command.gatewayOperationId ?? null,
                 gatewayOperationIndex: command.gatewayOperationIndex ?? null,
+                raceId: command.raceId ?? null,
               }
             : {}),
           subagentAgentId: command.subagentAgentId,

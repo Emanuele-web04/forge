@@ -13,6 +13,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "review",
   "fork",
   "side",
+  "race",
   "status",
   "subagents",
   "fast",

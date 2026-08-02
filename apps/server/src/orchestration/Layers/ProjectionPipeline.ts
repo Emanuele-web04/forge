@@ -551,6 +551,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             sourceTurnId: event.payload.sourceTurnId ?? null,
             gatewayOperationId: event.payload.gatewayOperationId ?? null,
             gatewayOperationIndex: event.payload.gatewayOperationIndex ?? null,
+            raceId: event.payload.raceId ?? null,
             subagentAgentId: event.payload.subagentAgentId ?? null,
             subagentNickname: event.payload.subagentNickname ?? null,
             subagentRole: event.payload.subagentRole ?? null,
