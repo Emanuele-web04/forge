@@ -10,6 +10,7 @@ import { buildLauncherArgv, buildRemoteScript } from "./remoteCommand";
 import {
   classifyRemoteProbe,
   isProbeResultFresh,
+  mayOfferHostKeyTrust,
   PROBE_MARKERS,
   REMOTE_PROBE_CONNECT_TIMEOUT_SECONDS,
   REMOTE_PROBE_MAX_AGE_MS,
@@ -227,8 +228,8 @@ describe("classifyRemoteProbe", () => {
     const cases: ReadonlyArray<readonly [string, string]> = [
       ["Permission denied (publickey,password).", "auth"],
       ["Received disconnect: Too many authentication failures", "auth"],
-      ["Host key verification failed.", "host-key"],
-      ["@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@", "host-key"],
+      ["Host key verification failed.", "host-key-unknown"],
+      ["@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@", "host-key-changed"],
       ["ssh: Could not resolve hostname build-box: Name or service not known", "dns"],
       ["ssh: connect to host build-box port 22: Connection refused", "refused"],
       ["ssh: connect to host build-box port 22: No route to host", "network"],
@@ -280,6 +281,89 @@ describe("classifyRemoteProbe", () => {
     });
     expect(result.outcome).toBe("ok");
     expect(result.suggestedLauncher).toEqual({ kind: "login-shell" });
+  });
+});
+
+// The security property of the whole host-key split lives here. `mayOfferHostKeyTrust`
+// is the ONLY thing standing between "you have never seen this host" and "someone
+// is impersonating a host you have seen", so both directions are asserted: the
+// trust affordance must appear on first contact, and must be unreachable on a
+// changed key no matter what else the probe says.
+describe("host-key trust gate", () => {
+  // ssh's real stderr for a changed key: the loud banner, and then — critically —
+  // the SAME "Host key verification failed." epilogue a first-contact refusal
+  // ends with. If classification matched the epilogue first, this stderr would
+  // be reported as routine first contact and earn a trust button.
+  const CHANGED_KEY_STDERR = [
+    "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+    "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @",
+    "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+    "IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!",
+    "Someone could be eavesdropping on you right now (man-in-the-middle attack)!",
+    "Host key verification failed.",
+  ].join("\n");
+
+  const UNKNOWN_KEY_STDERR = [
+    "The authenticity of host 'build-box (10.0.0.4)' can't be established.",
+    "ED25519 key fingerprint is SHA256:abc123.",
+    "Host key verification failed.",
+  ].join("\n");
+
+  it("classifies first contact as host-key-unknown and OFFERS trust", () => {
+    const result = classify({ stderr: UNKNOWN_KEY_STDERR, exitCode: 255 });
+    expect(result.outcome).toBe("unreachable");
+    expect(result.unreachableReason).toBe("host-key-unknown");
+    expect(mayOfferHostKeyTrust(result)).toBe(true);
+  });
+
+  it("classifies a changed key as host-key-changed and REFUSES trust", () => {
+    const result = classify({ stderr: CHANGED_KEY_STDERR, exitCode: 255 });
+    expect(result.outcome).toBe("unreachable");
+    expect(result.unreachableReason).toBe("host-key-changed");
+    expect(mayOfferHostKeyTrust(result)).toBe(false);
+  });
+
+  it("does not let the shared 'verification failed' epilogue downgrade a changed key", () => {
+    // Guards the pattern ORDER specifically: both host-key patterns match this
+    // stderr, and only the order decides which wins.
+    expect(classify({ stderr: CHANGED_KEY_STDERR, exitCode: 255 }).unreachableReason).not.toBe(
+      "host-key-unknown",
+    );
+  });
+
+  it("refuses trust for every reason that is not first contact", () => {
+    const reasons = [
+      "auth",
+      "host-key-changed",
+      "dns",
+      "refused",
+      "network",
+      "timeout",
+      "ssh-missing",
+      "unknown",
+    ] as const;
+    for (const unreachableReason of reasons) {
+      expect(mayOfferHostKeyTrust({ outcome: "unreachable", unreachableReason })).toBe(false);
+    }
+  });
+
+  it("refuses trust when the probe did not fail on the host key at all", () => {
+    expect(mayOfferHostKeyTrust({ outcome: "ok" })).toBe(false);
+    // A reachable host whose command failed must never inherit the affordance.
+    expect(
+      mayOfferHostKeyTrust({ outcome: "command-failed", unreachableReason: "host-key-unknown" }),
+    ).toBe(false);
+  });
+
+  it("does not route a key-algorithm mismatch into the trust affordance", () => {
+    // "no matching host key type" is not an unknown key — trusting a fingerprint
+    // cannot fix it, so it must not unlock the button.
+    const result = classify({
+      stderr: "Unable to negotiate with 10.0.0.4 port 22: no matching host key type found.",
+      exitCode: 255,
+    });
+    expect(result.unreachableReason).not.toBe("host-key-unknown");
+    expect(mayOfferHostKeyTrust(result)).toBe(false);
   });
 });
 

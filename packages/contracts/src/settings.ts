@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
+import { RemoteHostConfig } from "./remoteHost";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
@@ -113,6 +114,18 @@ export const ServerSettings = Schema.Struct({
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  /**
+   * SSH hosts the user has added. Empty by default, so an existing settings file
+   * decodes unchanged and no migration is required to introduce the field.
+   *
+   * SECURITY: `ServerSettingsView = ServerSettings`, so every field here is sent
+   * to every connected client. `RemoteHostConfig` is checked to hold no secret —
+   * no password, no private key, no token, no passphrase. Authentication is the
+   * server's own SSH keys/agent on its disk and never crosses this boundary.
+   * Anything secret that a remote host needs belongs in `providerCredentials`,
+   * NOT here.
+   */
+  remoteHosts: Schema.Array(RemoteHostConfig).pipe(Schema.withDecodingDefault(() => [])),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -197,6 +210,13 @@ export const ServerSettingsPatch = Schema.Struct({
       disabled: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(256)))),
     }),
   ),
+  /**
+   * The WHOLE host list, not a delta. `deepMerge` replaces arrays rather than
+   * merging them element-wise, and that is the semantics we want: a per-index
+   * merge of a list whose entries can be added, removed and reordered has no
+   * coherent meaning. Callers read the current list, change it, and send it back.
+   */
+  remoteHosts: Schema.optionalKey(Schema.Array(RemoteHostConfig)),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

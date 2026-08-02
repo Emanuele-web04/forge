@@ -125,9 +125,17 @@ export interface RemoteProbeExecution {
  * used to (mis)classify unrelated failures.
  */
 const UNREACHABLE_PATTERNS: ReadonlyArray<readonly [RegExp, RemoteHostUnreachableReason]> = [
-  [/host key verification failed/i, "host-key"],
-  [/remote host identification has changed/i, "host-key"],
-  [/no matching host key type/i, "host-key"],
+  // ORDER IS LOAD-BEARING. On a CHANGED key ssh prints the identification-changed
+  // banner AND then "Host key verification failed." — both patterns match the
+  // same stderr. The changed-key pattern must therefore be tested first, or an
+  // attack in progress is classified as routine first contact and the UI offers
+  // a trust button for it. Never reorder these two without moving this comment.
+  [/remote host identification has changed/i, "host-key-changed"],
+  [/host key verification failed/i, "host-key-unknown"],
+  // NOT a host-key-unknown: the key is not unknown, the two ends cannot agree on
+  // a key ALGORITHM. Trusting a fingerprint does not fix it, so it must never
+  // reach the reason that unlocks the trust affordance.
+  [/no matching host key type/i, "unknown"],
   [/permission denied \(/i, "auth"],
   [/too many authentication failures/i, "auth"],
   [/no supported authentication methods/i, "auth"],
@@ -154,8 +162,10 @@ function classifyUnreachable(stderr: string): RemoteHostUnreachableReason | unde
 
 const UNREACHABLE_MESSAGES: Readonly<Record<RemoteHostUnreachableReason, string>> = {
   auth: "SSH rejected the credentials for this host. Add a key ssh can use without a passphrase prompt, or load it into your agent.",
-  "host-key":
-    "The host key could not be verified. Verify the host's fingerprint and add it to your known_hosts — Synara will not skip this check.",
+  "host-key-unknown":
+    "This host has not been seen before. Check its fingerprint matches your server, then trust it — Synara will not skip this check.",
+  "host-key-changed":
+    "This host's key does not match the one Synara saw before. That can mean the server was rebuilt, or that something is impersonating it. Synara will not connect until you confirm which.",
   dns: "The hostname could not be resolved. Check the destination, or the Host alias in your ~/.ssh/config.",
   refused: "The connection was refused. Check that sshd is running and the port is correct.",
   network: "The network connection to the host dropped. Check connectivity or the VPN.",
@@ -164,6 +174,26 @@ const UNREACHABLE_MESSAGES: Readonly<Record<RemoteHostUnreachableReason, string>
     "The local ssh client could not be started. Check that ssh is installed and on PATH.",
   unknown: "SSH could not connect to this host.",
 };
+
+/**
+ * THE host-key trust gate. Every surface that could offer to trust a host key
+ * MUST ask this function — there is deliberately one definition, because a
+ * second copy is a second chance to get it wrong in only one place.
+ *
+ * True for exactly one reason: `host-key-unknown`, routine first contact, where
+ * the user can meaningfully compare a fingerprint against a host they control.
+ *
+ * False for `host-key-changed` and for everything else. A changed key is either
+ * a rebuilt server or an active machine-in-the-middle, and nothing observable
+ * from this side tells them apart — so there is no button. The user resolves it
+ * out of band (`ssh-keygen -R`) and adds the host again, which forces them past
+ * the unknown-key fingerprint check a second time.
+ */
+export function mayOfferHostKeyTrust(
+  probe: Pick<RemoteHostProbeResult, "outcome" | "unreachableReason">,
+): boolean {
+  return probe.outcome === "unreachable" && probe.unreachableReason === "host-key-unknown";
+}
 
 function trimForDisplay(value: string, max = 2_000): string {
   const trimmed = value.trim();

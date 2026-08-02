@@ -300,6 +300,10 @@
       "types": "./src/remoteHostConnectivity.ts",
       "import": "./src/remoteHostConnectivity.ts"
     },
+    "./remoteHostFingerprint": {
+      "types": "./src/remoteHostFingerprint.ts",
+      "import": "./src/remoteHostFingerprint.ts"
+    },
     "./rateLimiter": {
       "types": "./src/rateLimiter.ts",
       "import": "./src/rateLimiter.ts"

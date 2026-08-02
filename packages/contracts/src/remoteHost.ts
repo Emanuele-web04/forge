@@ -210,10 +210,25 @@ export const RemoteHostProbeOutcome = Schema.Literals([
 ]);
 export type RemoteHostProbeOutcome = typeof RemoteHostProbeOutcome.Type;
 
-/** Why a host was unreachable — each maps to a different user action. */
+/**
+ * Why a host was unreachable — each maps to a different user action.
+ *
+ * The two host-key reasons are split because they are OPPOSITE situations that
+ * happen to share ssh's "Host key verification failed" epilogue:
+ *
+ * - `host-key-unknown` is routine first contact. Nothing is wrong; the user has
+ *   simply never connected to this host before. Offering to trust the key after
+ *   showing its fingerprint is the correct affordance.
+ * - `host-key-changed` is the on-the-wire signature of a machine-in-the-middle
+ *   attack (and, more often but indistinguishably, a rebuilt server). There is
+ *   NO trust affordance for it — ever. A single "trust this host key" button
+ *   that serves both cases trains the user to click through the one case where
+ *   clicking through is how they get owned.
+ */
 export const RemoteHostUnreachableReason = Schema.Literals([
   "auth",
-  "host-key",
+  "host-key-unknown",
+  "host-key-changed",
   "dns",
   "refused",
   "network",
