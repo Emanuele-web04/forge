@@ -18,6 +18,10 @@ import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
 import { findEnvironmentIdForProject, findEnvironmentIdForThread } from "./storeAggregation";
 import { getWsEnvironmentClient, localWsEnvironmentClient } from "./wsEnvironmentRegistry";
 import { resolveEnvironmentHttpUrl } from "./lib/wsHttpUrl";
+import {
+  threadDetailResumeCursors,
+  type ThreadDetailResumeCursorScope,
+} from "./threadDetailResumeCursors";
 import { useStore } from "./store";
 import type { AppState } from "./storeState";
 import type { Project } from "./types";
@@ -117,6 +121,23 @@ export function resolveProjectEnvironmentId(
   // store already holds, so an id that is not a real project matches nothing
   // and resolves local — the same answer as an absent field.
   return findEnvironmentIdForProject(source, projectId as Project["id"]) ?? LOCAL_ENVIRONMENT_ID;
+}
+
+/**
+ * Resume cursors for the environment that OWNS `threadId`.
+ *
+ * The correct accessor for any thread-keyed cursor read or write. A sequence is
+ * only meaningful inside the journal that issued it, and two servers both
+ * starting at sequence 1 is the normal case rather than an anomaly — so filing
+ * a remote thread's sequence under the LOCAL scope both loses the real cursor
+ * and poisons the local space with a number from another journal.
+ *
+ * Lives here rather than beside the cursor store because resolution needs the
+ * store, and `storeProjection` already imports the cursor store — importing the
+ * store back from there would close an import cycle.
+ */
+export function threadResumeCursors(threadId: ThreadId): ThreadDetailResumeCursorScope {
+  return threadDetailResumeCursors(resolveThreadEnvironmentId(threadId));
 }
 
 /**

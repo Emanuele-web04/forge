@@ -163,7 +163,12 @@ import {
   resetThreadEnvironmentClaims,
   resolveThreadEnvironmentId,
   resolveThreadHttpUrl,
+  threadResumeCursors,
 } from "./environmentRouting";
+import {
+  resetThreadDetailResumeCursorsForTests,
+  threadDetailResumeCursors,
+} from "./threadDetailResumeCursors";
 
 beforeEach(() => {
   registeredClients.clear();
@@ -495,6 +500,44 @@ describe("non-routed members of a routed group", () => {
     expect(api.terminal.write).not.toBe(
       (localClient.api as Record<string, Record<string, unknown>>).terminal?.write,
     );
+  });
+});
+
+describe("resume cursors are filed under the owning environment", () => {
+  beforeEach(() => {
+    resetThreadDetailResumeCursorsForTests();
+  });
+
+  it("records a remote thread's sequence in that environment's space, not local", () => {
+    // Sequences are per-server autoincrement values. Filing a remote thread's
+    // cursor locally both loses the real cursor AND poisons the local space
+    // with a number from another journal — a later local resume would then
+    // skip every event below it.
+    ownThread(REMOTE_ENVIRONMENT_ID, REMOTE_THREAD_ID);
+
+    threadResumeCursors(REMOTE_THREAD_ID).advance(REMOTE_THREAD_ID, 42);
+
+    expect(threadDetailResumeCursors(REMOTE_ENVIRONMENT_ID).get(REMOTE_THREAD_ID)).toBe(42);
+    expect(threadDetailResumeCursors(LOCAL_ENVIRONMENT_ID).get(REMOTE_THREAD_ID)).toBeUndefined();
+  });
+
+  it("keeps a local thread's cursor local", () => {
+    ownThread(LOCAL_ENVIRONMENT_ID, LOCAL_THREAD_ID);
+
+    threadResumeCursors(LOCAL_THREAD_ID).advance(LOCAL_THREAD_ID, 7);
+
+    expect(threadDetailResumeCursors(LOCAL_ENVIRONMENT_ID).get(LOCAL_THREAD_ID)).toBe(7);
+  });
+
+  it("lets two hosts hold the same sequence for the same thread id independently", () => {
+    // Two servers both starting at sequence 1 is the normal case. A shared
+    // cursor space would let one server's number fence the other's stream.
+    ownThread(REMOTE_ENVIRONMENT_ID, REMOTE_THREAD_ID);
+    threadResumeCursors(REMOTE_THREAD_ID).advance(REMOTE_THREAD_ID, 5);
+    threadDetailResumeCursors(LOCAL_ENVIRONMENT_ID).advance(REMOTE_THREAD_ID, 99);
+
+    expect(threadDetailResumeCursors(REMOTE_ENVIRONMENT_ID).get(REMOTE_THREAD_ID)).toBe(5);
+    expect(threadDetailResumeCursors(LOCAL_ENVIRONMENT_ID).get(REMOTE_THREAD_ID)).toBe(99);
   });
 });
 

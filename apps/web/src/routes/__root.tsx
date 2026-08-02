@@ -2,6 +2,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   ThreadId,
   type OrchestrationEvent,
+  type OrchestrationThreadStreamItem,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type OrchestrationThread,
@@ -71,6 +72,7 @@ import {
 } from "../wsEnvironmentRegistry";
 import { LOCAL_ENVIRONMENT_ID } from "~/environmentIdentity";
 import { createEnvironmentDescriptorSync } from "../environmentDescriptorSync";
+import { createThreadStreamAggregator } from "../threadStreamAggregation";
 import { createEnvironmentProviderStatusSync } from "../environmentProviderStatusSync";
 import {
   addWsBuildSkewListener,
@@ -94,7 +96,7 @@ import {
   subscribeThreadDetailEvictions,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
-import { localThreadDetailResumeCursors } from "../threadDetailResumeCursors";
+import { threadResumeCursors } from "../environmentRouting";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
@@ -1086,7 +1088,7 @@ function EventRouter() {
       // immediately instead of buffering while waiting for a snapshot — which
       // is also what previously triggered the unsubscribe-resubscribe race that
       // re-shipped full history.
-      const resumeCursor = localThreadDetailResumeCursors().get(threadId);
+      const resumeCursor = threadResumeCursors(threadId).get(threadId);
       if (resumeCursor === undefined) {
         threadSnapshotSequenceById.delete(threadId);
       } else {
@@ -1114,7 +1116,7 @@ function EventRouter() {
         if (event.sequence > latestThreadSequence) {
           latestThreadSequence = event.sequence;
           threadSnapshotSequenceById.set(threadId, latestThreadSequence);
-          localThreadDetailResumeCursors().advance(threadId, latestThreadSequence);
+          threadResumeCursors(threadId).advance(threadId, latestThreadSequence);
           queueDomainEvent(event);
         }
       }
@@ -1170,7 +1172,7 @@ function EventRouter() {
       await Promise.all(
         additions.map((threadId) =>
           api.orchestration
-            .subscribeThread(localThreadDetailResumeCursors().buildSubscribeInput(threadId))
+            .subscribeThread(threadResumeCursors(threadId).buildSubscribeInput(threadId))
             .catch(() => undefined),
         ),
       );
@@ -1208,7 +1210,7 @@ function EventRouter() {
         // Every caller of this restart wants authoritative history (wiped or
         // never-synced detail), so a cursor resume would skip exactly the
         // snapshot being requested.
-        localThreadDetailResumeCursors().clear(threadId);
+        threadResumeCursors(threadId).clear(threadId);
         await api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
       }).finally(() => {
         threadSnapshotRequestInFlight.delete(threadId);
@@ -1460,7 +1462,7 @@ function EventRouter() {
               continue;
             }
             threadSnapshotSequenceById.set(threadId, event.sequence);
-            localThreadDetailResumeCursors().advance(threadId, event.sequence);
+            threadResumeCursors(threadId).advance(threadId, event.sequence);
             queueDomainEvent(event);
           }
         })
@@ -1511,7 +1513,7 @@ function EventRouter() {
           threadId,
           Math.max(currentSequence, snapshot.snapshotSequence),
         );
-        localThreadDetailResumeCursors().advance(threadId, snapshot.snapshotSequence);
+        threadResumeCursors(threadId).advance(threadId, snapshot.snapshotSequence);
         // Apply even when the cursor did not advance. The projection is
         // authoritative and can repair a client that advanced its cursor while
         // dropping or failing to reduce one of the corresponding live events.
@@ -1617,7 +1619,13 @@ function EventRouter() {
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
       }
     });
-    const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
+    // Handles one thread-stream item, WHICHEVER environment delivered it.
+    //
+    // Every piece of per-thread bookkeeping below is keyed by thread id and the
+    // cursor writes resolve the owning environment themselves, so the handler
+    // is environment-agnostic by construction — which is what lets the same
+    // function serve every client.
+    const handleThreadStreamItem = (item: OrchestrationThreadStreamItem) => {
       if (item.kind === "snapshot") {
         const threadId = item.snapshot.thread.id;
         threadSnapshotRequestInFlight.delete(threadId);
@@ -1627,7 +1635,7 @@ function EventRouter() {
         if (!canApplyThreadSnapshot({ threadId, leasedThreadIds: subscribedThreadIds })) {
           threadSnapshotSequenceById.delete(threadId);
           pendingThreadEventsById.delete(threadId);
-          localThreadDetailResumeCursors().clear(threadId);
+          threadResumeCursors(threadId).clear(threadId);
           return;
         }
         syncServerThreadDetailHotPath(item.snapshot.thread);
@@ -1639,14 +1647,14 @@ function EventRouter() {
         if (useStore.getState().threadDetailSyncById?.[threadId] !== "synced") {
           threadSnapshotSequenceById.delete(threadId);
           pendingThreadEventsById.delete(threadId);
-          localThreadDetailResumeCursors().clear(threadId);
+          threadResumeCursors(threadId).clear(threadId);
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
         // Snapshots replace cached detail wholesale, so overwrite the cursor
         // even when it is lower than the previous one (server-side reset).
-        localThreadDetailResumeCursors().set(threadId, item.snapshot.snapshotSequence);
+        threadResumeCursors(threadId).set(threadId, item.snapshot.snapshotSequence);
         nextThreadProjectionReconcileAtById.set(
           threadId,
           Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
@@ -1681,13 +1689,31 @@ function EventRouter() {
         return;
       }
       threadSnapshotSequenceById.set(threadId, item.event.sequence);
-      localThreadDetailResumeCursors().advance(threadId, item.event.sequence);
+      threadResumeCursors(threadId).advance(threadId, item.event.sequence);
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
       );
       queueDomainEvent(item.event);
+    };
+
+    // Listen on EVERY environment, not just the local one.
+    //
+    // `subscribeThread` is routed to the thread's owning host, so for a remote
+    // thread the stream arrives on that host's connection. Subscribing here
+    // only to the local client meant a remote thread's transcript was delivered
+    // to a socket nobody was reading: the chat rendered empty or frozen, with
+    // no error anywhere, because nothing failed — the events simply had no
+    // listener.
+    const threadStreamAggregator = createThreadStreamAggregator(handleThreadStreamItem);
+    threadStreamAggregator.sync(listWsEnvironmentClients());
+    const unsubThreadStreamRegistry = onWsEnvironmentRegistryChange(() => {
+      threadStreamAggregator.sync(listWsEnvironmentClients());
     });
+    const unsubThreadEvent = () => {
+      unsubThreadStreamRegistry();
+      threadStreamAggregator.detachAll();
+    };
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
       const threadId = ThreadId.makeUnsafe(failure.threadId);
       if (disposed || !subscribedThreadIds.has(threadId)) {
@@ -1696,7 +1722,7 @@ function EventRouter() {
       // The stream is dead with retries and reconnects exhausted: forget its
       // cursor so a future resubscribe requests a fresh snapshot, and surface
       // the failure so the thread view stops posing as an empty conversation.
-      localThreadDetailResumeCursors().clear(threadId);
+      threadResumeCursors(threadId).clear(threadId);
       threadSnapshotSequenceById.delete(threadId);
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
