@@ -122,10 +122,7 @@ const BROWSER_TOOL_NAME_SET = new Set<string>(BROWSER_TOOL_NAMES);
 const SYNARA_BROWSER_TOOL_PRESENTATIONS = Object.fromEntries(
   BROWSER_TOOL_NAMES.map((toolName) => {
     const title = BROWSER_TOOL_TITLES[toolName];
-    return [
-      `synara_${toolName}`,
-      { running: title, completed: title, failed: title },
-    ];
+    return [`synara_${toolName}`, { running: title, completed: title, failed: title }];
   }),
 ) as Record<SynaraBrowserToolName, SynaraMcpToolPresentation>;
 

@@ -13,7 +13,11 @@ import { type MouseEvent, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
-import { useCopyPathToClipboard, useCopyThreadIdToClipboard, useCopyThreadLinkToClipboard } from "~/hooks/useCopyToClipboard";
+import {
+  useCopyPathToClipboard,
+  useCopyThreadIdToClipboard,
+  useCopyThreadLinkToClipboard,
+} from "~/hooks/useCopyToClipboard";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { pinActionLabel } from "~/lib/pin";

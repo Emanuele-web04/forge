@@ -310,7 +310,11 @@ import {
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import type { LastThreadRoute } from "../chatRouteRestore";
-import { useCopyPathToClipboard, useCopyThreadIdToClipboard, useCopyThreadLinkToClipboard } from "~/hooks/useCopyToClipboard";
+import {
+  useCopyPathToClipboard,
+  useCopyThreadIdToClipboard,
+  useCopyThreadLinkToClipboard,
+} from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
 import {
