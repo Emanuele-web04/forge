@@ -3615,8 +3615,11 @@ export default function ChatView({
       interactionMode,
       isSidechat: Boolean(activeThread.sidechatSourceThreadId),
     });
+  // Drafts are allowed: createRace already accepts null sourceThreadId and spawns
+  // fresh candidate threads. Requiring a server thread hid /race on the common
+  // "new thread → type prompt → /race" path (especially fresh Canary installs).
   const canOfferRaceCommand =
-    isServerThread &&
+    (isServerThread || isLocalDraftThread) &&
     activeThread !== undefined &&
     Boolean(activeProject?.cwd?.trim()) &&
     activeProject?.kind !== "studio" &&
