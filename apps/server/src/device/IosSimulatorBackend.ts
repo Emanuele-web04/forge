@@ -26,9 +26,11 @@ import type {
   DeviceDescriptor,
   DeviceHardwareButton,
   DeviceInstallAppResult,
+  DeviceKeyModifier,
   DeviceLaunchAppResult,
   DeviceScreenshotResult,
   DeviceSetupStep,
+  DeviceUiNode,
 } from "@synara/contracts";
 
 import { runProcess, type ProcessRunResult } from "../processRunner.ts";
@@ -307,46 +309,80 @@ export class IosSimulatorBackend implements DeviceBackend {
   // ── Helper-backed capabilities ─────────────────────────────────────
 
   async tap(udid: string, x: number, y: number): Promise<void> {
-    await this.helperRequest(HELPER_METHODS.tap, { udid, x, y });
+    const helper = await this.attachedHelper(udid);
+    await this.helperRequest(HELPER_METHODS.tap, helper.normalize(x, y));
   }
 
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
-    await this.helperRequest(HELPER_METHODS.swipe, { udid, ...gesture });
+    const helper = await this.attachedHelper(udid);
+    const start = helper.normalize(gesture.fromX, gesture.fromY);
+    const end = helper.normalize(gesture.toX, gesture.toY);
+    await this.helperRequest(HELPER_METHODS.swipe, {
+      startX: start.x,
+      startY: start.y,
+      endX: end.x,
+      endY: end.y,
+      durationMs: gesture.durationMs,
+    });
   }
 
   async typeText(udid: string, text: string): Promise<void> {
-    await this.helperRequest(HELPER_METHODS.typeText, { udid, text });
+    await this.attachedHelper(udid);
+    await this.helperRequest(HELPER_METHODS.text, { text });
   }
 
   async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
-    await this.helperRequest(HELPER_METHODS.keyEvent, { udid, ...event });
+    await this.attachedHelper(udid);
+    // The helper takes one USB HID usage per call and tracks held modifiers
+    // itself, so a chord is sent as its modifier keys around the main key.
+    for (const modifier of event.modifiers) {
+      const usage = HID_MODIFIER_USAGES[modifier];
+      if (usage !== undefined) {
+        await this.helperRequest(HELPER_METHODS.key, { usage, phase: event.direction });
+      }
+    }
+    await this.helperRequest(HELPER_METHODS.key, {
+      usage: event.keyCode,
+      phase: event.direction,
+    });
   }
 
   async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
-    await this.helperRequest(HELPER_METHODS.pressButton, { udid, button });
+    if (button === "rotate") {
+      // Rotation is a Simulator.app window command, not a HID button: there is
+      // no HID usage for it and no simctl equivalent. Refused explicitly so the
+      // pane can hide or disable the affordance instead of silently no-opping.
+      throw new DeviceBackendError(
+        "Rotating a headless simulator is not supported; rotate the device from inside the app or use Simulator.app.",
+      );
+    }
+    await this.attachedHelper(udid);
+    await this.helperRequest(HELPER_METHODS.button, { name: button });
   }
 
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
-    const result = await this.helperRequest(HELPER_METHODS.describeUi, { udid });
-    const root = (result as { root?: unknown } | null)?.root;
-    if (typeof root !== "object" || root === null) {
+    await this.attachedHelper(udid);
+    const result = await this.helperRequest(HELPER_METHODS.describeUi, {});
+    const tree = (result as { tree?: unknown } | null)?.tree;
+    if (typeof tree !== "object" || tree === null) {
       throw new DeviceBackendError("Device helper returned no accessibility tree");
     }
     return {
       udid,
       capturedAt: new Date().toISOString(),
-      root: root as DeviceDescribeUiResult["root"],
+      root: normalizeUiNode(tree),
     };
   }
 
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
-    const helper = await this.requireHelper();
-    await helper.attachStream(udid, onFrame);
+    const helper = await this.attachedHelper(udid);
+    await helper.startStream(udid, onFrame);
   }
 
   async detachStream(udid: string): Promise<void> {
-    if (!this.helper) return;
-    await this.helper.detachStream(udid).catch(() => undefined);
+    // The helper holds one attachment, so its stream is this device's stream.
+    if (!this.helper || this.helper.attachedDevice?.udid !== udid) return;
+    await this.helper.stopStream().catch(() => undefined);
   }
 
   async dispose(): Promise<void> {
@@ -430,12 +466,32 @@ export class IosSimulatorBackend implements DeviceBackend {
     try {
       return await helper.request(method, params);
     } catch (error) {
-      const helperError = error as DeviceHelperError;
-      throw new DeviceBackendError(helperError.message, {
-        retryable: helperError.code === "helper_timeout",
-        cause: error,
-      });
+      throw this.helperError(error);
     }
+  }
+
+  private helperError(error: unknown): DeviceBackendError {
+    const helperError = error as DeviceHelperError;
+    return new DeviceBackendError(
+      helperError?.message ?? "Device helper failed",
+      // A timeout may still be progressing on the device; a refusal will not.
+      { retryable: helperError?.code === "helper_timeout", cause: error },
+    );
+  }
+
+  /**
+   * The helper is bound to one simulator at a time and every input and read
+   * method acts on that binding, so each call re-asserts it. `attach` is a
+   * no-op when the device is already the attached one.
+   */
+  private async attachedHelper(udid: string): Promise<HelperClient> {
+    const helper = await this.requireHelper();
+    try {
+      await helper.attach(udid);
+    } catch (error) {
+      throw this.helperError(error);
+    }
+    return helper;
   }
 
   private async requireHelper(): Promise<HelperClient> {
@@ -527,6 +583,47 @@ export class IosSimulatorBackend implements DeviceBackend {
     const build = /Build version\s+(\S+)/u.exec(result.stdout)?.[1] ?? "unknown";
     return `${version}-${build}`;
   }
+}
+
+/** USB HID keyboard usage codes for the modifiers the contract exposes. */
+const HID_MODIFIER_USAGES: Partial<Record<DeviceKeyModifier, number>> = {
+  control: 0xe0,
+  shift: 0xe1,
+  option: 0xe2,
+  command: 0xe3,
+};
+
+/**
+ * The helper omits absent accessibility attributes rather than sending nulls,
+ * and its frames are in display coordinates. Fill in the contract's shape so
+ * the pane and the agent see one predictable node type.
+ */
+export function normalizeUiNode(raw: unknown): DeviceUiNode {
+  const node = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const frame =
+    typeof node.frame === "object" && node.frame !== null
+      ? (node.frame as Record<string, unknown>)
+      : {};
+  const readFrameValue = (key: string): number => {
+    const value = frame[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  };
+  const readText = (key: string): string | null => {
+    const value = node[key];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  };
+  return {
+    role: typeof node.role === "string" ? node.role : "Unknown",
+    label: readText("label"),
+    value: readText("value"),
+    frame: {
+      x: readFrameValue("x"),
+      y: readFrameValue("y"),
+      width: Math.max(0, readFrameValue("width")),
+      height: Math.max(0, readFrameValue("height")),
+    },
+    children: Array.isArray(node.children) ? node.children.map(normalizeUiNode) : [],
+  };
 }
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

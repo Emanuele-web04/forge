@@ -9,6 +9,17 @@ import {
   type DeviceFrameHeader,
 } from "@synara/contracts";
 
+/**
+ * Encoded video rides its own WebSocket rather than the JSON RPC socket: a
+ * separate connection means a video backlog can never sit in front of an RPC
+ * response in the same send queue, and this path is deliberately excluded from
+ * per-message deflate (H.264 is already compressed).
+ *
+ * The device to stream is named by the `udid` query parameter.
+ */
+export const DEVICE_FRAME_WS_PATH = "/ws/device-frames";
+export const DEVICE_FRAME_WS_UDID_PARAM = "udid";
+
 export interface DeviceFrame {
   readonly header: DeviceFrameHeader;
   readonly payload: Uint8Array;

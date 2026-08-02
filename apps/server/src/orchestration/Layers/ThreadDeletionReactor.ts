@@ -2,6 +2,7 @@ import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
+import { DeviceService } from "../../device/Services/DeviceService";
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
 import { TerminalManager } from "../../terminal/Services/Manager";
@@ -201,6 +202,25 @@ const make = Effect.gen(function* () {
     return providerCleanupSucceeded && terminalCleanupSucceeded;
   });
 
+  // Archiving a thread ends its device attachment the same way it ends its
+  // terminals. Optional so non-macOS builds and tests need not provide it.
+  const detachThreadDevice = (threadId: ThreadId) =>
+    Effect.serviceOption(DeviceService).pipe(
+      Effect.flatMap((service) =>
+        Option.isNone(service)
+          ? Effect.void
+          : Effect.promise(() => service.value.manager.handleThreadArchived(threadId)),
+      ),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logDebug("thread archive cleanup skipped device detach", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+    );
+
   const cleanupArchivedThread = Effect.fn(function* (event: ThreadArchivedEvent) {
     const threadId = event.payload.threadId;
     for (let attempt = 1; attempt <= ARCHIVE_CLEANUP_RETRY_ATTEMPTS; attempt += 1) {
@@ -218,6 +238,7 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      yield* detachThreadDevice(threadId);
       const terminalCleanupSucceeded = yield* closeThreadTerminals(
         threadId,
         false,

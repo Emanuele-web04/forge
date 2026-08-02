@@ -57,6 +57,7 @@ import {
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { DeviceService } from "./device/Services/DeviceService";
 import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
+import { makeDeviceFrameRouteLayer } from "./device/deviceFrameRoute";
 import { GitCore } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
@@ -1982,7 +1983,26 @@ export const makeWebsocketNegotiationRouteLayer = () =>
     makeWebsocketBootstrapRouteLayer(makeBootstrapWebSocketHttpEffect),
   );
 
-export const websocketRpcRouteLayer = Layer.merge(
+/**
+ * Video rides a second WebSocket (see `deviceFrameRoute`), so it is admitted by
+ * the same rules as the RPC upgrade: trusted origin, then whatever
+ * authentication the config requires.
+ */
+const deviceFrameRouteLayer = makeDeviceFrameRouteLayer({
+  authorizeUpgrade: (request) =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig;
+      const serverAuth = yield* ServerAuth;
+      if (trustedWebSocketRequestUrl(request, config) === null) return false;
+      if (!requiresWebSocketAuthentication(config)) return true;
+      return (
+        (yield* serverAuth.authenticateWebSocketUpgrade(makeEffectAuthRequest(request))) !== null
+      );
+    }).pipe(Effect.orElseSucceed(() => false)),
+});
+
+export const websocketRpcRouteLayer = Layer.mergeAll(
+  deviceFrameRouteLayer,
   makeWebsocketNegotiationRouteLayer(),
   // The registry must be provided here so the upgrade route and the RPC
   // middleware (built from the same source effect) share one instance.

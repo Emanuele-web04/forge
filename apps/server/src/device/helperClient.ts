@@ -7,42 +7,54 @@
  * It speaks two channels:
  *
  * - Control: newline-delimited JSON-RPC 2.0 over stdin/stdout. Requests carry
- *   an integer id; responses carry `result` or `error`.
- * - Frames: length-prefixed encoded video over a unix socket the helper creates
- *   and whose path it reports in the `attachStream` result. Each record is
- *   `u32 payloadLength | u8 flags | f64 timestampMs | payload`, little-endian,
- *   with flag bit 0 = keyframe and bit 1 = codec config.
+ *   an integer id; responses carry `result` or `error`. It also emits a `ready`
+ *   notification at startup.
+ * - Frames: the server listens on a unix socket and passes its path to
+ *   `stream.start`; the helper connects as a client and writes
+ *   `u32 little-endian length` followed by that many bytes. Those bytes are
+ *   already the `@synara/contracts` device-frame envelope, so this module only
+ *   removes the length prefix and hands the envelope on untouched.
  *
- * ADAPTATION POINT: the helper is being built in parallel. If its final wire
- * format differs, every change belongs in this file — `FRAME_RECORD_*` and the
- * `HELPER_METHODS` map are the two places to touch, and nothing above this
- * layer parses helper bytes.
+ * Two protocol facts that shape callers:
+ *
+ * - The helper attaches to one simulator at a time (`attach`), and every input,
+ *   read, and stream method acts on that attachment rather than taking a udid.
+ * - Input coordinates are normalized to 0..1, not device points. Conversion
+ *   uses the geometry `attach` returns.
  *
  * @module device/helperClient
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { connect, type Socket } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer, type Server, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 
-import type { DeviceFrameListener, DeviceStreamFrame } from "./DeviceBackend.ts";
+import { peekDeviceFrameHeader } from "@synara/shared/deviceFrame";
+
+import type { DeviceStreamFrame } from "./DeviceBackend.ts";
 
 export const HELPER_METHODS = {
   ping: "ping",
-  tap: "input.tap",
-  swipe: "input.swipe",
-  typeText: "input.typeText",
-  keyEvent: "input.keyEvent",
-  pressButton: "input.pressButton",
-  describeUi: "accessibility.describe",
-  attachStream: "stream.attach",
-  detachStream: "stream.detach",
+  list: "list",
+  attach: "attach",
+  streamStart: "stream.start",
+  streamStop: "stream.stop",
+  streamStats: "stream.stats",
+  tap: "tap",
+  touch: "touch",
+  swipe: "swipe",
+  key: "key",
+  text: "text",
+  button: "button",
+  screenshot: "screenshot",
+  describeUi: "describe-ui",
 } as const;
 
-/** `u32 payloadLength | u8 flags | f64 timestampMs`, then the payload. */
-const FRAME_RECORD_HEADER_BYTES = 13;
-const FRAME_RECORD_FLAG_KEYFRAME = 0b0000_0001;
-const FRAME_RECORD_FLAG_CODEC_CONFIG = 0b0000_0010;
+/** `u32 little-endian payload length`, then the contract frame envelope. */
+const FRAME_LENGTH_PREFIX_BYTES = 4;
 /** Refuse absurd length prefixes rather than allocating on a desynced stream. */
-const FRAME_RECORD_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
+const FRAME_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CONTROL_LINE_BYTES = 4 * 1024 * 1024;
@@ -57,6 +69,18 @@ export class DeviceHelperError extends Error {
   }
 }
 
+/** Geometry from `attach`, used to convert device points into normalized input. */
+export interface DeviceHelperAttachment {
+  readonly udid: string;
+  readonly pointWidth: number;
+  readonly pointHeight: number;
+  readonly pixelWidth: number;
+  readonly pixelHeight: number;
+  readonly scale: number;
+  readonly inputAvailable: boolean;
+  readonly accessibilityAvailable: boolean;
+}
+
 interface PendingRequest {
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
@@ -68,91 +92,87 @@ export interface HelperClientOptions {
   readonly args?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   readonly requestTimeoutMs?: number;
-  /** Injected in tests so the frame socket can be faked without a filesystem. */
-  readonly connectFrameSocket?: (socketPath: string) => Socket;
   readonly onExit?: (reason: string) => void;
 }
 
-/**
- * Decodes the helper's length-prefixed frame records out of an arbitrarily
- * chunked byte stream. Split out from the socket so framing is unit-testable.
- */
-export class DeviceFrameRecordParser {
-  private buffer: Buffer = Buffer.alloc(0);
-  private sequence = 0;
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
 
-  /** Returns every complete record now available, in order. */
-  push(chunk: Uint8Array): readonly DeviceStreamFrame[] {
+function clampNormalized(value: number, extent: number): number {
+  return Math.min(1, Math.max(0, value / extent));
+}
+
+function readNumber(record: Record<string, unknown>, key: string, fallback: number): number {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * Splits the helper's length-prefixed records out of an arbitrarily chunked
+ * byte stream. The payload is passed through as-is: it is already the contract
+ * envelope, and re-parsing it here would duplicate `decodeDeviceFrame`.
+ */
+export class DeviceFramePrefixParser {
+  private buffer: Buffer = Buffer.alloc(0);
+
+  /** Returns every complete payload now available, in order. */
+  push(chunk: Uint8Array): readonly Uint8Array[] {
     this.buffer =
       this.buffer.byteLength === 0
         ? Buffer.from(chunk)
         : Buffer.concat([this.buffer, Buffer.from(chunk)]);
 
-    const frames: DeviceStreamFrame[] = [];
-    while (this.buffer.byteLength >= FRAME_RECORD_HEADER_BYTES) {
-      const payloadLength = this.buffer.readUInt32LE(0);
-      if (payloadLength > FRAME_RECORD_MAX_PAYLOAD_BYTES) {
+    const payloads: Uint8Array[] = [];
+    while (this.buffer.byteLength >= FRAME_LENGTH_PREFIX_BYTES) {
+      const length = this.buffer.readUInt32LE(0);
+      if (length > FRAME_MAX_PAYLOAD_BYTES) {
         throw new DeviceHelperError(
           "frame_stream_desync",
-          `Helper frame record claims ${payloadLength} bytes`,
+          `Helper frame record claims ${length} bytes`,
         );
       }
-      const total = FRAME_RECORD_HEADER_BYTES + payloadLength;
+      const total = FRAME_LENGTH_PREFIX_BYTES + length;
       if (this.buffer.byteLength < total) break;
-
-      const flags = this.buffer.readUInt8(4);
-      const timestampMs = this.buffer.readDoubleLE(5);
-      // Copy: the payload outlives this parse and `this.buffer` gets reassigned.
-      const data = Uint8Array.prototype.slice.call(
-        this.buffer,
-        FRAME_RECORD_HEADER_BYTES,
-        total,
-      ) as Uint8Array;
+      // Copied: the payload outlives this parse and `this.buffer` is reassigned.
+      payloads.push(
+        Uint8Array.prototype.slice.call(
+          this.buffer,
+          FRAME_LENGTH_PREFIX_BYTES,
+          total,
+        ) as Uint8Array,
+      );
       this.buffer = this.buffer.subarray(total);
-      this.sequence += 1;
-      frames.push({
-        sequence: this.sequence,
-        timestampMs,
-        keyframe: (flags & FRAME_RECORD_FLAG_KEYFRAME) !== 0,
-        codecConfig: (flags & FRAME_RECORD_FLAG_CODEC_CONFIG) !== 0,
-        data,
-      });
     }
-    return frames;
+    return payloads;
   }
 }
 
-/** Encode one frame record the way the helper does. Used by the helper tests. */
-export function encodeFrameRecord(frame: {
-  readonly timestampMs: number;
-  readonly keyframe: boolean;
-  readonly codecConfig: boolean;
-  readonly data: Uint8Array;
-}): Buffer {
-  const record = Buffer.alloc(FRAME_RECORD_HEADER_BYTES + frame.data.byteLength);
-  record.writeUInt32LE(frame.data.byteLength, 0);
-  let flags = 0;
-  if (frame.keyframe) flags |= FRAME_RECORD_FLAG_KEYFRAME;
-  if (frame.codecConfig) flags |= FRAME_RECORD_FLAG_CODEC_CONFIG;
-  record.writeUInt8(flags, 4);
-  record.writeDoubleLE(frame.timestampMs, 5);
-  record.set(frame.data, FRAME_RECORD_HEADER_BYTES);
+/** Frame the way the helper does. Used by the tests. */
+export function encodeFrameRecord(payload: Uint8Array): Buffer {
+  const record = Buffer.alloc(FRAME_LENGTH_PREFIX_BYTES + payload.byteLength);
+  record.writeUInt32LE(payload.byteLength, 0);
+  record.set(payload, FRAME_LENGTH_PREFIX_BYTES);
   return record;
 }
 
 /**
- * Owns one helper process: spawn, JSON-RPC over stdio, and the frame socket per
- * streaming device.
+ * Owns one helper process: spawn, JSON-RPC over stdio, and the unix socket the
+ * helper connects back to with frames.
  */
 export class HelperClient {
   private process: ChildProcessWithoutNullStreams | null = null;
   private stdoutBuffer = "";
   private nextRequestId = 1;
   private readonly pending = new Map<number, PendingRequest>();
-  private readonly frameSockets = new Map<string, Socket>();
   private readonly requestTimeoutMs: number;
   private stderrTail = "";
   private exited = false;
+
+  private attachment: DeviceHelperAttachment | null = null;
+  private frameServer: Server | null = null;
+  private frameSocket: Socket | null = null;
+  private frameSocketDirectory: string | null = null;
 
   constructor(private readonly options: HelperClientOptions) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -160,6 +180,11 @@ export class HelperClient {
 
   get running(): boolean {
     return this.process !== null && !this.exited;
+  }
+
+  /** The simulator this helper is currently bound to, if any. */
+  get attachedDevice(): DeviceHelperAttachment | null {
+    return this.attachment;
   }
 
   start(): void {
@@ -175,8 +200,8 @@ export class HelperClient {
     child.stdout.on("data", (chunk: string) => this.consumeStdout(chunk));
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      // Keep only a tail: helper diagnostics are useful in the failure message
-      // but must never grow without bound over a long-lived session.
+      // Keep only a tail: helper diagnostics belong in the failure message but
+      // must never grow without bound over a long-lived session.
       this.stderrTail = `${this.stderrTail}${chunk}`.slice(-4_096);
     });
     child.on("error", (error) =>
@@ -184,6 +209,7 @@ export class HelperClient {
     );
     child.on("exit", (code, signal) => {
       this.exited = true;
+      this.attachment = null;
       const reason = `device helper exited (code=${code ?? "null"}, signal=${signal ?? "null"})${
         this.stderrTail.trim() ? `: ${this.stderrTail.trim()}` : ""
       }`;
@@ -206,7 +232,7 @@ export class HelperClient {
         this.pending.delete(id);
         reject(new DeviceHelperError("helper_timeout", `Device helper ${method} timed out`));
       }, this.requestTimeoutMs);
-      // `unref` so a stuck helper request cannot hold the process open at exit.
+      // `unref` so a stuck request cannot hold the process open at exit.
       timer.unref?.();
       this.pending.set(id, { resolve, reject, timer });
       child.stdin.write(payload, (error) => {
@@ -221,68 +247,150 @@ export class HelperClient {
   }
 
   /**
-   * Ask the helper to start capturing and pipe its frame socket to `onFrame`.
-   * The helper answers with `{ socketPath }`.
+   * Bind the helper to one simulator. The helper holds a single attachment, so
+   * attaching to a different device implicitly replaces the previous one.
    */
-  async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
-    await this.detachStream(udid);
-    const result = await this.request(HELPER_METHODS.attachStream, { udid });
-    const socketPath =
-      typeof result === "object" && result !== null
-        ? (result as { socketPath?: unknown }).socketPath
-        : undefined;
-    if (typeof socketPath !== "string" || socketPath.length === 0) {
+  async attach(udid: string): Promise<DeviceHelperAttachment> {
+    if (this.attachment?.udid === udid) return this.attachment;
+    const result = asRecord(await this.request(HELPER_METHODS.attach, { udid }));
+    const capabilities = asRecord(result.capabilities);
+    const pixelWidth = readNumber(result, "pixelWidth", 0);
+    const pixelHeight = readNumber(result, "pixelHeight", 0);
+    const scale = readNumber(result, "scale", 3);
+    const attachment: DeviceHelperAttachment = {
+      udid,
+      pixelWidth,
+      pixelHeight,
+      scale,
+      pointWidth: readNumber(result, "pointWidth", pixelWidth / scale),
+      pointHeight: readNumber(result, "pointHeight", pixelHeight / scale),
+      inputAvailable: capabilities.input === true,
+      accessibilityAvailable: capabilities.accessibility === true,
+    };
+    if (attachment.pointWidth <= 0 || attachment.pointHeight <= 0) {
       throw new DeviceHelperError(
         "helper_malformed_response",
-        "Device helper did not return a frame socket path",
+        "Device helper reported no usable screen geometry",
       );
     }
-
-    const socket = (this.options.connectFrameSocket ?? ((path: string) => connect(path)))(
-      socketPath,
-    );
-    const parser = new DeviceFrameRecordParser();
-    socket.on("data", (chunk: Buffer) => {
-      let frames: readonly DeviceStreamFrame[];
-      try {
-        frames = parser.push(chunk);
-      } catch {
-        // A desynced stream cannot resynchronize: drop the socket and let the
-        // manager surface the detach rather than emitting garbage NALs.
-        socket.destroy();
-        return;
-      }
-      for (const frame of frames) onFrame(frame);
-    });
-    socket.on("error", () => socket.destroy());
-    socket.on("close", () => {
-      if (this.frameSockets.get(udid) === socket) this.frameSockets.delete(udid);
-    });
-    this.frameSockets.set(udid, socket);
+    this.attachment = attachment;
+    return attachment;
   }
 
-  async detachStream(udid: string): Promise<void> {
-    const socket = this.frameSockets.get(udid);
-    if (socket) {
-      this.frameSockets.delete(udid);
-      socket.destroy();
+  /**
+   * Convert device points to the normalized 0..1 coordinates the helper's input
+   * methods expect, clamped so a mis-scaled canvas cannot produce a rejection.
+   */
+  normalize(x: number, y: number): { readonly x: number; readonly y: number } {
+    const attachment = this.attachment;
+    if (!attachment) {
+      throw new DeviceHelperError(
+        "helper_not_attached",
+        "Device helper is not attached to a device",
+      );
     }
-    if (this.running) {
-      await this.request(HELPER_METHODS.detachStream, { udid }).catch(() => undefined);
+    return {
+      x: clampNormalized(x, attachment.pointWidth),
+      y: clampNormalized(y, attachment.pointHeight),
+    };
+  }
+
+  /**
+   * Start capture for the attached device. The server owns the socket: it
+   * listens first and passes the path, so the helper never has to guess where
+   * to connect and a stale socket file cannot be reused.
+   */
+  async startStream(udid: string, onFrame: (frame: DeviceStreamFrame) => void): Promise<void> {
+    await this.stopStream();
+    await this.attach(udid);
+
+    const directory = await mkdtemp(path.join(tmpdir(), "synara-device-frames-"));
+    const socketPath = path.join(directory, "frames.sock");
+    this.frameSocketDirectory = directory;
+
+    const server = createServer();
+    this.frameServer = server;
+    server.on("connection", (socket) => {
+      this.frameSocket = socket;
+      const parser = new DeviceFramePrefixParser();
+      socket.on("data", (chunk: Buffer) => {
+        let payloads: readonly Uint8Array[];
+        try {
+          payloads = parser.push(chunk);
+        } catch {
+          // A desynced stream cannot resynchronize: drop it rather than
+          // emitting garbage NALs into the decoder.
+          socket.destroy();
+          return;
+        }
+        for (const payload of payloads) {
+          const header = peekDeviceFrameHeader(payload);
+          if (!header) continue;
+          onFrame({
+            sequence: header.sequence,
+            timestampMs: header.timestampMs,
+            keyframe: header.keyframe,
+            codecConfig: header.codecConfig,
+            // Passed through whole: the transport re-encodes the envelope with
+            // the routing device id it already has.
+            data: payload.subarray(0),
+          });
+        }
+      });
+      socket.on("error", () => socket.destroy());
+      socket.on("close", () => {
+        if (this.frameSocket === socket) this.frameSocket = null;
+      });
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+
+    try {
+      await this.request(HELPER_METHODS.streamStart, { socketPath });
+    } catch (error) {
+      await this.closeFrameSocket();
+      throw error;
     }
+  }
+
+  async stopStream(): Promise<void> {
+    if (this.running && this.frameServer !== null) {
+      await this.request(HELPER_METHODS.streamStop).catch(() => undefined);
+    }
+    await this.closeFrameSocket();
   }
 
   async dispose(): Promise<void> {
-    for (const [udid] of this.frameSockets) await this.detachStream(udid);
+    await this.stopStream().catch(() => undefined);
     this.fail(new DeviceHelperError("helper_disposed", "Device helper was shut down"));
     const child = this.process;
     this.process = null;
+    this.attachment = null;
     this.exited = true;
     child?.stdin.end();
     child?.kill("SIGTERM");
   }
 
   // ── Internals ──────────────────────────────────────────────────────
+
+  private async closeFrameSocket(): Promise<void> {
+    this.frameSocket?.destroy();
+    this.frameSocket = null;
+    const server = this.frameServer;
+    this.frameServer = null;
+    if (server) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    const directory = this.frameSocketDirectory;
+    this.frameSocketDirectory = null;
+    if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
 
   private consumeStdout(chunk: string): void {
     this.stdoutBuffer += chunk;
@@ -307,21 +415,21 @@ export class HelperClient {
     try {
       message = JSON.parse(line);
     } catch {
-      // Helper logs that are not JSON are ignored; the protocol is responses only.
+      // Helper logs that are not JSON are ignored.
       return;
     }
-    if (typeof message !== "object" || message === null) return;
-    const record = message as { id?: unknown; result?: unknown; error?: unknown };
+    const record = asRecord(message);
+    // Notifications (`ready`, diagnostics) carry no id and need no reply.
     if (typeof record.id !== "number") return;
     const request = this.pending.get(record.id);
     if (!request) return;
     this.pending.delete(record.id);
     clearTimeout(request.timer);
     if (record.error !== undefined && record.error !== null) {
-      const error = record.error as { code?: unknown; message?: unknown };
+      const error = asRecord(record.error);
       request.reject(
         new DeviceHelperError(
-          typeof error.code === "string" ? error.code : "helper_error",
+          typeof error.code === "number" ? `helper_${error.code}` : "helper_error",
           typeof error.message === "string" ? error.message : "Device helper reported an error",
         ),
       );
