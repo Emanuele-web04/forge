@@ -288,6 +288,10 @@
       "types": "./src/proxyHeaders.ts",
       "import": "./src/proxyHeaders.ts"
     },
+    "./tailscaleServe": {
+      "types": "./src/tailscaleServe.ts",
+      "import": "./src/tailscaleServe.ts"
+    },
     "./remoteHostProbe": {
       "types": "./src/remoteHostProbe.ts",
       "import": "./src/remoteHostProbe.ts"

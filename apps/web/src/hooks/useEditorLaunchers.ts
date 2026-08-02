@@ -16,6 +16,11 @@ import {
 import { usePreferredEditor } from "../editorPreferences";
 import { shortcutLabelForCommand } from "../keybindings";
 import { readNativeApi } from "../nativeApi";
+import { environmentLabel } from "../environmentDirectory";
+import { resolveEnvironmentCapabilityRefusal } from "../environmentCapabilities";
+import { LOCAL_ENVIRONMENT_ID } from "../environmentIdentity";
+import { useEnvironmentScopeId } from "../environmentScope";
+import { toastManager } from "../components/ui/toast";
 
 export interface EditorLaunchers {
   /** Installed editors for the current platform, in catalog order. */
@@ -48,6 +53,7 @@ export function useEditorLaunchers({
   defaultEditor?: EditorId | undefined;
 }): EditorLaunchers {
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
+  const environmentScopeId = useEnvironmentScopeId();
   const isContextDefault = defaultEditor != null;
   // In context-default mode the primary action is pinned to `defaultEditor` and menu
   // selections are one-shot opens that must not overwrite the persisted preference.
@@ -68,6 +74,22 @@ export function useEditorLaunchers({
     if (!api || !openInTarget) return;
     const editor = editorId ?? effectivePreferred;
     if (!editor) return;
+    // Explicit refusal on a remote host. Falling through would open the LOCAL
+    // machine's copy of that path — the same file name, a different machine's
+    // contents — and look like it worked.
+    const refusal = resolveEnvironmentCapabilityRefusal({
+      capability: "editor-launch",
+      isLocalEnvironment: environmentScopeId === LOCAL_ENVIRONMENT_ID,
+      environmentLabel: environmentLabel(environmentScopeId),
+    });
+    if (refusal) {
+      toastManager.add({
+        type: "warning",
+        title: refusal.title,
+        description: refusal.description,
+      });
+      return;
+    }
     void api.shell.openInEditor(openInTarget, editor);
     setDefaultEditor(editor);
   };

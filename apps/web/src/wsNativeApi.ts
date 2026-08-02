@@ -487,6 +487,7 @@ export function createWsEnvironmentClient(
         transport.request(WS_METHODS.serverUpdateProvider, input, { timeoutMs: null }),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
       listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
+      getPhoneReachability: () => transport.request(WS_METHODS.serverGetPhoneReachability),
       stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),

@@ -19,6 +19,7 @@ import { cn } from "~/lib/utils";
 import { SETTINGS_INSET_LIST_CLASS_NAME } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "~/storeSelectors";
+import { PairDevicesSettingsPanel } from "./PairDevicesSettingsPanel";
 import { useSettingsRestoreSignal } from "./SettingControls";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
@@ -155,6 +156,9 @@ export function AdvancedSettingsPanel(props: {
           />
         </SettingsSection>
       ) : null}
+
+      {/* One pairing screen for every connected host, local and remote. */}
+      <PairDevicesSettingsPanel />
 
       <SettingsSection title="Developer tools">
         <SettingsRow

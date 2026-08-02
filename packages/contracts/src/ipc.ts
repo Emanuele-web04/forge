@@ -134,6 +134,7 @@ import type {
   ServerListProviderUsageResult,
   ServerGetSettingsResult,
   ServerListLocalServersResult,
+  ServerPhoneReachabilityResult,
   ServerListWorktreesResult,
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
@@ -677,6 +678,7 @@ export interface NativeApi {
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
     listLocalServers: () => Promise<ServerListLocalServersResult>;
+    getPhoneReachability: () => Promise<ServerPhoneReachabilityResult>;
     stopLocalServer: (input: ServerStopLocalServerInput) => Promise<ServerStopLocalServerResult>;
     getProviderUsageSnapshot: (
       input: ServerGetProviderUsageSnapshotInput,

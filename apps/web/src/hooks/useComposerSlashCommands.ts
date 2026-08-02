@@ -35,7 +35,7 @@ import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
-import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
+import { resolveThreadHttpUrl } from "../environmentRouting";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 
 type ComposerSnapshot = {
@@ -594,7 +594,9 @@ export function useComposerSlashCommands(input: {
     }
     const params = new URLSearchParams({ threadId: threadId });
     void downloadUrlAsBlob({
-      url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
+      // The export lives on the server that owns the thread; resolving ambiently
+      // would ask the local server to export a thread it has never seen.
+      url: resolveThreadHttpUrl(threadId, `/api/thread-export?${params.toString()}`),
       filename: `synara-thread-${threadId}.zip`,
     }).catch((error: unknown) => {
       toastManager.add({

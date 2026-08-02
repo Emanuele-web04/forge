@@ -58,7 +58,15 @@ export function buildLocalImageUrl(input: {
   // optional `previewGrant: string | null | undefined` straight through under
   // exactOptionalPropertyTypes. Internally falsy grants are simply omitted below.
   readonly grant?: string | null | undefined;
-}): string {
+  /**
+   * Resolves the route path against the environment that holds the file.
+   * Defaults to the ambient local server — correct for a local thread, and the
+   * only behavior single-server builds ever see. A remote preview passes the
+   * scope's resolver so it does not render the LOCAL machine's file at the same
+   * path, which would look like it worked.
+   */
+  readonly resolveUrl?: ((rawPath: string) => string | null) | undefined;
+}): string | null {
   const params = new URLSearchParams({ path: normalizeMarkdownImagePath(input.src) });
   if (input.cwd) {
     params.set("cwd", input.cwd);
@@ -72,7 +80,8 @@ export function buildLocalImageUrl(input: {
   // Always route through the WS-derived HTTP origin so desktop builds (custom protocol)
   // include the same legacy startup token attachments already use; in web/dev (where
   // the page and server share an origin) this falls back to the same relative path.
-  return resolveWsHttpUrl(`${LOCAL_IMAGE_ROUTE_PATH}?${params.toString()}`);
+  const resolve = input.resolveUrl ?? resolveWsHttpUrl;
+  return resolve(`${LOCAL_IMAGE_ROUTE_PATH}?${params.toString()}`);
 }
 
 export function localImageFileName(src: string): string {

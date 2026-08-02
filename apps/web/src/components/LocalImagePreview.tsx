@@ -12,6 +12,7 @@ import { type ImgHTMLAttributes, type MouseEvent, useState } from "react";
 import { downloadUrlAsBlob } from "~/lib/browserDownload";
 import { DownloadIcon, Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
 import { buildLocalImageUrl, localImageFileName } from "~/lib/localImageUrls";
+import { useEnvironmentHttpUrlResolver } from "~/environmentScope";
 import { cn } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
 
@@ -39,13 +40,20 @@ export function useLocalImagePreview(input: {
   previewGrant?: string | null | undefined;
 }): LocalImagePreviewState {
   const { src, cwd, previewGrant } = input;
-  const previewUrl = buildLocalImageUrl({ src, cwd: cwd ?? undefined, grant: previewGrant });
-  const downloadUrl = buildLocalImageUrl({
-    src,
-    cwd: cwd ?? undefined,
-    download: true,
-    grant: previewGrant,
-  });
+  // Resolved against the environment scope: a preview inside a remote thread
+  // must fetch from that host, and must show nothing rather than the local
+  // machine's file at the same path when the host is disconnected.
+  const resolveUrl = useEnvironmentHttpUrlResolver();
+  const previewUrl =
+    buildLocalImageUrl({ src, cwd: cwd ?? undefined, grant: previewGrant, resolveUrl }) ?? "";
+  const downloadUrl =
+    buildLocalImageUrl({
+      src,
+      cwd: cwd ?? undefined,
+      download: true,
+      grant: previewGrant,
+      resolveUrl,
+    }) ?? "";
   const fileName = localImageFileName(src);
   // A generation distinguishes separate visits to the same URL. This keeps an
   // A -> B -> A transition from reviving A's old error branch (which contains

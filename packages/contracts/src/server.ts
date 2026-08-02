@@ -208,6 +208,28 @@ export const ServerListLocalServersResult = Schema.Struct({
 });
 export type ServerListLocalServersResult = typeof ServerListLocalServersResult.Type;
 
+/**
+ * How a phone can reach this server.
+ *
+ * `tailscale-serve` is the blessed path (HTTPS straight to the host, survives a
+ * sleeping laptop); `ssh-port-forward` is the always-works fallback and is what
+ * every other case reports, so the UI never has to invent one.
+ */
+export const ServerPhoneReachabilityKind = Schema.Literals(["tailscale-serve", "ssh-port-forward"]);
+export type ServerPhoneReachabilityKind = typeof ServerPhoneReachabilityKind.Type;
+
+export const ServerPhoneReachabilityResult = Schema.Struct({
+  kind: ServerPhoneReachabilityKind,
+  /** HTTPS origin to encode in the QR code; null on the fallback path. */
+  origin: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2_048))),
+  summary: Schema.String.check(Schema.isMaxLength(500)),
+  /** What to do to enable the better path, when it is not available yet. */
+  setupHint: Schema.NullOr(Schema.String.check(Schema.isMaxLength(500))),
+  /** The SSH forward command, always present so the fallback is documented. */
+  fallbackCommand: Schema.String.check(Schema.isMaxLength(500)),
+});
+export type ServerPhoneReachabilityResult = typeof ServerPhoneReachabilityResult.Type;
+
 export const ServerStopLocalServerInput = Schema.Struct({
   pid: PositiveInt,
   port: PositiveInt,

@@ -158,6 +158,7 @@ import {
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
   ServerListLocalServersResult,
+  ServerPhoneReachabilityResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
@@ -769,6 +770,12 @@ export const WsServerProbeRemoteHostRpc = Rpc.make(WS_METHODS.serverProbeRemoteH
   error: WsRpcError,
 });
 
+export const WsServerGetPhoneReachabilityRpc = Rpc.make(WS_METHODS.serverGetPhoneReachability, {
+  payload: Schema.Struct({}),
+  success: ServerPhoneReachabilityResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
   WS_METHODS.serverGetProviderUsageSnapshot,
   {
@@ -1070,6 +1077,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
   WsServerProbeRemoteHostRpc,
+  WsServerGetPhoneReachabilityRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerListProviderUsageRpc,
   WsStatsGetProfileStatsRpc,

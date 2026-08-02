@@ -57,7 +57,8 @@ describe("local image URL helpers", () => {
       cwd: "/Users/me/project",
       download: true,
     });
-    const parsed = new URL(url);
+    expect(url).not.toBeNull();
+    const parsed = new URL(url as string);
     expect(parsed.origin).toBe("http://127.0.0.1:51204");
     expect(parsed.pathname).toBe("/api/local-image");
     expect(parsed.searchParams.get("path")).toBe(

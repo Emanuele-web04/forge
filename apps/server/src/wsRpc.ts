@@ -45,6 +45,7 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { RemoteHostRateLimitError, sharedRemoteHostBroker } from "./remoteHostBroker";
+import { detectPhoneReachability } from "./phoneReachability";
 import { listStudioThreadOutputs } from "./studioOutputs";
 import {
   ensureStudioWorkspaceInstructionsFiles,
@@ -1391,6 +1392,19 @@ const makeWsRpcHandlersLayer = () =>
             );
             return { probe, connectivity: broker.connectivity(input.host.hostId) };
           }),
+        // The pairing screen's production caller for Tailscale detection. Every
+        // failure inside `detectPhoneReachability` already degrades to the SSH
+        // fallback, so this cannot leave the screen without an answer.
+        [WS_METHODS.serverGetPhoneReachability]: () =>
+          rpcEffect(
+            Effect.promise(() =>
+              detectPhoneReachability({
+                localPort: config.port,
+                sshDestination: config.host ?? "<host>",
+              }),
+            ),
+            "Failed to check how a phone can reach this server",
+          ),
         [WS_METHODS.statsGetProfileStats]: (input) =>
           rpcEffect(profileStatsQuery.getProfileStats(input), "Failed to load profile stats"),
         [WS_METHODS.statsGetProfileTokenStats]: (input) =>

@@ -31,8 +31,18 @@ describe("owner-only enforcement", () => {
         WS_METHODS.serverUpsertKeybinding,
         WS_METHODS.serverStopLocalServer,
         WS_METHODS.serverProbeRemoteHost,
+        WS_METHODS.serverGetPhoneReachability,
       ].toSorted(),
     );
+  });
+
+  it("keeps phone-reachability detection owner-only", () => {
+    // It reports this machine's tailnet name and how it is exposed — network
+    // topology of the operator's host, not work inside a thread. It also exists
+    // solely to build a pairing QR code, and only an owner may issue pairing
+    // credentials, so a paired non-owner learning how to reach the host is the
+    // first half of handing out access nobody granted.
+    expect(OWNER_ONLY_WS_METHODS.has(WS_METHODS.serverGetPhoneReachability)).toBe(true);
   });
 
   it("keeps remote-host probing owner-only on every deployment shape", () => {

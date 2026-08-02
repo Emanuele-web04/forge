@@ -70,6 +70,8 @@ import {
   onWsEnvironmentRegistryChange,
 } from "../wsEnvironmentRegistry";
 import { LOCAL_ENVIRONMENT_ID } from "~/environmentIdentity";
+import { createEnvironmentDescriptorSync } from "../environmentDescriptorSync";
+import { createEnvironmentProviderStatusSync } from "../environmentProviderStatusSync";
 import {
   addWsBuildSkewListener,
   addWsCompatibilityIssueListener,
@@ -1999,13 +2001,26 @@ function EventRouter() {
       syncServerShellSnapshot: (snapshot, environmentId) =>
         useStore.getState().syncServerShellSnapshot(snapshot, environmentId),
     });
-    aggregator.sync(listWsEnvironmentClients());
-    const unsubscribe = onWsEnvironmentRegistryChange(() => {
-      aggregator.sync(listWsEnvironmentClients());
-    });
+    // Descriptors are what give the "Start in" picker and the pairing screen a
+    // host's real name and its reachability; without this the directory would
+    // sit at "checking" forever and refuse every remote start.
+    const descriptors = createEnvironmentDescriptorSync();
+    // Provider statuses are what let the picker say whether a host can actually
+    // run a chat, rather than silently offering one that has nothing to talk to.
+    const providerStatuses = createEnvironmentProviderStatusSync();
+    const syncAll = () => {
+      const clients = listWsEnvironmentClients();
+      aggregator.sync(clients);
+      descriptors.sync(clients);
+      providerStatuses.sync(clients);
+    };
+    syncAll();
+    const unsubscribe = onWsEnvironmentRegistryChange(syncAll);
     return () => {
       unsubscribe();
       aggregator.detachAll();
+      descriptors.dispose();
+      providerStatuses.dispose();
     };
   }, []);
 

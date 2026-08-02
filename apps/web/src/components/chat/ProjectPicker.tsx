@@ -16,6 +16,10 @@ import {
 } from "react";
 import { type ProjectDirectoryEntry, type ProjectId, type SpaceId } from "@synara/contracts";
 import { readNativeApi } from "../../nativeApi";
+import { environmentLabel } from "../../environmentDirectory";
+import { resolveEnvironmentCapabilityRefusal } from "../../environmentCapabilities";
+import { LOCAL_ENVIRONMENT_ID } from "../../environmentIdentity";
+import { useEnvironmentScopeId } from "../../environmentScope";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { PlusIcon, XIcon } from "~/lib/icons";
@@ -178,6 +182,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   const [resetTriggerFocused, setResetTriggerFocused] = useState(false);
   const resetInFlightRef = useRef(false);
   const isProjectSelectionMode = selectionMode === "project";
+  const environmentScopeId = useEnvironmentScopeId();
 
   const activeFolderOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -455,6 +460,19 @@ export const ProjectPicker = memo(function ProjectPicker({
       return;
     }
 
+    // The folder picker opens on the machine the user is sitting at, so on a
+    // remote host it would choose a path that host does not have. Refuse
+    // explicitly rather than silently adding a local folder to a remote server.
+    const refusal = resolveEnvironmentCapabilityRefusal({
+      capability: "desktop-dialogs",
+      isLocalEnvironment: environmentScopeId === LOCAL_ENVIRONMENT_ID,
+      environmentLabel: environmentLabel(environmentScopeId),
+    });
+    if (refusal) {
+      setErrorMessage(refusal.description);
+      return;
+    }
+
     setIsPicking(true);
     setErrorMessage(null);
     try {
@@ -476,7 +494,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       setIsPicking(false);
       setErrorMessage(error instanceof Error ? error.message : "Unable to open the folder picker.");
     }
-  }, [isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot]);
+  }, [environmentScopeId, isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot]);
 
   const handleResetToHome = useCallback(() => {
     if (resetInFlightRef.current) {

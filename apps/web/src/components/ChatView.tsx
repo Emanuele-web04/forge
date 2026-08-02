@@ -527,6 +527,10 @@ import {
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
+import { StartInPicker, type StartInSelection } from "./chat/StartInPicker";
+import { useEnvironmentDirectory } from "../environmentDirectory";
+import { claimThreadEnvironment, resolveThreadEnvironmentId } from "../environmentRouting";
+import { EnvironmentScopeProvider } from "../environmentScope";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -1134,7 +1138,24 @@ function makeAutomationSetupBubble(role: "user" | "assistant", text: string): Ch
   };
 }
 
-export default function ChatView({
+/**
+ * Scopes the chat's HTTP-backed asset requests (file previews, PDFs, editor
+ * launch) to the environment that owns the thread.
+ *
+ * A thin wrapper rather than a provider inside `ChatViewBody`'s own JSX: this is
+ * the hottest component in the app, and reindenting its entire return would
+ * churn ~950 lines for one element. The scope must sit ABOVE the body so the
+ * body's own hooks (`useEditorLaunchers`) can read it.
+ */
+export default function ChatView(props: ChatViewProps) {
+  return (
+    <EnvironmentScopeProvider threadId={props.threadId}>
+      <ChatViewBody {...props} />
+    </EnvironmentScopeProvider>
+  );
+}
+
+function ChatViewBody({
   threadId,
   paneScopeId: paneScopeIdProp,
   surfaceMode: surfaceModeProp,
@@ -1161,6 +1182,7 @@ export default function ChatView({
   const presentationMode = presentationModeProp ?? "default";
   const isFocusedPane = isFocusedPaneProp ?? true;
   const viewModeAction = viewModeActionProp ?? null;
+  const environmentDirectory = useEnvironmentDirectory();
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -9385,6 +9407,23 @@ export default function ChatView({
     ],
   );
 
+  /**
+   * "Start in" selection: claim the environment for this thread id, then move
+   * the draft to the chosen project.
+   *
+   * The claim is what routes the very first dispatch. Without it `thread.create`
+   * would fall through to the project's owner — correct, but only because the
+   * project happens to name one; the claim states the user's choice directly
+   * and covers the case where it does not.
+   */
+  const handleSelectStartIn = useCallback(
+    (selection: StartInSelection) => {
+      claimThreadEnvironment(threadId, selection.environmentId);
+      handleSelectProjectForEmptyDraft(selection.projectId);
+    },
+    [handleSelectProjectForEmptyDraft, threadId],
+  );
+
   const handleCreateProjectFromPickerPath = useCallback(
     async (workspaceRoot: string) => {
       if (!isLocalDraftThread) {
@@ -10480,6 +10519,10 @@ export default function ChatView({
   };
   const showEmptyLandingProjectPicker =
     isCenteredEmptyLanding && isLocalDraftThread && activeProject?.kind === "project";
+  // With only the local server there is no host to choose, so the plain folder
+  // picker stays and single-server installs see no new chrome at all.
+  const hasRemoteEnvironments = environmentDirectory.some((entry) => !entry.isLocal);
+  const draftEnvironmentId = resolveThreadEnvironmentId(threadId);
   const showContainerChatWorkspacePicker =
     isEmptyChatLanding && (isHomeChatContainer || isStudioContainer);
   const emptyLandingProjectChip =
@@ -10529,6 +10572,18 @@ export default function ChatView({
                 onCreateProjectFromPath: handleCreateProjectFromPickerPath,
               }
             : {})}
+        />
+      ) : showEmptyLandingProjectPicker && hasRemoteEnvironments ? (
+        // With a remote host connected, WHERE the chat runs is the first
+        // decision, so the picker leads with the host. With only the local
+        // server there is nothing to choose, and the plain folder picker stays.
+        <StartInPicker
+          align="start"
+          side="top"
+          triggerClassName="h-7 py-1"
+          selectedEnvironmentId={draftEnvironmentId}
+          selectedProjectId={activeProject.id}
+          onSelect={handleSelectStartIn}
         />
       ) : showEmptyLandingProjectPicker ? (
         <ProjectPicker

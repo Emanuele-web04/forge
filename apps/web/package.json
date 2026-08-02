@@ -49,6 +49,7 @@
     "katex": "^0.16.45",
     "lexical": "^0.41.0",
     "pdfjs-dist": "^5.4.296",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.0.0",
     "react-colorful": "^5.6.1",
     "react-dom": "^19.0.0",

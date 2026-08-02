@@ -16,6 +16,7 @@ import { useState } from "react";
 import { basenameOfPath } from "~/file-icons";
 import { Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
 import { buildLocalImageUrl } from "~/lib/localImageUrls";
+import { useEnvironmentHttpUrlResolver } from "~/environmentScope";
 import { useContainerSize } from "~/lib/pdf/useContainerSize";
 import { usePdfDocument } from "~/lib/pdf/usePdfDocument";
 import { usePdfPageNavigation } from "~/lib/pdf/usePdfPageNavigation";
@@ -36,11 +37,14 @@ export function PdfFilePreview(props: {
   openInTarget: string | null;
   className?: string;
 }) {
-  const previewUrl = buildLocalImageUrl({
-    src: props.filePath,
-    cwd: props.cwd ?? undefined,
-    grant: props.previewGrant,
-  });
+  const resolveUrl = useEnvironmentHttpUrlResolver();
+  const previewUrl =
+    buildLocalImageUrl({
+      src: props.filePath,
+      cwd: props.cwd ?? undefined,
+      grant: props.previewGrant,
+      resolveUrl,
+    }) ?? "";
   const fileName = basenameOfPath(props.filePath);
   const doc = usePdfDocument(previewUrl);
 

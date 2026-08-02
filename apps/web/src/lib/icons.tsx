@@ -46,6 +46,7 @@ import {
   IconMinus,
   IconDeviceLaptop,
   IconMessageCircle,
+  IconServer2,
   IconMoon,
   IconPaperclip,
   IconPlus,
@@ -239,6 +240,7 @@ export const StarFilledIcon = adaptIcon(IconStarFilled);
 export const SunIcon = adaptIcon(IconSun);
 export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
+export const RemoteHostIcon = adaptIcon(IconServer2);
 export const StopIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const StopFilledIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const SquareSplitHorizontal: LucideIcon = (props) => (
