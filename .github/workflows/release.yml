@@ -418,10 +418,90 @@ jobs:
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag latest --app-version "${{ needs.preflight.outputs.version }}" --verbose
 
+  build_server_tarball:
+    name: Build remote bootstrap artifacts
+    if: ${{ needs.preflight.outputs.publish_release == 'true' }}
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        # Preflight already validates lifecycle scripts; this job only needs
+        # dependencies available to build the package.
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Build server package
+        run: bun run build --filter=@synara/web --filter=@synara/cli
+
+      - name: Pack server tarball
+        run: node apps/server/scripts/cli.ts pack --out release-server --app-version "${{ needs.preflight.outputs.version }}"
+
+      - id: node_version
+        name: Resolve exact Node runtime version
+        shell: bash
+        run: |
+          node_version="$(node --version)"
+          echo "version=${node_version#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch Linux Node runtimes
+        run: |
+          node scripts/fetch-node-runtime.ts \
+            --node-version "${{ steps.node_version.outputs.version }}" \
+            --platform linux --arch x64 \
+            --out release-server
+          node scripts/fetch-node-runtime.ts \
+            --node-version "${{ steps.node_version.outputs.version }}" \
+            --platform linux --arch arm64 \
+            --out release-server
+
+      - name: Create bootstrap manifests
+        run: |
+          node scripts/create-bootstrap-artifact-manifest.ts \
+            --release-id "${{ needs.preflight.outputs.version }}" \
+            --server-version "${{ needs.preflight.outputs.version }}" \
+            --target linux-x64 \
+            --server-tarball "release-server/synara-server-${{ needs.preflight.outputs.version }}.tar.gz" \
+            --node-runtime "release-server/node-v${{ steps.node_version.outputs.version }}-linux-x64" \
+            --out release-server/bootstrap-artifacts-linux-x64.json
+          node scripts/create-bootstrap-artifact-manifest.ts \
+            --release-id "${{ needs.preflight.outputs.version }}" \
+            --server-version "${{ needs.preflight.outputs.version }}" \
+            --target linux-arm64 \
+            --server-tarball "release-server/synara-server-${{ needs.preflight.outputs.version }}.tar.gz" \
+            --node-runtime "release-server/node-v${{ steps.node_version.outputs.version }}-linux-arm64" \
+            --out release-server/bootstrap-artifacts-linux-arm64.json
+
+      - name: Upload remote bootstrap artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-bootstrap-artifacts
+          path: |
+            release-server/synara-server-*.tar.gz
+            release-server/node-v*-linux-x64
+            release-server/node-v*-linux-arm64
+            release-server/node-v*-linux-*.sha256
+            release-server/bootstrap-artifacts-linux-*.json
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
     if: ${{ needs.preflight.outputs.publish_release == 'true' }}
-    needs: [preflight, build]
+    needs: [preflight, build, build_server_tarball]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -440,6 +520,12 @@ jobs:
         with:
           pattern: desktop-*
           merge-multiple: true
+          path: release-assets
+
+      - name: Download remote bootstrap artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: server-bootstrap-artifacts
           path: release-assets
 
       - name: Merge macOS updater manifests
@@ -545,6 +631,11 @@ jobs:
             release-assets/*.blockmap
             release-assets/*.yml
             release-assets/*.provenance.json
+            release-assets/synara-server-*.tar.gz
+            release-assets/node-v*-linux-x64
+            release-assets/node-v*-linux-arm64
+            release-assets/node-v*-linux-*.sha256
+            release-assets/bootstrap-artifacts-linux-*.json
           fail_on_unmatched_files: true
 
       - name: Mirror Synara artifacts onto the pinned updater feed
