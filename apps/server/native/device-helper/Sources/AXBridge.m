@@ -52,7 +52,11 @@ static id SynaraJSONValue(id value) {
 - (instancetype)init {
   self = [super init];
   if (self) {
-    _callbackQueue = dispatch_queue_create("dev.synara.device-helper.ax", DISPATCH_QUEUE_SERIAL);
+    // Concurrent, not serial: the translator issues nested accessibility
+    // requests from inside a completion handler, and each one blocks waiting for
+    // its own completion. On a serial queue that nesting deadlocks the moment a
+    // tree needs more than one round-trip.
+    _callbackQueue = dispatch_queue_create("dev.synara.device-helper.ax", DISPATCH_QUEUE_CONCURRENT);
     _requestTimeout = 5.0;
   }
   return self;
@@ -103,9 +107,6 @@ static id SynaraJSONValue(id value) {
   NSTimeInterval timeout = self.requestTimeout;
 
   id (^callback)(id) = ^id(id request) {
-    if (getenv("SYNARA_DEVICE_HELPER_DEBUG")) {
-      fprintf(stderr, "[device-helper] ax: bridge callback invoked\n");
-    }
     if (device == nil) {
       return SynaraEmptyTranslatorResponse();
     }
@@ -122,11 +123,9 @@ static id SynaraJSONValue(id value) {
         device, selector, request, queue, completion);
 
     dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC));
-    long waitResult = dispatch_group_wait(group, deadline);
-    if (getenv("SYNARA_DEVICE_HELPER_DEBUG")) {
-      fprintf(stderr, "[device-helper] ax: callback wait=%ld response=%d\n", waitResult, response != nil);
-    }
-    if (waitResult != 0) {
+    if (dispatch_group_wait(group, deadline) != 0) {
+      // A wedged accessibility service must not hang the caller: an empty
+      // response ends the read with a partial tree instead of blocking forever.
       return SynaraEmptyTranslatorResponse();
     }
     return response ?: SynaraEmptyTranslatorResponse();
@@ -147,12 +146,22 @@ static id SynaraJSONValue(id value) {
   }
 
   NSString *token = NSUUID.UUID.UUIDString;
-  if (getenv("SYNARA_DEVICE_HELPER_DEBUG")) {
-    fprintf(stderr, "[device-helper] ax: requesting frontmost (main=%d)\n", (int)NSThread.isMainThread);
-  }
   SEL frontmostSelector = NSSelectorFromString(@"frontmostApplicationWithDisplayId:bridgeDelegateToken:");
-  id translation = ((id (*)(id, SEL, unsigned int, NSString *))objc_msgSend)(
-      _translator, frontmostSelector, 0, token);
+  // Resolved on a dedicated thread rather than the caller's queue: the
+  // translator blocks on nested XPC round-trips, and running that on a
+  // dispatch-queue worker thread deadlocks against libdispatch's thread pool.
+  __block id translation = nil;
+  id translator = _translator;
+  dispatch_semaphore_t resolved = dispatch_semaphore_create(0);
+  NSThread *worker = [[NSThread alloc] initWithBlock:^{
+    translation = ((id (*)(id, SEL, unsigned int, NSString *))objc_msgSend)(
+        translator, frontmostSelector, 0, token);
+    dispatch_semaphore_signal(resolved);
+  }];
+  worker.stackSize = 1024 * 1024;
+  [worker start];
+  // Bounded: a translator that never answers must not wedge the RPC loop.
+  dispatch_semaphore_wait(resolved, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)));
   if (translation == nil) {
     if (error) {
       *error = [NSError errorWithDomain:@"dev.synara.device-helper.ax"

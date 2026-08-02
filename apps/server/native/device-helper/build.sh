@@ -43,11 +43,31 @@ OUT_BINARY="$OUT_DIR/$BINARY_NAME"
 TMP_BINARY="$(mktemp "${OUT_DIR}/.${BINARY_NAME}.XXXXXX")"
 trap 'rm -f "$TMP_BINARY"' EXIT
 
+TARGET_TRIPLE="$(uname -m)-apple-macosx13.0"
+
+# The Objective-C sources are compiled separately so they can be built with ARC.
+# swiftc hands .m files to clang without -fobjc-arc, which would leave the
+# accessibility bridge under manual retain/release and crash on the first
+# translator response.
+OBJC_OBJECTS=()
+for source in "$SOURCE_DIR/Sources/AXBridge.m" "$SOURCE_DIR/Sources/HIDBridge.m"; do
+  object="$OUT_DIR/$(basename "${source%.m}").o"
+  xcrun clang \
+    -c \
+    -fobjc-arc \
+    -O2 \
+    -fmodules \
+    -target "$TARGET_TRIPLE" \
+    "$source" \
+    -o "$object"
+  OBJC_OBJECTS+=("$object")
+done
+
 xcrun swiftc \
   -O \
   -whole-module-optimization \
   -swift-version 5 \
-  -target "$(uname -m)-apple-macosx13.0" \
+  -target "$TARGET_TRIPLE" \
   -import-objc-header "$SOURCE_DIR/Sources/DeviceHelper-Bridging-Header.h" \
   -framework Foundation \
   -framework AppKit \
@@ -58,8 +78,7 @@ xcrun swiftc \
   -framework ImageIO \
   -framework IOSurface \
   -framework VideoToolbox \
-  "$SOURCE_DIR/Sources/AXBridge.m" \
-  "$SOURCE_DIR/Sources/HIDBridge.m" \
+  "${OBJC_OBJECTS[@]}" \
   "$SOURCE_DIR/Sources/CoreSimulatorBridge.swift" \
   "$SOURCE_DIR/Sources/FrameStream.swift" \
   "$SOURCE_DIR/Sources/Screenshot.swift" \
