@@ -92,6 +92,16 @@ export interface WsEnvironmentClient {
   readonly api: NativeApi;
   readonly transport: WsTransport;
   readonly channels: WsEnvironmentChannels;
+  /**
+   * Absolute WS URL for a remote environment; `null` for the page's own server.
+   *
+   * Exposed because HTTP-backed payload routes that live OUTSIDE this module —
+   * attachment upload, thread-scoped downloads — must address the same server
+   * the socket does. The alternative, a second URL map beside the registry, is
+   * a second answer to "where does this environment live" that can disagree
+   * with the transport actually in use.
+   */
+  readonly wsUrl: string | null;
   /** Latest cached push for a channel, used for replay to late subscribers. */
   getLatestPush: WsTransport["getLatestPush"];
   dispose(): Promise<void>;
@@ -786,6 +796,7 @@ export function createWsEnvironmentClient(
     api,
     transport,
     channels,
+    wsUrl: explicitHttpUrl,
     getLatestPush: (channel) => transport.getLatestPush(channel),
     dispose: async () => {
       unsubscribeDomainEventTransport?.();

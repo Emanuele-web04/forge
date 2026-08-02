@@ -345,13 +345,20 @@ export function withAggregatedView(state: AppState): AppState {
 }
 
 /**
- * The environment that owns a thread, or the local one when no record claims it.
+ * The environment whose record holds `threadId`, or `null` when NO record does.
  *
- * Ownership is positional now, so this is a lookup over the records rather than
- * a side table that a write can forget to maintain. Used by the few transitions
- * that receive only a thread id and must find its home before writing.
+ * The honest answer, kept separate from `environmentIdForThread` because that
+ * one cannot express "nobody has this". Answering LOCAL for an unknown thread
+ * is right for a thread being read and wrong for one being CREATED:
+ * `thread.create` carries a brand-new id no snapshot has reported, so a caller
+ * that must fall back to another key (the owning project) has to be able to
+ * tell "owned by local" from "unknown". Collapsing the two is what sent a
+ * remote project's new thread to the user's laptop.
  */
-export function environmentIdForThread(state: AppState, threadId: ThreadId): EnvironmentId {
+export function findEnvironmentIdForThread(
+  state: AppState,
+  threadId: ThreadId,
+): EnvironmentId | null {
   // Same order the aggregate merges in, so the environment that OWNS a
   // colliding id is the one whose row is on screen. Scanning in raw `Record`
   // order while the merge took the last writer meant a shared id rendered one
@@ -361,18 +368,37 @@ export function environmentIdForThread(state: AppState, threadId: ThreadId): Env
       return environmentId as EnvironmentId;
     }
   }
-  return LOCAL_ENVIRONMENT_ID;
+  return null;
 }
 
-/** The environment that owns a project, or the local one when no record claims it. */
-export function environmentIdForProject(state: AppState, projectId: Project["id"]): EnvironmentId {
-  // First-wins in aggregate order; see `environmentIdForThread`.
+/**
+ * The environment that owns a thread, or the local one when no record claims it.
+ *
+ * Ownership is positional now, so this is a lookup over the records rather than
+ * a side table that a write can forget to maintain. Used by the few transitions
+ * that receive only a thread id and must find its home before writing.
+ */
+export function environmentIdForThread(state: AppState, threadId: ThreadId): EnvironmentId {
+  return findEnvironmentIdForThread(state, threadId) ?? LOCAL_ENVIRONMENT_ID;
+}
+
+/** The environment whose record holds `projectId`, or `null` when none does. */
+export function findEnvironmentIdForProject(
+  state: AppState,
+  projectId: Project["id"],
+): EnvironmentId | null {
+  // First-wins in aggregate order; see `findEnvironmentIdForThread`.
   for (const [environmentId, environment] of orderedEnvironmentEntries(state)) {
     if (environment.projects.some((project) => project.id === projectId)) {
       return environmentId as EnvironmentId;
     }
   }
-  return LOCAL_ENVIRONMENT_ID;
+  return null;
+}
+
+/** The environment that owns a project, or the local one when no record claims it. */
+export function environmentIdForProject(state: AppState, projectId: Project["id"]): EnvironmentId {
+  return findEnvironmentIdForProject(state, projectId) ?? LOCAL_ENVIRONMENT_ID;
 }
 
 /**
