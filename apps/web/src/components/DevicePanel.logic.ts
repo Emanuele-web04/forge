@@ -324,6 +324,10 @@ export interface DeviceShortcutEventLike {
  * muscle memory carries over. Everything else with Cmd held is left to the
  * browser/app rather than injected, since Cmd+W/Cmd+R on a focused canvas must
  * still reach Synara.
+ *
+ * Simulator.app's ⌘→ rotate chord is deliberately absent: rotation is a window
+ * command with no HID usage and no simctl equivalent, so the backend cannot
+ * honour it. Claiming the chord here would swallow the keystroke and then fail.
  */
 export function resolveDeviceHardwareButtonShortcut(
   event: DeviceShortcutEventLike,
@@ -337,7 +341,6 @@ export function resolveDeviceHardwareButtonShortcut(
   if (key === "l") return "lock";
   if (event.key === "ArrowUp") return "volume-up";
   if (event.key === "ArrowDown") return "volume-down";
-  if (event.key === "ArrowRight") return "rotate";
   return null;
 }
 

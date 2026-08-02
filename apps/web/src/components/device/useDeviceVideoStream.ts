@@ -6,7 +6,7 @@
 
 import type { DeviceUdid } from "@synara/contracts";
 import type { DeviceFrame } from "@synara/shared/deviceFrame";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   createDeviceFrameGateState,
@@ -80,13 +80,10 @@ export function useDeviceVideoStream(input: {
   /** Null unsubscribes and tears the decoder down. */
   readonly udid: DeviceUdid | null;
   readonly enabled: boolean;
-  /** Called when the gate needs a keyframe the stream has not produced. */
-  readonly onRequestKeyframe?: () => void;
 }): { readonly status: DeviceVideoStatus; readonly dimensions: DeviceVideoDimensions | null } {
   const { canvasRef, udid, enabled } = input;
   const [status, setStatus] = useState<DeviceVideoStatus>({ kind: "idle" });
   const [dimensions, setDimensions] = useState<DeviceVideoDimensions | null>(null);
-  const requestKeyframe = useEffectEvent(() => input.onRequestKeyframe?.());
 
   // Generation guards every async callback: a decoder output or socket message
   // from a torn-down stream must not paint over the current one.
@@ -168,10 +165,12 @@ export function useDeviceVideoStream(input: {
           paint(videoFrame);
         },
         error: (error) => {
-          // A decoder error is recoverable: reconfigure on the next parameter
-          // set and ask for a keyframe so the picture returns quickly.
+          // A decoder error is recoverable: asking the server to rebuild the
+          // capture session yields fresh parameter sets and an IDR, which
+          // reconfigures this decoder rather than waiting out the encoder's
+          // next natural keyframe (up to two seconds away).
           failStream(error instanceof Error ? error.message : "The video decoder failed.");
-          requestKeyframe();
+          source?.requestResync();
         },
       });
       try {
@@ -203,7 +202,7 @@ export function useDeviceVideoStream(input: {
         );
       } catch (error) {
         failStream(error instanceof Error ? error.message : "A video frame could not be decoded.");
-        requestKeyframe();
+        source?.requestResync();
       }
     };
 
@@ -211,7 +210,7 @@ export function useDeviceVideoStream(input: {
       if (!isCurrent() || disposed) return;
       const step = stepDeviceFrameGate(gate, frame.header, udid);
       gate = step.state;
-      if (step.requestKeyframe) requestKeyframe();
+      if (step.requestKeyframe) source?.requestResync();
 
       switch (step.action.kind) {
         case "configure":

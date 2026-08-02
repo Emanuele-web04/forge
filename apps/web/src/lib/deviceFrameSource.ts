@@ -5,6 +5,7 @@
 // Depends on: @synara/shared/deviceFrame for the binary envelope, wsTransport for URL resolution
 
 import {
+  DEVICE_FRAME_RESYNC_MESSAGE,
   DEVICE_FRAME_WS_PATH,
   DEVICE_FRAME_WS_UDID_PARAM,
   decodeDeviceFrame,
@@ -25,7 +26,21 @@ export interface DeviceFrameSourceHandlers {
 
 export type DeviceFrameSourceResetReason = "closed" | "error" | "decode-failed";
 
+/**
+ * Rebuilding the capture session is expensive (it tears down and recreates the
+ * VideoToolbox encoder), so a gate that fires on every dropped frame must not
+ * be allowed to thrash it. One request is in flight at a time and further
+ * requests inside this window are dropped rather than queued — the resync
+ * already in flight will deliver the parameter sets and IDR they wanted.
+ */
+export const DEVICE_FRAME_RESYNC_COOLDOWN_MS = 1_000;
+
 export interface DeviceFrameSource {
+  /**
+   * Ask the server for fresh parameter sets and an IDR after a gap or decode
+   * error. Debounced; returns true when the request actually went out.
+   */
+  readonly requestResync: () => boolean;
   /** Idempotent; a source is single-use and cannot be restarted after close. */
   readonly close: () => void;
 }
@@ -36,14 +51,19 @@ export interface DeviceFrameSourceOptions {
   /** Test seam; defaults to the browser's WebSocket against the resolved server URL. */
   readonly createSocket?: (url: string) => WebSocketLike;
   readonly explicitUrl?: string | null;
+  /** Test seam for the resync cooldown clock. */
+  readonly now?: () => number;
+  readonly resyncCooldownMs?: number;
 }
 
 /** The narrow slice of WebSocket the frame path uses, so tests need no DOM. */
 export interface WebSocketLike {
   binaryType: string;
+  readonly readyState?: number;
+  readonly send: (data: string) => void;
   readonly close: () => void;
   readonly addEventListener: (
-    type: "message" | "close" | "error",
+    type: "message" | "close" | "error" | "open",
     listener: (event: never) => void,
   ) => void;
 }
@@ -88,11 +108,39 @@ export function createDeviceFrameSource(options: DeviceFrameSourceOptions): Devi
   const socket = (options.createSocket ?? defaultCreateSocket)(url);
   socket.binaryType = "arraybuffer";
 
+  const now = options.now ?? (() => Date.now());
+  const cooldownMs = options.resyncCooldownMs ?? DEVICE_FRAME_RESYNC_COOLDOWN_MS;
   let closed = false;
+  let open = false;
+  let lastResyncAt: number | null = null;
+  // A gap can be detected before the socket finishes opening (the first frames
+  // of a fresh connection). Remember the intent and send it on open rather than
+  // dropping it, or the canvas waits for the encoder's next natural IDR.
+  let resyncPending = false;
+
   const reset = (reason: DeviceFrameSourceResetReason) => {
     if (closed) return;
     options.handlers.onReset(reason);
   };
+
+  const sendResync = (): boolean => {
+    if (closed) return false;
+    try {
+      socket.send(JSON.stringify({ type: DEVICE_FRAME_RESYNC_MESSAGE }));
+      return true;
+    } catch {
+      // A socket that dropped between the readyState check and the send; the
+      // close handler already resets the decoder.
+      return false;
+    }
+  };
+
+  socket.addEventListener("open", (() => {
+    open = true;
+    if (!resyncPending) return;
+    resyncPending = false;
+    sendResync();
+  }) as (event: never) => void);
 
   socket.addEventListener("message", ((event: { data: unknown }) => {
     if (closed) return;
@@ -116,9 +164,23 @@ export function createDeviceFrameSource(options: DeviceFrameSourceOptions): Devi
   socket.addEventListener("error", (() => reset("error")) as (event: never) => void);
 
   return {
+    requestResync: () => {
+      if (closed) return false;
+      const at = now();
+      if (lastResyncAt !== null && at - lastResyncAt < cooldownMs) {
+        return false;
+      }
+      lastResyncAt = at;
+      if (!open) {
+        resyncPending = true;
+        return false;
+      }
+      return sendResync();
+    },
     close: () => {
       if (closed) return;
       closed = true;
+      resyncPending = false;
       try {
         socket.close();
       } catch {

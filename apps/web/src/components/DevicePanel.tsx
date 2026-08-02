@@ -49,17 +49,32 @@ import {
 } from "./ui/dialog";
 import { anchoredToastManager as toastManager } from "./ui/toast";
 
-const HARDWARE_BUTTONS: ReadonlyArray<{
+/**
+ * `rotate` is in the contract but has no implementation: there is no HID usage
+ * for rotation and no simctl equivalent — it is a Simulator.app window command,
+ * and the helper's button enum has no member for it. The server throws on it, so
+ * the affordance is omitted rather than offered as a button that always errors.
+ * Revisit if the helper ever gains a rotation path.
+ */
+const UNSUPPORTED_HARDWARE_BUTTONS: ReadonlySet<DeviceHardwareButton> = new Set(["rotate"]);
+
+interface DeviceHardwareButtonEntry {
   readonly button: DeviceHardwareButton;
   readonly label: string;
   readonly shortcut: string;
-}> = [
+}
+
+const ALL_HARDWARE_BUTTONS: readonly DeviceHardwareButtonEntry[] = [
   { button: "home", label: "Home", shortcut: "⌘⇧H" },
   { button: "lock", label: "Lock", shortcut: "⌘L" },
   { button: "volume-up", label: "Volume up", shortcut: "⌘↑" },
   { button: "volume-down", label: "Volume down", shortcut: "⌘↓" },
   { button: "rotate", label: "Rotate", shortcut: "⌘→" },
 ];
+
+const HARDWARE_BUTTONS: readonly DeviceHardwareButtonEntry[] = ALL_HARDWARE_BUTTONS.filter(
+  (entry) => !UNSUPPORTED_HARDWARE_BUTTONS.has(entry.button),
+);
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.length > 0 ? error.message : fallback;
@@ -114,23 +129,13 @@ export default function DevicePanel(props: {
     attachedDevice,
   });
 
-  const requestKeyframe = useCallback(() => {
-    // Re-attaching is the contract-level way to ask for a fresh stream
-    // generation: the server responds with a new codec config and keyframe.
-    if (!attachedDevice) return;
-    void ensureNativeApi()
-      .device.attach({ threadId, udid: attachedDevice.udid })
-      .then(upsertThreadState)
-      .catch(() => {
-        // Best-effort resync; the gate keeps dropping until a keyframe lands.
-      });
-  }, [attachedDevice, threadId, upsertThreadState]);
-
+  // Resync is owned by the frame socket, not this component: `device.attach` on
+  // an already-attached device early-returns server-side, so it could never
+  // have recovered a frozen canvas.
   const { status: videoStatus, dimensions } = useDeviceVideoStream({
     canvasRef,
     udid: streamEnabled && attachedDevice ? attachedDevice.udid : null,
     enabled: streamEnabled,
-    onRequestKeyframe: requestKeyframe,
   });
 
   const pickerEntries = useMemo(

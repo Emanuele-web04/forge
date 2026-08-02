@@ -312,7 +312,12 @@ describe("hardware button shortcuts", () => {
     expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "l" })).toBe("lock");
     expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowUp" })).toBe("volume-up");
     expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowDown" })).toBe("volume-down");
-    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowRight" })).toBe("rotate");
+  });
+
+  it("leaves Simulator.app's rotate chord unclaimed, since the backend cannot honour it", () => {
+    // Rotation is a window command with no HID usage and no simctl equivalent.
+    // Claiming ⌘→ would swallow the keystroke and then surface an error.
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowRight" })).toBeNull();
   });
 
   it("leaves unrelated chords to the app", () => {

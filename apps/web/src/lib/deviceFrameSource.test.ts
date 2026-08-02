@@ -16,9 +16,11 @@ type Listener = (event: never) => void;
 function createFakeSocket() {
   const listeners = new Map<string, Listener[]>();
   const close = vi.fn();
+  const send = vi.fn();
   const socket: WebSocketLike & { emit: (type: string, event: unknown) => void } = {
     binaryType: "blob",
     close,
+    send,
     addEventListener: (type, listener) => {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);
     },
@@ -28,7 +30,7 @@ function createFakeSocket() {
       }
     },
   };
-  return { socket, close };
+  return { socket, close, send };
 }
 
 function frameBytes(overrides: {
@@ -63,8 +65,8 @@ describe("deviceFrameSocketUrl", () => {
 });
 
 describe("createDeviceFrameSource", () => {
-  function subscribe() {
-    const { socket, close } = createFakeSocket();
+  function subscribe(options?: { now?: () => number; resyncCooldownMs?: number }) {
+    const { socket, close, send } = createFakeSocket();
     const onFrame = vi.fn();
     const onReset = vi.fn();
     const source = createDeviceFrameSource({
@@ -72,8 +74,9 @@ describe("createDeviceFrameSource", () => {
       explicitUrl: EXPLICIT_URL,
       handlers: { onFrame, onReset },
       createSocket: () => socket,
+      ...options,
     });
-    return { socket, close, onFrame, onReset, source };
+    return { socket, close, send, onFrame, onReset, source };
   }
 
   it("pins the socket to arraybuffer so frames arrive in order", () => {
@@ -147,5 +150,91 @@ describe("createDeviceFrameSource", () => {
 
     expect(onFrame).toHaveBeenCalledTimes(1);
     expect(onFrame.mock.calls[0]?.[0].header.codecConfig).toBe(true);
+  });
+});
+
+describe("resync requests", () => {
+  function subscribeWithClock(startMs: number) {
+    const { socket, close, send } = createFakeSocket();
+    let clock = startMs;
+    const source = createDeviceFrameSource({
+      udid: UDID,
+      explicitUrl: EXPLICIT_URL,
+      handlers: { onFrame: vi.fn(), onReset: vi.fn() },
+      createSocket: () => socket,
+      now: () => clock,
+      resyncCooldownMs: 1_000,
+    });
+    return { socket, close, send, source, advance: (ms: number) => (clock += ms) };
+  }
+
+  it("sends the shared resync message once the socket is open", () => {
+    const { socket, send, source } = subscribeWithClock(0);
+    socket.emit("open", {});
+
+    expect(source.requestResync()).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(send.mock.calls[0]?.[0] as string)).toEqual({
+      type: "device.frame.resync",
+    });
+  });
+
+  it("debounces repeat requests inside the cooldown", () => {
+    // Resync rebuilds the VideoToolbox session; a gate firing on every dropped
+    // frame must not thrash the encoder.
+    const { socket, send, source, advance } = subscribeWithClock(0);
+    socket.emit("open", {});
+
+    expect(source.requestResync()).toBe(true);
+    expect(source.requestResync()).toBe(false);
+    advance(999);
+    expect(source.requestResync()).toBe(false);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    advance(1);
+    expect(source.requestResync()).toBe(true);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("defers a request made before the socket opens instead of dropping it", () => {
+    // A gap can be detected on the first frames of a fresh connection; dropping
+    // the request would strand the canvas until the next natural IDR.
+    const { socket, send, source } = subscribeWithClock(0);
+
+    expect(source.requestResync()).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+
+    socket.emit("open", {});
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends only one deferred request no matter how many were coalesced", () => {
+    const { socket, send, source, advance } = subscribeWithClock(0);
+
+    source.requestResync();
+    advance(5_000);
+    source.requestResync();
+    socket.emit("open", {});
+
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to send after close", () => {
+    const { socket, send, source } = subscribeWithClock(0);
+    socket.emit("open", {});
+    source.close();
+
+    expect(source.requestResync()).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("reports failure rather than throwing when the socket rejects the send", () => {
+    const { socket, send, source } = subscribeWithClock(0);
+    socket.emit("open", {});
+    send.mockImplementation(() => {
+      throw new Error("socket closed");
+    });
+
+    expect(source.requestResync()).toBe(false);
   });
 });
