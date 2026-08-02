@@ -760,8 +760,12 @@ describe("pin helpers", () => {
   });
 
   it("waits for thread hydration before pruning persisted pins", () => {
-    expect(shouldPrunePinnedThreads({ threadsHydrated: false })).toBe(false);
-    expect(shouldPrunePinnedThreads({ threadsHydrated: true })).toBe(true);
+    expect(
+      shouldPrunePinnedThreads({ threadsHydrated: false, allEnvironmentsHydrated: true }),
+    ).toBe(false);
+    expect(shouldPrunePinnedThreads({ threadsHydrated: true, allEnvironmentsHydrated: true })).toBe(
+      true,
+    );
   });
 
   it("also waits for EVERY environment before deleting persisted pins", () => {
@@ -779,9 +783,15 @@ describe("pin helpers", () => {
 
   it("is unchanged for a single-server install", () => {
     // With only the local environment registered, "all hydrated" IS "local
-    // hydrated", so omitting the flag must behave exactly as before.
-    expect(shouldPrunePinnedThreads({ threadsHydrated: true })).toBe(true);
-    expect(shouldPrunePinnedThreads({ threadsHydrated: false })).toBe(false);
+    // hydrated". The flag is REQUIRED rather than defaulting: the caller is a
+    // ~900-line effect no unit test reaches, so a silent default would let the
+    // bug return with every test still green.
+    expect(shouldPrunePinnedThreads({ threadsHydrated: true, allEnvironmentsHydrated: true })).toBe(
+      true,
+    );
+    expect(
+      shouldPrunePinnedThreads({ threadsHydrated: false, allEnvironmentsHydrated: true }),
+    ).toBe(false);
   });
 
   it("shows loading before the first project snapshot can prove the list is empty", () => {

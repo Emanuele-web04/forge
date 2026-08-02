@@ -1051,14 +1051,21 @@ export function getUnpinnedThreadsForSidebar<
  * had any chance to appear. The user loses a pin to a race they never saw, and
  * reconnecting does not bring it back because the persisted record is gone.
  *
- * Defaults to true so single-server installs are bit-identical: with only the
- * local environment registered, "all hydrated" is exactly "local hydrated".
+ * `allEnvironmentsHydrated` is REQUIRED rather than optional-defaulting-true.
+ * The caller is a ~900-line effect in Sidebar.tsx that no unit test reaches, so
+ * omitting the argument would silently restore the bug with every test still
+ * green. A default meaning "safe" is indistinguishable at the call site from a
+ * caller who thought about it, which is why it hides from review AND from tests
+ * at the same time; requiring it makes the omission a compile error, the one
+ * check a caller cannot forget to run. A single-server caller passes `true`
+ * explicitly: with only the local environment registered, "all hydrated" is
+ * exactly "local hydrated".
  */
 export function shouldPrunePinnedThreads(input: {
   threadsHydrated: boolean;
-  allEnvironmentsHydrated?: boolean;
+  allEnvironmentsHydrated: boolean;
 }): boolean {
-  return input.threadsHydrated && (input.allEnvironmentsHydrated ?? true);
+  return input.threadsHydrated && input.allEnvironmentsHydrated;
 }
 
 export type ProjectEmptyState = "loading" | "empty" | null;

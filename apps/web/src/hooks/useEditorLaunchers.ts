@@ -17,7 +17,7 @@ import { usePreferredEditor } from "../editorPreferences";
 import { shortcutLabelForCommand } from "../keybindings";
 import { readNativeApi } from "../nativeApi";
 import { environmentLabel } from "../environmentDirectory";
-import { resolveEnvironmentCapabilityRefusal } from "../environmentCapabilities";
+import { withEnvironmentCapability } from "../environmentCapabilities";
 import { LOCAL_ENVIRONMENT_ID } from "../environmentIdentity";
 import { useEnvironmentScopeId } from "../environmentScope";
 import { toastManager } from "../components/ui/toast";
@@ -77,21 +77,22 @@ export function useEditorLaunchers({
     // Explicit refusal on a remote host. Falling through would open the LOCAL
     // machine's copy of that path — the same file name, a different machine's
     // contents — and look like it worked.
-    const refusal = resolveEnvironmentCapabilityRefusal({
+    withEnvironmentCapability({
       capability: "editor-launch",
       isLocalEnvironment: environmentScopeId === LOCAL_ENVIRONMENT_ID,
       environmentLabel: environmentLabel(environmentScopeId),
+      onRefused: (refusal) => {
+        toastManager.add({
+          type: "warning",
+          title: refusal.title,
+          description: refusal.description,
+        });
+      },
+      action: () => {
+        void api.shell.openInEditor(openInTarget, editor);
+        setDefaultEditor(editor);
+      },
     });
-    if (refusal) {
-      toastManager.add({
-        type: "warning",
-        title: refusal.title,
-        description: refusal.description,
-      });
-      return;
-    }
-    void api.shell.openInEditor(openInTarget, editor);
-    setDefaultEditor(editor);
   };
 
   const openFavoriteShortcutLabel = shortcutLabelForCommand(keybindings, "editor.openFavorite");

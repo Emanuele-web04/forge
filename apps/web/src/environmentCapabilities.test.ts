@@ -3,7 +3,7 @@
 //          actionable refusal rather than a silent local fallback.
 // Layer: Web environment UX tests
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   detectEnvironmentVersionSkew,
@@ -12,6 +12,7 @@ import {
   ENVIRONMENT_CAPABILITIES,
   LOCAL_ONLY_ENVIRONMENT_CAPABILITIES,
   resolveEnvironmentCapabilityRefusal,
+  withEnvironmentCapability,
 } from "./environmentCapabilities";
 
 describe("capability refusals", () => {
@@ -109,5 +110,65 @@ describe("unreachable copy", () => {
     expect(message).toContain("prod-vps");
     expect(message).toContain("ssh");
     expect(message).toContain("Remote hosts");
+  });
+});
+
+describe("withEnvironmentCapability", () => {
+  // The refusal predicate was already well tested and both call sites could
+  // still skip it: deleting `if (refusal) return` at either one left 1129
+  // component tests passing while the guard vanished. These pin the funnel that
+  // makes skipping require deleting the call itself.
+
+  it("runs the action on the local environment", () => {
+    const action = vi.fn();
+    const onRefused = vi.fn();
+    const ran = withEnvironmentCapability({
+      capability: "editor-launch",
+      isLocalEnvironment: true,
+      environmentLabel: "This computer",
+      onRefused,
+      action,
+    });
+
+    expect(ran).toBe(true);
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(onRefused).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES on a remote host and never runs the action", () => {
+    // The property that matters: the action is unreachable, not merely
+    // followed by an error. Launching an editor on a remote host opens the
+    // LOCAL copy of that path — same name, different machine's contents — and
+    // looks like it worked.
+    const action = vi.fn();
+    const onRefused = vi.fn();
+    const ran = withEnvironmentCapability({
+      capability: "editor-launch",
+      isLocalEnvironment: false,
+      environmentLabel: "prod-vps",
+      onRefused,
+      action,
+    });
+
+    expect(ran).toBe(false);
+    expect(action).not.toHaveBeenCalled();
+    expect(onRefused).toHaveBeenCalledTimes(1);
+    expect(onRefused.mock.calls[0]?.[0]?.description).toContain("prod-vps");
+  });
+
+  it("runs a capability that is NOT local-only even on a remote host", () => {
+    // Guards the other direction: a blanket refusal would be just as wrong,
+    // and would make every remote host unusable rather than safe.
+    const action = vi.fn();
+    const ran = withEnvironmentCapability({
+      capability: "thread-turns" as never,
+      isLocalEnvironment: false,
+      environmentLabel: "prod-vps",
+      onRefused: vi.fn(),
+      action,
+    });
+
+    expect(ran).toBe(true);
+    expect(action).toHaveBeenCalledTimes(1);
   });
 });

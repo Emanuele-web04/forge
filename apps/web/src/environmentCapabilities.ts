@@ -127,3 +127,39 @@ export function detectEnvironmentVersionSkew(input: {
 export function environmentUnreachableMessage(environmentLabel: string): string {
   return `Synara cannot reach ${environmentLabel}. Its SSH connection is down — check that the machine is awake and that \`ssh\` to it still works from a terminal, then reconnect it from Settings → Remote hosts.`;
 }
+
+/**
+ * Runs `action` only if the capability is available here, otherwise reports the
+ * refusal. Returns whether the action ran.
+ *
+ * The refusal predicate was well tested and both call sites could still skip
+ * it: deleting the `if (refusal) return` at either one left 1129 component
+ * tests passing while the guard disappeared. A predicate a caller may simply
+ * not consult is not a guard, and a UI call site inside a large component is
+ * exactly where nothing reaches to notice.
+ *
+ * Funnelling both through one function makes the refusal the DEFAULT path
+ * rather than an early return someone has to remember to write: `action` is
+ * unreachable when a refusal exists, so a caller cannot forget the check
+ * without deleting the call itself, which is a visible edit rather than a
+ * silent one.
+ */
+export function withEnvironmentCapability(input: {
+  readonly capability: EnvironmentCapability;
+  readonly isLocalEnvironment: boolean;
+  readonly environmentLabel: string;
+  readonly onRefused: (refusal: EnvironmentCapabilityRefusal) => void;
+  readonly action: () => void;
+}): boolean {
+  const refusal = resolveEnvironmentCapabilityRefusal({
+    capability: input.capability,
+    isLocalEnvironment: input.isLocalEnvironment,
+    environmentLabel: input.environmentLabel,
+  });
+  if (refusal) {
+    input.onRefused(refusal);
+    return false;
+  }
+  input.action();
+  return true;
+}
