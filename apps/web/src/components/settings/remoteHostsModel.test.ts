@@ -82,9 +82,9 @@ describe("canTrustHostKey", () => {
     // what the prompt exists to prevent.
     const firstContact = probe({ outcome: "unreachable", unreachableReason: "host-key-unknown" });
     expect(canTrustHostKey(firstContact, undefined)).toBe(false);
-    expect(
-      canTrustHostKey(firstContact, { hostname: "devbox", port: 22, fingerprints: [] }),
-    ).toBe(false);
+    expect(canTrustHostKey(firstContact, { hostname: "devbox", port: 22, fingerprints: [] })).toBe(
+      false,
+    );
     expect(
       canTrustHostKey(firstContact, {
         hostname: "devbox",

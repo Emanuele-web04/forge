@@ -119,6 +119,12 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import type {
+  RemoteHostFingerprintInput,
+  RemoteHostFingerprintResult,
+  RemoteHostProbeInput,
+  RemoteHostProbeRpcResult,
+} from "./remoteHost";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
@@ -680,6 +686,10 @@ export interface NativeApi {
     listLocalServers: () => Promise<ServerListLocalServersResult>;
     getPhoneReachability: () => Promise<ServerPhoneReachabilityResult>;
     stopLocalServer: (input: ServerStopLocalServerInput) => Promise<ServerStopLocalServerResult>;
+    probeRemoteHost: (input: RemoteHostProbeInput) => Promise<RemoteHostProbeRpcResult>;
+    getRemoteHostFingerprint: (
+      input: RemoteHostFingerprintInput,
+    ) => Promise<RemoteHostFingerprintResult>;
     getProviderUsageSnapshot: (
       input: ServerGetProviderUsageSnapshotInput,
     ) => Promise<ServerGetProviderUsageSnapshotResult>;

@@ -489,6 +489,9 @@ export function createWsEnvironmentClient(
       listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
       getPhoneReachability: () => transport.request(WS_METHODS.serverGetPhoneReachability),
       stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
+      probeRemoteHost: (input) => transport.request(WS_METHODS.serverProbeRemoteHost, input),
+      getRemoteHostFingerprint: (input) =>
+        transport.request(WS_METHODS.serverGetRemoteHostFingerprint, input),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
       listProviderUsage: (input) => transport.request(WS_METHODS.serverListProviderUsage, input),

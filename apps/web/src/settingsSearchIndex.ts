@@ -394,6 +394,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Pair Codex Claude and other local MCP clients with scoped project access. revoke credential task create wait read worktree approval",
   },
   {
+    id: "remoteHosts:add-host",
+    section: "remoteHosts",
+    title: "Remote hosts",
+    target: null,
+    keywords:
+      "Run sessions on another machine over SSH. add host remote server ssh connect fingerprint host key devbox",
+  },
+  {
     id: "advanced:version",
     section: "advanced",
     title: "Version",

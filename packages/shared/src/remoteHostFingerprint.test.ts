@@ -49,9 +49,9 @@ describe("buildSshResolveArgv", () => {
   });
 
   it("refuses a destination the shared config gate would refuse", () => {
-    expect(() => buildSshResolveArgv(makeConfig({ destination: "-oProxyCommand=touch /tmp/x" }))).toThrow(
-      RemoteHostConfigError,
-    );
+    expect(() =>
+      buildSshResolveArgv(makeConfig({ destination: "-oProxyCommand=touch /tmp/x" })),
+    ).toThrow(RemoteHostConfigError);
   });
 
   it("never builds a shell string", () => {
@@ -88,7 +88,9 @@ describe("parseResolvedSshTarget", () => {
 
   it("refuses a resolved hostname that could be read as an ssh-keyscan option", () => {
     // ssh-keyscan has no `--`, so a dashed hostname would become a flag.
-    expect(() => parseResolvedSshTarget("hostname -oProxyCommand=x")).toThrow(RemoteHostConfigError);
+    expect(() => parseResolvedSshTarget("hostname -oProxyCommand=x")).toThrow(
+      RemoteHostConfigError,
+    );
   });
 
   it("fails loudly when ssh reported no hostname at all", () => {
