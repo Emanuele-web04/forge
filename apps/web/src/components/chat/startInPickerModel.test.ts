@@ -184,6 +184,53 @@ describe("host readiness", () => {
     ).toBe("not-authenticated");
   });
 
+  describe("MIXED provider states", () => {
+    // The case every earlier fixture missed: they were all single-provider or
+    // uniform, so three states were pinned individually while their
+    // COMBINATIONS went unexercised. A realistic host has one agent installed
+    // and another absent, which makes mixed the common case rather than the
+    // edge. Testing the distinctions I had just been thinking about, rather
+    // than the space they live in, is what let a third wrong classification
+    // through underneath a comment forbidding exactly that.
+    const installedAuthed = providerStatus({ available: true, authStatus: "authenticated" });
+    const installedUnauthed = providerStatus({ available: true, authStatus: "unauthenticated" });
+    const installedUnknown = providerStatus({ available: true, authStatus: "unknown" });
+    const absent = providerStatus({ available: false, authStatus: "unknown" });
+
+    it("an installed+signed-in provider makes the host ready whatever else is absent", () => {
+      expect(resolveStartInReadiness([installedAuthed, absent])).toBe("ready");
+      expect(resolveStartInReadiness([absent, installedAuthed])).toBe("ready");
+    });
+
+    it("an absent provider does NOT make a still-checking host claim nothing is installed", () => {
+      // The reported bug, exactly: this said "No coding agents are installed on
+      // this host" while an agent WAS installed and merely mid-check.
+      expect(resolveStartInReadiness([installedUnknown, absent])).toBe("unknown");
+      expect(resolveStartInReadiness([absent, installedUnknown])).toBe("unknown");
+    });
+
+    it("an absent provider does not mask a real sign-in problem", () => {
+      expect(resolveStartInReadiness([installedUnauthed, absent])).toBe("not-authenticated");
+    });
+
+    it("claims nothing is installed only when NOTHING is", () => {
+      expect(resolveStartInReadiness([absent, absent])).toBe("unavailable");
+    });
+
+    it("is order-independent across every pairing", () => {
+      // Order comes from the server's status list and is not guaranteed, so a
+      // classifier that depends on it is wrong in a way no fixed fixture shows.
+      const all = [installedAuthed, installedUnauthed, installedUnknown, absent];
+      for (const left of all) {
+        for (const right of all) {
+          expect(resolveStartInReadiness([left, right])).toBe(
+            resolveStartInReadiness([right, left]),
+          );
+        }
+      }
+    });
+  });
+
   it("stays silent for a ready host and speaks for the others", () => {
     // Presence is the signal. A line that is always there is one nobody reads.
     expect(startInReadinessNote("ready")).toBeNull();

@@ -63,10 +63,20 @@ export function resolveStartInReadiness(
   if (statuses.some((status) => status.available && status.authStatus === "unauthenticated")) {
     return "not-authenticated";
   }
-  // Everything reported, nothing is usable, and no installed provider blamed
-  // authentication: the host has answered, so this is not "unknown" either.
-  if (statuses.some((status) => !status.available)) return "unavailable";
-  return "unknown";
+  // An INSTALLED provider whose auth has not reported yet may still turn out to
+  // be signed in, so the host is not describable yet. Checked BEFORE
+  // `unavailable`: the presence of one installed provider disproves "nothing is
+  // installed" regardless of what else is in the list, and an uninstalled
+  // provider sitting beside it says nothing about the installed one.
+  //
+  // This ordering is the whole fix. Testing `some(!available)` first meant ANY
+  // uninstalled provider produced "No coding agents are installed on this
+  // host" — false, and on a realistic host (one agent installed and
+  // mid-check, another absent) it was the common case rather than the edge.
+  if (statuses.some((status) => status.available)) return "unknown";
+  // EVERY provider reported, and none is installed. Only now is "no coding
+  // agents are installed" a true statement about this host.
+  return "unavailable";
 }
 
 /**

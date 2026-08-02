@@ -81,6 +81,12 @@ function makeApi(
       api[group] = groupApi;
     }
   }
+  // `shell` is positional-path routed, so it is not in any name table the loop
+  // above walks; add it explicitly or the tests exercise `undefined`.
+  api.shell = {
+    openInEditor: vi.fn(async () => undefined),
+    showInFolder: vi.fn(async () => undefined),
+  };
   api.orchestration = {
     ...api.orchestration,
     dispatchCommand: dispatch,
@@ -111,6 +117,14 @@ const remoteClient: FakeClient = {
 vi.mock("./wsEnvironmentRegistry", () => ({
   localWsEnvironmentClient: () => localClient,
   getWsEnvironmentClient: (environmentId: EnvironmentId) => registeredClients.get(environmentId),
+  // `environmentDirectory` (pulled in for `environmentLabel`) subscribes to the
+  // registry at module load, so these must exist or the whole file fails to
+  // import — which vitest reports as "no tests" rather than a failure.
+  // Empty: this suite drives the routed API directly and never exercises the
+  // directory's own aggregation, so an inert list keeps the module loadable
+  // without pretending to model registration.
+  listWsEnvironmentClients: () => [],
+  onWsEnvironmentRegistryChange: () => () => undefined,
 }));
 
 /**
@@ -701,6 +715,56 @@ describe("projectId-keyed calls route by project ownership", () => {
       api.projects.stopDevServer({ projectId: "project-remote" } as never),
     ).rejects.toBeInstanceOf(EnvironmentUnavailableError);
     expect(spyFor(localClient, "projects", "stopDevServer")).not.toHaveBeenCalled();
+  });
+});
+
+describe("positional path arguments refuse rather than open the wrong machine's copy", () => {
+  const REMOTE_CWD = "/srv/vps-service";
+
+  it("refuses to open an editor on a path that belongs to another host", async () => {
+    // `shell.openInEditor(cwd, editor)` passes the path POSITIONALLY, so the
+    // contract-derived cwd check cannot see it. Unrefused this opened the LOCAL
+    // machine's copy of that path — same file name, different machine's
+    // contents — and looked like it worked. Reachable from the project context
+    // menu and a keyboard shortcut, not just in theory.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote", REMOTE_CWD);
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await expect(api.shell.openInEditor(`${REMOTE_CWD}/src`, "vscode" as never)).rejects.toThrow(
+      /lives on/,
+    );
+    expect(spyFor(localClient, "shell", "openInEditor")).not.toHaveBeenCalled();
+  });
+
+  it("refuses showInFolder for another host's path", async () => {
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote", REMOTE_CWD);
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await expect(api.shell.showInFolder(REMOTE_CWD)).rejects.toThrow(/lives on/);
+    expect(spyFor(localClient, "shell", "showInFolder")).not.toHaveBeenCalled();
+  });
+
+  it("still opens a LOCAL path on this machine", async () => {
+    // These are desktop surfaces on the user's own machine, so the local case
+    // must be completely unchanged — routing them elsewhere would be useless.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(LOCAL_ENVIRONMENT_ID, "project-local", "/Users/me/dev/app");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.shell.openInEditor("/Users/me/dev/app/src", "vscode" as never);
+
+    expect(spyFor(localClient, "shell", "openInEditor")).toHaveBeenCalledTimes(1);
+  });
+
+  it("is unchanged when no remote host is registered", async () => {
+    // A single-server install must behave exactly as before: an unowned path is
+    // local, because it cannot be anywhere else.
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.shell.showInFolder("/tmp/anywhere");
+
+    expect(spyFor(localClient, "shell", "showInFolder")).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -18,7 +18,12 @@ import {
   resolveProjectEnvironmentId,
   resolveThreadEnvironmentId,
 } from "./environmentRouting";
-import { resolvePathEnvironment, UnknownPathEnvironmentError } from "./environmentPathRouting";
+import {
+  resolvePathEnvironment,
+  UnknownPathEnvironmentError,
+  unknownPathRefusalMessage,
+} from "./environmentPathRouting";
+import { environmentLabel } from "./environmentDirectory";
 import { useStore } from "./store";
 
 /**
@@ -195,6 +200,32 @@ export const CWD_LOCAL_OR_THREAD_ROUTED_METHODS = {
   server: ["transcribeVoice"],
   filesystem: ["browse"],
 } as const satisfies { readonly [G in keyof NativeApi]?: ReadonlyArray<keyof NativeApi[G]> };
+
+/**
+ * Methods whose FIRST POSITIONAL ARGUMENT is a filesystem path.
+ *
+ * `shell.openInEditor(cwd, editor)` and `shell.showInFolder(path)` pass the
+ * path directly rather than as a field, so the contract-derived `cwd` check
+ * structurally cannot see them — the known limit documented in
+ * `environmentRoutingCoverage.test-d.ts`. The panel showed the gap is reachable
+ * from real UI (a keyboard shortcut and the project context menu), not
+ * theoretical.
+ *
+ * These are DESKTOP surfaces: they open an editor window or a file manager on
+ * the machine the user is sitting at. So the answer is not to route them — a
+ * headless host has no display — but to REFUSE when the path belongs to another
+ * host, which is what `environmentCapabilities` already says should happen.
+ * Falling through opens the LOCAL machine's copy of that path: the same file
+ * name, a different machine's contents, and it looks like it worked.
+ *
+ * Listed by ARGUMENT INDEX because there is no field name to match on. Anything
+ * added here must take its path as `args[index]`.
+ */
+export const POSITIONAL_PATH_METHODS = {
+  shell: { openInEditor: 0, showInFolder: 0 },
+} as const satisfies {
+  readonly [G in keyof NativeApi]?: { readonly [M in keyof NativeApi[G]]?: number };
+};
 
 /**
  * Methods keyed by `projectId` and routed to the project's owning host.
@@ -390,6 +421,45 @@ export function createEnvironmentRoutedApi(localApi: NativeApi): NativeApi {
         if (!owner) return Promise.reject(new EnvironmentUnavailableError(environmentId));
         const ownerGroup = owner[group as keyof NativeApi] as Record<string, unknown>;
         return (ownerGroup[method] as (...a: readonly unknown[]) => unknown)(...args);
+      };
+    }
+
+    routed[group] = routedGroup;
+  }
+
+  for (const [group, methods] of Object.entries(POSITIONAL_PATH_METHODS)) {
+    const localGroup = localApi[group as keyof NativeApi] as Record<string, unknown> | undefined;
+    if (!localGroup) continue;
+    const routedGroup: Record<string, unknown> = { ...(routed[group] ?? localGroup) };
+
+    for (const [method, index] of Object.entries(methods as Record<string, number>)) {
+      const localImplementation = localGroup[method];
+      if (typeof localImplementation !== "function") continue;
+
+      routedGroup[method] = (...args: readonly unknown[]) => {
+        const path = args[index];
+        const resolution = resolvePathEnvironment(
+          useStore.getState(),
+          typeof path === "string" ? path : null,
+        );
+        // Local, or a path nobody claims while only one host exists: unchanged.
+        if (resolution.kind === "local") {
+          return (localImplementation as (...a: readonly unknown[]) => unknown)(...args);
+        }
+        // Refuse rather than open the LOCAL copy of a path that belongs
+        // elsewhere. These are desktop surfaces on the user's own machine, so
+        // routing them to a headless host would not help either.
+        const label =
+          resolution.kind === "remote"
+            ? environmentLabel(resolution.environmentId)
+            : resolution.path;
+        return Promise.reject(
+          new Error(
+            resolution.kind === "remote"
+              ? `That folder lives on ${label}. Editors and file managers open on this computer, so Synara cannot open it from here — open it from Synara running on ${label}.`
+              : unknownPathRefusalMessage(label),
+          ),
+        );
       };
     }
 
