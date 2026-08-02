@@ -47,6 +47,8 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   WS_METHODS.serverGetDiagnostics,
   // Spawns an ssh process and waits on a remote round-trip.
   WS_METHODS.serverProbeRemoteHost,
+  // Spawns `ssh -G` and then `ssh-keyscan`, which waits on a remote round-trip.
+  WS_METHODS.serverGetRemoteHostFingerprint,
   // Spawns two `tailscale` processes.
   WS_METHODS.serverGetPhoneReachability,
   WS_METHODS.serverGenerateThreadRecap,

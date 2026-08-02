@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { DEFAULT_MODEL_BY_PROVIDER } from "@synara/contracts";
+import { DEFAULT_MODEL_BY_PROVIDER, type RemoteHostId } from "@synara/contracts";
+import { buildRemoteHostConfig } from "@synara/shared/remoteHostDraft";
 import { Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ServerConfig } from "./config";
@@ -130,11 +131,10 @@ describe("ServerSettingsService", () => {
   });
 
   describe("remoteHosts", () => {
-    const HOST = {
-      hostId: "host-1",
-      label: "Devbox",
-      destination: "devbox",
-    } as const;
+    const HOST = buildRemoteHostConfig(
+      { destination: "devbox", label: "Devbox" },
+      "host-1" as RemoteHostId,
+    );
 
     it("defaults to an empty list and round-trips through disk", async () => {
       const result = await runWithSettings(
@@ -177,7 +177,10 @@ describe("ServerSettingsService", () => {
           const service = yield* ServerSettingsService;
           yield* service.start;
           yield* service.updateSettings({
-            remoteHosts: [HOST, { hostId: "host-2", label: "Big", destination: "big" }],
+            remoteHosts: [
+              HOST,
+              buildRemoteHostConfig({ destination: "big", label: "Big" }, "host-2" as RemoteHostId),
+            ],
           });
           return yield* service.updateSettings({ remoteHosts: [HOST] });
         }),

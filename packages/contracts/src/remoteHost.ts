@@ -288,6 +288,34 @@ export const RemoteHostConnectivityStatus = Schema.Struct({
 });
 export type RemoteHostConnectivityStatus = typeof RemoteHostConnectivityStatus.Type;
 
+/**
+ * A host's public-key fingerprint, for the user to compare against the machine
+ * they own before trusting it. Public key material only — never a private key.
+ */
+export const RemoteHostKeyFingerprint = Schema.Struct({
+  /** ssh's wire name, e.g. `ssh-ed25519`. */
+  keyType: TrimmedNonEmptyString,
+  /** Short name for display, e.g. `ed25519`. */
+  displayType: TrimmedNonEmptyString,
+  /** `SHA256:…`, byte-identical to `ssh-keygen -lf`. */
+  fingerprint: TrimmedNonEmptyString,
+});
+export type RemoteHostKeyFingerprint = typeof RemoteHostKeyFingerprint.Type;
+
+export const RemoteHostFingerprintInput = Schema.Struct({ host: RemoteHostConfig });
+export type RemoteHostFingerprintInput = typeof RemoteHostFingerprintInput.Type;
+
+export const RemoteHostFingerprintResult = Schema.Struct({
+  /** Resolved hostname ssh would actually dial; shown so an alias is unambiguous. */
+  hostname: TrimmedNonEmptyString,
+  port: PositiveInt,
+  /** Empty when the host offered nothing we could parse — never a placeholder. */
+  fingerprints: Schema.Array(RemoteHostKeyFingerprint),
+  /** Set when the scan failed; the UI shows this instead of a fingerprint. */
+  error: Schema.optional(Schema.String),
+});
+export type RemoteHostFingerprintResult = typeof RemoteHostFingerprintResult.Type;
+
 /** Probe RPC. Rate-limited server-side; see `remoteHostBroker.ts`. */
 export const RemoteHostProbeInput = Schema.Struct({
   host: RemoteHostConfig,

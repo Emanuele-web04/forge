@@ -168,6 +168,9 @@ const OWNER_ONLY_WS_METHOD_LIST = [
   // the caller. That is an outbound capability of the operator's machine, not
   // work inside a thread, so a paired non-owner client may not trigger it.
   WS_METHODS.serverProbeRemoteHost,
+  // Same outbound capability as probing: it resolves a caller-chosen destination
+  // through the operator's ~/.ssh/config and dials it to read its key.
+  WS_METHODS.serverGetRemoteHostFingerprint,
   // Reports this machine's tailnet name and how it is exposed — network topology
   // of the operator's host, not work inside a thread. It also exists solely to
   // build a pairing QR code, and only an owner may issue pairing credentials.

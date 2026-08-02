@@ -45,6 +45,7 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { RemoteHostRateLimitError, sharedRemoteHostBroker } from "./remoteHostBroker";
+import { fetchRemoteHostFingerprint } from "./remoteHostFingerprintService";
 import { detectPhoneReachability } from "./phoneReachability";
 import { listStudioThreadOutputs } from "./studioOutputs";
 import {
@@ -1392,6 +1393,15 @@ const makeWsRpcHandlersLayer = () =>
             );
             return { probe, connectivity: broker.connectivity(input.host.hostId) };
           }),
+        // Fetches the host's PUBLIC key fingerprint so the user can compare it
+        // against the machine they own before trusting it. Failure comes back as
+        // a result with an `error` and no fingerprints — never as a trust prompt
+        // with nothing to compare.
+        [WS_METHODS.serverGetRemoteHostFingerprint]: (input) =>
+          rpcEffect(
+            Effect.promise(() => fetchRemoteHostFingerprint(input.host)),
+            "Failed to read the host's key fingerprint",
+          ),
         // The pairing screen's production caller for Tailscale detection. Every
         // failure inside `detectPhoneReachability` already degrades to the SSH
         // fallback, so this cannot leave the screen without an answer.

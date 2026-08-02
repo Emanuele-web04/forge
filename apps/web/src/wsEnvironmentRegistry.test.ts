@@ -400,6 +400,7 @@ describe("wsEnvironmentRegistry", () => {
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
         skills: { disabled: [] },
+        remoteHosts: [],
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);

@@ -31,7 +31,12 @@ import {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
-import { RemoteHostProbeInput, RemoteHostProbeRpcResult } from "./remoteHost";
+import {
+  RemoteHostFingerprintInput,
+  RemoteHostFingerprintResult,
+  RemoteHostProbeInput,
+  RemoteHostProbeRpcResult,
+} from "./remoteHost";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
@@ -770,6 +775,15 @@ export const WsServerProbeRemoteHostRpc = Rpc.make(WS_METHODS.serverProbeRemoteH
   error: WsRpcError,
 });
 
+export const WsServerGetRemoteHostFingerprintRpc = Rpc.make(
+  WS_METHODS.serverGetRemoteHostFingerprint,
+  {
+    payload: RemoteHostFingerprintInput,
+    success: RemoteHostFingerprintResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerGetPhoneReachabilityRpc = Rpc.make(WS_METHODS.serverGetPhoneReachability, {
   payload: Schema.Struct({}),
   success: ServerPhoneReachabilityResult,
@@ -1077,6 +1091,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
   WsServerProbeRemoteHostRpc,
+  WsServerGetRemoteHostFingerprintRpc,
   WsServerGetPhoneReachabilityRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerListProviderUsageRpc,
