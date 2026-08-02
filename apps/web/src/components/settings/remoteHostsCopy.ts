@@ -58,6 +58,55 @@ export const CONNECTIVITY_LABEL: Readonly<Record<RemoteHostConnectivityState, st
   down: "Not connected",
 };
 
+/**
+ * Live stages, mapped from `BootstrapProgress`. NEVER a raw step name.
+ *
+ * A line appears only when its step actually FIRES. There is deliberately no
+ * pre-rendered list of eight rows greying themselves in: `reusing-staged` and
+ * `uploading` are alternatives, not a sequence, so a fixed list would show one
+ * of them permanently unreached on every run.
+ */
+export const ADD_STAGE_LABEL = {
+  preparing: "Connecting over SSH",
+  uploading: "Copying Synara to the host",
+  "reusing-staged": "Reusing what's already on the host",
+  verifying: "Checking the transfer",
+  extracting: "Unpacking",
+  activating: "Starting Synara",
+  "installing-supervisor": "Setting it to restart automatically",
+  handshake: "Finishing up",
+} as const satisfies Readonly<Record<string, string>>;
+
+export function addStageHeader(label: string): string {
+  return `Adding ${label}`;
+}
+
+export function addStageDone(label: string): string {
+  return `${label} is ready.`;
+}
+
+export const STOP_BUTTON = "Stop";
+
+/**
+ * CONDITIONAL STRING — the OTHER variant was checked and is NOT available.
+ *
+ * The approved copy offers "Stopped. Nothing was left running on the host."
+ * only if teardown actually ran AND its success was checked. Neither holds:
+ *
+ *  - `uninstallRemoteServer` runs `supervisor.uninstallArgv` through plain
+ *    `connection.exec` with no exit-code check, and says so in its own comment
+ *    ("Uninstall is best-effort per step"). Best-effort and "nothing was left"
+ *    cannot both be true.
+ *  - `bootstrapRemoteServer` calls `ensureDirectories` BEFORE taking the lock,
+ *    so even the earliest possible cancel can already have created `<root>/`,
+ *    `releases/`, `state/` and `staging/` on the host.
+ *
+ * So this is the honest one. It stays until a teardown exists that runs on
+ * cancel and whose success is verified — at which point the other string
+ * becomes available and this comment is the record of what had to change.
+ */
+export const ADD_STOPPED = "Stopped. Synara may still be installed on the host.";
+
 export const DISCONNECT_BUTTON = "Disconnect";
 export const CONNECT_BUTTON = "Connect";
 export const REMOVE_BUTTON = "Remove";
