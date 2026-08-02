@@ -167,6 +167,11 @@ export function renderSystemdUnit(input: SupervisorInput): string {
     "Type=simple",
     `WorkingDirectory=${escapeSystemdValue(quotePosixShellArgument(input.layout.root))}`,
     `Environment=${systemdEnvironmentAssignment("SYNARA_AUTH_TOKEN_FILE", input.layout.credentialFile)}`,
+    // Named explicitly, not derived from SYNARA_HOME. The server's own default
+    // is `<SYNARA_HOME>/userdata/environment-id` and it GENERATES a fresh id
+    // when that file is absent — so without this the remote would invent an id,
+    // report it, and fail the handshake against the one bootstrap provisioned.
+    `Environment=${systemdEnvironmentAssignment("SYNARA_ENVIRONMENT_ID_FILE", input.layout.environmentIdFile)}`,
     `Environment=${systemdEnvironmentAssignment("SYNARA_HOME", input.layout.stateDirectory)}`,
     `ExecStart=${execStart}`,
     // A crashed server restarts; a server we deliberately stopped for an
@@ -217,6 +222,8 @@ export function renderLaunchdPlist(input: SupervisorInput): string {
     "  <dict>",
     "    <key>SYNARA_AUTH_TOKEN_FILE</key>",
     `    <string>${escapeXml(input.layout.credentialFile)}</string>`,
+    "    <key>SYNARA_ENVIRONMENT_ID_FILE</key>",
+    `    <string>${escapeXml(input.layout.environmentIdFile)}</string>`,
     "    <key>SYNARA_HOME</key>",
     `    <string>${escapeXml(input.layout.stateDirectory)}</string>`,
     "  </dict>",

@@ -26,6 +26,19 @@ export const ENV_PROXY_PATH_PREFIX = "/env";
 export const ENV_PROXY_ID_MAX_LENGTH = 64;
 
 /**
+ * Where a server states which environment it is and which release it runs.
+ *
+ * Defined here, in the contracts package, because BOTH sides depend on it being
+ * the same string: the remote server registers the route, and the broker's
+ * handshake requests it through the tunnel. Two independent spellings would
+ * produce a 404 that reads exactly like "the server is not up yet".
+ *
+ * Under `/api/`, so it lands inside the surface the auth layer already covers
+ * rather than beside it.
+ */
+export const PROVISIONING_IDENTITY_ROUTE_PATH = "/api/provisioning/identity";
+
+/**
  * Close code: the proxy could not keep up with one direction and dropped the
  * connection rather than buffering without bound or silently discarding frames.
  *

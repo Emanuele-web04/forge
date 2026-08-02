@@ -51,7 +51,13 @@ export function toBootstrapExchangeAuthError(cause: BootstrapCredentialError): A
   });
 }
 
-function parseBearerToken(headers: Record<string, string | undefined>): string | null {
+/**
+ * Exported so the provisioning-identity route echoes the SAME token this
+ * module authenticated, parsed the same way. A second parser here would be a
+ * second answer to "which bytes are the credential", and the echo's whole value
+ * is that it is the one that was actually checked.
+ */
+export function parseBearerToken(headers: Record<string, string | undefined>): string | null {
   const header = headers.authorization;
   if (typeof header !== "string" || !header.startsWith(AUTHORIZATION_PREFIX)) {
     return null;

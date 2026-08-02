@@ -27,6 +27,7 @@ import {
   type ServerConfigShape,
 } from "./config";
 import { AUTH_TOKEN_FILE_ENV, AuthTokenFileError, resolveAuthToken } from "./authTokenFile";
+import { ENVIRONMENT_ID_FILE_ENV } from "./provisioningIdentity";
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { normalizeHttpsPublicOrigin, remoteAccessPolicyError } from "./remoteAccessPolicy";
 import { Open } from "./open";
@@ -161,6 +162,10 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  environmentIdFile: Config.string(ENVIRONMENT_ID_FILE_ENV).pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   desktopShutdownToken: Config.string("SYNARA_DESKTOP_SHUTDOWN_TOKEN").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -223,6 +228,14 @@ const ServerConfigLive = (input: CliInput) =>
       const baseDir = yield* resolveBaseDir(configuredHome);
       const userHomeDir = OS.homedir();
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
+      // A provisioned environment id OVERRIDES the derived path. The default
+      // generates an id when the file is missing, which for a remote install
+      // would mean inventing one and then failing the broker's handshake
+      // against the id bootstrap actually wrote.
+      const environmentIdPath =
+        env.environmentIdFile !== undefined && env.environmentIdFile.trim().length > 0
+          ? env.environmentIdFile.trim()
+          : derivedPaths.environmentIdPath;
       yield* Effect.try({
         try: () => preparePrivateServerPaths(derivedPaths),
         catch: (cause) =>
@@ -311,6 +324,7 @@ const ServerConfigLive = (input: CliInput) =>
         host,
         baseDir,
         ...derivedPaths,
+        environmentIdPath,
         staticDir,
         devUrl,
         publicUrl,

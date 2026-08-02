@@ -8,6 +8,7 @@ import {
   AuthRevokePairingLinkInput,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVISIONING_IDENTITY_ROUTE_PATH,
   SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
   ThreadId,
 } from "@synara/contracts";
@@ -35,6 +36,9 @@ import {
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
+import { parseBearerToken } from "./auth/Layers/ServerAuth";
+import { buildProvisioningIdentity } from "./provisioningIdentity";
+import { version as serverVersion } from "../package.json" with { type: "json" };
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
@@ -189,12 +193,47 @@ function localPreviewCorsHeaders(input: {
   };
 }
 
+/**
+ * What a bootstrapped remote server answers the broker's provisioning probe.
+ *
+ * BEHIND AUTH, deliberately and by construction: the handler's first statement
+ * requires an authenticated request, so an unauthenticated caller learns
+ * nothing — not the environment id, not the version, and above all not the
+ * `acceptedToken` echo, which is only meaningful to a caller that already
+ * presented that exact token. An unauthenticated variant of this route would
+ * hand an attacker on the remote host everything needed to answer the
+ * handshake convincingly.
+ */
+export const provisioningIdentityEffectRouteLayer = HttpRouter.add(
+  "GET",
+  PROVISIONING_IDENTITY_ROUTE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
+    const config = yield* ServerConfig;
+    // The token is echoed from what the caller PRESENTED, and only after
+    // `authenticateHttpRequest` accepted it — so an echo can never reveal a
+    // credential the caller did not already hold.
+    const presented = parseBearerToken(request.headers);
+    return HttpServerResponse.jsonUnsafe(
+      buildProvisioningIdentity({
+        environmentIdFile: config.environmentIdPath,
+        serverVersion,
+        presentedToken: presented ?? undefined,
+      }),
+      { status: 200, headers: { "Cache-Control": "no-store" } },
+    );
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
 export function makeEffectHttpRouteLayer(
   readiness: ServerReadiness,
   shutdownController: ServerShutdownController,
 ) {
   return Layer.mergeAll(
     makeHealthEffectRouteLayer(readiness),
+    provisioningIdentityEffectRouteLayer,
     makeDesktopShutdownEffectRouteLayer(shutdownController),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
