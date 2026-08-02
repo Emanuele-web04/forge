@@ -14,6 +14,7 @@ import {
   buildRecentViewDisplayEntries,
   deriveCurrentRecentView,
   pruneRecentViews,
+  shouldPruneRecentViewsOnHydration,
   recentViewKey,
   resolveRecentViewNavigationIndex,
   type RecentView,
@@ -221,7 +222,15 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
     // would drop that host's recent views with no second pass to restore them —
     // the `didHydrationPruneRef` latch makes the race unrecoverable rather than
     // merely early.
-    if (!threadsHydrated || !allEnvironmentsHydrated || didHydrationPruneRef.current) return;
+    if (
+      !shouldPruneRecentViewsOnHydration({
+        threadsHydrated,
+        allEnvironmentsHydrated,
+        alreadyPruned: didHydrationPruneRef.current,
+      })
+    ) {
+      return;
+    }
     didHydrationPruneRef.current = true;
     pruneRecentViewsStore(buildRecentViewAvailability());
   }, [

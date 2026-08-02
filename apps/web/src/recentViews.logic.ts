@@ -129,6 +129,38 @@ export function upsertRecentView(
   return [view, ...deduped].slice(0, limit);
 }
 
+/**
+ * Whether the one-shot hydration prune may run.
+ *
+ * This prune fires ONCE — the caller latches it — and deletes persisted recent
+ * views permanently. So it must not run until every registered environment has
+ * reported: a remote host connects after local, and in that window its views
+ * are absent from the aggregate purely because its server has not answered.
+ * Pruning then deletes them with NO second pass to restore them, which is what
+ * makes the latch turn an early race into an unrecoverable one.
+ *
+ * `allEnvironmentsHydrated` is REQUIRED, not optional-defaulting-true. The
+ * caller is a hook and cannot be unit-tested here, so omitting the argument
+ * would silently restore the bug with every test still green — exactly the
+ * "function pinned, call site unpinned" shape this branch has hit four times.
+ * Requiring it makes the omission a compile error instead, which is the one
+ * check a caller cannot forget to run. A single-server caller passes `true`
+ * explicitly: with only the local environment registered, "all hydrated" is
+ * exactly "local hydrated".
+ *
+ * Extracted from the hook so this decision is reachable by a test at all. It
+ * lived as an inline predicate inside a `useEffect`, where mutating it broke
+ * nothing — the fix was correct and completely undefended.
+ */
+export function shouldPruneRecentViewsOnHydration(input: {
+  readonly threadsHydrated: boolean;
+  readonly allEnvironmentsHydrated: boolean;
+  readonly alreadyPruned: boolean;
+}): boolean {
+  if (input.alreadyPruned) return false;
+  return input.threadsHydrated && input.allEnvironmentsHydrated;
+}
+
 export function pruneRecentViews(
   recentViews: readonly RecentView[],
   availability: RecentViewAvailability,

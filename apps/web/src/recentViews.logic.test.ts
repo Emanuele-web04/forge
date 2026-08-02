@@ -11,6 +11,7 @@ import {
   pruneRecentViews,
   recentViewKey,
   resolveRecentViewNavigationIndex,
+  shouldPruneRecentViewsOnHydration,
   upsertRecentView,
   type RecentView,
 } from "./recentViews.logic";
@@ -172,5 +173,81 @@ describe("recent view MRU logic", () => {
         title: "bun dev",
       },
     });
+  });
+});
+
+describe("shouldPruneRecentViewsOnHydration", () => {
+  // This prune fires ONCE and deletes persisted views permanently, so the gate
+  // is the only thing standing between a slow-connecting remote host and the
+  // silent loss of its recent views. It was previously an inline predicate in a
+  // useEffect: correct, and completely undefended — mutating it broke nothing.
+
+  it("does not run while any environment is still unhydrated", () => {
+    // The bug. A remote host connects after local; in that window its views are
+    // absent from the aggregate because its server has not answered, not
+    // because they are gone. Pruning here deletes them with no second pass.
+    expect(
+      shouldPruneRecentViewsOnHydration({
+        threadsHydrated: true,
+        allEnvironmentsHydrated: false,
+        alreadyPruned: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("runs once every environment has reported", () => {
+    expect(
+      shouldPruneRecentViewsOnHydration({
+        threadsHydrated: true,
+        allEnvironmentsHydrated: true,
+        alreadyPruned: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not run before the LOCAL server has reported", () => {
+    // The original condition, still required: absence before local hydration is
+    // "nothing has loaded yet" rather than "these are gone".
+    expect(
+      shouldPruneRecentViewsOnHydration({
+        threadsHydrated: false,
+        allEnvironmentsHydrated: true,
+        alreadyPruned: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("never runs twice", () => {
+    // The latch is what makes an early prune unrecoverable, so it must hold
+    // even once everything is hydrated.
+    expect(
+      shouldPruneRecentViewsOnHydration({
+        threadsHydrated: true,
+        allEnvironmentsHydrated: true,
+        alreadyPruned: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is unchanged for a single-server install", () => {
+    // With only the local environment registered, "all hydrated" IS "local
+    // hydrated", so the single-server case behaves exactly as before. The flag
+    // is REQUIRED rather than defaulting: the caller is a hook that no unit
+    // test reaches, so omitting it would silently restore the bug — a compile
+    // error is the one check a caller cannot skip.
+    expect(
+      shouldPruneRecentViewsOnHydration({
+        threadsHydrated: true,
+        allEnvironmentsHydrated: true,
+        alreadyPruned: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPruneRecentViewsOnHydration({
+        threadsHydrated: false,
+        allEnvironmentsHydrated: true,
+        alreadyPruned: false,
+      }),
+    ).toBe(false);
   });
 });

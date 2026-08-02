@@ -642,6 +642,22 @@ async function terminateOwnedProcess(
  * Every command names the exact unit and the exact path. There is deliberately
  * no process-name matching: a `pkill -f synara` here would kill an unrelated
  * Synara that another user, or the same user, is running on the same host.
+ *
+ * MUST NOT BE CALLED FROM THE "REMOVE HOST" PATH IN THE UI.
+ *
+ * Removing a host is client-side only: it drops cached rows, resume cursors and
+ * the socket, and touches nothing on the remote. The remove confirmation
+ * promises the user exactly that — "Threads that ran on this host stay on the
+ * host itself — they'll come back if you add it again." This function ends in
+ * `rm -rf -- <installRoot>`, so wiring it to Remove would delete the data that
+ * sentence guarantees is safe: approved copy becomes a lie and the user loses
+ * work they were told they could get back. "Remove" reading like "uninstall" is
+ * the plausible mistake, which is why the hazard is recorded here and not just
+ * the rule.
+ *
+ * There is deliberately no uninstall affordance in the UI at all — a user who
+ * wants the files gone ssh's in themselves. If that ever changes it needs its
+ * own action, its own confirmation, and its own copy stating what is deleted.
  */
 export async function uninstallRemoteServer(input: {
   readonly connection: RemoteConnection;
