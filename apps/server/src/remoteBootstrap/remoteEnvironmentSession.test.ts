@@ -15,7 +15,7 @@ const SERVER_VERSION = "1.2.3";
 
 function makeConfig(): RemoteHostConfig {
   return {
-    hostId: "host-1",
+    hostId: "host-1" as RemoteHostConfig["hostId"],
     label: "Build box",
     destination: "build-box",
     sshArgs: [],
@@ -25,7 +25,7 @@ function makeConfig(): RemoteHostConfig {
     connectionReuse: { enabled: false, persistSeconds: 300 },
     launcher: { kind: "direct" },
     binaryPath: "/usr/local/bin/claude",
-  } as RemoteHostConfig;
+  } satisfies RemoteHostConfig;
 }
 
 function goodClaim(): ProvisioningClaim {

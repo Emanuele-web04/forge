@@ -21,8 +21,8 @@ import {
   isLegacyTokenAuthorized,
   makeDesktopShutdownEffectRouteLayer,
   makeHealthEffectRouteLayer,
-  makeEffectHttpRouteLayer,
   projectFaviconEffectRouteLayer,
+  provisioningIdentityEffectRouteLayer,
   staticAndDevEffectRouteLayer,
 } from "./http";
 import {
@@ -118,17 +118,17 @@ type TestedRoute =
   | { readonly kind: "favicon" }
   | { readonly kind: "editor-icon" }
   /**
-   * The FULL composed route table, not one layer in isolation. Registering a
-   * route proves nothing about whether it executes: `staticAndDevEffectRouteLayer`
-   * is a `GET *` SPA fallback that happily answers any path, so a new GET route
-   * that lost the ordering would silently serve index.html instead — a 200, and
-   * therefore invisible to a test that only asserts "not an error".
+   * The provisioning route MERGED WITH the SPA fallback, in the order
+   * `makeEffectHttpRouteLayer` composes them.
+   *
+   * Registering a route proves nothing about whether it executes:
+   * `staticAndDevEffectRouteLayer` is a `GET *` fallback that answers any path,
+   * so a GET route that lost the ordering would silently serve index.html — a
+   * 200, and therefore invisible to a test that only asserts "not an error".
+   * That collision is the whole risk, so this pairs exactly those two rather
+   * than the full table, which drags in four unrelated services.
    */
-  | {
-      readonly kind: "composed";
-      readonly readiness: typeof readiness;
-      readonly controller: ServerShutdownController;
-    };
+  | { readonly kind: "provisioning" };
 
 async function withEffectServer(
   config: ServerConfigShape,
@@ -158,10 +158,12 @@ async function withEffectServer(
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(projectFaviconEffectRouteLayer));
           } else if (route.kind === "editor-icon") {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(editorIconEffectRouteLayer));
-          } else if (route.kind === "composed") {
+          } else if (route.kind === "provisioning") {
+            // Merged in the SAME order makeEffectHttpRouteLayer uses, so the
+            // precedence under test is the deployed one.
             yield* httpServer.serve(
               yield* HttpRouter.toHttpEffect(
-                makeEffectHttpRouteLayer(route.readiness, route.controller),
+                Layer.mergeAll(provisioningIdentityEffectRouteLayer, staticAndDevEffectRouteLayer),
               ),
             );
           } else {
@@ -609,14 +611,13 @@ describe("production Effect HTTP routes", () => {
    * composed layer production does and asserts the answer is the route's JSON,
    * not the fallback's HTML.
    */
-  it("answers the provisioning handshake from the deployed route table", async () => {
-    const controller = await Effect.runPromise(makeServerShutdownController());
+  it("answers the provisioning handshake rather than the SPA fallback", async () => {
     const environmentIdPath = path.join(makeTempDir("synara-provisioning-"), "environment-id");
     writeFileSync(environmentIdPath, "env-from-bootstrap\n");
 
     await withEffectServer(
       makeConfig({ environmentIdPath }),
-      { kind: "composed", readiness, controller },
+      { kind: "provisioning" },
       async (origin) => {
         const response = await fetch(`${origin}/api/provisioning/identity`, {
           headers: { authorization: "Bearer tok-1" },
