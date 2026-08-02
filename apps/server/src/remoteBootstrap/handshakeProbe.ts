@@ -86,7 +86,9 @@ function attempt(input: HandshakeProbeInput): Promise<AttemptOutcome> {
         });
         response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
         response.on("error", (cause) =>
-          reject(new HandshakeProbeError("The remote server's identity response failed.", { cause })),
+          reject(
+            new HandshakeProbeError("The remote server's identity response failed.", { cause }),
+          ),
         );
       },
     );
@@ -133,7 +135,8 @@ function parseClaim(outcome: AttemptOutcome): ProvisioningClaim {
   } catch {
     parsed = undefined;
   }
-  const record = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  const record =
+    typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
   const asString = (value: unknown): string | undefined =>
     typeof value === "string" && value.length > 0 ? value : undefined;
   return {

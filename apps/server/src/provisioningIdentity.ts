@@ -50,10 +50,9 @@ export function readEnvironmentIdFile(filePath: string): string {
   try {
     contents = readFileSync(filePath, "utf8");
   } catch (cause) {
-    throw new ProvisioningIdentityError(
-      `Failed to read ${ENVIRONMENT_ID_FILE_ENV} ${filePath}.`,
-      { cause },
-    );
+    throw new ProvisioningIdentityError(`Failed to read ${ENVIRONMENT_ID_FILE_ENV} ${filePath}.`, {
+      cause,
+    });
   }
   return parseEnvironmentIdFile(contents, filePath);
 }

@@ -205,9 +205,7 @@ export async function openSshTunnel(input: OpenSshTunnelInput): Promise<SshTunne
     config: input.config,
     localPort,
     remotePort: input.remotePort,
-    ...(input.controlDirectory === undefined
-      ? {}
-      : { controlDirectory: input.controlDirectory }),
+    ...(input.controlDirectory === undefined ? {} : { controlDirectory: input.controlDirectory }),
   });
 
   let child: ChildProcess;

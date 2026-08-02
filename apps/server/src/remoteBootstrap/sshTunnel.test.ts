@@ -3,7 +3,12 @@ import * as Net from "node:net";
 import type { RemoteHostConfig } from "@synara/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { openSshTunnel, releaseReservedPort, reserveLoopbackPort, SshTunnelError } from "./sshTunnel";
+import {
+  openSshTunnel,
+  releaseReservedPort,
+  reserveLoopbackPort,
+  SshTunnelError,
+} from "./sshTunnel";
 
 function makeConfig(overrides: Partial<RemoteHostConfig> = {}): RemoteHostConfig {
   return {
@@ -31,7 +36,8 @@ function makeConfig(overrides: Partial<RemoteHostConfig> = {}): RemoteHostConfig
 function fakeSshSpawner(script: (localPort: number) => string) {
   const spawned: Array<import("node:child_process").ChildProcess> = [];
   const spawn = ((_command: string, args: readonly string[], options: unknown) => {
-    const { spawn: realSpawn } = require("node:child_process") as typeof import("node:child_process");
+    const { spawn: realSpawn } =
+      require("node:child_process") as typeof import("node:child_process");
     // Recover the port from the forward spec we built: `127.0.0.1:L:127.0.0.1:R`.
     const spec = args[args.indexOf("-L") + 1] as string;
     const localPort = Number(spec.split(":")[1]);

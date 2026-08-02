@@ -21,10 +21,7 @@
 import type { EnvironmentId } from "@synara/contracts";
 import type { RemoteHostConfig } from "@synara/contracts";
 
-import {
-  publishProxiedEnvironment,
-  retractProxiedEnvironment,
-} from "../environmentProxyRegistry";
+import { publishProxiedEnvironment, retractProxiedEnvironment } from "../environmentProxyRegistry";
 import { probeHandshakeOverTunnel } from "./handshakeProbe";
 import {
   type ProvisioningClaim,
@@ -103,9 +100,7 @@ export async function openRemoteEnvironmentSession(
   tunnel = await (input.openTunnel ?? openSshTunnel)({
     config: input.config,
     remotePort: input.remotePort,
-    ...(input.controlDirectory === undefined
-      ? {}
-      : { controlDirectory: input.controlDirectory }),
+    ...(input.controlDirectory === undefined ? {} : { controlDirectory: input.controlDirectory }),
     onClosed: ({ expected, detail }) => {
       if (expected) return;
       // Unwind through the same path an explicit close takes, so a tunnel that
@@ -116,8 +111,9 @@ export async function openRemoteEnvironmentSession(
   });
 
   try {
-    const claim = await (input.probeHandshake ??
-      ((probeInput) => probeHandshakeOverTunnel(probeInput)))({
+    const claim = await (
+      input.probeHandshake ?? ((probeInput) => probeHandshakeOverTunnel(probeInput))
+    )({
       localPort: tunnel.localPort,
       credential: input.credential,
     });

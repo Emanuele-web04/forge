@@ -38,11 +38,13 @@ function goodClaim(): ProvisioningClaim {
 }
 
 /** Records the order of every effect, which is what most of these assert. */
-function makeHarness(options: {
-  readonly claim?: ProvisioningClaim;
-  readonly claimError?: Error;
-  readonly tunnelError?: Error;
-} = {}) {
+function makeHarness(
+  options: {
+    readonly claim?: ProvisioningClaim;
+    readonly claimError?: Error;
+    readonly tunnelError?: Error;
+  } = {},
+) {
   const events: string[] = [];
   const published: EnvironmentProxyUpstream[] = [];
   let closedTunnels = 0;
