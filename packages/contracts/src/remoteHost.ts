@@ -224,11 +224,16 @@ export type RemoteHostProbeOutcome = typeof RemoteHostProbeOutcome.Type;
  *   NO trust affordance for it — ever. A single "trust this host key" button
  *   that serves both cases trains the user to click through the one case where
  *   clicking through is how they get owned.
+ * - `host-key-unsupported` is neither: the two ends share no host-key
+ *   ALGORITHM. Nothing is unknown and nothing changed, so there is nothing to
+ *   trust — but it is split out from `unknown` because the fix is specific and
+ *   a generic "could not connect" tells the user nothing.
  */
 export const RemoteHostUnreachableReason = Schema.Literals([
   "auth",
   "host-key-unknown",
   "host-key-changed",
+  "host-key-unsupported",
   "dns",
   "refused",
   "network",

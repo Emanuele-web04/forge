@@ -335,6 +335,7 @@ describe("host-key trust gate", () => {
     const reasons = [
       "auth",
       "host-key-changed",
+      "host-key-unsupported",
       "dns",
       "refused",
       "network",
@@ -357,13 +358,34 @@ describe("host-key trust gate", () => {
 
   it("does not route a key-algorithm mismatch into the trust affordance", () => {
     // "no matching host key type" is not an unknown key — trusting a fingerprint
-    // cannot fix it, so it must not unlock the button.
+    // cannot fix it, so it must not unlock the button. It gets its own reason
+    // rather than "unknown" because the cause and the fix are both specific.
     const result = classify({
       stderr: "Unable to negotiate with 10.0.0.4 port 22: no matching host key type found.",
       exitCode: 255,
     });
-    expect(result.unreachableReason).not.toBe("host-key-unknown");
+    expect(result.unreachableReason).toBe("host-key-unsupported");
     expect(mayOfferHostKeyTrust(result)).toBe(false);
+    // The message must name the real problem, not say "could not connect".
+    expect(result.message).toMatch(/algorithm/i);
+    expect(result.message).toMatch(/ssh-rsa|sshd/i);
+  });
+
+  it("keeps the reassuring first-contact wording OFF the changed-key branch", () => {
+    // Guards a specific, realistic drift: someone tidies the two messages to
+    // read consistently and quietly makes the MITM case sound routine. The
+    // changed-key copy must never invite the user to compare a fingerprint and
+    // proceed, because on that branch there is nothing safe to proceed to.
+    const changed = classify({ stderr: CHANGED_KEY_STDERR, exitCode: 255 }).message;
+    const unknown = classify({ stderr: UNKNOWN_KEY_STDERR, exitCode: 255 }).message;
+
+    expect(changed).toMatch(/impersonat/i);
+    expect(changed).not.toMatch(/has not been seen before/i);
+    expect(changed).not.toMatch(/then trust it/i);
+    expect(changed).not.toMatch(/check its fingerprint/i);
+    // And the two must stay distinguishable at all.
+    expect(changed).not.toBe(unknown);
+    expect(unknown).not.toMatch(/impersonat/i);
   });
 });
 

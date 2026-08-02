@@ -42,7 +42,17 @@ describe("addHostStageFromProbe", () => {
   });
 
   it("treats other connection failures as failed, not as a key problem", () => {
-    for (const unreachableReason of ["auth", "dns", "refused", "timeout", "unknown"] as const) {
+    // host-key-unsupported belongs here, not on a key branch: nothing is unknown
+    // and nothing changed, so there is nothing to trust — the probe message
+    // explains the algorithm mismatch instead.
+    for (const unreachableReason of [
+      "auth",
+      "dns",
+      "refused",
+      "timeout",
+      "unknown",
+      "host-key-unsupported",
+    ] as const) {
       expect(addHostStageFromProbe(probe({ outcome: "unreachable", unreachableReason })).kind).toBe(
         "failed",
       );
@@ -97,6 +107,15 @@ describe("canTrustHostKey", () => {
 
   it("refuses trust for a reachable host", () => {
     expect(canTrustHostKey(probe({ outcome: "ok" }), FINGERPRINT)).toBe(false);
+  });
+
+  it("refuses trust for a key-algorithm mismatch", () => {
+    expect(
+      canTrustHostKey(
+        probe({ outcome: "unreachable", unreachableReason: "host-key-unsupported" }),
+        FINGERPRINT,
+      ),
+    ).toBe(false);
   });
 });
 

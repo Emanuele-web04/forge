@@ -134,8 +134,9 @@ const UNREACHABLE_PATTERNS: ReadonlyArray<readonly [RegExp, RemoteHostUnreachabl
   [/host key verification failed/i, "host-key-unknown"],
   // NOT a host-key-unknown: the key is not unknown, the two ends cannot agree on
   // a key ALGORITHM. Trusting a fingerprint does not fix it, so it must never
-  // reach the reason that unlocks the trust affordance.
-  [/no matching host key type/i, "unknown"],
+  // reach the reason that unlocks the trust affordance — but it is not `unknown`
+  // either, because the cause is specific and so is the fix.
+  [/no matching host key type/i, "host-key-unsupported"],
   [/permission denied \(/i, "auth"],
   [/too many authentication failures/i, "auth"],
   [/no supported authentication methods/i, "auth"],
@@ -166,6 +167,8 @@ const UNREACHABLE_MESSAGES: Readonly<Record<RemoteHostUnreachableReason, string>
     "This host has not been seen before. Check its fingerprint matches your server, then trust it — Synara will not skip this check.",
   "host-key-changed":
     "This host's key does not match the one Synara saw before. That can mean the server was rebuilt, or that something is impersonating it. Synara will not connect until you confirm which.",
+  "host-key-unsupported":
+    "This host and your ssh client share no host-key algorithm, so neither one is refusing the other's identity — they cannot negotiate one. This usually means a very old server offering only ssh-rsa, or a new client that no longer accepts it. Update the host's sshd, or allow the older algorithm for this host in your ~/.ssh/config.",
   dns: "The hostname could not be resolved. Check the destination, or the Host alias in your ~/.ssh/config.",
   refused: "The connection was refused. Check that sshd is running and the port is correct.",
   network: "The network connection to the host dropped. Check connectivity or the VPN.",
