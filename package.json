@@ -42,6 +42,7 @@
     "brand:check": "node scripts/check-brand-identity.ts",
     "migrations:check": "node scripts/check-migration-lineage.ts",
     "test:desktop-smoke": "turbo run smoke-test --filter=@synara/desktop",
+    "test:device": "bun scripts/device-helper-smoke.ts",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "build:contracts": "turbo run build --filter=@synara/contracts",
