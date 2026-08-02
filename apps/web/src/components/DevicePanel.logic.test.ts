@@ -1,0 +1,540 @@
+import type { DeviceDescriptor, DeviceUdid } from "@synara/contracts";
+import { describe, expect, it } from "vitest";
+
+import {
+  attachedDeviceFromThreadState,
+  buildDevicePickerEntries,
+  canvasPointToDevicePoint,
+  createDeviceFrameGateState,
+  DEVICE_TAP_MOVEMENT_THRESHOLD_POINTS,
+  deviceContainRect,
+  deviceHidUsageForKey,
+  deviceKeyModifiers,
+  deviceSetupProgress,
+  isNextDeviceFrameSequence,
+  resolveDeviceAvailabilityView,
+  resolveDeviceHardwareButtonShortcut,
+  resolveDevicePointerGesture,
+  shouldSubscribeToDeviceStream,
+  stepDeviceFrameGate,
+  type DeviceFrameGateState,
+} from "./DevicePanel.logic";
+
+const UDID = "AAAA-BBBB" as DeviceUdid;
+const OTHER_UDID = "CCCC-DDDD" as DeviceUdid;
+
+function header(overrides: {
+  sequence: number;
+  keyframe?: boolean;
+  codecConfig?: boolean;
+  deviceId?: string;
+}) {
+  return {
+    deviceId: overrides.deviceId ?? UDID,
+    sequence: overrides.sequence,
+    keyframe: overrides.keyframe ?? false,
+    codecConfig: overrides.codecConfig ?? false,
+  };
+}
+
+function device(overrides: Partial<DeviceDescriptor> = {}): DeviceDescriptor {
+  return {
+    platform: "ios-simulator",
+    udid: UDID,
+    name: "iPhone 16 Pro",
+    runtime: "iOS 18.2",
+    state: "booted",
+    bootSource: "user",
+    ...overrides,
+  } as DeviceDescriptor;
+}
+
+describe("device frame gate", () => {
+  it("ignores frames addressed to another device", () => {
+    const state = createDeviceFrameGateState();
+    const step = stepDeviceFrameGate(state, header({ sequence: 1, deviceId: OTHER_UDID }), UDID);
+
+    expect(step.action).toEqual({ kind: "ignore" });
+    expect(step.state).toBe(state);
+  });
+
+  it("ignores every frame while no device is attached", () => {
+    const step = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: 1, keyframe: true, codecConfig: true }),
+      null,
+    );
+
+    expect(step.action).toEqual({ kind: "ignore" });
+  });
+
+  it("drops media frames until a codec config arrives", () => {
+    const step = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: 1, keyframe: true }),
+      UDID,
+    );
+
+    expect(step.action).toEqual({ kind: "drop", reason: "no-codec-config" });
+    expect(step.state.phase).toBe("awaiting-config");
+    expect(step.state.droppedSinceResync).toBe(1);
+  });
+
+  it("configures on a codec-config frame and then requires a keyframe", () => {
+    const configured = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: 1, codecConfig: true }),
+      UDID,
+    );
+    expect(configured.action).toEqual({ kind: "configure" });
+    expect(configured.state.phase).toBe("awaiting-keyframe");
+    expect(configured.requestKeyframe).toBe(true);
+
+    const delta = stepDeviceFrameGate(configured.state, header({ sequence: 2 }), UDID);
+    expect(delta.action).toEqual({ kind: "drop", reason: "awaiting-keyframe" });
+
+    const key = stepDeviceFrameGate(delta.state, header({ sequence: 3, keyframe: true }), UDID);
+    expect(key.action).toEqual({ kind: "decode", keyframe: true });
+    expect(key.state.phase).toBe("streaming");
+    expect(key.state.droppedSinceResync).toBe(0);
+  });
+
+  it("decodes consecutive delta frames once streaming", () => {
+    let state: DeviceFrameGateState = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: 1, codecConfig: true }),
+      UDID,
+    ).state;
+    state = stepDeviceFrameGate(state, header({ sequence: 2, keyframe: true }), UDID).state;
+
+    const first = stepDeviceFrameGate(state, header({ sequence: 3 }), UDID);
+    expect(first.action).toEqual({ kind: "decode", keyframe: false });
+    const second = stepDeviceFrameGate(first.state, header({ sequence: 4 }), UDID);
+    expect(second.action).toEqual({ kind: "decode", keyframe: false });
+    expect(second.state.lastSequence).toBe(4);
+  });
+
+  it("holds and requests a keyframe after a sequence gap", () => {
+    let state: DeviceFrameGateState = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: 1, codecConfig: true }),
+      UDID,
+    ).state;
+    state = stepDeviceFrameGate(state, header({ sequence: 2, keyframe: true }), UDID).state;
+
+    const gap = stepDeviceFrameGate(state, header({ sequence: 9 }), UDID);
+    expect(gap.action).toEqual({ kind: "drop", reason: "sequence-gap" });
+    expect(gap.state.phase).toBe("awaiting-keyframe");
+    expect(gap.requestKeyframe).toBe(true);
+
+    const recovered = stepDeviceFrameGate(
+      gap.state,
+      header({ sequence: 10, keyframe: true }),
+      UDID,
+    );
+    expect(recovered.action).toEqual({ kind: "decode", keyframe: true });
+    expect(recovered.state.phase).toBe("streaming");
+  });
+
+  it("decodes straight through a gap when the gap frame is itself a keyframe", () => {
+    let state: DeviceFrameGateState = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: 1, codecConfig: true }),
+      UDID,
+    ).state;
+    state = stepDeviceFrameGate(state, header({ sequence: 2, keyframe: true }), UDID).state;
+
+    const step = stepDeviceFrameGate(state, header({ sequence: 40, keyframe: true }), UDID);
+    expect(step.action).toEqual({ kind: "decode", keyframe: true });
+    expect(step.state.phase).toBe("streaming");
+  });
+
+  it("drops duplicate and far-out-of-order frames without disturbing the gate", () => {
+    let state: DeviceFrameGateState = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: 100, codecConfig: true }),
+      UDID,
+    ).state;
+    state = stepDeviceFrameGate(state, header({ sequence: 101, keyframe: true }), UDID).state;
+
+    const duplicate = stepDeviceFrameGate(state, header({ sequence: 101 }), UDID);
+    expect(duplicate.action).toEqual({ kind: "drop", reason: "stale-sequence" });
+    expect(duplicate.state.phase).toBe("streaming");
+    expect(duplicate.state.lastSequence).toBe(101);
+
+    const stale = stepDeviceFrameGate(state, header({ sequence: 50 }), UDID);
+    expect(stale.action).toEqual({ kind: "drop", reason: "stale-sequence" });
+    expect(stale.state.lastSequence).toBe(101);
+  });
+
+  it("treats a wrapped u32 sequence as consecutive", () => {
+    const last = 2 ** 32 - 1;
+    expect(isNextDeviceFrameSequence(last, 0)).toBe(true);
+    expect(isNextDeviceFrameSequence(5, 6)).toBe(true);
+    expect(isNextDeviceFrameSequence(5, 7)).toBe(false);
+
+    let state: DeviceFrameGateState = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: last - 1, codecConfig: true }),
+      UDID,
+    ).state;
+    state = stepDeviceFrameGate(state, header({ sequence: last, keyframe: true }), UDID).state;
+
+    const wrapped = stepDeviceFrameGate(state, header({ sequence: 0 }), UDID);
+    expect(wrapped.action).toEqual({ kind: "decode", keyframe: false });
+  });
+
+  it("re-arms the keyframe requirement when a new codec config arrives mid-stream", () => {
+    let state: DeviceFrameGateState = stepDeviceFrameGate(
+      createDeviceFrameGateState(),
+      header({ sequence: 1, codecConfig: true }),
+      UDID,
+    ).state;
+    state = stepDeviceFrameGate(state, header({ sequence: 2, keyframe: true }), UDID).state;
+    expect(state.phase).toBe("streaming");
+
+    const reconfigured = stepDeviceFrameGate(
+      state,
+      header({ sequence: 3, codecConfig: true }),
+      UDID,
+    );
+    expect(reconfigured.action).toEqual({ kind: "configure" });
+    expect(reconfigured.state.phase).toBe("awaiting-keyframe");
+
+    const delta = stepDeviceFrameGate(reconfigured.state, header({ sequence: 4 }), UDID);
+    expect(delta.action).toEqual({ kind: "drop", reason: "awaiting-keyframe" });
+  });
+});
+
+describe("coordinate mapping", () => {
+  const geometry = {
+    frameWidth: 400,
+    frameHeight: 800,
+    displayWidth: 400,
+    displayHeight: 800,
+  };
+
+  it("maps a click one-to-one when the canvas matches the frame", () => {
+    expect(canvasPointToDevicePoint(geometry, 100, 200)).toEqual({ x: 100, y: 200 });
+  });
+
+  it("scales coordinates when the canvas is smaller than the frame", () => {
+    const scaled = { ...geometry, displayWidth: 200, displayHeight: 400 };
+    expect(canvasPointToDevicePoint(scaled, 100, 200)).toEqual({ x: 200, y: 400 });
+  });
+
+  it("accounts for letterboxing when the aspect ratios differ", () => {
+    // A tall 400x800 frame in a 800x800 box leaves 200px bars left and right.
+    const letterboxed = { ...geometry, displayWidth: 800, displayHeight: 800 };
+    const rect = deviceContainRect(letterboxed);
+    expect(rect).toEqual({ offsetX: 200, offsetY: 0, width: 400, height: 800 });
+
+    expect(canvasPointToDevicePoint(letterboxed, 400, 400)).toEqual({ x: 200, y: 400 });
+    // Inside the left bar: no device coordinate at all.
+    expect(canvasPointToDevicePoint(letterboxed, 100, 400)).toBeNull();
+    expect(canvasPointToDevicePoint(letterboxed, 700, 400)).toBeNull();
+  });
+
+  it("maps to device points when they differ from frame pixels", () => {
+    const retina = {
+      ...geometry,
+      frameWidth: 1179,
+      frameHeight: 2556,
+      displayWidth: 1179,
+      displayHeight: 2556,
+      devicePointWidth: 393,
+      devicePointHeight: 852,
+    };
+    expect(canvasPointToDevicePoint(retina, 1179, 2556)).toEqual({ x: 393, y: 852 });
+    expect(canvasPointToDevicePoint(retina, 0, 0)).toEqual({ x: 0, y: 0 });
+  });
+
+  it("returns null for a degenerate geometry rather than dividing by zero", () => {
+    expect(deviceContainRect({ ...geometry, frameWidth: 0 })).toBeNull();
+    expect(canvasPointToDevicePoint({ ...geometry, displayHeight: 0 }, 10, 10)).toBeNull();
+  });
+});
+
+describe("pointer gestures", () => {
+  it("classifies a stationary press as a tap", () => {
+    const gesture = resolveDevicePointerGesture({
+      from: { x: 10, y: 10 },
+      to: { x: 10, y: 10 },
+      durationMs: 120,
+    });
+    expect(gesture).toEqual({ kind: "tap", point: { x: 10, y: 10 } });
+  });
+
+  it("treats jitter under the threshold as a tap", () => {
+    const gesture = resolveDevicePointerGesture({
+      from: { x: 10, y: 10 },
+      to: { x: 10 + DEVICE_TAP_MOVEMENT_THRESHOLD_POINTS, y: 10 },
+      durationMs: 80,
+    });
+    expect(gesture?.kind).toBe("tap");
+  });
+
+  it("classifies real movement as a swipe and floors the duration", () => {
+    const gesture = resolveDevicePointerGesture({
+      from: { x: 10, y: 400 },
+      to: { x: 10, y: 100 },
+      durationMs: 0,
+    });
+    expect(gesture).toEqual({
+      kind: "swipe",
+      from: { x: 10, y: 400 },
+      to: { x: 10, y: 100 },
+      durationMs: 16,
+    });
+  });
+
+  it("yields no gesture when the press did not start on the screen", () => {
+    expect(
+      resolveDevicePointerGesture({ from: null, to: { x: 1, y: 1 }, durationMs: 50 }),
+    ).toBeNull();
+  });
+
+  it("falls back to a tap at the press origin when the release leaves the screen", () => {
+    const gesture = resolveDevicePointerGesture({
+      from: { x: 5, y: 5 },
+      to: null,
+      durationMs: 50,
+    });
+    expect(gesture).toEqual({ kind: "tap", point: { x: 5, y: 5 } });
+  });
+});
+
+describe("hardware button shortcuts", () => {
+  const base = { metaKey: true, shiftKey: false, altKey: false, ctrlKey: false };
+
+  it("matches the Simulator.app chords", () => {
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, shiftKey: true, key: "H" })).toBe("home");
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "l" })).toBe("lock");
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowUp" })).toBe("volume-up");
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowDown" })).toBe("volume-down");
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowRight" })).toBe("rotate");
+  });
+
+  it("leaves unrelated chords to the app", () => {
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "w" })).toBeNull();
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, metaKey: false, key: "l" })).toBeNull();
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, ctrlKey: true, key: "l" })).toBeNull();
+    // Cmd+Shift only maps Home; other Cmd+Shift chords stay with Synara.
+    expect(
+      resolveDeviceHardwareButtonShortcut({ ...base, shiftKey: true, key: "ArrowUp" }),
+    ).toBeNull();
+  });
+});
+
+describe("key translation", () => {
+  it("maps letters, digits, and named keys to HID usages", () => {
+    expect(deviceHidUsageForKey("a")).toBe(0x04);
+    expect(deviceHidUsageForKey("A")).toBe(0x04);
+    expect(deviceHidUsageForKey("z")).toBe(0x1d);
+    expect(deviceHidUsageForKey("1")).toBe(0x1e);
+    expect(deviceHidUsageForKey("9")).toBe(0x26);
+    expect(deviceHidUsageForKey("0")).toBe(0x27);
+    expect(deviceHidUsageForKey("Enter")).toBe(0x28);
+    expect(deviceHidUsageForKey("Backspace")).toBe(0x2a);
+    expect(deviceHidUsageForKey(" ")).toBe(0x2c);
+    expect(deviceHidUsageForKey("ArrowUp")).toBe(0x52);
+  });
+
+  it("returns null for keys the device has no equivalent for", () => {
+    expect(deviceHidUsageForKey("F5")).toBeNull();
+    expect(deviceHidUsageForKey("Dead")).toBeNull();
+    expect(deviceHidUsageForKey("Unidentified")).toBeNull();
+  });
+
+  it("collects the active modifiers", () => {
+    expect(
+      deviceKeyModifiers({
+        key: "a",
+        metaKey: true,
+        shiftKey: true,
+        altKey: false,
+        ctrlKey: false,
+      }),
+    ).toEqual(["command", "shift"]);
+    expect(
+      deviceKeyModifiers({
+        key: "a",
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        ctrlKey: false,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("device picker", () => {
+  it("puts the attached device first, then booted, then the rest", () => {
+    const entries = buildDevicePickerEntries({
+      devices: [
+        device({ udid: "d-shutdown" as DeviceUdid, name: "iPad", state: "shutdown" }),
+        device({ udid: "d-booted" as DeviceUdid, name: "iPhone 16", state: "booted" }),
+        device({ udid: "d-attached" as DeviceUdid, name: "iPhone SE", state: "booted" }),
+        device({ udid: "d-booting" as DeviceUdid, name: "iPhone 15", state: "booting" }),
+      ],
+      attachedDeviceUdid: "d-attached" as DeviceUdid,
+    });
+
+    expect(entries.map((entry) => entry.device.udid)).toEqual([
+      "d-attached",
+      "d-booted",
+      "d-booting",
+      "d-shutdown",
+    ]);
+    expect(entries[0]?.attached).toBe(true);
+  });
+
+  it("chooses boot-then-attach for a shut-down device and waits mid-transition", () => {
+    const entries = buildDevicePickerEntries({
+      devices: [
+        device({ udid: "a" as DeviceUdid, name: "A", state: "booted" }),
+        device({ udid: "b" as DeviceUdid, name: "B", state: "shutdown" }),
+        device({ udid: "c" as DeviceUdid, name: "C", state: "booting" }),
+        device({ udid: "d" as DeviceUdid, name: "D", state: "shutting-down" }),
+      ],
+      attachedDeviceUdid: null,
+    });
+
+    const actionByUdid = Object.fromEntries(
+      entries.map((entry) => [entry.device.udid, entry.action.kind]),
+    );
+    expect(actionByUdid).toEqual({
+      a: "attach",
+      b: "boot-then-attach",
+      c: "wait",
+      d: "wait",
+    });
+  });
+
+  it("labels each entry with its runtime and state", () => {
+    const [entry] = buildDevicePickerEntries({
+      devices: [device({ runtime: "iOS 18.2", state: "booted" })],
+      attachedDeviceUdid: null,
+    });
+    expect(entry?.detail).toBe("iOS 18.2 · Booted");
+  });
+});
+
+describe("availability", () => {
+  it("reports ready when the backend is available", () => {
+    expect(resolveDeviceAvailabilityView({ kind: "available" })).toEqual({ kind: "ready" });
+  });
+
+  it("explains an unsupported platform and marks it unrecoverable", () => {
+    const view = resolveDeviceAvailabilityView({
+      kind: "unsupported-platform",
+      platform: "linux",
+    });
+    expect(view.kind).toBe("blocked");
+    if (view.kind !== "blocked") return;
+    expect(view.description).toContain("linux");
+    expect(view.retryable).toBe(false);
+    expect(view.steps).toEqual([]);
+  });
+
+  it("passes setup steps through for the live checklist", () => {
+    const steps = [
+      { id: "install-xcode", label: "Install Xcode", done: true },
+      { id: "install-ios-runtime", label: "Install an iOS runtime", done: false },
+    ] as const;
+    const view = resolveDeviceAvailabilityView({ kind: "setup-required", steps });
+
+    expect(view.kind).toBe("blocked");
+    if (view.kind !== "blocked") return;
+    expect(view.steps).toHaveLength(2);
+    expect(view.retryable).toBe(true);
+    expect(deviceSetupProgress(view.steps)).toEqual({ done: 1, total: 2 });
+  });
+
+  it("surfaces the helper failure message verbatim", () => {
+    const view = resolveDeviceAvailabilityView({
+      kind: "helper-unavailable",
+      message: "Swift compile failed: no such module 'SimulatorKit'",
+    });
+    expect(view.kind).toBe("blocked");
+    if (view.kind !== "blocked") return;
+    expect(view.description).toBe("Swift compile failed: no such module 'SimulatorKit'");
+    expect(view.retryable).toBe(true);
+  });
+});
+
+describe("stream subscription policy", () => {
+  const booted = device({ state: "booted" });
+
+  it("subscribes only for a live, visible pane on a booted device", () => {
+    expect(
+      shouldSubscribeToDeviceStream({
+        runtimeMode: "live",
+        isVisible: true,
+        attachedDevice: booted,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays unsubscribed for preview panes, hidden tabs, and unbooted devices", () => {
+    expect(
+      shouldSubscribeToDeviceStream({
+        runtimeMode: "preview",
+        isVisible: true,
+        attachedDevice: booted,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSubscribeToDeviceStream({
+        runtimeMode: "live",
+        isVisible: false,
+        attachedDevice: booted,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSubscribeToDeviceStream({
+        runtimeMode: "live",
+        isVisible: true,
+        attachedDevice: device({ state: "booting" }),
+      }),
+    ).toBe(false);
+    expect(
+      shouldSubscribeToDeviceStream({
+        runtimeMode: "live",
+        isVisible: true,
+        attachedDevice: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("thread state helpers", () => {
+  it("resolves the attached descriptor from the thread state", () => {
+    const state = {
+      threadId: "t" as never,
+      version: 1,
+      attachedDeviceUdid: UDID,
+      devices: [device({ udid: OTHER_UDID }), device({ udid: UDID, name: "Attached" })],
+      agentActive: false,
+      availability: { kind: "available" },
+      lastError: null,
+    } as never;
+
+    expect(attachedDeviceFromThreadState(state)?.name).toBe("Attached");
+  });
+
+  it("returns null when nothing is attached or the state is missing", () => {
+    expect(attachedDeviceFromThreadState(undefined)).toBeNull();
+    expect(
+      attachedDeviceFromThreadState({
+        threadId: "t",
+        version: 1,
+        attachedDeviceUdid: null,
+        devices: [device()],
+        agentActive: false,
+        availability: { kind: "available" },
+        lastError: null,
+      } as never),
+    ).toBeNull();
+  });
+});

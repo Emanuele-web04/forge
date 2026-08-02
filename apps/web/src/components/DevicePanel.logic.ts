@@ -1,0 +1,550 @@
+// FILE: DevicePanel.logic.ts
+// Purpose: Pure decision logic for the iOS Simulator dock pane (video gating, input mapping, picker/availability views).
+// Layer: Component logic helper
+// Exports: frame-gate state machine, canvas/device coordinate mapping, hardware-button and key translation, picker + availability view models
+// Depends on: device contracts and the shared frame envelope header only — no DOM, no React.
+
+import type {
+  DeviceAvailability,
+  DeviceDescriptor,
+  DeviceFrameHeader,
+  DeviceHardwareButton,
+  DeviceKeyModifier,
+  DeviceSetupStep,
+  DeviceUdid,
+  ThreadDeviceState,
+} from "@synara/contracts";
+
+// ── Frame gating ─────────────────────────────────────────────────────
+//
+// A WebCodecs VideoDecoder must be configured from a codec-config frame (SPS/PPS)
+// before it accepts any sample, and after configuring it must receive a keyframe
+// before any delta frame or it errors out. The stream is lossy by design (the
+// server drops frames under backpressure), so sequence gaps are expected and must
+// re-arm the keyframe requirement rather than kill the pane.
+
+export type DeviceFrameGatePhase =
+  /** No codec config seen yet: nothing can be decoded. */
+  | "awaiting-config"
+  /** Configured, but no keyframe has been admitted since the last configure or gap. */
+  | "awaiting-keyframe"
+  /** Decoding normally. */
+  | "streaming";
+
+export interface DeviceFrameGateState {
+  readonly phase: DeviceFrameGatePhase;
+  /** Sequence of the last admitted frame; null before the first admission. */
+  readonly lastSequence: number | null;
+  /** Frames dropped since the gate last reached "streaming". Diagnostics only. */
+  readonly droppedSinceResync: number;
+}
+
+export type DeviceFrameGateAction =
+  /** Hand the payload to `VideoDecoder.configure` (or `decode` for media frames). */
+  | { readonly kind: "configure" }
+  | { readonly kind: "decode"; readonly keyframe: boolean }
+  /** Frame cannot be decoded in the current phase. */
+  | { readonly kind: "drop"; readonly reason: DeviceFrameDropReason }
+  /** Frame belongs to another device/thread and was never ours to decode. */
+  | { readonly kind: "ignore" };
+
+export type DeviceFrameDropReason =
+  | "no-codec-config"
+  | "awaiting-keyframe"
+  | "sequence-gap"
+  | "stale-sequence";
+
+export interface DeviceFrameGateStep {
+  readonly state: DeviceFrameGateState;
+  readonly action: DeviceFrameGateAction;
+  /**
+   * True when the gate newly needs a keyframe it cannot produce itself, so the
+   * caller should ask the server for one instead of waiting for the next
+   * natural IDR (which may be seconds away at a low keyframe interval).
+   */
+  readonly requestKeyframe: boolean;
+}
+
+export function createDeviceFrameGateState(): DeviceFrameGateState {
+  return { phase: "awaiting-config", lastSequence: null, droppedSinceResync: 0 };
+}
+
+// u32 sequence wraps, so "next" is computed modulo 2^32 rather than by addition.
+const SEQUENCE_MODULUS = 2 ** 32;
+
+export function isNextDeviceFrameSequence(previous: number, next: number): boolean {
+  return (previous + 1) % SEQUENCE_MODULUS === next;
+}
+
+/**
+ * Distance from `previous` to `next` going forward through the wrap point.
+ * Used to tell a small forward gap (dropped frames) from a stale/reordered
+ * frame, which would otherwise look like an enormous forward jump.
+ */
+function forwardSequenceDistance(previous: number, next: number): number {
+  return (next - previous + SEQUENCE_MODULUS) % SEQUENCE_MODULUS;
+}
+
+// Beyond this, a "forward" jump is far more likely a stale frame from a previous
+// stream generation than a real burst of drops, so it is discarded rather than
+// treated as a gap.
+const MAX_PLAUSIBLE_SEQUENCE_GAP = 1_024;
+
+export function stepDeviceFrameGate(
+  state: DeviceFrameGateState,
+  header: Pick<DeviceFrameHeader, "deviceId" | "sequence" | "keyframe" | "codecConfig">,
+  expectedDeviceId: DeviceUdid | string | null,
+): DeviceFrameGateStep {
+  if (expectedDeviceId === null || header.deviceId !== expectedDeviceId) {
+    return { state, action: { kind: "ignore" }, requestKeyframe: false };
+  }
+
+  // Codec config re-arms the keyframe requirement: a new parameter set means the
+  // decoder is reconfigured, and a decoder cannot resume mid-GOP after that.
+  if (header.codecConfig) {
+    return {
+      state: {
+        phase: "awaiting-keyframe",
+        lastSequence: header.sequence,
+        droppedSinceResync: 0,
+      },
+      action: { kind: "configure" },
+      requestKeyframe: state.phase !== "awaiting-keyframe",
+    };
+  }
+
+  if (state.phase === "awaiting-config") {
+    return {
+      state: { ...state, droppedSinceResync: state.droppedSinceResync + 1 },
+      action: { kind: "drop", reason: "no-codec-config" },
+      requestKeyframe: false,
+    };
+  }
+
+  if (state.lastSequence !== null) {
+    const distance = forwardSequenceDistance(state.lastSequence, header.sequence);
+    if (distance === 0 || distance > MAX_PLAUSIBLE_SEQUENCE_GAP) {
+      // Reordered, duplicated, or from a previous stream generation. Dropping it
+      // keeps `lastSequence` monotonic so one stale frame cannot wedge the gate.
+      return {
+        state: { ...state, droppedSinceResync: state.droppedSinceResync + 1 },
+        action: { kind: "drop", reason: "stale-sequence" },
+        requestKeyframe: false,
+      };
+    }
+    if (distance > 1 && !header.keyframe && state.phase === "streaming") {
+      // Frames were dropped mid-GOP. Decoding onward would render visible
+      // corruption, so hold until the next keyframe and ask for one now.
+      return {
+        state: {
+          phase: "awaiting-keyframe",
+          lastSequence: header.sequence,
+          droppedSinceResync: state.droppedSinceResync + 1,
+        },
+        action: { kind: "drop", reason: "sequence-gap" },
+        requestKeyframe: true,
+      };
+    }
+  }
+
+  if (state.phase === "awaiting-keyframe" && !header.keyframe) {
+    return {
+      state: {
+        ...state,
+        lastSequence: header.sequence,
+        droppedSinceResync: state.droppedSinceResync + 1,
+      },
+      action: { kind: "drop", reason: "awaiting-keyframe" },
+      requestKeyframe: false,
+    };
+  }
+
+  return {
+    state: { phase: "streaming", lastSequence: header.sequence, droppedSinceResync: 0 },
+    action: { kind: "decode", keyframe: header.keyframe },
+    requestKeyframe: false,
+  };
+}
+
+/**
+ * Drops back to the pre-config phase. Used on decoder error and on
+ * detach/resubscribe, where the next stream may carry different parameter sets.
+ */
+export function resetDeviceFrameGate(): DeviceFrameGateState {
+  return createDeviceFrameGateState();
+}
+
+// ── Coordinate mapping ───────────────────────────────────────────────
+
+export interface DeviceCanvasGeometry {
+  /** Decoded frame size in pixels. */
+  readonly frameWidth: number;
+  readonly frameHeight: number;
+  /** Rendered canvas size in CSS pixels (its bounding box). */
+  readonly displayWidth: number;
+  readonly displayHeight: number;
+}
+
+export interface DevicePoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * Frames arrive at the device's native pixel resolution while input is injected
+ * in device points, so the scale factor is derived from the frame rather than
+ * assumed: `object-fit: contain` letterboxes, and a click in a letterbox band
+ * has no device coordinate at all.
+ */
+export function deviceContainRect(geometry: DeviceCanvasGeometry): {
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly width: number;
+  readonly height: number;
+} | null {
+  const { frameWidth, frameHeight, displayWidth, displayHeight } = geometry;
+  if (
+    !Number.isFinite(frameWidth) ||
+    !Number.isFinite(frameHeight) ||
+    frameWidth <= 0 ||
+    frameHeight <= 0 ||
+    displayWidth <= 0 ||
+    displayHeight <= 0
+  ) {
+    return null;
+  }
+  const scale = Math.min(displayWidth / frameWidth, displayHeight / frameHeight);
+  const width = frameWidth * scale;
+  const height = frameHeight * scale;
+  return {
+    offsetX: (displayWidth - width) / 2,
+    offsetY: (displayHeight - height) / 2,
+    width,
+    height,
+  };
+}
+
+/**
+ * Maps a pointer position (relative to the canvas bounding box) to device
+ * points. Returns null for clicks in the letterbox bands, which must not be
+ * clamped onto the screen edge — a stray tap at (0, y) is worse than no tap.
+ */
+export function canvasPointToDevicePoint(
+  geometry: DeviceCanvasGeometry & {
+    /** Device screen size in points; falls back to frame pixels when unknown. */
+    readonly devicePointWidth?: number;
+    readonly devicePointHeight?: number;
+  },
+  canvasX: number,
+  canvasY: number,
+): DevicePoint | null {
+  const rect = deviceContainRect(geometry);
+  if (!rect) return null;
+
+  const withinX = canvasX - rect.offsetX;
+  const withinY = canvasY - rect.offsetY;
+  if (withinX < 0 || withinY < 0 || withinX > rect.width || withinY > rect.height) {
+    return null;
+  }
+
+  const pointWidth = geometry.devicePointWidth ?? geometry.frameWidth;
+  const pointHeight = geometry.devicePointHeight ?? geometry.frameHeight;
+  // Round to whole points: the helper injects integral HID coordinates, and a
+  // fractional point would be truncated inconsistently across the hop.
+  return {
+    x: clampToRange(Math.round((withinX / rect.width) * pointWidth), 0, pointWidth),
+    y: clampToRange(Math.round((withinY / rect.height) * pointHeight), 0, pointHeight),
+  };
+}
+
+function clampToRange(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+// ── Tap vs swipe ─────────────────────────────────────────────────────
+
+/**
+ * Below this movement a drag is a tap: trackpads and touchscreens jitter a few
+ * pixels during a press, and sending a 3px swipe instead of a tap makes buttons
+ * feel unreliable.
+ */
+export const DEVICE_TAP_MOVEMENT_THRESHOLD_POINTS = 8;
+
+export type DevicePointerGesture =
+  | { readonly kind: "tap"; readonly point: DevicePoint }
+  | {
+      readonly kind: "swipe";
+      readonly from: DevicePoint;
+      readonly to: DevicePoint;
+      readonly durationMs: number;
+    };
+
+/**
+ * Classifies a completed pointer interaction. A press that started or ended
+ * outside the screen area yields no gesture rather than a clamped one.
+ */
+export function resolveDevicePointerGesture(input: {
+  readonly from: DevicePoint | null;
+  readonly to: DevicePoint | null;
+  readonly durationMs: number;
+  readonly movementThreshold?: number;
+}): DevicePointerGesture | null {
+  const { from, to } = input;
+  if (!from) return null;
+  if (!to) return { kind: "tap", point: from };
+
+  const threshold = input.movementThreshold ?? DEVICE_TAP_MOVEMENT_THRESHOLD_POINTS;
+  const distance = Math.hypot(to.x - from.x, to.y - from.y);
+  if (distance <= threshold) {
+    return { kind: "tap", point: to };
+  }
+  return {
+    kind: "swipe",
+    from,
+    to,
+    // A zero-duration swipe is rejected by the helper as a flick with infinite
+    // velocity; clamp to a single frame's worth of time.
+    durationMs: Math.max(16, Math.round(input.durationMs)),
+  };
+}
+
+// ── Hardware buttons and keyboard ────────────────────────────────────
+
+export interface DeviceShortcutEventLike {
+  readonly key: string;
+  readonly code?: string;
+  readonly metaKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+  readonly ctrlKey: boolean;
+}
+
+/**
+ * Simulator.app's hardware chords, matched before keyboard passthrough so the
+ * muscle memory carries over. Everything else with Cmd held is left to the
+ * browser/app rather than injected, since Cmd+W/Cmd+R on a focused canvas must
+ * still reach Synara.
+ */
+export function resolveDeviceHardwareButtonShortcut(
+  event: DeviceShortcutEventLike,
+): DeviceHardwareButton | null {
+  if (!event.metaKey || event.ctrlKey) return null;
+
+  const key = event.key.toLowerCase();
+  if (event.shiftKey) {
+    return key === "h" ? "home" : null;
+  }
+  if (key === "l") return "lock";
+  if (event.key === "ArrowUp") return "volume-up";
+  if (event.key === "ArrowDown") return "volume-down";
+  if (event.key === "ArrowRight") return "rotate";
+  return null;
+}
+
+export function deviceKeyModifiers(event: DeviceShortcutEventLike): DeviceKeyModifier[] {
+  const modifiers: DeviceKeyModifier[] = [];
+  if (event.metaKey) modifiers.push("command");
+  if (event.shiftKey) modifiers.push("shift");
+  if (event.altKey) modifiers.push("option");
+  if (event.ctrlKey) modifiers.push("control");
+  return modifiers;
+}
+
+// HID usage codes (page 0x07) for the keys the pane forwards. Letters and digits
+// are computed; only the named keys need a table.
+const HID_USAGE_BY_KEY: Readonly<Record<string, number>> = {
+  Enter: 0x28,
+  Escape: 0x29,
+  Backspace: 0x2a,
+  Tab: 0x2b,
+  " ": 0x2c,
+  "-": 0x2d,
+  "=": 0x2e,
+  "[": 0x2f,
+  "]": 0x30,
+  "\\": 0x31,
+  ";": 0x33,
+  "'": 0x34,
+  "`": 0x35,
+  ",": 0x36,
+  ".": 0x37,
+  "/": 0x38,
+  ArrowRight: 0x4f,
+  ArrowLeft: 0x50,
+  ArrowDown: 0x51,
+  ArrowUp: 0x52,
+};
+
+const HID_USAGE_A = 0x04;
+const HID_USAGE_1 = 0x1e;
+const HID_USAGE_0 = 0x27;
+
+/**
+ * Translates a DOM key to a HID usage code. Returns null for keys the device
+ * has no equivalent for (function keys, dead keys, IME composition), which are
+ * dropped rather than guessed at.
+ */
+export function deviceHidUsageForKey(key: string): number | null {
+  if (key.length === 1) {
+    const lower = key.toLowerCase();
+    const codePoint = lower.codePointAt(0);
+    if (codePoint === undefined) return null;
+    if (lower >= "a" && lower <= "z") {
+      return HID_USAGE_A + (codePoint - 97);
+    }
+    if (lower === "0") return HID_USAGE_0;
+    if (lower >= "1" && lower <= "9") {
+      return HID_USAGE_1 + (codePoint - 49);
+    }
+  }
+  return HID_USAGE_BY_KEY[key] ?? null;
+}
+
+// ── Device picker ────────────────────────────────────────────────────
+
+export type DevicePickerAction =
+  /** Already booted: attaching is all that is needed. */
+  | { readonly kind: "attach" }
+  /** Shut down: boot first, then attach when the boot resolves. */
+  | { readonly kind: "boot-then-attach" }
+  /** Mid-transition: selecting would race the state machine. */
+  | { readonly kind: "wait" };
+
+export interface DevicePickerEntry {
+  readonly device: DeviceDescriptor;
+  readonly attached: boolean;
+  readonly action: DevicePickerAction;
+  /** Secondary line, e.g. `iOS 18.2 · Booted`. */
+  readonly detail: string;
+}
+
+const RUNTIME_STATE_LABELS = {
+  shutdown: "Shut down",
+  booting: "Booting",
+  booted: "Booted",
+  "shutting-down": "Shutting down",
+} as const satisfies Record<DeviceDescriptor["state"], string>;
+
+export function deviceRuntimeStateLabel(state: DeviceDescriptor["state"]): string {
+  return RUNTIME_STATE_LABELS[state];
+}
+
+function devicePickerAction(state: DeviceDescriptor["state"]): DevicePickerAction {
+  switch (state) {
+    case "booted":
+      return { kind: "attach" };
+    case "shutdown":
+      return { kind: "boot-then-attach" };
+    default:
+      return { kind: "wait" };
+  }
+}
+
+/**
+ * Booted devices sort first so the common case (pick the running simulator) is
+ * one click away; within a group, name order keeps the list stable as states
+ * churn during boots.
+ */
+export function buildDevicePickerEntries(input: {
+  readonly devices: readonly DeviceDescriptor[];
+  readonly attachedDeviceUdid: DeviceUdid | null;
+}): readonly DevicePickerEntry[] {
+  const rank = (device: DeviceDescriptor): number => {
+    if (device.udid === input.attachedDeviceUdid) return 0;
+    if (device.state === "booted") return 1;
+    if (device.state === "booting") return 2;
+    return 3;
+  };
+
+  return input.devices
+    .toSorted((left, right) => rank(left) - rank(right) || left.name.localeCompare(right.name))
+    .map((device) => ({
+      device,
+      attached: device.udid === input.attachedDeviceUdid,
+      action: devicePickerAction(device.state),
+      detail: `${device.runtime} · ${deviceRuntimeStateLabel(device.state)}`,
+    }));
+}
+
+// ── Availability ─────────────────────────────────────────────────────
+
+export type DeviceAvailabilityView =
+  | { readonly kind: "ready" }
+  | {
+      readonly kind: "blocked";
+      readonly title: string;
+      readonly description: string;
+      /** Present only for setup-required; drives the live checklist. */
+      readonly steps: readonly DeviceSetupStep[];
+      /** Whether the pane should keep polling/listening for a state change. */
+      readonly retryable: boolean;
+    };
+
+export function resolveDeviceAvailabilityView(
+  availability: DeviceAvailability,
+): DeviceAvailabilityView {
+  switch (availability.kind) {
+    case "available":
+      return { kind: "ready" };
+    case "unsupported-platform":
+      return {
+        kind: "blocked",
+        title: "iOS Simulator needs macOS",
+        description: `This Synara server runs on ${availability.platform}. Simulators are only available when the server runs on a Mac with Xcode installed.`,
+        steps: [],
+        retryable: false,
+      };
+    case "setup-required":
+      return {
+        kind: "blocked",
+        title: "Finish setting up the simulator",
+        description:
+          "Synara needs Xcode and an iOS runtime before it can stream a simulator. Steps check off on their own as you complete them.",
+        steps: availability.steps,
+        retryable: true,
+      };
+    case "helper-unavailable":
+      return {
+        kind: "blocked",
+        title: "Simulator helper could not start",
+        description: availability.message,
+        steps: [],
+        retryable: true,
+      };
+  }
+}
+
+export function deviceSetupProgress(steps: readonly DeviceSetupStep[]): {
+  readonly done: number;
+  readonly total: number;
+} {
+  return { done: steps.filter((step) => step.done).length, total: steps.length };
+}
+
+// ── Thread state helpers ─────────────────────────────────────────────
+
+export function attachedDeviceFromThreadState(
+  state: ThreadDeviceState | undefined,
+): DeviceDescriptor | null {
+  if (!state?.attachedDeviceUdid) return null;
+  return state.devices.find((device) => device.udid === state.attachedDeviceUdid) ?? null;
+}
+
+/**
+ * The stream is only worth holding when the pane is live, a device is attached,
+ * and that device is actually booted. Preview panes (restored but not yet
+ * activated) and hidden tabs unsubscribe so a background thread never decodes
+ * H.264 it will not paint.
+ */
+export function shouldSubscribeToDeviceStream(input: {
+  readonly runtimeMode: "live" | "preview";
+  readonly isVisible: boolean;
+  readonly attachedDevice: DeviceDescriptor | null;
+}): boolean {
+  return (
+    input.runtimeMode === "live" &&
+    input.isVisible &&
+    input.attachedDevice !== null &&
+    input.attachedDevice.state === "booted"
+  );
+}
