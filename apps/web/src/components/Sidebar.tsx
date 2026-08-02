@@ -310,7 +310,7 @@ import {
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import type { LastThreadRoute } from "../chatRouteRestore";
-import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
+import { useCopyPathToClipboard, useCopyThreadIdToClipboard, useCopyThreadLinkToClipboard } from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
 import {
@@ -2715,6 +2715,7 @@ export default function Sidebar() {
   );
 
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
+  const copyThreadLinkToClipboard = useCopyThreadLinkToClipboard();
   const copyPathToClipboard = useCopyPathToClipboard();
   const handoffThread = useCallback(
     async (thread: Thread, targetProvider: ProviderKind) => {
@@ -2790,6 +2791,7 @@ export default function Sidebar() {
           ...(threadWorkspacePath
             ? [{ id: "open-path-in-terminal", label: "Open Path in Terminal" }]
             : []),
+          { id: "copy-link", label: "Copy link" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           ...(options?.extraItems ?? []),
           // Subagent threads are archived and restored through their parent
@@ -2930,6 +2932,10 @@ export default function Sidebar() {
         }
         return;
       }
+      if (clicked === "copy-link") {
+        copyThreadLinkToClipboard(threadId);
+        return;
+      }
       if (clicked === "copy-thread-id") {
         copyThreadIdToClipboard(threadId);
         return;
@@ -2950,6 +2956,7 @@ export default function Sidebar() {
       confirmAndDeleteThread,
       copyPathToClipboard,
       copyThreadIdToClipboard,
+      copyThreadLinkToClipboard,
       clearDismissedThreadStatus,
       clearThreadNotification,
       handoffThread,

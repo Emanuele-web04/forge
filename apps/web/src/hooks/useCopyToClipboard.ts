@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { toastManager } from "../components/ui/toast";
+import { buildThreadLinkUrl } from "../lib/threadLink";
 
 function fallbackCopyTextToClipboard(value: string): boolean {
   if (typeof document === "undefined" || typeof document.execCommand !== "function") {
@@ -170,4 +171,30 @@ export function useCopyThreadIdToClipboard(): (threadId: string) => void {
       }),
   });
   return (threadId: string) => copyToClipboard(threadId, { threadId });
+}
+
+/** Copy a browser-openable thread URL (Codex-style "Copy link"). */
+export function useCopyThreadLinkToClipboard(): (threadId: string) => void {
+  const { copyToClipboard } = useCopyToClipboard<{ url: string }>({
+    onCopy: (ctx) =>
+      toastManager.add({ type: "success", title: "Link copied", description: ctx.url }),
+    onError: (error) =>
+      toastManager.add({
+        type: "error",
+        title: "Failed to copy link",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      }),
+  });
+  return (threadId: string) => {
+    try {
+      const url = buildThreadLinkUrl(threadId);
+      copyToClipboard(url, { url });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Failed to copy link",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    }
+  };
 }
