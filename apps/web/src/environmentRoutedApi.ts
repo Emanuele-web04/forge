@@ -4,9 +4,10 @@
 // Layer: Web transport routing
 // Exports: createEnvironmentRoutedApi, ROUTED_METHODS, LOCAL_ONLY_THREAD_METHODS
 //
-// SCOPE: thread- and project-keyed calls only. Calls keyed by a bare `cwd`
-// path are NOT routed and still run locally — see the KNOWN GAP note above
-// `readStringField` before assuming any operation follows a thread to its host.
+// SCOPE: every call that names a target. Thread- and project-keyed calls route
+// by their id (ROUTED_METHODS); calls keyed by a bare `cwd` route by PATH
+// OWNERSHIP (CWD_ROUTED_METHODS), which can also answer "unknown" and refuse.
+// Both sets are enforced against the NativeApi contract at type-check time.
 
 import type { NativeApi, ThreadId } from "@synara/contracts";
 
@@ -17,6 +18,7 @@ import {
   resolveProjectEnvironmentId,
   resolveThreadEnvironmentId,
 } from "./environmentRouting";
+import { resolvePathEnvironment, UnknownPathEnvironmentError } from "./environmentPathRouting";
 import { useStore } from "./store";
 
 /**
@@ -96,35 +98,104 @@ export const LOCAL_ONLY_THREAD_METHODS = {
 } as const satisfies { readonly [G in keyof NativeApi]?: ReadonlyArray<keyof NativeApi[G]> };
 
 /**
- * KNOWN GAP — `cwd`-keyed calls are NOT routed. Do not read this module as
- * covering them.
+ * `cwd`-keyed methods routed by PATH OWNERSHIP rather than by a thread or
+ * project id.
  *
- * Roughly 35 inputs identify their target by a bare filesystem path (`cwd`)
- * and carry no thread or project id: 22 `git.*` methods (checkout,
- * createBranch, createWorktree, stageFiles, pull, status, ...), 6 `project.*`
- * (readFile, writeFile, runDevServer, ...), `filesystem.browse`,
- * `shell.openInEditor`, `provider.listModels`/`listAgents`/`skillsCatalog`,
- * and two `server.generate*` methods. A path carries no host identity, so the
- * thread/project key this module routes on cannot answer for them, and they
- * all run on the LOCAL server.
+ * These inputs identify their target by a bare filesystem path and carry no
+ * routing key of their own. Unrouted they all ran on the LOCAL server, and
+ * because `/Users/me/dev/foo` plausibly exists on both machines the failure was
+ * not an error but a SILENT SUCCESS against the wrong checkout — `git.checkout`
+ * or `projects.writeFile` landing on the laptop while the UI said the thread
+ * ran on a remote host. Data loss, not a wrong result.
  *
- * Why this is worse than a plain missing feature: `/Users/me/dev/foo`
- * plausibly exists on BOTH machines. The failure is therefore not an error but
- * a SILENT SUCCESS against the wrong checkout — `git.checkout` or
- * `project.writeFile` landing on the laptop while the UI says the thread runs
- * on a remote host. That is data loss, not a wrong result.
+ * Resolution is `resolvePathEnvironment` (environmentPathRouting.ts), which
+ * answers local / remote / UNKNOWN. Unknown is a value this module must handle,
+ * not something that decays to local: with no remote host registered it means
+ * local (a local-only install is unchanged), and once a remote host exists it
+ * REFUSES naming the path.
  *
- * `git.handoffThread` is the one member of that family fixable today, because
- * it happens to carry `threadId` alongside `cwd`; it is routed above.
- *
- * The agreed fix is a path-ownership index over project `workspaceRoot` and
- * thread `worktreePath` feeding a three-state resolver
- * (`local` | `remote` | `unknown`), where `unknown` resolves local while no
- * remote host is registered and refuses once one is. It is deliberately NOT in
- * this change: it is a larger, separately-reviewable piece of work. Until it
- * lands, any UI that lets a user create work on a remote host must not imply
- * that path-scoped operations follow it there.
+ * Membership is enforced against the contract at type-check time by
+ * `environmentRoutingCoverage.test-d.ts`, exactly as for thread-scoped methods.
  */
+export const CWD_ROUTED_METHODS = {
+  git: [
+    "checkout",
+    "createBranch",
+    "createDetachedWorktree",
+    "createWorktree",
+    "githubRepository",
+    "init",
+    "listBranches",
+    "preparePullRequestThread",
+    "pull",
+    "pullRequestSnapshot",
+    "readWorkingTreeDiff",
+    "removeIndexLock",
+    "removeWorktree",
+    "resolvePullRequest",
+    "runStackedAction",
+    "stageFiles",
+    "stashAndCheckout",
+    "stashDrop",
+    "stashInfo",
+    "status",
+    "summarizeDiff",
+    "unstageFiles",
+    "workingTreeDiffStats",
+  ],
+  projects: [
+    "discoverScripts",
+    "listDirectories",
+    "readFile",
+    "runDevServer",
+    "searchEntries",
+    "writeFile",
+  ],
+  // Discovery reads config and binaries from the checkout's own machine: a
+  // remote thread's available models, agents, skills and plugins are the REMOTE
+  // host's. Several of these take an OPTIONAL `cwd`; when it is absent the call
+  // resolves local, which is the same answer as before — there is no path to
+  // send anywhere.
+  provider: [
+    "listAgents",
+    "listCommands",
+    "listModels",
+    "listPlugins",
+    "listSkills",
+    "listSkillsCatalog",
+    "readPlugin",
+  ],
+  // Both read the thread's working tree to build their prompt.
+  server: ["generateAutomationIntent", "generateThreadRecap"],
+} as const satisfies { readonly [G in keyof NativeApi]?: ReadonlyArray<keyof NativeApi[G]> };
+
+/**
+ * `cwd`-keyed methods deliberately routed by something OTHER than the path, or
+ * not routed at all, and why.
+ *
+ * Every one of these carries a `cwd` but must not be resolved by it:
+ *   - `terminal.open` / `terminal.restart` and `git.handoffThread` also carry
+ *     `threadId`, which is the more specific key and is already routed by
+ *     `ROUTED_METHODS`. Routing them twice could disagree with itself.
+ *   - `browser.annotations` is a webview surface on the user's own machine
+ *     (see LOCAL_ONLY_THREAD_METHODS).
+ *   - `server.transcribeVoice` uploads audio recorded by the user's microphone
+ *     and is addressed per-environment by `wsNativeApi` already; its `cwd` is
+ *     context for the transcript, not the resource being acted on.
+ *   - `filesystem.browse` shows the machine the USER is sitting at. On a remote
+ *     host it would list the wrong machine's folders under the right names, so
+ *     it is REFUSED by the `local-filesystem-browse` capability
+ *     (environmentCapabilities.ts) rather than routed: the answer has to come
+ *     from this machine or not at all.
+ */
+export const CWD_LOCAL_OR_THREAD_ROUTED_METHODS = {
+  terminal: ["open", "restart"],
+  git: ["handoffThread"],
+  browser: ["annotations"],
+  server: ["transcribeVoice"],
+  filesystem: ["browse"],
+} as const satisfies { readonly [G in keyof NativeApi]?: ReadonlyArray<keyof NativeApi[G]> };
+
 function readStringField(argument: unknown, field: string): string | null {
   if (typeof argument !== "object" || argument === null) return null;
   const candidate = (argument as Record<string, unknown>)[field];
@@ -216,6 +287,42 @@ export function createEnvironmentRoutedApi(localApi: NativeApi): NativeApi {
         }
         const owner = environmentNativeApi(environmentId);
         if (!owner) return Promise.reject(new EnvironmentUnavailableError(environmentId));
+        const ownerGroup = owner[group as keyof NativeApi] as Record<string, unknown>;
+        return (ownerGroup[method] as (...a: readonly unknown[]) => unknown)(...args);
+      };
+    }
+
+    routed[group] = routedGroup;
+  }
+
+  for (const [group, methods] of Object.entries(CWD_ROUTED_METHODS)) {
+    const localGroup = localApi[group as keyof NativeApi] as Record<string, unknown> | undefined;
+    if (!localGroup) continue;
+    // Start from whatever the thread/project pass produced for this group, so a
+    // group carrying BOTH kinds (git) keeps its already-routed members.
+    const routedGroup: Record<string, unknown> = { ...(routed[group] ?? localGroup) };
+
+    for (const method of methods as ReadonlyArray<string>) {
+      const localImplementation = localGroup[method];
+      if (typeof localImplementation !== "function") continue;
+
+      routedGroup[method] = (...args: readonly unknown[]) => {
+        const resolution = resolvePathEnvironment(
+          useStore.getState(),
+          readStringField(args[0], "cwd"),
+        );
+        if (resolution.kind === "local") {
+          return (localImplementation as (...a: readonly unknown[]) => unknown)(...args);
+        }
+        // Refuse rather than guess. Reached only when a remote host is
+        // registered, so the path really is ambiguous and running it on the
+        // wrong machine could change the wrong files.
+        if (resolution.kind === "unknown") {
+          return Promise.reject(new UnknownPathEnvironmentError(resolution.path));
+        }
+        const owner = environmentNativeApi(resolution.environmentId);
+        if (!owner)
+          return Promise.reject(new EnvironmentUnavailableError(resolution.environmentId));
         const ownerGroup = owner[group as keyof NativeApi] as Record<string, unknown>;
         return (ownerGroup[method] as (...a: readonly unknown[]) => unknown)(...args);
       };

@@ -20,7 +20,12 @@
 
 import type { NativeApi } from "@synara/contracts";
 
-import { LOCAL_ONLY_THREAD_METHODS, ROUTED_METHODS } from "./environmentRoutedApi";
+import {
+  CWD_LOCAL_OR_THREAD_ROUTED_METHODS,
+  CWD_ROUTED_METHODS,
+  LOCAL_ONLY_THREAD_METHODS,
+  ROUTED_METHODS,
+} from "./environmentRoutedApi";
 
 /** The declared input of a NativeApi method, or `never` for zero-arg methods. */
 type FirstArgument<F> = F extends (input: infer I, ...rest: never[]) => unknown ? I : never;
@@ -90,3 +95,87 @@ const _nothingRoutedThatIsNotThreadScoped: never = null as unknown as Exclude<
   | "orchestration.listProviderDeliveryBlockers"
 >;
 void _nothingRoutedThatIsNotThreadScoped;
+
+/**
+ * Methods of one API group whose input names a bare filesystem path.
+ *
+ * Same structural derivation as the thread-scoped set, and the reason it must
+ * exist: a `cwd` carries no host identity, so one of these left unrouted does
+ * not fail — it silently succeeds against the wrong machine's checkout.
+ *
+ * KNOWN LIMIT OF THIS CHECK: it only sees a path carried as a FIELD of the
+ * first argument. `shell.openInEditor(cwd, editor)` passes it POSITIONALLY and
+ * is therefore invisible here, as would be any future method shaped that way.
+ * All three `shell.*` methods are desktop surfaces on the user's own machine
+ * (open an editor, open a browser, reveal in Finder) and are refused on a
+ * remote host by `editor-launch` / `desktop-dialogs` in
+ * environmentCapabilities.ts rather than routed — so the gap is covered today,
+ * but it is covered by a refusal a human wrote, NOT by this check. A new
+ * positional-path method would slip through silently. Prefer an input object
+ * for anything new that names a path.
+ */
+type CwdScopedMethods<Group> = {
+  [Method in keyof Group]: FirstArgument<Group[Method]> extends { readonly cwd: string }
+    ? Method
+    : // Also catches an OPTIONAL `cwd`. `filesystem.browse` has one, and a
+      // required-only check silently omitted it — a method can be just as
+      // path-scoped when the field is optional, and the omission is invisible
+      // precisely because nothing errors.
+      undefined extends FirstArgument<Group[Method]>
+      ? never
+      : FirstArgument<Group[Method]> extends { readonly cwd?: string | undefined }
+        ? [FirstArgument<Group[Method]>] extends [never]
+          ? never
+          : Method
+        : never;
+}[keyof Group];
+
+/** `"git.checkout" | "projects.writeFile" | ...` across the whole contract. */
+type CwdScopedByContract = {
+  [Group in keyof NativeApi]: CwdScopedMethods<NativeApi[Group]> extends never
+    ? never
+    : `${Group & string}.${CwdScopedMethods<NativeApi[Group]> & string}`;
+}[keyof NativeApi];
+
+type CwdDecidedMethods =
+  | DeclaredIn<typeof CWD_ROUTED_METHODS>
+  | DeclaredIn<typeof CWD_LOCAL_OR_THREAD_ROUTED_METHODS>;
+
+/**
+ * Every `cwd`-keyed method in the contract has a routing decision.
+ *
+ * When this errors, TypeScript names the method: one whose input carries `cwd`
+ * was added without deciding whose filesystem it means. Add it to
+ * `CWD_ROUTED_METHODS` (route it by path ownership) or to
+ * `CWD_LOCAL_OR_THREAD_ROUTED_METHODS` with a comment saying what routes it
+ * instead. Do not silence this by widening the types — the failure it prevents
+ * is a write landing on the wrong machine's checkout, which nothing at runtime
+ * will catch, because it succeeds.
+ */
+const _everyCwdScopedMethodHasARoutingDecision: never = null as unknown as Exclude<
+  CwdScopedByContract,
+  CwdDecidedMethods
+>;
+void _everyCwdScopedMethodHasARoutingDecision;
+
+/** Nothing is path-routed that the contract does not actually key by `cwd`. */
+const _nothingCwdRoutedThatIsNotCwdScoped: never = null as unknown as Exclude<
+  DeclaredIn<typeof CWD_ROUTED_METHODS>,
+  CwdScopedByContract
+>;
+void _nothingCwdRoutedThatIsNotCwdScoped;
+
+/**
+ * No method is routed by BOTH its id and its path.
+ *
+ * Two routing rules for one call can disagree, and the order they run in would
+ * silently decide which machine a write lands on. `terminal.open`,
+ * `terminal.restart` and `git.handoffThread` carry a `cwd` AND a `threadId`;
+ * the id is the more specific key, so they stay in `ROUTED_METHODS` and are
+ * excused from path routing.
+ */
+const _nothingIsRoutedTwice: never = null as unknown as Extract<
+  DeclaredIn<typeof ROUTED_METHODS>,
+  DeclaredIn<typeof CWD_ROUTED_METHODS>
+>;
+void _nothingIsRoutedTwice;

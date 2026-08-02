@@ -345,6 +345,21 @@ export function withAggregatedView(state: AppState): AppState {
 }
 
 /**
+ * Environment records in aggregate order, for the path-ownership index.
+ *
+ * Exported so path routing resolves ties by the SAME precedence as thread and
+ * project ownership. Two hosts can legitimately report the same path — two
+ * clones, or `ssh localhost` where both environments are one machine — and if
+ * path routing picked a different winner than the aggregate view, the user
+ * would act on a checkout belonging to a host other than the one on screen.
+ */
+export function orderedEnvironmentEntriesForPathIndex(
+  state: AppState,
+): ReadonlyArray<readonly [string, EnvironmentState]> {
+  return orderedEnvironmentEntries(state);
+}
+
+/**
  * The environment whose record holds `threadId`, or `null` when NO record does.
  *
  * The honest answer, kept separate from `environmentIdForThread` because that

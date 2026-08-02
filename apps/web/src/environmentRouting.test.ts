@@ -34,15 +34,20 @@ const localGetSnapshot = vi.fn(async () => ({ threads: [] }));
 /**
  * Non-routed members that live on a group the router DOES wrap, mirroring the
  * real contract: `terminal.onEvent` sits beside 7 routed terminal methods, and
- * `git.status` beside the single routed `git.handoffThread`.
+ * `git.onActionProgress` beside git's routed ones.
  *
  * They exist so a test can prove the wrapper carries a group's other members
  * across untouched. `terminal.onEvent` in particular is the subscription every
  * terminal's output depends on.
+ *
+ * `git.status` used to be listed here and is NOT any more: it is `cwd`-keyed,
+ * so path routing now sends it to the host that owns the checkout. Both
+ * remaining entries are event subscriptions, which is the honest shape — a
+ * subscription is a listener on this client, not a call about a resource.
  */
 const NON_ROUTED_SIBLINGS: Readonly<Record<string, readonly string[]>> = {
   terminal: ["onEvent"],
-  git: ["status", "onActionProgress"],
+  git: ["onActionProgress"],
 };
 
 /**
@@ -57,15 +62,24 @@ function makeApi(
   subscribeThread: typeof localSubscribeThread,
 ): Record<string, unknown> {
   const api: Record<string, Record<string, unknown>> = {};
-  for (const [group, methods] of Object.entries(ROUTED_METHODS)) {
-    const groupApi: Record<string, unknown> = {};
-    for (const method of methods as readonly string[]) {
-      groupApi[method] = vi.fn(async () => ({}));
+  // Both tables, merged per group: `git` appears in each (handoffThread is
+  // id-routed, checkout and friends are path-routed), so a per-group reset here
+  // would silently leave one set as `undefined` and its tests exercising
+  // nothing.
+  const tables = [ROUTED_METHODS, CWD_ROUTED_METHODS] as ReadonlyArray<
+    Readonly<Record<string, readonly string[]>>
+  >;
+  for (const table of tables) {
+    for (const [group, methods] of Object.entries(table)) {
+      const groupApi: Record<string, unknown> = { ...api[group] };
+      for (const method of methods) {
+        groupApi[method] = vi.fn(async () => ({}));
+      }
+      for (const sibling of NON_ROUTED_SIBLINGS[group] ?? []) {
+        groupApi[sibling] = vi.fn(() => vi.fn());
+      }
+      api[group] = groupApi;
     }
-    for (const sibling of NON_ROUTED_SIBLINGS[group] ?? []) {
-      groupApi[sibling] = vi.fn(() => vi.fn());
-    }
-    api[group] = groupApi;
   }
   api.orchestration = {
     ...api.orchestration,
@@ -126,9 +140,9 @@ function ownThread(environmentId: string, threadId: ThreadId): void {
 }
 
 /** Places a project in an environment's record. */
-function ownProject(environmentId: string, projectId: string): void {
+function ownProject(environmentId: string, projectId: string, cwd?: string): void {
   const record = environmentRecord(environmentId);
-  (record.projects as unknown[]).push({ id: projectId });
+  (record.projects as unknown[]).push({ id: projectId, ...(cwd ? { cwd } : {}) });
 }
 
 vi.mock("./store", () => ({
@@ -137,9 +151,11 @@ vi.mock("./store", () => ({
 
 import {
   createEnvironmentRoutedApi,
+  CWD_ROUTED_METHODS,
   LOCAL_ONLY_THREAD_METHODS,
   ROUTED_METHODS,
 } from "./environmentRoutedApi";
+import { UnknownPathEnvironmentError } from "./environmentPathRouting";
 import {
   claimThreadEnvironment,
   EnvironmentUnavailableError,
@@ -481,6 +497,109 @@ describe("non-routed members of a routed group", () => {
   });
 });
 
+describe("cwd-keyed calls route by path ownership", () => {
+  const LOCAL_CWD = "/Users/me/dev/laptop-app";
+  const REMOTE_CWD = "/srv/vps-service";
+
+  function ownPaths(): void {
+    ownProject(LOCAL_ENVIRONMENT_ID, "project-local", LOCAL_CWD);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote", REMOTE_CWD);
+  }
+
+  it("runs git.checkout against the checkout whose host owns that path", async () => {
+    // The failure this closes: unrouted, this ran on the LOCAL machine, and
+    // because the same path plausibly exists on both it succeeded — against the
+    // wrong working tree.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownPaths();
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.git.checkout({ cwd: `${REMOTE_CWD}/src`, ref: "main" } as never);
+
+    expect(spyFor(remoteClient, "git", "checkout")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "git", "checkout")).not.toHaveBeenCalled();
+  });
+
+  it("keeps a local path's write on the local machine", async () => {
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownPaths();
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.projects.writeFile({ cwd: LOCAL_CWD, path: "a.ts", content: "" } as never);
+
+    expect(spyFor(localClient, "projects", "writeFile")).toHaveBeenCalledTimes(1);
+    expect(spyFor(remoteClient, "projects", "writeFile")).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES an unowned path once a remote host exists, running it nowhere", async () => {
+    // Fail-closed: a silent write to the wrong checkout is unrecoverable, a
+    // refusal costs a click. Crucially it does NOT fall through to local.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownPaths();
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await expect(
+      api.projects.writeFile({ cwd: "/tmp/scratch", path: "a.ts", content: "" } as never),
+    ).rejects.toBeInstanceOf(UnknownPathEnvironmentError);
+
+    expect(spyFor(localClient, "projects", "writeFile")).not.toHaveBeenCalled();
+    expect(spyFor(remoteClient, "projects", "writeFile")).not.toHaveBeenCalled();
+  });
+
+  it("runs an unowned path locally when NO remote host is registered", async () => {
+    // A local-only install must behave exactly as it does today: no migration,
+    // no new refusals, nothing to click.
+    ownProject(LOCAL_ENVIRONMENT_ID, "project-local", LOCAL_CWD);
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.projects.writeFile({ cwd: "/tmp/scratch", path: "a.ts", content: "" } as never);
+
+    expect(spyFor(localClient, "projects", "writeFile")).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses rather than running locally when the owning host is disconnected", async () => {
+    // The host is known but not connected. Falling back to local would run a
+    // remote checkout's git command on the laptop.
+    ownPaths();
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await expect(api.git.status({ cwd: REMOTE_CWD } as never)).rejects.toBeInstanceOf(
+      EnvironmentUnavailableError,
+    );
+    expect(spyFor(localClient, "git", "status")).not.toHaveBeenCalled();
+  });
+
+  it("routes by the owning environment even when both hosts are the same machine", async () => {
+    // The `ssh localhost` shape. A resolver that stat'd the filesystem or
+    // compared hostnames would look correct here and fail on a real VPS, so
+    // this pins that ownership comes from the store record alone.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(LOCAL_ENVIRONMENT_ID, "project-local", "/Users/me/dev/app");
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote", "/Users/me/dev/app/service");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.git.status({ cwd: "/Users/me/dev/app/service/src" } as never);
+
+    expect(spyFor(remoteClient, "git", "status")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "git", "status")).not.toHaveBeenCalled();
+  });
+
+  it("still routes git.handoffThread by its threadId, not its cwd", async () => {
+    // It carries both keys. The id is the more specific one, and routing it
+    // twice could disagree with itself — the type-level check forbids listing
+    // it in both tables, and this proves the runtime honours the id.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownThread(REMOTE_ENVIRONMENT_ID, REMOTE_THREAD_ID);
+    ownProject(LOCAL_ENVIRONMENT_ID, "project-local", LOCAL_CWD);
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.git.handoffThread({ threadId: REMOTE_THREAD_ID, cwd: LOCAL_CWD } as never);
+
+    expect(spyFor(remoteClient, "git", "handoffThread")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "git", "handoffThread")).not.toHaveBeenCalled();
+  });
+});
+
 describe("the routing decision tables", () => {
   it("leaves the server-wide orchestration methods unrouted", () => {
     for (const method of ["getSnapshot", "getShellSnapshot", "repairState", "replayEvents"]) {
@@ -495,19 +614,21 @@ describe("the routing decision tables", () => {
     expect(LOCAL_ONLY_THREAD_METHODS.browser).toContain("navigate");
   });
 
-  it("documents that cwd-keyed calls are NOT routed by this module", () => {
-    // Pins the boundary of THIS module: a bare `cwd` carries no host identity,
-    // so the thread/project key cannot answer for it. These are routed
-    // separately by the path-ownership resolver rather than here; asserting it
-    // keeps a future contributor from "fixing" the omission by adding them to
-    // a table that cannot resolve them.
+  it("routes cwd-keyed calls by PATH, not by an id they do not carry", () => {
+    // These identify their target by a bare path and have no thread or project
+    // id, so the id table cannot resolve them and must not pretend to. They
+    // belong to the path table instead — the two are kept disjoint at
+    // type-check time so no call is resolved by two rules that could disagree.
     for (const method of ["checkout", "status", "createWorktree", "stageFiles", "pull"]) {
       expect(ROUTED_METHODS.git as readonly string[]).not.toContain(method);
+      expect(CWD_ROUTED_METHODS.git as readonly string[]).toContain(method);
     }
-    // The one cwd-family method resolvable here, because it also carries threadId.
+    // Carries BOTH keys; the id is the more specific one and wins.
     expect(ROUTED_METHODS.git as readonly string[]).toContain("handoffThread");
+    expect(CWD_ROUTED_METHODS.git as readonly string[]).not.toContain("handoffThread");
+    // Whole groups that are path-keyed only.
     expect(Object.keys(ROUTED_METHODS)).not.toContain("projects");
-    expect(Object.keys(ROUTED_METHODS)).not.toContain("filesystem");
+    expect(Object.keys(CWD_ROUTED_METHODS)).toContain("projects");
   });
 });
 
