@@ -157,6 +157,9 @@ describe("Claude context selection", () => {
     ["claude-opus-4-6", undefined, 200_000],
     ["claude-opus-4-5", "1m", undefined],
     ["claude-opus-4-6", "2m", undefined],
+    // #367: custom/proxy Claude slugs inherit the flagship auto-compact ladder.
+    ["claude/custom-opus", undefined, 200_000],
+    ["my-proxy/custom-opus", "1m", 1_000_000],
   ] as const)("resolves model=%s selection=%s to %s", (model, selected, expected) => {
     expect(resolveSelectedClaudeAutoCompactWindow(model, selected)).toBe(expected);
   });

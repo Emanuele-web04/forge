@@ -7529,10 +7529,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
+      // Spawn (1m) + live reset to the default 200k budget. Switching to a
+      // custom/discovered Claude slug (#367) keeps the flagship 200k default,
+      // so it does not emit a third auto-compact reconfiguration.
       const configuredEventsFiber = yield* Stream.filter(
         adapter.streamEvents,
         (event) => event.type === "session.configured",
-      ).pipe(Stream.take(3), Stream.runCollect, Effect.forkChild);
+      ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
 
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -7563,16 +7566,16 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      assert.deepEqual(harness.query.applyFlagSettingsCalls, [
-        { autoCompactWindow: 200_000 },
-        { autoCompactWindow: null },
-      ]);
+      // Default 200k applied once when leaving the explicit 1m selection.
+      // Custom slugs inherit the same default, so no second applyFlagSettings.
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: 200_000 }]);
+      assert.ok(harness.query.setModelCalls.includes("claude/custom-opus"));
       const configuredEvents = Array.from(yield* Fiber.join(configuredEventsFiber));
       assert.deepEqual(
         configuredEvents.map((event) =>
           event.type === "session.configured" ? event.payload.config.autoCompactWindow : undefined,
         ),
-        [1_000_000, 200_000, null],
+        [1_000_000, 200_000],
       );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
