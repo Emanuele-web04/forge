@@ -1,0 +1,310 @@
+/**
+ * FakeDeviceBackend - deterministic in-memory DeviceBackend for tests.
+ *
+ * Every observable effect is recorded and every clock is injectable, so manager
+ * lifecycle tests, tool tests, and frame-transport tests can run identically on
+ * any platform without Xcode, a simulator, or the native helper.
+ *
+ * @module device/FakeDeviceBackend
+ */
+import type {
+  DeviceAvailability,
+  DeviceDescribeUiResult,
+  DeviceDescriptor,
+  DeviceHardwareButton,
+  DeviceInstallAppResult,
+  DeviceLaunchAppResult,
+  DeviceScreenshotResult,
+} from "@synara/contracts";
+
+import {
+  DeviceBackendError,
+  type DeviceBackend,
+  type DeviceFrameListener,
+  type DeviceKeyEvent,
+  type DeviceListOptions,
+  type DeviceStreamFrame,
+  type DeviceSwipeGesture,
+} from "./DeviceBackend.ts";
+
+export interface FakeDeviceSeed {
+  readonly udid: string;
+  readonly name: string;
+  readonly runtime: string;
+  readonly state?: DeviceDescriptor["state"];
+}
+
+export type FakeDeviceCall =
+  | { readonly kind: "boot"; readonly udid: string }
+  | { readonly kind: "shutdown"; readonly udid: string }
+  | { readonly kind: "install"; readonly udid: string; readonly appPath: string }
+  | { readonly kind: "launch"; readonly udid: string; readonly bundleId: string }
+  | { readonly kind: "openUrl"; readonly udid: string; readonly url: string }
+  | { readonly kind: "tap"; readonly udid: string; readonly x: number; readonly y: number }
+  | { readonly kind: "swipe"; readonly udid: string; readonly gesture: DeviceSwipeGesture }
+  | { readonly kind: "typeText"; readonly udid: string; readonly text: string }
+  | { readonly kind: "keyEvent"; readonly udid: string; readonly event: DeviceKeyEvent }
+  | { readonly kind: "pressButton"; readonly udid: string; readonly button: DeviceHardwareButton }
+  | { readonly kind: "screenshot"; readonly udid: string }
+  | { readonly kind: "describeUi"; readonly udid: string }
+  | { readonly kind: "attachStream"; readonly udid: string }
+  | { readonly kind: "detachStream"; readonly udid: string };
+
+export interface FakeDeviceBackendOptions {
+  readonly devices?: readonly FakeDeviceSeed[];
+  readonly availability?: DeviceAvailability;
+  readonly now?: () => number;
+}
+
+const DEFAULT_DEVICES: readonly FakeDeviceSeed[] = [
+  { udid: "FAKE-0001", name: "iPhone 17 Pro", runtime: "iOS 26.0", state: "shutdown" },
+  { udid: "FAKE-0002", name: "iPhone 17", runtime: "iOS 26.0", state: "shutdown" },
+  { udid: "FAKE-0003", name: "iPad Pro 13-inch", runtime: "iOS 26.0", state: "shutdown" },
+  { udid: "FAKE-0004", name: "iPhone Air", runtime: "iOS 26.0", state: "shutdown" },
+];
+
+// A 1x1 transparent PNG; small enough to inline and valid enough that anything
+// decoding the bytes in a test gets a real image.
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+export class FakeDeviceBackend implements DeviceBackend {
+  readonly platform = "ios-simulator" as const;
+
+  readonly calls: FakeDeviceCall[] = [];
+  /** Set by tests to make the next call of a given kind reject. */
+  readonly failures = new Map<FakeDeviceCall["kind"], DeviceBackendError>();
+  disposed = false;
+
+  private availabilityValue: DeviceAvailability;
+  private readonly now: () => number;
+  private readonly devices = new Map<string, DeviceDescriptor>();
+  private readonly listeners = new Map<string, DeviceFrameListener>();
+  private readonly sequences = new Map<string, number>();
+  private readonly installedBundles = new Map<string, string>();
+
+  constructor(options: FakeDeviceBackendOptions = {}) {
+    this.availabilityValue = options.availability ?? { kind: "available" };
+    this.now = options.now ?? Date.now;
+    for (const seed of options.devices ?? DEFAULT_DEVICES) {
+      this.devices.set(seed.udid, {
+        platform: "ios-simulator",
+        udid: seed.udid,
+        name: seed.name,
+        runtime: seed.runtime,
+        state: seed.state ?? "shutdown",
+        bootSource: "user",
+      });
+    }
+  }
+
+  // ── Test controls ──────────────────────────────────────────────────
+
+  setAvailability(availability: DeviceAvailability): void {
+    this.availabilityValue = availability;
+  }
+
+  failNext(kind: FakeDeviceCall["kind"], error: DeviceBackendError): void {
+    this.failures.set(kind, error);
+  }
+
+  /** Mark a device booted without going through Synara, as Simulator.app would. */
+  bootExternally(udid: string): void {
+    const device = this.requireDevice(udid);
+    this.devices.set(udid, { ...device, state: "booted", bootSource: "user" });
+  }
+
+  hasStream(udid: string): boolean {
+    return this.listeners.has(udid);
+  }
+
+  /** Push one frame to whoever is attached; no-op when nobody is listening. */
+  emitFrame(
+    udid: string,
+    frame: Partial<Omit<DeviceStreamFrame, "data">> & { readonly data?: Uint8Array } = {},
+  ): DeviceStreamFrame | null {
+    const listener = this.listeners.get(udid);
+    if (!listener) return null;
+    const sequence = frame.sequence ?? (this.sequences.get(udid) ?? 0) + 1;
+    this.sequences.set(udid, sequence);
+    const emitted: DeviceStreamFrame = {
+      sequence,
+      timestampMs: frame.timestampMs ?? this.now(),
+      keyframe: frame.keyframe ?? false,
+      codecConfig: frame.codecConfig ?? false,
+      data: frame.data ?? new Uint8Array([sequence & 0xff]),
+    };
+    listener(emitted);
+    return emitted;
+  }
+
+  callsOfKind<K extends FakeDeviceCall["kind"]>(
+    kind: K,
+  ): ReadonlyArray<Extract<FakeDeviceCall, { kind: K }>> {
+    return this.calls.filter(
+      (call): call is Extract<FakeDeviceCall, { kind: K }> => call.kind === kind,
+    );
+  }
+
+  // ── DeviceBackend ──────────────────────────────────────────────────
+
+  availability(): Promise<DeviceAvailability> {
+    return Promise.resolve(this.availabilityValue);
+  }
+
+  listDevices(options: DeviceListOptions = {}): Promise<readonly DeviceDescriptor[]> {
+    const all = [...this.devices.values()];
+    return Promise.resolve(
+      options.includeShutdown === true ? all : all.filter((device) => device.state !== "shutdown"),
+    );
+  }
+
+  async boot(udid: string): Promise<DeviceDescriptor> {
+    this.record({ kind: "boot", udid });
+    const device = this.requireDevice(udid);
+    const booted: DeviceDescriptor = { ...device, state: "booted" };
+    this.devices.set(udid, booted);
+    return booted;
+  }
+
+  async shutdown(udid: string): Promise<void> {
+    this.record({ kind: "shutdown", udid });
+    const device = this.requireDevice(udid);
+    this.devices.set(udid, { ...device, state: "shutdown", bootSource: "user" });
+    await this.detachStream(udid);
+  }
+
+  async install(udid: string, appPath: string): Promise<DeviceInstallAppResult> {
+    this.record({ kind: "install", udid, appPath });
+    this.requireBooted(udid);
+    const bundleId = `com.example.${
+      appPath
+        .split("/")
+        .pop()
+        ?.replace(/\.app$/u, "") || "app"
+    }`;
+    this.installedBundles.set(`${udid}:${bundleId}`, appPath);
+    return { udid, bundleId };
+  }
+
+  async launch(
+    udid: string,
+    bundleId: string,
+    _launchArguments?: readonly string[],
+  ): Promise<DeviceLaunchAppResult> {
+    this.record({ kind: "launch", udid, bundleId });
+    this.requireBooted(udid);
+    return { udid, bundleId, pid: 4_242 };
+  }
+
+  async openUrl(udid: string, url: string): Promise<void> {
+    this.record({ kind: "openUrl", udid, url });
+    this.requireBooted(udid);
+  }
+
+  async tap(udid: string, x: number, y: number): Promise<void> {
+    this.record({ kind: "tap", udid, x, y });
+    this.requireBooted(udid);
+  }
+
+  async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
+    this.record({ kind: "swipe", udid, gesture });
+    this.requireBooted(udid);
+  }
+
+  async typeText(udid: string, text: string): Promise<void> {
+    this.record({ kind: "typeText", udid, text });
+    this.requireBooted(udid);
+  }
+
+  async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
+    this.record({ kind: "keyEvent", udid, event });
+    this.requireBooted(udid);
+  }
+
+  async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
+    this.record({ kind: "pressButton", udid, button });
+    this.requireBooted(udid);
+  }
+
+  async screenshot(udid: string): Promise<DeviceScreenshotResult> {
+    this.record({ kind: "screenshot", udid });
+    const device = this.requireBooted(udid);
+    return {
+      udid,
+      name: `${device.name}.png`,
+      mimeType: "image/png",
+      width: 1,
+      height: 1,
+      sizeBytes: Buffer.from(PNG_BASE64, "base64").byteLength,
+      bytesBase64: PNG_BASE64,
+      capturedAt: new Date(this.now()).toISOString(),
+    };
+  }
+
+  async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
+    this.record({ kind: "describeUi", udid });
+    this.requireBooted(udid);
+    return {
+      udid,
+      capturedAt: new Date(this.now()).toISOString(),
+      root: {
+        role: "Application",
+        label: "Fake App",
+        value: null,
+        frame: { x: 0, y: 0, width: 393, height: 852 },
+        children: [
+          {
+            role: "Button",
+            label: "Continue",
+            value: null,
+            frame: { x: 24, y: 700, width: 345, height: 50 },
+            children: [],
+          },
+        ],
+      },
+    };
+  }
+
+  async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
+    this.record({ kind: "attachStream", udid });
+    this.requireBooted(udid);
+    this.listeners.set(udid, onFrame);
+  }
+
+  async detachStream(udid: string): Promise<void> {
+    if (!this.listeners.has(udid)) return;
+    this.record({ kind: "detachStream", udid });
+    this.listeners.delete(udid);
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    this.listeners.clear();
+  }
+
+  // ── Internals ──────────────────────────────────────────────────────
+
+  private record(call: FakeDeviceCall): void {
+    const failure = this.failures.get(call.kind);
+    if (failure) {
+      this.failures.delete(call.kind);
+      throw failure;
+    }
+    this.calls.push(call);
+  }
+
+  private requireDevice(udid: string): DeviceDescriptor {
+    const device = this.devices.get(udid);
+    if (!device) throw new DeviceBackendError(`Unknown device ${udid}`);
+    return device;
+  }
+
+  private requireBooted(udid: string): DeviceDescriptor {
+    const device = this.requireDevice(udid);
+    if (device.state !== "booted") {
+      throw new DeviceBackendError(`Device ${udid} is not booted`, { retryable: true });
+    }
+    return device;
+  }
+}
