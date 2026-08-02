@@ -40,6 +40,7 @@ import {
   readPersistedState,
   rememberProjectLocalNames,
   rememberProjectUiState,
+  selectPersistableProjects,
 } from "./storePersistence";
 import { initialState, type AppState } from "./storeState";
 import type { Project, ThreadWorkspacePatch } from "./types";
@@ -410,8 +411,13 @@ export const useStore = create<AppStore>((set) => ({
 
 // Persist state changes with debouncing to avoid localStorage thrashing
 useStore.subscribe((state) => {
-  rememberProjectUiState(state.projects);
-  rememberProjectLocalNames(state.projects);
+  // The LOCAL slice, not `state.projects`: the aggregate concatenates every
+  // environment's projects, and these caches are keyed by cwd alone, so a
+  // remote copy sharing a checkout path would overwrite the local project's
+  // remembered expansion and alias.
+  const persistableProjects = selectPersistableProjects(state);
+  rememberProjectUiState(persistableProjects);
+  rememberProjectLocalNames(persistableProjects);
   debouncedPersistState.maybeExecute(state);
 });
 

@@ -1356,8 +1356,14 @@ function syncServerShellSnapshotInEnvironment(
   if (isStaleSnapshot(state, snapshot.snapshotSequence)) {
     return state;
   }
-  rememberProjectUiState(state.projects);
-  rememberProjectLocalNames(state.projects);
+  // Local only. The remembered caches are keyed by cwd alone, so recording a
+  // remote environment's projects here lets a remote copy sharing a checkout
+  // path overwrite the local project's expansion and alias. This function runs
+  // for every environment, so the guard belongs here and not at the caller.
+  if (environmentId === LOCAL_ENVIRONMENT_ID) {
+    rememberProjectUiState(state.projects);
+    rememberProjectLocalNames(state.projects);
+  }
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
   const snapshotThreads = snapshot.threads.filter(
@@ -1539,6 +1545,9 @@ function syncServerReadModelInEnvironment(
   if (isStaleSnapshot(state, readModel.snapshotSequence)) {
     return state;
   }
+  // Safe to record unconditionally: this path is local-only by construction —
+  // `syncServerReadModel` always targets LOCAL_ENVIRONMENT_ID — so `state` is
+  // the local slice and never a remote one.
   rememberProjectUiState(state.projects);
   rememberProjectLocalNames(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};

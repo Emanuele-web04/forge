@@ -4,6 +4,7 @@
 
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 
+import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
 import type { AppState } from "./storeState";
 import type { Project } from "./types";
 
@@ -36,6 +37,32 @@ const rememberedProjectUiState: RememberedProjectUiState = {
 export function projectCwdKey(cwd: string): string {
   return normalizeWorkspaceRootForComparison(cwd);
 }
+
+/**
+ * The LOCAL environment's projects — the only ones whose UI preferences this
+ * module may record.
+ *
+ * These maps are keyed by normalized cwd ALONE, while `AppState.projects` is
+ * the aggregate concatenated across every registered environment. Two servers
+ * can legitimately point at the same checkout path, so two Project rows sharing
+ * a cwd both land on one cwd-keyed entry and the later one wins: a remote copy
+ * that happens to be collapsed deletes the local copy's expansion, and the
+ * project reopens collapsed after reload. The aggregate de-duplicates by
+ * `project.id`, not by cwd, so both copies genuinely arrive here.
+ *
+ * Scoping to local rather than widening the keys is deliberate. These are local
+ * renderer preferences about how THIS browser draws its sidebar; a remote
+ * server's collapse state is not the user's preference for it. It also leaves
+ * the persisted schema — and the v8 storage key — untouched, so no migration.
+ *
+ * A remote project still renders sensibly: `normalizeProject` defaults it to
+ * expanded and uses its server-provided title.
+ */
+export function selectPersistableProjects(state: AppState): ReadonlyArray<Project> {
+  return state.environmentById[LOCAL_ENVIRONMENT_ID]?.projects ?? EMPTY_PERSISTABLE_PROJECTS;
+}
+
+const EMPTY_PERSISTABLE_PROJECTS: ReadonlyArray<Project> = [];
 
 export function getRememberedProjectUiState(): RememberedProjectUiState {
   return rememberedProjectUiState;
@@ -113,15 +140,18 @@ export function readPersistedState(initialState: AppState): AppState {
 export function persistState(state: AppState): void {
   if (typeof window === "undefined") return;
   try {
-    rememberProjectUiState(state.projects);
-    rememberProjectLocalNames(state.projects);
+    // Local only, never the cross-environment aggregate: see
+    // `selectPersistableProjects`.
+    const projects = selectPersistableProjects(state);
+    rememberProjectUiState(projects);
+    rememberProjectLocalNames(projects);
     window.localStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
-        expandedProjectCwds: state.projects
+        expandedProjectCwds: projects
           .filter((project) => project.expanded)
           .map((project) => project.cwd),
-        projectOrderCwds: state.projects.map((project) => project.cwd),
+        projectOrderCwds: projects.map((project) => project.cwd),
         projectNamesByCwd: Object.fromEntries(persistedProjectNamesByCwd),
       }),
     );
