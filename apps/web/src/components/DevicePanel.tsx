@@ -128,7 +128,6 @@ export default function DevicePanel(props: {
 
   const { status: videoStatus, dimensions } = useDeviceVideoStream({
     canvasRef,
-    threadId,
     udid: streamEnabled && attachedDevice ? attachedDevice.udid : null,
     enabled: streamEnabled,
     onRequestKeyframe: requestKeyframe,

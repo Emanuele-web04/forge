@@ -182,6 +182,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Reveal the built-in browser panel for the active thread.",
   },
   {
+    command: "device.toggle",
+    label: "Toggle iOS Simulator",
+    description: "Reveal the iOS Simulator panel for the active thread. macOS servers only.",
+  },
+  {
     command: "chat.visible.previous",
     label: "Previous visible thread",
     description: "Cycle to the previous thread that is currently visible in the sidebar.",

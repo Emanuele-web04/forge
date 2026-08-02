@@ -692,6 +692,14 @@ export function isBrowserToggleShortcut(
   return matchesCommandShortcut(event, keybindings, "browser.toggle", options);
 }
 
+export function isDeviceToggleShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "device.toggle", options);
+}
+
 export function isChatNewShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,

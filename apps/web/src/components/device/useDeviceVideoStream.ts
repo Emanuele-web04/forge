@@ -4,7 +4,7 @@
 // Exports: useDeviceVideoStream
 // Depends on: DevicePanel.logic frame gate, deviceFrameSource transport
 
-import type { DeviceUdid, ThreadId } from "@synara/contracts";
+import type { DeviceUdid } from "@synara/contracts";
 import type { DeviceFrame } from "@synara/shared/deviceFrame";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
@@ -77,14 +77,13 @@ function isWebCodecsAvailable(): boolean {
 
 export function useDeviceVideoStream(input: {
   readonly canvasRef: React.RefObject<HTMLCanvasElement | null>;
-  readonly threadId: ThreadId;
   /** Null unsubscribes and tears the decoder down. */
   readonly udid: DeviceUdid | null;
   readonly enabled: boolean;
   /** Called when the gate needs a keyframe the stream has not produced. */
   readonly onRequestKeyframe?: () => void;
 }): { readonly status: DeviceVideoStatus; readonly dimensions: DeviceVideoDimensions | null } {
-  const { canvasRef, threadId, udid, enabled } = input;
+  const { canvasRef, udid, enabled } = input;
   const [status, setStatus] = useState<DeviceVideoStatus>({ kind: "idle" });
   const [dimensions, setDimensions] = useState<DeviceVideoDimensions | null>(null);
   const requestKeyframe = useEffectEvent(() => input.onRequestKeyframe?.());
@@ -244,7 +243,6 @@ export function useDeviceVideoStream(input: {
     };
 
     source = createDeviceFrameSource({
-      threadId,
       udid,
       handlers: { onFrame: handleFrame, onReset: handleReset },
     });
@@ -255,7 +253,7 @@ export function useDeviceVideoStream(input: {
       source?.close();
       teardownDecoder();
     };
-  }, [canvasRef, threadId, udid, enabled]);
+  }, [canvasRef, udid, enabled]);
 
   return { status, dimensions };
 }

@@ -17,6 +17,7 @@ describe("RIGHT_DOCK_PANE_KINDS (single source of truth)", () => {
   it("lists every supported kind", () => {
     expect([...RIGHT_DOCK_PANE_KINDS]).toEqual([
       "browser",
+      "device",
       "diff",
       "explorer",
       "file",

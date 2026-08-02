@@ -24,6 +24,10 @@ describe("RIGHT_DOCK_ADD_MENU_KINDS", () => {
   it("labels the explorer pane", () => {
     expect(getRightDockPaneMeta("explorer").label).toBe("Explorer");
   });
+
+  it("gives the platform-neutral device kind its user-facing iOS label", () => {
+    expect(getRightDockPaneMeta("device").label).toBe("iOS Simulator");
+  });
 });
 
 describe("resolveRightDockLauncherItems", () => {
@@ -70,5 +74,37 @@ describe("resolveRightDockLauncherItems", () => {
         hasReview: false,
       }).map(({ kind }) => kind),
     ).toEqual(["terminal", "browser", "explorer", "sidechat", "git"]);
+  });
+
+  it("offers the simulator only when the server can host one", () => {
+    // Off macOS there is nothing the user could do from this machine to make
+    // simulators work, so the entry is hidden rather than shown disabled.
+    expect(
+      resolveRightDockLauncherItems({
+        hasWorkspace: true,
+        hasGitRepository: false,
+        hasReview: false,
+        hasDeviceSupport: true,
+      }).map(({ kind }) => kind),
+    ).toEqual(["terminal", "browser", "explorer", "sidechat", "device"]);
+
+    expect(
+      resolveRightDockLauncherItems({
+        hasWorkspace: true,
+        hasGitRepository: false,
+        hasReview: false,
+        hasDeviceSupport: false,
+      }).map(({ kind }) => kind),
+    ).not.toContain("device");
+  });
+
+  it("omits the simulator when support is unknown, so the entry cannot flicker in", () => {
+    expect(
+      resolveRightDockLauncherItems({
+        hasWorkspace: true,
+        hasGitRepository: false,
+        hasReview: false,
+      }).map(({ kind }) => kind),
+    ).not.toContain("device");
   });
 });

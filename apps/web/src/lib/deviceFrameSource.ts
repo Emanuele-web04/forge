@@ -4,24 +4,15 @@
 // Exports: DeviceFrameSource contract, the WebSocket-backed implementation, and the pane-facing factory
 // Depends on: @synara/shared/deviceFrame for the binary envelope, wsTransport for URL resolution
 
-import { decodeDeviceFrame, type DeviceFrame } from "@synara/shared/deviceFrame";
-import type { DeviceUdid, ThreadId } from "@synara/contracts";
+import {
+  DEVICE_FRAME_WS_PATH,
+  DEVICE_FRAME_WS_UDID_PARAM,
+  decodeDeviceFrame,
+  type DeviceFrame,
+} from "@synara/shared/deviceFrame";
+import type { DeviceUdid } from "@synara/contracts";
 
 import { makeSocketUrl } from "../wsTransport";
-
-/**
- * Frames are lossy, high-rate, and useless the moment they are late, which is
- * the opposite of everything the Effect RPC feature socket carries. They ride a
- * dedicated binary WebSocket so a frame burst can never delay an RPC response
- * or a domain-event push, and so a slow consumer drops video instead of stalling
- * the control plane. Subscription is expressed entirely in the URL, so no
- * handshake message is needed before frames start.
- */
-export const DEVICE_FRAME_SOCKET_PATH = "/ws/device-frames";
-export const DEVICE_FRAME_QUERY = {
-  threadId: "threadId",
-  udid: "udid",
-} as const;
 
 export interface DeviceFrameSourceHandlers {
   readonly onFrame: (frame: DeviceFrame) => void;
@@ -40,7 +31,6 @@ export interface DeviceFrameSource {
 }
 
 export interface DeviceFrameSourceOptions {
-  readonly threadId: ThreadId;
   readonly udid: DeviceUdid;
   readonly handlers: DeviceFrameSourceHandlers;
   /** Test seam; defaults to the browser's WebSocket against the resolved server URL. */
@@ -58,14 +48,21 @@ export interface WebSocketLike {
   ) => void;
 }
 
+/**
+ * Frames are lossy, high-rate, and useless the moment they are late, which is
+ * the opposite of everything the Effect RPC feature socket carries. They ride a
+ * dedicated binary WebSocket so a frame burst can never delay an RPC response or
+ * a domain-event push, and so a slow consumer drops video instead of stalling
+ * the control plane. The subscription is the URL, so frames start with no
+ * handshake message. It keys on the device rather than the thread: two threads
+ * watching one simulator share the same encoder output.
+ */
 export function deviceFrameSocketUrl(input: {
-  readonly threadId: ThreadId;
   readonly udid: DeviceUdid;
   readonly explicitUrl?: string | null;
 }): string {
-  const url = new URL(makeSocketUrl(input.explicitUrl ?? null, DEVICE_FRAME_SOCKET_PATH));
-  url.searchParams.set(DEVICE_FRAME_QUERY.threadId, input.threadId);
-  url.searchParams.set(DEVICE_FRAME_QUERY.udid, input.udid);
+  const url = new URL(makeSocketUrl(input.explicitUrl ?? null, DEVICE_FRAME_WS_PATH));
+  url.searchParams.set(DEVICE_FRAME_WS_UDID_PARAM, input.udid);
   return url.toString();
 }
 
@@ -85,7 +82,6 @@ function frameBytes(data: unknown): Uint8Array | null {
 
 export function createDeviceFrameSource(options: DeviceFrameSourceOptions): DeviceFrameSource {
   const url = deviceFrameSocketUrl({
-    threadId: options.threadId,
     udid: options.udid,
     ...(options.explicitUrl !== undefined ? { explicitUrl: options.explicitUrl } : {}),
   });
