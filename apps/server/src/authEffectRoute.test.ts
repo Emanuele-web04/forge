@@ -5,7 +5,7 @@ import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthSessionId } from "@synara/contracts";
+import { AuthSessionId, WS_COMPATIBILITY_QUERY } from "@synara/contracts";
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
   ATTACHMENT_UPLOAD_ROUTE_PATH,
@@ -13,6 +13,7 @@ import {
 import { DateTime, Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
+import { version as serverBuild } from "../package.json" with { type: "json" };
 
 import { AuthError, ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import {
@@ -462,5 +463,72 @@ describe("binaryUploadEffectRouteLayer", () => {
     } finally {
       fs.rmSync(attachmentsDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("build-skew degradation on the auth router", () => {
+  // The auth router is one wildcard route, so it cannot be registered through
+  // `addBuildSkewGuardedWriteRoute`. The per-path decision happens inside it —
+  // and these tests are what prove the guard actually RUNS there. The allowlist
+  // being correct is not enough if nothing consults it on this router.
+  const skewedQuery = `?${WS_COMPATIBILITY_QUERY.clientBuild}=0.0.0-not-the-server-build`;
+
+  it.each([
+    { path: "/api/auth/clients/revoke", body: { sessionId: otherSessionId } },
+    { path: "/api/auth/clients/revoke-others" },
+    { path: "/api/auth/pairing-links/revoke", body: { id: "pairing-id" } },
+  ])("refuses destructive $path from a skewed client", async ({ path, body }) => {
+    const sideEffects = { count: 0 };
+    const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;
+    await withAuthEffectServer(config, makeServerAuth(sideEffects), async (serverOrigin) => {
+      const response = await fetch(
+        `${serverOrigin}${path}${skewedQuery}`,
+        mutationRequest({ credential: "bearer", ...(body === undefined ? {} : { body }) }),
+      );
+      expect(response.status).toBe(409);
+      // Refused BEFORE the handler: revoking someone else's access from a
+      // client the server has declared read-only must not happen at all.
+      expect(sideEffects.count).toBe(0);
+    });
+  });
+
+  it("still lets a skewed client log out", async () => {
+    // The recovery half, and the reason the exemption exists at all: logout
+    // ends the caller's OWN session and is how a user reaches a clean re-pair.
+    // Blocking it strands exactly the session that needs to recover.
+    const sideEffects = { count: 0 };
+    const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;
+    await withAuthEffectServer(config, makeServerAuth(sideEffects), async (serverOrigin) => {
+      const response = await fetch(
+        `${serverOrigin}/api/auth/logout${skewedQuery}`,
+        mutationRequest({ credential: "bearer" }),
+      );
+      expect(response.status).not.toBe(409);
+    });
+  });
+
+  it("still lets a skewed client re-pair", async () => {
+    const sideEffects = { count: 0 };
+    const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;
+    await withAuthEffectServer(config, makeServerAuth(sideEffects), async (serverOrigin) => {
+      const response = await fetch(
+        `${serverOrigin}/api/auth/ws-token${skewedQuery}`,
+        mutationRequest({ credential: "bearer" }),
+      );
+      expect(response.status).not.toBe(409);
+    });
+  });
+
+  it("does not refuse a destructive route when the client build matches", async () => {
+    // Guards the other direction: skew must gate this, not block it outright.
+    const sideEffects = { count: 0 };
+    const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;
+    await withAuthEffectServer(config, makeServerAuth(sideEffects), async (serverOrigin) => {
+      const response = await fetch(
+        `${serverOrigin}/api/auth/clients/revoke-others?${WS_COMPATIBILITY_QUERY.clientBuild}=${serverBuild}`,
+        mutationRequest({ credential: "bearer" }),
+      );
+      expect(response.status).not.toBe(409);
+    });
   });
 });

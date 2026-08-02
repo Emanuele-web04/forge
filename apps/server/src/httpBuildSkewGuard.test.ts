@@ -83,15 +83,44 @@ describe("auth recovery-path exemption", () => {
   it.each([
     "/api/auth/session",
     "/api/auth/bootstrap",
+    "/api/auth/bootstrap/bearer",
     "/api/auth/ws-token",
     "/api/auth/pairing-token",
+    "/api/auth/pairing-links",
+    // Ends the CALLER'S OWN session only, and is how a user reaches a clean
+    // re-pair. Recovery, not destruction.
     "/api/auth/logout",
-    "/api/auth/clients/revoke",
-  ])("exempts %s from the guard", (pathname) => {
+  ])("exempts recovery route %s from the guard", (pathname) => {
     expect(isBuildSkewExemptHttpPath(pathname)).toBe(true);
   });
 
-  it("exempts nothing outside the auth prefix", () => {
+  // The other direction, and the reason the prefix was replaced by a list.
+  // These destroy access for someone ELSE, irreversibly, from a client the
+  // server has already declared read-only. None of them helps anyone recover,
+  // so none may ride along on the recovery exemption.
+  it.each([
+    "/api/auth/clients/revoke",
+    "/api/auth/clients/revoke-others",
+    "/api/auth/pairing-links/revoke",
+  ])("guards destructive route %s", (pathname) => {
+    expect(isBuildSkewExemptHttpPath(pathname)).toBe(false);
+  });
+
+  it("normalizes a trailing slash in both directions", () => {
+    // A recovery route must not miss the list and strand a user; a destructive
+    // one must not slip past it and stay exempt.
+    expect(isBuildSkewExemptHttpPath("/api/auth/logout/")).toBe(true);
+    expect(isBuildSkewExemptHttpPath("/api/auth/clients/revoke/")).toBe(false);
+  });
+
+  it("guards a NEW route under the auth prefix by default", () => {
+    // The point of an allowlist over a prefix: a route added later is guarded
+    // unless someone explicitly decides it is recovery, rather than exempt by
+    // accident of where it was filed.
+    expect(isBuildSkewExemptHttpPath("/api/auth/some-future-route")).toBe(false);
+  });
+
+  it("exempts nothing outside the recovery list", () => {
     for (const pathname of [
       "/api/attachments/upload",
       "/api/attachments/cancel",

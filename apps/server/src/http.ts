@@ -17,7 +17,12 @@ import {
   VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
-import { addBuildSkewGuardedWriteRoute } from "./httpBuildSkewGuard";
+import {
+  addBuildSkewGuardedWriteRoute,
+  buildSkewHttpRejection,
+  isBuildSkewExemptHttpPath,
+  isHttpRequestBuildSkewed,
+} from "./httpBuildSkewGuard";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { Cause, DateTime, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -416,6 +421,21 @@ export const authEffectRouteLayer = HttpRouter.add(
     const sessions = yield* SessionCredentialService;
     const url = HttpServerRequest.toURL(request);
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    // The auth router is ONE wildcard route, so it cannot be registered through
+    // `addBuildSkewGuardedWriteRoute` — that helper guards an entire path, and
+    // most of what lives here is the recovery path that must stay reachable
+    // while degraded. The per-path decision therefore happens HERE, before any
+    // handler runs: recovery routes pass, and the destructive ones (revoking
+    // another client, every other device, or a pairing link) are refused like
+    // every other write. Without this the allowlist would be inert — the guard
+    // simply never ran on this router.
+    if (
+      request.method !== "OPTIONS" &&
+      !isBuildSkewExemptHttpPath(url.pathname) &&
+      isHttpRequestBuildSkewed(url)
+    ) {
+      return buildSkewHttpRejection();
+    }
     const authRequest = makeEffectAuthRequest(request);
 
     if (request.method === "GET" && url.pathname === "/api/auth/session") {

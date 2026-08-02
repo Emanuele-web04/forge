@@ -20,8 +20,44 @@ import { isWsClientBuildSkewed } from "./wsCompatibility";
  */
 export const BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX = "/api/auth/" as const;
 
+/**
+ * The recovery routes, named individually.
+ *
+ * The intent above is right and unchanged; the PREFIX was the wrong mechanism
+ * for it. Exempting everything under `/api/auth/` also exempted operations that
+ * help nobody recover: revoking another client's session, revoking every other
+ * device, revoking a pairing link. None is on the path from "my client is
+ * skewed" to "my client is no longer skewed" — each destroys access for someone
+ * else, irreversibly, issued from a client the server has ALREADY decided it
+ * cannot trust to make changes. `revoke-others` is the sharpest: a user on a
+ * stale build signs out every other device, unrecoverable without the host.
+ *
+ * `logout` is recovery, not destruction. It ends the CALLER'S OWN session, from
+ * the caller's own authenticated identity, and cannot reach anyone else's; it
+ * is also how a user reaches a clean re-pair.
+ *
+ * An allowlist also inverts the default in the safe direction: a NEW route
+ * under `/api/auth/` is guarded unless someone explicitly exempts it, rather
+ * than exempt by accident of where it was filed. A prefix grants by pattern —
+ * which is the same shape as the routing-coverage holes on this branch, where
+ * "matches the shape" silently stood in for a decision nobody made per case.
+ */
+export const BUILD_SKEW_EXEMPT_HTTP_PATHS: ReadonlySet<string> = new Set([
+  `${BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX}session`,
+  `${BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX}bootstrap`,
+  `${BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX}bootstrap/bearer`,
+  `${BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX}ws-token`,
+  `${BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX}pairing-token`,
+  `${BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX}pairing-links`,
+  `${BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX}logout`,
+]);
+
 export function isBuildSkewExemptHttpPath(pathname: string): boolean {
-  return pathname.startsWith(BUILD_SKEW_EXEMPT_HTTP_PATH_PREFIX);
+  // Trailing slashes normalized in BOTH directions: so `/api/auth/logout/`
+  // cannot miss the allowlist and strand a recovering user, and
+  // `/api/auth/clients/revoke/` cannot slip past it and stay exempt.
+  const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  return BUILD_SKEW_EXEMPT_HTTP_PATHS.has(normalized);
 }
 
 /**
