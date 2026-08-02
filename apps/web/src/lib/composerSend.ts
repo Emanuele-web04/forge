@@ -12,6 +12,7 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ClaudeCodeEffort,
   type ProviderKind,
+  type ThreadId,
   type UploadChatAttachment,
 } from "@synara/contracts";
 import {
@@ -34,7 +35,8 @@ import {
 } from "./composerImagePreparation";
 import { normalizeComposerImageSource } from "./composerImageSource";
 import { randomUUID } from "./utils";
-import { resolveWsHttpUrl, withClientBuildIdentity } from "./wsHttpUrl";
+import { withClientBuildIdentity } from "./wsHttpUrl";
+import { resolveThreadHttpUrl } from "../environmentRouting";
 
 const ATTACHMENT_CANCEL_CONCURRENCY = 2;
 const ATTACHMENT_CANCEL_BODY_MAX_BYTES = 512;
@@ -251,7 +253,17 @@ function isManagedAttachmentId(value: unknown): value is string {
   );
 }
 
-async function cancelManagedAttachments(attachmentIds: readonly string[]): Promise<void> {
+/**
+ * Cancels staged attachments on the server that STAGED them.
+ *
+ * `threadId` is required for the same reason the upload needs it: the staging
+ * routes are per-server, so cancelling against the local server would leave a
+ * remote host's staged bytes to expire on their own while cancelling nothing.
+ */
+async function cancelManagedAttachments(
+  threadId: string,
+  attachmentIds: readonly string[],
+): Promise<void> {
   let nextIndex = 0;
   const worker = async () => {
     while (nextIndex < attachmentIds.length) {
@@ -261,12 +273,18 @@ async function cancelManagedAttachments(attachmentIds: readonly string[]): Promi
       const body = JSON.stringify({ attachmentId });
       if (new TextEncoder().encode(body).byteLength > ATTACHMENT_CANCEL_BODY_MAX_BYTES) continue;
       try {
-        await fetch(resolveWsHttpUrl(withClientBuildIdentity(ATTACHMENT_CANCEL_ROUTE_PATH)), {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body,
-        });
+        await fetch(
+          resolveThreadHttpUrl(
+            threadId as ThreadId,
+            withClientBuildIdentity(ATTACHMENT_CANCEL_ROUTE_PATH),
+          ),
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body,
+          },
+        );
       } catch {
         // Staged attachments also have a server-owned expiry. Compensation is
         // deliberately best-effort and must never replace the dispatch/upload error.
@@ -304,8 +322,12 @@ export async function stageUploadComposerAttachments(input: {
         name: attachment.name,
         mimeType: attachment.mimeType,
       });
+      // Resolved against the thread's OWNING environment: an ambient resolution
+      // would post a remote thread's file bytes to the local server, which then
+      // stages an attachment the host actually running the turn cannot read.
       const response = await fetch(
-        resolveWsHttpUrl(
+        resolveThreadHttpUrl(
+          input.threadId as ThreadId,
           withClientBuildIdentity(`${ATTACHMENT_UPLOAD_ROUTE_PATH}?${params.toString()}`),
         ),
         {
@@ -330,7 +352,7 @@ export async function stageUploadComposerAttachments(input: {
       attachments.push(payload);
     }
   } catch (error) {
-    await cancelManagedAttachments(managedAttachmentIds);
+    await cancelManagedAttachments(input.threadId, managedAttachmentIds);
     throw error;
   }
 
@@ -338,7 +360,7 @@ export async function stageUploadComposerAttachments(input: {
   const cleanup = async () => {
     if (disposition !== "pending") return;
     disposition = "cleaned";
-    await cancelManagedAttachments(managedAttachmentIds);
+    await cancelManagedAttachments(input.threadId, managedAttachmentIds);
   };
   const commit = () => {
     if (disposition === "pending") disposition = "committed";

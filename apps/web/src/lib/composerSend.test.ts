@@ -287,6 +287,58 @@ describe("composerSend attachment builders", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("never masks the upload error when cancellation cannot be routed", async () => {
+    // Cancellation is best-effort compensation, so its own failure must never
+    // replace the real upload error — the user would be told something about
+    // routing when what actually failed was the upload.
+    const file = new File(["one"], "one.png", { type: "image/png" });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            type: "image",
+            id: "thread-1-11111111-1111-4111-8111-111111111111",
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json({ error: "Original upload failure." }, { status: 500 }))
+      .mockResolvedValueOnce(Response.json({ cancelled: true }, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      stageUploadComposerAttachments({
+        threadId: "thread-1",
+        images: [
+          {
+            type: "image",
+            id: "draft-one",
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            previewUrl: "blob:one.png",
+            file,
+          },
+          {
+            type: "image",
+            id: "draft-two",
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            previewUrl: "blob:two.png",
+            file,
+          },
+        ],
+        files: [],
+        assistantSelections: [],
+      }),
+    ).rejects.toThrow("Original upload failure.");
+  });
+
   it("cancels every staged managed attachment when dispatch rejects", async () => {
     const files = [
       new File(["one"], "one.png", { type: "image/png" }),

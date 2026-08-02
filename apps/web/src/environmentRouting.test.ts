@@ -156,6 +156,7 @@ import {
   ROUTED_METHODS,
 } from "./environmentRoutedApi";
 import { UnknownPathEnvironmentError } from "./environmentPathRouting";
+import { stageUploadComposerAttachments } from "./lib/composerSend";
 import {
   claimThreadEnvironment,
   EnvironmentUnavailableError,
@@ -649,5 +650,90 @@ describe("HTTP-backed route resolution", () => {
     expect(() => resolveThreadHttpUrl(REMOTE_THREAD_ID, "/api/attachments/upload")).toThrow(
       EnvironmentUnavailableError,
     );
+  });
+
+  it("resolves the attachment CANCEL route on the same host that staged it", () => {
+    // Cancel is the half that was missed once already. Pointed at the local
+    // server it cancels nothing while the remote host's staged bytes sit until
+    // they expire — a compensating action that silently compensates the wrong
+    // machine.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownThread(REMOTE_ENVIRONMENT_ID, REMOTE_THREAD_ID);
+
+    const upload = new URL(resolveThreadHttpUrl(REMOTE_THREAD_ID, "/api/attachments/upload"));
+    const cancel = new URL(resolveThreadHttpUrl(REMOTE_THREAD_ID, "/api/attachments/cancel"));
+    expect(cancel.origin).toBe(upload.origin);
+    expect(cancel.origin).toBe("https://vps.example.com");
+  });
+
+  it("keeps a local thread's upload on the local server", () => {
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    // No throw, and no remote origin: the ambient local resolution is preserved
+    // exactly as it was, so single-server installs are unaffected.
+    expect(() => resolveThreadHttpUrl(LOCAL_THREAD_ID, "/api/attachments/upload")).not.toThrow();
+  });
+
+  it("sends a remote thread's attachment bytes AND its cancel to that host", async () => {
+    // The CALL SITE, not just the resolver: composerSend must actually route
+    // both routes, and pinning only `resolveThreadHttpUrl` left that unproven —
+    // with a single local environment both spellings produce the same relative
+    // URL, so a call site that forgot to route looked identical.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownThread(REMOTE_ENVIRONMENT_ID, REMOTE_THREAD_ID);
+
+    const file = new File(["one"], "one.png", { type: "image/png" });
+    const requestedUrls: string[] = [];
+    const fetchMock = vi.fn(async (input: unknown) => {
+      requestedUrls.push(String(input));
+      // First upload succeeds so an id is staged; the second fails, which is
+      // what triggers the cancel of the first.
+      if (requestedUrls.length === 1) {
+        return Response.json(
+          {
+            type: "image",
+            id: `${REMOTE_THREAD_ID}-11111111-1111-4111-8111-111111111111`,
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+          },
+          { status: 201 },
+        );
+      }
+      if (requestedUrls.length === 2) {
+        return Response.json({ error: "Second upload failed." }, { status: 500 });
+      }
+      return Response.json({ cancelled: true }, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const image = (id: string) => ({
+      type: "image" as const,
+      id,
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      previewUrl: `blob:${id}`,
+      file,
+    });
+
+    await expect(
+      stageUploadComposerAttachments({
+        threadId: REMOTE_THREAD_ID,
+        images: [image("draft-one"), image("draft-two")],
+        files: [],
+        assistantSelections: [],
+      }),
+    ).rejects.toThrow("Second upload failed.");
+
+    vi.unstubAllGlobals();
+
+    // Every request — both uploads and the compensating cancel — went to the
+    // REMOTE host. A single one resolving locally means a remote thread's file
+    // bytes landed on the user's laptop, or its staged bytes were never freed.
+    expect(requestedUrls).toHaveLength(3);
+    for (const url of requestedUrls) {
+      expect(new URL(url).origin).toBe("https://vps.example.com");
+    }
+    expect(requestedUrls[2]).toContain("/api/attachments/cancel");
   });
 });
