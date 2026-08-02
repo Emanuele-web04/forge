@@ -73,6 +73,25 @@ describe("systemd unit rendering", () => {
     );
   });
 
+  /**
+   * The environment-id file must be named EXPLICITLY, not left to the server's
+   * own default.
+   *
+   * The default is `<SYNARA_HOME>/userdata/environment-id`, and the server
+   * GENERATES a fresh id when that file is absent. SYNARA_HOME here is
+   * `<root>/state`, so the default resolves to `<root>/state/userdata/environment-id`
+   * — a different path from the `<root>/state/environment-id` bootstrap writes.
+   * Without this line the remote would invent an id, report it, and fail the
+   * provisioning handshake against the one we provisioned: a first install that
+   * could never succeed.
+   */
+  it("points the unit at the provisioned environment id, not the derived default", () => {
+    const unit = renderSystemdUnit(input());
+    expect(unit).toContain(`Environment=SYNARA_ENVIRONMENT_ID_FILE=${layout.environmentIdFile}`);
+    // Specifically NOT the path SYNARA_HOME would derive.
+    expect(unit).not.toContain(`${layout.stateDirectory}/userdata/environment-id`);
+  });
+
   // Mutation guard: dropping escapeSystemdValue turns a `%` in a path into a
   // systemd specifier, silently rewriting the ExecStart line.
   it("escapes a percent sign so systemd cannot expand it as a specifier", () => {
@@ -209,6 +228,13 @@ describe("launchd plan", () => {
     expect(plist).toContain("<string>--host</string>");
     expect(plist).toContain("<string>127.0.0.1</string>");
     expect(plist).toContain("<string>45123</string>");
+  });
+
+  /** The same explicit environment id the systemd unit sets, for the same reason. */
+  it("names the provisioned environment id file too", () => {
+    const plist = renderLaunchdPlist(input({ os: "darwin" }));
+    expect(plist).toContain("<key>SYNARA_ENVIRONMENT_ID_FILE</key>");
+    expect(plist).toContain(`<string>${layout.environmentIdFile}</string>`);
   });
 
   // Mutation guard (M47): KeepAlive must be the SuccessfulExit/false dict, not

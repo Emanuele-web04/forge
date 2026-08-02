@@ -21,6 +21,7 @@ import {
   isLegacyTokenAuthorized,
   makeDesktopShutdownEffectRouteLayer,
   makeHealthEffectRouteLayer,
+  makeEffectHttpRouteLayer,
   projectFaviconEffectRouteLayer,
   staticAndDevEffectRouteLayer,
 } from "./http";
@@ -115,7 +116,19 @@ type TestedRoute =
   | { readonly kind: "shutdown"; readonly controller: ServerShutdownController }
   | { readonly kind: "static" }
   | { readonly kind: "favicon" }
-  | { readonly kind: "editor-icon" };
+  | { readonly kind: "editor-icon" }
+  /**
+   * The FULL composed route table, not one layer in isolation. Registering a
+   * route proves nothing about whether it executes: `staticAndDevEffectRouteLayer`
+   * is a `GET *` SPA fallback that happily answers any path, so a new GET route
+   * that lost the ordering would silently serve index.html instead — a 200, and
+   * therefore invisible to a test that only asserts "not an error".
+   */
+  | {
+      readonly kind: "composed";
+      readonly readiness: typeof readiness;
+      readonly controller: ServerShutdownController;
+    };
 
 async function withEffectServer(
   config: ServerConfigShape,
@@ -145,6 +158,12 @@ async function withEffectServer(
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(projectFaviconEffectRouteLayer));
           } else if (route.kind === "editor-icon") {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(editorIconEffectRouteLayer));
+          } else if (route.kind === "composed") {
+            yield* httpServer.serve(
+              yield* HttpRouter.toHttpEffect(
+                makeEffectHttpRouteLayer(route.readiness, route.controller),
+              ),
+            );
           } else {
             yield* httpServer.serve(
               yield* HttpRouter.toHttpEffect(makeHealthEffectRouteLayer(route.readiness)),
@@ -578,5 +597,43 @@ describe("production Effect HTTP routes", () => {
       expect(response.status).toBe(400);
       await expect(response.text()).resolves.toBe("Missing id parameter");
     });
+  });
+
+  /**
+   * The provisioning-identity route must actually EXECUTE in the deployed table.
+   *
+   * Registering a route proves nothing on its own: `staticAndDevEffectRouteLayer`
+   * is a `GET *` SPA fallback, so a new GET route that lost the ordering would be
+   * answered with index.html — status 200, content-type text/html, and therefore
+   * invisible to any test that only checks "not an error". This serves the same
+   * composed layer production does and asserts the answer is the route's JSON,
+   * not the fallback's HTML.
+   */
+  it("answers the provisioning handshake from the deployed route table", async () => {
+    const controller = await Effect.runPromise(makeServerShutdownController());
+    const environmentIdPath = path.join(makeTempDir("synara-provisioning-"), "environment-id");
+    writeFileSync(environmentIdPath, "env-from-bootstrap\n");
+
+    await withEffectServer(
+      makeConfig({ environmentIdPath }),
+      { kind: "composed", readiness, controller },
+      async (origin) => {
+        const response = await fetch(`${origin}/api/provisioning/identity`, {
+          headers: { authorization: "Bearer tok-1" },
+        });
+        expect(response.status).toBe(200);
+        // Not the SPA fallback. This is the assertion that catches a route that
+        // was registered but never reached.
+        expect(response.headers.get("content-type")).toContain("application/json");
+
+        const body = (await response.json()) as Record<string, unknown>;
+        // The id bootstrap WROTE, not one the server generated for itself.
+        expect(body.environmentId).toBe("env-from-bootstrap");
+        expect(body.authenticated).toBe(true);
+        // The echo is of the token the caller presented and this server accepted.
+        expect(body.acceptedToken).toBe("tok-1");
+        expect(typeof body.serverVersion).toBe("string");
+      },
+    );
   });
 });
