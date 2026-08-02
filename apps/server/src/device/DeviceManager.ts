@@ -22,6 +22,7 @@
  */
 import {
   DEVICE_SYNARA_BOOT_LIMIT,
+  ThreadId,
   type DeviceAvailability,
   type DeviceBootResult,
   type DeviceDescribeUiResult,
@@ -283,7 +284,12 @@ export class DeviceManager {
 
   /** Auto-open the pane when an agent puts an app on a device. */
   requestOpenPane(threadId: string, udid: string, reason: DeviceOpenPaneReason): void {
-    this.emit({ type: "device.open-pane-requested", threadId, udid, reason });
+    this.emit({
+      type: "device.open-pane-requested",
+      threadId: ThreadId.makeUnsafe(threadId),
+      udid,
+      reason,
+    });
   }
 
   async recordThreadError(threadId: string, message: string): Promise<void> {

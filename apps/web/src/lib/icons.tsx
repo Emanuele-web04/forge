@@ -190,6 +190,8 @@ export const FilterIcon: LucideIcon = centralIconWrapper("filter-2");
 export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 export const GlobeIcon = adaptIcon(IconWorld);
 export const WebSearchIcon: LucideIcon = centralIconWrapper("globe");
+// Handset glyph for the iOS Simulator dock pane.
+export const DeviceMobileIcon: LucideIcon = centralIconWrapper("phone");
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );

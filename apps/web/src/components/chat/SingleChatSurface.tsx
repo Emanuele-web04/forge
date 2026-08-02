@@ -23,6 +23,7 @@ import { basenameOfPath } from "../../file-icons";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { useDeviceSupport } from "../../hooks/useDeviceSupport";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
   addChatFileComment,
@@ -73,6 +74,7 @@ import {
   ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
+  LazyDevicePanel,
   LazyDiffPanel,
   noopChatSurfaceAction,
 } from "./ChatThreadSurfacePrimitives";
@@ -213,10 +215,12 @@ export function SingleChatSurface(props: {
     gitCwd: workspaceRoot,
     isGitRepo: hasGitRepository,
   });
+  const hasDeviceSupport = useDeviceSupport();
   const dockLauncherItems = resolveRightDockLauncherItems({
     hasWorkspace: workspaceRoot !== null,
     hasGitRepository,
     hasReview: dockDiffTotals.fileCount > 0,
+    hasDeviceSupport,
   });
   const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
   const projects = useStore((store) => store.projects);
@@ -693,6 +697,19 @@ export function SingleChatSurface(props: {
               threadId={props.threadId}
               onClosePanel={() => closePane(props.threadId, pane.id)}
               runtimeMode={context.runtimeMode}
+              onRequestLive={requestActiveDockPaneLive}
+            />
+          </Suspense>
+        );
+      case "device":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading simulator...</PanelStateMessage>}>
+            <LazyDevicePanel
+              mode="sidebar"
+              threadId={props.threadId}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
+              runtimeMode={context.runtimeMode}
+              isVisible={context.isVisible}
               onRequestLive={requestActiveDockPaneLive}
             />
           </Suspense>

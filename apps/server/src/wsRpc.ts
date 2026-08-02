@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import {
   CommandId,
   DEFAULT_TERMINAL_ID,
+  DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   ThreadId,
   WS_BOOTSTRAP_METHOD,
@@ -12,9 +13,11 @@ import {
   WS_METHODS,
   WsBootstrapRpcGroup,
   WsCompatibilityError,
+  WsDeviceRpcGroup,
   WsFeatureRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
+  type DeviceEvent,
   type GitActionProgressEvent,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -52,6 +55,8 @@ import {
   STUDIO_WORKSPACE_SUBDIRECTORIES,
 } from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
+import { DeviceService } from "./device/Services/DeviceService";
+import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
 import { GitCore } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
@@ -142,7 +147,12 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
   { error: WsRpcError, requiredForClient: false },
 ) {}
 
-const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.middleware(WsRequestAdmissionMiddleware);
+// The device group is defined separately in contracts because its engine is
+// macOS-only, but it is served on the same socket: one connection, one
+// admission middleware, one exhaustive handler map.
+const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup).middleware(
+  WsRequestAdmissionMiddleware,
+);
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   WsRequestAdmissionMiddleware,
@@ -332,6 +342,10 @@ const makeWsRpcHandlersLayer = () =>
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      // Optional so route-level tests and non-macOS builds can mount the RPC
+      // group without a device engine; the handlers below then refuse cleanly
+      // with the same unsupported-platform answer the backend would give.
+      const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
       const streamAdmission = yield* makeWsStreamAdmission({
         recordRejection: (incident) =>
           threadDiagnostics
@@ -1688,6 +1702,29 @@ const makeWsRpcHandlersLayer = () =>
             ).pipe(
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
+          ),
+
+        ...makeWsDeviceHandlers(deviceService),
+        [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "device.events" },
+            // Device pushes are lossy by design: thread state is a versioned
+            // full snapshot, so a client that falls behind converges on the
+            // next one rather than needing every intermediate state.
+            deviceService === undefined
+              ? Stream.empty
+              : bufferLiveUiStream(
+                  Stream.callback<DeviceEvent>((queue) =>
+                    Effect.gen(function* () {
+                      const unsubscribe = deviceService.manager.onEvent((event) => {
+                        Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
+                      });
+                      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+                    }),
+                  ),
+                  { label: "device.events" },
+                ),
           ),
       });
     }),

@@ -42,6 +42,9 @@ import {
   WS_METHODS,
   type WsWelcomePayload,
   type AutomationStreamEvent,
+  DEVICE_WS_CHANNELS,
+  DEVICE_WS_METHODS,
+  type DeviceEvent,
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
@@ -126,6 +129,7 @@ function omitNullUserInputAnswers(
 const terminalEventListeners = createListenerRegistry<TerminalEvent>();
 const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
 const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
+const deviceEventListeners = createListenerRegistry<DeviceEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
@@ -143,6 +147,7 @@ function clearWsNativeApiListeners(): void {
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
   automationEventListeners.clear();
+  deviceEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
@@ -424,6 +429,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
     automationEventListeners.emit(message.data);
+  });
+  transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
+    deviceEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
@@ -737,6 +745,27 @@ export function createWsNativeApi(): NativeApi {
       archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
       resolveProposal: (input) => transport.request(WS_METHODS.automationResolveProposal, input),
       onEvent: automationEventListeners.subscribe,
+    },
+    device: {
+      list: (input) => transport.request(DEVICE_WS_METHODS.list, input),
+      // Booting a cold simulator routinely outruns the default RPC deadline.
+      boot: (input) => transport.request(DEVICE_WS_METHODS.boot, input, { timeoutMs: null }),
+      shutdown: (input) => transport.request(DEVICE_WS_METHODS.shutdown, input),
+      attach: (input) => transport.request(DEVICE_WS_METHODS.attach, input),
+      detach: (input) => transport.request(DEVICE_WS_METHODS.detach, input),
+      getThreadState: (input) => transport.request(DEVICE_WS_METHODS.getThreadState, input),
+      tap: (input) => transport.request(DEVICE_WS_METHODS.tap, input),
+      swipe: (input) => transport.request(DEVICE_WS_METHODS.swipe, input),
+      typeText: (input) => transport.request(DEVICE_WS_METHODS.typeText, input),
+      keyEvent: (input) => transport.request(DEVICE_WS_METHODS.keyEvent, input),
+      pressButton: (input) => transport.request(DEVICE_WS_METHODS.pressButton, input),
+      installApp: (input) =>
+        transport.request(DEVICE_WS_METHODS.installApp, input, { timeoutMs: null }),
+      launchApp: (input) => transport.request(DEVICE_WS_METHODS.launchApp, input),
+      openUrl: (input) => transport.request(DEVICE_WS_METHODS.openUrl, input),
+      screenshot: (input) => transport.request(DEVICE_WS_METHODS.screenshot, input),
+      describeUi: (input) => transport.request(DEVICE_WS_METHODS.describeUi, input),
+      onEvent: deviceEventListeners.subscribe,
     },
     browser: {
       open: async (input) => {

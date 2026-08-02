@@ -119,6 +119,32 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import type {
+  DeviceAttachInput,
+  DeviceBootInput,
+  DeviceBootResult,
+  DeviceDescribeUiInput,
+  DeviceDescribeUiResult,
+  DeviceDetachInput,
+  DeviceEvent,
+  DeviceInstallAppInput,
+  DeviceInstallAppResult,
+  DeviceKeyEventInput,
+  DeviceLaunchAppInput,
+  DeviceLaunchAppResult,
+  DeviceListInput,
+  DeviceListResult,
+  DeviceOpenUrlInput,
+  DevicePressButtonInput,
+  DeviceScreenshotInput,
+  DeviceScreenshotResult,
+  DeviceShutdownInput,
+  DeviceSwipeInput,
+  DeviceTapInput,
+  DeviceThreadInput,
+  DeviceTypeTextInput,
+  ThreadDeviceState,
+} from "./device";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
@@ -763,5 +789,27 @@ export interface NativeApi {
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;
     onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
+  };
+  // macOS-only in practice: off darwin the server answers `list`/`getThreadState`
+  // with an `unsupported-platform` availability and refuses the rest, so the pane
+  // renders its blocked state rather than the client guessing at capabilities.
+  device: {
+    list: (input: DeviceListInput) => Promise<DeviceListResult>;
+    boot: (input: DeviceBootInput) => Promise<DeviceBootResult>;
+    shutdown: (input: DeviceShutdownInput) => Promise<void>;
+    attach: (input: DeviceAttachInput) => Promise<ThreadDeviceState>;
+    detach: (input: DeviceDetachInput) => Promise<ThreadDeviceState>;
+    getThreadState: (input: DeviceThreadInput) => Promise<ThreadDeviceState>;
+    tap: (input: DeviceTapInput) => Promise<void>;
+    swipe: (input: DeviceSwipeInput) => Promise<void>;
+    typeText: (input: DeviceTypeTextInput) => Promise<void>;
+    keyEvent: (input: DeviceKeyEventInput) => Promise<void>;
+    pressButton: (input: DevicePressButtonInput) => Promise<void>;
+    installApp: (input: DeviceInstallAppInput) => Promise<DeviceInstallAppResult>;
+    launchApp: (input: DeviceLaunchAppInput) => Promise<DeviceLaunchAppResult>;
+    openUrl: (input: DeviceOpenUrlInput) => Promise<void>;
+    screenshot: (input: DeviceScreenshotInput) => Promise<DeviceScreenshotResult>;
+    describeUi: (input: DeviceDescribeUiInput) => Promise<DeviceDescribeUiResult>;
+    onEvent: (callback: (event: DeviceEvent) => void) => () => void;
   };
 }

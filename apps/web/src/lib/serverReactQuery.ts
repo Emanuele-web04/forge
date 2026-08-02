@@ -148,6 +148,22 @@ export function serverAuthSessionQueryOptions() {
   });
 }
 
+/**
+ * The execution environment (OS, arch, server version) is fixed for the life of
+ * a server process, so it caches indefinitely; a restart drops the socket and
+ * remounts the app, which refetches.
+ */
+export function serverEnvironmentQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.environment(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getEnvironment();
+    },
+    staleTime: Infinity,
+  });
+}
+
 export function serverSettingsQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.settings(),
