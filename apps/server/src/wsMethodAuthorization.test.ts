@@ -31,9 +31,18 @@ describe("owner-only enforcement", () => {
         WS_METHODS.serverUpsertKeybinding,
         WS_METHODS.serverStopLocalServer,
         WS_METHODS.serverProbeRemoteHost,
+        WS_METHODS.serverGetRemoteHostFingerprint,
         WS_METHODS.serverGetPhoneReachability,
       ].toSorted(),
     );
+  });
+
+  it("keeps remote-host key fingerprinting owner-only", () => {
+    // Same outbound capability as probing: it resolves a caller-chosen
+    // destination through the OPERATOR's ~/.ssh/config and dials it. A paired
+    // non-owner could otherwise use this server to scan hosts it cannot reach
+    // itself, and read the operator's config by inference from the results.
+    expect(OWNER_ONLY_WS_METHODS.has(WS_METHODS.serverGetRemoteHostFingerprint)).toBe(true);
   });
 
   it("keeps phone-reachability detection owner-only", () => {
