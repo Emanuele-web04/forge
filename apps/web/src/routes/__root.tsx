@@ -288,7 +288,13 @@ function TransportBuildSkewNotice() {
       role="status"
       className="pointer-events-none fixed inset-x-0 top-0 z-[240] flex justify-center px-3 pt-2"
     >
-      <p className="pointer-events-auto rounded-full border border-amber-500/40 bg-card/95 px-3 py-1 text-[11px] text-muted-foreground shadow-lg backdrop-blur-md">
+      {/*
+       * Pointer-transparent like its wrapper. The notice carries no controls,
+       * and a skewed session lasts until the user updates, so an interactive
+       * pill would swallow every click in the top centre of the app for the
+       * whole session.
+       */}
+      <p className="rounded-full border border-amber-500/40 bg-card/95 px-3 py-1 text-[11px] text-muted-foreground shadow-lg backdrop-blur-md">
         Read-only: this client ({skew.clientBuild}) and server ({skew.serverBuild}) run mismatched
         builds. Update both to the same version to make changes.
       </p>
