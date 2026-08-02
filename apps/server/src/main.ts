@@ -241,21 +241,22 @@ const ServerConfigLive = (input: CliInput) =>
       // request needs a session) — a loopback user locked out with no recovery
       // path by a stray space in a .env or a file the supervisor wrote empty.
       // A token that is only whitespace is no token, everywhere.
-      const authToken = (yield* Effect.try({
-        try: () =>
-          resolveAuthToken({
-            authToken: Option.getOrUndefined(input.authToken) ?? env.authToken,
-            authTokenFile: Option.getOrUndefined(input.authTokenFile) ?? env.authTokenFile,
-          }),
-        catch: (cause) =>
-          new StartupError({
-            message:
-              cause instanceof AuthTokenFileError
-                ? cause.message
-                : `Failed to read the ${AUTH_TOKEN_FILE_ENV} credential`,
-            cause,
-          }),
-      }))?.trim() || undefined;
+      const authToken =
+        (yield* Effect.try({
+          try: () =>
+            resolveAuthToken({
+              authToken: Option.getOrUndefined(input.authToken) ?? env.authToken,
+              authTokenFile: Option.getOrUndefined(input.authTokenFile) ?? env.authTokenFile,
+            }),
+          catch: (cause) =>
+            new StartupError({
+              message:
+                cause instanceof AuthTokenFileError
+                  ? cause.message
+                  : `Failed to read the ${AUTH_TOKEN_FILE_ENV} credential`,
+              cause,
+            }),
+        }))?.trim() || undefined;
       const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
       const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,

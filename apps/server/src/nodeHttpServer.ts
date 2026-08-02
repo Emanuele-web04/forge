@@ -2,6 +2,7 @@ import http from "node:http";
 import type { ListenOptions, Socket } from "node:net";
 
 import { WS_FEATURE_PATH } from "@synara/contracts";
+import type { EnvironmentProxyDispatch } from "./environmentProxy";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Scope } from "effect";
 import * as HttpServer from "effect/unstable/http/HttpServer";
@@ -122,6 +123,16 @@ export function upgradePathAllowsCompression(requestUrl: string | undefined): bo
 export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   evaluate: () => http.Server,
   options: ListenOptions,
+  /**
+   * Single-origin environment proxy. When present, `/env/:envId/*` requests and
+   * upgrades are diverted to a remote Synara server BEFORE the local Effect
+   * router or the ws servers see them, and everything else is untouched.
+   *
+   * Passed in rather than constructed here so the proxy's registry (which is
+   * authorization state) is owned by the server lifecycle, and so a deployment
+   * with no remote environments has no proxy surface at all.
+   */
+  environmentProxy?: EnvironmentProxyDispatch,
 ) {
   const scope = yield* Effect.scope;
   const server = evaluate();
@@ -209,7 +220,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
           scope: serveScope,
         },
       );
-      const upgradeHandler = (
+      const localUpgradeHandler = (
         nodeRequest: http.IncomingMessage,
         socket: Parameters<typeof featureUpgradeHandler>[1],
         head: Parameters<typeof featureUpgradeHandler>[2],
@@ -220,13 +231,26 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
         dispatch(nodeRequest, socket, head);
       };
 
+      // Wrapping, not a second listener: Node runs every listener, so a proxied
+      // request would otherwise be answered by BOTH the proxy and the local
+      // router (whose SPA fallback happily serves index.html for
+      // `/env/<id>/threads/...`), racing two responses onto one socket.
+      const requestHandler = environmentProxy
+        ? environmentProxy.wrapRequestHandler(handler)
+        : handler;
+      const upgradeHandler = environmentProxy
+        ? environmentProxy.wrapUpgradeHandler(
+            localUpgradeHandler as Parameters<EnvironmentProxyDispatch["wrapUpgradeHandler"]>[0],
+          )
+        : localUpgradeHandler;
+
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          server.off("request", handler);
+          server.off("request", requestHandler);
           server.off("upgrade", upgradeHandler);
         }),
       );
-      server.on("request", handler);
+      server.on("request", requestHandler);
       server.on("upgrade", upgradeHandler);
     }),
   });

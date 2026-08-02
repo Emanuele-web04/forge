@@ -130,8 +130,7 @@ import {
   shouldRejectUntrustedRequestOrigin,
 } from "./trustedOrigins";
 import {
-  isLocalOnlyDeployment,
-  requiresSessionAuthentication,
+  allowsImplicitOwnerSession,
   type AuthenticatedDeployment,
   type RemoteAccessDeployment,
 } from "./remoteAccessPolicy";
@@ -1768,10 +1767,7 @@ export function authenticateRpcWebSocketUpgrade(input: {
   readonly request: AuthRequest;
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
 }): Effect.Effect<AuthenticatedSession | null, AuthError> {
-  if (
-    !requiresSessionAuthentication(input.config) ||
-    (isLocalOnlyDeployment(input.config) && input.legacyToken === input.config.authToken)
-  ) {
+  if (allowsImplicitOwnerSession({ config: input.config, legacyToken: input.legacyToken })) {
     return Effect.succeed(null);
   }
   return input.serverAuth.authenticateWebSocketUpgrade(input.request);

@@ -272,6 +272,22 @@
       "types": "./src/remoteCommand.ts",
       "import": "./src/remoteCommand.ts"
     },
+    "./environmentProxyPath": {
+      "types": "./src/environmentProxyPath.ts",
+      "import": "./src/environmentProxyPath.ts"
+    },
+    "./proxyFrameQueue": {
+      "types": "./src/proxyFrameQueue.ts",
+      "import": "./src/proxyFrameQueue.ts"
+    },
+    "./wsFrameSplit": {
+      "types": "./src/wsFrameSplit.ts",
+      "import": "./src/wsFrameSplit.ts"
+    },
+    "./proxyHeaders": {
+      "types": "./src/proxyHeaders.ts",
+      "import": "./src/proxyHeaders.ts"
+    },
     "./remoteHostProbe": {
       "types": "./src/remoteHostProbe.ts",
       "import": "./src/remoteHostProbe.ts"

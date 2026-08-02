@@ -55,6 +55,28 @@ export function requiresSessionAuthentication(config: AuthenticatedDeployment): 
   return isRemoteReachableDeployment(config) || Boolean(config.authToken?.trim());
 }
 
+/**
+ * Whether a request may proceed as the implicit owner, with no session
+ * credential at all.
+ *
+ * The ONE place this decision is made. Every entry point that can reach
+ * privileged state — the RPC WebSocket upgrade, the `/env/:envId/*` proxy —
+ * asks this rather than re-deriving it, because a second spelling of "when may
+ * we skip authentication" is a second place for it to be wrong.
+ *
+ * True only for a local-only deployment, and then only when the configured
+ * legacy token (if any) matches.
+ */
+export function allowsImplicitOwnerSession(input: {
+  readonly config: AuthenticatedDeployment;
+  readonly legacyToken: string | null;
+}): boolean {
+  return (
+    !requiresSessionAuthentication(input.config) ||
+    (isLocalOnlyDeployment(input.config) && input.legacyToken === input.config.authToken)
+  );
+}
+
 export function normalizeHttpsPublicOrigin(publicUrl: URL): URL | null {
   if (
     publicUrl.protocol !== "https:" ||
