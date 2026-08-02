@@ -103,6 +103,20 @@ void _nothingRoutedThatIsNotThreadScoped;
  * exist: a `cwd` carries no host identity, so one of these left unrouted does
  * not fail — it silently succeeds against the wrong machine's checkout.
  *
+ * THIS CHECK HAS ALREADY HAD THAT BUG ITSELF. It first matched only a REQUIRED
+ * `{ readonly cwd: string }`, which structurally cannot see `cwd?:`. Six
+ * path-scoped methods — `filesystem.browse` and five provider discovery calls —
+ * were therefore unrouted behind a check reporting full coverage, and nothing
+ * errored, which is the only reason it survived review. The guard was asserting
+ * a completeness it did not have.
+ *
+ * The lesson is about the SHAPE of the failure, not the fix: a structural match
+ * is only as complete as the shapes it enumerates, and every shape it omits is
+ * invisible BY CONSTRUCTION rather than merely untested. Narrowing the match
+ * below — dropping the optional branch, requiring a more specific type —
+ * reopens the hole silently. Widen it when in doubt; a false positive costs a
+ * table entry, a false negative costs someone's working tree.
+ *
  * KNOWN LIMIT OF THIS CHECK: it only sees a path carried as a FIELD of the
  * first argument. `shell.openInEditor(cwd, editor)` passes it POSITIONALLY and
  * is therefore invisible here, as would be any future method shaped that way.

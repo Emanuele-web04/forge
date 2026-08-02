@@ -37,9 +37,19 @@ export type StartInReadiness = "ready" | "not-authenticated" | "unavailable" | "
  * authenticated — that is the literal precondition for starting a thread there.
  *
  * The three not-ready answers are kept apart because each implies a DIFFERENT
- * action, and the note tells the user what to do. "Sign in on that host" is
- * wrong advice for a host whose provider CLI is not installed, and "still
- * checking" is wrong for a host that has already answered.
+ * ACTION, and the note's whole job is telling the user what to do. DO NOT
+ * collapse them back together — each merge states something false:
+ *
+ * - `unavailable` into `not-authenticated` tells someone to sign in on a host
+ *   whose provider CLI is not installed. It is not signed in BECAUSE it is not
+ *   there, so signing in cannot help. Sending a user to perform an action that
+ *   cannot fix their problem is the exact failure class this feature exists to
+ *   remove, reintroduced one level down.
+ * - `unknown` into `not-authenticated` accuses a host whose status has simply
+ *   not arrived yet. `ServerProviderStatus.authStatus` is three-valued
+ *   precisely so "we have not heard" stays distinguishable from "it said no";
+ *   a false accusation here trains the user to ignore the line entirely, which
+ *   costs us the case it exists for.
  */
 export function resolveStartInReadiness(
   statuses: readonly ServerProviderStatus[] | undefined,
@@ -60,18 +70,50 @@ export function resolveStartInReadiness(
 }
 
 /**
+ * The provider to name in a sign-in prompt, or `null` when none can be named.
+ *
+ * Returns a name only when EXACTLY ONE installed provider is unauthenticated.
+ * With several, naming one would send the user to sign in to an arbitrary
+ * choice; with none identifiable, naming a guess is worse than naming nothing,
+ * because a wrong provider name sends them somewhere that cannot help.
+ */
+export function signInProviderName(
+  statuses: readonly ServerProviderStatus[] | undefined,
+): string | null {
+  const candidates = (statuses ?? []).filter(
+    (status) => status.available && status.authStatus === "unauthenticated",
+  );
+  if (candidates.length !== 1) return null;
+  const only = candidates[0];
+  if (!only) return null;
+  // `authLabel` is the human-facing name when the server supplies one; the
+  // provider kind is the honest fallback. Never a hardcoded product name — a
+  // host may have a different provider signed in entirely.
+  return only.authLabel?.trim() || only.provider;
+}
+
+/**
  * The line shown under a host, or `null` when there is nothing worth saying.
  *
  * Silent for a ready host on purpose: a message that is always present is a
  * message nobody reads, and the whole value of this line is that its presence
  * means something. Names the action and where to take it, never the internals.
  */
-export function startInReadinessNote(readiness: StartInReadiness): string | null {
+export function startInReadinessNote(
+  readiness: StartInReadiness,
+  /** Provider to name, when exactly one is identifiable. */
+  providerName?: string | null,
+): string | null {
   switch (readiness) {
     case "ready":
       return null;
     case "not-authenticated":
-      return "No providers are signed in on this host yet — sign in there to start chats.";
+      // Named when we can say WHICH provider — a specific action beats a
+      // general one. Falls back to the unnamed line rather than guessing,
+      // because naming the wrong provider is worse than naming none.
+      return providerName
+        ? `Sign in to ${providerName} on this host to start chats here.`
+        : "No providers are signed in on this host yet — sign in there to start chats.";
     case "unavailable":
       return "No coding agents are installed on this host yet.";
     case "unknown":
@@ -151,7 +193,10 @@ export function buildStartInEnvironmentOptions(
       // Suppressed while the host is unselectable: `disabledReason` already
       // occupies that line with the more urgent fact, and two competing
       // explanations of why a row is unusable is worse than one.
-      readinessNote: unreachable || checking ? null : startInReadinessNote(readiness),
+      readinessNote:
+        unreachable || checking
+          ? null
+          : startInReadinessNote(readiness, signInProviderName(providerStatuses)),
     };
   });
 }
@@ -197,26 +242,6 @@ export function resolveStartInSelection(input: {
     };
   }
   return { target: { environmentId: input.option.environmentId, projectId: input.projectId } };
-}
-
-/**
- * The standing note shown while a REMOTE host is selected, or `null` for the
- * local one.
- *
- * Describes what does and does not follow the chat to that host. File and Git
- * actions DO follow it — they are resolved by path ownership — but the desktop
- * surfaces (folder dialogs, the embedded browser) stay on the user's own
- * machine, because they are windows on the screen in front of them.
- *
- * Deliberately absent for "This computer": there everything really does run in
- * one place, and a note that is always on is a note nobody reads.
- */
-export function startInEnvironmentNote(option: {
-  readonly isLocal: boolean;
-  readonly label: string;
-}): string | null {
-  if (option.isLocal) return null;
-  return `Runs on ${option.label}. Chats, terminals, files and Git run there; the folder picker and browser preview stay on this computer.`;
 }
 
 /** Case-insensitive filter over environment labels and their project names. */

@@ -30,7 +30,6 @@ import {
   buildStartInEnvironmentOptions,
   filterStartInOptions,
   resolveStartInSelection,
-  startInEnvironmentNote,
   type StartInEnvironmentInput,
   type StartInProject,
   type StartInRefusal,
@@ -89,13 +88,6 @@ export const StartInPicker = memo(function StartInPicker(props: {
     () => filteredOptions.flatMap((option) => option.projects.map((project) => project.id)),
     [filteredOptions],
   );
-
-  // Standing note for the SELECTED host, not the hovered row: it describes
-  // where the chat being composed will run. Null for "This computer".
-  const environmentNote = useMemo(() => {
-    const option = options.find((candidate) => candidate.environmentId === selectedEnvironmentId);
-    return option ? startInEnvironmentNote(option) : null;
-  }, [options, selectedEnvironmentId]);
 
   const triggerLabel = useMemo(() => {
     const option = options.find((candidate) => candidate.environmentId === selectedEnvironmentId);
@@ -164,15 +156,6 @@ export const StartInPicker = memo(function StartInPicker(props: {
                 <p className="font-medium text-destructive">{refusal.title}</p>
                 <p className="mt-0.5 text-muted-foreground">{refusal.description}</p>
               </div>
-            ) : environmentNote ? (
-              // A refusal outranks the note: it is about the click just made,
-              // while the note is standing context for the whole session.
-              <p
-                className="px-2 pb-1.5 pt-1 text-muted-foreground text-xs"
-                data-testid="start-in-picker-environment-note"
-              >
-                {environmentNote}
-              </p>
             ) : null
           }
         >

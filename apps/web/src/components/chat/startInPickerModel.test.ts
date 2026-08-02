@@ -14,7 +14,7 @@ import {
   filterStartInOptions,
   resolveStartInReadiness,
   resolveStartInSelection,
-  startInEnvironmentNote,
+  signInProviderName,
   startInReadinessNote,
   type StartInEnvironmentInput,
   type StartInProject,
@@ -191,13 +191,65 @@ describe("host readiness", () => {
     expect(startInReadinessNote("unknown")).toContain("Checking");
   });
 
+  it("names the provider to sign in to when exactly one is identifiable", () => {
+    // A specific action beats a general one: "Sign in to Codex on this host"
+    // tells the user where to go, "no providers are signed in" does not.
+    expect(
+      signInProviderName([providerStatus({ authStatus: "unauthenticated", authLabel: "Codex" })]),
+    ).toBe("Codex");
+    expect(startInReadinessNote("not-authenticated", "Codex")).toBe(
+      "Sign in to Codex on this host to start chats here.",
+    );
+  });
+
+  it("falls back to the provider kind when the server supplies no label", () => {
+    expect(signInProviderName([providerStatus({ authStatus: "unauthenticated" })])).toBe("codex");
+  });
+
+  it("names NOTHING rather than guessing when several providers could be meant", () => {
+    // Naming an arbitrary one sends the user to sign in to a provider they may
+    // not want; naming the wrong one is worse than naming none.
+    expect(
+      signInProviderName([
+        providerStatus({ provider: "codex", authStatus: "unauthenticated" }),
+        providerStatus({ provider: "claudeAgent", authStatus: "unauthenticated" }),
+      ]),
+    ).toBeNull();
+    expect(startInReadinessNote("not-authenticated", null)).toContain("No providers are signed in");
+  });
+
+  it("does not name an uninstalled provider", () => {
+    // It is not signed in because it is not there; telling the user to sign in
+    // to it sends them somewhere that cannot help.
+    expect(
+      signInProviderName([providerStatus({ available: false, authStatus: "unauthenticated" })]),
+    ).toBeNull();
+  });
+
   it("surfaces the readiness note on a reachable host that is not signed in", () => {
     const options = buildStartInEnvironmentOptions(
       inputs({ remote: { providerStatuses: [providerStatus({ authStatus: "unauthenticated" })] } }),
     );
     const remote = options.find((option) => !option.isLocal);
     expect(remote?.readiness).toBe("not-authenticated");
-    expect(remote?.readinessNote).toContain("signed in");
+    // One identifiable provider, so the note names it: the specific action.
+    expect(remote?.readinessNote).toBe("Sign in to codex on this host to start chats here.");
+  });
+
+  it("uses the unnamed line when several providers could be meant", () => {
+    const options = buildStartInEnvironmentOptions(
+      inputs({
+        remote: {
+          providerStatuses: [
+            providerStatus({ provider: "codex", authStatus: "unauthenticated" }),
+            providerStatus({ provider: "claudeAgent", authStatus: "unauthenticated" }),
+          ],
+        },
+      }),
+    );
+    expect(options.find((option) => !option.isLocal)?.readinessNote).toContain(
+      "No providers are signed in",
+    );
   });
 
   it("does NOT block selection on readiness", () => {
@@ -288,30 +340,6 @@ describe("resolving a selection", () => {
     expect(resolveStartInSelection({ option: local, projectId: LOCAL_PROJECT_ID })).toEqual({
       target: { environmentId: LOCAL_ENVIRONMENT_ID, projectId: LOCAL_PROJECT_ID },
     });
-  });
-});
-
-describe("the remote-host note", () => {
-  const options = buildStartInEnvironmentOptions(inputs());
-  const remote = options.find((option) => !option.isLocal) as (typeof options)[number];
-  const local = options.find((option) => option.isLocal) as typeof remote;
-
-  it("names the host and what stays on this computer", () => {
-    // Files and Git DO follow the chat once path ownership resolves them; the
-    // desktop surfaces do not, because they are windows on the screen in front
-    // of the user. The note has to draw that line in the right place.
-    const note = startInEnvironmentNote(remote);
-    expect(note).toContain(remote.label);
-    expect(note).toContain("files and Git run there");
-    expect(note).toContain("stay on this computer");
-  });
-
-  it("says nothing for This computer", () => {
-    // The absence is the load-bearing half: on the local host everything really
-    // does run in one place, and a note that is always on is a note nobody
-    // reads. If this ever starts returning a string, the note becomes noise and
-    // stops being read on the remote host where it matters.
-    expect(startInEnvironmentNote(local)).toBeNull();
   });
 });
 
