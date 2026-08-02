@@ -3830,7 +3830,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
                 input: {
                   pattern: "changelog",
                 },
-                output: "Found 18 matches",
+                output: "\nFound 18 matches\n",
                 time: {
                   start: 2,
                   end: 3,

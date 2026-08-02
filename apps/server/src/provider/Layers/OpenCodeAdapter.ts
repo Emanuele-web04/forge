@@ -637,14 +637,19 @@ function messageRoleForPart(
   return part.type === "tool" ? "assistant" : undefined;
 }
 
+function normalizedToolDetail(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
 function detailFromToolPart(part: Extract<Part, { type: "tool" }>): string | undefined {
   switch (part.state.status) {
     case "completed":
-      return part.state.output;
+      return normalizedToolDetail(part.state.output);
     case "error":
-      return part.state.error;
+      return normalizedToolDetail(part.state.error);
     case "running":
-      return part.state.title;
+      return normalizedToolDetail(part.state.title);
     default:
       return undefined;
   }
