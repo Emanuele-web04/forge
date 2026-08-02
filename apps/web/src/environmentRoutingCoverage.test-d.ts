@@ -24,11 +24,41 @@ import {
   CWD_LOCAL_OR_THREAD_ROUTED_METHODS,
   CWD_ROUTED_METHODS,
   LOCAL_ONLY_THREAD_METHODS,
+  PROJECT_LOCAL_OR_OTHER_ROUTED_METHODS,
+  PROJECT_ROUTED_METHODS,
   ROUTED_METHODS,
 } from "./environmentRoutedApi";
 
 /** The declared input of a NativeApi method, or `never` for zero-arg methods. */
 type FirstArgument<F> = F extends (input: infer I, ...rest: never[]) => unknown ? I : never;
+
+/**
+ * Methods of one group whose input carries `Key`, REQUIRED OR OPTIONAL.
+ *
+ * One matcher for every ownership key, so adding a key category below is a
+ * single line rather than a new hand-written block that can be narrower than
+ * the one beside it. The three holes this check has already had were all the
+ * same mistake — a match that saw fewer shapes than it appeared to — and three
+ * near-identical blocks is how the fourth would arrive.
+ */
+type MethodsWithKey<Group, Key extends string> = {
+  [Method in keyof Group]: FirstArgument<Group[Method]> extends Record<Key, string>
+    ? Method
+    : undefined extends FirstArgument<Group[Method]>
+      ? never
+      : FirstArgument<Group[Method]> extends Partial<Record<Key, string | undefined>>
+        ? [FirstArgument<Group[Method]>] extends [never]
+          ? never
+          : Method
+        : never;
+}[keyof Group];
+
+/** `"group.method"` for every method in the contract carrying `Key`. */
+type ByContract<Key extends string> = {
+  [Group in keyof NativeApi]: MethodsWithKey<NativeApi[Group], Key> extends never
+    ? never
+    : `${Group & string}.${MethodsWithKey<NativeApi[Group], Key> & string}`;
+}[keyof NativeApi];
 
 /**
  * Methods of one API group whose input names a thread.
@@ -128,28 +158,7 @@ void _nothingRoutedThatIsNotThreadScoped;
  * positional-path method would slip through silently. Prefer an input object
  * for anything new that names a path.
  */
-type CwdScopedMethods<Group> = {
-  [Method in keyof Group]: FirstArgument<Group[Method]> extends { readonly cwd: string }
-    ? Method
-    : // Also catches an OPTIONAL `cwd`. `filesystem.browse` has one, and a
-      // required-only check silently omitted it — a method can be just as
-      // path-scoped when the field is optional, and the omission is invisible
-      // precisely because nothing errors.
-      undefined extends FirstArgument<Group[Method]>
-      ? never
-      : FirstArgument<Group[Method]> extends { readonly cwd?: string | undefined }
-        ? [FirstArgument<Group[Method]>] extends [never]
-          ? never
-          : Method
-        : never;
-}[keyof Group];
-
-/** `"git.checkout" | "projects.writeFile" | ...` across the whole contract. */
-type CwdScopedByContract = {
-  [Group in keyof NativeApi]: CwdScopedMethods<NativeApi[Group]> extends never
-    ? never
-    : `${Group & string}.${CwdScopedMethods<NativeApi[Group]> & string}`;
-}[keyof NativeApi];
+type CwdScopedByContract = ByContract<"cwd">;
 
 type CwdDecidedMethods =
   | DeclaredIn<typeof CWD_ROUTED_METHODS>
@@ -193,3 +202,49 @@ const _nothingIsRoutedTwice: never = null as unknown as Extract<
   DeclaredIn<typeof CWD_ROUTED_METHODS>
 >;
 void _nothingIsRoutedTwice;
+
+/**
+ * Every `projectId`-keyed method in the contract has a routing decision.
+ *
+ * The THIRD ownership key, added after the panel found eight project-scoped
+ * methods executing locally: stopping a remote project's dev server killed
+ * nothing while the real process kept running, and a pull-request action was
+ * attempted against the local server's idea of the repository.
+ *
+ * Uses the same `ByContract` matcher as `cwd` rather than a third hand-written
+ * block. That is the actual lesson from this check's history: it has been
+ * narrower than it looked three times — required-only, then positional, then
+ * missing a key category entirely — and near-identical blocks that can drift
+ * apart is how the fourth would arrive.
+ */
+type ProjectScopedByContract = ByContract<"projectId">;
+
+const _everyProjectScopedMethodHasARoutingDecision: never = null as unknown as Exclude<
+  ProjectScopedByContract,
+  | DeclaredIn<typeof PROJECT_ROUTED_METHODS>
+  | DeclaredIn<typeof PROJECT_LOCAL_OR_OTHER_ROUTED_METHODS>
+  // `dispatchCommand`'s argument is the command union; its project-scoped
+  // members are routed per-call at runtime by `resolveCallEnvironmentId`.
+  | "orchestration.dispatchCommand"
+>;
+void _everyProjectScopedMethodHasARoutingDecision;
+
+/** Nothing is project-routed that the contract does not actually key that way. */
+const _nothingProjectRoutedThatIsNotProjectScoped: never = null as unknown as Exclude<
+  DeclaredIn<typeof PROJECT_ROUTED_METHODS>,
+  ProjectScopedByContract
+>;
+void _nothingProjectRoutedThatIsNotProjectScoped;
+
+/**
+ * No method is routed by BOTH its project and its path.
+ *
+ * Same hazard as the id/path pair: two rules for one call, with evaluation
+ * order silently deciding the host. `projects.runDevServer` carries both and
+ * stays path-routed.
+ */
+const _nothingIsProjectAndPathRouted: never = null as unknown as Extract<
+  DeclaredIn<typeof PROJECT_ROUTED_METHODS>,
+  DeclaredIn<typeof CWD_ROUTED_METHODS>
+>;
+void _nothingIsProjectAndPathRouted;

@@ -66,7 +66,7 @@ function makeApi(
   // id-routed, checkout and friends are path-routed), so a per-group reset here
   // would silently leave one set as `undefined` and its tests exercising
   // nothing.
-  const tables = [ROUTED_METHODS, CWD_ROUTED_METHODS] as ReadonlyArray<
+  const tables = [ROUTED_METHODS, CWD_ROUTED_METHODS, PROJECT_ROUTED_METHODS] as ReadonlyArray<
     Readonly<Record<string, readonly string[]>>
   >;
   for (const table of tables) {
@@ -153,6 +153,7 @@ import {
   createEnvironmentRoutedApi,
   CWD_ROUTED_METHODS,
   LOCAL_ONLY_THREAD_METHODS,
+  PROJECT_ROUTED_METHODS,
   ROUTED_METHODS,
 } from "./environmentRoutedApi";
 import { UnknownPathEnvironmentError } from "./environmentPathRouting";
@@ -641,6 +642,65 @@ describe("cwd-keyed calls route by path ownership", () => {
 
     expect(spyFor(remoteClient, "git", "handoffThread")).toHaveBeenCalledTimes(1);
     expect(spyFor(localClient, "git", "handoffThread")).not.toHaveBeenCalled();
+  });
+});
+
+describe("projectId-keyed calls route by project ownership", () => {
+  it("stops a REMOTE project's dev server on the host actually running it", async () => {
+    // Unrouted this asked the LOCAL server to stop a process it never started:
+    // it reported success while the real dev server kept running on the remote
+    // host, with the UI showing it as stopped.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.projects.stopDevServer({ projectId: "project-remote" } as never);
+
+    expect(spyFor(remoteClient, "projects", "stopDevServer")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "projects", "stopDevServer")).not.toHaveBeenCalled();
+  });
+
+  it("runs a pull-request action against the host that has the repository", async () => {
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.pullRequests.action({ projectId: "project-remote", number: 1 } as never);
+
+    expect(spyFor(remoteClient, "pullRequests", "action")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "pullRequests", "action")).not.toHaveBeenCalled();
+  });
+
+  it("keeps a local project's call local", async () => {
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(LOCAL_ENVIRONMENT_ID, "project-local");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.projects.stopDevServer({ projectId: "project-local" } as never);
+
+    expect(spyFor(localClient, "projects", "stopDevServer")).toHaveBeenCalledTimes(1);
+    expect(spyFor(remoteClient, "projects", "stopDevServer")).not.toHaveBeenCalled();
+  });
+
+  it("stays local when no project is named", async () => {
+    // An absent optional projectId identifies no other host, so this is a
+    // server-wide call and must keep running where it always did.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.automation.update({ id: "automation-1" } as never);
+
+    expect(spyFor(localClient, "automation", "update")).toHaveBeenCalledTimes(1);
+    expect(spyFor(remoteClient, "automation", "update")).not.toHaveBeenCalled();
+  });
+
+  it("refuses rather than running locally when the project's host is disconnected", async () => {
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote");
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+
+    await expect(
+      api.projects.stopDevServer({ projectId: "project-remote" } as never),
+    ).rejects.toBeInstanceOf(EnvironmentUnavailableError);
+    expect(spyFor(localClient, "projects", "stopDevServer")).not.toHaveBeenCalled();
   });
 });
 

@@ -4,14 +4,12 @@
 // Layer: Web environment UX
 // Exports: createEnvironmentProviderStatusSync
 
-import type { EnvironmentId } from "@synara/contracts";
-
+import { createEnvironmentAttachmentRegistry } from "./environmentAttachment";
 import {
   forgetEnvironmentProviderStatuses,
   recordEnvironmentProviderStatuses,
 } from "./environmentProviderStatus";
 import { onServerProviderStatusesUpdated } from "./wsEnvironmentRegistry";
-import type { WsEnvironmentClient } from "./wsNativeApi";
 
 /**
  * Subscribes to every connected environment's provider statuses, and forgets
@@ -28,49 +26,21 @@ import type { WsEnvironmentClient } from "./wsNativeApi";
  * which for a settled host may never come.
  */
 export function createEnvironmentProviderStatusSync() {
-  const unsubscribeByEnvironmentId = new Map<EnvironmentId, () => void>();
-  let disposed = false;
-
-  const drop = (environmentId: EnvironmentId): void => {
-    unsubscribeByEnvironmentId.get(environmentId)?.();
-    unsubscribeByEnvironmentId.delete(environmentId);
-    // A disconnected host must not keep reporting "ready" from a cached
-    // answer — that is precisely the stale claim the readiness line exists to
-    // avoid making.
-    forgetEnvironmentProviderStatuses(environmentId);
-  };
-
-  return {
-    sync(clients: readonly WsEnvironmentClient[]): void {
-      if (disposed) return;
-      const present = new Set(clients.map((client) => client.environmentId));
-
-      // Snapshotted before the loop because `drop` deletes from the map;
-      // mutating it while iterating is how entries get skipped.
-      const departed = Array.from(unsubscribeByEnvironmentId.keys()).filter(
-        (environmentId) => !present.has(environmentId),
-      );
-      for (const environmentId of departed) drop(environmentId);
-
-      for (const client of clients) {
-        if (unsubscribeByEnvironmentId.has(client.environmentId)) continue;
-        unsubscribeByEnvironmentId.set(
-          client.environmentId,
-          onServerProviderStatusesUpdated(
-            (payload) => {
-              if (disposed) return;
-              recordEnvironmentProviderStatuses(client.environmentId, payload.providers);
-            },
-            { environmentId: client.environmentId },
-          ),
-        );
-      }
-    },
-    dispose(): void {
-      disposed = true;
-      for (const environmentId of Array.from(unsubscribeByEnvironmentId.keys())) {
-        drop(environmentId);
-      }
-    },
-  };
+  return createEnvironmentAttachmentRegistry({
+    // Keyed on the CLIENT by the shared registry, not the environment id: the
+    // registry replaces a disposed client with a new object under the same id,
+    // and an id-keyed check would treat the replacement as already-subscribed —
+    // so that host's provider statuses would freeze at whatever the dead
+    // connection last reported, and the picker would keep claiming it.
+    attach: (client) =>
+      onServerProviderStatusesUpdated(
+        (payload) => {
+          recordEnvironmentProviderStatuses(client.environmentId, payload.providers);
+        },
+        { environmentId: client.environmentId },
+      ),
+    // A disconnected host must not keep reporting "ready" from a cached answer —
+    // precisely the stale claim the readiness line exists to avoid making.
+    release: forgetEnvironmentProviderStatuses,
+  });
 }

@@ -5,12 +5,14 @@
 // Exports: createEnvironmentDescriptorSync
 
 import {
+  createEnvironmentAttachmentRegistry,
+  type EnvironmentAttachment,
+} from "./environmentAttachment";
+import {
   forgetEnvironmentMetadata,
   recordEnvironmentDescriptor,
   recordEnvironmentReachability,
 } from "./environmentDirectory";
-import type { EnvironmentId } from "@synara/contracts";
-import type { WsEnvironmentClient } from "./wsNativeApi";
 
 /**
  * Describes every connected environment, and forgets the ones that left.
@@ -20,45 +22,35 @@ import type { WsEnvironmentClient } from "./wsNativeApi";
  * describe, and a permanently-"checking" host is indistinguishable from a
  * working one that is merely slow — the user would keep clicking a row that
  * never responds.
+ *
+ * Attachment is keyed on the CLIENT via the shared registry, not the
+ * environment id: the registry replaces a disposed client with a new object
+ * under the same id, and an id-keyed check would treat the replacement as
+ * already-described — leaving that host stuck on a stale label, or stuck at
+ * "checking" forever if the first attempt failed.
  */
 export function createEnvironmentDescriptorSync() {
-  const described = new Set<EnvironmentId>();
-  let disposed = false;
-
-  return {
-    sync(clients: readonly WsEnvironmentClient[]): void {
-      if (disposed) return;
-      const present = new Set(clients.map((client) => client.environmentId));
-
-      // Snapshotted before the loop because the loop deletes from `described`;
-      // mutating a Set while iterating it is how entries get skipped.
-      const departed = Array.from(described).filter((environmentId) => !present.has(environmentId));
-      for (const environmentId of departed) {
-        described.delete(environmentId);
-        // A re-registered host may be a different machine reusing the same id
-        // slot, so a surviving label would name the old one.
-        forgetEnvironmentMetadata(environmentId);
-      }
-
-      for (const client of clients) {
-        if (described.has(client.environmentId)) continue;
-        described.add(client.environmentId);
-        void client.api.server
-          .getEnvironment()
-          .then((descriptor) => {
-            if (disposed || !described.has(client.environmentId)) return;
-            recordEnvironmentDescriptor(client.environmentId, descriptor);
-          })
-          .catch(() => {
-            if (disposed || !described.has(client.environmentId)) return;
-            recordEnvironmentReachability(client.environmentId, "unreachable");
-          });
-      }
+  return createEnvironmentAttachmentRegistry({
+    attach(client): EnvironmentAttachment["detach"] {
+      // Resolved after the request settles, so a client replaced or removed
+      // mid-flight does not record a descriptor for a connection that is gone.
+      let active = true;
+      void client.api.server
+        .getEnvironment()
+        .then((descriptor) => {
+          if (!active) return;
+          recordEnvironmentDescriptor(client.environmentId, descriptor);
+        })
+        .catch(() => {
+          if (!active) return;
+          recordEnvironmentReachability(client.environmentId, "unreachable");
+        });
+      return () => {
+        active = false;
+      };
     },
-    dispose(): void {
-      disposed = true;
-      for (const environmentId of described) forgetEnvironmentMetadata(environmentId);
-      described.clear();
-    },
-  };
+    // A re-registered host may be a different machine reusing the same id slot,
+    // so a surviving label would name the old one.
+    release: forgetEnvironmentMetadata,
+  });
 }

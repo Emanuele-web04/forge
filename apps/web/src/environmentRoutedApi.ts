@@ -196,6 +196,42 @@ export const CWD_LOCAL_OR_THREAD_ROUTED_METHODS = {
   filesystem: ["browse"],
 } as const satisfies { readonly [G in keyof NativeApi]?: ReadonlyArray<keyof NativeApi[G]> };
 
+/**
+ * Methods keyed by `projectId` and routed to the project's owning host.
+ *
+ * A project belongs to one server, so anything scoped to it acts on that
+ * server's resources: a dev server runs on the machine holding the checkout,
+ * and a pull request is opened against the remote that machine has configured.
+ * Unrouted, stopping a remote project's dev server killed nothing while the
+ * real process kept running, and a PR action was attempted against the LOCAL
+ * server's idea of the repository.
+ *
+ * Resolution is `resolveProjectEnvironmentId` — positional, the same rule the
+ * aggregate view uses, so the project acted on is the one whose row is shown.
+ */
+export const PROJECT_ROUTED_METHODS = {
+  projects: ["stopDevServer"],
+  pullRequests: ["action", "comment", "detail", "diff", "setPinned"],
+  // An automation runs turns in its project's checkout, so it belongs to that
+  // project's host. `update` takes an OPTIONAL projectId — when absent the call
+  // resolves local, the same answer as before, since nothing names another host.
+  automation: ["create", "update"],
+} as const satisfies { readonly [G in keyof NativeApi]?: ReadonlyArray<keyof NativeApi[G]> };
+
+/**
+ * `projectId`-keyed methods routed by something else, or deliberately local.
+ *
+ *   - `projects.runDevServer` carries `cwd` ALONGSIDE `projectId` and is
+ *     already path-routed. Both keys name the same host, and routing it twice
+ *     could disagree with itself.
+ *   - `browser.annotations` is a webview surface on the user's own machine
+ *     (see LOCAL_ONLY_THREAD_METHODS).
+ */
+export const PROJECT_LOCAL_OR_OTHER_ROUTED_METHODS = {
+  projects: ["runDevServer"],
+  browser: ["annotations"],
+} as const satisfies { readonly [G in keyof NativeApi]?: ReadonlyArray<keyof NativeApi[G]> };
+
 function readStringField(argument: unknown, field: string): string | null {
   if (typeof argument !== "object" || argument === null) return null;
   const candidate = (argument as Record<string, unknown>)[field];
@@ -323,6 +359,35 @@ export function createEnvironmentRoutedApi(localApi: NativeApi): NativeApi {
         const owner = environmentNativeApi(resolution.environmentId);
         if (!owner)
           return Promise.reject(new EnvironmentUnavailableError(resolution.environmentId));
+        const ownerGroup = owner[group as keyof NativeApi] as Record<string, unknown>;
+        return (ownerGroup[method] as (...a: readonly unknown[]) => unknown)(...args);
+      };
+    }
+
+    routed[group] = routedGroup;
+  }
+
+  for (const [group, methods] of Object.entries(PROJECT_ROUTED_METHODS)) {
+    const localGroup = localApi[group as keyof NativeApi] as Record<string, unknown> | undefined;
+    if (!localGroup) continue;
+    // Start from the previous passes' result so a group carrying several key
+    // kinds keeps its already-routed members.
+    const routedGroup: Record<string, unknown> = { ...(routed[group] ?? localGroup) };
+
+    for (const method of methods as ReadonlyArray<string>) {
+      const localImplementation = localGroup[method];
+      if (typeof localImplementation !== "function") continue;
+
+      routedGroup[method] = (...args: readonly unknown[]) => {
+        const projectId = readStringField(args[0], "projectId");
+        // No project named is not ambiguous — nothing identifies another host,
+        // so this is a server-wide call and stays where it always ran.
+        if (projectId === null) {
+          return (localImplementation as (...a: readonly unknown[]) => unknown)(...args);
+        }
+        const environmentId = resolveProjectEnvironmentId(projectId);
+        const owner = environmentNativeApi(environmentId);
+        if (!owner) return Promise.reject(new EnvironmentUnavailableError(environmentId));
         const ownerGroup = owner[group as keyof NativeApi] as Record<string, unknown>;
         return (ownerGroup[method] as (...a: readonly unknown[]) => unknown)(...args);
       };
