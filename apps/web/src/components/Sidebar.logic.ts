@@ -1034,9 +1034,31 @@ export function getUnpinnedThreadsForSidebar<
   return threads.filter((thread) => !hiddenThreadIds.has(thread.id));
 }
 
-// Only prune persisted pins after the thread snapshot has hydrated.
-export function shouldPrunePinnedThreads(input: { threadsHydrated: boolean }): boolean {
-  return input.threadsHydrated;
+/**
+ * Whether a pruner that DELETES persisted pins may run.
+ *
+ * Two conditions, and they answer different questions:
+ *   - `threadsHydrated` (LOCAL): the local server's rows have arrived, so
+ *     absence is not merely "nothing has loaded yet".
+ *   - `allEnvironmentsHydrated`: every registered host has reported, so a pin
+ *     missing from the aggregate is genuinely gone rather than owned by a host
+ *     still connecting.
+ *
+ * The second is what a multi-server client added. Remote environments connect
+ * AFTER local, and in that window a remote host's pinned project is absent from
+ * the aggregate purely because its server has not answered — pruning then
+ * deletes it permanently from persisted state, before the host it points at has
+ * had any chance to appear. The user loses a pin to a race they never saw, and
+ * reconnecting does not bring it back because the persisted record is gone.
+ *
+ * Defaults to true so single-server installs are bit-identical: with only the
+ * local environment registered, "all hydrated" is exactly "local hydrated".
+ */
+export function shouldPrunePinnedThreads(input: {
+  threadsHydrated: boolean;
+  allEnvironmentsHydrated?: boolean;
+}): boolean {
+  return input.threadsHydrated && (input.allEnvironmentsHydrated ?? true);
 }
 
 export type ProjectEmptyState = "loading" | "empty" | null;

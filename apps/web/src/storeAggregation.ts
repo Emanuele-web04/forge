@@ -433,3 +433,21 @@ export function environmentIdForProject(state: AppState, projectId: Project["id"
 export function selectLocalThreadsHydrated(state: AppState): boolean {
   return selectLocalEnvironment(state).threadsHydrated;
 }
+
+/**
+ * Whether EVERY registered environment has reported its rows.
+ *
+ * The guard for pruners that DELETE persisted user state. Absence from the
+ * aggregate is only evidence of deletion once every environment has answered;
+ * before that it may simply mean a host has not finished connecting, and a
+ * pruner running then permanently deletes pins whose targets are about to
+ * appear — the user loses a pin to a race they never saw.
+ *
+ * Distinct from `selectLocalThreadsHydrated`, which answers a different
+ * question: may a pruner run at all. A pruner must not run before LOCAL has
+ * reported AND must not treat a silent remote as authoritative. Both are
+ * needed; neither substitutes for the other.
+ */
+export function selectAllEnvironmentsHydrated(state: AppState): boolean {
+  return Object.values(state.environmentById).every((environment) => environment.threadsHydrated);
+}

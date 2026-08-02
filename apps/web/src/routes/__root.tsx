@@ -3,6 +3,7 @@ import {
   ThreadId,
   type OrchestrationEvent,
   type OrchestrationThreadStreamItem,
+  type ProjectId,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type OrchestrationThread,
@@ -85,7 +86,7 @@ import {
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
-import { useProjectRunStore } from "../projectRunStore";
+import { applyProjectDevServerEvent, useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
@@ -96,7 +97,7 @@ import {
   subscribeThreadDetailEvictions,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
-import { threadResumeCursors } from "../environmentRouting";
+import { resolveProjectEnvironmentId, threadResumeCursors } from "../environmentRouting";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
@@ -1776,18 +1777,21 @@ function EventRouter() {
     // Dev servers are first-class server processes; mirror their lifecycle into the
     // client store so the sidebar indicator survives reconnects and stays consistent
     // across tabs without owning any thread/terminal state.
+    // Attributes an existing run to its owning host so a snapshot only replaces
+    // the rows it actually speaks for.
+    const projectRunOwnerOf = (projectId: ProjectId) => resolveProjectEnvironmentId(projectId);
     const invalidateLocalServers = () => {
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
     };
     const unsubDevServerEvent = api.projects.onDevServerEvent((event) => {
-      const store = useProjectRunStore.getState();
-      if (event.type === "snapshot") {
-        store.replaceAll(event.servers);
-      } else if (event.type === "upserted") {
-        store.upsertRun(event.server);
-      } else {
-        store.removeRun(event.projectId);
-      }
+      applyProjectDevServerEvent({
+        event,
+        // This is the LOCAL client's stream, so its snapshot speaks only for
+        // local and must not clear another host's runs.
+        environmentId: LOCAL_ENVIRONMENT_ID,
+        ownerOf: projectRunOwnerOf,
+        store: useProjectRunStore.getState(),
+      });
       invalidateLocalServers();
     });
     // The channel's initial snapshot may have arrived before this listener was
@@ -1798,7 +1802,7 @@ function EventRouter() {
         if (disposed) {
           return;
         }
-        useProjectRunStore.getState().replaceAll(servers);
+        useProjectRunStore.getState().replaceAll(servers, LOCAL_ENVIRONMENT_ID, projectRunOwnerOf);
         invalidateLocalServers();
       })
       .catch(() => undefined);

@@ -20,6 +20,7 @@ import { serverQueryKeys, sidebarLocalServersQueryOptions } from "../lib/serverR
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useProjectRunStore, type ProjectRunState } from "../projectRunStore";
+import { resolveProjectEnvironmentId } from "../environmentRouting";
 import {
   selectPrimaryProjectRunCommand,
   upsertProjectRunCommandScripts,
@@ -201,7 +202,12 @@ export function useSidebarProjectRunController(input: {
       } catch (error) {
         try {
           const { servers } = await api.projects.listDevServers();
-          useProjectRunStore.getState().replaceAll(servers);
+          // The routed API sent this to the project's OWNING host, so the
+          // snapshot speaks for that environment and must replace only its rows.
+          const environmentId = resolveProjectEnvironmentId(projectId);
+          useProjectRunStore
+            .getState()
+            .replaceAll(servers, environmentId, resolveProjectEnvironmentId);
         } catch {
           // The dev-server event stream remains the final reconciliation path.
         }

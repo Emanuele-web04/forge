@@ -764,6 +764,26 @@ describe("pin helpers", () => {
     expect(shouldPrunePinnedThreads({ threadsHydrated: true })).toBe(true);
   });
 
+  it("also waits for EVERY environment before deleting persisted pins", () => {
+    // Remote hosts connect after local. Pruning in that window deletes a remote
+    // host's pins permanently — before the host they point at has appeared —
+    // and reconnecting does not bring them back, because the persisted record
+    // is already gone.
+    expect(
+      shouldPrunePinnedThreads({ threadsHydrated: true, allEnvironmentsHydrated: false }),
+    ).toBe(false);
+    expect(shouldPrunePinnedThreads({ threadsHydrated: true, allEnvironmentsHydrated: true })).toBe(
+      true,
+    );
+  });
+
+  it("is unchanged for a single-server install", () => {
+    // With only the local environment registered, "all hydrated" IS "local
+    // hydrated", so omitting the flag must behave exactly as before.
+    expect(shouldPrunePinnedThreads({ threadsHydrated: true })).toBe(true);
+    expect(shouldPrunePinnedThreads({ threadsHydrated: false })).toBe(false);
+  });
+
   it("shows loading before the first project snapshot can prove the list is empty", () => {
     expect(
       resolveProjectEmptyState({

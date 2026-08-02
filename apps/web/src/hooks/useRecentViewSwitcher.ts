@@ -26,7 +26,7 @@ import { useRecentViewsStore } from "../recentViewsStore";
 import { collectLeaves } from "../splitView.logic";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
-import { selectLocalThreadsHydrated } from "../storeAggregation";
+import { selectAllEnvironmentsHydrated, selectLocalThreadsHydrated } from "../storeAggregation";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import {
@@ -75,6 +75,7 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   // Local-scoped on purpose: gates the recent-view pruner, which drops
   // persisted views whose targets are absent.
   const threadsHydrated = useStore(selectLocalThreadsHydrated);
+  const allEnvironmentsHydrated = useStore(selectAllEnvironmentsHydrated);
   const routeSplitViewId =
     typeof routeSearch.splitViewId === "string" ? routeSearch.splitViewId : undefined;
   const settingsSection = typeof routeSearch.section === "string" ? routeSearch.section : undefined;
@@ -215,10 +216,20 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   }, [prewarmThreadDetails, recentThreadIds]);
 
   useEffect(() => {
-    if (!threadsHydrated || didHydrationPruneRef.current) return;
+    // Waits for EVERY environment, not just local. This prune runs once and
+    // deletes permanently, so firing it while a remote host is still connecting
+    // would drop that host's recent views with no second pass to restore them —
+    // the `didHydrationPruneRef` latch makes the race unrecoverable rather than
+    // merely early.
+    if (!threadsHydrated || !allEnvironmentsHydrated || didHydrationPruneRef.current) return;
     didHydrationPruneRef.current = true;
     pruneRecentViewsStore(buildRecentViewAvailability());
-  }, [buildRecentViewAvailability, pruneRecentViewsStore, threadsHydrated]);
+  }, [
+    allEnvironmentsHydrated,
+    buildRecentViewAvailability,
+    pruneRecentViewsStore,
+    threadsHydrated,
+  ]);
 
   const activateRecentView = (view: RecentView) => {
     switch (view.kind) {

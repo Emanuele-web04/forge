@@ -82,8 +82,12 @@ export function createEnvironmentAttachmentRegistry(options: {
         attached.set(client.environmentId, { client, detach: options.attach(client) });
       }
 
-      // Snapshotted before the loop because `drop` deletes from the map;
-      // mutating it while iterating is how entries get skipped.
+      // Snapshotted because `drop` runs caller-supplied `detach` and `release`.
+      // Deleting the CURRENT key mid-iteration is safe — a Map iterator handles
+      // that. Deleting a LATER one is not: the live key view skips it. A
+      // callback that re-enters `sync` or `dispose` does exactly that, which is
+      // what the copy defends against. Lint calls the spread useless; measured,
+      // it is not.
       for (const environmentId of [...attached.keys()]) {
         if (present.has(environmentId)) continue;
         drop(environmentId);
@@ -91,9 +95,7 @@ export function createEnvironmentAttachmentRegistry(options: {
     },
     dispose(): void {
       disposed = true;
-      // Snapshotted for the same reason as above: `drop` deletes as it goes.
-      // Lint calls the spread unnecessary; it is not, and removing it would
-      // silently leave half the environments attached.
+      // Snapshotted for the same re-entrancy reason as `sync` above.
       for (const environmentId of [...attached.keys()]) drop(environmentId);
     },
     /** Test seam: how many environments are currently attached. */

@@ -10,6 +10,7 @@ import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
 import {
   environmentIdForProject,
   environmentIdForThread,
+  selectAllEnvironmentsHydrated,
   selectEnvironment,
   selectLocalEnvironment,
   selectLocalThreadsHydrated,
@@ -317,5 +318,38 @@ describe("storeAggregation", () => {
         LOCAL_ENVIRONMENT_ID,
       );
     });
+  });
+});
+
+describe("selectAllEnvironmentsHydrated", () => {
+  it("is false while any registered environment has not reported", () => {
+    // The guard for pruners that delete persisted state. A remote host that has
+    // not answered yet is not evidence that its rows are gone.
+    const state = {
+      environmentById: {
+        [LOCAL_ENVIRONMENT_ID]: { ...initialEnvironmentState, threadsHydrated: true },
+        remote: { ...initialEnvironmentState, threadsHydrated: false },
+      },
+    } as unknown as AppState;
+    expect(selectAllEnvironmentsHydrated(state)).toBe(false);
+  });
+
+  it("is true once every environment has reported", () => {
+    const state = {
+      environmentById: {
+        [LOCAL_ENVIRONMENT_ID]: { ...initialEnvironmentState, threadsHydrated: true },
+        remote: { ...initialEnvironmentState, threadsHydrated: true },
+      },
+    } as unknown as AppState;
+    expect(selectAllEnvironmentsHydrated(state)).toBe(true);
+  });
+
+  it("matches local hydration exactly for a single-server install", () => {
+    const hydrated = {
+      environmentById: {
+        [LOCAL_ENVIRONMENT_ID]: { ...initialEnvironmentState, threadsHydrated: true },
+      },
+    } as unknown as AppState;
+    expect(selectAllEnvironmentsHydrated(hydrated)).toBe(true);
   });
 });

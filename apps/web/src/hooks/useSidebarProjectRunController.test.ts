@@ -282,7 +282,14 @@ describe("useSidebarProjectRunController", () => {
     await render().handleStopProjectRun(PROJECT_ID);
 
     expect(harness.removeRun).toHaveBeenCalledWith(PROJECT_ID);
-    expect(harness.replaceAll).toHaveBeenCalledWith(authoritative);
+    // Scoped to the environment that answered: the routed API sent
+    // `listDevServers` to the project's OWNING host, so its snapshot replaces
+    // that host's rows and must leave other environments' runs alone.
+    expect(harness.replaceAll).toHaveBeenCalledWith(
+      authoritative,
+      expect.any(String),
+      expect.any(Function),
+    );
     expect(harness.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["server", "local"],
     });

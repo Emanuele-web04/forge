@@ -105,7 +105,7 @@ import { isOrdinarySpaceProject } from "../lib/spaces";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
-import { selectLocalThreadsHydrated } from "../storeAggregation";
+import { selectAllEnvironmentsHydrated, selectLocalThreadsHydrated } from "../storeAggregation";
 import { getThreadFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
@@ -1294,6 +1294,9 @@ export default function Sidebar() {
   // which deletes persisted pins whose targets are absent. It must mean "the
   // LOCAL server's rows have loaded", never "some server has reported".
   const threadsHydrated = useStore(selectLocalThreadsHydrated);
+  // A remote host connects after local, so pruning before it reports would
+  // delete its pins permanently — before the host they point at can appear.
+  const allEnvironmentsHydrated = useStore(selectAllEnvironmentsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
@@ -3756,11 +3759,11 @@ export default function Sidebar() {
   }, [standardProjects]);
 
   useEffect(() => {
-    if (!shouldPrunePinnedThreads({ threadsHydrated })) {
+    if (!shouldPrunePinnedThreads({ threadsHydrated, allEnvironmentsHydrated })) {
       return;
     }
     prunePinnedProjects(allStandardProjectsBase.map((project) => project.id));
-  }, [allStandardProjectsBase, prunePinnedProjects, threadsHydrated]);
+  }, [allEnvironmentsHydrated, allStandardProjectsBase, prunePinnedProjects, threadsHydrated]);
 
   useEffect(() => {
     const retainedThreadIds = new Set(sidebarThreads.map((thread) => thread.id));
