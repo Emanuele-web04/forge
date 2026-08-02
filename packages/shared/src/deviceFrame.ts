@@ -20,6 +20,21 @@ import {
 export const DEVICE_FRAME_WS_PATH = "/ws/device-frames";
 export const DEVICE_FRAME_WS_UDID_PARAM = "udid";
 
+/**
+ * The one message a client may send on the frame socket, as
+ * `{"type":"device.frame.resync"}`.
+ *
+ * A decoder that hits a sequence gap or a decode error needs fresh parameter
+ * sets and an IDR, and the encoder's next natural keyframe can be seconds
+ * away. The server answers by restarting the capture session, which always
+ * emits a codec-config frame followed by a keyframe.
+ *
+ * It rides this socket rather than the RPC one because it is a property of
+ * this stream, and a frozen canvas should not depend on a second socket being
+ * healthy. Unrecognized messages are ignored rather than treated as errors.
+ */
+export const DEVICE_FRAME_RESYNC_MESSAGE = "device.frame.resync";
+
 export interface DeviceFrame {
   readonly header: DeviceFrameHeader;
   readonly payload: Uint8Array;

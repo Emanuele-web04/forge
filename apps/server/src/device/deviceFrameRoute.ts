@@ -17,12 +17,39 @@
  *
  * @module device/deviceFrameRoute
  */
-import { DEVICE_FRAME_WS_PATH, DEVICE_FRAME_WS_UDID_PARAM } from "@synara/shared/deviceFrame";
+import {
+  DEVICE_FRAME_RESYNC_MESSAGE,
+  DEVICE_FRAME_WS_PATH,
+  DEVICE_FRAME_WS_UDID_PARAM,
+} from "@synara/shared/deviceFrame";
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import { DeviceService } from "./Services/DeviceService.ts";
 import type { DeviceFrameSink } from "./deviceFrameTransport.ts";
+
+/** A resync request is a few dozen bytes; anything larger is not one. */
+const MAX_CLIENT_MESSAGE_BYTES = 1_024;
+
+/**
+ * Parse a client message on the frame socket. Returns the request kind, or
+ * null for anything unrecognized, which the caller ignores rather than
+ * treating as a protocol error.
+ */
+export function decodeResyncRequest(message: string | Uint8Array): "resync" | null {
+  const text = typeof message === "string" ? message : Buffer.from(message).toString("utf8");
+  if (text.length > MAX_CLIENT_MESSAGE_BYTES) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as { type?: unknown }).type === DEVICE_FRAME_RESYNC_MESSAGE
+      ? "resync"
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface DeviceFrameSocketWriter {
   readonly write: (bytes: Uint8Array) => void;
@@ -103,9 +130,20 @@ export function makeDeviceFrameRouteLayer<R = never>(options: {
               unsubscribe();
             }),
           );
-          // Frames are server to client only; running the socket keeps the
-          // connection alive and completes when the client goes away.
-          yield* socket.run(() => {});
+          // The only thing a client may send is a resync request, when its
+          // decoder hits a sequence gap or an error. Handled here rather than
+          // as an RPC because it is a property of this stream, and because a
+          // frozen canvas should not depend on a second socket being healthy.
+          // Anything unrecognized is ignored: a stray message must not kill a
+          // stream.
+          yield* socket.run((message) => {
+            if (decodeResyncRequest(message) === null) return;
+            Effect.runFork(
+              Effect.promise(() =>
+                deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
+              ),
+            );
+          });
           return HttpServerResponse.empty();
         }).pipe(
           Effect.catchCause((cause) =>

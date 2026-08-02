@@ -92,6 +92,60 @@ describe("DeviceManager attachment", () => {
   });
 });
 
+describe("DeviceManager keyframe resync", () => {
+  it("rebuilds the capture session so the encoder emits new parameter sets", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+
+    await manager.requestKeyframe(DEVICE_A);
+
+    // A fresh compression session is the only way to force an IDR: the helper
+    // has no "keyframe now" call and the natural interval is seconds away.
+    expect(backend.callsOfKind("detachStream")).toHaveLength(1);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(2);
+    expect(backend.hasStream(DEVICE_A)).toBe(true);
+  });
+
+  it("does not restart the stream on a plain re-attach", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+
+    await manager.attach(THREAD_A, DEVICE_A);
+
+    // Re-attaching an already-attached device is a no-op, so a client cannot
+    // use it to recover a stalled decoder; requestKeyframe exists for that.
+    expect(backend.callsOfKind("attachStream")).toHaveLength(1);
+  });
+
+  it("drops cached frames so a late subscriber cannot get a stale keyframe", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+    backend.emitFrame(DEVICE_A, { keyframe: true });
+
+    await manager.requestKeyframe(DEVICE_A);
+    const received: number[] = [];
+    manager.subscribeFrames(DEVICE_A, {
+      send: () => received.push(1),
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+
+    expect(received).toHaveLength(0);
+  });
+
+  it("is a no-op for a device that is not streaming", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    await manager.requestKeyframe(DEVICE_A);
+
+    expect(backend.callsOfKind("attachStream")).toHaveLength(0);
+  });
+});
+
 describe("DeviceManager boot ownership", () => {
   it("marks devices it booted as synara-owned and leaves discovered ones alone", async () => {
     const { backend, manager } = makeManager();

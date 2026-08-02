@@ -353,6 +353,23 @@ export class DeviceManager {
     }
   }
 
+  /**
+   * Force a fresh codec-config frame followed by a keyframe.
+   *
+   * There is no "emit an IDR now" call in the helper, and the encoder's natural
+   * keyframe interval is seconds away, so a decoder that has lost sync would
+   * otherwise sit frozen. Restarting the stream builds a new compression
+   * session, which always emits parameter sets and an IDR as its first frames.
+   *
+   * Cached frames are dropped first so a late subscriber cannot be primed with
+   * a keyframe from the previous generation.
+   */
+  async requestKeyframe(udid: string): Promise<void> {
+    if (!this.streaming.has(udid) || this.disposed) return;
+    await this.stopStream(udid);
+    await this.startStream(udid);
+  }
+
   private async stopStream(udid: string): Promise<void> {
     if (!this.streaming.delete(udid)) return;
     this.transport.resetDevice(udid);
