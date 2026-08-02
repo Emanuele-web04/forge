@@ -270,3 +270,30 @@ export function filterStartInOptions(
     return projects.length > 0 ? [{ ...option, projects }] : [];
   });
 }
+
+/**
+ * Applies a "Start in" selection: claim the host, then move the draft.
+ *
+ * Extracted from ChatView so the ORDER and the claim itself are reachable by a
+ * test. It lived as a two-line handler inside a ~10,000-line component that no
+ * test reaches, so deleting the claim line broke nothing — and the claim is
+ * what routes the very first dispatch of a brand-new thread.
+ *
+ * Losing it is narrower than it sounds: `thread.create` also carries the
+ * projectId, and ownership resolves most-specific-first, so the thread still
+ * reaches the right host whenever the project names one. The claim covers the
+ * case where it does not, and states the user's choice directly rather than
+ * inferring it.
+ *
+ * The claim MUST precede the draft move. The move is what makes the composer
+ * dispatch, so claiming afterwards would leave a window where the first
+ * dispatch resolves against no claim at all.
+ */
+export function applyStartInSelection(input: {
+  readonly selection: StartInTarget;
+  readonly claimEnvironment: (environmentId: StartInTarget["environmentId"]) => void;
+  readonly selectProject: (projectId: StartInTarget["projectId"]) => void;
+}): void {
+  input.claimEnvironment(input.selection.environmentId);
+  input.selectProject(input.selection.projectId);
+}

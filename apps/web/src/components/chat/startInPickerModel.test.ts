@@ -5,7 +5,7 @@
 // Layer: Chat composer logic tests
 
 import { EnvironmentId, ProjectId, type ServerProviderStatus } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { EnvironmentDirectoryEntry } from "../../environmentDirectory";
 import { LOCAL_ENVIRONMENT_ID } from "../../environmentIdentity";
@@ -13,6 +13,7 @@ import {
   buildStartInEnvironmentOptions,
   filterStartInOptions,
   resolveStartInReadiness,
+  applyStartInSelection,
   resolveStartInSelection,
   signInProviderName,
   startInReadinessNote,
@@ -407,5 +408,42 @@ describe("filtering", () => {
 
   it("drops environments with no match at all", () => {
     expect(filterStartInOptions(options, "nothing-matches-this")).toHaveLength(0);
+  });
+});
+
+describe("applyStartInSelection", () => {
+  // The handler lived inside a ~10,000-line component no test reaches, so
+  // deleting the claim broke nothing. These pin both the claim and its ORDER.
+
+  it("claims the host and then moves the draft", () => {
+    const calls: string[] = [];
+    applyStartInSelection({
+      selection: { environmentId: REMOTE_ENVIRONMENT_ID, projectId: REMOTE_PROJECT_ID },
+      claimEnvironment: (environmentId) => {
+        calls.push(`claim:${environmentId}`);
+      },
+      selectProject: (projectId) => {
+        calls.push(`select:${projectId}`);
+      },
+    });
+
+    // Order is load-bearing: selecting the project is what makes the composer
+    // dispatch, so a claim afterwards leaves a window where the first dispatch
+    // resolves against no claim at all.
+    expect(calls).toEqual([`claim:${REMOTE_ENVIRONMENT_ID}`, `select:${REMOTE_PROJECT_ID}`]);
+  });
+
+  it("claims the LOCAL environment explicitly too", () => {
+    // `claimThreadEnvironment` treats a local claim as "release", which is
+    // correct — but it must still be told, or a previous remote claim survives
+    // a switch back to This computer.
+    const claimEnvironment = vi.fn();
+    applyStartInSelection({
+      selection: { environmentId: LOCAL_ENVIRONMENT_ID, projectId: LOCAL_PROJECT_ID },
+      claimEnvironment,
+      selectProject: vi.fn(),
+    });
+
+    expect(claimEnvironment).toHaveBeenCalledWith(LOCAL_ENVIRONMENT_ID);
   });
 });

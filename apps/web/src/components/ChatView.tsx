@@ -528,6 +528,7 @@ import { getComposerTraitSelection } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { StartInPicker, type StartInSelection } from "./chat/StartInPicker";
+import { applyStartInSelection } from "./chat/startInPickerModel";
 import { useEnvironmentDirectory } from "../environmentDirectory";
 import { claimThreadEnvironment, resolveThreadEnvironmentId } from "../environmentRouting";
 import { EnvironmentScopeProvider } from "../environmentScope";
@@ -9418,8 +9419,11 @@ function ChatViewBody({
    */
   const handleSelectStartIn = useCallback(
     (selection: StartInSelection) => {
-      claimThreadEnvironment(threadId, selection.environmentId);
-      handleSelectProjectForEmptyDraft(selection.projectId);
+      applyStartInSelection({
+        selection,
+        claimEnvironment: (environmentId) => claimThreadEnvironment(threadId, environmentId),
+        selectProject: handleSelectProjectForEmptyDraft,
+      });
     },
     [handleSelectProjectForEmptyDraft, threadId],
   );
