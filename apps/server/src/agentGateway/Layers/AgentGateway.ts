@@ -69,6 +69,8 @@ import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts"
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
+import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
+import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
@@ -103,6 +105,10 @@ export const makeAgentGateway = Effect.gen(function* () {
     yield* Effect.serviceOption(BrowserAutomationHost),
     () => makeBrowserAutomationHost({}),
   );
+  // Optional and platform-gated: off macOS (and in tests that do not provide
+  // it) the agent never sees the device_* tools at all, rather than being
+  // offered eleven tools that can only report an unsupported platform.
+  const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
   const loadProviderAvailabilities = Effect.gen(function* () {
     const [settings, statuses] = yield* Effect.all([
       serverSettings.getSettings,
@@ -620,6 +626,9 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadArchived,
     ...automationTools,
     ...browserTools,
+    ...(deviceService?.supported === true
+      ? makeAgentGatewayDeviceTools({ manager: deviceService.manager })
+      : []),
   ];
   return {
     handleMcpPost: makeAgentGatewayMcpTransport({
