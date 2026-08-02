@@ -4,7 +4,8 @@
 //          function; every rejection decided here rather than in a UI.
 // Layer: Shared runtime (server + tests)
 // Exports: posixShellQuote, buildRemoteScript, buildLauncherArgv, buildSshArgv,
-//          validateRemoteHostConfig, remoteCommandSignature, sshControlPathFor
+//          validateRemoteHostConfig, remoteCommandSignature, sshControlPathFor,
+//          buildSshTunnelArgv, TUNNEL_LOOPBACK_ADDRESS
 
 import * as Crypto from "node:crypto";
 
@@ -530,6 +531,111 @@ export function buildSshArgv(input: BuildSshArgvInput): SshInvocation {
   // a dashed value ever reached here. validateRemoteHostConfig already refuses a
   // dashed destination; this is the second, independent guarantee.
   args.push("--", config.destination, ...input.remoteArgv.map(posixShellQuote));
+
+  return { command: config.sshBinary ?? "ssh", args };
+}
+
+// ── Tunnel argv ──────────────────────────────────────────────────────────────
+
+/**
+ * The near end of every forward. Not configurable, and not `localhost`:
+ * `localhost` resolves through the resolver and on a host with an IPv6-first
+ * `/etc/hosts` binds `::1` instead, where the proxy — which connects to
+ * `127.0.0.1` — then finds nothing listening. A literal address binds exactly
+ * one interface with no name resolution in between.
+ */
+export const TUNNEL_LOOPBACK_ADDRESS = "127.0.0.1";
+
+export interface BuildSshTunnelArgvInput {
+  readonly config: RemoteHostConfig;
+  /** Loopback port Synara reserved locally. Computed by us, never typed. */
+  readonly localPort: number;
+  /** Port the remote server listens on, on the remote's own loopback. */
+  readonly remotePort: number;
+  readonly controlDirectory?: string | undefined;
+}
+
+function assertTunnelPort(label: string, port: number): number {
+  // A forward spec is `bind:port:host:port`, so a non-integer stringifies into
+  // extra colons and silently re-parses as a DIFFERENT forward — a fractional
+  // local port would move the bind address. Refusing here is what makes the
+  // spec below unambiguous by construction rather than by hope.
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new RemoteHostConfigError(label, `${label} must be an integer port, got ${port}.`);
+  }
+  return port;
+}
+
+/**
+ * The ssh invocation that holds one local-forward open, and nothing else.
+ *
+ * `-L` and `-N` are BUILT HERE, from two integers this process computed. They
+ * are deliberately still refused in `validateSshArgs`, and that is not a
+ * contradiction: that validator guards `sshArgs`, a value persisted in Synara's
+ * state that any route reaching the state file can write. The distinction this
+ * function rests on is provenance — a forward whose four fields are numbers we
+ * reserved cannot address anything we did not choose, whereas a `-L` a user
+ * typed can name any bind address and any destination on the remote's network.
+ * So the user's args go through the same allowlist as always (which refuses
+ * their own `-L`), and ours is appended afterwards where no user value reaches.
+ *
+ * `-N` means no remote command: the connection carries the forward and nothing
+ * else, so there is no remote process whose exit could take the tunnel with it.
+ * ssh then stays in the foreground and its OWN lifetime is the tunnel's
+ * lifetime, which is what makes "the child died" a usable signal.
+ */
+export function buildSshTunnelArgv(input: BuildSshTunnelArgvInput): SshInvocation {
+  const config = validateRemoteHostConfig(input.config);
+  const localPort = assertTunnelPort("localPort", input.localPort);
+  const remotePort = assertTunnelPort("remotePort", input.remotePort);
+
+  const args: string[] = [
+    ...validateSshArgs(config.sshArgs),
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    `StrictHostKeyChecking=${config.hostKeyVerification === "strict" ? "yes" : "accept-new"}`,
+    "-o",
+    `ConnectTimeout=${config.connectTimeoutSeconds}`,
+    // Keepalives are not optional for a tunnel. A forward over a dead TCP
+    // connection never errors — reads simply never complete — so without these
+    // the proxy would keep handing requests to a socket that will never answer
+    // and every turn through it would hang until something else gave out.
+    "-o",
+    `ServerAliveInterval=${config.keepalive.intervalSeconds}`,
+    "-o",
+    `ServerAliveCountMax=${config.keepalive.countMax}`,
+    "-o",
+    "RequestTTY=no",
+    // Without this ssh reports a failed forward on stderr and then sits there
+    // CONNECTED, so the child stays alive while nothing is listening on the
+    // local port. That is the worst shape available: healthy-looking, and every
+    // request through it refused.
+    "-o",
+    "ExitOnForwardFailure=yes",
+  ];
+
+  if (config.connectionReuse.enabled && input.controlDirectory !== undefined) {
+    args.push(
+      "-o",
+      "ControlMaster=auto",
+      "-o",
+      `ControlPath=${sshControlPathFor(input.controlDirectory, config)}`,
+      "-o",
+      `ControlPersist=${config.connectionReuse.persistSeconds}`,
+    );
+  }
+
+  args.push(
+    // Bind address is spelled out. Omitting it makes the bind depend on
+    // GatewayPorts, which a user's ~/.ssh/config can set — and the difference
+    // is a port exposed to the whole network rather than to this machine.
+    "-L",
+    `${TUNNEL_LOOPBACK_ADDRESS}:${localPort}:${TUNNEL_LOOPBACK_ADDRESS}:${remotePort}`,
+    "-N",
+    "--",
+    config.destination,
+  );
 
   return { command: config.sshBinary ?? "ssh", args };
 }

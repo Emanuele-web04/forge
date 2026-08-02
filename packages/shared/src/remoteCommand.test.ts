@@ -12,6 +12,7 @@ import {
   buildLauncherArgv,
   buildRemoteScript,
   buildSshArgv,
+  buildSshTunnelArgv,
   DETACHING_LAUNCHER_COMMANDS,
   posixShellJoin,
   posixShellQuote,
@@ -711,5 +712,156 @@ describe("remoteCommandSignature", () => {
     for (const variant of variants) {
       expect(variant()).not.toBe(original);
     }
+  });
+});
+
+describe("buildSshTunnelArgv", () => {
+  it("forwards a loopback port to the remote's loopback port and runs no command", () => {
+    const { command, args } = buildSshTunnelArgv({
+      config: makeConfig(),
+      localPort: 45123,
+      remotePort: 39100,
+    });
+    expect(command).toBe("ssh");
+    expect(args).toContain("-L");
+    expect(args[args.indexOf("-L") + 1]).toBe("127.0.0.1:45123:127.0.0.1:39100");
+    expect(args).toContain("-N");
+    // The destination is the LAST word and comes after `--`, so nothing that
+    // follows can be read as a flag and there is no remote command at all.
+    expect(args.slice(-2)).toEqual(["--", "build-box"]);
+  });
+
+  /**
+   * The forward's bind address must be spelled out. Omitting it makes the bind
+   * depend on GatewayPorts, which a user's ~/.ssh/config may set, and the
+   * difference between the two spellings is a port exposed to the whole network
+   * rather than to this machine.
+   */
+  it("binds the near end to loopback explicitly, never a bare port", () => {
+    const { args } = buildSshTunnelArgv({
+      config: makeConfig(),
+      localPort: 45123,
+      remotePort: 39100,
+    });
+    const spec = args[args.indexOf("-L") + 1] as string;
+    expect(spec.startsWith("127.0.0.1:")).toBe(true);
+    expect(spec.split(":")).toHaveLength(4);
+    expect(spec).not.toContain("localhost");
+    expect(spec).not.toContain("*");
+  });
+
+  /**
+   * Mutation guard for the property the whole design rests on: a `-L` a USER
+   * typed is still refused, and only the one this function builds from two
+   * integers gets through. If validateSshArgs stopped being called here, a host
+   * record could name any bind address and any destination on the remote's
+   * network.
+   */
+  it("still refuses a user-supplied forward while emitting its own", () => {
+    for (const hostile of [
+      ["-L", "0.0.0.0:1234:internal.corp:22"],
+      ["-L8080:localhost:80"],
+      ["-R", "9000:localhost:9000"],
+      ["-D", "1080"],
+      ["-N"],
+      ["-f"],
+      ["-o", "StrictHostKeyChecking=no"],
+      ["-o", "ProxyCommand=printf pwned"],
+    ]) {
+      expect(() =>
+        buildSshTunnelArgv({
+          config: makeConfig({ sshArgs: hostile }),
+          localPort: 45123,
+          remotePort: 39100,
+        }),
+      ).toThrow(RemoteHostConfigError);
+    }
+  });
+
+  /**
+   * A non-integer port stringifies into extra colons and re-parses as a
+   * DIFFERENT forward — `45123.5` would move the bind address. Refusing makes
+   * the spec unambiguous by construction rather than by hope.
+   */
+  it("refuses a port that is not an integer in range", () => {
+    for (const port of [0, -1, 65_536, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        buildSshTunnelArgv({ config: makeConfig(), localPort: port, remotePort: 39100 }),
+      ).toThrow(RemoteHostConfigError);
+      expect(() =>
+        buildSshTunnelArgv({ config: makeConfig(), localPort: 45123, remotePort: port }),
+      ).toThrow(RemoteHostConfigError);
+    }
+  });
+
+  /**
+   * Without ExitOnForwardFailure ssh reports a failed forward on stderr and
+   * then sits there CONNECTED — the child stays alive while nothing listens on
+   * the local port. Healthy-looking, and every request through it refused.
+   */
+  it("exits rather than staying up with a forward that failed", () => {
+    const { args } = buildSshTunnelArgv({
+      config: makeConfig(),
+      localPort: 45123,
+      remotePort: 39100,
+    });
+    expect(args).toContain("ExitOnForwardFailure=yes");
+  });
+
+  /**
+   * A forward over a dead TCP connection never errors — reads simply never
+   * complete — so without keepalives the proxy hands requests to a socket that
+   * will never answer and every turn through it hangs.
+   */
+  it("carries keepalives so a dead connection is reported rather than hung", () => {
+    const { args } = buildSshTunnelArgv({
+      config: makeConfig({ keepalive: { intervalSeconds: 7, countMax: 2 } }),
+      localPort: 45123,
+      remotePort: 39100,
+    });
+    expect(args).toContain("ServerAliveInterval=7");
+    expect(args).toContain("ServerAliveCountMax=2");
+  });
+
+  it("verifies the host key, and cannot be asked not to", () => {
+    expect(
+      buildSshTunnelArgv({ config: makeConfig(), localPort: 45123, remotePort: 39100 }).args,
+    ).toContain("StrictHostKeyChecking=yes");
+    expect(
+      buildSshTunnelArgv({
+        config: makeConfig({ hostKeyVerification: "accept-new" }),
+        localPort: 45123,
+        remotePort: 39100,
+      }).args,
+    ).toContain("StrictHostKeyChecking=accept-new");
+    // There is no input that produces `no`.
+    for (const verification of ["strict", "accept-new"] as const) {
+      const { args } = buildSshTunnelArgv({
+        config: makeConfig({ hostKeyVerification: verification }),
+        localPort: 45123,
+        remotePort: 39100,
+      });
+      expect(args).not.toContain("StrictHostKeyChecking=no");
+    }
+  });
+
+  it("refuses a dashed destination the same way every other builder does", () => {
+    expect(() =>
+      buildSshTunnelArgv({
+        config: makeConfig({ destination: "-oProxyCommand=id" }),
+        localPort: 45123,
+        remotePort: 39100,
+      }),
+    ).toThrow(RemoteHostConfigError);
+  });
+
+  it("is an argv array, never a shell string", () => {
+    const { args } = buildSshTunnelArgv({
+      config: makeConfig(),
+      localPort: 45123,
+      remotePort: 39100,
+    });
+    expect(Array.isArray(args)).toBe(true);
+    for (const token of args) expect(typeof token).toBe("string");
   });
 });
