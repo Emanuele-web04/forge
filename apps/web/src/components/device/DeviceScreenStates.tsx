@@ -1,7 +1,7 @@
 // FILE: DeviceScreenStates.tsx
 // Purpose: The non-video states that render on the simulated phone screen.
 // Layer: Device pane presentation
-// Exports: DeviceSetupScreen, DeviceEmptyScreen, DeviceBootingScreen, DeviceAgentPill
+// Exports: DeviceSetupScreen, DeviceEmptyScreen, DeviceBootingScreen
 //
 // These sit inside the bezel, so they are styled against the phone's near-black
 // screen rather than the app surface: fixed light-on-dark values, not theme
@@ -148,18 +148,5 @@ export function DeviceBootingScreen(props: { deviceName: string; label: string }
         {props.label}
       </span>
     </div>
-  );
-}
-
-/**
- * Floats above the chassis instead of occupying a row, so it can appear and
- * disappear as the agent works without shifting the phone.
- */
-export function DeviceAgentPill(props: { label: string }) {
-  return (
-    <span className="pointer-events-none inline-flex shrink-0 items-center gap-1.5 rounded-full border border-info/25 bg-info/10 px-2 py-0.5 text-[10px] text-info-foreground">
-      <span aria-hidden className="size-1.5 rounded-full bg-info-foreground/80" />
-      {props.label}
-    </span>
   );
 }

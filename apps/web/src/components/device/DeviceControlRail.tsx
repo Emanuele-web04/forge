@@ -70,13 +70,20 @@ export const DEVICE_RAIL_GROUPS: readonly DeviceRailGroup[] = [
   },
 ];
 
+/**
+ * The rail's own height, exported so the panel can reserve a matching spacer
+ * above the bezel and keep the *phone* optically centered rather than the
+ * phone-plus-rail group. Buttons are size-7 (1.75rem) inside py-2 (0.5rem).
+ */
+export const DEVICE_RAIL_HEIGHT_CLASS = "h-[2.75rem] shrink-0";
+
 export function DeviceControlRail(props: {
   disabled: boolean;
   onPressButton: (button: DeviceHardwareButton) => void;
   onScreenshot: () => void;
 }) {
   return (
-    <div className="flex shrink-0 items-center justify-center gap-1 py-2">
+    <div className={cn("flex items-center justify-center gap-1", DEVICE_RAIL_HEIGHT_CLASS)}>
       {DEVICE_RAIL_GROUPS.map((group, groupIndex) => (
         <div key={group.id} className="flex items-center gap-0.5">
           {groupIndex > 0 ? (

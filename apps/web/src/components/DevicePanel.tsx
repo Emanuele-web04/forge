@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ensureNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, XIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 
 import { selectThreadDeviceState, useDeviceStateStore } from "../deviceStateStore";
 import {
@@ -34,9 +35,8 @@ import {
   type DevicePoint,
 } from "./DevicePanel.logic";
 import { DeviceBezel } from "./device/DeviceBezel";
-import { DeviceControlRail } from "./device/DeviceControlRail";
+import { DEVICE_RAIL_HEIGHT_CLASS, DeviceControlRail } from "./device/DeviceControlRail";
 import {
-  DeviceAgentPill,
   DeviceBootingScreen,
   DeviceEmptyScreen,
   DeviceSetupScreen,
@@ -504,20 +504,14 @@ export default function DevicePanel(props: {
   return (
     <DiffPanelShell mode={props.mode} header={header}>
       {/*
-        Phone and rail travel together as one centered group, so the controls
-        stay tucked under the device instead of drifting to the pane's floor
-        whenever the bezel is width-bound and leaves vertical slack.
+        Phone and rail travel together as one group centered in the space
+        between header and error row. The rail is balanced by an equal spacer
+        above, so the *phone* reads as centered rather than the group — without
+        it the device sits visibly high by half the rail's height.
       */}
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-3 py-3">
-        <DeviceBezel
-          className="min-h-0 w-full flex-1"
-          overlay={
-            threadState?.agentActive ? <DeviceAgentPill label="Agent is using this device" /> : null
-          }
-        >
-          {screen}
-        </DeviceBezel>
-
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-3">
+        <div aria-hidden className={DEVICE_RAIL_HEIGHT_CLASS} />
+        <DeviceBezel className="min-h-0 w-full flex-1">{screen}</DeviceBezel>
         <DeviceControlRail
           disabled={!attachedDevice || attachedDevice.state !== "booted" || busy}
           onPressButton={pressButton}
@@ -525,11 +519,24 @@ export default function DevicePanel(props: {
         />
       </div>
 
-      {threadState?.lastError ? (
-        <p className="shrink-0 border-t border-border px-3 py-1.5 text-destructive text-xs">
-          {threadState.lastError}
-        </p>
-      ) : null}
+      {/*
+        Space is reserved rather than conditionally inserted: an error that
+        appears and clears as the agent retries would otherwise resize the
+        bezel's container on every transition. The row keeps its height always
+        and only paints its rule and text when there is something to say.
+      */}
+      <p
+        role="status"
+        className={cn(
+          "line-clamp-2 flex shrink-0 items-center px-3 text-destructive text-xs transition-opacity duration-220 motion-reduce:transition-none",
+          threadState?.lastError
+            ? "border-border border-t opacity-100"
+            : "border-transparent border-t opacity-0",
+        )}
+        style={{ height: "1.875rem" }}
+      >
+        {threadState?.lastError ?? ""}
+      </p>
 
       <DeviceBootLimitDialog
         state={bootLimit}

@@ -38,14 +38,15 @@ function SideButtons() {
 
 export function DeviceBezel(props: {
   children: ReactNode;
-  /** Rendered above the chassis, e.g. the agent-activity pill. */
-  overlay?: ReactNode;
   className?: string;
   screenClassName?: string;
 }) {
   return (
-    <div className={cn("flex min-h-0 min-w-0 flex-col items-center gap-2", props.className)}>
-      {props.overlay}
+    // No conditional siblings here, by design. The chassis is the only child, so
+    // nothing that mounts or unmounts around it (status pills, notices) can
+    // shift the device — an earlier revision put a badge above it and the phone
+    // visibly jumped 30px every time an agent started or finished a tool call.
+    <div className={cn("flex min-h-0 min-w-0 flex-col items-center", props.className)}>
       {/*
         Two nested constraints keep the phone proportional in any pane shape:
         this box fills the space and clamps its own width to whatever the
@@ -53,7 +54,10 @@ export function DeviceBezel(props: {
         below then fills that box. Clamping only one axis would squash the
         device the moment the other became the tighter bound.
       */}
-      <div className="flex min-h-0 w-full flex-1 justify-center" style={{ containerType: "size" }}>
+      <div
+        className="flex min-h-0 w-full flex-1 items-center justify-center"
+        style={{ containerType: "size" }}
+      >
         <div
           className={cn(
             "relative h-full max-h-full",
