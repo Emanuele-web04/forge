@@ -33,6 +33,12 @@ import type {
   DeviceUiNode,
 } from "@synara/contracts";
 
+import {
+  DEVICE_HELPER_BINARY_NAME,
+  DEVICE_HELPER_CACHE_SEGMENTS,
+  deviceHelperCacheKey,
+} from "@synara/shared/deviceHelperCache";
+
 import { runProcess, type ProcessRunResult } from "../processRunner.ts";
 import {
   DeviceBackendError,
@@ -49,13 +55,7 @@ const BOOT_TIMEOUT_MS = 120_000;
 /** Screenshots are PNG on stdout-adjacent temp files; cap what we will read. */
 const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
 
-export const DEVICE_HELPER_CACHE_ROOT = path.join(
-  homedir(),
-  "Library",
-  "Caches",
-  "synara",
-  "device-helper",
-);
+export const DEVICE_HELPER_CACHE_ROOT = path.join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS);
 
 export interface IosSimulatorBackendOptions {
   /** Overridden in tests; defaults to `process.platform`. */
@@ -249,6 +249,10 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   async shutdown(udid: string): Promise<void> {
     await this.detachStream(udid);
+    // The helper outlives the simulator, and its attachment holds a display
+    // descriptor bound to this boot. Dropping it here means the next attach
+    // rebinds instead of reusing a descriptor whose framebuffer is gone.
+    this.helper?.invalidateAttachment(udid);
     const result = await this.simctl(["shutdown", udid]);
     if (result.code !== 0 && !/current state: Shutdown/iu.test(result.stderr)) {
       throw this.simctlError("shutdown", result);
@@ -489,7 +493,16 @@ export class IosSimulatorBackend implements DeviceBackend {
     try {
       await helper.attach(udid);
     } catch (error) {
-      throw this.helperError(error);
+      // A device can also be rebooted outside Synara (Simulator.app, or simctl
+      // in the agent's own shell), which no invalidation hook here can observe.
+      // A dead-descriptor failure is therefore retried once with a forced
+      // re-attach, which rebinds against the current boot.
+      if (!isStaleDescriptorError(error)) throw this.helperError(error);
+      try {
+        await helper.attach(udid, { force: true });
+      } catch (retryError) {
+        throw this.helperError(retryError);
+      }
     }
     return helper;
   }
@@ -538,7 +551,7 @@ export class IosSimulatorBackend implements DeviceBackend {
         `Device helper build failed${detail ? `: ${detail}` : ""}. Verify Xcode is installed and its license accepted.`,
       );
     }
-    const binaryPath = path.join(outputDirectory, "synara-device-helper");
+    const binaryPath = path.join(outputDirectory, DEVICE_HELPER_BINARY_NAME);
     const exists = await stat(binaryPath).then(
       () => true,
       () => false,
@@ -561,7 +574,7 @@ export class IosSimulatorBackend implements DeviceBackend {
     if (this.osPlatform !== "darwin") return null;
     const key = await this.xcodeBuildKey().catch(() => null);
     if (key === null) return null;
-    const binaryPath = path.join(this.helperCacheRoot, key, "synara-device-helper");
+    const binaryPath = path.join(this.helperCacheRoot, key, DEVICE_HELPER_BINARY_NAME);
     return await stat(binaryPath).then(
       () => binaryPath,
       () => null,
@@ -573,16 +586,26 @@ export class IosSimulatorBackend implements DeviceBackend {
       timeoutMs: 20_000,
       allowNonZeroExit: true,
     }).catch(() => null);
-    if (!result || result.code !== 0) {
+    // Derived by the shared helper so the smoke CLI writes the directory the
+    // server reads; deriving it here independently is what let them diverge.
+    const key = result?.code === 0 ? deviceHelperCacheKey(result.stdout) : null;
+    if (key === null) {
       throw this.recordHelperFailure(
         "Could not determine the Xcode version. Install Xcode and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
       );
     }
-    // `Xcode 26.0\nBuild version 17A123` -> `26.0-17A123`.
-    const version = /Xcode\s+([\d.]+)/u.exec(result.stdout)?.[1] ?? "unknown";
-    const build = /Build version\s+(\S+)/u.exec(result.stdout)?.[1] ?? "unknown";
-    return `${version}-${build}`;
+    return key;
   }
+}
+
+/**
+ * Does this failure mean the helper is holding a display descriptor from a
+ * previous boot? The helper reports it as a missing framebuffer surface, since
+ * from its side the descriptor is valid but has nothing behind it.
+ */
+export function isStaleDescriptorError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /framebuffer surface|display has no|not attached/iu.test(message);
 }
 
 /** USB HID keyboard usage codes for the modifiers the contract exposes. */

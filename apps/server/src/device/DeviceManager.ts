@@ -106,9 +106,30 @@ export class DeviceManager {
 
   async list(options: { readonly includeShutdown?: boolean } = {}): Promise<DeviceListResult> {
     const availability = await this.backend.availability();
-    if (availability.kind !== "available") return { devices: [], availability };
-    const devices = await this.backend.listDevices(options);
-    return { devices: devices.map((device) => this.withBootSource(device)), availability };
+    const devices = await this.discover(availability, options);
+    return { devices, availability };
+  }
+
+  /**
+   * Devices to show alongside an availability state.
+   *
+   * Discovery is gated only on the platform, never on full availability.
+   * Listing runs on `simctl`, which works long before the native helper exists,
+   * and the helper is only built on first attach. Requiring `available` here
+   * deadlocked a fresh machine: the picker stayed empty because the helper was
+   * unbuilt, and the helper stayed unbuilt because attaching needs a udid from
+   * the picker. The pane shows the devices and the remaining setup step
+   * together, which is what the setup checklist is for.
+   */
+  private async discover(
+    availability: DeviceAvailability,
+    options: { readonly includeShutdown?: boolean } = {},
+  ): Promise<readonly DeviceDescriptor[]> {
+    if (availability.kind === "unsupported-platform") return [];
+    // Already reported through `availability`; an empty list is the honest
+    // answer when simctl itself cannot run.
+    const devices = await this.backend.listDevices(options).catch(() => []);
+    return devices.map((device) => this.withBootSource(device));
   }
 
   async getThreadState(threadId: string): Promise<ThreadDeviceState> {
@@ -414,15 +435,12 @@ export class DeviceManager {
   private async snapshot(threadId: string): Promise<ThreadDeviceState> {
     const attachment = this.threadState(threadId);
     const availability = await this.backend.availability();
-    const devices =
-      availability.kind === "available"
-        ? await this.backend.listDevices({ includeShutdown: true }).catch(() => [])
-        : [];
+    const devices = await this.discover(availability, { includeShutdown: true });
     return {
       threadId: threadId as ThreadDeviceState["threadId"],
       version: attachment.version,
       attachedDeviceUdid: attachment.attachedDeviceUdid as ThreadDeviceState["attachedDeviceUdid"],
-      devices: devices.map((device) => this.withBootSource(device)),
+      devices,
       agentActive: attachment.agentActiveCount > 0,
       availability,
       lastError: attachment.lastError,

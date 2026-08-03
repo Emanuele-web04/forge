@@ -22,6 +22,10 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { decodeDeviceFrame } from "@synara/shared/deviceFrame";
+import {
+  DEVICE_HELPER_CACHE_SEGMENTS,
+  deviceHelperCacheKey,
+} from "@synara/shared/deviceHelperCache";
 
 const execFileAsync = promisify(execFile);
 
@@ -276,14 +280,17 @@ async function main(): Promise<void> {
     );
   }
   const xcodeVersion = execFileSync("xcodebuild", ["-version"], { encoding: "utf8" }).trim();
-  const buildVersion = xcodeVersion.split("\n").at(-1)?.replace("Build version", "").trim();
-  assert(Boolean(buildVersion), "cannot determine Xcode build version");
+  const cacheKey = deviceHelperCacheKey(xcodeVersion);
+  assert(cacheKey !== null, "cannot determine Xcode build version");
   info(xcodeVersion.replace("\n", " / "));
 
   step("Compiling the helper");
-  // Cached by Xcode build version: private API surface moves with the toolchain,
-  // so a binary built against one Xcode must not be reused after an upgrade.
-  const cacheDir = join(homedir(), "Library/Caches/synara/device-helper", buildVersion!);
+  // Cached by Xcode version: private API surface moves with the toolchain, so a
+  // binary built against one Xcode must not be reused after an upgrade. The key
+  // comes from @synara/shared so this build lands in the same directory the
+  // server reads; deriving it here separately meant a passing smoke run
+  // populated a directory the server never looked in.
+  const cacheDir = join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS, cacheKey);
   mkdirSync(cacheDir, { recursive: true });
   const buildStarted = Date.now();
   let helperPath: string;

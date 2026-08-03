@@ -92,6 +92,73 @@ describe("DeviceManager attachment", () => {
   });
 });
 
+describe("DeviceManager discovery before the helper exists", () => {
+  /** A fresh machine: simctl works, the helper has not been built yet. */
+  const setupRequired = {
+    kind: "setup-required" as const,
+    steps: [
+      { id: "install-xcode" as const, label: "Install Xcode", done: true },
+      { id: "build-device-helper" as const, label: "Build the Synara device helper", done: false },
+    ],
+  };
+
+  it("lists devices while the helper build is still outstanding", async () => {
+    const backend = new FakeDeviceBackend({ availability: setupRequired });
+    const { manager } = makeManager(backend);
+
+    const result = await manager.list({ includeShutdown: true });
+
+    // The helper is only built on first attach, and attaching needs a udid from
+    // this list. Returning nothing here made that unreachable on a fresh
+    // machine: empty picker, so no attach, so no helper, forever.
+    expect(result.devices.map((device) => device.udid)).toContain(DEVICE_A);
+    expect(result.availability).toEqual(setupRequired);
+  });
+
+  it("puts the devices in the thread snapshot too", async () => {
+    const backend = new FakeDeviceBackend({ availability: setupRequired });
+    const { manager } = makeManager(backend);
+
+    const state = await manager.getThreadState(THREAD_A);
+
+    expect(state.devices.map((device) => device.udid)).toContain(DEVICE_A);
+    expect(state.availability).toEqual(setupRequired);
+  });
+
+  it("still lists devices when a previous helper build failed", async () => {
+    const backend = new FakeDeviceBackend({
+      availability: { kind: "helper-unavailable", message: "build failed" },
+    });
+    const { manager } = makeManager(backend);
+
+    // The user can still see and boot devices; the pane explains why input and
+    // video are unavailable.
+    expect((await manager.list({ includeShutdown: true })).devices).not.toHaveLength(0);
+  });
+
+  it("reports no devices off a supported platform", async () => {
+    const backend = new FakeDeviceBackend({
+      availability: { kind: "unsupported-platform", platform: "linux" },
+    });
+    const { manager } = makeManager(backend);
+
+    // The one case where discovery genuinely cannot run.
+    expect((await manager.list({ includeShutdown: true })).devices).toEqual([]);
+    expect((await manager.getThreadState(THREAD_A)).devices).toEqual([]);
+  });
+
+  it("degrades to an empty list when discovery itself fails", async () => {
+    const backend = new FakeDeviceBackend({ availability: setupRequired });
+    backend.listDevices = () => Promise.reject(new Error("xcrun exploded"));
+    const { manager } = makeManager(backend);
+
+    const result = await manager.list();
+
+    expect(result.devices).toEqual([]);
+    expect(result.availability).toEqual(setupRequired);
+  });
+});
+
 describe("DeviceManager keyframe resync", () => {
   it("rebuilds the capture session so the encoder emits new parameter sets", async () => {
     const { backend, manager } = makeManager();

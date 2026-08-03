@@ -335,6 +335,54 @@ describeE2e("device pane end-to-end", () => {
     expect(detached.attachedDeviceUdid).toBeNull();
   }, 60_000);
 
+  it("re-attaches and streams again after the simulator is rebooted", async () => {
+    if (!target) throw new Error("no target device");
+
+    // The helper process outlives the simulator, and its attachment holds a
+    // display descriptor bound to one boot. Before this was fixed, every call
+    // after a reboot failed permanently with "display has no framebuffer
+    // surface yet".
+    await rpc.call(DEVICE_WS_METHODS.shutdown, { udid: target.udid });
+    const afterShutdown = await rpc.call<DeviceListResult>(DEVICE_WS_METHODS.list, {
+      includeShutdown: true,
+    });
+    expect(afterShutdown.devices.find((device) => device.udid === target?.udid)?.state).toBe(
+      "shutdown",
+    );
+
+    const rebooted = await rpc.call<{ kind: string }>(DEVICE_WS_METHODS.boot, {
+      udid: target.udid,
+    });
+    expect(rebooted.kind).toBe("booted");
+
+    const reattached = await rpc.call<ThreadDeviceState>(DEVICE_WS_METHODS.attach, {
+      threadId: THREAD_ID,
+      udid: target.udid,
+    });
+    expect(reattached.attachedDeviceUdid).toBe(target.udid);
+    expect(reattached.lastError).toBeNull();
+
+    // Input and video must both work against the new boot, not just attach.
+    const frames = await collectFrames(
+      target.udid,
+      async () => {
+        for (let index = 0; index < 6; index += 1) {
+          await rpc.call(DEVICE_WS_METHODS.tap, {
+            udid: target!.udid,
+            x: 200 + index * 5,
+            y: 400 + index * 5,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+      },
+      3_000,
+    );
+    expect(frames.keyframes).toBeGreaterThanOrEqual(1);
+    expect(frames.total).toBeGreaterThan(frames.codecConfig);
+
+    await rpc.call(DEVICE_WS_METHODS.detach, { threadId: THREAD_ID });
+  }, 300_000);
+
   it("serves device_list and device_screenshot through the agent gateway tools", async () => {
     const backend = new IosSimulatorBackend({ platform: process.platform });
     const manager = new DeviceManager({ backend });

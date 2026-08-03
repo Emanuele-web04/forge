@@ -250,8 +250,14 @@ export class HelperClient {
    * Bind the helper to one simulator. The helper holds a single attachment, so
    * attaching to a different device implicitly replaces the previous one.
    */
-  async attach(udid: string): Promise<DeviceHelperAttachment> {
-    if (this.attachment?.udid === udid) return this.attachment;
+  async attach(
+    udid: string,
+    options: { readonly force?: boolean } = {},
+  ): Promise<DeviceHelperAttachment> {
+    if (!options.force && this.attachment?.udid === udid) return this.attachment;
+    // Cleared before the request: a failed re-attach must not leave the caller
+    // believing the previous, now-dead attachment is still good.
+    this.attachment = null;
     const result = asRecord(await this.request(HELPER_METHODS.attach, { udid }));
     const capabilities = asRecord(result.capabilities);
     const pixelWidth = readNumber(result, "pixelWidth", 0);
@@ -275,6 +281,19 @@ export class HelperClient {
     }
     this.attachment = attachment;
     return attachment;
+  }
+
+  /**
+   * Forget the cached attachment for a device.
+   *
+   * The helper's attachment holds a display descriptor tied to one boot of the
+   * simulator. Shutting the device down invalidates that descriptor, but the
+   * helper process outlives the simulator, so without this the next `attach`
+   * would short-circuit on the matching udid and every call would fail against
+   * a dead framebuffer.
+   */
+  invalidateAttachment(udid: string): void {
+    if (this.attachment?.udid === udid) this.attachment = null;
   }
 
   /**

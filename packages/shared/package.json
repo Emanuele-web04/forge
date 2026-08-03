@@ -263,6 +263,10 @@
     "./deviceFrame": {
       "types": "./src/deviceFrame.ts",
       "import": "./src/deviceFrame.ts"
+    },
+    "./deviceHelperCache": {
+      "types": "./src/deviceHelperCache.ts",
+      "import": "./src/deviceHelperCache.ts"
     }
   },
   "scripts": {
