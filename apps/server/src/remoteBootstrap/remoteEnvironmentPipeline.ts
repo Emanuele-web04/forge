@@ -184,6 +184,10 @@ export async function bringUpRemoteEnvironment(
     }
     credential = { token };
     releaseId = installedReleaseId;
+    // Read off the host, so still a CLAIM at this point. It is not trusted
+    // here: the session below runs the handshake through its own tunnel and
+    // `verifyProvisioningHandshake` refuses unless the running server reports
+    // this exact id, version and credential. Nothing is published until it does.
     provisionedEnvironmentId = environmentId;
   } else {
     // A fresh install or an upgrade. The bootstrapper owns the whole sequence,
