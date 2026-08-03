@@ -13,7 +13,10 @@ import type {
   BrowserAnnotationTheme,
   ThreadId,
 } from "@synara/contracts";
-import { sanitizeBrowserAnnotationUrl } from "@synara/shared/browserAnnotations";
+import {
+  browserAnnotationDocumentIdentityUrl,
+  sanitizeBrowserAnnotationUrl,
+} from "@synara/shared/browserAnnotations";
 
 import { BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL } from "../ipcChannels";
 import {
@@ -42,6 +45,7 @@ interface BrowserAnnotationCoordinatorOptions {
 interface ReadyDocument {
   readonly webContentsId: number;
   readonly liveUrl: string;
+  readonly compatibleDocumentKeys: ReadonlySet<string>;
   readonly document: BrowserAnnotationDocument;
   readonly source: BrowserAnnotationSource;
 }
@@ -225,14 +229,19 @@ export class BrowserAnnotationCoordinator {
       ) {
         this.finishSession(activeSession, "navigation", false);
       }
+      const identityKey = browserAnnotationDocumentKey(
+        browserAnnotationDocumentIdentityUrl(liveUrl),
+      );
+      const compatibleDocumentKeys = new Set([identityKey, browserAnnotationDocumentKey(liveUrl)]);
       const document: BrowserAnnotationDocument = {
         token: message.documentToken,
-        key: browserAnnotationDocumentKey(liveUrl),
+        key: identityKey,
         url: message.source.url,
       };
       const ready: ReadyDocument = {
         webContentsId: sender.id,
         liveUrl,
+        compatibleDocumentKeys,
         document,
         source: message.source,
       };
@@ -492,7 +501,7 @@ export class BrowserAnnotationCoordinator {
   ): BrowserAnnotationSyncMarkersInput["markers"] {
     return projection.markers.filter((marker) => {
       if (marker.source.url !== documentState.source.url) return false;
-      return marker.documentKey === documentState.document.key;
+      return documentState.compatibleDocumentKeys.has(marker.documentKey);
     });
   }
 

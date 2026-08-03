@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  browserAnnotationDocumentIdentityUrl,
   sanitizeBrowserAnnotationPageTitle,
   sanitizeBrowserAnnotationUrl,
 } from "./browserAnnotations";
+
+describe("browserAnnotationDocumentIdentityUrl", () => {
+  it("ignores fragments while preserving private query identity", () => {
+    expect(
+      browserAnnotationDocumentIdentityUrl("https://example.test/app?token=private#details"),
+    ).toBe("https://example.test/app?token=private");
+    expect(browserAnnotationDocumentIdentityUrl("https://example.test/app#other")).toBe(
+      "https://example.test/app",
+    );
+  });
+
+  it("rejects malformed and non-web URLs", () => {
+    expect(browserAnnotationDocumentIdentityUrl("javascript:alert(1)")).toBe("");
+    expect(browserAnnotationDocumentIdentityUrl("not a url")).toBe("");
+  });
+});
 
 describe("sanitizeBrowserAnnotationPageTitle", () => {
   it.each([

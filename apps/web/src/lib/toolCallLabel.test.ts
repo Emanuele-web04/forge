@@ -7,6 +7,7 @@ import {
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
   isInspectCommand,
+  isSynaraBrowserToolCall,
   normalizeCompactToolLabel,
   resolveCommandVisualKind,
   sanitizeSynaraMcpToolPreview,
@@ -263,6 +264,14 @@ describe("deriveSynaraMcpToolTitle", () => {
         status: "failed",
       }),
     ).toBe('Unexpected key "reasoningEffort" for Claude Agent');
+  });
+});
+
+describe("isSynaraBrowserToolCall", () => {
+  it("recognizes canonical presentation titles without a tool identifier", () => {
+    expect(isSynaraBrowserToolCall({ title: "Open browser tab" })).toBe(true);
+    expect(isSynaraBrowserToolCall({ fallbackLabel: "Snapshot browser page" })).toBe(true);
+    expect(isSynaraBrowserToolCall({ title: "Synara listed threads" })).toBe(false);
   });
 });
 

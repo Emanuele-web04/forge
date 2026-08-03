@@ -4,11 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type {
-  BrowserAnnotationEvent,
-  BrowserAnnotationSession,
-  BrowserAnnotationTheme,
-} from "@synara/contracts";
+import type { BrowserAnnotationEvent, BrowserAnnotationTheme } from "@synara/contracts";
 import { _electron as electron, expect, test, type ElectronApplication } from "playwright/test";
 
 import { createBrowserMcpHarness } from "./fixtures/mcpBrowserHarness";
@@ -142,35 +138,118 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     const webviewRect = await page.locator("webview").boundingBox();
     if (!webviewRect) throw new Error("Visible annotation guest lost its bounds.");
 
+    /**
+     * Runs a script inside the annotated guest page. MCP browser tools refuse to
+     * act while an annotation session holds the webview, so page-side setup and
+     * inspection has to go through the runtime the main process already owns.
+     */
+    const runInGuest = async (script: string): Promise<unknown> =>
+      electronApp.evaluate(
+        (_electron, input) => {
+          const fixture = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                browserManager: {
+                  getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
+                    webContents: { executeJavaScript(script: string): Promise<unknown> };
+                  };
+                };
+              };
+            }
+          ).__synaraVisibleBrowserE2E;
+          return fixture.browserManager
+            .getVisibleAutomationRuntime({ threadId: input.threadId, tabId: input.tabId })
+            .webContents.executeJavaScript(input.script);
+        },
+        { threadId, tabId, script },
+      );
+    /**
+     * Calls a method on the main-process browser manager. Rejects when the call
+     * throws, so a caller that expects a not-ready failure has to say so.
+     */
+    const callBrowserManager = async (
+      method: "startAnnotation" | "cancelAnnotation" | "syncAnnotationMarkers",
+      payload: unknown,
+    ): Promise<unknown> =>
+      electronApp.evaluate(
+        (_electron, input) => {
+          const fixture = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                browserManager: Record<string, (value: unknown) => unknown>;
+              };
+            }
+          ).__synaraVisibleBrowserE2E;
+          return fixture.browserManager[input.method]?.(input.payload) ?? null;
+        },
+        { method, payload },
+      );
+    /** Every annotation event the host has observed, oldest first. */
+    const annotationEvents = async (): Promise<BrowserAnnotationEvent[]> =>
+      electronApp.evaluate(() => {
+        const fixture = (
+          globalThis as typeof globalThis & {
+            __synaraVisibleBrowserE2E: { annotationEvents: BrowserAnnotationEvent[] };
+          }
+        ).__synaraVisibleBrowserE2E;
+        return fixture.annotationEvents;
+      });
+    const annotationEventKinds = async (): Promise<string[]> =>
+      (await annotationEvents()).map((event) => event.kind);
+    const committedAnnotations = async (): Promise<
+      Extract<BrowserAnnotationEvent, { kind: "committed" }>[]
+    > =>
+      (await annotationEvents()).filter(
+        (event): event is Extract<BrowserAnnotationEvent, { kind: "committed" }> =>
+          event.kind === "committed",
+      );
+
     await expect
       .poll(
         () =>
-          electronApp.evaluate(
-            (_electron, input) => {
-              const fixture = (
-                globalThis as typeof globalThis & {
-                  __synaraVisibleBrowserE2E: {
-                    browserManager: {
-                      startAnnotation(value: {
-                        threadId: string;
-                        tabId: string;
-                        theme: BrowserAnnotationTheme;
-                      }): BrowserAnnotationSession;
-                    };
-                  };
-                }
-              ).__synaraVisibleBrowserE2E;
-              try {
-                return fixture.browserManager.startAnnotation(input);
-              } catch {
-                return null;
-              }
-            },
-            { threadId, tabId, theme: DARK_ANNOTATION_THEME },
-          ),
+          // The guest keeps refusing until its preload has attached, so a throw
+          // here is a retry signal rather than a failure.
+          callBrowserManager("startAnnotation", {
+            threadId,
+            tabId,
+            theme: DARK_ANNOTATION_THEME,
+          }).catch(() => null),
         { timeout: 5_000, intervals: [25, 50, 100, 200] },
       )
       .not.toBeNull();
+
+    // The overlay host is discoverable in the page's DOM, so a hostile page can
+    // aim synthetic events at it. None of them may steer the picker: the
+    // session hides the native cursor, so a page that could drive the bubble
+    // would highlight one element while the real pointer sat on another, and a
+    // synthetic Enter would publish a half-typed comment.
+    const spoofingReachedOverlayHost = await runInGuest(
+      "(() => { const host = document.querySelector('[data-synara-browser-annotations]'); document.dispatchEvent(new PointerEvent('pointermove', { clientX: 3, clientY: 3, bubbles: true })); document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); host?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return host !== null; })()",
+    );
+    expect(spoofingReachedOverlayHost).toBe(true);
+    const kindsAfterSpoofing = await annotationEventKinds();
+    expect(kindsAfterSpoofing).not.toContain("cancelled");
+    expect(kindsAfterSpoofing).not.toContain("committed");
+
+    // An element buried too deep to address within the selector bound can never
+    // be committed. The picker has to refuse it up front instead of opening a
+    // composer whose save would silently turn into a cancel and throw the typed
+    // comment away.
+    const unanchorableRect = (await runInGuest(
+      "(() => { const root = document.createElement('div'); root.setAttribute('data-unanchorable', ''); root.style.cssText = 'position:fixed;left:8px;top:8px;z-index:999;background:rgb(230,230,230)'; let node = root; for (let index = 0; index < 90; index += 1) { const child = document.createElement('div'); node.append(child); node = child; } node.style.cssText = 'padding:14px'; node.textContent = 'deep'; document.body.append(root); const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
+    )) as { x: number; y: number; width: number; height: number };
+    await page.mouse.click(
+      webviewRect.x + unanchorableRect.x + unanchorableRect.width / 2,
+      webviewRect.y + unanchorableRect.y + unanchorableRect.height / 2,
+    );
+    await page.keyboard.type("Never reaches a composer");
+    await page.keyboard.press("Enter");
+    const kindsAfterUnanchorable = await annotationEventKinds();
+    expect(kindsAfterUnanchorable).not.toContain("cancelled");
+    expect(kindsAfterUnanchorable).not.toContain("committed");
+    await runInGuest(
+      "(() => { document.querySelector('[data-unanchorable]')?.remove(); return true; })()",
+    );
 
     await page.mouse.click(
       webviewRect.x + targetRect.x + targetRect.width / 2,
@@ -181,35 +260,13 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     await page.keyboard.press("Enter");
 
     await expect
-      .poll(
-        () =>
-          electronApp.evaluate(() => {
-            const fixture = (
-              globalThis as typeof globalThis & {
-                __synaraVisibleBrowserE2E: {
-                  annotationEvents: BrowserAnnotationEvent[];
-                };
-              }
-            ).__synaraVisibleBrowserE2E;
-            return fixture.annotationEvents.find((event) => event.kind === "committed") ?? null;
-          }),
-        { timeout: 5_000, intervals: [25, 50, 100] },
-      )
-      .not.toBeNull();
+      .poll(async () => (await committedAnnotations()).length, {
+        timeout: 5_000,
+        intervals: [25, 50, 100],
+      })
+      .toBe(1);
 
-    const committedEvent = await electronApp.evaluate(() => {
-      const fixture = (
-        globalThis as typeof globalThis & {
-          __synaraVisibleBrowserE2E: {
-            annotationEvents: BrowserAnnotationEvent[];
-          };
-        }
-      ).__synaraVisibleBrowserE2E;
-      return fixture.annotationEvents.find(
-        (event): event is Extract<BrowserAnnotationEvent, { kind: "committed" }> =>
-          event.kind === "committed",
-      );
-    });
+    const committedEvent = (await committedAnnotations())[0];
     expect(committedEvent?.annotation).toMatchObject({
       selector: "#manual",
       name: "Manual Playwright action",
@@ -225,34 +282,12 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     await page.keyboard.press("Tab");
     await page.keyboard.press("Enter");
     await expect
-      .poll(
-        () =>
-          electronApp.evaluate(() => {
-            const fixture = (
-              globalThis as typeof globalThis & {
-                __synaraVisibleBrowserE2E: {
-                  annotationEvents: BrowserAnnotationEvent[];
-                };
-              }
-            ).__synaraVisibleBrowserE2E;
-            return fixture.annotationEvents.filter((event) => event.kind === "committed").length;
-          }),
-        { timeout: 5_000, intervals: [25, 50, 100] },
-      )
+      .poll(async () => (await committedAnnotations()).length, {
+        timeout: 5_000,
+        intervals: [25, 50, 100],
+      })
       .toBe(2);
-    const sensitiveContainerEvent = await electronApp.evaluate(() => {
-      const fixture = (
-        globalThis as typeof globalThis & {
-          __synaraVisibleBrowserE2E: {
-            annotationEvents: BrowserAnnotationEvent[];
-          };
-        }
-      ).__synaraVisibleBrowserE2E;
-      return fixture.annotationEvents.filter(
-        (event): event is Extract<BrowserAnnotationEvent, { kind: "committed" }> =>
-          event.kind === "committed",
-      )[1];
-    });
+    const sensitiveContainerEvent = (await committedAnnotations())[1];
     expect(sensitiveContainerEvent?.annotation).toMatchObject({
       selector: "#private-editor-wrap",
       name: null,
@@ -262,69 +297,123 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "Private draft must not be captured",
     );
 
-    const manualClicks = await electronApp.evaluate(
-      (_electron, input) => {
-        const fixture = (
-          globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: {
-              browserManager: {
-                getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
-                  webContents: {
-                    executeJavaScript(script: string): Promise<string | undefined>;
-                  };
-                };
-              };
-            };
-          }
-        ).__synaraVisibleBrowserE2E;
-        return fixture.browserManager
-          .getVisibleAutomationRuntime(input)
-          .webContents.executeJavaScript("document.body.dataset.manualClicks");
-      },
-      { threadId, tabId },
+    // A target can stop being addressable between selection and save. That must
+    // not end the session as a cancel: the comment the user already typed has to
+    // survive so they can re-pick and save it.
+    const staleRect = (await runInGuest(
+      "(() => { const root = document.createElement('div'); root.setAttribute('data-stale-chain', ''); root.style.cssText = 'position:fixed;left:8px;top:8px;z-index:999;background:rgb(230,230,230)'; let node = root; for (let index = 0; index < 90; index += 1) { const child = document.createElement('div'); node.append(child); node = child; } node.id = 'stale-leaf'; node.style.cssText = 'padding:14px'; node.textContent = 'stale'; document.body.append(root); const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
+    )) as { x: number; y: number; width: number; height: number };
+    const clickStaleTarget = async (): Promise<void> => {
+      await page.mouse.click(
+        webviewRect.x + staleRect.x + staleRect.width / 2,
+        webviewRect.y + staleRect.y + staleRect.height / 2,
+      );
+    };
+    await clickStaleTarget();
+    await page.keyboard.type("Kept through a stale target");
+    // Dropping the id leaves only the structural selector, which this chain is
+    // far too deep to fit inside the contract's bound.
+    await runInGuest(
+      "(() => { document.getElementById('stale-leaf')?.removeAttribute('id'); return true; })()",
     );
+    await page.keyboard.press("Enter");
+    const kindsAfterStaleSave = await annotationEventKinds();
+    expect(kindsAfterStaleSave).not.toContain("cancelled");
+    expect(kindsAfterStaleSave.filter((kind) => kind === "committed")).toHaveLength(2);
+
+    await runInGuest(
+      "(() => { document.querySelector('[data-stale-chain] div:not(:has(div))').id = 'stale-leaf'; return true; })()",
+    );
+    await clickStaleTarget();
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(async () => (await committedAnnotations()).length, {
+        timeout: 5_000,
+        intervals: [25, 50, 100],
+      })
+      .toBe(3);
+    const recoveredEvent = (await committedAnnotations())[2];
+    expect(recoveredEvent?.annotation).toMatchObject({
+      selector: "#stale-leaf",
+      comment: "Kept through a stale target",
+    });
+    await runInGuest(
+      "(() => { document.querySelector('[data-stale-chain]')?.remove(); return true; })()",
+    );
+
+    // If a selected element collapses without disconnecting, the hidden
+    // composer must release it without allowing Enter to publish an invisible
+    // annotation. The typed comment still carries into the next valid pick.
+    const collapsingRect = (await runInGuest(
+      "(() => { const target = document.createElement('button'); target.id = 'collapsing-target'; target.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:999;padding:14px'; target.textContent = 'collapse'; document.body.append(target); const rect = target.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
+    )) as { x: number; y: number; width: number; height: number };
+    const clickCollapsingTarget = async (): Promise<void> => {
+      await page.mouse.click(
+        webviewRect.x + collapsingRect.x + collapsingRect.width / 2,
+        webviewRect.y + collapsingRect.y + collapsingRect.height / 2,
+      );
+    };
+    await clickCollapsingTarget();
+    await page.keyboard.type("Kept through a collapsed target");
+    await runInGuest(
+      "(() => { document.getElementById('collapsing-target').style.display = 'none'; return true; })()",
+    );
+    // Submit immediately, before relying on the next overlay animation frame
+    // to notice the collapsed box.
+    await page.keyboard.press("Enter");
+    expect(await committedAnnotations()).toHaveLength(3);
+    await runInGuest(
+      "(() => { document.getElementById('collapsing-target').style.display = 'block'; return true; })()",
+    );
+    await clickCollapsingTarget();
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(async () => (await committedAnnotations()).length, {
+        timeout: 5_000,
+        intervals: [25, 50, 100],
+      })
+      .toBe(4);
+    expect((await committedAnnotations())[3]?.annotation.comment).toBe(
+      "Kept through a collapsed target",
+    );
+    await runInGuest(
+      "(() => { document.getElementById('collapsing-target')?.remove(); return true; })()",
+    );
+
+    // A long unique ancestor id can make its anchored selector exceed the
+    // contract even though the ordinary structural path remains short. Keep
+    // walking in that case, and preserve the existing Cmd/Ctrl+Enter shortcut.
+    const fallbackSelectorRect = (await runInGuest(
+      "(() => { const root = document.createElement('div'); root.id = `anchor-${'x'.repeat(490)}`; root.setAttribute('data-long-anchor', ''); root.style.cssText = 'position:fixed;right:8px;top:8px;z-index:999;background:rgb(230,230,230)'; const target = document.createElement('button'); target.style.cssText = 'padding:14px'; target.textContent = 'fallback'; root.append(target); document.body.append(root); const rect = target.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
+    )) as { x: number; y: number; width: number; height: number };
+    await page.mouse.click(
+      webviewRect.x + fallbackSelectorRect.x + fallbackSelectorRect.width / 2,
+      webviewRect.y + fallbackSelectorRect.y + fallbackSelectorRect.height / 2,
+    );
+    await page.keyboard.type("Fallback selector and shortcut");
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect
+      .poll(async () => (await committedAnnotations()).length, {
+        timeout: 5_000,
+        intervals: [25, 50, 100],
+      })
+      .toBe(5);
+    const fallbackSelectorEvent = (await committedAnnotations())[4];
+    expect(fallbackSelectorEvent?.annotation.comment).toBe("Fallback selector and shortcut");
+    expect(fallbackSelectorEvent?.annotation.selector).not.toContain("anchor-");
+    await runInGuest(
+      "(() => { document.querySelector('[data-long-anchor]')?.remove(); return true; })()",
+    );
+
+    const manualClicks = await runInGuest("document.body.dataset.manualClicks");
     expect(manualClicks).toBe("0");
-    const hostileCapture = await electronApp.evaluate(
-      (_electron, input) => {
-        const fixture = (
-          globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: {
-              browserManager: {
-                getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
-                  webContents: {
-                    executeJavaScript(script: string): Promise<unknown>;
-                  };
-                };
-              };
-            };
-          }
-        ).__synaraVisibleBrowserE2E;
-        return fixture.browserManager
-          .getVisibleAutomationRuntime(input)
-          .webContents.executeJavaScript(
-            "({ capture: globalThis.__annotationHostileCapture, unexpectedKeyups: globalThis.__annotationUnexpectedKeyups })",
-          );
-      },
-      { threadId, tabId },
+    const hostileCapture = await runInGuest(
+      "({ capture: globalThis.__annotationHostileCapture, unexpectedKeyups: globalThis.__annotationUnexpectedKeyups })",
     );
     expect(hostileCapture).toEqual({ capture: [], unexpectedKeyups: [] });
 
     if (!committedEvent) throw new Error("Annotation commit event was not captured.");
-    await electronApp.evaluate(
-      (_electron, input) => {
-        const fixture = (
-          globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: {
-              browserManager: {
-                cancelAnnotation(value: typeof input): void;
-              };
-            };
-          }
-        ).__synaraVisibleBrowserE2E;
-        fixture.browserManager.cancelAnnotation(input);
-      },
-      { threadId, tabId },
-    );
+    await callBrowserManager("cancelAnnotation", { threadId, tabId });
     const awayFromAnnotation = await mcp.call("browser_navigate", {
       tabId,
       url: site.nextUrl,
@@ -338,110 +427,66 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     });
     expect(returnedToAnnotation.structuredContent.finalUrl).toBe(annotatedLiveUrl);
 
-    await electronApp.evaluate(
-      (_electron, input) => {
-        const fixture = (
-          globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: {
-              browserManager: {
-                syncAnnotationMarkers(value: typeof input): void;
-              };
-            };
-          }
-        ).__synaraVisibleBrowserE2E;
-        fixture.browserManager.syncAnnotationMarkers(input);
-      },
-      {
-        threadId,
-        tabId,
-        version: 1,
-        markers: [
-          {
-            id: committedEvent.annotation.id,
-            ordinal: 1,
-            documentKey: committedEvent.document.key,
-            source: committedEvent.annotation.source,
-            selector: committedEvent.annotation.selector,
-            fingerprint: committedEvent.annotation.fingerprint,
-          },
-        ],
-      },
-    );
+    await callBrowserManager("syncAnnotationMarkers", {
+      threadId,
+      tabId,
+      version: 1,
+      markers: [
+        {
+          id: committedEvent.annotation.id,
+          ordinal: 1,
+          documentKey: committedEvent.document.key,
+          source: committedEvent.annotation.source,
+          selector: committedEvent.annotation.selector,
+          fingerprint: committedEvent.annotation.fingerprint,
+        },
+      ],
+    });
     await expect
       .poll(
-        () =>
-          electronApp.evaluate((_, annotationId) => {
-            const fixture = (
-              globalThis as typeof globalThis & {
-                __synaraVisibleBrowserE2E: {
-                  annotationEvents: BrowserAnnotationEvent[];
-                };
-              }
-            ).__synaraVisibleBrowserE2E;
-            return fixture.annotationEvents.some(
-              (event) =>
-                event.kind === "markers-synced" && event.projectedMarkerIds.includes(annotationId),
-            );
-          }, committedEvent.annotation.id),
+        async () =>
+          (await annotationEvents()).some(
+            (event) =>
+              event.kind === "markers-synced" &&
+              event.projectedMarkerIds.includes(committedEvent.annotation.id),
+          ),
         { timeout: 5_000, intervals: [25, 50, 100] },
       )
       .toBe(true);
 
-    await electronApp.evaluate(
-      (_electron, input) => {
-        const fixture = (
-          globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: {
-              browserManager: {
-                startAnnotation(value: {
-                  threadId: string;
-                  tabId: string;
-                  theme: BrowserAnnotationTheme;
-                }): BrowserAnnotationSession;
-              };
-            };
-          }
-        ).__synaraVisibleBrowserE2E;
-        fixture.browserManager.startAnnotation(input);
-      },
-      { threadId, tabId, theme: DARK_ANNOTATION_THEME },
-    );
-    await electronApp.evaluate(
-      (_electron, input) => {
-        const fixture = (
-          globalThis as typeof globalThis & {
-            __synaraVisibleBrowserE2E: {
-              browserManager: {
-                getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
-                  webContents: {
-                    executeJavaScript(script: string): Promise<unknown>;
-                  };
-                };
-              };
-            };
-          }
-        ).__synaraVisibleBrowserE2E;
-        return fixture.browserManager
-          .getVisibleAutomationRuntime(input)
-          .webContents.executeJavaScript("history.pushState({}, '', '/app#annotation-cancelled')");
-      },
-      { threadId, tabId },
+    await callBrowserManager("startAnnotation", {
+      threadId,
+      tabId,
+      theme: DARK_ANNOTATION_THEME,
+    });
+    const markerSyncCountBeforeHash = (await annotationEvents()).filter(
+      (event) => event.kind === "markers-synced",
+    ).length;
+    await runInGuest(
+      "history.pushState({}, '', location.pathname + location.search + '#annotation-cancelled')",
     );
     await expect
       .poll(
-        () =>
-          electronApp.evaluate(() => {
-            const fixture = (
-              globalThis as typeof globalThis & {
-                __synaraVisibleBrowserE2E: {
-                  annotationEvents: BrowserAnnotationEvent[];
-                };
-              }
-            ).__synaraVisibleBrowserE2E;
-            return fixture.annotationEvents.some(
-              (event) => event.kind === "cancelled" && event.reason === "navigation",
-            );
-          }),
+        async () =>
+          (await annotationEvents()).some(
+            (event) => event.kind === "cancelled" && event.reason === "navigation",
+          ),
+        { timeout: 5_000, intervals: [25, 50, 100] },
+      )
+      .toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const markerSyncs = (await annotationEvents()).filter(
+            (event): event is Extract<BrowserAnnotationEvent, { kind: "markers-synced" }> =>
+              event.kind === "markers-synced",
+          );
+          const latest = markerSyncs.at(-1);
+          return (
+            markerSyncs.length > markerSyncCountBeforeHash &&
+            latest?.projectedMarkerIds.includes(committedEvent.annotation.id) === true
+          );
+        },
         { timeout: 5_000, intervals: [25, 50, 100] },
       )
       .toBe(true);
@@ -450,31 +495,10 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       webviewRect.y + targetRect.y + targetRect.height / 2,
     );
     await expect
-      .poll(
-        () =>
-          electronApp.evaluate(
-            (_electron, input) => {
-              const fixture = (
-                globalThis as typeof globalThis & {
-                  __synaraVisibleBrowserE2E: {
-                    browserManager: {
-                      getVisibleAutomationRuntime(value: { threadId: string; tabId: string }): {
-                        webContents: {
-                          executeJavaScript(script: string): Promise<string | undefined>;
-                        };
-                      };
-                    };
-                  };
-                }
-              ).__synaraVisibleBrowserE2E;
-              return fixture.browserManager
-                .getVisibleAutomationRuntime(input)
-                .webContents.executeJavaScript("document.body.dataset.manualClicks");
-            },
-            { threadId, tabId },
-          ),
-        { timeout: 5_000, intervals: [25, 50, 100] },
-      )
+      .poll(() => runInGuest("document.body.dataset.manualClicks"), {
+        timeout: 5_000,
+        intervals: [25, 50, 100],
+      })
       .toBe("1");
   } finally {
     await closeElectronApplication(electronApp);
