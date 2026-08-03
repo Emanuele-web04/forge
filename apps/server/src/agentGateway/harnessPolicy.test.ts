@@ -92,4 +92,39 @@ describe("Synara harness policy", () => {
       assert.notInclude(text, "one exact synara_create_threads plan", provider);
     }
   });
+
+  it("teaches the device tools well enough for a plain prompt to work", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+
+    // When to reach for them at all: the demo needed "using your device_* tools"
+    // spelled out because the policy only triggered on the user naming a tool.
+    assert.include(policy, "run, test, check, demo, debug, or interact with an iOS app");
+    assert.include(policy, "whether or not the user names a tool");
+    assert.include(policy, "never drive the simulator with xcrun simctl");
+
+    // The workflow, so the agent does not have to guess an ordering.
+    assert.include(policy, "device_list for a udid");
+    assert.include(policy, "device_install and device_launch");
+    assert.include(policy, "com.apple.Preferences");
+
+    // Interaction discipline: describe before tapping, verify after.
+    assert.include(policy, "Before every tap, call device_describe_ui");
+    assert.include(policy, "device points, not screenshot pixels");
+    assert.include(policy, "confirm the screen actually changed");
+
+    // The traps that made the demo agent report success it never observed.
+    assert.include(policy, "an unchanged tree after a tap means the tap missed");
+    assert.include(policy, "not delivered to the simulator");
+    assert.include(policy, "Never report success you have not observed");
+    assert.include(policy, "device_open_url always requires explicit user approval");
+    assert.include(policy, "Airplane Mode");
+  });
+
+  it("withholds device guidance from sessions with no gateway control", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    // Promising tools this session cannot reach would be a lie.
+    assert.notInclude(policy, "device_list");
+    assert.notInclude(policy, "device_describe_ui");
+  });
 });
