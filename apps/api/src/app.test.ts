@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app";
 import type { ApiConfig } from "./config";
 import { runMigrations } from "./db/migrate";
+import { hasUiBuild } from "./staticUi";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
@@ -47,7 +48,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
     expect(body.keys.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("serves the placeholder UI for non-API routes", async () => {
+  it("serves HTML for non-API routes", async () => {
     const built = createApp(baseConfig);
     pool = built.pool;
 
@@ -55,7 +56,21 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     const body = await res.text();
-    expect(body).toContain("Synara accounts");
+    // Either the built ceremony UI or, without a `vite build`, the placeholder.
+    expect(body).toContain(hasUiBuild() ? '<div id="root">' : "Synara accounts");
+  });
+
+  // Client-side routes must survive a direct hit, not just navigation from "/".
+  it.skipIf(!hasUiBuild())("serves the SPA document for /login", async () => {
+    const built = createApp(baseConfig);
+    pool = built.pool;
+
+    const res = await built.app.request("/login");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain('<div id="root">');
+    expect(body).toContain("/assets/");
   });
 
   it("returns a JSON AccountErrorBody for unknown API routes", async () => {

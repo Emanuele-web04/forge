@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans:
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+
+  --color-canvas: oklch(0.16 0.006 264);
+  --color-surface: oklch(0.201 0.007 264);
+  --color-line: oklch(0.3 0.008 264);
+  --color-ink: oklch(0.97 0.002 264);
+  --color-ink-muted: oklch(0.68 0.01 264);
+  --color-ink-faint: oklch(0.55 0.011 264);
+  --color-accent: oklch(0.72 0.15 258);
+  --color-accent-ink: oklch(0.18 0.03 264);
+  --color-danger: oklch(0.68 0.17 22);
+  --color-success: oklch(0.75 0.14 158);
+}
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Focus is always visible and always the accent — never removed, only shaped. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    // Deliberately not `composite`: nothing references this project, and
+    // declaration emit would fail on better-auth's client types, which name an
+    // unexported zod subpath (TS2742 — the same constraint documented in
+    // src/auth.ts).
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "noEmit": true
+  },
+  "include": ["src", "vite.config.ts"]
+}
