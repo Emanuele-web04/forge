@@ -229,9 +229,15 @@ const worker = setupWorker(
         });
         return;
       }
+      // Every subscription the app opens must be listed here. One that is not
+      // falls through to the catch-all, which answers a stream request with
+      // `{}`; the schema failure reads as a dead socket and reconnects the
+      // whole client on a ~1s loop. See the longer note in
+      // EventRouter.browser.tsx.
       if (
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
+        method === WS_METHODS.subscribeRemoteEnvironmentStatuses ||
         method === WS_METHODS.subscribeTerminalEvents ||
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||

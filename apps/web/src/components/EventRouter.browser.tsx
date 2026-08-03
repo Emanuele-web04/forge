@@ -296,9 +296,20 @@ const worker = setupWorker(
         });
         return;
       }
+      // Subscriptions this fixture holds open without ever sending a chunk.
+      //
+      // The list must cover EVERY subscription the app opens. A missing one
+      // falls through to the catch-all below, which answers a stream request
+      // with `{}` — the stream fails its schema, and the transport treats any
+      // non-admission stream failure as a dead socket and reconnects the WHOLE
+      // client. Every other stream is interrupted and restarted on a ~1s loop,
+      // which resets `nextThreadProjectionReconcileAtById` on each new snapshot
+      // and starves the projection reconcile that four tests here wait on.
+      // Nothing reports an error; the suite just times out somewhere else.
       if (
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
+        method === WS_METHODS.subscribeRemoteEnvironmentStatuses ||
         method === WS_METHODS.subscribeTerminalEvents ||
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
