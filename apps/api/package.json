@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "dev:ui": "vite --config ui/vite.config.ts",
-    "build": "vite build --config ui/vite.config.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun run build:ui",
+    "build:ui": "vite build --config ui/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p ui/tsconfig.json",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",

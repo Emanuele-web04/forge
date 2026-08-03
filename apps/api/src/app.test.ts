@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AccountErrorBody } from "@synara/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app";
@@ -6,6 +9,25 @@ import { runMigrations } from "./db/migrate";
 import { hasUiBuild } from "./staticUi";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+
+const API_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * The SPA assertions below are only meaningful against a real `ui/dist`, so the
+ * suite builds one rather than skipping itself into a false pass. This runs at
+ * module load — before `describe` is collected — because `mountUi` decides how
+ * to serve at `createApp` time. Repeat runs are free: an existing dist is reused.
+ */
+function ensureUiBuild(): void {
+  if (hasUiBuild()) return;
+  execFileSync("bunx", ["vite", "build", "--config", "ui/vite.config.ts"], {
+    cwd: API_ROOT,
+    stdio: "inherit",
+    timeout: 180_000,
+  });
+}
+
+if (TEST_DATABASE_URL) ensureUiBuild();
 
 describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
   const databaseUrl = TEST_DATABASE_URL as string;
@@ -48,20 +70,23 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
     expect(body.keys.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("serves HTML for non-API routes", async () => {
+  // `ensureUiBuild` guarantees a real bundle, so these assert the built UI
+  // unconditionally rather than degrading to the placeholder.
+  it("serves the built UI for non-API routes", async () => {
     const built = createApp(baseConfig);
     pool = built.pool;
+
+    expect(hasUiBuild()).toBe(true);
 
     const res = await built.app.request("/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     const body = await res.text();
-    // Either the built ceremony UI or, without a `vite build`, the placeholder.
-    expect(body).toContain(hasUiBuild() ? '<div id="root">' : "Synara accounts");
+    expect(body).toContain('<div id="root">');
   });
 
   // Client-side routes must survive a direct hit, not just navigation from "/".
-  it.skipIf(!hasUiBuild())("serves the SPA document for /login", async () => {
+  it("serves the SPA document for /login", async () => {
     const built = createApp(baseConfig);
     pool = built.pool;
 
@@ -71,6 +96,19 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
     const body = await res.text();
     expect(body).toContain('<div id="root">');
     expect(body).toContain("/assets/");
+  });
+
+  it("serves the hashed bundle referenced by the SPA document", async () => {
+    const built = createApp(baseConfig);
+    pool = built.pool;
+
+    const html = await (await built.app.request("/login")).text();
+    const scriptSrc = /src="(\/assets\/[^"]+\.js)"/.exec(html)?.[1];
+    expect(scriptSrc).toBeDefined();
+
+    const res = await built.app.request(scriptSrc as string);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("javascript");
   });
 
   it("returns a JSON AccountErrorBody for unknown API routes", async () => {

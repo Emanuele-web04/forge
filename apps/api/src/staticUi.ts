@@ -59,6 +59,10 @@ export function mountUi(app: Hono, onApiNotFound: (c: Context) => Response): voi
     console.warn(
       `[api] UI assets not served: ${UI_DIST_DIR} is outside the working directory ${process.cwd()}`,
     );
+    // Without the mount, an asset request would otherwise fall through to the
+    // SPA fallback and return HTML for a .js file — the browser fails on a MIME
+    // mismatch and the user sees a blank page. 404 names the real problem.
+    app.all("/assets/*", (c) => c.text("UI assets are not available", 404));
   }
 
   app.notFound((c) => (isApiPath(c) ? onApiNotFound(c) : c.html(indexHtml)));
