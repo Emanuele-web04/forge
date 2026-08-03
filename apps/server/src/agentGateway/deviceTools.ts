@@ -58,6 +58,33 @@ export function deviceToolRequiresApproval(name: string): boolean {
   return DEVICE_APPROVAL_REQUIRED_TOOLS.has(name);
 }
 
+/**
+ * Errors the pane's status row is allowed to show.
+ *
+ * The agent hears about every tool failure; the person watching should only be
+ * interrupted by the ones they can act on — the helper will not build, the
+ * simulator will not boot, the stream died. A scroll that ran out of list, a
+ * label that matched nothing, a tap whose element moved: those are the agent's
+ * feedback loop, and painting them in red under the device reads as the pane
+ * being broken while the agent is already recovering.
+ *
+ * Deliberately a denylist of the recoverable shapes rather than an allowlist of
+ * fatal ones: an unrecognised failure is more useful shown than hidden.
+ */
+const AGENT_RECOVERABLE_ERROR_PATTERNS: readonly RegExp[] = [
+  /appears to be at its end/iu,
+  /no element (?:matching|labelled|labeled)/iu,
+  /matched more than one element/iu,
+  /is not visible on screen/iu,
+  /out of reach/iu,
+  /scrolling stopped moving/iu,
+];
+
+export function isViewerFacingDeviceError(error: unknown): boolean {
+  const message = errorText(error);
+  return !AGENT_RECOVERABLE_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 /** Input plus `device_open_url`: anything that changes what the device does. */
 const DEVICE_APPROVAL_REQUIRED_TOOLS = new Set([
   "device_boot",
@@ -149,9 +176,11 @@ export function makeAgentGatewayDeviceTools(
           Effect.catch((error) =>
             Effect.gen(function* () {
               const message = errorText(error);
-              yield* Effect.promise(() =>
-                manager.recordThreadError(context.callerThreadId, message).catch(() => undefined),
-              );
+              if (isViewerFacingDeviceError(error)) {
+                yield* Effect.promise(() =>
+                  manager.recordThreadError(context.callerThreadId, message).catch(() => undefined),
+                );
+              }
               return mcpToolResultError(message);
             }),
           ),

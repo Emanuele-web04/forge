@@ -564,10 +564,13 @@ export default function DevicePanel(props: {
       </div>
 
       {/*
-        Space is reserved rather than conditionally inserted: an error that
-        appears and clears as the agent retries would otherwise resize the
-        bezel's container on every transition. The row keeps its height always
-        and only paints its rule and text when there is something to say.
+        Only errors the person watching can act on reach this row; the server
+        keeps the agent's own recoverable tool failures out of thread state.
+
+        Space is reserved rather than conditionally inserted: a message that
+        appears and clears would otherwise resize the bezel's container on
+        every transition. The row keeps its height always and only paints its
+        rule and text when there is something to say.
       */}
       <p
         role="status"
