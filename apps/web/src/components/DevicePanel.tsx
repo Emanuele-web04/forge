@@ -30,6 +30,7 @@ import {
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
+  resolveDevicePointSize,
   resolveDeviceSetupAction,
   shouldSubscribeToDeviceStream,
   type DevicePoint,
@@ -242,23 +243,61 @@ export default function DevicePanel(props: {
 
   const pressRef = useRef<{ point: DevicePoint | null; startedAt: number } | null>(null);
 
+  // The accessibility tree's root frame is the device's screen in points, which
+  // is the unit the backend injects input in. Frames arrive in pixels (3x on a
+  // Retina phone), so without this the pane sends coordinates triple their true
+  // value and every tap lands off-screen, where the helper clamps it silently.
+  const [measuredPointSize, setMeasuredPointSize] = useState<{
+    readonly width: number;
+    readonly height: number;
+  } | null>(null);
+  const attachedUdid = attachedDevice?.udid ?? null;
+
+  useEffect(() => {
+    setMeasuredPointSize(null);
+    if (!attachedUdid || attachedDevice?.state !== "booted") return;
+    let cancelled = false;
+    void ensureNativeApi()
+      .device.describeUi({ udid: attachedUdid })
+      .then((result) => {
+        if (cancelled) return;
+        const { width, height } = result.root.frame;
+        if (width > 0 && height > 0) setMeasuredPointSize({ width, height });
+      })
+      .catch(() => {
+        // Accessibility can be degraded while streaming and input still work;
+        // the inferred scale below keeps taps landing in that case.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attachedUdid, attachedDevice?.state]);
+
   const pointFromEvent = useCallback(
     (event: { clientX: number; clientY: number }): DevicePoint | null => {
       const canvas = canvasRef.current;
       if (!canvas || !dimensions) return null;
       const rect = canvas.getBoundingClientRect();
+      const pointSize = resolveDevicePointSize({
+        framePixelWidth: dimensions.width,
+        framePixelHeight: dimensions.height,
+        measured: measuredPointSize,
+      });
       return canvasPointToDevicePoint(
         {
           frameWidth: dimensions.width,
           frameHeight: dimensions.height,
           displayWidth: rect.width,
           displayHeight: rect.height,
+          ...(pointSize
+            ? { devicePointWidth: pointSize.width, devicePointHeight: pointSize.height }
+            : {}),
         },
         event.clientX - rect.left,
         event.clientY - rect.top,
       );
     },
-    [dimensions],
+    [dimensions, measuredPointSize],
   );
 
   const handlePointerDown = useCallback(

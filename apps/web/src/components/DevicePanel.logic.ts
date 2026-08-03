@@ -574,6 +574,63 @@ export function deviceSetupProgress(steps: readonly DeviceSetupStep[]): {
   return { done: steps.filter((step) => step.done).length, total: steps.length };
 }
 
+// ── Device screen geometry ───────────────────────────────────────────
+
+/**
+ * Every Apple display ships at 1x, 2x, or 3x. Frames arrive in pixels and input
+ * is injected in points, so the pane must divide by the scale — sending pixels
+ * puts a tap several hundred points off the right edge of the screen, where the
+ * backend silently clamps it and nothing happens.
+ *
+ * The authoritative point size comes from the accessibility tree's root frame;
+ * this is the fallback for before that first read resolves, and it only has to
+ * pick between three candidates.
+ */
+export const DEVICE_SCALE_FACTORS = [3, 2, 1] as const;
+
+/**
+ * Every 3x device Apple ships is a phone, and every phone is narrow: 3x frames
+ * land at 1080-1320px. Wider frames are iPads, which are always 2x. Choosing on
+ * the frame width directly avoids the trap of a plausible-looking point width —
+ * an iPad's 1640px divides by 3 into 547, which is a perfectly reasonable
+ * number and completely wrong.
+ */
+export function inferDeviceScaleFactor(framePixelWidth: number): number {
+  if (!Number.isFinite(framePixelWidth) || framePixelWidth <= 0) return 1;
+  if (framePixelWidth >= 1000 && framePixelWidth <= 1400) return 3;
+  if (framePixelWidth > 1400) return 2;
+  // Below 1000px: a 2x phone (750-828px) or a 1x frame. Point widths under 320
+  // do not exist on shipping hardware, so anything that small is already points.
+  return framePixelWidth >= 640 ? 2 : 1;
+}
+
+/**
+ * Resolves the device's point dimensions, preferring the measured size from the
+ * accessibility tree and falling back to the scale inferred from the frame.
+ */
+export function resolveDevicePointSize(input: {
+  readonly framePixelWidth: number;
+  readonly framePixelHeight: number;
+  readonly measured?: { readonly width: number; readonly height: number } | null;
+}): { readonly width: number; readonly height: number } | null {
+  const { framePixelWidth, framePixelHeight, measured } = input;
+  if (
+    measured &&
+    Number.isFinite(measured.width) &&
+    Number.isFinite(measured.height) &&
+    measured.width > 0 &&
+    measured.height > 0
+  ) {
+    return { width: measured.width, height: measured.height };
+  }
+  if (framePixelWidth <= 0 || framePixelHeight <= 0) return null;
+  const scale = inferDeviceScaleFactor(framePixelWidth);
+  return {
+    width: Math.round(framePixelWidth / scale),
+    height: Math.round(framePixelHeight / scale),
+  };
+}
+
 export interface DeviceSetupAction {
   readonly label: string;
   readonly url: string;

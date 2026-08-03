@@ -12,10 +12,12 @@ import {
   deviceKeyModifiers,
   deviceSetupProgress,
   describeDegradedCapabilities,
+  inferDeviceScaleFactor,
   isNextDeviceFrameSequence,
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
+  resolveDevicePointSize,
   shouldSubscribeToDeviceStream,
   stepDeviceFrameGate,
   type DeviceFrameGateState,
@@ -253,6 +255,71 @@ describe("coordinate mapping", () => {
   it("returns null for a degenerate geometry rather than dividing by zero", () => {
     expect(deviceContainRect({ ...geometry, frameWidth: 0 })).toBeNull();
     expect(canvasPointToDevicePoint({ ...geometry, displayHeight: 0 }, 10, 10)).toBeNull();
+  });
+});
+
+describe("device point size", () => {
+  // Regression: the pane shipped sending frame *pixels* as tap coordinates. On a
+  // 3x phone that put every tap ~3x off the right edge of the screen, where the
+  // backend clamps silently — clicks appeared to do nothing at all.
+  it("prefers the measured accessibility size over anything inferred", () => {
+    expect(
+      resolveDevicePointSize({
+        framePixelWidth: 1206,
+        framePixelHeight: 2622,
+        measured: { width: 402, height: 874 },
+      }),
+    ).toEqual({ width: 402, height: 874 });
+  });
+
+  it("infers the 3x scale of a Retina phone when accessibility is unavailable", () => {
+    expect(resolveDevicePointSize({ framePixelWidth: 1206, framePixelHeight: 2622 })).toEqual({
+      width: 402,
+      height: 874,
+    });
+  });
+
+  it("never returns the raw pixel size for a Retina frame", () => {
+    const size = resolveDevicePointSize({ framePixelWidth: 1206, framePixelHeight: 2622 });
+    expect(size?.width).not.toBe(1206);
+    expect(size?.height).not.toBe(2622);
+  });
+
+  it("identifies each Apple scale factor from the frame width", () => {
+    expect(inferDeviceScaleFactor(1206)).toBe(3); // iPhone 17 Pro
+    expect(inferDeviceScaleFactor(1170)).toBe(3); // iPhone 13 Pro
+    expect(inferDeviceScaleFactor(1640)).toBe(2); // iPad Air
+  });
+
+  it("ignores a degenerate or missing measurement", () => {
+    expect(
+      resolveDevicePointSize({
+        framePixelWidth: 1206,
+        framePixelHeight: 2622,
+        measured: { width: 0, height: 0 },
+      }),
+    ).toEqual({ width: 402, height: 874 });
+    expect(resolveDevicePointSize({ framePixelWidth: 0, framePixelHeight: 0 })).toBeNull();
+  });
+
+  it("maps a canvas click to points, not pixels, end to end", () => {
+    // The exact failure from the live repro: a click 84.5% across a 3x screen
+    // must send ~340, not the ~1019 the pane was sending.
+    const size = resolveDevicePointSize({ framePixelWidth: 1206, framePixelHeight: 2622 });
+    const point = canvasPointToDevicePoint(
+      {
+        frameWidth: 1206,
+        frameHeight: 2622,
+        displayWidth: 368,
+        displayHeight: 816,
+        devicePointWidth: size?.width ?? 0,
+        devicePointHeight: size?.height ?? 0,
+      },
+      368 * 0.845,
+      816 * 0.365,
+    );
+    expect(point?.x).toBeCloseTo(340, 0);
+    expect(point?.x).toBeLessThan(size?.width ?? 0);
   });
 });
 
