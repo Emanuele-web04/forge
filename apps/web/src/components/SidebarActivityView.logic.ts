@@ -377,6 +377,21 @@ export function resolveActivityScope(
 export const ACTIVITY_RECENT_LIMIT = 5;
 
 /**
+ * Recent turns over at 4am, not midnight: a session that runs past midnight is
+ * still the same working day, and resetting the section out from under a live
+ * session is worse than carrying it a few hours longer.
+ */
+export const ACTIVITY_DAY_START_HOUR = 4;
+
+/** Start of the working day `nowMs` belongs to, in local time. */
+export function resolveActivityDayStartMs(nowMs: number): number {
+  const dayStart = new Date(nowMs);
+  dayStart.setHours(ACTIVITY_DAY_START_HOUR, 0, 0, 0);
+  if (dayStart.getTime() > nowMs) dayStart.setDate(dayStart.getDate() - 1);
+  return dayStart.getTime();
+}
+
+/**
  * Keeps actionable or live work ahead of the user's already-reviewed working
  * set. `active` is already status-sorted, so both returned arrays preserve the
  * intended attention → unseen completion → running → seen ordering.
@@ -414,15 +429,20 @@ export function resolveActivityInteractionMs(
 
 /**
  * Pulls the user's working set out of the (already status-sorted) active list:
- * the last `limit` threads they interacted with, newest interaction first. The
- * remainder keeps its original order for the date buckets below.
+ * up to `limit` threads they interacted with *today*, newest interaction first.
+ * The freshness window is the point of the section — without it the slots stay
+ * occupied by whatever was last opened, so a thread touched days ago squats at
+ * the top until it is archived. Nothing is hidden by aging out: the remainder
+ * keeps its original order and falls through to the date buckets below.
  */
 export function splitRecentActivityThreads(
   active: readonly SidebarThreadSummary[],
-  limit: number = ACTIVITY_RECENT_LIMIT,
+  options: { nowMs: number; limit?: number },
 ): { recent: SidebarThreadSummary[]; rest: SidebarThreadSummary[] } {
+  const limit = options.limit ?? ACTIVITY_RECENT_LIMIT;
+  const dayStartMs = resolveActivityDayStartMs(options.nowMs);
   const recent = active
-    .filter((thread) => resolveActivityInteractionMs(thread) > 0)
+    .filter((thread) => resolveActivityInteractionMs(thread) >= dayStartMs)
     .toSorted(
       (left, right) =>
         resolveActivityInteractionMs(right) - resolveActivityInteractionMs(left) ||

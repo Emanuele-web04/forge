@@ -4941,6 +4941,7 @@ export default function ChatView({
         latestTranscriptMessage.role,
         latestTranscriptMessage.streaming ? "streaming" : "settled",
         latestTranscriptMessage.text.length > 0 ? "content" : "empty",
+        latestTranscriptMessage.text.length,
         latestTranscriptMessage.completedAt ?? "",
       ].join(":")
     : "empty";

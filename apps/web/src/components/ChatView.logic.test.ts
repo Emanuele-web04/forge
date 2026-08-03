@@ -98,11 +98,11 @@ describe("transcript auto-follow signal", () => {
   it("stays stable when only non-message turn activity changes", () => {
     const before = buildTranscriptAutoFollowSignal({
       messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content",
+      tailKey: "assistant-3:assistant:streaming:content:120",
     });
     const afterWorkRow = buildTranscriptAutoFollowSignal({
       messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content",
+      tailKey: "assistant-3:assistant:streaming:content:120",
     });
 
     expect(afterWorkRow).toBe(before);
@@ -111,21 +111,34 @@ describe("transcript auto-follow signal", () => {
   it("changes for a real transcript append or tail lifecycle change", () => {
     const streaming = buildTranscriptAutoFollowSignal({
       messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content",
+      tailKey: "assistant-3:assistant:streaming:content:120",
     });
 
     expect(
       buildTranscriptAutoFollowSignal({
         messageCount: 4,
-        tailKey: "user-4:user:settled:content",
+        tailKey: "user-4:user:settled:content:24",
       }),
     ).not.toBe(streaming);
     expect(
       buildTranscriptAutoFollowSignal({
         messageCount: 3,
-        tailKey: "assistant-3:assistant:settled:content",
+        tailKey: "assistant-3:assistant:settled:content:120",
       }),
     ).not.toBe(streaming);
+  });
+
+  it("changes as the streaming assistant tail grows", () => {
+    const firstChunk = buildTranscriptAutoFollowSignal({
+      messageCount: 3,
+      tailKey: "assistant-3:assistant:streaming:content:120",
+    });
+    const nextChunk = buildTranscriptAutoFollowSignal({
+      messageCount: 3,
+      tailKey: "assistant-3:assistant:streaming:content:240",
+    });
+
+    expect(nextChunk).not.toBe(firstChunk);
   });
 });
 

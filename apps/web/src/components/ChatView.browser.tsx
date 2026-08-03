@@ -2378,7 +2378,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("smoothly re-sticks to the bottom after sending an optimistic user message", async () => {
+  // How the transcript gets there — one motion, no bouncing — is covered by
+  // "moves a sent message to its anchor once…"; this guards the outcome: a send
+  // from far up the transcript ends pinned at the live edge with focus kept.
+  it("re-sticks to the bottom after sending an optimistic user message", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -2401,6 +2404,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
       );
 
+      // Installed so any native smooth scroll resolves immediately; the send
+      // path itself drives the container frame by frame, so this spy is here for
+      // determinism rather than to observe the motion.
       const scrollSpy = installImmediateScrollToSpy(scrollContainer);
       restoreScrollTo = scrollSpy.restore;
 
@@ -2415,13 +2421,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
         async () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.activeElement).toBe(await waitForComposerEditor());
-          expect(scrollSpy.calls.some((call) => call.behavior === "smooth")).toBe(true);
           const layout = await mounted.measureLayout();
           expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
         },
         { timeout: 8_000, interval: 16 },
       );
+      expect(scrollContainer.scrollTop, "transcript never left the top").toBeGreaterThan(0);
     } finally {
       restoreScrollTo();
       await mounted.cleanup();
@@ -2626,6 +2632,264 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  // Regression: the sent message must reach its anchored coordinate in one
+  // motion and then stay there for the rest of the turn. The failure this guards
+  // is the message visibly jumping up and down through send → Thinking →
+  // "Working for" → streaming, which is what a fixed-target scroll produces once
+  // the coordinate moves under it (reserve sizing, rows above being remeasured).
+  it("moves a sent message to its anchor once and holds it across the turn lifecycle", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-send-jitter" as MessageId,
+      targetText: "jitter target",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const prompt = "measure the anchor motion for this send";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      const findSentRow = () => {
+        const rows = document.querySelectorAll<HTMLElement>(
+          "[data-message-id][data-message-role='user']",
+        );
+        for (const row of rows) {
+          if (row.textContent?.includes(prompt)) return row;
+        }
+        return null;
+      };
+      const topGapPx = Number.parseFloat(getComputedStyle(scrollContainer).paddingTop) || 0;
+
+      // Sampled every frame: the regression is a single-frame hop, so polling for
+      // the settled state would not see it.
+      const samples: Array<{ t: number; offset: number | null }> = [];
+      const startedAt = performance.now();
+      let sampling = true;
+      const sample = () => {
+        if (!sampling) return;
+        const row = findSentRow();
+        samples.push({
+          t: performance.now() - startedAt,
+          offset: row
+            ? row.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top
+            : null,
+        });
+        window.requestAnimationFrame(sample);
+      };
+      window.requestAnimationFrame(sample);
+
+      const at = (ms: number, action: () => void) => window.setTimeout(action, ms);
+      const activeTurnId = TurnId.makeUnsafe("turn-jitter");
+      const streamingId = MessageId.makeUnsafe("msg-assistant-jitter-stream");
+
+      // Server ack: durable user row + running turn (Thinking appears).
+      at(140, () => {
+        const sentMessageId = findSentRow()?.dataset.messageId;
+        if (!sentMessageId) return;
+        syncActiveThread((thread) => ({
+          ...thread,
+          messages: [
+            ...thread.messages,
+            {
+              id: MessageId.makeUnsafe(sentMessageId),
+              role: "user" as const,
+              text: prompt,
+              turnId: activeTurnId,
+              streaming: false,
+              source: "native" as const,
+              createdAt: isoAt(1_300),
+              updatedAt: isoAt(1_300),
+            },
+          ],
+          latestTurn: {
+            turnId: activeTurnId,
+            state: "running" as const,
+            requestedAt: isoAt(1_300),
+            startedAt: null,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: thread.session
+            ? {
+                ...thread.session,
+                status: "running" as const,
+                activeTurnId,
+                updatedAt: isoAt(1_301),
+              }
+            : null,
+          updatedAt: isoAt(1_301),
+        }));
+      });
+      // Turn actually starts: the "Working for" header replaces Thinking.
+      at(420, () => {
+        syncActiveThread((thread) => ({
+          ...thread,
+          latestTurn: thread.latestTurn
+            ? { ...thread.latestTurn, startedAt: isoAt(1_310) }
+            : thread.latestTurn,
+          updatedAt: isoAt(1_310),
+        }));
+      });
+      // Rows above the anchor settle to their real height mid-slide (late image
+      // loads, markdown remeasure, estimated virtualized rows mounting). Visible
+      // content preservation is off while an anchor is set, so this is exactly
+      // what shifts the anchored row under the in-flight slide.
+      const earlierMessageId = currentSnapshot.threads
+        .find((thread) => thread.id === THREAD_ID)!
+        .messages.at(-2)!.id;
+      for (const [index, delayMs] of [260, 340, 430].entries()) {
+        at(delayMs, () => {
+          syncActiveThread((thread) => ({
+            ...thread,
+            messages: thread.messages.map((message) =>
+              message.id === earlierMessageId
+                ? {
+                    ...message,
+                    text: `${message.text}\n\n${"Late-measured earlier content. ".repeat(6 * (index + 1))}`,
+                    updatedAt: isoAt(1_250 + index),
+                  }
+                : message,
+            ),
+            updatedAt: isoAt(1_250 + index),
+          }));
+        });
+      }
+      // Assistant text streams in below the anchor, chunk by chunk.
+      for (let chunk = 1; chunk <= 24; chunk += 1) {
+        at(560 + chunk * 33, () => {
+          syncActiveThread((thread) => ({
+            ...thread,
+            messages: [
+              ...thread.messages.filter((message) => message.id !== streamingId),
+              {
+                id: streamingId,
+                role: "assistant" as const,
+                text: "Streaming response paragraph.\n\n".repeat(chunk),
+                turnId: activeTurnId,
+                streaming: true,
+                source: "native" as const,
+                createdAt: isoAt(1_320),
+                updatedAt: isoAt(1_320 + chunk),
+              },
+            ],
+            updatedAt: isoAt(1_320 + chunk),
+          }));
+        });
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 1_600);
+      });
+      sampling = false;
+
+      const visible = samples.filter(
+        (entry): entry is { t: number; offset: number } => entry.offset !== null,
+      );
+      const firstArrivalIndex = visible.findIndex(
+        (entry) => Math.abs(entry.offset - topGapPx) <= 2,
+      );
+      const settled = firstArrivalIndex >= 0 ? visible.slice(firstArrivalIndex) : [];
+      let reversals = 0;
+      let travelAfterArrivalPx = 0;
+      let maxDownwardJumpPx = 0;
+      let previousDirection = 0;
+      for (let index = 1; index < settled.length; index += 1) {
+        const delta = settled[index]!.offset - settled[index - 1]!.offset;
+        travelAfterArrivalPx += Math.abs(delta);
+        maxDownwardJumpPx = Math.max(maxDownwardJumpPx, delta);
+        if (Math.abs(delta) <= 0.5) continue;
+        const direction = Math.sign(delta);
+        if (previousDirection !== 0 && direction !== previousDirection) reversals += 1;
+        previousDirection = direction;
+      }
+      const maxDriftAfterArrivalPx = settled.reduce(
+        (worst, entry) => Math.max(worst, Math.abs(entry.offset - topGapPx)),
+        0,
+      );
+      // The approach itself must not bounce: every frame moves the message
+      // toward the anchor, never back down and up again.
+      const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
+      let approachReversals = 0;
+      let approachDirection = 0;
+      for (let index = 1; index < approach.length; index += 1) {
+        const delta = approach[index]!.offset - approach[index - 1]!.offset;
+        if (Math.abs(delta) <= 0.5) continue;
+        const direction = Math.sign(delta);
+        if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
+        approachDirection = direction;
+      }
+      // ...and it has to be a glide, not a teleport. Without an explicit bound
+      // on how much ground a single frame may cover, every assertion above is
+      // also satisfied by the message simply appearing at the anchor.
+      const approachDistancePx = (approach[0]?.offset ?? topGapPx) - topGapPx;
+      let maxApproachFrameJumpPx = 0;
+      let animatedFrames = 0;
+      for (let index = 1; index < approach.length; index += 1) {
+        const travelled = approach[index - 1]!.offset - approach[index]!.offset;
+        maxApproachFrameJumpPx = Math.max(maxApproachFrameJumpPx, travelled);
+        if (travelled > 0.5) animatedFrames += 1;
+      }
+
+      const trace = () =>
+        visible.map((entry) => `${Math.round(entry.t)}:${Math.round(entry.offset)}`).join(" ");
+      expect(
+        firstArrivalIndex,
+        `sent message never reached its anchor: ${trace()}`,
+      ).toBeGreaterThan(-1);
+      expect(
+        visible[firstArrivalIndex]!.t,
+        `anchor took too long to land: ${trace()}`,
+      ).toBeLessThan(900);
+      expect(approachReversals, `anchor bounced on its way up: ${trace()}`).toBeLessThanOrEqual(1);
+      expect(animatedFrames, `anchor jumped instead of gliding: ${trace()}`).toBeGreaterThanOrEqual(
+        8,
+      );
+      expect(
+        maxApproachFrameJumpPx,
+        `anchor covered too much ground in one frame: ${trace()}`,
+      ).toBeLessThan(approachDistancePx * 0.5);
+      expect(reversals, `anchor moved back and forth after landing: ${trace()}`).toBe(0);
+      expect(maxDownwardJumpPx, `anchor slid back down after landing: ${trace()}`).toBeLessThan(2);
+      expect(travelAfterArrivalPx, `anchor kept moving after landing: ${trace()}`).toBeLessThan(8);
+      expect(maxDriftAfterArrivalPx, `anchor drifted off its coordinate: ${trace()}`).toBeLessThan(
+        4,
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
@@ -2778,13 +3042,32 @@ describe("ChatView timeline estimator parity (full app)", () => {
           message.id === liveAssistantMessage.id
             ? {
                 ...message,
-                streaming: false,
-                completedAt: isoAt(1_207),
+                text: `${message.text}\n\nA second streamed chunk that grows the live response.`,
                 updatedAt: isoAt(1_207),
               }
             : message,
         ),
         updatedAt: isoAt(1_207),
+      }));
+      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
+        timeout: 4_000,
+        interval: 16,
+      });
+
+      scrollSpy.calls.length = 0;
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === liveAssistantMessage.id
+            ? {
+                ...message,
+                streaming: false,
+                completedAt: isoAt(1_208),
+                updatedAt: isoAt(1_208),
+              }
+            : message,
+        ),
+        updatedAt: isoAt(1_208),
       }));
       await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
         timeout: 4_000,

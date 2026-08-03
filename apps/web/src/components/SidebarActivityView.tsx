@@ -529,8 +529,10 @@ export function SidebarActivityView({
   const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
     model.active,
   );
-  const { recent: recentThreads, rest: remainingActiveThreads } =
-    splitRecentActivityThreads(seenThreads);
+  const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
+    seenThreads,
+    { nowMs },
+  );
   const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
   const projectGroups =
     groupMode === "project"
