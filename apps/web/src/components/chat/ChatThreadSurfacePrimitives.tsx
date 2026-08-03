@@ -14,6 +14,7 @@ import type { SplitViewPanePanelState } from "../../splitViewStore";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
 import { Spinner } from "../ui/spinner";
 import { cn } from "~/lib/utils";
+import { scheduleDeferredChatMount } from "./deferredChatMount";
 
 const DiffPanel = lazy(() => import("../DiffPanel"));
 export const LazyBrowserPanel = lazy(() => import("../BrowserPanel"));
@@ -134,16 +135,11 @@ export function DeferredChatView(props: {
     }
     // readyMountKey is keyed by mountKey, so a changed mountKey already makes
     // canMountChatView false (loader) without an eager reset here; the double
-    // rAF then stamps the new key once the paint has settled.
-    let firstFrame = 0;
-    let secondFrame = 0;
-    firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => setReadyMountKey(mountKey));
-    });
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      window.cancelAnimationFrame(secondFrame);
-    };
+    // rAF then stamps the new key once the paint has settled. Chromium can
+    // suppress animation frames while an Electron window is starting or being
+    // background-throttled, so keep a bounded fallback: a deferred draft must
+    // never remain on the mount loader forever just because frames did not run.
+    return scheduleDeferredChatMount(window, () => setReadyMountKey(mountKey));
   }, [mountKey, props.deferMount]);
 
   useEffect(() => {
