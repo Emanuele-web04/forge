@@ -30,7 +30,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
-import { peekDeviceFrameHeader } from "@synara/shared/deviceFrame";
+import { decodeDeviceFrame } from "@synara/shared/deviceFrame";
 
 import type { DeviceStreamFrame } from "./DeviceBackend.ts";
 
@@ -323,17 +323,20 @@ export class HelperClient {
           socket.destroy();
           return;
         }
-        for (const payload of payloads) {
-          const header = peekDeviceFrameHeader(payload);
-          if (!header) continue;
+        for (const record of payloads) {
+          const decoded = decodeDeviceFrame(record);
+          if (!decoded.ok) continue;
+          const { header, payload } = decoded.frame;
           onFrame({
             sequence: header.sequence,
             timestampMs: header.timestampMs,
             keyframe: header.keyframe,
             codecConfig: header.codecConfig,
-            // Passed through whole: the transport re-encodes the envelope with
-            // the routing device id it already has.
-            data: payload.subarray(0),
+            // Envelope stripped: the transport re-encodes one with the routing
+            // device id it already has, so forwarding the record whole would
+            // leave a second header in front of the access unit and every frame
+            // would fail to decode.
+            data: payload,
           });
         }
       });
