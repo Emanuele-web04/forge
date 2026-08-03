@@ -310,6 +310,18 @@ export function createFakeRemoteHost(): FakeRemoteHost {
         return ok();
       }
       case "sh": {
+        // `sh -s` runs a script delivered on stdin — how the registry runner is
+        // sent, so that no part of it is ever an argv token.
+        //
+        // Deliberately NOT a shell interpreter: this records that the script ran
+        // and reports the "started" line its caller parses. Anything the script
+        // itself would do on a real host (npm resolving a tree, a process
+        // surviving nohup) is exactly what the live run against a Mac is for,
+        // and pretending to simulate it here would be a fake that lies.
+        if (rest[0] === "-s") {
+          if ((options?.stdin ?? "").length === 0) return fail("sh -s: empty script on stdin");
+          return ok("started 4242\n");
+        }
         // Only the exact `umask 077; cat > "$1"` form the bootstrapper uses.
         const script = rest[1];
         if (script !== 'umask 077; cat > "$1"') return fail("sh: unsupported script");
