@@ -13,6 +13,33 @@ const retiredSecondName = characters(100, 112, 99, 111, 100, 101);
 const retiredPredecessorName = characters(99, 111, 100, 101, 116, 104, 105, 110, 103);
 const incorrectBundleDomain = characters(99, 111, 109, 46, 115, 121, 110, 97, 114, 97);
 
+const approvedPredecessorProjectName = `${retiredShortName.toUpperCase()}${characters(
+  67,
+  111,
+  100,
+  101,
+)}`;
+const approvedAttributionLines = new Map<string, ReadonlySet<string>>([
+  [
+    "LICENSE",
+    new Set([
+      `Copyright (c) 2026 ${retiredShortName.toUpperCase()} ${characters(
+        84,
+        111,
+        111,
+        108,
+        115,
+      )} Inc.`,
+    ]),
+  ],
+  [
+    "README.md",
+    new Set([
+      `Synara began as a clone of [${approvedPredecessorProjectName}](https://github.com/pingdotgg/${approvedPredecessorProjectName.toLowerCase()}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`,
+    ]),
+  ],
+]);
+
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const joinedWithOptionalSeparator = (left: string, right: string): string =>
   `${escapeRegExp(left)}[\\s._/@:-]*${escapeRegExp(right)}`;
@@ -76,6 +103,10 @@ function containsForbiddenIdentity(value: string): boolean {
   return forbiddenPatterns.some((pattern) => pattern.test(value));
 }
 
+function isApprovedAttribution(path: string, line: string): boolean {
+  return approvedAttributionLines.get(path)?.has(line) ?? false;
+}
+
 export function findBrandIdentityViolations(
   files: readonly BrandIdentityFile[],
 ): BrandIdentityViolation[] {
@@ -86,6 +117,7 @@ export function findBrandIdentityViolations(
     }
     for (const [index, line] of file.contents.split(/\r?\n/).entries()) {
       if (!containsForbiddenIdentity(line)) continue;
+      if (isApprovedAttribution(file.path, line)) continue;
       violations.push({ path: file.path, line: index + 1, text: line.trim() });
     }
   }

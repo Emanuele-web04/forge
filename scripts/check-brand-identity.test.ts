@@ -27,7 +27,7 @@ describe("brand identity guard", () => {
     ).toEqual([]);
   });
 
-  it("rejects retired identity in legal notices", () => {
+  it("permits the canonical license attribution without permitting copies", () => {
     const notice = `Copyright (c) 2026 ${characters(84, 51)} ${characters(
       84,
       111,
@@ -35,9 +35,19 @@ describe("brand identity guard", () => {
       108,
       115,
     )} Inc.`;
-    expect(findBrandIdentityViolations([{ path: "LICENSE", contents: notice }])).toHaveLength(1);
+    expect(findBrandIdentityViolations([{ path: "LICENSE", contents: notice }])).toEqual([]);
     expect(
       findBrandIdentityViolations([{ path: "docs/license-copy.md", contents: notice }]),
+    ).toHaveLength(1);
+  });
+
+  it("permits the canonical origins note without permitting predecessor branding elsewhere", () => {
+    const predecessorName = `${characters(84, 51)}${characters(67, 111, 100, 101)}`;
+    const origins = `Synara began as a clone of [${predecessorName}](https://github.com/pingdotgg/${predecessorName.toLowerCase()}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
+
+    expect(findBrandIdentityViolations([{ path: "README.md", contents: origins }])).toEqual([]);
+    expect(
+      findBrandIdentityViolations([{ path: "docs/origins.md", contents: origins }]),
     ).toHaveLength(1);
   });
 
