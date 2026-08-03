@@ -56,6 +56,82 @@ const THREAD_ID = `device-e2e-${Date.now()}`;
 const describeE2e = ENABLED ? describe : describe.skip;
 
 /** PNG magic: the eight bytes every PNG starts with. */
+/** Every label in an accessibility tree, in document order. */
+function labelsOf(node: unknown, out: string[] = []): string[] {
+  const record = node as { label?: unknown; children?: unknown } | null;
+  if (record && typeof record.label === "string") out.push(record.label);
+  if (record && Array.isArray(record.children)) {
+    for (const child of record.children) labelsOf(child, out);
+  }
+  return out;
+}
+
+/**
+ * A system permission alert's dismiss button, if one is on screen. Fresh
+ * simulator boots raise these over the app under test.
+ */
+function alertDismissButton(node: unknown): { readonly x: number; readonly y: number } | null {
+  const record = node as {
+    label?: unknown;
+    frame?: Record<string, number>;
+    children?: unknown;
+  } | null;
+  if (!record) return null;
+  const label = typeof record.label === "string" ? record.label : "";
+  if (/^(Don.t Allow|Allow Once|OK|Cancel|Not Now)$/u.test(label.trim())) {
+    const frame = record.frame;
+    return {
+      x: (frame?.x ?? 0) + (frame?.width ?? 0) / 2,
+      y: (frame?.y ?? 0) + (frame?.height ?? 0) / 2,
+    };
+  }
+  if (Array.isArray(record.children)) {
+    for (const child of record.children) {
+      const found = alertDismissButton(child);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * Centre of the first list row the accessibility tree reports: a labelled node
+ * with a row-shaped frame. Used instead of a fixed coordinate so the tap lands
+ * on something real regardless of which screen is showing.
+ */
+function firstTappableRow(node: unknown): { readonly x: number; readonly y: number } | null {
+  const record = node as {
+    label?: unknown;
+    frame?: Record<string, number>;
+    children?: unknown;
+  } | null;
+  if (!record) return null;
+  const frame = record.frame;
+  const x = frame?.x ?? 0;
+  const y = frame?.y ?? 0;
+  const width = frame?.width ?? 0;
+  const height = frame?.height ?? 0;
+  if (
+    typeof record.label === "string" &&
+    record.label.trim().length > 0 &&
+    height > 30 &&
+    height < 90 &&
+    width > 200 &&
+    y > 200
+  ) {
+    return { x: x + width / 2, y: y + height / 2 };
+  }
+  if (Array.isArray(record.children)) {
+    for (const child of record.children) {
+      const found = firstTappableRow(child);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+const SETTINGS_BUNDLE_ID = "com.apple.Preferences";
+
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 interface RpcSocket {
@@ -381,6 +457,119 @@ describeE2e("device pane end-to-end", () => {
     expect(frames.total).toBeGreaterThan(frames.codecConfig);
 
     await rpc.call(DEVICE_WS_METHODS.detach, { threadId: THREAD_ID });
+  }, 300_000);
+
+  it("drives the device through the MCP tools with no pane and no stream", async () => {
+    // The agent path: MCP tool handlers only, nothing attached, no frame
+    // stream. A tap here used to be acked while the screen never changed,
+    // because the helper's HID bridge failed silently and the RPC layer
+    // reported success anyway.
+    const backend = new IosSimulatorBackend({ platform: process.platform });
+    const manager = new DeviceManager({ backend });
+    const openPaneRequests: Array<{ readonly reason: string }> = [];
+    manager.onEvent((event) => {
+      if (event.type === "device.open-pane-requested") openPaneRequests.push(event);
+    });
+    const tools = new Map(
+      makeAgentGatewayDeviceTools({ manager }).map((tool) => [tool.definition.name, tool]),
+    );
+    const context = {
+      principal: {
+        kind: "provider-session",
+        sessionKey: "device-e2e",
+        threadId: THREAD_ID,
+        provider: "codex",
+        turnId: "device-e2e-turn",
+      },
+      callerThreadId: THREAD_ID,
+      callerSessionKey: "device-e2e",
+      callerProvider: "codex",
+      callerCapabilities: new Set(["device:control"]),
+      callerTurnId: "device-e2e-turn",
+      assertCallerTurnActive: () => Effect.void,
+      jsonRpcRequestId: 1,
+    } as unknown as ToolContext;
+
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const tool = tools.get(name);
+      if (!tool) throw new Error(`missing tool ${name}`);
+      const result = await Effect.runPromise(tool.handler(args, context));
+      expect(result.isError, `${name} must not error`).not.toBe(true);
+      return readToolJson(result) as Record<string, unknown>;
+    };
+
+    try {
+      const listed = (await call("device_list", { includeShutdown: true })) as {
+        devices: ReadonlyArray<DeviceDescriptor>;
+      };
+      const device =
+        listed.devices.find((entry) => entry.state === "booted") ??
+        listed.devices.find((entry) => entry.name.startsWith("iPhone"));
+      expect(device, "expected a simulator to drive").toBeDefined();
+      // An earlier case in this file shuts the device down, so re-check the
+      // live state rather than trusting the listing, and wait for the boot to
+      // finish before launching into it.
+      const booted = (await call("device_boot", { udid: device!.udid })) as { kind?: string };
+      expect(booted.kind, "expected the device to boot").toBe("booted");
+
+      // device_boot returns once CoreSimulator reports Booted, but SpringBoard
+      // keeps initializing after that and an app launched too early never
+      // paints. Wait for the home screen to serve a tree at all, then launch.
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const root = (
+          (await call("device_describe_ui", { udid: device!.udid })) as {
+            root: unknown;
+          }
+        ).root;
+        if (labelsOf(root).length > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      }
+
+      // Relaunch rather than launch: an earlier case in this file may have left
+      // Settings running, and simctl launch on a live process is a no-op that
+      // would leave whatever screen it was on.
+      await call("device_launch", { udid: device!.udid, bundleId: SETTINGS_BUNDLE_ID });
+      // A launch through MCP must also ask the pane to open.
+      expect(openPaneRequests.map((request) => request.reason)).toContain("agent-launch");
+      // Settings paints its root asynchronously, and a preceding reboot can
+      // leave SpringBoard still settling. Poll for a populated tree rather than
+      // sleeping a fixed time and comparing two shots of a launch placeholder.
+      let before: string[] = [];
+      let target: { readonly x: number; readonly y: number } | null = null;
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        const root = (
+          (await call("device_describe_ui", { udid: device!.udid })) as {
+            root: unknown;
+          }
+        ).root;
+        before = labelsOf(root);
+        // A freshly booted runtime raises system permission alerts ("Allow
+        // Wallet to use your location?") over whatever is running. Dismiss one
+        // and resample rather than comparing two shots of the alert.
+        const dismiss = alertDismissButton(root);
+        if (dismiss) {
+          await call("device_tap", { udid: device!.udid, x: dismiss.x, y: dismiss.y });
+          continue;
+        }
+        target = firstTappableRow(root);
+        if (before.length > 6 && target !== null) break;
+      }
+      expect(before.length, "expected a populated accessibility tree").toBeGreaterThan(6);
+      expect(target, "expected a tappable row in the accessibility tree").not.toBeNull();
+
+      // Tapping a row the tree actually reports, rather than a fixed point that
+      // may land on padding, is what makes this deterministic.
+      await call("device_tap", { udid: device!.udid, x: target!.x, y: target!.y });
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+
+      const after = labelsOf(
+        ((await call("device_describe_ui", { udid: device!.udid })) as { root: unknown }).root,
+      );
+      expect(after, "device_tap must actually change the screen").not.toEqual(before);
+    } finally {
+      await manager.dispose().catch(() => undefined);
+    }
   }, 300_000);
 
   it("serves device_list and device_screenshot through the agent gateway tools", async () => {
