@@ -184,6 +184,23 @@ struct SimulatorDevice {
   var state: Int { (handle.value(forKey: "state") as? NSNumber)?.intValue ?? -1 }
   var isBooted: Bool { state == Self.bootedState }
 
+  /// A marker that changes on every boot of this device.
+  ///
+  /// `lastBootedAt` updates each time CoreSimulator boots the device (it is
+  /// also persisted in device.plist), so a changed value means an attachment's
+  /// HID client and display descriptor belong to a dead boot even though the
+  /// udid still matches. `bootSessionUUID` exists as a selector but returns
+  /// nil on current CoreSimulator (26.x), so the timestamp is the reliable
+  /// identity. Nil when the property is unavailable; callers must treat nil
+  /// as "cannot verify", never as "still valid".
+  var bootIdentity: String? {
+    let selector = NSSelectorFromString("lastBootedAt")
+    guard handle.responds(to: selector),
+      let value = handle.perform(selector)?.takeUnretainedValue() as? NSDate
+    else { return nil }
+    return String(value.timeIntervalSinceReferenceDate)
+  }
+
   var runtimeIdentifier: String? {
     guard let runtime = handle.value(forKey: "runtime") as? NSObject else { return nil }
     return runtime.value(forKey: "identifier") as? String

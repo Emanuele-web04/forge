@@ -146,6 +146,11 @@ final class HelperSession {
   private(set) var accessibility: SynaraAXBridge?
   private var stream: FrameStream?
   private var displayDescriptor: NSObject?
+  /// The boot the current attachment belongs to. Compared against the device's
+  /// live boot identity before input so an externally rebooted simulator
+  /// (simctl, Simulator.app, an agent's shell) cannot silently swallow HID
+  /// events on a client bound to the previous boot.
+  private var attachedBootSession: String?
 
   init(developerDirectory: String, deviceSet: SimulatorDeviceSet) {
     self.developerDirectory = developerDirectory
@@ -188,6 +193,7 @@ final class HelperSession {
     self.displayDescriptor = descriptor
     self.hid = hidReady ? hidBridge : nil
     self.accessibility = axReady ? axBridge : nil
+    self.attachedBootSession = device.bootIdentity
 
     let pixelWidth = IOSurfaceGetWidth(surface)
     let pixelHeight = IOSurfaceGetHeight(surface)
@@ -224,10 +230,44 @@ final class HelperSession {
   }
 
   func requireHID() throws -> SynaraHIDBridge {
+    // Verify first: a stale boot session re-attaches and replaces `hid`, so
+    // the guard must read the post-verification client, not the old one.
+    try verifyBootSession()
     guard let hid else {
       throw RPCError(.notAttached, "HID input is unavailable for this simulator")
     }
     return hid
+  }
+
+  /// Fail input when the simulator has been rebooted since we attached.
+  ///
+  /// An external reboot (simctl, Simulator.app, an agent's shell) leaves this
+  /// process holding a SimDevice HID client for a boot that no longer exists.
+  /// Injecting into it does not error — events are accepted and vanish — so
+  /// the undelivered-counter honesty check never fires. The boot identity (lastBootedAt)
+  /// is the reliable tripwire: it changes on every boot. When it no longer
+  /// matches, attempt one transparent re-attach to the new boot; if that
+  /// fails, surface `notAttached` so the caller re-attaches explicitly.
+  /// A nil UUID on either side means we cannot verify — re-attach then too,
+  /// because guessing "still valid" is how this bug shipped the first time.
+  private func verifyBootSession() throws {
+    guard let device else {
+      throw RPCError(.notAttached, "not attached to a simulator; call 'attach' first")
+    }
+    let current = device.bootIdentity
+    if let expected = attachedBootSession, let current, current == expected { return }
+    logDiagnostic(
+      "boot session changed (attached \(attachedBootSession ?? "unknown"), "
+        + "now \(current ?? "unknown")); re-attaching")
+    let udid = device.udid
+    _ = stopStream()
+    do {
+      _ = try attach(udid: udid)
+    } catch {
+      throw RPCError(
+        .notAttached,
+        "simulator \(udid) was rebooted and re-attach failed: \(error.localizedDescription)")
+    }
   }
 
   func requireAccessibility() throws -> SynaraAXBridge {

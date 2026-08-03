@@ -85,6 +85,10 @@ enum SymbolManifest {
 
     // ── HID ──────────────────────────────────────────────────────────
     RuntimeSymbol(
+      name: "lastBootedAt", kind: .selector(onClass: "SimDevice"), capability: .hid,
+      purpose: "per-boot identity; detects an externally rebooted simulator whose "
+        + "HID client would otherwise swallow input silently"),
+    RuntimeSymbol(
       name: "IndigoHIDMessageForButton", kind: .simulatorKitFunction, capability: .hid,
       purpose: "builds hardware button events"),
     RuntimeSymbol(
