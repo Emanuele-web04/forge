@@ -487,8 +487,9 @@ describe("DeviceManager agent auto-attach", () => {
     await manager.surfaceDeviceForAgent(THREAD_A, DEVICE_B, "agent-tool");
 
     const opened = events.filter((event) => event.type === "device.open-pane-requested");
-    expect(opened.map((event) => (event.type === "device.open-pane-requested" ? event.udid : null)))
-      .toEqual([DEVICE_A, DEVICE_B]);
+    expect(
+      opened.map((event) => (event.type === "device.open-pane-requested" ? event.udid : null)),
+    ).toEqual([DEVICE_A, DEVICE_B]);
   });
 
   it("attaches each thread independently", async () => {

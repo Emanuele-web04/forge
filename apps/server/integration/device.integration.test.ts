@@ -671,8 +671,11 @@ describeE2e("device pane end-to-end", () => {
       // Settings running, and simctl launch on a live process is a no-op that
       // would leave whatever screen it was on.
       await call("device_launch", { udid: device!.udid, bundleId: SETTINGS_BUNDLE_ID });
-      // A launch through MCP must also ask the pane to open.
-      expect(openPaneRequests.map((request) => request.reason)).toContain("agent-launch");
+      // Driving the device through MCP must ask the pane to open. The polling
+      // describe above already surfaced it as "agent-tool", so this launch is
+      // correctly a no-op: one request for the turn, not one per tool call.
+      expect(openPaneRequests).toHaveLength(1);
+      expect(openPaneRequests[0]!.reason).toBe("agent-tool");
       // Settings paints its root asynchronously, and a preceding reboot can
       // leave SpringBoard still settling. Poll for a populated tree rather than
       // sleeping a fixed time and comparing two shots of a launch placeholder.
