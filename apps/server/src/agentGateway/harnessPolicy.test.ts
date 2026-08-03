@@ -114,7 +114,17 @@ describe("Synara harness policy", () => {
     // Interaction discipline: describe before tapping, verify after.
     assert.include(policy, "Before every tap, call device_describe_ui");
     assert.include(policy, "device points, not screenshot pixels");
-    assert.include(policy, "confirm the screen actually changed");
+
+    // Aiming at a control, not its row. A real run tapped the centre of the
+    // "Dark Appearance" row, which does nothing, before finding the switch.
+    assert.include(policy, "tap its activationPoint when the node has one");
+    assert.include(policy, "the row's frame centre is dead space");
+
+    // Reading and verifying toggle state from the tree instead of pixels. The
+    // same run took a screenshot purely to work out whether the switch moved.
+    assert.include(policy, "A toggle reports its state in the node's value");
+    assert.include(policy, "Never take a screenshot to check state");
+    assert.include(policy, "device_screenshot is for showing the user a result");
 
     // The traps that made the demo agent report success it never observed.
     assert.include(policy, "an unchanged tree after a tap means the tap missed");

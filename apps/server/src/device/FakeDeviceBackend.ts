@@ -259,15 +259,30 @@ export class FakeDeviceBackend implements DeviceBackend {
       capturedAt: new Date(this.now()).toISOString(),
       root: {
         role: "Application",
+        subrole: null,
         label: "Fake App",
         value: null,
         frame: { x: 0, y: 0, width: 393, height: 852 },
+        activationPoint: null,
         children: [
           {
             role: "Button",
+            subrole: null,
             label: "Continue",
             value: null,
             frame: { x: 24, y: 700, width: 345, height: 50 },
+            activationPoint: { x: 196, y: 725 },
+            children: [],
+          },
+          // A switch row: its frame centre is dead space, so only the
+          // activation point toggles it. Mirrors real UIKit settings rows.
+          {
+            role: "CheckBox",
+            subrole: "Switch",
+            label: "Fake Toggle",
+            value: "0",
+            frame: { x: 24, y: 200, width: 345, height: 44 },
+            activationPoint: { x: 340, y: 222 },
             children: [],
           },
         ],

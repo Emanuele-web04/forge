@@ -313,7 +313,7 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_tap",
         description:
-          "Tap a point on the device screen. Coordinates are device points, as reported by device_describe_ui frames, not screenshot pixels.",
+          "Tap a point on the device screen. Coordinates are device points from device_describe_ui, not screenshot pixels: use the target node's activationPoint when it has one, and its frame centre otherwise.",
         inputSchema: {
           type: "object",
           properties: {
@@ -473,7 +473,7 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_describe_ui",
         description:
-          "Read the device's accessibility tree: roles, labels, values, and frames in device points. This is the canonical way to locate something before device_tap.",
+          "Read the device's accessibility tree: roles, subroles, labels, values, frames, and activation points in device points. This is the canonical way to locate something before device_tap. Tap a node's activationPoint when it has one: a control merged into its row (switch, checkbox, stepper) only responds there, not at the row's frame centre. A toggle's value is \"1\" when on and \"0\" when off, so re-reading this tree is how you verify a toggle flipped.",
         inputSchema: {
           type: "object",
           properties: { udid: UDID_PROPERTY },

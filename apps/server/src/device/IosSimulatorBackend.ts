@@ -33,6 +33,7 @@ import type {
   DeviceScreenshotResult,
   DeviceSetupStep,
   DeviceUiNode,
+  DeviceUiPoint,
 } from "@synara/contracts";
 
 import {
@@ -766,8 +767,19 @@ export function normalizeUiNode(raw: unknown): DeviceUiNode {
     const value = node[key];
     return typeof value === "string" && value.length > 0 ? value : null;
   };
+  // Only a complete pair of finite coordinates is worth surfacing: half a point
+  // would aim taps at (0, y) instead of the control.
+  const readActivationPoint = (): DeviceUiPoint | null => {
+    const raw = node.activationPoint;
+    if (typeof raw !== "object" || raw === null) return null;
+    const { x, y } = raw as Record<string, unknown>;
+    if (typeof x !== "number" || !Number.isFinite(x)) return null;
+    if (typeof y !== "number" || !Number.isFinite(y)) return null;
+    return { x, y };
+  };
   return {
     role: typeof node.role === "string" ? node.role : "Unknown",
+    subrole: readText("subrole"),
     label: readText("label"),
     value: readText("value"),
     frame: {
@@ -776,6 +788,7 @@ export function normalizeUiNode(raw: unknown): DeviceUiNode {
       width: Math.max(0, readFrameValue("width")),
       height: Math.max(0, readFrameValue("height")),
     },
+    activationPoint: readActivationPoint(),
     children: Array.isArray(node.children) ? node.children.map(normalizeUiNode) : [],
   };
 }

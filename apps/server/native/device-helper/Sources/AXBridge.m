@@ -229,6 +229,27 @@ static id SynaraJSONValue(id value) {
     };
   }
 
+  // UIKit merges a settings row and the control it contains into ONE element
+  // whose frame spans the whole row, so the frame centre of a switch row is
+  // dead space that swallows taps. The activation point is the control's own
+  // hit point, and is the only coordinate that actually toggles it.
+  SEL activationSelector = NSSelectorFromString(@"accessibilityActivationPoint");
+  if ([element respondsToSelector:activationSelector]) {
+    NSPoint point = ((NSPoint (*)(id, SEL))objc_msgSend)(element, activationSelector);
+    if (!CGPointEqualToPoint(NSPointToCGPoint(point), CGPointZero)) {
+      node[@"activationPoint"] = @{@"x": @(point.x), @"y": @(point.y)};
+    }
+  }
+
+  // AXCheckBox covers both checkboxes and switches on iOS; the subrole is what
+  // distinguishes them, and an agent needs it to know "0"/"1" means off/on.
+  NSString *subrole = SynaraStringAttribute(element, @"accessibilitySubrole");
+  if ([subrole hasPrefix:@"AX"] && subrole.length > 2) {
+    node[@"subrole"] = [subrole substringFromIndex:2];
+  } else if (subrole.length > 0) {
+    node[@"subrole"] = subrole;
+  }
+
   node[@"enabled"] = @(SynaraBoolAttribute(element, @"isAccessibilityEnabled"));
 
   if (depth >= maxDepth) {

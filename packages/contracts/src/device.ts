@@ -428,19 +428,36 @@ export const DeviceUiFrame = Schema.Struct({
 });
 export type DeviceUiFrame = typeof DeviceUiFrame.Type;
 
+export const DeviceUiPoint = Schema.Struct({
+  x: Schema.Finite,
+  y: Schema.Finite,
+});
+export type DeviceUiPoint = typeof DeviceUiPoint.Type;
+
 export interface DeviceUiNode {
   readonly role: string;
+  /** Separates controls that share a role, e.g. `Switch` inside `CheckBox`. */
+  readonly subrole: string | null;
   readonly label: string | null;
   readonly value: string | null;
   readonly frame: DeviceUiFrame;
+  /**
+   * The control's own hit point in device points. UIKit merges a settings row
+   * and the control inside it into a single element whose frame spans the row,
+   * so for a switch the frame centre is dead space and only this point toggles
+   * it. Tap this instead of the frame centre whenever it is present.
+   */
+  readonly activationPoint: DeviceUiPoint | null;
   readonly children: readonly DeviceUiNode[];
 }
 
 export const DeviceUiNode: Schema.Schema<DeviceUiNode> = Schema.Struct({
   role: Schema.String.check(Schema.isMaxLength(128)),
+  subrole: Schema.NullOr(Schema.String.check(Schema.isMaxLength(128))),
   label: Schema.NullOr(Schema.String.check(Schema.isMaxLength(1_024))),
   value: Schema.NullOr(Schema.String.check(Schema.isMaxLength(1_024))),
   frame: DeviceUiFrame,
+  activationPoint: Schema.NullOr(DeviceUiPoint),
   children: Schema.Array(Schema.suspend((): Schema.Schema<DeviceUiNode> => DeviceUiNode)).check(
     Schema.isMaxLength(512),
   ),
