@@ -107,6 +107,12 @@ export function useDeviceVideoStream(input: {
     let decoder: VideoDecoder | null = null;
     let source: DeviceFrameSource | null = null;
     let disposed = false;
+    // The codec-config frame carries SPS/PPS only, with no slice data, so it
+    // cannot itself be decoded as a key chunk — WebCodecs rejects it with "a key
+    // frame is required after configure()". Hold the parameter sets and prepend
+    // them to the next keyframe, which is how in-band Annex-B parameter sets are
+    // meant to reach the decoder.
+    let pendingParameterSets: Uint8Array | null = null;
 
     setStatus({ kind: "connecting" });
 
@@ -132,6 +138,9 @@ export function useDeviceVideoStream(input: {
     };
 
     const teardownDecoder = () => {
+      // Parameter sets belong to the decoder being torn down; carrying them into
+      // the next one would prepend a stale SPS/PPS to its first keyframe.
+      pendingParameterSets = null;
       if (!decoder) return;
       const current = decoder;
       decoder = null;
@@ -185,19 +194,27 @@ export function useDeviceVideoStream(input: {
         return;
       }
       decoder = next;
-      // The parameter set itself is fed through so in-band SPS/PPS reaches the
-      // decoder alongside the first keyframe.
-      submit(frame, true);
+      // Carried, not decoded: the next keyframe is sent with these bytes in
+      // front of it so the decoder sees SPS/PPS and an IDR in one chunk.
+      pendingParameterSets = frame.payload.slice();
     };
 
     const submit = (frame: DeviceFrame, keyframe: boolean) => {
       if (!decoder || decoder.state !== "configured") return;
+      let data = frame.payload;
+      if (keyframe && pendingParameterSets) {
+        const combined = new Uint8Array(pendingParameterSets.byteLength + data.byteLength);
+        combined.set(pendingParameterSets, 0);
+        combined.set(data, pendingParameterSets.byteLength);
+        data = combined;
+        pendingParameterSets = null;
+      }
       try {
         decoder.decode(
           new EncodedVideoChunk({
             type: keyframe ? "key" : "delta",
             timestamp: Math.round(frame.header.timestampMs * 1000),
-            data: frame.payload,
+            data,
           }),
         );
       } catch (error) {
