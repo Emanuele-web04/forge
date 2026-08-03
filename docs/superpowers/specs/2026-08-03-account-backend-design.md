@@ -72,6 +72,7 @@ Email/password + GitHub, Google, Apple, Microsoft — all via BetterAuth, all in
 ## Flows
 
 **Desktop (headed, Electron):**
+
 - Email/password: form rendered fully in the desktop UI, calling BetterAuth
   endpoints directly against `SYNARA_ACCOUNT_URL`. No browser.
 - Social: system browser opens the provider flow; the web callback page
@@ -86,7 +87,7 @@ works), CLI polls and receives the device token automatically. No code pasting.
 **iOS (later):** same deep-link pattern as desktop; no loopback needed. V1
 builds nothing iOS-specific.
 
-*V1 implementation boundary:* the desktop flows above are the agreed design,
+_V1 implementation boundary:_ the desktop flows above are the agreed design,
 but V1 implements only the server side of them — the ceremony pages, the
 callback page's `synara://` redirect with one-time code, and the code-exchange
 endpoint. The in-app desktop form and deep-link handling land with the desktop
@@ -94,9 +95,10 @@ UI phase; until then, desktop users authenticate via `synara auth` (the CLI
 ships inside the desktop bundle).
 
 **Tokens:**
-- *Device token* — long-lived BetterAuth session per signed-in device,
+
+- _Device token_ — long-lived BetterAuth session per signed-in device,
   revocable individually. Authenticates user-level calls.
-- *Host token* — minted when a machine registers as an environment; hashed at
+- _Host token_ — minted when a machine registers as an environment; hashed at
   rest (SHA-256), shown once, one active token per host, rotated on re-link,
   independently revocable. Authenticates that machine's own record updates.
 
@@ -116,7 +118,7 @@ Synara tables:
 - `hosts`: `id` uuid pk · `userId` fk→user cascade · `environmentId` text,
   unique per user · `name` · `platform` (`darwin`|`linux`|`windows`) · `kind`
   (`local`|`ssh-managed`) · `endpoints` jsonb `[{url, transport:
-  'lan'|'tailscale'|'public'}]` · `appVersion` · `createdAt` · `lastSeenAt`.
+'lan'|'tailscale'|'public'}]` · `appVersion` · `createdAt` · `lastSeenAt`.
 - `host_tokens`: `id` · `hostId` fk cascade · `tokenHash` · `createdAt` ·
   `lastUsedAt` · `revokedAt` nullable.
 
@@ -124,16 +126,16 @@ Request/response contracts live in `packages/contracts` (schema-only).
 
 ## API Surface (`/api/v1`)
 
-| Endpoint | Auth | Purpose |
-|---|---|---|
-| `GET /me` | device | Signed-in identity (login, name, avatar, email) |
-| `GET /hosts` | device | List linked hosts with endpoints + lastSeenAt |
-| `POST /hosts` | device | Register this machine; returns record + one-time host token |
-| `PATCH /hosts/:id` | host | Update name/endpoints/version; bumps lastSeenAt |
-| `DELETE /hosts/:id` | device or host | Unlink (self-removal or owner removal) |
-| `GET /sessions` | device | List device sessions |
-| `DELETE /sessions/:id` | device | Revoke a device |
-| `GET /instance` | none | Version, enabled auth methods, signup mode, email availability |
+| Endpoint               | Auth           | Purpose                                                        |
+| ---------------------- | -------------- | -------------------------------------------------------------- |
+| `GET /me`              | device         | Signed-in identity (login, name, avatar, email)                |
+| `GET /hosts`           | device         | List linked hosts with endpoints + lastSeenAt                  |
+| `POST /hosts`          | device         | Register this machine; returns record + one-time host token    |
+| `PATCH /hosts/:id`     | host           | Update name/endpoints/version; bumps lastSeenAt                |
+| `DELETE /hosts/:id`    | device or host | Unlink (self-removal or owner removal)                         |
+| `GET /sessions`        | device         | List device sessions                                           |
+| `DELETE /sessions/:id` | device         | Revoke a device                                                |
+| `GET /instance`        | none           | Version, enabled auth methods, signup mode, email availability |
 
 Plus BetterAuth's mounted `/api/auth/*` (sign-in/up, social, device flow,
 polling) and `/api/auth/jwks`.

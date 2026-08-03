@@ -24,6 +24,7 @@
 ### Task 1: Scaffold apps/api workspace + docker-compose + config module
 
 **Files:**
+
 - Create: `apps/api/package.json`
 - Create: `apps/api/tsconfig.json`
 - Create: `apps/api/docker-compose.yml`
@@ -33,6 +34,7 @@
 - Modify: `.gitignore` (ensure `apps/api/.env` ignored; check existing patterns first)
 
 **Interfaces:**
+
 - Produces: `loadApiConfig(env: Record<string, string | undefined>): ApiConfig` where `ApiConfig = { databaseUrl: string; baseUrl: string; authSecret: string; port: number; providers: { github?: OAuthPair; google?: OAuthPair; apple?: OAuthPair; microsoft?: OAuthPair }; email?: { resendApiKey?: string; smtpUrl?: string; from?: string }; allowedSignupEmails?: string[] }` and `OAuthPair = { clientId: string; clientSecret: string }`. Throws `ApiConfigError` (plain Error subclass with `message`) listing every missing required var.
 - Produces: `enabledAuthMethods(config: ApiConfig): { emailPassword: true; social: Array<"github" | "google" | "apple" | "microsoft">; emailDelivery: boolean; signupRestricted: boolean }`
 
@@ -134,8 +136,10 @@ describe("enabledAuthMethods", () => {
   it("reports enabled socials, email delivery, and restriction", () => {
     const config = loadApiConfig({
       ...base,
-      GITHUB_CLIENT_ID: "i", GITHUB_CLIENT_SECRET: "s",
-      RESEND_API_KEY: "re_x", EMAIL_FROM: "noreply@example.com",
+      GITHUB_CLIENT_ID: "i",
+      GITHUB_CLIENT_SECRET: "s",
+      RESEND_API_KEY: "re_x",
+      EMAIL_FROM: "noreply@example.com",
       ACCOUNT_ALLOWED_SIGNUP_EMAILS: "a@x.com",
     });
     expect(enabledAuthMethods(config)).toEqual({
@@ -161,6 +165,7 @@ describe("enabledAuthMethods", () => {
 ### Task 2: Drizzle schema + migrations + db bootstrap
 
 **Files:**
+
 - Create: `apps/api/drizzle.config.ts`
 - Create: `apps/api/src/db/schema.ts`
 - Create: `apps/api/src/db/index.ts`
@@ -169,6 +174,7 @@ describe("enabledAuthMethods", () => {
 - Test: `apps/api/src/db/schema.test.ts`
 
 **Interfaces:**
+
 - Produces: `createDb(databaseUrl: string): { db: NodePgDatabase<typeof schema>; pool: pg.Pool }` from `src/db/index.ts`; `runMigrations(databaseUrl: string): Promise<void>` from `src/db/migrate.ts` (used on boot and by tests).
 - Produces: schema exports `user, session, account, verification, deviceCode, jwks` (BetterAuth tables) and `hosts, hostTokens` (Synara tables) with the exact columns below.
 
@@ -180,9 +186,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { deviceAuthorization, jwt } from "better-auth/plugins";
 import { createDb } from "./db";
 
-export const createAuth = (options: {
-  databaseUrl: string; baseUrl: string; secret: string;
-}) => {
+export const createAuth = (options: { databaseUrl: string; baseUrl: string; secret: string }) => {
   const { db } = createDb(options.databaseUrl);
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
@@ -209,7 +213,9 @@ export const hosts = pgTable(
   "hosts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
     environmentId: text("environment_id").notNull(),
     name: text("name").notNull(),
     platform: text("platform", { enum: ["darwin", "linux", "windows"] }).notNull(),
@@ -224,7 +230,9 @@ export const hosts = pgTable(
 
 export const hostTokens = pgTable("host_tokens", {
   id: uuid("id").primaryKey().defaultRandom(),
-  hostId: uuid("host_id").notNull().references(() => hosts.id, { onDelete: "cascade" }),
+  hostId: uuid("host_id")
+    .notNull()
+    .references(() => hosts.id, { onDelete: "cascade" }),
   tokenHash: text("token_hash").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
@@ -246,14 +254,30 @@ import { hosts, user } from "./schema";
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)("schema", () => {
-  beforeAll(async () => { await runMigrations(url!); });
+  beforeAll(async () => {
+    await runMigrations(url!);
+  });
   it("enforces unique (userId, environmentId)", async () => {
     const { db, pool } = createDb(url!);
-    const [u] = await db.insert(user).values({
-      id: crypto.randomUUID(), name: "t", email: `${crypto.randomUUID()}@x.com`,
-      emailVerified: false, createdAt: new Date(), updatedAt: new Date(),
-    }).returning();
-    const row = { userId: u.id, environmentId: "env-1", name: "MacBook", platform: "darwin" as const, kind: "local" as const, endpoints: [] };
+    const [u] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        name: "t",
+        email: `${crypto.randomUUID()}@x.com`,
+        emailVerified: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+    const row = {
+      userId: u.id,
+      environmentId: "env-1",
+      name: "MacBook",
+      platform: "darwin" as const,
+      kind: "local" as const,
+      endpoints: [],
+    };
     await db.insert(hosts).values(row);
     await expect(db.insert(hosts).values(row)).rejects.toThrow();
     await pool.end();
@@ -272,11 +296,13 @@ describe.skipIf(!url)("schema", () => {
 ### Task 3: Account contracts in packages/contracts
 
 **Files:**
+
 - Create: `packages/contracts/src/account.ts`
 - Modify: `packages/contracts/src/index.ts` (add `export * from "./account"`)
 - Test: `packages/contracts/src/account.test.ts`
 
 **Interfaces:**
+
 - Produces (effect Schema, matching existing contracts style — see `packages/contracts/src/environment.ts` for idiom; import `EnvironmentId`, `TrimmedNonEmptyString` from `./baseSchemas`):
   - `AccountHostTransport = Schema.Literals(["lan", "tailscale", "public"])`
   - `AccountHostEndpoint = Schema.Struct({ url: TrimmedNonEmptyString, transport: AccountHostTransport })`
@@ -305,10 +331,12 @@ describe.skipIf(!url)("schema", () => {
 ### Task 4: BetterAuth wiring — providers from config, allowlist hook, device flow, JWKS
 
 **Files:**
+
 - Modify: `apps/api/src/auth.ts` (full version replacing Task 2's stub)
 - Test: `apps/api/src/auth.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ApiConfig` (Task 1), `createDb` (Task 2).
 - Produces: `createAuth(config: ApiConfig, db: NodePgDatabase<typeof schema>): ReturnType<typeof betterAuth>` — social providers included only when configured; `databaseHooks.user.create.before` rejects sign-ups whose email is not in `allowedSignupEmails` (when set) by throwing `new APIError("FORBIDDEN", { message: "signup_restricted" })`; email delivery callbacks wired to Resend when configured, no-op logger otherwise; `basePath: "/api/auth"`; rate limiting enabled (BetterAuth built-in, default window) so device-code endpoints are covered; `trustedOrigins` includes `synara://` and `synara-dev://`.
 
@@ -336,17 +364,20 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 ### Task 5: Host registry routes (/api/v1)
 
 **Files:**
+
 - Create: `apps/api/src/routes/v1.ts`
 - Create: `apps/api/src/routes/hostAuth.ts`
 - Create: `apps/api/src/hostTokens.ts`
 - Test: `apps/api/src/routes/v1.test.ts`
 
 **Interfaces:**
+
 - Consumes: `createAuth` (Task 4), db + schema (Task 2), contracts (Task 3).
 - Produces: `createV1Routes(deps: { auth: Auth; db: Db; config: ApiConfig }): Hono` mounted at `/api/v1` implementing the spec's route table exactly. `src/hostTokens.ts` exports `mintHostToken(): { token: string; hash: string }` (token = `synhost_` + 32 random bytes base64url; hash = SHA-256 hex) and `hashHostToken(token: string): string`.
 - Error responses use `AccountErrorBody` shape: `{ error: <code>, message: <human text> }` with statuses: 401 unauthorized, 404 host_not_found, 403 token_revoked/signup_restricted, 409 environment_already_linked, 400 validation_failed.
 
 **Authorization rules (the heart of the task):**
+
 - Device-token auth: resolve via `auth.api.getSession({ headers })` (works for both cookie and bearer session tokens). Missing/invalid → 401.
 - Host-token auth (`hostAuth.ts`): `Authorization: Bearer synhost_...` → hash → look up non-revoked `host_tokens` row → attach `hostId`; update `lastUsedAt` (fire-and-forget). Revoked → 403 `token_revoked`; unknown → 401.
 - `PATCH /hosts/:id` accepts host token for its own `hostId` only.
@@ -354,6 +385,7 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 - Cross-user isolation: every device-token query filters `eq(hosts.userId, session.user.id)`.
 
 **Route behaviors:**
+
 - `GET /me` → `AccountMe` from session user.
 - `GET /hosts` → all rows for user, ISO timestamps.
 - `POST /hosts` → validate body against `RegisterHostRequest` (decode with effect Schema from contracts; on failure 400 `validation_failed` with the parse message). If `(userId, environmentId)` exists: update the row in place (name/platform/kind/endpoints/appVersion, bump lastSeenAt), revoke existing tokens (`revokedAt = now()`), mint fresh token → this is the re-link rotation. Else insert. Respond `RegisterHostResponse` with plaintext token (only time it's shown).
@@ -363,7 +395,7 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 - `DELETE /sessions/:id` → `auth.api.revokeSession`. 204.
 - `GET /instance` → `InstanceInfo` (version from package.json import, `enabledAuthMethods(config)` mapped in). No auth.
 
-- [ ] **Step 1: Write failing integration tests** — spin the whole Hono app (import `createApp` from Task 6 if done first is not possible: build a local test harness `new Hono().route("/api/v1", createV1Routes(deps))` plus `auth.handler` mounted; sign up two users via `auth.api`, get bearer tokens). Cover: 401 unauthenticated; register→list round-trip; re-register same environmentId rotates token (old host token 403s, new one works); PATCH with host token updates endpoints + lastSeenAt; PATCH with the *other host's* token → 401/403; user B cannot see or DELETE user A's host (list empty, delete 404); DELETE with device token removes host and its token; `/instance` reflects config without auth.
+- [ ] **Step 1: Write failing integration tests** — spin the whole Hono app (import `createApp` from Task 6 if done first is not possible: build a local test harness `new Hono().route("/api/v1", createV1Routes(deps))` plus `auth.handler` mounted; sign up two users via `auth.api`, get bearer tokens). Cover: 401 unauthenticated; register→list round-trip; re-register same environmentId rotates token (old host token 403s, new one works); PATCH with host token updates endpoints + lastSeenAt; PATCH with the _other host's_ token → 401/403; user B cannot see or DELETE user A's host (list empty, delete 404); DELETE with device token removes host and its token; `/instance` reflects config without auth.
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** `hostTokens.ts`, `hostAuth.ts`, `v1.ts`.
 - [ ] **Step 4: Run** → PASS.
@@ -374,11 +406,13 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 ### Task 6: App assembly + server entry + migrations on boot
 
 **Files:**
+
 - Create: `apps/api/src/app.ts`
 - Create: `apps/api/src/index.ts`
 - Test: `apps/api/src/app.test.ts`
 
 **Interfaces:**
+
 - Consumes: everything above.
 - Produces: `createApp(config: ApiConfig): { app: Hono; auth: Auth; pool: pg.Pool }` — mounts `auth.handler` on `/api/auth/*`, v1 routes on `/api/v1`, and static UI serving (Task 7 fills the directory; until then a fallback `200 text/html` placeholder for `/`). `src/index.ts`: `loadApiConfig(process.env)` → `runMigrations` → `serve({ fetch: app.fetch, port })` (`@hono/node-server`) with graceful shutdown on SIGTERM (`pool.end()`).
 
@@ -392,15 +426,18 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 ### Task 7: Auth ceremony UI (Vite + React + Tailwind)
 
 **Files:**
+
 - Create: `apps/api/ui/` — `index.html`, `vite.config.ts`, `src/main.tsx`, `src/App.tsx`, `src/pages/SignIn.tsx`, `src/pages/SignUp.tsx`, `src/pages/Device.tsx`, `src/pages/ResetPassword.tsx`, `src/pages/VerifyEmail.tsx`, `src/pages/Callback.tsx`, `src/styles.css`
 - Modify: `apps/api/package.json` (ui deps: `react`, `react-dom`, `react-router-dom`, `tailwindcss` + `@tailwindcss/vite`, `better-auth` client, `@vitejs/plugin-react`; scripts: `dev:ui: vite dev ui`, build includes `vite build ui`)
 - Modify: `apps/api/src/app.ts` (serve `ui/dist` via `serveStatic` from `@hono/node-server/serve-static`, SPA fallback to `index.html` for non-`/api` paths)
 
 **Interfaces:**
+
 - Consumes: `/api/auth/*` (BetterAuth client `createAuthClient({ baseURL: "" })` — same origin), `/api/v1/instance`.
 - Produces: routed pages `/login`, `/signup`, `/device`, `/reset-password`, `/verify-email`, `/callback`.
 
 **Page behaviors (implement exactly):**
+
 - `/login`: fetch `/api/v1/instance`; render email/password form (only that + enabled social buttons). Social buttons call `authClient.signIn.social({ provider, callbackURL: "/callback" + preserved query })`. On success with `?redirect=device&user_code=X` → navigate to `/device?user_code=X`.
 - `/signup`: mirror of login for email/password sign-up; show `signupRestricted` notice when instance says so.
 - `/device`: reads `user_code` from query (editable input when absent); requires session (redirect to `/login?redirect=device&user_code=…` when signed out); calls the deviceAuthorization approve endpoint via authClient; success screen: "Device connected — you can close this tab."
@@ -419,10 +456,12 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 ### Task 8: Account client in packages/shared
 
 **Files:**
+
 - Create: `packages/shared/src/account.ts` (add matching subpath export in `packages/shared/package.json` — follow the existing `./git` export pattern)
 - Test: `packages/shared/src/account.test.ts`
 
 **Interfaces:**
+
 - Consumes: contracts (Task 3).
 - Produces (plain fetch wrapper, no Effect requirement — match shared's existing style by reading `packages/shared/src/git.ts` first):
   - `createAccountClient(options: { baseUrl: string; fetch?: typeof fetch }): AccountClient`
@@ -438,6 +477,7 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 ### Task 9: `synara auth` + `synara status` CLI commands
 
 **Files:**
+
 - Create: `apps/server/src/accountAuth.ts` (credential store + flows)
 - Modify: `apps/server/src/main.ts` (register `auth` and `status` subcommands next to the `mcp` command group — follow its `Command.make` + `Command.withSubcommands` pattern exactly)
 - Modify: `apps/server/src/config.ts` or nearest env plumbing: read `SYNARA_ACCOUNT_URL`
@@ -445,6 +485,7 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 - Test: `apps/server/src/accountAuth.test.ts`
 
 **Interfaces:**
+
 - Consumes: `createAccountClient` (Task 8), the server's environment identity (`apps/server/src/environment/Layers/ServerEnvironment.ts` persists `environmentId` at `serverConfig.environmentIdPath` — reuse that file/value, do not invent a new ID).
 - Produces in `accountAuth.ts`:
   - `readAccountCredentials(baseDir): Promise<AccountCredentials | undefined>` / `writeAccountCredentials(baseDir, creds)` — JSON file `account-credentials.json` in the Synara home dir, written with `mode: 0o600` (match `ServerSecretStore.ts` style); shape `{ accountUrl: string; deviceToken: string; hostToken?: string; hostId?: string }`.
@@ -463,11 +504,13 @@ Use unique emails per run (`${crypto.randomUUID()}@x.com`). For the device-flow 
 ### Task 10: Startup best-effort host refresh + docs + final verification
 
 **Files:**
+
 - Modify: `apps/server/src/effectServer.ts` or the startup path in `main.ts` (choose the spot where the server has its config + environment id ready): fire ONE best-effort `updateHost` (refresh endpoints, bump lastSeenAt) when credentials exist — `void`ed promise with `.catch(() => {})`, never blocks startup, never retries.
 - Create: `apps/api/README.md` — self-hosting guide: compose up, env vars, OAuth app registration pointers (incl. Apple/App Store note from the spec), Railway deploy notes (build command, PlanetScale `DATABASE_URL`), explicit "no secrets in repo; instance off by default" statements.
 - Test: `apps/server/src/accountAuth.test.ts` (extend: refresh helper called once with current endpoints; silent on network error)
 
 **Interfaces:**
+
 - Consumes: `readAccountCredentials`, `createAccountClient`.
 - Produces: `refreshHostRegistration(options): Promise<void>` in `accountAuth.ts` (exported; called from startup).
 
