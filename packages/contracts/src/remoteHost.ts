@@ -8,6 +8,7 @@
 import { Schema } from "effect";
 
 import {
+  EnvironmentId,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -333,3 +334,71 @@ export const RemoteHostProbeRpcResult = Schema.Struct({
   connectivity: RemoteHostConnectivityStatus,
 });
 export type RemoteHostProbeRpcResult = typeof RemoteHostProbeRpcResult.Type;
+
+/**
+ * How far the supervisor has got in making a saved host into a reachable
+ * environment.
+ *
+ * These are the phases of ONE pipeline (probe → bootstrap → tunnel → publish),
+ * not a duplicate of `RemoteHostConnectivityState`. Connectivity answers "can
+ * ssh reach this box"; this answers "is there a Synara on it the browser can
+ * talk to". A host can be `connected` and still `bootstrapping`.
+ *
+ * `unsupported` is deliberately terminal and distinct from `failed`: a darwin
+ * remote is not a transient error and must never be retried in a loop. It
+ * carries the capability's own reason so the surface can say what to do.
+ */
+export const RemoteEnvironmentPhase = Schema.Literals([
+  /** No work started yet, or the host was just added. */
+  "idle",
+  /** Checking the host answers before touching it. */
+  "probing",
+  /** Installing or upgrading the remote server. */
+  "bootstrapping",
+  /** Server installed; opening the forward and verifying the handshake. */
+  "connecting",
+  /** Published to the proxy. The browser may connect. */
+  "ready",
+  /** A step failed. `retryAtMs` is set when another attempt is scheduled. */
+  "failed",
+  /** Structurally impossible on this host; never retried. */
+  "unsupported",
+]);
+export type RemoteEnvironmentPhase = typeof RemoteEnvironmentPhase.Type;
+
+/**
+ * One host's supervision status.
+ *
+ * `environmentId` is present ONLY from the point the bootstrap handshake proved
+ * which environment the host actually provisioned. It is never synthesised: a
+ * client that invents one would register a WebSocket for an environment the
+ * proxy has no entry for.
+ */
+export const RemoteEnvironmentStatus = Schema.Struct({
+  hostId: RemoteHostId,
+  phase: RemoteEnvironmentPhase,
+  /** Set once the handshake reported it; absent before that, always. */
+  environmentId: Schema.optional(EnvironmentId),
+  /**
+   * The bootstrap step currently running, as the RAW step name.
+   *
+   * Raw on purpose: the wire carries an identifier and the CLIENT owns the
+   * copy, so a step this server has and the client has no approved string for
+   * renders nothing rather than leaking `installing-supervisor` into the UI.
+   */
+  bootstrapStep: Schema.optional(TrimmedNonEmptyString),
+  /** Human-readable failure summary. Never contains key material. */
+  lastError: Schema.optional(Schema.String),
+  /** Epoch millis of the next scheduled attempt, when backing off. */
+  retryAtMs: Schema.optional(NonNegativeInt),
+  /** Why this host can never work, for `unsupported` only. */
+  unsupportedReason: Schema.optional(Schema.String),
+  updatedAt: IsoDateTime,
+});
+export type RemoteEnvironmentStatus = typeof RemoteEnvironmentStatus.Type;
+
+/** Payload of the per-host supervision stream. One entry per saved host. */
+export const RemoteEnvironmentStatusesPayload = Schema.Struct({
+  statuses: Schema.Array(RemoteEnvironmentStatus),
+});
+export type RemoteEnvironmentStatusesPayload = typeof RemoteEnvironmentStatusesPayload.Type;

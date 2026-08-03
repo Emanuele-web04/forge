@@ -32,6 +32,7 @@ import {
 } from "./externalMcp";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
+  RemoteEnvironmentStatusesPayload,
   RemoteHostFingerprintInput,
   RemoteHostFingerprintResult,
   RemoteHostProbeInput,
@@ -881,6 +882,20 @@ export const WsSubscribeServerSettingsRpc = Rpc.make(WS_METHODS.subscribeServerS
   stream: true,
 });
 
+/**
+ * Per-host supervision status. Streamed rather than polled so the add dialog's
+ * live stages arrive as the bootstrap emits them.
+ */
+export const WsSubscribeRemoteEnvironmentStatusesRpc = Rpc.make(
+  WS_METHODS.subscribeRemoteEnvironmentStatuses,
+  {
+    payload: Schema.Struct({}),
+    success: RemoteEnvironmentStatusesPayload,
+    error: WsRpcError,
+    stream: true,
+  },
+);
+
 export const WsProviderGetComposerCapabilitiesRpc = Rpc.make(
   WS_METHODS.providerGetComposerCapabilities,
   {
@@ -1106,6 +1121,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsSubscribeServerConfigRpc,
   WsSubscribeServerProviderStatusesRpc,
   WsSubscribeServerSettingsRpc,
+  WsSubscribeRemoteEnvironmentStatusesRpc,
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderCompactThreadRpc,
   WsProviderListCommandsRpc,
