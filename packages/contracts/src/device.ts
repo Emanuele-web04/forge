@@ -20,6 +20,8 @@ export const DEVICE_WS_METHODS = {
   launchApp: "device.launchApp",
   openUrl: "device.openUrl",
   screenshot: "device.screenshot",
+  startRecording: "device.startRecording",
+  stopRecording: "device.stopRecording",
   describeUi: "device.describeUi",
   scrollToElement: "device.scrollToElement",
   subscribeEvents: "device.subscribeEvents",
@@ -428,6 +430,34 @@ export const DeviceScreenshotResult = Schema.Struct({
   capturedAt: IsoDateTime,
 });
 export type DeviceScreenshotResult = typeof DeviceScreenshotResult.Type;
+
+export const DeviceStartRecordingInput = DeviceTargetInput;
+export type DeviceStartRecordingInput = typeof DeviceStartRecordingInput.Type;
+
+export const DeviceStartRecordingResult = Schema.Struct({
+  udid: DeviceUdid,
+  /** Absolute so the pane can reveal the eventual file without reconstructing server paths. */
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(DEVICE_PATH_MAX_LENGTH)),
+  /** Server time keeps elapsed recording UI independent of request latency and client clocks. */
+  startedAt: IsoDateTime,
+});
+export type DeviceStartRecordingResult = typeof DeviceStartRecordingResult.Type;
+
+export const DeviceStopRecordingInput = DeviceTargetInput;
+export type DeviceStopRecordingInput = typeof DeviceStopRecordingInput.Type;
+
+export const DeviceStopRecordingResult = Schema.Struct({
+  udid: DeviceUdid,
+  /** Repeated because stopping can finish after the pane that started the recording is gone. */
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(DEVICE_PATH_MAX_LENGTH)),
+  /** Zero remains representable when simctl had to be killed before its first frame was flushed. */
+  sizeBytes: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  /** Measured on the server so RPC transit time is not counted as recorded footage. */
+  durationMs: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  /** A stable completion time lets callers order recordings completed after reconnects. */
+  stoppedAt: IsoDateTime,
+});
+export type DeviceStopRecordingResult = typeof DeviceStopRecordingResult.Type;
 
 export const DeviceDescribeUiInput = DeviceTargetInput;
 export type DeviceDescribeUiInput = typeof DeviceDescribeUiInput.Type;

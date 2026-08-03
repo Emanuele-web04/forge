@@ -34,6 +34,8 @@ import {
   type DeviceListResult,
   type DeviceOpenPaneReason,
   type DeviceScreenshotResult,
+  type DeviceStartRecordingResult,
+  type DeviceStopRecordingResult,
   type DeviceUiNode,
   type ThreadDeviceState,
 } from "@synara/contracts";
@@ -98,6 +100,7 @@ export class DeviceManager {
   private readonly synaraBooted = new Set<string>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
   private readonly streaming = new Set<string>();
+  private readonly recording = new Set<string>();
   private readonly listeners = new Set<DeviceEventListener>();
   private disposed = false;
 
@@ -192,6 +195,7 @@ export class DeviceManager {
   }
 
   async shutdown(udid: string): Promise<void> {
+    await this.stopRecordingIfActive(udid).catch(() => undefined);
     await this.stopStream(udid);
     await this.backend.shutdown(udid);
     this.synaraBooted.delete(udid);
@@ -430,6 +434,23 @@ export class DeviceManager {
     return await this.backend.screenshot(udid);
   }
 
+  async startRecording(udid: string): Promise<DeviceStartRecordingResult> {
+    const alreadyTracked = this.recording.has(udid);
+    this.recording.add(udid);
+    try {
+      return await this.backend.startRecording(udid);
+    } catch (error) {
+      if (!alreadyTracked) this.recording.delete(udid);
+      throw error;
+    }
+  }
+
+  async stopRecording(udid: string): Promise<DeviceStopRecordingResult> {
+    const result = await this.backend.stopRecording(udid);
+    this.recording.delete(udid);
+    return result;
+  }
+
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
     return await this.backend.describeUi(udid);
   }
@@ -507,8 +528,10 @@ export class DeviceManager {
     this.idleTimers.clear();
     // Snapshotted: both loops mutate the set they are walking.
     const streaming = Array.from(this.streaming);
+    const recording = Array.from(this.recording);
     const booted = Array.from(this.synaraBooted);
     for (const udid of streaming) await this.stopStream(udid).catch(() => undefined);
+    for (const udid of recording) await this.stopRecordingIfActive(udid).catch(() => undefined);
     for (const udid of booted) {
       await this.backend.shutdown(udid).catch(() => undefined);
       this.synaraBooted.delete(udid);
@@ -612,6 +635,7 @@ export class DeviceManager {
    * idle countdown if Synara booted it.
    */
   private async releaseDevice(udid: string): Promise<void> {
+    await this.stopRecordingIfActive(udid).catch(() => undefined);
     if (this.isAttachedAnywhere(udid)) return;
     if (this.transport.deviceSubscriberCount(udid) === 0) {
       await this.stopStream(udid).catch(() => undefined);
@@ -626,6 +650,11 @@ export class DeviceManager {
     // shuts these devices down anyway.
     timer.unref?.();
     this.idleTimers.set(udid, timer);
+  }
+
+  private async stopRecordingIfActive(udid: string): Promise<void> {
+    if (!this.recording.has(udid)) return;
+    await this.stopRecording(udid);
   }
 
   private async shutdownIfStillIdle(udid: string): Promise<void> {

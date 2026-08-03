@@ -2,7 +2,7 @@
  * WebSocket handlers for the device RPC group.
  *
  * Kept out of `wsRpc.ts` because the device engine is optional and
- * platform-gated: this module answers all seventeen methods whether or not a
+ * platform-gated: this module answers all twenty methods whether or not a
  * backend exists, so the RPC group stays exhaustively handled everywhere and
  * off-macOS clients get one clear refusal instead of a transport error.
  *
@@ -29,6 +29,10 @@ import {
   type DevicePressButtonInput,
   type DeviceScreenshotInput,
   type DeviceScreenshotResult,
+  type DeviceStartRecordingInput,
+  type DeviceStartRecordingResult,
+  type DeviceStopRecordingInput,
+  type DeviceStopRecordingResult,
   type DeviceScrollToElementInput,
   type DeviceScrollToElementResult,
   type DeviceShutdownInput,
@@ -118,6 +122,12 @@ export interface WsDeviceHandlers {
   readonly [DEVICE_WS_METHODS.screenshot]: (
     input: DeviceScreenshotInput,
   ) => Effect.Effect<DeviceScreenshotResult, WsRpcError>;
+  readonly [DEVICE_WS_METHODS.startRecording]: (
+    input: DeviceStartRecordingInput,
+  ) => Effect.Effect<DeviceStartRecordingResult, WsRpcError>;
+  readonly [DEVICE_WS_METHODS.stopRecording]: (
+    input: DeviceStopRecordingInput,
+  ) => Effect.Effect<DeviceStopRecordingResult, WsRpcError>;
   readonly [DEVICE_WS_METHODS.scrollToElement]: (
     input: DeviceScrollToElementInput,
   ) => Effect.Effect<DeviceScrollToElementResult, WsRpcError>;
@@ -127,7 +137,7 @@ export interface WsDeviceHandlers {
 }
 
 /**
- * Build the sixteen request handlers. The seventeenth method
+ * Build the nineteen request handlers. The twentieth method
  * (`subscribeEvents`) is a stream and is wired in `wsRpc.ts` where the stream
  * admission guard lives.
  */
@@ -163,6 +173,8 @@ export function makeWsDeviceHandlers(
       [DEVICE_WS_METHODS.launchApp]: () => unsupported(),
       [DEVICE_WS_METHODS.openUrl]: () => unsupported(),
       [DEVICE_WS_METHODS.screenshot]: () => unsupported(),
+      [DEVICE_WS_METHODS.startRecording]: () => unsupported(),
+      [DEVICE_WS_METHODS.stopRecording]: () => unsupported(),
       [DEVICE_WS_METHODS.describeUi]: () => unsupported(),
       [DEVICE_WS_METHODS.scrollToElement]: () => unsupported(),
     };
@@ -238,6 +250,10 @@ export function makeWsDeviceHandlers(
       attempt(() => manager.openUrl(input.udid, input.url), "Failed to open URL on device"),
     [DEVICE_WS_METHODS.screenshot]: (input) =>
       attempt(() => manager.screenshot(input.udid), "Failed to capture device screenshot"),
+    [DEVICE_WS_METHODS.startRecording]: (input) =>
+      attempt(() => manager.startRecording(input.udid), "Failed to start device recording"),
+    [DEVICE_WS_METHODS.stopRecording]: (input) =>
+      attempt(() => manager.stopRecording(input.udid), "Failed to stop device recording"),
     [DEVICE_WS_METHODS.describeUi]: (input) =>
       attempt(() => manager.describeUi(input.udid), "Failed to read device accessibility tree"),
     [DEVICE_WS_METHODS.scrollToElement]: (input) =>

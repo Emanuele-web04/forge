@@ -3,8 +3,9 @@
  *
  * Split by capability:
  *
- * - Discovery, boot/shutdown, install/launch/openurl, and screenshots go
- *   through `xcrun simctl`, which is public, stable, and needs no permissions.
+ * - Discovery, boot/shutdown, install/launch/openurl, screenshots, and screen
+ *   recordings go through `xcrun simctl`, which is public, stable, and needs
+ *   no permissions.
  * - Input injection, the accessibility tree, and the video stream need private
  *   CoreSimulator/SimulatorKit APIs, so they go through the native helper
  *   (see `helperClient.ts`), compiled on demand against the user's Xcode.
@@ -15,9 +16,10 @@
  *
  * @module device/IosSimulatorBackend
  */
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { homedir } from "node:os";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
+import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 
 import type {
@@ -32,6 +34,8 @@ import type {
   DeviceLaunchAppResult,
   DeviceScreenshotResult,
   DeviceSetupStep,
+  DeviceStartRecordingResult,
+  DeviceStopRecordingResult,
   DeviceUiNode,
   DeviceUiPoint,
 } from "@synara/contracts";
@@ -61,10 +65,19 @@ import { HELPER_METHODS, HelperClient, type DeviceHelperError } from "./helperCl
 
 const SIMCTL_TIMEOUT_MS = 30_000;
 const BOOT_TIMEOUT_MS = 120_000;
+const RECORDING_START_TIMEOUT_MS = 10_000;
+const RECORDING_STOP_GRACE_MS = 15_000;
+const RECORDING_KILL_GRACE_MS = 1_000;
+const MAX_RECORDING_STDERR_LENGTH = 64 * 1024;
 /** Screenshots are PNG on stdout-adjacent temp files; cap what we will read. */
 const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
 
 export const DEVICE_HELPER_CACHE_ROOT = path.join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS);
+
+export type SpawnRecordingProcess = (
+  command: string,
+  args: readonly string[],
+) => ChildProcessWithoutNullStreams;
 
 export interface IosSimulatorBackendOptions {
   /** Overridden in tests; defaults to `process.platform`. */
@@ -74,6 +87,18 @@ export interface IosSimulatorBackendOptions {
   readonly helperCacheRoot?: string;
   readonly run?: typeof runProcess;
   readonly makeHelperClient?: (binaryPath: string) => HelperClient;
+  /** Keeps the long-lived simctl process controllable in tests. */
+  readonly spawnProcess?: SpawnRecordingProcess;
+  /** Tests isolate output without changing the user's normal save location. */
+  readonly recordingDirectory?: string;
+  readonly now?: () => number;
+}
+
+interface ActiveRecording {
+  readonly child: ChildProcessWithoutNullStreams;
+  readonly path: string;
+  startedAt: string;
+  stderr: string;
 }
 
 interface SimctlDevice {
@@ -149,6 +174,26 @@ export function hasBootableIosRuntime(devices: readonly DeviceDescriptor[]): boo
   return devices.length > 0;
 }
 
+export async function selectRecordingDirectory(
+  candidates: readonly string[],
+  fallback: string,
+): Promise<string> {
+  for (const directory of candidates) {
+    const usable = await stat(directory).then(
+      async (info) => {
+        if (!info.isDirectory()) return false;
+        return await access(directory, fsConstants.W_OK).then(
+          () => true,
+          () => false,
+        );
+      },
+      () => false,
+    );
+    if (usable) return directory;
+  }
+  return fallback;
+}
+
 export class IosSimulatorBackend implements DeviceBackend {
   readonly platform = "ios-simulator" as const;
 
@@ -157,6 +202,9 @@ export class IosSimulatorBackend implements DeviceBackend {
   private readonly helperCacheRoot: string;
   private readonly run: typeof runProcess;
   private readonly makeHelperClient: (binaryPath: string) => HelperClient;
+  private readonly spawnProcess: SpawnRecordingProcess;
+  private readonly recordingDirectoryOverride: string | undefined;
+  private readonly now: () => number;
 
   /** Geometry learned from helper attachments, keyed by udid. */
   private readonly deviceGeometry = new Map<string, DeviceGeometry>();
@@ -165,6 +213,11 @@ export class IosSimulatorBackend implements DeviceBackend {
   private helperCompilation: Promise<string> | null = null;
   /** Keyed on the binary so a rebuilt helper is re-probed rather than assumed. */
   private helperProbe: { binaryPath: string; result: HelperProbeResult } | null = null;
+  private readonly recordings = new Map<string, ActiveRecording>();
+  private readonly recordingStarts = new Map<string, Promise<DeviceStartRecordingResult>>();
+  private readonly recordingStops = new Map<string, Promise<DeviceStopRecordingResult>>();
+  private readonly reservedRecordingPaths = new Set<string>();
+  private disposed = false;
 
   constructor(options: IosSimulatorBackendOptions = {}) {
     this.osPlatform = options.platform ?? process.platform;
@@ -175,6 +228,11 @@ export class IosSimulatorBackend implements DeviceBackend {
     this.run = options.run ?? runProcess;
     this.makeHelperClient =
       options.makeHelperClient ?? ((binaryPath) => new HelperClient({ binaryPath }));
+    this.spawnProcess =
+      options.spawnProcess ??
+      ((command, args) => spawn(command, [...args], { stdio: "pipe", windowsHide: true }));
+    this.recordingDirectoryOverride = options.recordingDirectory;
+    this.now = options.now ?? Date.now;
   }
 
   // ── Availability ───────────────────────────────────────────────────
@@ -314,6 +372,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async shutdown(udid: string): Promise<void> {
+    await this.stopRecordingForLifecycle(udid);
     await this.detachStream(udid);
     // The helper outlives the simulator, and its attachment holds a display
     // descriptor bound to this boot. Dropping it here means the next attach
@@ -376,12 +435,47 @@ export class IosSimulatorBackend implements DeviceBackend {
     }
   }
 
+  async startRecording(udid: string): Promise<DeviceStartRecordingResult> {
+    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
+    if (this.recordings.has(udid) || this.recordingStarts.has(udid)) {
+      throw new DeviceBackendError(`Device ${udid} is already recording`);
+    }
+
+    const starting = this.startRecordingProcess(udid);
+    this.recordingStarts.set(udid, starting);
+    try {
+      return await starting;
+    } finally {
+      if (this.recordingStarts.get(udid) === starting) this.recordingStarts.delete(udid);
+    }
+  }
+
+  async stopRecording(udid: string): Promise<DeviceStopRecordingResult> {
+    const stopping = this.recordingStops.get(udid);
+    if (stopping) return await stopping;
+
+    const starting = this.recordingStarts.get(udid);
+    if (starting) await starting;
+    const resumedStopping = this.recordingStops.get(udid);
+    if (resumedStopping) return await resumedStopping;
+    const recording = this.recordings.get(udid);
+    if (!recording) throw new DeviceBackendError(`Device ${udid} is not recording`);
+
+    const pending = this.finishRecording(udid, recording);
+    this.recordingStops.set(udid, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.recordingStops.get(udid) === pending) this.recordingStops.delete(udid);
+    }
+  }
+
   // ── Helper-backed capabilities ─────────────────────────────────────
   //
   // Each operation asserts only the capability it actually needs, so a symbol
-  // Apple moved in one area cannot disable the others. Screenshots are absent
-  // from this list on purpose: they run on `simctl io`, so they survive even a
-  // completely broken framebuffer path.
+  // Apple moved in one area cannot disable the others. Screenshots and screen
+  // recordings are absent from this list on purpose: both run on public
+  // `simctl io`, so they survive even a completely broken framebuffer path.
 
   /**
    * Send one HID injection, rebinding the helper's input client if the first
@@ -497,9 +591,203 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    const active = Array.from(this.recordings.values());
+    await Promise.all(active.map((recording) => this.interruptRecording(recording)));
+    await Promise.allSettled(this.recordingStarts.values());
+    this.recordings.clear();
+    this.reservedRecordingPaths.clear();
     const helper = this.helper;
     this.helper = null;
     await helper?.dispose();
+  }
+
+  private async startRecordingProcess(udid: string): Promise<DeviceStartRecordingResult> {
+    if (this.osPlatform !== "darwin") {
+      throw new DeviceBackendError("iOS simulators are only available on macOS");
+    }
+    const devices = await this.listDevicesUnchecked();
+    const deviceName = devices.find((device) => device.udid === udid)?.name ?? udid;
+    const requestedAt = new Date(this.now()).toISOString();
+    const outputPath = await this.nextRecordingPath(deviceName, requestedAt);
+    if (this.disposed) {
+      this.reservedRecordingPaths.delete(outputPath);
+      throw new DeviceBackendError("The iOS simulator backend is disposed");
+    }
+
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = this.spawnProcess("xcrun", [
+        "simctl",
+        "io",
+        udid,
+        "recordVideo",
+        "--codec=h264",
+        outputPath,
+      ]);
+    } catch (cause) {
+      this.reservedRecordingPaths.delete(outputPath);
+      throw new DeviceBackendError(`Could not start simulator recording: ${errorText(cause)}`, {
+        cause,
+      });
+    }
+
+    const recording: ActiveRecording = {
+      child,
+      path: outputPath,
+      startedAt: requestedAt,
+      stderr: "",
+    };
+    this.recordings.set(udid, recording);
+    child.stdout.resume();
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      recording.stderr = `${recording.stderr}${chunk.toString()}`.slice(
+        -MAX_RECORDING_STDERR_LENGTH,
+      );
+    });
+    child.once("close", () => {
+      if (this.recordings.get(udid) === recording) this.recordings.delete(udid);
+      this.reservedRecordingPaths.delete(outputPath);
+    });
+
+    try {
+      await this.waitForRecordingStart(recording);
+      if (processHasExited(child)) {
+        throw new DeviceBackendError("simctl recordVideo exited as recording began");
+      }
+      recording.startedAt = new Date(this.now()).toISOString();
+      return { udid, path: outputPath, startedAt: recording.startedAt };
+    } catch (cause) {
+      await this.interruptRecording(recording);
+      if (this.recordings.get(udid) === recording) this.recordings.delete(udid);
+      this.reservedRecordingPaths.delete(outputPath);
+      await rm(outputPath, { force: true }).catch(() => undefined);
+      if (cause instanceof DeviceBackendError) throw cause;
+      throw new DeviceBackendError(`Could not start simulator recording: ${errorText(cause)}`, {
+        cause,
+      });
+    }
+  }
+
+  private async finishRecording(
+    udid: string,
+    recording: ActiveRecording,
+  ): Promise<DeviceStopRecordingResult> {
+    await this.interruptRecording(recording);
+    if (this.recordings.get(udid) === recording) this.recordings.delete(udid);
+    this.reservedRecordingPaths.delete(recording.path);
+
+    const info = await stat(recording.path).catch((cause: unknown) => {
+      throw new DeviceBackendError(
+        `Simulator recording finished without a readable file at ${recording.path}`,
+        { cause },
+      );
+    });
+    const stoppedAtMs = this.now();
+    return {
+      udid,
+      path: recording.path,
+      sizeBytes: info.size,
+      durationMs: Math.max(0, Math.floor(stoppedAtMs - Date.parse(recording.startedAt))),
+      stoppedAt: new Date(stoppedAtMs).toISOString(),
+    };
+  }
+
+  private waitForRecordingStart(recording: ActiveRecording): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (result: { readonly error?: DeviceBackendError }): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        recording.child.stderr.off("data", onStderr);
+        recording.child.off("error", onError);
+        recording.child.off("close", onClose);
+        if (result.error) reject(result.error);
+        else resolve();
+      };
+      const onStderr = (): void => {
+        if (/Recording started/iu.test(recording.stderr)) finish({});
+      };
+      const onError = (cause: Error): void => {
+        finish({
+          error: new DeviceBackendError(
+            `Could not start simulator recording: ${errorText(cause)}`,
+            { cause },
+          ),
+        });
+      };
+      const onClose = (): void => {
+        const detail = recording.stderr.trim();
+        finish({
+          error: new DeviceBackendError(
+            `simctl recordVideo exited before recording started${detail ? `: ${detail}` : ""}`,
+          ),
+        });
+      };
+      const timer = setTimeout(() => {
+        finish({
+          error: new DeviceBackendError(
+            `simctl recordVideo did not start within ${RECORDING_START_TIMEOUT_MS}ms`,
+            { retryable: true },
+          ),
+        });
+      }, RECORDING_START_TIMEOUT_MS);
+      timer.unref?.();
+      recording.child.stderr.on("data", onStderr);
+      recording.child.once("error", onError);
+      recording.child.once("close", onClose);
+      if (processHasExited(recording.child)) onClose();
+    });
+  }
+
+  private async interruptRecording(recording: ActiveRecording): Promise<void> {
+    if (processHasExited(recording.child)) return;
+    const gracefulExit = waitForProcessExit(recording.child, RECORDING_STOP_GRACE_MS);
+    recording.child.kill("SIGINT");
+    if (await gracefulExit) return;
+
+    const forcedExit = waitForProcessExit(recording.child, RECORDING_KILL_GRACE_MS);
+    recording.child.kill("SIGKILL");
+    await forcedExit;
+  }
+
+  private async stopRecordingForLifecycle(udid: string): Promise<void> {
+    const starting = this.recordingStarts.get(udid);
+    if (starting) await starting.catch(() => undefined);
+    if (!this.recordings.has(udid)) return;
+    await this.stopRecording(udid).catch(() => undefined);
+  }
+
+  private async nextRecordingPath(deviceName: string, startedAt: string): Promise<string> {
+    const directory = await this.recordingDirectory();
+    const slug = slugDeviceName(deviceName);
+    const timestamp = startedAt.replace(/[:.]/gu, "-");
+    const base = `simulator-${slug}-${timestamp}`;
+    for (let suffix = 1; suffix < Number.MAX_SAFE_INTEGER; suffix += 1) {
+      const candidate = path.join(directory, `${base}${suffix === 1 ? "" : `-${suffix}`}.mp4`);
+      if (this.reservedRecordingPaths.has(candidate)) continue;
+      const exists = await stat(candidate).then(
+        () => true,
+        (cause: unknown) => {
+          if (isMissingPathError(cause)) return false;
+          throw new DeviceBackendError(`Could not inspect recording path ${candidate}`, { cause });
+        },
+      );
+      if (exists) continue;
+      this.reservedRecordingPaths.add(candidate);
+      return candidate;
+    }
+    throw new DeviceBackendError(`Could not choose a unique recording path in ${directory}`);
+  }
+
+  private async recordingDirectory(): Promise<string> {
+    if (this.recordingDirectoryOverride) return path.resolve(this.recordingDirectoryOverride);
+    return await selectRecordingDirectory(
+      [path.join(homedir(), "Desktop"), path.join(homedir(), "Downloads")],
+      tmpdir(),
+    );
   }
 
   // ── simctl plumbing ────────────────────────────────────────────────
@@ -718,6 +1006,48 @@ export class IosSimulatorBackend implements DeviceBackend {
     }
     return key;
   }
+}
+
+function slugDeviceName(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, "-")
+      .replace(/^-+|-+$/gu, "") || "device"
+  );
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+function processHasExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForProcessExit(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (processHasExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("close", onClose);
+      resolve(exited);
+    };
+    const onClose = (): void => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    timer.unref?.();
+    child.once("close", onClose);
+  });
 }
 
 /**

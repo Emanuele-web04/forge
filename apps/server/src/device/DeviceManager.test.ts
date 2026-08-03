@@ -424,6 +424,79 @@ describe("DeviceManager lifecycle and agent activity", () => {
   });
 });
 
+describe("DeviceManager screen recording", () => {
+  it("returns the same output path when a recording is started and stopped", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    const started = await manager.startRecording(DEVICE_A);
+    const stopped = await manager.stopRecording(DEVICE_A);
+
+    expect(stopped.path).toBe(started.path);
+    expect(stopped.udid).toBe(DEVICE_A);
+    expect(backend.callsOfKind("startRecording")).toHaveLength(1);
+    expect(backend.callsOfKind("stopRecording")).toHaveLength(1);
+  });
+
+  it("refuses to start a second recording for the same device", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+    await manager.startRecording(DEVICE_A);
+
+    await expect(manager.startRecording(DEVICE_A)).rejects.toThrow(/already recording/iu);
+    await manager.detach(THREAD_A);
+
+    expect(backend.callsOfKind("startRecording")).toHaveLength(2);
+    expect(backend.callsOfKind("stopRecording")).toHaveLength(1);
+  });
+
+  it("stops a recording when the last thread detaches from its device", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+    await manager.startRecording(DEVICE_A);
+
+    await manager.detach(THREAD_A);
+
+    expect(backend.callsOfKind("stopRecording").map((call) => call.udid)).toEqual([DEVICE_A]);
+  });
+
+  it("stops a recording on detach while another thread keeps the stream attached", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+    await manager.attach(THREAD_B, DEVICE_A);
+    await manager.startRecording(DEVICE_A);
+
+    await manager.detach(THREAD_A);
+
+    expect(backend.callsOfKind("stopRecording").map((call) => call.udid)).toEqual([DEVICE_A]);
+    expect(backend.hasStream(DEVICE_A)).toBe(true);
+  });
+
+  it("stops a recording before shutting down its device", async () => {
+    const { backend, manager } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.startRecording(DEVICE_A);
+
+    await manager.shutdown(DEVICE_A);
+
+    expect(backend.calls.slice(-2).map((call) => call.kind)).toEqual(["stopRecording", "shutdown"]);
+  });
+
+  it("stops recordings on user-owned devices when the manager disposes", async () => {
+    const { backend, manager } = makeManager();
+    backend.bootExternally(DEVICE_A);
+    await manager.startRecording(DEVICE_A);
+
+    await manager.dispose();
+
+    expect(backend.callsOfKind("stopRecording").map((call) => call.udid)).toEqual([DEVICE_A]);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+  });
+});
+
 describe("DeviceManager agent auto-attach", () => {
   it("attaches an unattached thread to the device the agent is using", async () => {
     const { backend, manager } = makeManager();

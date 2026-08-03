@@ -764,6 +764,10 @@ export function createWsNativeApi(): NativeApi {
       launchApp: (input) => transport.request(DEVICE_WS_METHODS.launchApp, input),
       openUrl: (input) => transport.request(DEVICE_WS_METHODS.openUrl, input),
       screenshot: (input) => transport.request(DEVICE_WS_METHODS.screenshot, input),
+      startRecording: (input) =>
+        transport.request(DEVICE_WS_METHODS.startRecording, input, { timeoutMs: null }),
+      stopRecording: (input) =>
+        transport.request(DEVICE_WS_METHODS.stopRecording, input, { timeoutMs: null }),
       describeUi: (input) => transport.request(DEVICE_WS_METHODS.describeUi, input),
       // A scroll loop runs several swipe/describe round-trips on the device.
       scrollToElement: (input) =>

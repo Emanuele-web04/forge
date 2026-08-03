@@ -7,6 +7,9 @@
  *
  * @module device/FakeDeviceBackend
  */
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+
 import type {
   DeviceAvailability,
   DeviceDescribeUiResult,
@@ -16,6 +19,8 @@ import type {
   DeviceInstallAppResult,
   DeviceLaunchAppResult,
   DeviceScreenshotResult,
+  DeviceStartRecordingResult,
+  DeviceStopRecordingResult,
 } from "@synara/contracts";
 
 import {
@@ -47,6 +52,8 @@ export type FakeDeviceCall =
   | { readonly kind: "keyEvent"; readonly udid: string; readonly event: DeviceKeyEvent }
   | { readonly kind: "pressButton"; readonly udid: string; readonly button: DeviceHardwareButton }
   | { readonly kind: "screenshot"; readonly udid: string }
+  | { readonly kind: "startRecording"; readonly udid: string }
+  | { readonly kind: "stopRecording"; readonly udid: string }
   | { readonly kind: "describeUi"; readonly udid: string }
   | { readonly kind: "attachStream"; readonly udid: string }
   | { readonly kind: "detachStream"; readonly udid: string };
@@ -102,6 +109,10 @@ export class FakeDeviceBackend implements DeviceBackend {
   private readonly sequences = new Map<string, number>();
   private readonly installedBundles = new Map<string, string>();
   private readonly attachedGeometry = new Set<string>();
+  private readonly recordings = new Map<
+    string,
+    { readonly path: string; readonly startedAt: string }
+  >();
 
   constructor(options: FakeDeviceBackendOptions = {}) {
     this.availabilityValue = options.availability ?? { kind: "available" };
@@ -272,6 +283,42 @@ export class FakeDeviceBackend implements DeviceBackend {
     };
   }
 
+  async startRecording(udid: string): Promise<DeviceStartRecordingResult> {
+    this.record({ kind: "startRecording", udid });
+    const device = this.requireBooted(udid);
+    if (this.recordings.has(udid)) {
+      throw new DeviceBackendError(`Device ${udid} is already recording`);
+    }
+    const startedAt = new Date(this.now()).toISOString();
+    const slug =
+      device.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gu, "-")
+        .replace(/^-+|-+$/gu, "") || "device";
+    const timestamp = startedAt.replace(/[:.]/gu, "-");
+    const recording = {
+      path: path.join(tmpdir(), `simulator-${slug}-${timestamp}.mp4`),
+      startedAt,
+    };
+    this.recordings.set(udid, recording);
+    return { udid, ...recording };
+  }
+
+  async stopRecording(udid: string): Promise<DeviceStopRecordingResult> {
+    this.record({ kind: "stopRecording", udid });
+    const recording = this.recordings.get(udid);
+    if (!recording) throw new DeviceBackendError(`Device ${udid} is not recording`);
+    this.recordings.delete(udid);
+    const stoppedAtMs = this.now();
+    return {
+      udid,
+      path: recording.path,
+      sizeBytes: 1_024,
+      durationMs: Math.max(0, stoppedAtMs - Date.parse(recording.startedAt)),
+      stoppedAt: new Date(stoppedAtMs).toISOString(),
+    };
+  }
+
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
     this.record({ kind: "describeUi", udid });
     this.requireBooted(udid);
@@ -346,6 +393,9 @@ export class FakeDeviceBackend implements DeviceBackend {
   }
 
   async dispose(): Promise<void> {
+    for (const udid of Array.from(this.recordings.keys())) {
+      await this.stopRecording(udid).catch(() => undefined);
+    }
     this.disposed = true;
     this.listeners.clear();
   }

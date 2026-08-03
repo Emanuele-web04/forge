@@ -22,7 +22,7 @@ describe("device WebSocket handlers", () => {
     const { handlers } = await setup();
 
     // The stream method is wired in wsRpc where the admission guard lives; the
-    // other sixteen must all be present or the handler map is not exhaustive.
+    // other nineteen must all be present or the handler map is not exhaustive.
     const expected = Object.values(DEVICE_WS_METHODS).filter(
       (method) => method !== DEVICE_WS_METHODS.subscribeEvents,
     );
@@ -52,6 +52,21 @@ describe("device WebSocket handlers", () => {
     expect(backend.callsOfKind("pressButton")[0]).toMatchObject({ button: "home" });
   });
 
+  it("delegates recording start and stop to the device manager", async () => {
+    const { backend, handlers } = await setup();
+
+    const started = await Effect.runPromise(
+      handlers[DEVICE_WS_METHODS.startRecording]({ udid: DEVICE }),
+    );
+    const stopped = await Effect.runPromise(
+      handlers[DEVICE_WS_METHODS.stopRecording]({ udid: DEVICE }),
+    );
+
+    expect(stopped.path).toBe(started.path);
+    expect(backend.callsOfKind("startRecording")).toHaveLength(1);
+    expect(backend.callsOfKind("stopRecording")).toHaveLength(1);
+  });
+
   it("turns a backend failure into an RPC error carrying its message", async () => {
     const { handlers } = await setup();
 
@@ -74,6 +89,27 @@ describe("device WebSocket handlers without a backend", () => {
     expect(Exit.isFailure(exit)).toBe(true);
     if (!Exit.isFailure(exit)) return;
     expect(JSON.stringify(exit.cause)).toContain("requires macOS");
+  });
+
+  it("exposes and refuses both recording methods", async () => {
+    const handlers = makeWsDeviceHandlers(undefined);
+
+    expect(typeof handlers[DEVICE_WS_METHODS.startRecording]).toBe("function");
+    expect(typeof handlers[DEVICE_WS_METHODS.stopRecording]).toBe("function");
+    const startExit = await Effect.runPromiseExit(
+      handlers[DEVICE_WS_METHODS.startRecording]({ udid: DEVICE }),
+    );
+    const stopExit = await Effect.runPromiseExit(
+      handlers[DEVICE_WS_METHODS.stopRecording]({ udid: DEVICE }),
+    );
+    expect(Exit.isFailure(startExit)).toBe(true);
+    if (Exit.isFailure(startExit)) {
+      expect(JSON.stringify(startExit.cause)).toContain("requires macOS");
+    }
+    expect(Exit.isFailure(stopExit)).toBe(true);
+    if (Exit.isFailure(stopExit)) {
+      expect(JSON.stringify(stopExit.cause)).toContain("requires macOS");
+    }
   });
 
   it("still answers getThreadState so the pane can render its unsupported state", async () => {

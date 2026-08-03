@@ -23,6 +23,8 @@ import type {
   DeviceLaunchAppResult,
   DevicePlatform,
   DeviceScreenshotResult,
+  DeviceStartRecordingResult,
+  DeviceStopRecordingResult,
 } from "@synara/contracts";
 
 /**
@@ -111,6 +113,8 @@ export interface DeviceBackend {
   pressButton(udid: string, button: DeviceHardwareButton): Promise<void>;
 
   screenshot(udid: string): Promise<DeviceScreenshotResult>;
+  startRecording(udid: string): Promise<DeviceStartRecordingResult>;
+  stopRecording(udid: string): Promise<DeviceStopRecordingResult>;
   describeUi(udid: string): Promise<DeviceDescribeUiResult>;
 
   /**

@@ -140,6 +140,10 @@ import type {
   DevicePressButtonInput,
   DeviceScreenshotInput,
   DeviceScreenshotResult,
+  DeviceStartRecordingInput,
+  DeviceStartRecordingResult,
+  DeviceStopRecordingInput,
+  DeviceStopRecordingResult,
   DeviceShutdownInput,
   DeviceSwipeInput,
   DeviceTapInput,
@@ -811,6 +815,8 @@ export interface NativeApi {
     launchApp: (input: DeviceLaunchAppInput) => Promise<DeviceLaunchAppResult>;
     openUrl: (input: DeviceOpenUrlInput) => Promise<void>;
     screenshot: (input: DeviceScreenshotInput) => Promise<DeviceScreenshotResult>;
+    startRecording: (input: DeviceStartRecordingInput) => Promise<DeviceStartRecordingResult>;
+    stopRecording: (input: DeviceStopRecordingInput) => Promise<DeviceStopRecordingResult>;
     describeUi: (input: DeviceDescribeUiInput) => Promise<DeviceDescribeUiResult>;
     scrollToElement: (input: DeviceScrollToElementInput) => Promise<DeviceScrollToElementResult>;
     onEvent: (callback: (event: DeviceEvent) => void) => () => void;

@@ -50,6 +50,10 @@ import {
   DevicePressButtonInput,
   DeviceScreenshotInput,
   DeviceScreenshotResult,
+  DeviceStartRecordingInput,
+  DeviceStartRecordingResult,
+  DeviceStopRecordingInput,
+  DeviceStopRecordingResult,
   DeviceShutdownInput,
   DeviceSwipeInput,
   DeviceScrollToElementInput,
@@ -546,6 +550,18 @@ export const WsDeviceScreenshotRpc = Rpc.make(DEVICE_WS_METHODS.screenshot, {
   error: WsRpcError,
 });
 
+export const WsDeviceStartRecordingRpc = Rpc.make(DEVICE_WS_METHODS.startRecording, {
+  payload: DeviceStartRecordingInput,
+  success: DeviceStartRecordingResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceStopRecordingRpc = Rpc.make(DEVICE_WS_METHODS.stopRecording, {
+  payload: DeviceStopRecordingInput,
+  success: DeviceStopRecordingResult,
+  error: WsRpcError,
+});
+
 export const WsDeviceDescribeUiRpc = Rpc.make(DEVICE_WS_METHODS.describeUi, {
   payload: DeviceDescribeUiInput,
   success: DeviceDescribeUiResult,
@@ -581,6 +597,8 @@ export const WsDeviceRpcGroup = RpcGroup.make(
   WsDeviceLaunchAppRpc,
   WsDeviceOpenUrlRpc,
   WsDeviceScreenshotRpc,
+  WsDeviceStartRecordingRpc,
+  WsDeviceStopRecordingRpc,
   WsDeviceDescribeUiRpc,
   WsDeviceScrollToElementRpc,
   WsSubscribeDeviceEventsRpc,
