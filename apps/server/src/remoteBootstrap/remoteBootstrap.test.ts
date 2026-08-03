@@ -773,6 +773,28 @@ describe("successful upgrade records a rollback target", () => {
   });
 });
 
+describe("first-install rollback on a host without a supervisor", () => {
+  // Observed live against a container with no systemd: the supervisor install
+  // fails at `systemctl`, and the rollback's stop step then failed the SAME
+  // way. With the stop running before the rm — or its failure propagating —
+  // `current` was left pointing at a release that never passed its handshake,
+  // and a later readRemoteReleaseId believes that link. The invariant is the
+  // link, not the stop.
+  it("removes current even when the supervisor's stop command also fails", async () => {
+    const host = createFakeRemoteHost();
+    // stubExit, not failOn: failOn is one-shot, and the point is that EVERY
+    // systemctl fails — the install's and then the rollback's, exactly like a
+    // host with no systemd at all. exit 127 is what a missing binary returns.
+    host.stubExit((argv) => argv[0] === "systemctl", {
+      exitCode: 127,
+      stdout: "",
+      stderr: "sh: systemctl: command not found",
+    });
+    await expect(bootstrapRemoteServer(bootstrapInput(host))).rejects.toThrow(/systemctl/);
+    expect(host.readLink(layout.currentLink)).toBeNull();
+  });
+});
+
 describe("uninstall", () => {
   it("leaves no files, units, or processes behind", async () => {
     const host = createFakeRemoteHost();

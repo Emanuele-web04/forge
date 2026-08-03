@@ -474,8 +474,20 @@ export async function rollbackRemoteServer(input: {
   if (previousReleaseId === null) {
     // Nothing to roll back to: stop the service and leave `current` dangling
     // rather than pointing at a release that failed its handshake.
-    await runPlanCommands(connection, supervisor.stopArgv);
+    //
+    // The link is removed FIRST, and the stop is best-effort. The failure that
+    // triggered this rollback is often the same one that breaks the stop — a
+    // host without systemd fails the install at `systemctl` and then failed
+    // the stop the same way, aborting before the rm and leaving `current`
+    // pointing at the unverified release. Observed live against a container
+    // without systemd; the invariant is the link, not the stop. And if the
+    // install died before `start`, there is nothing running to stop anyway.
     await connection.exec(["rm", "-f", "--", layout.currentLink]);
+    try {
+      await runPlanCommands(connection, supervisor.stopArgv);
+    } catch {
+      // A failed stop must not turn a completed rollback into a thrown one.
+    }
     return;
   }
   // The restored release authenticates with the credential it was installed
