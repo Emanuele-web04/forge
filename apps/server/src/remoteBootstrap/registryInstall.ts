@@ -8,7 +8,7 @@
 //
 // Why this exists, and how it differs from the two designs it borrows from
 // -----------------------------------------------------------------------
-// Prior art (T3 Code) runs `npx <pkg>@latest` on the remote. That is the right
+// Prior art in this space runs `npx <pkg>@latest` on the remote. That is the right
 // call about DEPENDENCIES: npm resolves them on the destination, so there is no
 // per-platform artifact matrix and native bindings are simply installed for the
 // host that will run them. Uploading a tarball meant shipping node_modules per
