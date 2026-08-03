@@ -35,6 +35,7 @@ import {
 } from "./DevicePanel.logic";
 import { useDeviceVideoStream } from "./device/useDeviceVideoStream";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -370,15 +371,16 @@ export default function DevicePanel(props: {
 
   const header = (
     <div className="flex h-full w-full min-w-0 items-center gap-1.5">
-      <MenuTrigger
-        render={
-          <Button variant="ghost" size="sm" className="min-w-0 gap-1" disabled={busy}>
-            <span className="truncate">{attachedDevice?.name ?? "Choose a simulator"}</span>
-            <ChevronDownIcon />
-          </Button>
-        }
-      >
-        <Menu>
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button variant="ghost" size="sm" className="min-w-0 gap-1" disabled={busy}>
+              <span className="truncate">{attachedDevice?.name ?? "Choose a simulator"}</span>
+              <ChevronDownIcon />
+            </Button>
+          }
+        />
+        <ComposerPickerMenuPopup align="start">
           {pickerEntries.length === 0 ? (
             <MenuItem disabled>No simulators found</MenuItem>
           ) : (
@@ -405,8 +407,8 @@ export default function DevicePanel(props: {
               <MenuItem onClick={shutdownAttached}>Shut down {attachedDevice.name}</MenuItem>
             </>
           ) : null}
-        </Menu>
-      </MenuTrigger>
+        </ComposerPickerMenuPopup>
+      </Menu>
 
       {threadState?.agentActive ? (
         <Badge variant="info" size="sm" className="shrink-0">
