@@ -3,6 +3,7 @@ import { Effect } from "effect";
 
 import type { ProviderKind } from "@synara/contracts";
 
+import { DeviceBackendError } from "../device/DeviceBackend.ts";
 import { DeviceManager } from "../device/DeviceManager.ts";
 import { FakeDeviceBackend } from "../device/FakeDeviceBackend.ts";
 import { makeAgentGatewayDeviceTools } from "./deviceTools.ts";
@@ -233,5 +234,62 @@ describe("agent gateway device tools without an approval gate", () => {
     const result = await call("device_tap", { udid: DEVICE, x: 5, y: 5 }, "codex");
 
     expect(result.isError).toBeUndefined();
+  });
+});
+
+describe("agent gateway device tools auto-attach", () => {
+  it("attaches the caller thread to the device it launches on", async () => {
+    const { manager, structured } = await setup();
+
+    await structured("device_launch", { udid: DEVICE, bundleId: "com.example.Demo" });
+
+    // The open-pane request is only useful if the pane has a device to stream.
+    expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
+  });
+
+  it("attaches on install too", async () => {
+    const { manager, structured } = await setup();
+
+    await structured("device_install", { udid: DEVICE, appPath: "/tmp/Demo.app" });
+
+    expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
+  });
+
+  it("attaches on boot without opening the pane", async () => {
+    const { manager, structured } = await setup();
+    const opened: unknown[] = [];
+    manager.onEvent((event) => {
+      if (event.type === "device.open-pane-requested") opened.push(event);
+    });
+
+    await structured("device_boot", { udid: "FAKE-0002" });
+
+    // An agent that only boots and drives Settings still needs something to
+    // watch, but the pane opens for install/launch, when there is an app.
+    expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
+    expect(opened).toHaveLength(0);
+  });
+
+  it("leaves a thread already watching another device alone", async () => {
+    const { backend, manager, structured } = await setup();
+    await backend.boot("FAKE-0002");
+    await manager.attach(THREAD, "FAKE-0002");
+
+    await structured("device_launch", { udid: DEVICE, bundleId: "com.example.Demo" });
+
+    expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
+  });
+
+  it("still returns the launch result when attaching cannot stream", async () => {
+    const { backend, structured } = await setup();
+    backend.failNext("attachStream", new DeviceBackendError("helper is not built"));
+
+    const result = (await structured("device_launch", {
+      udid: DEVICE,
+      bundleId: "com.example.Demo",
+    })) as { bundleId?: string };
+
+    // A stream failure must not turn a successful launch into a tool error.
+    expect(result.bundleId).toBe("com.example.Demo");
   });
 });

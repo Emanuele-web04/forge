@@ -406,3 +406,59 @@ describe("DeviceManager lifecycle and agent activity", () => {
     expect(result.availability).toEqual({ kind: "unsupported-platform", platform: "linux" });
   });
 });
+
+describe("DeviceManager agent auto-attach", () => {
+  it("attaches an unattached thread to the device the agent is using", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
+
+    // Without this the pane auto-opens on the empty picker and the user
+    // watches a black phone while the agent works.
+    const state = await manager.getThreadState(THREAD_A);
+    expect(state.attachedDeviceUdid).toBe(DEVICE_A);
+    expect(backend.hasStream(DEVICE_A)).toBe(true);
+  });
+
+  it("never steals a thread already attached to a different device", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await backend.boot(DEVICE_B);
+    await manager.attach(THREAD_A, DEVICE_B);
+
+    await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
+
+    // The existing attachment reflects a deliberate user choice; the agent's
+    // device stays reachable through the picker.
+    expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_B);
+    expect(backend.hasStream(DEVICE_A)).toBe(false);
+  });
+
+  it("is idempotent when the thread already watches that device", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+    const before = (await manager.getThreadState(THREAD_A)).version;
+
+    await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
+    await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
+
+    // Repeated launches must not churn the stream or bump the version, which
+    // the pane uses to drop stale pushes.
+    expect((await manager.getThreadState(THREAD_A)).version).toBe(before);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(1);
+  });
+
+  it("attaches each thread independently", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await backend.boot(DEVICE_B);
+
+    await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
+    await manager.ensureThreadAttached(THREAD_B, DEVICE_B);
+
+    expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_A);
+    expect((await manager.getThreadState(THREAD_B)).attachedDeviceUdid).toBe(DEVICE_B);
+  });
+});

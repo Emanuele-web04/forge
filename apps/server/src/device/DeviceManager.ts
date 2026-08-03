@@ -206,6 +206,28 @@ export class DeviceManager {
     return await this.publish(threadId);
   }
 
+  /**
+   * Point a thread at the device its agent is driving, unless the user already
+   * pointed it somewhere else.
+   *
+   * Auto-opening the pane is only useful if there is something to watch: before
+   * this, an agent's launch opened a pane still asking the user to pick a
+   * simulator, so they stared at a black phone while the agent worked. The
+   * attachment is what makes `ThreadDeviceState.attachedDeviceUdid` non-null,
+   * and the pane's existing logic starts the stream from there.
+   *
+   * Never steals: a thread already attached to a different device keeps it,
+   * because that attachment reflects a deliberate choice by the user and the
+   * agent's device is still reachable through the picker. Idempotent, so
+   * repeated launches on the same device cost nothing.
+   */
+  async ensureThreadAttached(threadId: string, udid: string): Promise<void> {
+    const attached = this.threadState(threadId).attachedDeviceUdid;
+    if (attached === udid) return;
+    if (attached !== null) return;
+    await this.attach(threadId, udid);
+  }
+
   async detach(threadId: string): Promise<ThreadDeviceState> {
     const attachment = this.threadState(threadId);
     const udid = attachment.attachedDeviceUdid;

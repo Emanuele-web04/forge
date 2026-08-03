@@ -155,8 +155,18 @@ export function makeAgentGatewayDeviceTools(
       });
   };
 
-  /** Auto-open the pane once an agent puts an app in front of the user. */
-  const requestPane = (context: ToolContext, udid: string, reason: DeviceOpenPaneReason): void => {
+  /**
+   * Put the agent's device in front of the user: attach the thread to it (so
+   * the pane has something to stream) and ask the pane to open. Attaching
+   * first means the open request lands on a state that already names a device,
+   * rather than a pane showing the empty picker.
+   */
+  const surfaceDevice = async (
+    context: ToolContext,
+    udid: string,
+    reason: DeviceOpenPaneReason,
+  ): Promise<void> => {
+    await manager.ensureThreadAttached(context.callerThreadId, udid).catch(() => undefined);
     manager.requestOpenPane(context.callerThreadId, udid, reason);
   };
 
@@ -199,7 +209,18 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Boot device", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handle("device_boot", async (args) => manager.boot(readUdid(args))),
+      handler: handle("device_boot", async (args, context) => {
+        const udid = readUdid(args);
+        const result = await manager.boot(udid);
+        // Booting is the agent claiming a device even when it never installs
+        // or launches (driving Settings, opening a URL). Attach so the pane has
+        // something to show, but stay silent: opening the pane is reserved for
+        // install/launch, when there is actually an app to watch.
+        if (result.kind === "booted") {
+          await manager.ensureThreadAttached(context.callerThreadId, udid).catch(() => undefined);
+        }
+        return result;
+      }),
     },
     {
       requiredCapability: DEVICE_CONTROL_CAPABILITY,
@@ -225,7 +246,7 @@ export function makeAgentGatewayDeviceTools(
           udid,
           readStringArg(args, "appPath", { required: true })!,
         );
-        requestPane(context, udid, "agent-install");
+        await surfaceDevice(context, udid, "agent-install");
         return result;
       }),
     },
@@ -258,7 +279,7 @@ export function makeAgentGatewayDeviceTools(
           readStringArg(args, "bundleId", { required: true })!,
           readStringArrayArg(args, "arguments"),
         );
-        requestPane(context, udid, "agent-launch");
+        await surfaceDevice(context, udid, "agent-launch");
         return result;
       }),
     },
