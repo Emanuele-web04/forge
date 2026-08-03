@@ -44,6 +44,11 @@ import {
   type DeviceSwipeGesture,
 } from "./DeviceBackend.ts";
 import { DeviceFrameTransport, type DeviceFrameSink } from "./deviceFrameTransport.ts";
+import {
+  resolveTapTarget,
+  type DeviceUiTarget,
+  type DeviceUiTargetMatch,
+} from "./uiTreeTargeting.ts";
 
 /** How long a Synara-booted device stays up with no thread attached. */
 export const DEVICE_IDLE_SHUTDOWN_MS = 10 * 60 * 1000;
@@ -264,6 +269,20 @@ export class DeviceManager {
 
   async tap(udid: string, x: number, y: number): Promise<void> {
     await this.backend.tap(udid, x, y);
+  }
+
+  /**
+   * Tap the element a label names, resolving the point server-side.
+   *
+   * The tree is read fresh rather than cached: a stale frame is exactly how a
+   * tap lands on whatever scrolled into that position instead. Returns the
+   * node so the caller can report what it actually hit and its state.
+   */
+  async tapElement(udid: string, target: DeviceUiTarget): Promise<DeviceUiTargetMatch> {
+    const tree = await this.describeUi(udid);
+    const match = resolveTapTarget(tree.root, target);
+    await this.backend.tap(udid, match.point.x, match.point.y);
+    return match;
   }
 
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {

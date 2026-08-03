@@ -294,10 +294,21 @@ export type DeviceThreadInput = typeof DeviceThreadInput.Type;
 // while still rejecting nonsense coordinates from a mis-scaled canvas.
 const DeviceCoordinate = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 20_000 }));
 
+/**
+ * A tap names either a point or an element.
+ *
+ * Element targeting exists because the coordinate arithmetic is where taps go
+ * wrong: the caller must pick the right node and then the right coordinate
+ * within it, and a control merged into its row has a frame centre that does
+ * nothing at all. Naming the label lets the server resolve both. The point
+ * form stays for anything the accessibility tree does not label.
+ */
 export const DeviceTapInput = Schema.Struct({
   udid: DeviceUdid,
-  x: DeviceCoordinate,
-  y: DeviceCoordinate,
+  x: Schema.optional(DeviceCoordinate),
+  y: Schema.optional(DeviceCoordinate),
+  label: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(1_024))),
+  role: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
 });
 export type DeviceTapInput = typeof DeviceTapInput.Type;
 

@@ -112,12 +112,17 @@ describe("Synara harness policy", () => {
     assert.include(policy, "com.apple.Preferences");
 
     // Interaction discipline: describe before tapping, verify after.
-    assert.include(policy, "Before every tap, call device_describe_ui");
-    assert.include(policy, "device points, not screenshot pixels");
+    assert.include(policy, "device points from device_describe_ui, never screenshot pixels");
+    assert.include(policy, "again afterwards to confirm the screen changed");
 
-    // Aiming at a control, not its row. A real run tapped the centre of the
-    // "Dark Appearance" row, which does nothing, before finding the switch.
-    assert.include(policy, "tap its activationPoint when the node has one");
+    // Semantic targeting is the headline: making the model do the coordinate
+    // arithmetic is where taps go wrong, so label targeting leads.
+    assert.include(policy, "Tap by label rather than by coordinates");
+    assert.include(policy, "device_tap {udid, label}");
+    assert.include(policy, "device_tap {udid, label, role}");
+    assert.include(policy, "only when nothing in the tree labels the target");
+
+    // Why a row-centre tap does nothing, for the cases still using coordinates.
     assert.include(policy, "the row's frame centre is dead space");
 
     // Reading and verifying toggle state from the tree instead of pixels. The

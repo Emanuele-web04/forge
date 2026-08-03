@@ -502,3 +502,39 @@ describe("DeviceManager device geometry", () => {
     expect(listed.devices.every((device) => device.geometry === undefined)).toBe(true);
   });
 });
+
+describe("DeviceManager element targeting", () => {
+  it("taps a switch at its own point rather than its row centre", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    const match = await manager.tapElement(DEVICE_A, { label: "Fake Toggle" });
+
+    // The fake's toggle row spans x 24..369 (centre 196.5) with its control at
+    // x=340, mirroring a real UIKit settings row.
+    expect(match.point).toEqual({ x: 340, y: 222 });
+    expect(backend.calls.at(-1)).toEqual({ kind: "tap", udid: DEVICE_A, x: 340, y: 222 });
+  });
+
+  it("reads the tree fresh for every element tap", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    await manager.tapElement(DEVICE_A, { label: "Fake Toggle" });
+
+    // A cached frame is exactly how a tap lands on whatever scrolled into that
+    // position instead, so the describe must precede the tap every time.
+    const kinds = backend.calls.map((call) => call.kind);
+    expect(kinds.slice(-2)).toEqual(["describeUi", "tap"]);
+  });
+
+  it("refuses an unknown label without tapping anything", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    await expect(manager.tapElement(DEVICE_A, { label: "Nonexistent" })).rejects.toThrow(
+      /No element labelled/,
+    );
+    expect(backend.calls.some((call) => call.kind === "tap")).toBe(false);
+  });
+});

@@ -39,6 +39,20 @@ import {
 import { Effect } from "effect";
 
 import type { DeviceServiceShape } from "./Services/DeviceService.ts";
+import { readTapRequest } from "./uiTreeTargeting.ts";
+
+/** Shared by the pane (always a point) and agents (usually a label). */
+async function tapFromInput(
+  manager: DeviceServiceShape["manager"],
+  input: DeviceTapInput,
+): Promise<void> {
+  const request = readTapRequest(input);
+  if (request.kind === "point") {
+    await manager.tap(input.udid, request.x, request.y);
+    return;
+  }
+  await manager.tapElement(input.udid, request.target);
+}
 
 const UNSUPPORTED_MESSAGE =
   "The device pane requires macOS with Xcode and an iOS simulator runtime.";
@@ -177,7 +191,7 @@ export function makeWsDeviceHandlers(
         "Failed to read device state",
       ),
     [DEVICE_WS_METHODS.tap]: (input) =>
-      attempt(() => manager.tap(input.udid, input.x, input.y), "Failed to tap device"),
+      attempt(() => tapFromInput(manager, input), "Failed to tap device"),
     [DEVICE_WS_METHODS.swipe]: (input) =>
       attempt(
         () =>

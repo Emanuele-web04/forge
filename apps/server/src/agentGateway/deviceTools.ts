@@ -28,6 +28,7 @@ import {
 import { Effect } from "effect";
 
 import type { DeviceManager } from "../device/DeviceManager.ts";
+import { readTapRequest } from "../device/uiTreeTargeting.ts";
 import { mcpToolResultError, mcpToolResultJson, type McpToolCallResult } from "./protocol.ts";
 import {
   ToolInputError,
@@ -313,25 +314,56 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_tap",
         description:
-          "Tap a point on the device screen. Coordinates are device points from device_describe_ui, not screenshot pixels: use the target node's activationPoint when it has one, and its frame centre otherwise.",
+          "Tap an element by label, or a raw point. Prefer label: Synara re-reads the accessibility tree and taps the element's own point, which is the only thing that works for a control merged into its row (a switch's row centre is dead space). Pass role alongside label only to disambiguate. Use x and y just for something the tree does not label; they are device points from device_describe_ui, never screenshot pixels.",
         inputSchema: {
           type: "object",
           properties: {
             udid: UDID_PROPERTY,
-            x: { type: "number", description: "Horizontal device point." },
-            y: { type: "number", description: "Vertical device point." },
+            label: {
+              type: "string",
+              description: "Label of the element to tap, as reported by device_describe_ui.",
+            },
+            role: {
+              type: "string",
+              description:
+                'Optional role or subrole to disambiguate a repeated label, e.g. "Button" or "Switch".',
+            },
+            x: { type: "number", description: "Horizontal device point. Requires y." },
+            y: { type: "number", description: "Vertical device point. Requires x." },
           },
-          required: ["udid", "x", "y"],
+          required: ["udid"],
           additionalProperties: false,
         },
         annotations: { title: "Tap", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
       handler: handle("device_tap", async (args) => {
         const udid = readUdid(args);
-        const x = readCoordinate(args, "x");
-        const y = readCoordinate(args, "y");
-        await manager.tap(udid, x, y);
-        return { udid, x, y };
+        const request = readTapRequest({
+          x: readNumberArg(args, "x"),
+          y: readNumberArg(args, "y"),
+          label: readStringArg(args, "label") ?? undefined,
+          role: readStringArg(args, "role") ?? undefined,
+        });
+        if (request.kind === "point") {
+          const x = readCoordinate(args, "x");
+          const y = readCoordinate(args, "y");
+          await manager.tap(udid, x, y);
+          return { udid, x, y };
+        }
+        const match = await manager.tapElement(udid, request.target);
+        // Report the node so the agent sees what it hit and, for a toggle, the
+        // state it had before the tap; the follow-up describe shows the change.
+        return {
+          udid,
+          x: match.point.x,
+          y: match.point.y,
+          element: {
+            role: match.node.role,
+            subrole: match.node.subrole,
+            label: match.node.label,
+            valueBeforeTap: match.node.value,
+          },
+        };
       }),
     },
     {
