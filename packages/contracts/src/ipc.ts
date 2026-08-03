@@ -275,6 +275,12 @@ export interface BrowserTabState {
   id: string;
   url: string;
   title: string;
+  /**
+   * Agent-owned tabs use a main-process WebContentsView so the exact page can
+   * stay alive while its chat route is not mounted. Older snapshots omit this
+   * field and are treated as renderer-owned by the web app.
+   */
+  runtimeSurface?: "native" | "renderer";
   status: "live" | "suspended";
   isLoading: boolean;
   canGoBack: boolean;

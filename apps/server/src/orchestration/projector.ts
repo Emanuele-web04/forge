@@ -67,10 +67,6 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   return "completed" as const;
 }
 
-function isProviderDiffPlaceholderRef(checkpointRef: string | null | undefined): boolean {
-  return checkpointRef?.startsWith("provider-diff:") === true;
-}
-
 function isTerminalLatestTurn(
   latestTurn: OrchestrationThread["latestTurn"] | null | undefined,
 ): boolean {
@@ -1122,27 +1118,28 @@ export function projectEvent(
           payload.preserveLatestTurn === true ||
           (previousLatestCheckpointTurnCount !== undefined &&
             previousLatestCheckpointTurnCount > payload.checkpointTurnCount);
+        const matchingLatestTurn =
+          thread.latestTurn?.turnId === payload.turnId ? thread.latestTurn : null;
         const latestTurn = preservesNewerLatestTurn
           ? thread.latestTurn
-          : // A provider-diff placeholder only carries live diff totals; it must never
-            // change the turn lifecycle — neither close a running turn nor flip an
-            // already-settled one to "interrupted" when it loses the race against
-            // session settlement.
-            isProviderDiffPlaceholderRef(payload.checkpointRef) &&
-              payload.status === "missing" &&
-              thread.latestTurn?.turnId === payload.turnId
-            ? thread.latestTurn
+          : matchingLatestTurn !== null
+            ? {
+                // Checkpoints describe filesystem state; the provider session is
+                // the lifecycle authority. In particular, a successful empty git
+                // capture must not turn an interrupted, answer-less turn into a
+                // completed one merely because both checkpoint commands and
+                // runtime ingestion subscribe to the same terminal event.
+                ...matchingLatestTurn,
+                assistantMessageId: preservedAssistantMessageId,
+              }
             : {
+                // Historical/sessionless checkpoint projections have no matching
+                // lifecycle row to enrich, so retain the legacy reconstruction
+                // behavior for those imports and rollback paths.
                 turnId: payload.turnId,
                 state: checkpointStatusToLatestTurnState(payload.status),
-                requestedAt:
-                  thread.latestTurn?.turnId === payload.turnId
-                    ? thread.latestTurn.requestedAt
-                    : payload.completedAt,
-                startedAt:
-                  thread.latestTurn?.turnId === payload.turnId
-                    ? (thread.latestTurn.startedAt ?? payload.completedAt)
-                    : payload.completedAt,
+                requestedAt: payload.completedAt,
+                startedAt: payload.completedAt,
                 completedAt: payload.completedAt,
                 assistantMessageId: preservedAssistantMessageId,
               };

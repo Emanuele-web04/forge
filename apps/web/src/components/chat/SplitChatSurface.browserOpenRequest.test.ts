@@ -50,38 +50,39 @@ function createSplitView(): SplitView {
 }
 
 describe("routeSplitBrowserPanelOpenRequest", () => {
-  it("focuses the pane already showing the requested thread and opens its browser", () => {
+  it("does not disturb an unfocused pane that owns a background browser request", () => {
     const calls: string[] = [];
 
     routeSplitBrowserPanelOpenRequest({
       splitView: createSplitView(),
       requestedThreadId: THREAD_B,
-      focusPane: (paneId) => calls.push(`focus:${paneId}`),
-      replacePaneThread: (paneId, threadId) => calls.push(`replace:${paneId}:${threadId}`),
       openBrowserPanel: (paneId) => calls.push(`open:${paneId}`),
-      navigateToThread: (threadId) => calls.push(`navigate:${threadId}`),
     });
 
-    expect(calls).toEqual(["focus:pane-b", "open:pane-b", `navigate:${THREAD_B}`]);
+    expect(calls).toEqual([]);
   });
 
-  it("replaces the focused pane when the requested thread is not in the split", () => {
+  it("opens the browser only when the requesting thread is already focused", () => {
+    const calls: string[] = [];
+
+    routeSplitBrowserPanelOpenRequest({
+      splitView: createSplitView(),
+      requestedThreadId: THREAD_A,
+      openBrowserPanel: (paneId) => calls.push(`open:${paneId}`),
+    });
+
+    expect(calls).toEqual(["open:pane-a"]);
+  });
+
+  it("does not replace a pane for a thread outside the split", () => {
     const calls: string[] = [];
 
     routeSplitBrowserPanelOpenRequest({
       splitView: createSplitView(),
       requestedThreadId: THREAD_C,
-      focusPane: (paneId) => calls.push(`focus:${paneId}`),
-      replacePaneThread: (paneId, threadId) => calls.push(`replace:${paneId}:${threadId}`),
       openBrowserPanel: (paneId) => calls.push(`open:${paneId}`),
-      navigateToThread: (threadId) => calls.push(`navigate:${threadId}`),
     });
 
-    expect(calls).toEqual([
-      "focus:pane-a",
-      `replace:pane-a:${THREAD_C}`,
-      "open:pane-a",
-      `navigate:${THREAD_C}`,
-    ]);
+    expect(calls).toEqual([]);
   });
 });

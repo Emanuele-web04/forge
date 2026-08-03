@@ -81,7 +81,7 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 // tool definition, so repeating the full policy here adds tens of thousands of
 // context characters per round without adding authority or safety.
 const AGENT_GATEWAY_INSTRUCTIONS =
-  "Synara tools are thread-scoped. Use browser_* only for Synara's visible WebView; follow the provider-delivered <synara_host_context> for full policy.";
+  "Synara tools are thread-scoped. Use browser_* only for Synara's shared in-app browser runtime; follow the provider-delivered <synara_host_context> for full policy.";
 
 export const makeAgentGateway = Effect.gen(function* () {
   const credentials = yield* AgentGatewayCredentials;

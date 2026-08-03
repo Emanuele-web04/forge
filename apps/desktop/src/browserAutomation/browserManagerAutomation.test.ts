@@ -40,7 +40,7 @@ vi.mock("electron", () => ({
   webContents: { fromId },
   WebContentsView: class {
     constructor() {
-      webContentsViewConstructor();
+      return webContentsViewConstructor();
     }
   },
 }));
@@ -78,7 +78,7 @@ class FakeWebContents extends EventEmitter {
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
-  it("refuses a native fallback and returns only an adopted renderer webview", () => {
+  it("refuses a detached native fallback and returns an adopted renderer webview", () => {
     const manager = new DesktopBrowserManager();
     const state = manager.open({ threadId: THREAD_ID });
     const tabId = state.activeTabId;
@@ -112,7 +112,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     });
 
     expect(() => manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId })).toThrow(
-      /refuses a native or fallback/i,
+      /not currently visible/i,
     );
 
     access.runtimes.set(key, {
@@ -129,7 +129,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     );
   });
 
-  it("prepares a renderer tab without constructing a WebContentsView fallback", () => {
+  it("marks prepared agent tabs for a persistent native runtime", () => {
     const manager = new DesktopBrowserManager();
     const state = manager.prepareAutomationTab({
       threadId: THREAD_ID,
@@ -140,17 +140,18 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     expect(state.open).toBe(true);
     expect(state.tabs).toHaveLength(1);
     expect(state.activeTabId).toBe(state.tabs.at(-1)?.id);
+    expect(state.tabs[0]?.runtimeSurface).toBe("native");
     expect(() =>
       manager.getVisibleAutomationRuntime({
         threadId: THREAD_ID,
         tabId: state.activeTabId!,
       }),
-    ).toThrow(/has not attached yet/i);
+    ).toThrow(/not ready yet/i);
   });
 
   it("adopts only a webview owned by the exact Synara window and browser partition", () => {
     const manager = new DesktopBrowserManager();
-    const state = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const state = manager.open({ threadId: THREAD_ID });
     const tabId = state.activeTabId!;
     const guest = Object.assign(new FakeWebContents(), {
       getType: () => "webview",
@@ -187,7 +188,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
     };
     manager.setWindow(hostWindow as never);
-    const state = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const state = manager.open({ threadId: THREAD_ID });
     const tabId = state.activeTabId!;
     const guest = Object.assign(new FakeWebContents(), {
       getType: () => "webview",
@@ -218,7 +219,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("rejects stale or duplicate renderer bindings instead of stealing visible tab affinity", () => {
     const manager = new DesktopBrowserManager();
-    const state = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const state = manager.open({ threadId: THREAD_ID });
     const tabId = state.activeTabId!;
     const firstGuest = Object.assign(new FakeWebContents(17), {
       getType: () => "webview",
@@ -241,10 +242,9 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       firstGuest,
     );
 
-    const second = manager.prepareAutomationTab({
+    const second = manager.newTab({
       threadId: THREAD_ID,
       url: "https://second.example/",
-      reuse: false,
     });
     const secondTabId = second.activeTabId!;
     expect(() =>
@@ -255,7 +255,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("keeps the CDP session when one renderer webview is rebound to another tab", () => {
     const manager = new DesktopBrowserManager();
-    const first = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const first = manager.open({ threadId: THREAD_ID });
     const firstTabId = first.activeTabId!;
     const detachDebugger = vi.fn();
     const guest = Object.assign(new FakeWebContents(), {
@@ -274,10 +274,9 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       41,
     );
 
-    const second = manager.prepareAutomationTab({
+    const second = manager.newTab({
       threadId: THREAD_ID,
       url: "https://second.example/",
-      reuse: false,
     });
     const secondTabId = second.activeTabId!;
     manager.attachWebview(
@@ -300,7 +299,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
   it("detaches CDP and defers publication before removing the final renderer webview", async () => {
     const manager = new DesktopBrowserManager();
-    const state = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const state = manager.open({ threadId: THREAD_ID });
     const tabId = state.activeTabId!;
     const detachDebugger = vi.fn();
     const guest = Object.assign(new FakeWebContents(), {
@@ -351,7 +350,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     expect(projected.activeTabId).toBe(tabId);
     expect(projected.tabs[0]?.url).toBe("https://docs.example/path");
     expect(() => manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId })).toThrow(
-      /has not attached yet/i,
+      /not ready yet/i,
     );
   });
 
@@ -388,14 +387,14 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     expect(publication).not.toHaveBeenCalled();
   });
 
-  it("still treats a real panel hide as human takeover", () => {
+  it("still treats hiding a manual browser panel as human takeover", () => {
     const manager = new DesktopBrowserManager();
-    manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
-    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
+    manager.open({ threadId: THREAD_ID });
+    const beforeHide = manager.getAutomationHumanControlEpoch(THREAD_ID);
 
     manager.hide({ threadId: THREAD_ID });
 
-    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(1);
+    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(beforeHide + 1);
   });
 
   it("publishes direct native keyboard and mouse takeover from the visible guest", () => {
@@ -555,60 +554,32 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     releaseUnmatched();
   });
 
-  it.each([
-    ["while the action listener is active", false],
-    ["after the action listener is released", true],
-  ] as const)(
-    "preserves download containment across native-to-renderer migration %s",
-    (_, releaseBeforeMigration) => {
-      const manager = new DesktopBrowserManager();
-      const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
-      const tabId = prepared.activeTabId!;
-      const nativeWebContents = new FakeWebContents();
-      const nativeRuntime = {
-        key: `${THREAD_ID}:${tabId}`,
-        threadId: THREAD_ID,
-        tabId,
-        webContents: nativeWebContents as unknown as WebContents,
-        view: null,
-        ownsWebContents: true as const,
-        listenerDisposers: [] as Array<() => void>,
-      };
-      const access = manager as unknown as {
-        runtimes: Map<string, typeof nativeRuntime>;
-      };
-      access.runtimes.set(nativeRuntime.key, nativeRuntime);
-      const observed = vi.fn();
-      const release = manager.trackAutomationDownload({ threadId: THREAD_ID, tabId }, observed);
-      if (releaseBeforeMigration) release();
+  it("keeps an agent-owned native runtime when its tab is reselected", async () => {
+    const manager = new DesktopBrowserManager();
+    const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const tabId = prepared.activeTabId!;
+    const nativeWebContents = new FakeWebContents();
+    const nativeRuntime = {
+      key: `${THREAD_ID}:${tabId}`,
+      threadId: THREAD_ID,
+      tabId,
+      webContents: nativeWebContents as unknown as WebContents,
+      view: {},
+      ownsWebContents: true as const,
+      listenerDisposers: [] as Array<() => void>,
+    };
+    const access = manager as unknown as {
+      runtimes: Map<string, typeof nativeRuntime>;
+    };
+    access.runtimes.set(nativeRuntime.key, nativeRuntime);
 
-      manager.selectAutomationTab({ threadId: THREAD_ID, tabId });
-      expect(nativeWebContents.close).toHaveBeenCalledOnce();
+    manager.selectAutomationTab({ threadId: THREAD_ID, tabId });
+    const acquired = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId });
 
-      const rendererWebContents = Object.assign(new FakeWebContents(18), {
-        getType: () => "webview",
-        hostWebContents: { id: 41 },
-        session: browserSession,
-      });
-      fromId.mockReturnValue(rendererWebContents);
-      manager.attachWebview(
-        { threadId: THREAD_ID, tabId, webContentsId: rendererWebContents.id },
-        41,
-      );
-      const migratedDownload = { preventDefault: vi.fn() };
-      willDownloadListener.current?.(migratedDownload, {}, rendererWebContents);
-
-      expect(migratedDownload.preventDefault).toHaveBeenCalledOnce();
-      if (releaseBeforeMigration) {
-        expect(observed).not.toHaveBeenCalled();
-      } else {
-        expect(observed).toHaveBeenCalledWith({ threadId: THREAD_ID, sourceTabId: tabId });
-        release();
-      }
-
-      manager.dispose();
-    },
-  );
+    expect(acquired.webContents).toBe(nativeWebContents);
+    expect(nativeWebContents.close).not.toHaveBeenCalled();
+    manager.dispose();
+  });
 
   it("contains delayed agent downloads until human control advances the runtime epoch", () => {
     const manager = new DesktopBrowserManager();
@@ -1017,8 +988,14 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     }
   });
 
-  it("does not create a transient fallback when the renderer opens a projected agent URL", () => {
+  it("creates a persistent native runtime without mounting the owning chat", async () => {
     webContentsViewConstructor.mockClear();
+    const nativeWebContents = new FakeWebContents();
+    const setBounds = vi.fn();
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: nativeWebContents,
+      setBounds,
+    });
     const manager = new DesktopBrowserManager();
     const blank = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
     const tabId = blank.activeTabId!;
@@ -1027,17 +1004,129 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       tabId,
       url: "https://agent.example/path",
     });
-    manager.setPanelBounds({
+    const runtime = await manager.getAutomationRuntime(
+      { threadId: THREAD_ID, tabId },
+      { restore: false },
+    );
+
+    expect(webContentsViewConstructor).toHaveBeenCalledOnce();
+    expect(runtime.webContents).toBe(nativeWebContents);
+    expect(setBounds).toHaveBeenCalledWith({ x: -10_000, y: 0, width: 1_280, height: 800 });
+    expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.runtimeSurface).toBe("native");
+    manager.dispose();
+  });
+
+  it("does not race host navigation when the owning panel reveals first", async () => {
+    const nativeWebContents = Object.assign(new FakeWebContents(), { getURL: () => "" });
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: nativeWebContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+    });
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const tabId = prepared.activeTabId!;
+    manager.prepareAutomationNavigation({
       threadId: THREAD_ID,
-      surface: "renderer",
-      bounds: { x: 0, y: 0, width: 800, height: 600 },
+      tabId,
+      url: "https://agent.example/path",
     });
 
-    manager.open({ threadId: THREAD_ID });
+    manager.setPanelBounds({
+      threadId: THREAD_ID,
+      surface: "native",
+      bounds: { x: 0, y: 40, width: 900, height: 700 },
+    });
 
-    expect(webContentsViewConstructor).not.toHaveBeenCalled();
-    expect(() => manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId })).toThrow(
-      /has not attached yet/i,
+    expect(nativeWebContents.loadURL).not.toHaveBeenCalled();
+    expect(manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId }).webContents).toBe(
+      nativeWebContents,
     );
+    await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId }, { restore: false });
+    expect(nativeWebContents.loadURL).toHaveBeenCalledOnce();
+    expect(nativeWebContents.loadURL).toHaveBeenCalledWith("about:blank");
+    manager.dispose();
+  });
+
+  it("does not suspend the active agent tab when its chat stays hidden", async () => {
+    vi.useFakeTimers();
+    try {
+      const nativeWebContents = new FakeWebContents();
+      webContentsViewConstructor.mockReturnValueOnce({
+        webContents: nativeWebContents,
+        setBounds: vi.fn(),
+      });
+      const manager = new DesktopBrowserManager();
+      const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+      const tabId = prepared.activeTabId!;
+
+      await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId }, { restore: false });
+      manager.hide({ threadId: THREAD_ID });
+      await vi.runAllTimersAsync();
+
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
+      expect(nativeWebContents.close).not.toHaveBeenCalled();
+      expect(manager.getState({ threadId: THREAD_ID }).tabs[0]).toMatchObject({
+        id: tabId,
+        runtimeSurface: "native",
+        status: "live",
+      });
+      manager.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds hidden automation runtimes globally and restores an evicted tab on demand", async () => {
+    vi.useFakeTimers();
+    try {
+      const nativeWebContents = Array.from({ length: 6 }, (_, index) =>
+        new FakeWebContents(100 + index),
+      );
+      for (const webContents of nativeWebContents) {
+        webContentsViewConstructor.mockReturnValueOnce({
+          webContents,
+          setBounds: vi.fn(),
+          setVisible: vi.fn(),
+        });
+      }
+
+      const manager = new DesktopBrowserManager();
+      const tabs = [] as Array<{ threadId: ThreadId; tabId: string }>;
+      for (let index = 0; index < 5; index += 1) {
+        const threadId = ThreadId.makeUnsafe(`thread-background-${index}`);
+        const prepared = manager.prepareAutomationTab({ threadId, reuse: true });
+        const tabId = prepared.activeTabId!;
+        tabs.push({ threadId, tabId });
+        await manager.getAutomationRuntime({ threadId, tabId }, { restore: false });
+      }
+
+      // Active browser calls receive a full tool-deadline grace period. Once it
+      // expires, the least-recently-used hidden page is evicted to enforce the cap.
+      expect(nativeWebContents.every((webContents) => !webContents.close.mock.calls.length)).toBe(
+        true,
+      );
+      await vi.advanceTimersByTimeAsync(31_001);
+
+      expect(nativeWebContents[0]!.close).toHaveBeenCalledOnce();
+      expect(
+        nativeWebContents
+          .slice(1, 5)
+          .every((webContents) => !webContents.close.mock.calls.length),
+      ).toBe(true);
+      expect(manager.getState({ threadId: tabs[0]!.threadId }).tabs[0]?.status).toBe("suspended");
+
+      const restored = await manager.getAutomationRuntime(tabs[0]!, { restore: false });
+      expect(restored.webContents).toBe(nativeWebContents[5]);
+      expect(manager.getState({ threadId: tabs[0]!.threadId }).tabs[0]?.status).toBe("live");
+      // Restoring the evicted tab keeps the total at four by evicting the next LRU page.
+      expect(nativeWebContents[1]!.close).toHaveBeenCalledOnce();
+      manager.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

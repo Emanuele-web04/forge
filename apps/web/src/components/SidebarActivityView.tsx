@@ -536,7 +536,7 @@ export function SidebarActivityView({
   const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
   const projectGroups =
     groupMode === "project"
-      ? groupActivityThreadsByProject(model.active, isRealProject)
+      ? groupActivityThreadsByProject(model.active, isRealProject, { nowMs })
       : EMPTY_PROJECT_GROUPS;
 
   const earlierPaging = resolveSidebarThreadListPaging({

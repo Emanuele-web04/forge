@@ -110,8 +110,60 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       reuse: true,
     });
     const tabId = String(opened.structuredContent.tabId);
-    await expect(page.locator("webview")).toBeVisible();
-    await expect(page.locator("html")).toHaveAttribute("data-webview-attached", "true");
+    await expect(page.locator("html")).toHaveAttribute("data-native-runtime-tab-id", tabId);
+
+    const sendNativeInput = (event: Record<string, unknown>) =>
+      electronApp.evaluate(
+        (_electron, input) => {
+          const manager = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                browserManager: {
+                  runtimes: Map<
+                    string,
+                    { webContents: { sendInputEvent(event: Record<string, unknown>): void } }
+                  >;
+                };
+              };
+            }
+          ).__synaraVisibleBrowserE2E.browserManager;
+          const runtime = manager.runtimes.get(`${input.threadId}:${input.tabId}`);
+          if (!runtime) throw new Error("Expected the native annotation runtime to be live.");
+          runtime.webContents.sendInputEvent(input.event);
+        },
+        { threadId, tabId, event },
+      );
+    const insertNativeText = (text: string) =>
+      electronApp.evaluate(
+        (_electron, input) => {
+          const manager = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                browserManager: {
+                  runtimes: Map<string, { webContents: { insertText(text: string): void } }>;
+                };
+              };
+            }
+          ).__synaraVisibleBrowserE2E.browserManager;
+          const runtime = manager.runtimes.get(`${input.threadId}:${input.tabId}`);
+          if (!runtime) throw new Error("Expected the native annotation runtime to be live.");
+          runtime.webContents.insertText(input.text);
+        },
+        { threadId, tabId, text },
+      );
+    const clickNativePoint = async (x: number, y: number): Promise<void> => {
+      const point = { x: Math.round(x), y: Math.round(y) };
+      await sendNativeInput({ type: "mouseMove", ...point });
+      await sendNativeInput({ type: "mouseDown", ...point, button: "left", clickCount: 1 });
+      await sendNativeInput({ type: "mouseUp", ...point, button: "left", clickCount: 1 });
+    };
+    const pressNativeKey = async (
+      keyCode: string,
+      modifiers: readonly string[] = [],
+    ): Promise<void> => {
+      await sendNativeInput({ type: "keyDown", keyCode, modifiers });
+      await sendNativeInput({ type: "keyUp", keyCode, modifiers });
+    };
 
     const targetGeometry = await mcp.call("browser_evaluate", {
       expression:
@@ -135,12 +187,9 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       width: number;
       height: number;
     };
-    const webviewRect = await page.locator("webview").boundingBox();
-    if (!webviewRect) throw new Error("Visible annotation guest lost its bounds.");
-
     /**
      * Runs a script inside the annotated guest page. MCP browser tools refuse to
-     * act while an annotation session holds the webview, so page-side setup and
+     * act while an annotation session holds the page, so page-side setup and
      * inspection has to go through the runtime the main process already owns.
      */
     const runInGuest = async (script: string): Promise<unknown> =>
@@ -238,12 +287,12 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     const unanchorableRect = (await runInGuest(
       "(() => { const root = document.createElement('div'); root.setAttribute('data-unanchorable', ''); root.style.cssText = 'position:fixed;left:8px;top:8px;z-index:999;background:rgb(230,230,230)'; let node = root; for (let index = 0; index < 90; index += 1) { const child = document.createElement('div'); node.append(child); node = child; } node.style.cssText = 'padding:14px'; node.textContent = 'deep'; document.body.append(root); const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
     )) as { x: number; y: number; width: number; height: number };
-    await page.mouse.click(
-      webviewRect.x + unanchorableRect.x + unanchorableRect.width / 2,
-      webviewRect.y + unanchorableRect.y + unanchorableRect.height / 2,
+    await clickNativePoint(
+      unanchorableRect.x + unanchorableRect.width / 2,
+      unanchorableRect.y + unanchorableRect.height / 2,
     );
-    await page.keyboard.type("Never reaches a composer");
-    await page.keyboard.press("Enter");
+    await insertNativeText("Never reaches a composer");
+    await pressNativeKey("Enter");
     const kindsAfterUnanchorable = await annotationEventKinds();
     expect(kindsAfterUnanchorable).not.toContain("cancelled");
     expect(kindsAfterUnanchorable).not.toContain("committed");
@@ -251,13 +300,13 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "(() => { document.querySelector('[data-unanchorable]')?.remove(); return true; })()",
     );
 
-    await page.mouse.click(
-      webviewRect.x + targetRect.x + targetRect.width / 2,
-      webviewRect.y + targetRect.y + targetRect.height / 2,
+    await clickNativePoint(
+      targetRect.x + targetRect.width / 2,
+      targetRect.y + targetRect.height / 2,
     );
-    await page.keyboard.type("Make this action clearer");
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Enter");
+    await insertNativeText("Make this action clearer");
+    await pressNativeKey("Tab");
+    await pressNativeKey("Enter");
 
     await expect
       .poll(async () => (await committedAnnotations()).length, {
@@ -275,12 +324,12 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     });
     expect(JSON.stringify(committedEvent)).not.toContain("private-annotation");
 
-    await page.mouse.click(
-      webviewRect.x + sensitiveContainerRect.x + 6,
-      webviewRect.y + sensitiveContainerRect.y + sensitiveContainerRect.height / 2,
+    await clickNativePoint(
+      sensitiveContainerRect.x + 6,
+      sensitiveContainerRect.y + sensitiveContainerRect.height / 2,
     );
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Enter");
+    await pressNativeKey("Tab");
+    await pressNativeKey("Enter");
     await expect
       .poll(async () => (await committedAnnotations()).length, {
         timeout: 5_000,
@@ -304,19 +353,16 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "(() => { const root = document.createElement('div'); root.setAttribute('data-stale-chain', ''); root.style.cssText = 'position:fixed;left:8px;top:8px;z-index:999;background:rgb(230,230,230)'; let node = root; for (let index = 0; index < 90; index += 1) { const child = document.createElement('div'); node.append(child); node = child; } node.id = 'stale-leaf'; node.style.cssText = 'padding:14px'; node.textContent = 'stale'; document.body.append(root); const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
     )) as { x: number; y: number; width: number; height: number };
     const clickStaleTarget = async (): Promise<void> => {
-      await page.mouse.click(
-        webviewRect.x + staleRect.x + staleRect.width / 2,
-        webviewRect.y + staleRect.y + staleRect.height / 2,
-      );
+      await clickNativePoint(staleRect.x + staleRect.width / 2, staleRect.y + staleRect.height / 2);
     };
     await clickStaleTarget();
-    await page.keyboard.type("Kept through a stale target");
+    await insertNativeText("Kept through a stale target");
     // Dropping the id leaves only the structural selector, which this chain is
     // far too deep to fit inside the contract's bound.
     await runInGuest(
       "(() => { document.getElementById('stale-leaf')?.removeAttribute('id'); return true; })()",
     );
-    await page.keyboard.press("Enter");
+    await pressNativeKey("Enter");
     const kindsAfterStaleSave = await annotationEventKinds();
     expect(kindsAfterStaleSave).not.toContain("cancelled");
     expect(kindsAfterStaleSave.filter((kind) => kind === "committed")).toHaveLength(2);
@@ -325,7 +371,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "(() => { document.querySelector('[data-stale-chain] div:not(:has(div))').id = 'stale-leaf'; return true; })()",
     );
     await clickStaleTarget();
-    await page.keyboard.press("Enter");
+    await pressNativeKey("Enter");
     await expect
       .poll(async () => (await committedAnnotations()).length, {
         timeout: 5_000,
@@ -348,25 +394,25 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "(() => { const target = document.createElement('button'); target.id = 'collapsing-target'; target.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:999;padding:14px'; target.textContent = 'collapse'; document.body.append(target); const rect = target.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
     )) as { x: number; y: number; width: number; height: number };
     const clickCollapsingTarget = async (): Promise<void> => {
-      await page.mouse.click(
-        webviewRect.x + collapsingRect.x + collapsingRect.width / 2,
-        webviewRect.y + collapsingRect.y + collapsingRect.height / 2,
+      await clickNativePoint(
+        collapsingRect.x + collapsingRect.width / 2,
+        collapsingRect.y + collapsingRect.height / 2,
       );
     };
     await clickCollapsingTarget();
-    await page.keyboard.type("Kept through a collapsed target");
+    await insertNativeText("Kept through a collapsed target");
     await runInGuest(
       "(() => { document.getElementById('collapsing-target').style.display = 'none'; return true; })()",
     );
     // Submit immediately, before relying on the next overlay animation frame
     // to notice the collapsed box.
-    await page.keyboard.press("Enter");
+    await pressNativeKey("Enter");
     expect(await committedAnnotations()).toHaveLength(3);
     await runInGuest(
       "(() => { document.getElementById('collapsing-target').style.display = 'block'; return true; })()",
     );
     await clickCollapsingTarget();
-    await page.keyboard.press("Enter");
+    await pressNativeKey("Enter");
     await expect
       .poll(async () => (await committedAnnotations()).length, {
         timeout: 5_000,
@@ -386,12 +432,12 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     const fallbackSelectorRect = (await runInGuest(
       "(() => { const root = document.createElement('div'); root.id = `anchor-${'x'.repeat(490)}`; root.setAttribute('data-long-anchor', ''); root.style.cssText = 'position:fixed;right:8px;top:8px;z-index:999;background:rgb(230,230,230)'; const target = document.createElement('button'); target.style.cssText = 'padding:14px'; target.textContent = 'fallback'; root.append(target); document.body.append(root); const rect = target.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
     )) as { x: number; y: number; width: number; height: number };
-    await page.mouse.click(
-      webviewRect.x + fallbackSelectorRect.x + fallbackSelectorRect.width / 2,
-      webviewRect.y + fallbackSelectorRect.y + fallbackSelectorRect.height / 2,
+    await clickNativePoint(
+      fallbackSelectorRect.x + fallbackSelectorRect.width / 2,
+      fallbackSelectorRect.y + fallbackSelectorRect.height / 2,
     );
-    await page.keyboard.type("Fallback selector and shortcut");
-    await page.keyboard.press("ControlOrMeta+Enter");
+    await insertNativeText("Fallback selector and shortcut");
+    await pressNativeKey("Enter", [process.platform === "darwin" ? "meta" : "control"]);
     await expect
       .poll(async () => (await committedAnnotations()).length, {
         timeout: 5_000,
@@ -490,9 +536,9 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
         { timeout: 5_000, intervals: [25, 50, 100] },
       )
       .toBe(true);
-    await page.mouse.click(
-      webviewRect.x + targetRect.x + targetRect.width / 2,
-      webviewRect.y + targetRect.y + targetRect.height / 2,
+    await clickNativePoint(
+      targetRect.x + targetRect.width / 2,
+      targetRect.y + targetRect.height / 2,
     );
     await expect
       .poll(() => runInGuest("document.body.dataset.manualClicks"), {

@@ -728,9 +728,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
           routeSplitBrowserPanelOpenRequest({
             splitView: activeSplitView,
             requestedThreadId,
-            focusPane: (paneId) => setFocusedPane(activeSplitView.id, paneId),
-            replacePaneThread: (paneId, threadId) =>
-              replacePaneThread(activeSplitView.id, paneId, threadId),
             openBrowserPanel: (paneId) =>
               setPanePanelState(activeSplitView.id, paneId, {
                 panel: "browser",
@@ -739,14 +736,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
                 hasOpenedPanel: true,
                 lastOpenPanel: "browser",
               }),
-            navigateToThread: (threadId) => {
-              void navigate({
-                to: "/$threadId",
-                params: { threadId },
-                replace: true,
-                search: () => ({ splitViewId: activeSplitView.id }),
-              });
-            },
           });
         }
       : null,

@@ -334,6 +334,57 @@ export function createSidebarTreeThreadsSelector(): (
   };
 }
 
+/**
+ * Last time each project was actually *used*, i.e. when a thread of that project last received a
+ * user message (falling back to the thread's creation time for threads never written to).
+ *
+ * Deliberately not `Project.updatedAt`: that timestamp only moves when project *metadata* changes
+ * (creation, rename, pin, scripts), so ranking by it surfaces the most recently created project
+ * instead of the one you were last talking in. Deliberately not thread `updatedAt` either: that
+ * churns on every streamed token and would rebuild this map continuously.
+ */
+export function createProjectLastActivityAtSelector(): (
+  state: AppState,
+) => ReadonlyMap<ProjectId, string> {
+  let previousThreadIds: AppState["threadIds"] | undefined;
+  let previousSummaryById: AppState["sidebarThreadSummaryById"] | undefined;
+  let previousActivity: ReadonlyMap<ProjectId, string> = new Map();
+
+  return (state) => {
+    const threadIds = state.threadIds;
+    const summaryById = state.sidebarThreadSummaryById;
+    if (threadIds === previousThreadIds && summaryById === previousSummaryById) {
+      return previousActivity;
+    }
+    previousThreadIds = threadIds;
+    previousSummaryById = summaryById;
+
+    const nextActivity = new Map<ProjectId, string>();
+    for (const threadId of threadIds ?? []) {
+      const thread = summaryById[threadId];
+      if (!thread) {
+        continue;
+      }
+      const activityAt = thread.latestUserMessageAt ?? thread.createdAt;
+      const current = nextActivity.get(thread.projectId);
+      if (current === undefined || current < activityAt) {
+        nextActivity.set(thread.projectId, activityAt);
+      }
+    }
+
+    if (
+      nextActivity.size === previousActivity.size &&
+      [...nextActivity].every(
+        ([projectId, activityAt]) => previousActivity.get(projectId) === activityAt,
+      )
+    ) {
+      return previousActivity;
+    }
+    previousActivity = nextActivity;
+    return previousActivity;
+  };
+}
+
 export function createFirstProjectSelector(): (state: AppState) => Project | undefined {
   let previousProjects: readonly Project[] | undefined;
   let previousFirstProject: Project | undefined;

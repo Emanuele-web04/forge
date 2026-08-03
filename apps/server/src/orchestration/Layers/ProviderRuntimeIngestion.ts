@@ -52,6 +52,7 @@ import {
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
+import { OrchestrationCommandIdentityCollisionError } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
@@ -2550,6 +2551,71 @@ const make = Effect.gen(function* () {
   // inputs still drain, and the durable poll retries from the exact cursor.
   let runtimeJournalPageBlocked = false;
 
+  const quarantineCommandIdentityCollision = Effect.fnUntraced(function* (
+    input: Extract<RuntimeIngestionInput, { source: "runtime" }>,
+    error: OrchestrationCommandIdentityCollisionError,
+  ) {
+    // A command receipt permanently binds one command id to one fingerprint.
+    // Retrying the same runtime row can therefore never make an identity
+    // collision succeed. This most commonly happens when a crash or upgrade
+    // leaves a partially projected event whose remaining command is rebuilt
+    // from newer thread state.
+    //
+    // The runtime journal has one global cursor, so waiting for the generic
+    // poison gate here drops every later event for every provider — including
+    // assistant output — for at least a minute. Quarantine this deterministically
+    // unreplayable row immediately, exactly as the poison gate eventually would,
+    // and keep the accepted event available in the retained diagnostic tail.
+    const advanced = yield* runtimeEvents
+      .advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: input.sequence,
+        updatedAt: new Date().toISOString(),
+      })
+      .pipe(
+        Effect.catchCause((cause) => {
+          runtimeJournalPageBlocked = true;
+          return Effect.logWarning("provider runtime command collision quarantine failed", {
+            sequence: input.sequence,
+            eventId: input.event.eventId,
+            eventType: input.event.type,
+            threadId: input.event.threadId,
+            provider: input.event.provider,
+            commandId: error.commandId,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(null));
+        }),
+      );
+    if (advanced === null) {
+      return;
+    }
+    if (!advanced) {
+      runtimeJournalPageBlocked = true;
+      yield* Effect.logWarning("provider runtime command collision could not be quarantined", {
+        sequence: input.sequence,
+        eventId: input.event.eventId,
+        eventType: input.event.type,
+        threadId: input.event.threadId,
+        provider: input.event.provider,
+        commandId: error.commandId,
+        detail: error.detail,
+      });
+      return;
+    }
+    yield* Effect.logError(
+      "provider runtime command collision quarantined without blocking the journal",
+      {
+        sequence: input.sequence,
+        eventId: input.event.eventId,
+        eventType: input.event.type,
+        threadId: input.event.threadId,
+        provider: input.event.provider,
+        commandId: error.commandId,
+        detail: error.detail,
+      },
+    );
+  });
+
   const processInputSafely = (input: RuntimeIngestionInput) =>
     input.source === "runtime" && runtimeJournalPageBlocked
       ? Effect.void
@@ -2557,6 +2623,13 @@ const make = Effect.gen(function* () {
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) {
               return Effect.failCause(cause);
+            }
+            const error = Option.getOrUndefined(Cause.findErrorOption(cause));
+            if (
+              input.source === "runtime" &&
+              error instanceof OrchestrationCommandIdentityCollisionError
+            ) {
+              return quarantineCommandIdentityCollision(input, error);
             }
             if (input.source === "runtime") {
               runtimeJournalPageBlocked = true;

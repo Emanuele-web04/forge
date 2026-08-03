@@ -17,7 +17,9 @@ describe("Synara harness policy", () => {
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
     assert.include(policy, "Use the browser_* tools");
-    assert.include(policy, "exact Electron WebView the user sees");
+    assert.include(policy, "exact thread-scoped Electron page Synara surfaces to the user");
+    assert.include(policy, "continue in the background");
+    assert.include(policy, "must never change the user's active chat");
     assert.include(policy, "in any language");
     assert.include(policy, "canonical and complete control surface");
     assert.include(policy, "start with browser_open");

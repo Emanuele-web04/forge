@@ -108,7 +108,7 @@ export const DESTRUCTIVE_LOCAL = {
 } as const;
 
 const BROWSER_COMMON_AGENT_GUIDANCE =
-  "Controls only Synara's visible shared WebView (same DOM, cookies and session), never chat or desktop; no approval prompt is required.";
+  "Controls only this thread's shared Synara browser runtime (same DOM, cookies and session), never chat or desktop. It may continue in the background when another chat is active; no approval prompt is required.";
 const BROWSER_TAB_SCOPED_AGENT_GUIDANCE =
   " Omit tabId to use this provider session's assigned tab; only pass a tabId returned by browser_tabs/open in this thread scope.";
 const BROWSER_SNAPSHOT_TARGET_GUIDANCE =
@@ -117,7 +117,7 @@ const BROWSER_SNAPSHOT_TARGET_GUIDANCE =
 export const BROWSER_TOOL_INSTRUCTION_COPY = {
   browser_status: `${BROWSER_COMMON_AGENT_GUIDANCE} Check availability and current assignment without accepting a tabId or creating/changing a tab. Integrated browser control requires no user authorization prompt. Call this when browser control may be unavailable.`,
   browser_tabs: `${BROWSER_COMMON_AGENT_GUIDANCE} List only tabs in the MCP connection's server-bound thread scope; this tool accepts no tabId and does not change focus or assignment.`,
-  browser_open: `${BROWSER_COMMON_AGENT_GUIDANCE} Open or reuse the session-affined/current scoped tab; this tool accepts no tabId. show defaults true and reveals the same surface. show:false only reuses that renderer WebView when it is already attached and otherwise reports unavailable; it never creates a separate/headless browser. reuse:false always requests a new tab.`,
+  browser_open: `${BROWSER_COMMON_AGENT_GUIDANCE} Open or reuse the session-affined/current scoped tab; this tool accepts no tabId. show defaults true and reveals the surface only when its owning thread is already active; it never changes the user's current chat. show:false reuses an existing scoped tab without asking the UI to reveal it. reuse:false always requests a new tab.`,
   browser_navigate: `${BROWSER_COMMON_AGENT_GUIDANCE}${BROWSER_TAB_SCOPED_AGENT_GUIDANCE} Navigate the assigned or explicit scoped tab using exactly one of an http/https url or an opaque annotationId from a browser annotation attachment. annotationId is resolved locally to the exact captured live page without embedding its private live URL in the prompt. When acting on an annotation, prefer annotationId and pass its tabId when available. Wait for the requested load milestone, then take a new snapshot after success or an ambiguous committed failure.`,
   browser_back: `${BROWSER_COMMON_AGENT_GUIDANCE}${BROWSER_TAB_SCOPED_AGENT_GUIDANCE} Move the exact shared tab one entry backward in its real Chromium history, wait for the requested load milestone and report the observed final URL. This may execute page lifecycle handlers; snapshot again after success.`,
   browser_forward: `${BROWSER_COMMON_AGENT_GUIDANCE}${BROWSER_TAB_SCOPED_AGENT_GUIDANCE} Move the exact shared tab one entry forward in its real Chromium history, wait for the requested load milestone and report the observed final URL. This may execute page lifecycle handlers; snapshot again after success.`,

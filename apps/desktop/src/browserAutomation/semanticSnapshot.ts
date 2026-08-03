@@ -452,7 +452,7 @@ export const captureSemanticSnapshot = async (
       ? [
           {
             code: "semantic-runtime",
-            message: "Snapshot collected from the shared visible Electron WebView.",
+            message: "Snapshot collected from the shared Electron browser runtime.",
           },
           {
             code: "closed-shadow-unobservable",

@@ -554,14 +554,6 @@ export function SingleChatSurface(props: {
         requestedThreadId,
         requestImmediateBrowserHydration: () => requestImmediateDockHydration("browser"),
         openBrowserPane: (threadId) => openPane(threadId, { kind: "browser" }),
-        navigateToThread: (threadId, panel) => {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId },
-            replace: true,
-            search: () => ({ panel }),
-          });
-        },
       });
     },
   });

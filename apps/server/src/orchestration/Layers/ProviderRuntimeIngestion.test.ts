@@ -377,6 +377,124 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(persisted.sequence);
   });
 
+  it("quarantines a command identity collision without blocking later assistant output", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-after-command-collision");
+    const itemId = asItemId("assistant-after-command-collision");
+    const collisionEvent: ProviderRuntimeEvent = {
+      type: "runtime.warning",
+      eventId: asEventId("evt-command-identity-collision"),
+      provider: "cursor",
+      createdAt: "2026-07-14T00:00:00.000Z",
+      threadId,
+      payload: { message: "Current warning shape" },
+    };
+    const collisionCommandId = CommandId.makeUnsafe(
+      `provider:${collisionEvent.eventId}:thread-activity-append:${threadId}:runtime.warning:${collisionEvent.eventId}`,
+    );
+
+    // Model a crash/upgrade boundary: this event's command id was accepted
+    // under an older projection shape, but its runtime-journal row was never
+    // acknowledged. Replaying the current shape must collide deterministically.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: collisionCommandId,
+        threadId,
+        activity: {
+          id: collisionEvent.eventId,
+          tone: "info",
+          kind: "runtime.warning",
+          summary: "Legacy warning shape",
+          payload: { message: "Legacy warning shape" },
+          turnId: null,
+          createdAt: collisionEvent.createdAt,
+        },
+        createdAt: collisionEvent.createdAt,
+      }),
+    );
+
+    const collisionRow = await Effect.runPromise(
+      harness.runtimeEventRepository.append(collisionEvent),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-after-command-collision"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:00.500Z",
+        threadId,
+        turnId,
+        payload: {},
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "content.delta",
+        eventId: asEventId("evt-assistant-after-command-collision"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:01.000Z",
+        threadId,
+        turnId,
+        itemId,
+        payload: {
+          streamKind: "assistant_text",
+          delta: "The journal kept moving.",
+        },
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "item.completed",
+        eventId: asEventId("evt-assistant-complete-after-command-collision"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:02.000Z",
+        threadId,
+        turnId,
+        itemId,
+        payload: { itemType: "assistant_message", status: "completed" },
+      }),
+    );
+    const terminalRow = await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-complete-after-command-collision"),
+        provider: "cursor",
+        createdAt: "2026-07-14T00:00:03.000Z",
+        threadId,
+        turnId,
+        payload: { state: "completed" },
+      }),
+    );
+
+    await harness.startIngestion();
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === `assistant:${itemId}` &&
+          message.text === "The journal kept moving." &&
+          message.streaming === false,
+      ),
+    );
+    expect(thread.messages.find((message) => message.id === `assistant:${itemId}`)?.text).toBe(
+      "The journal kept moving.",
+    );
+    expect(
+      thread.activities.find((activity) => activity.id === collisionEvent.eventId)?.summary,
+    ).toBe("Legacy warning shape");
+    expect(thread.session).toMatchObject({ status: "ready", activeTurnId: null });
+    expect(thread.latestTurn).toMatchObject({ turnId, state: "completed" });
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(terminalRow.sequence);
+    expect(collisionRow.sequence).toBeLessThan(terminalRow.sequence);
+  });
+
   it("REL-01C gate: rebuilds accepted buffered output before a terminal event", async () => {
     const harness = await createHarness({ startIngestion: false });
     const turnId = asTurnId("turn-buffered-restart");

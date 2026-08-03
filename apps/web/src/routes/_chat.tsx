@@ -32,6 +32,7 @@ import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
 import { isOrdinarySpaceProject } from "../lib/spaces";
 import { isKeyboardShortcutsHelpShortcut, resolveShortcutCommand } from "../keybindings";
 import { useStore } from "../store";
+import { createProjectLastActivityAtSelector } from "../storeSelectors";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
@@ -238,6 +239,8 @@ function ChatRouteGlobalShortcuts() {
   const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
   const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
+  const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
+  const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
   useTemporaryThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -277,8 +280,13 @@ function ChatRouteGlobalShortcuts() {
   // The remembered project is global, so it is unusable the moment you switch Space. Fall
   // back to this Space's most recently touched project rather than to nothing.
   const latestUsableProjectId = useMemo(
-    () => resolveLatestProjectTargetIdWithFallback(activeSpaceProjects, latestProjectId),
-    [activeSpaceProjects, latestProjectId],
+    () =>
+      resolveLatestProjectTargetIdWithFallback(
+        activeSpaceProjects,
+        latestProjectId,
+        projectLastActivityAt,
+      ),
+    [activeSpaceProjects, latestProjectId, projectLastActivityAt],
   );
   // Deliberately unscoped: the persisted id is only cleared once the project is gone from
   // the app entirely, not merely absent from the Space you happen to be in.

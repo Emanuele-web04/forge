@@ -518,6 +518,7 @@ describe("project filter", () => {
         }),
       ],
       (projectId) => projectId === PROJECT_ID,
+      { nowMs: Date.parse("2026-08-01T12:00:00.000Z") },
     );
 
     expect(groups.map((group) => [group.kind, group.threads.map((thread) => thread.id)])).toEqual([
@@ -529,6 +530,37 @@ describe("project filter", () => {
       kind: "chats",
       projectIds: [CHAT_PROJECT_A, CHAT_PROJECT_B],
     });
+  });
+
+  it("ranks projects touched in the current working day above newer untouched activity", () => {
+    const OTHER_PROJECT_ID = ProjectId.makeUnsafe("project-2");
+    // 01:30 local on Aug 2: the working day still started at 04:00 on Aug 1.
+    const nowMs = new Date(2026, 7, 2, 1, 30, 0).getTime();
+    const localIso = (day: number, hour: number) => new Date(2026, 7, day, hour).toISOString();
+
+    const touched = {
+      ...makeThread({
+        id: "touched",
+        projectId: PROJECT_ID,
+        latestTurn: completedTurn(localIso(1, 22)),
+        lastVisitedAt: localIso(1, 22),
+      }),
+    };
+    // Newer agent output, but the user has not opened it since before the turnover.
+    const untouched = {
+      ...makeThread({
+        id: "untouched",
+        projectId: OTHER_PROJECT_ID,
+        latestTurn: completedTurn(localIso(2, 1)),
+        lastVisitedAt: localIso(1, 3),
+      }),
+    };
+
+    const groups = groupActivityThreadsByProject([untouched, touched], () => true, { nowMs });
+    expect(groups.map((group) => group.key)).toEqual([
+      `project:${PROJECT_ID}`,
+      `project:${OTHER_PROJECT_ID}`,
+    ]);
   });
 });
 

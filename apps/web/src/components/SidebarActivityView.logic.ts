@@ -271,11 +271,19 @@ export type ActivityProjectGroup =
  * Groups an already-ordered active list by project, busiest-recent project
  * first. Thread order inside a group is preserved, so status priority still
  * decides who leads each project block.
+ *
+ * Projects the user themselves touched in the current working day (the same
+ * 4am-to-4am window the Recent section uses) rank above the rest, so a project
+ * being worked on right now cannot be pushed down by another project whose
+ * agents merely emitted newer output overnight. Within each tier the most
+ * recent activity still leads.
  */
 export function groupActivityThreadsByProject(
   threads: readonly SidebarThreadSummary[],
   isRealProject: (projectId: ProjectId) => boolean,
+  options: { nowMs: number },
 ): ActivityProjectGroup[] {
+  const dayStartMs = resolveActivityDayStartMs(options.nowMs);
   const groupByKey = new Map<string, ActivityProjectGroup>();
   for (const thread of threads) {
     const key = isRealProject(thread.projectId) ? `project:${thread.projectId}` : "chats";
@@ -304,12 +312,28 @@ export function groupActivityThreadsByProject(
           },
     );
   }
-  return Array.from(groupByKey.values()).toSorted(
-    (left, right) =>
-      Math.max(...right.threads.map(resolveActivityRecencyMs)) -
-        Math.max(...left.threads.map(resolveActivityRecencyMs)) ||
-      left.key.localeCompare(right.key),
-  );
+  // Precomputed so the comparator stays O(1) per call instead of rescanning
+  // every thread of both groups on each comparison.
+  const rankByKey = new Map<string, { touchedToday: number; recencyMs: number }>();
+  for (const group of groupByKey.values()) {
+    let recencyMs = 0;
+    let touchedToday = 1;
+    for (const thread of group.threads) {
+      recencyMs = Math.max(recencyMs, resolveActivityRecencyMs(thread));
+      if (resolveActivityInteractionMs(thread) >= dayStartMs) touchedToday = 0;
+    }
+    rankByKey.set(group.key, { touchedToday, recencyMs });
+  }
+
+  return Array.from(groupByKey.values()).toSorted((left, right) => {
+    const leftRank = rankByKey.get(left.key)!;
+    const rightRank = rankByKey.get(right.key)!;
+    return (
+      leftRank.touchedToday - rightRank.touchedToday ||
+      rightRank.recencyMs - leftRank.recencyMs ||
+      left.key.localeCompare(right.key)
+    );
+  });
 }
 
 export type ActivityScopeOption =

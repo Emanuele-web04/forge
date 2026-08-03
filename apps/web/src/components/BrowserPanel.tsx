@@ -31,6 +31,7 @@ import {
 } from "~/lib/icons";
 
 import { localServerPrimaryLabel } from "@synara/shared/localServers";
+import { resolveDesktopDipRectFromCssRect } from "@synara/shared/desktopChrome";
 import {
   BROWSER_BLANK_URL,
   isBlankBrowserTabUrl,
@@ -44,6 +45,7 @@ import {
 import { isElectron } from "~/env";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
+import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacPlatform } from "~/lib/utils";
@@ -617,6 +619,7 @@ export function BrowserPanel({
     threadBrowserState?.tabs[0] ??
     null;
   const activeTabId = activeTab?.id ?? null;
+  const usesNativeRuntime = activeTab?.runtimeSurface === "native";
   const activeTabInitialUrl = activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
   activeTabInitialUrlRef.current = activeTabInitialUrl;
   const loading = activeTab?.isLoading ?? false;
@@ -808,7 +811,7 @@ export function BrowserPanel({
       return;
     }
 
-    if (showLocalServersHome) {
+    if (showLocalServersHome || usesNativeRuntime) {
       detachRendererBrowserWebview();
       return;
     }
@@ -992,6 +995,7 @@ export function BrowserPanel({
     showLocalServersHome,
     threadId,
     upsertThreadState,
+    usesNativeRuntime,
     workspaceReady,
   ]);
 
@@ -1053,16 +1057,18 @@ export function BrowserPanel({
             if (rect.width <= 0 || rect.height <= 0) {
               return null;
             }
-            return {
-              x: rect.left,
-              y: rect.top,
-              width: rect.width,
-              height: rect.height,
-            };
+            // The native view is positioned in window DIPs, which only equal the CSS
+            // pixels measured above while the shell sits at 100% zoom. Convert, or a
+            // zoomed shell leaves the browser surface sized 1/zoom off its DOM slot.
+            return resolveDesktopDipRectFromCssRect(
+              { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+              readDesktopZoomFactor(),
+            );
           })();
+      const surface = usesNativeRuntime ? "native" : "renderer";
       const nextKey = bounds
-        ? `renderer:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}`
-        : "renderer:hidden";
+        ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}`
+        : `${surface}:hidden`;
       lastMeasuredBoundsKeyRef.current = nextKey;
       if (lastSentBoundsRef.current === nextKey) {
         perfCountersRef.current.syncSkips += 1;
@@ -1071,7 +1077,7 @@ export function BrowserPanel({
       lastSentBoundsRef.current = nextKey;
       perfCountersRef.current.syncSends += 1;
       void api.browser
-        .setPanelBounds({ threadId, bounds, surface: "renderer" })
+        .setPanelBounds({ threadId, bounds, surface })
         .catch(ignoreBrowserBoundsSyncError);
     };
 
@@ -1153,6 +1159,10 @@ export function BrowserPanel({
       scheduleSyncBounds();
     });
     observer.observe(element);
+    // A zoom change moves the slot on the DIP grid. It usually reflows the panel too
+    // (so the observer above fires), but a slot with a fixed CSS px size keeps its
+    // measured rect and would otherwise strand the native view at the old scale.
+    const unsubscribeZoom = subscribeDesktopZoomFactor(scheduleSyncBounds);
     window.addEventListener("resize", scheduleSyncBounds);
     window.addEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
     document.addEventListener("transitionrun", handleTransitionBounds, true);
@@ -1162,6 +1172,7 @@ export function BrowserPanel({
     return () => {
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, false);
       observer.disconnect();
+      unsubscribeZoom();
       window.removeEventListener("resize", scheduleSyncBounds);
       window.removeEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
       document.removeEventListener("transitionrun", handleTransitionBounds, true);
@@ -1178,7 +1189,7 @@ export function BrowserPanel({
       burstFramesRemainingRef.current = 0;
       burstStableFramesRef.current = 0;
     };
-  }, [api, isLiveRuntime, showLocalServersHome, threadId]);
+  }, [api, isLiveRuntime, showLocalServersHome, threadId, usesNativeRuntime]);
 
   const onSubmitAddress = useCallback(() => {
     if (!ensureLiveRuntime()) {

@@ -498,8 +498,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const threadMarkers = threadMarkersProp ?? EMPTY_MESSAGE_MARKERS;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
+  // The timeline remounts per thread (and when the agent-activity detail view
+  // closes), but the anchor lives above it and survives those remounts. An
+  // anchor that is already set at mount time therefore describes a slide that
+  // has *already* played — re-entry must land at the anchored end directly
+  // rather than replaying the glide from the top of the whole conversation.
+  const [inheritedTailAnchorMessageId] = useState<MessageId | null>(
+    () => tailAnchorMessageIdProp ?? null,
+  );
+  const hasInheritedTailAnchor =
+    inheritedTailAnchorMessageId !== null && tailAnchorMessageId === inheritedTailAnchorMessageId;
   const [settledTailAnchorMessageId, setSettledTailAnchorMessageId] = useState<MessageId | null>(
-    null,
+    () => inheritedTailAnchorMessageId,
   );
   const tailAnchorSlideInFlight =
     tailAnchorMessageId !== null && tailAnchorMessageId !== settledTailAnchorMessageId;
@@ -621,7 +631,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   useTailAnchorScroll({
     listRef: resolvedListRef,
     timelineRootRef,
-    anchorMessageId: tailAnchorMessageId,
+    // An inherited anchor already reached its resting position before this
+    // mount; the list bootstraps there via `initialScrollAtEnd` instead.
+    anchorMessageId: hasInheritedTailAnchor ? null : tailAnchorMessageId,
     anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
@@ -2165,7 +2177,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // LegendList caches rendered rows, so every local expansion map that changes row content
         // has to be surfaced through extraData.
         extraData={timelineExtraData}
-        initialScrollAtEnd={tailAnchorMessageId === null}
+        // Deliberately keyed off the *inherited* anchor rather than
+        // `tailAnchorSlideInFlight`: LegendList re-targets the end on every data
+        // change while this is true, which would yank a live post-send anchor
+        // out of its hold. A remount that inherits an already-settled anchor has
+        // no slide to preserve, so bootstrapping at the end is what we want.
+        initialScrollAtEnd={tailAnchorMessageId === null || hasInheritedTailAnchor}
         {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
         maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
         maintainScrollAtEndThreshold={0.1}
@@ -2419,6 +2436,7 @@ function useSettledTurnCollapseTransitions(
   const [transitions, setTransitions] = useState<Record<string, SettledTurnCollapseTransition>>({});
   const previousAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
   const previousCollapsedSignaturesRef = useRef<ReadonlyMap<string, string>>(new Map());
+  const watchedLiveMessageIdsRef = useRef(new Set<string>());
   const timersRef = useRef(new Map<string, SettledTurnCollapseTimer>());
 
   const clearTransitionTimer = useCallback((messageId: string) => {
@@ -2478,6 +2496,7 @@ function useSettledTurnCollapseTransitions(
       rows,
       previousAssistantMessageIdsRef,
       previousCollapsedSignaturesRef,
+      watchedLiveMessageIdsRef,
       clearTransitionTimer,
       scheduleTransitionClose,
       setTransitions,
@@ -2504,6 +2523,7 @@ function applySettledTurnCollapseTransitions(params: {
   rows: readonly MessagesTimelineRow[];
   previousAssistantMessageIdsRef: RefObject<ReadonlySet<string>>;
   previousCollapsedSignaturesRef: RefObject<ReadonlyMap<string, string>>;
+  watchedLiveMessageIdsRef: RefObject<Set<string>>;
   clearTransitionTimer: (messageId: string) => void;
   scheduleTransitionClose: (messageId: string) => void;
   setTransitions: Dispatch<SetStateAction<Record<string, SettledTurnCollapseTransition>>>;
@@ -2512,6 +2532,7 @@ function applySettledTurnCollapseTransitions(params: {
     rows,
     previousAssistantMessageIdsRef,
     previousCollapsedSignaturesRef,
+    watchedLiveMessageIdsRef,
     clearTransitionTimer,
     scheduleTransitionClose,
     setTransitions,
@@ -2521,6 +2542,7 @@ function applySettledTurnCollapseTransitions(params: {
     string,
     { signature: string; items: readonly CollapsedTurnItem[] }
   >();
+  const watchedLiveMessageIds = watchedLiveMessageIdsRef.current;
 
   for (const row of rows) {
     if (row.kind !== "message" || row.message.role !== "assistant") {
@@ -2528,11 +2550,23 @@ function applySettledTurnCollapseTransitions(params: {
     }
     const messageId = row.message.id;
     currentAssistantMessageIds.add(messageId);
+    // Only the assistant row belonging to the live turn has an expanded layout
+    // on screen worth animating away. Thread-wide working state also covers
+    // reconnects, approvals, and newer turns, so it must not qualify history.
+    if (row.assistantTurnInProgress || row.message.streaming) {
+      watchedLiveMessageIds.add(messageId);
+    }
     if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
       currentCollapsed.set(messageId, {
         signature: collapsedTurnItemsSignature(row.collapsedTurnItems),
         items: row.collapsedTurnItems,
       });
+    }
+  }
+
+  for (const messageId of watchedLiveMessageIds) {
+    if (!currentAssistantMessageIds.has(messageId)) {
+      watchedLiveMessageIds.delete(messageId);
     }
   }
 
@@ -2544,7 +2578,11 @@ function applySettledTurnCollapseTransitions(params: {
   }> = [];
 
   for (const [messageId, collapsed] of currentCollapsed) {
-    if (previousAssistantMessageIds.has(messageId) && !previousCollapsedSignatures.has(messageId)) {
+    if (
+      watchedLiveMessageIds.has(messageId) &&
+      previousAssistantMessageIds.has(messageId) &&
+      !previousCollapsedSignatures.has(messageId)
+    ) {
       startedTransitions.push({ messageId, items: collapsed.items });
     }
   }
