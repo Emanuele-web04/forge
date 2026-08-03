@@ -12,9 +12,18 @@ import type { WsEnvironmentClient } from "./wsNativeApi";
 const ENVIRONMENT_A = EnvironmentId.makeUnsafe("aaaaaaaa-1111-4111-8111-111111111111");
 const ENVIRONMENT_B = EnvironmentId.makeUnsafe("bbbbbbbb-2222-4222-8222-222222222222");
 
-/** Minimal client stand-in exposing only the shell-event hook the aggregator uses. */
+/**
+ * Client stand-in covering both halves of attachment: the shell-event hook AND
+ * the subscribe/unsubscribe pair.
+ *
+ * The fake originally stubbed `onShellEvent` alone, which is exactly why the
+ * missing `subscribeShell` call went unnoticed here — a fake that models only
+ * what the code happens to call cannot report a call the code SHOULD make.
+ * `subscribeCount` is asserted below so the request is pinned, not assumed.
+ */
 function makeClient(environmentId: EnvironmentId) {
   const listeners = new Set<(item: unknown) => void>();
+  const counts = { subscribe: 0, unsubscribe: 0 };
   const client = {
     environmentId,
     api: {
@@ -23,11 +32,20 @@ function makeClient(environmentId: EnvironmentId) {
           listeners.add(listener);
           return () => listeners.delete(listener);
         },
+        subscribeShell() {
+          counts.subscribe += 1;
+          return Promise.resolve();
+        },
+        unsubscribeShell() {
+          counts.unsubscribe += 1;
+          return Promise.resolve();
+        },
       },
     },
   } as unknown as WsEnvironmentClient;
   return {
     client,
+    counts,
     emitSnapshot(snapshotSequence: number, threadId: ThreadId) {
       for (const listener of listeners) {
         listener({ kind: "snapshot", snapshot: { snapshotSequence, threads: [{ id: threadId }] } });
@@ -45,6 +63,22 @@ function makeClient(environmentId: EnvironmentId) {
 }
 
 describe("shellAggregation", () => {
+  it("asks each environment for its shell stream, not just for its events", () => {
+    // A listener is not a subscription: the server sends shell snapshots only
+    // after `subscribeShell` on that connection. Attaching without it left
+    // every environment — local included — waiting on a producer nobody
+    // started, so the store never populated. Detach must release it again.
+    const store = { syncServerShellSnapshot: vi.fn() };
+    const a = makeClient(ENVIRONMENT_A);
+
+    const detach = attachEnvironmentShellStream(a.client, store);
+    expect(a.counts.subscribe).toBe(1);
+    expect(a.counts.unsubscribe).toBe(0);
+
+    detach();
+    expect(a.counts.unsubscribe).toBe(1);
+  });
+
   it("routes each environment's snapshot to the store under its own id", () => {
     const store = { syncServerShellSnapshot: vi.fn() };
     const a = makeClient(ENVIRONMENT_A);
