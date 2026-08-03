@@ -478,7 +478,7 @@ export interface SshInvocation {
  */
 export function sshControlPathFor(controlDirectory: string, config: RemoteHostConfig): string {
   const digest = Crypto.createHash("sha256")
-    .update(`${config.hostId} ${config.destination}`)
+    .update(`${config.hostId}\u0000${config.destination}`)
     .digest("hex")
     .slice(0, 16);
   return `${controlDirectory.replace(/\/+$/, "")}/s-${digest}`;
@@ -649,6 +649,6 @@ export function buildSshTunnelArgv(input: BuildSshTunnelArgvInput): SshInvocatio
  * discards a stale "ready" instead of vouching for a command that will never run.
  */
 export function remoteCommandSignature(invocation: SshInvocation): string {
-  const payload = [invocation.command, ...invocation.args].join(" ");
+  const payload = [invocation.command, ...invocation.args].join("\u0000");
   return Crypto.createHash("sha256").update(payload).digest("hex");
 }
