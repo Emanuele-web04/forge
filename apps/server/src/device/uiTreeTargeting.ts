@@ -40,7 +40,9 @@ export class DeviceUiTargetError extends Error {
     // here and the agent (MCP tool errors, WsRpcError) carries only the
     // message, and a "no such label" with no list of real ones is a dead end.
     const listed =
-      candidates.length === 0 ? message : `${message} Elements on screen: ${candidates.join("; ")}.`;
+      candidates.length === 0
+        ? message
+        : `${message} Elements on screen: ${candidates.join("; ")}.`;
     super(listed);
     this.name = "DeviceUiTargetError";
     this.candidates = candidates;
@@ -75,7 +77,9 @@ function normalize(value: string): string {
 
 function matchesRole(node: DeviceUiNode, role: string): boolean {
   const wanted = normalize(role);
-  return normalize(node.role) === wanted || (node.subrole !== null && normalize(node.subrole) === wanted);
+  return (
+    normalize(node.role) === wanted || (node.subrole !== null && normalize(node.subrole) === wanted)
+  );
 }
 
 /** A node is on screen when the point we would tap is inside the root's frame. */
@@ -116,7 +120,9 @@ export function resolveTapTarget(root: DeviceUiNode, target: DeviceUiTarget): De
 
   const exact = byRole.filter((node) => normalize(node.label as string) === wanted);
   const matches =
-    exact.length > 0 ? exact : byRole.filter((node) => normalize(node.label as string).includes(wanted));
+    exact.length > 0
+      ? exact
+      : byRole.filter((node) => normalize(node.label as string).includes(wanted));
 
   if (matches.length === 0) {
     const roleNote = target.role === undefined ? "" : ` with role ${JSON.stringify(target.role)}`;

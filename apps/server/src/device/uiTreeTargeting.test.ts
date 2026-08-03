@@ -34,7 +34,10 @@ const DARK_APPEARANCE = node({
 const SCREEN = node({
   role: "Application",
   label: "Settings",
-  children: [DARK_APPEARANCE, node({ role: "Button", label: "L4S", frame: { x: 20, y: 692, width: 362, height: 53 } })],
+  children: [
+    DARK_APPEARANCE,
+    node({ role: "Button", label: "L4S", frame: { x: 20, y: 692, width: 362, height: 53 } }),
+  ],
 });
 
 describe("tap point resolution", () => {
@@ -70,8 +73,16 @@ describe("resolving a label to an element", () => {
     const screen = node({
       role: "Application",
       children: [
-        node({ role: "Button", label: "Developer", frame: { x: 0, y: 100, width: 402, height: 50 } }),
-        node({ role: "Button", label: "Developer Mode", frame: { x: 0, y: 200, width: 402, height: 50 } }),
+        node({
+          role: "Button",
+          label: "Developer",
+          frame: { x: 0, y: 100, width: 402, height: 50 },
+        }),
+        node({
+          role: "Button",
+          label: "Developer Mode",
+          frame: { x: 0, y: 200, width: 402, height: 50 },
+        }),
       ],
     });
     expect(resolveTapTarget(screen, { label: "Developer" }).point).toEqual({ x: 201, y: 125 });
@@ -126,7 +137,11 @@ describe("resolving a label to an element", () => {
       role: "Application",
       frame: { x: 0, y: 0, width: 402, height: 874 },
       children: [
-        node({ role: "Button", label: "Far Below", frame: { x: 0, y: 1800, width: 402, height: 50 } }),
+        node({
+          role: "Button",
+          label: "Far Below",
+          frame: { x: 0, y: 1800, width: 402, height: 50 },
+        }),
       ],
     });
     expect(() => resolveTapTarget(screen, { label: "Far Below" })).toThrow(/scrolled off screen/);
