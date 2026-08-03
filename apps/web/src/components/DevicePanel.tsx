@@ -16,8 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ensureNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
-import { cn } from "~/lib/utils";
-import { CheckIcon, ChevronDownIcon, CameraIcon, LoaderCircleIcon, XIcon } from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, XIcon } from "~/lib/icons";
 
 import { selectThreadDeviceState, useDeviceStateStore } from "../deviceStateStore";
 import {
@@ -26,18 +25,25 @@ import {
   canvasPointToDevicePoint,
   deviceHidUsageForKey,
   deviceKeyModifiers,
-  deviceSetupProgress,
+  deviceSetupCheckingLabel,
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
+  resolveDeviceSetupAction,
   shouldSubscribeToDeviceStream,
   type DevicePoint,
 } from "./DevicePanel.logic";
+import { DeviceBezel } from "./device/DeviceBezel";
+import { DeviceControlRail } from "./device/DeviceControlRail";
+import {
+  DeviceAgentPill,
+  DeviceBootingScreen,
+  DeviceEmptyScreen,
+  DeviceSetupScreen,
+} from "./device/DeviceScreenStates";
 import { useDeviceVideoStream } from "./device/useDeviceVideoStream";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
-import { PanelStateMessage } from "./chat/PanelStateMessage";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
 import {
@@ -49,33 +55,6 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { anchoredToastManager as toastManager } from "./ui/toast";
-
-/**
- * `rotate` is in the contract but has no implementation: there is no HID usage
- * for rotation and no simctl equivalent — it is a Simulator.app window command,
- * and the helper's button enum has no member for it. The server throws on it, so
- * the affordance is omitted rather than offered as a button that always errors.
- * Revisit if the helper ever gains a rotation path.
- */
-const UNSUPPORTED_HARDWARE_BUTTONS: ReadonlySet<DeviceHardwareButton> = new Set(["rotate"]);
-
-interface DeviceHardwareButtonEntry {
-  readonly button: DeviceHardwareButton;
-  readonly label: string;
-  readonly shortcut: string;
-}
-
-const ALL_HARDWARE_BUTTONS: readonly DeviceHardwareButtonEntry[] = [
-  { button: "home", label: "Home", shortcut: "⌘⇧H" },
-  { button: "lock", label: "Lock", shortcut: "⌘L" },
-  { button: "volume-up", label: "Volume up", shortcut: "⌘↑" },
-  { button: "volume-down", label: "Volume down", shortcut: "⌘↓" },
-  { button: "rotate", label: "Rotate", shortcut: "⌘→" },
-];
-
-const HARDWARE_BUTTONS: readonly DeviceHardwareButtonEntry[] = ALL_HARDWARE_BUTTONS.filter(
-  (entry) => !UNSUPPORTED_HARDWARE_BUTTONS.has(entry.button),
-);
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.length > 0 ? error.message : fallback;
@@ -369,64 +348,59 @@ export default function DevicePanel(props: {
 
   // ── Render ─────────────────────────────────────────────────────────
 
+  // Nothing is selectable until the backend can list devices, so a blocked pane
+  // shows the pane's name where the picker would be rather than a menu whose
+  // every entry would be empty.
   const header = (
     <div className="flex h-full w-full min-w-0 items-center gap-1.5">
-      <Menu>
-        <MenuTrigger
-          render={
-            <Button variant="ghost" size="sm" className="min-w-0 gap-1" disabled={busy}>
-              <span className="truncate">{attachedDevice?.name ?? "Choose a simulator"}</span>
-              <ChevronDownIcon />
-            </Button>
-          }
-        />
-        <ComposerPickerMenuPopup align="start">
-          {pickerEntries.length === 0 ? (
-            <MenuItem disabled>No simulators found</MenuItem>
-          ) : (
-            pickerEntries.map((entry) => (
-              <MenuItem
-                key={entry.device.udid}
-                disabled={entry.action.kind === "wait"}
-                onClick={() => selectDevice(entry)}
-              >
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className="truncate">{entry.device.name}</span>
-                  <span className="ml-auto shrink-0 text-muted-foreground text-xs">
-                    {entry.detail}
+      {availabilityView.kind === "blocked" ? (
+        <span className="truncate px-2 font-medium text-muted-foreground text-xs">
+          iOS Simulator
+        </span>
+      ) : (
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button variant="ghost" size="sm" className="min-w-0 gap-1" disabled={busy}>
+                <span className="truncate">{attachedDevice?.name ?? "Choose a simulator"}</span>
+                <ChevronDownIcon />
+              </Button>
+            }
+          />
+          <ComposerPickerMenuPopup align="start">
+            {pickerEntries.length === 0 ? (
+              <MenuItem disabled>No simulators found</MenuItem>
+            ) : (
+              pickerEntries.map((entry) => (
+                <MenuItem
+                  key={entry.device.udid}
+                  disabled={entry.action.kind === "wait"}
+                  onClick={() => selectDevice(entry)}
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className="truncate">{entry.device.name}</span>
+                    <span className="ml-auto shrink-0 text-muted-foreground text-xs">
+                      {entry.detail}
+                    </span>
+                    {entry.attached ? <CheckIcon className="size-3.5 shrink-0" /> : null}
                   </span>
-                  {entry.attached ? <CheckIcon className="size-3.5 shrink-0" /> : null}
-                </span>
-              </MenuItem>
-            ))
-          )}
-          {attachedDevice ? (
-            <>
-              <MenuSeparator />
-              <MenuItem onClick={detachDevice}>Detach</MenuItem>
-              <MenuItem onClick={shutdownAttached}>Shut down {attachedDevice.name}</MenuItem>
-            </>
-          ) : null}
-        </ComposerPickerMenuPopup>
-      </Menu>
+                </MenuItem>
+              ))
+            )}
+            {attachedDevice ? (
+              <>
+                <MenuSeparator />
+                <MenuItem onClick={detachDevice}>Detach</MenuItem>
+                <MenuItem onClick={shutdownAttached}>Shut down {attachedDevice.name}</MenuItem>
+              </>
+            ) : null}
+          </ComposerPickerMenuPopup>
+        </Menu>
+      )}
 
-      {threadState?.agentActive ? (
-        <Badge variant="info" size="sm" className="shrink-0">
-          Agent is using this device
-        </Badge>
-      ) : null}
-
+      {/* Screenshot moved to the control rail, where it sits with the other
+          device actions; the header keeps only picker and close. */}
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={saveScreenshot}
-          disabled={!attachedDevice || busy}
-          title="Save screenshot"
-          aria-label="Save screenshot"
-        >
-          <CameraIcon />
-        </Button>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -440,74 +414,116 @@ export default function DevicePanel(props: {
     </div>
   );
 
+  // Every state renders on the phone's screen, so the pane reads as one object
+  // rather than a video rectangle with chrome stacked around it.
+  const screen = (() => {
+    if (availabilityView.kind === "blocked") {
+      const action = resolveDeviceSetupAction(availabilityView.steps);
+      return (
+        <DeviceSetupScreen
+          title={availabilityView.title}
+          description={availabilityView.description}
+          steps={availabilityView.steps}
+          checkingLabel={
+            availabilityView.retryable ? deviceSetupCheckingLabel(availabilityView.steps) : null
+          }
+          footnote={
+            availabilityView.steps.length > 0
+              ? "Xcode is a free download from Apple and needs about 10 GB of disk space."
+              : null
+          }
+          action={
+            action
+              ? {
+                  label: action.label,
+                  onClick: () => {
+                    void ensureNativeApi().shell.openExternal(action.url);
+                  },
+                }
+              : null
+          }
+        />
+      );
+    }
+
+    if (!attachedDevice) {
+      return <DeviceEmptyScreen message="Choose a simulator to start streaming it here." />;
+    }
+
+    if (videoStatus.kind !== "streaming" && attachedDevice.state === "booting") {
+      return <DeviceBootingScreen deviceName={attachedDevice.name} label="Starting up…" />;
+    }
+
+    return (
+      <>
+        {/*
+          biome-ignore lint/a11y/noNoninteractiveElementInteractions: the canvas
+          is the device surface; pointer and key handlers are the feature.
+        */}
+        <canvas
+          ref={canvasRef}
+          tabIndex={0}
+          aria-label={`${attachedDevice.name} screen`}
+          // object-cover so the frame is filled edge to edge: the canvas already
+          // carries the device's own aspect ratio, so nothing is actually cropped.
+          className="h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70"
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={() => {
+            pressRef.current = null;
+          }}
+          onKeyDown={(event) => handleKey(event, "down")}
+          onKeyUp={(event) => handleKey(event, "up")}
+        />
+        {videoStatus.kind !== "streaming" ? (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-[12%]">
+            <DeviceVideoOverlay
+              status={videoStatus}
+              deviceState={attachedDevice.state}
+              runtimeMode={runtimeMode}
+              {...(props.onRequestLive ? { onRequestLive: props.onRequestLive } : {})}
+            />
+          </div>
+        ) : null}
+        {/*
+          A degraded capability is a notice, not a wall. As a chip on the screen
+          it costs no layout and cannot push the phone around.
+        */}
+        {availabilityView.kind === "degraded" ? (
+          <p
+            role="status"
+            className="absolute inset-x-[6%] top-[4%] rounded-full bg-black/70 px-2.5 py-1 text-center text-[9.5px] text-white/75 backdrop-blur-sm"
+          >
+            {availabilityView.notice}
+          </p>
+        ) : null}
+      </>
+    );
+  })();
+
   return (
     <DiffPanelShell mode={props.mode} header={header}>
-      {availabilityView.kind === "blocked" ? (
-        <DeviceBlockedState view={availabilityView} />
-      ) : !attachedDevice ? (
-        <PanelStateMessage>
-          Choose a simulator to start streaming it here. Booting one can take a few seconds.
-        </PanelStateMessage>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          {/*
-            A degraded capability is a notice, not a wall: the pane keeps
-            streaming and accepting input while saying what stopped working.
-          */}
-          {availabilityView.kind === "degraded" ? (
-            <p
-              role="status"
-              className="border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-muted-foreground"
-            >
-              {availabilityView.notice}
-            </p>
-          ) : null}
-          <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black/90 p-3">
-            {/*
-              biome-ignore lint/a11y/noNoninteractiveElementInteractions: the canvas
-              is the device surface; pointer and key handlers are the feature.
-            */}
-            <canvas
-              ref={canvasRef}
-              tabIndex={0}
-              aria-label={`${attachedDevice.name} screen`}
-              className="h-full w-full object-contain outline-none ring-inset focus-visible:ring-1 focus-visible:ring-ring/60"
-              onPointerDown={handlePointerDown}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={() => {
-                pressRef.current = null;
-              }}
-              onKeyDown={(event) => handleKey(event, "down")}
-              onKeyUp={(event) => handleKey(event, "up")}
-            />
-            {videoStatus.kind !== "streaming" ? (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <DeviceVideoOverlay
-                  status={videoStatus}
-                  deviceState={attachedDevice.state}
-                  runtimeMode={runtimeMode}
-                  {...(props.onRequestLive ? { onRequestLive: props.onRequestLive } : {})}
-                />
-              </div>
-            ) : null}
-          </div>
+      {/*
+        Phone and rail travel together as one centered group, so the controls
+        stay tucked under the device instead of drifting to the pane's floor
+        whenever the bezel is width-bound and leaves vertical slack.
+      */}
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-3 py-3">
+        <DeviceBezel
+          className="min-h-0 w-full flex-1"
+          overlay={
+            threadState?.agentActive ? <DeviceAgentPill label="Agent is using this device" /> : null
+          }
+        >
+          {screen}
+        </DeviceBezel>
 
-          <div className="flex shrink-0 flex-wrap items-center gap-1 border-t border-border px-2 py-1.5">
-            {HARDWARE_BUTTONS.map((entry) => (
-              <Button
-                key={entry.button}
-                variant="ghost"
-                size="chip"
-                disabled={busy}
-                onClick={() => pressButton(entry.button)}
-                title={`${entry.label} (${entry.shortcut})`}
-              >
-                {entry.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-      )}
+        <DeviceControlRail
+          disabled={!attachedDevice || attachedDevice.state !== "booted" || busy}
+          onPressButton={pressButton}
+          onScreenshot={saveScreenshot}
+        />
+      </div>
 
       {threadState?.lastError ? (
         <p className="shrink-0 border-t border-border px-3 py-1.5 text-destructive text-xs">
@@ -536,7 +552,7 @@ function DeviceVideoOverlay(props: {
     return (
       <button
         type="button"
-        className="pointer-events-auto rounded-lg bg-background/90 px-3 py-1.5 text-xs"
+        className="pointer-events-auto rounded-full bg-white/95 px-3 py-1.5 font-medium text-[10px] text-black"
         onClick={props.onRequestLive}
       >
         Show the live simulator
@@ -546,7 +562,7 @@ function DeviceVideoOverlay(props: {
 
   if (status.kind === "unsupported") {
     return (
-      <p className="max-w-64 text-balance text-center text-white/80 text-xs">
+      <p className="text-balance text-center text-[10px] text-white/70 leading-snug">
         This browser cannot decode the simulator stream. Chrome, Edge, or Safari 17+ support the
         WebCodecs video decoder Synara uses.
       </p>
@@ -555,72 +571,17 @@ function DeviceVideoOverlay(props: {
 
   if (status.kind === "error") {
     return (
-      <p className="max-w-64 text-balance text-center text-white/80 text-xs">{status.message}</p>
+      <p className="text-balance text-center text-[10px] text-white/70 leading-snug">
+        {status.message}
+      </p>
     );
   }
 
   return (
-    <span className="flex items-center gap-2 text-white/70 text-xs">
-      <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
-      {props.deviceState === "booting" ? "Booting the simulator..." : "Connecting..."}
+    <span className="flex items-center gap-1.5 text-[10px] text-white/45">
+      <LoaderCircleIcon className="size-3 animate-spin motion-reduce:animate-none" />
+      {props.deviceState === "booting" ? "Starting up…" : "Connecting…"}
     </span>
-  );
-}
-
-function DeviceBlockedState(props: {
-  view: Extract<ReturnType<typeof resolveDeviceAvailabilityView>, { kind: "blocked" }>;
-}) {
-  const { view } = props;
-  const progress = deviceSetupProgress(view.steps);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-      <div className="max-w-80 space-y-1">
-        <p className="font-medium text-sm">{view.title}</p>
-        <p className="text-muted-foreground text-xs">{view.description}</p>
-      </div>
-
-      {view.steps.length > 0 ? (
-        <ol className="w-full max-w-80 space-y-1.5 text-left" aria-label="Setup steps">
-          {view.steps.map((step) => (
-            <li key={step.id} className="flex items-start gap-2">
-              <span
-                aria-hidden
-                className={cn(
-                  "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border text-[9px]",
-                  step.done
-                    ? "border-success bg-success/16 text-success"
-                    : "border-border text-muted-foreground",
-                )}
-              >
-                {step.done ? <CheckIcon className="size-2.5" /> : null}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span
-                  className={cn(
-                    "text-xs",
-                    step.done ? "text-muted-foreground line-through" : "text-foreground",
-                  )}
-                >
-                  {step.label}
-                </span>
-                {step.detail ? (
-                  <span className="block break-words font-mono text-[10px] text-muted-foreground">
-                    {step.detail}
-                  </span>
-                ) : null}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : null}
-
-      {progress.total > 0 ? (
-        <p className="text-muted-foreground text-xs" aria-live="polite">
-          {progress.done} of {progress.total} complete
-        </p>
-      ) : null}
-    </div>
   );
 }
 

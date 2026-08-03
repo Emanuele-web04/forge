@@ -13,6 +13,7 @@ import type {
   DeviceHardwareButton,
   DeviceKeyModifier,
   DeviceSetupStep,
+  DeviceSetupStepId,
   DeviceToolchain,
   DeviceUdid,
   ThreadDeviceState,
@@ -542,9 +543,8 @@ export function resolveDeviceAvailabilityView(
     case "setup-required":
       return {
         kind: "blocked",
-        title: "Finish setting up the simulator",
-        description:
-          "Synara needs Xcode and an iOS runtime before it can stream a simulator. Steps check off on their own as you complete them.",
+        title: "Set up the iOS Simulator",
+        description: "Progress updates automatically as each step finishes.",
         steps: availability.steps,
         retryable: true,
       };
@@ -572,6 +572,44 @@ export function deviceSetupProgress(steps: readonly DeviceSetupStep[]): {
   readonly total: number;
 } {
   return { done: steps.filter((step) => step.done).length, total: steps.length };
+}
+
+export interface DeviceSetupAction {
+  readonly label: string;
+  readonly url: string;
+}
+
+/**
+ * The one thing the user can act on right now. Only Xcode installation has a
+ * destination Synara can send them to — every other step either completes on
+ * its own or is driven from Xcode itself — so the screen shows a single button
+ * or none, rather than a row of links that mostly go nowhere.
+ */
+const DEVICE_SETUP_ACTIONS: Partial<Record<DeviceSetupStepId, DeviceSetupAction>> = {
+  // The https form rather than macappstore://: the shell bridge only forwards
+  // http(s), and macOS hands this link to the App Store app regardless.
+  "install-xcode": {
+    label: "Open Mac App Store",
+    url: "https://apps.apple.com/app/xcode/id497799835",
+  },
+};
+
+export function resolveDeviceSetupAction(
+  steps: readonly DeviceSetupStep[],
+): DeviceSetupAction | null {
+  const next = steps.find((step) => !step.done);
+  return next ? (DEVICE_SETUP_ACTIONS[next.id] ?? null) : null;
+}
+
+/**
+ * The checklist re-reports on its own, so a "checking" line is only honest while
+ * steps remain. Once everything is done the pane is about to flip to the picker
+ * and a spinner would be a lie.
+ */
+export function deviceSetupCheckingLabel(steps: readonly DeviceSetupStep[]): string | null {
+  const next = steps.find((step) => !step.done);
+  if (!next) return null;
+  return next.id === "install-xcode" ? "Checking for Xcode…" : "Checking your setup…";
 }
 
 // ── Thread state helpers ─────────────────────────────────────────────

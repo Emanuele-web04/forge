@@ -192,6 +192,12 @@ export const GlobeIcon = adaptIcon(IconWorld);
 export const WebSearchIcon: LucideIcon = centralIconWrapper("globe");
 // Handset glyph for the iOS Simulator dock pane.
 export const DeviceMobileIcon: LucideIcon = centralIconWrapper("phone");
+// Hardware-button glyphs for the simulator's control rail.
+export const DeviceHomeIcon: LucideIcon = centralIconWrapper("home");
+export const DeviceLockIcon: LucideIcon = centralIconWrapper("lock");
+export const DeviceVolumeUpIcon: LucideIcon = centralIconWrapper("volume-up");
+export const DeviceVolumeDownIcon: LucideIcon = centralIconWrapper("volume-down");
+export const DeviceShutterIcon: LucideIcon = centralIconWrapper("camera-1");
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );

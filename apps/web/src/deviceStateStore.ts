@@ -52,6 +52,13 @@ export const useDeviceStateStore = create<DeviceStateStore>()((set) => ({
   clear: () => set({ threadStatesByThreadId: {} }),
 }));
 
+// Dev-only handle so the pane's availability and setup states — which otherwise
+// require a Mac without Xcode, or a broken helper — can be driven directly when
+// verifying the UI. Stripped from production builds by the import.meta.env guard.
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__deviceStateStoreForTests = useDeviceStateStore;
+}
+
 export function selectThreadDeviceState(
   threadId: ThreadId,
 ): (store: DeviceStateStore) => ThreadDeviceState | undefined {
