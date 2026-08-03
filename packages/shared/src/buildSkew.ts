@@ -107,6 +107,11 @@ export const READ_ONLY_SAFE_WS_METHODS: ReadonlySet<string> = new Set<string>([
   WS_METHODS.subscribeServerConfig,
   WS_METHODS.subscribeServerProviderStatuses,
   WS_METHODS.subscribeServerSettings,
+  // A subscription that only reads supervision status. Safe in a skewed
+  // session for the same reason the settings stream is, and needed there:
+  // without it a degraded client cannot tell that a remote host is connected,
+  // so its hosts would read as permanently unreachable.
+  WS_METHODS.subscribeRemoteEnvironmentStatuses,
   WS_METHODS.statsGetProfileStats,
   WS_METHODS.statsGetProfileTokenStats,
 

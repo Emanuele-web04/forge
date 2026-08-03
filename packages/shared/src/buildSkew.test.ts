@@ -143,6 +143,9 @@ describe("read-only method allowlist", () => {
         WS_METHODS.subscribeServerConfig,
         WS_METHODS.subscribeServerProviderStatuses,
         WS_METHODS.subscribeServerSettings,
+        // Reviewed: the handler only reads supervision status and streams it.
+        // It starts no bring-up and mutates nothing.
+        WS_METHODS.subscribeRemoteEnvironmentStatuses,
         WS_METHODS.statsGetProfileStats,
         WS_METHODS.statsGetProfileTokenStats,
         WS_METHODS.providerGetComposerCapabilities,

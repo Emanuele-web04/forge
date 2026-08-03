@@ -282,6 +282,11 @@ describe("default deny", () => {
         WS_METHODS.subscribeAutomationEvents,
         WS_METHODS.subscribeOrchestrationDomainEvents,
         WS_METHODS.subscribeProjectDevServerEvents,
+        // Reviewed: the payload is host ids, supervision phases, bootstrap step
+        // names and error text — no credential, no destination, no key material.
+        // A non-owner session may already read the whole RemoteHostConfig via
+        // subscribeServerSettings, so this grants strictly less than it does.
+        WS_METHODS.subscribeRemoteEnvironmentStatuses,
         WS_METHODS.subscribeServerConfig,
         WS_METHODS.subscribeServerLifecycle,
         WS_METHODS.subscribeServerProviderStatuses,
