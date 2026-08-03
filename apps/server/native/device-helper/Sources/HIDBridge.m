@@ -193,6 +193,21 @@ static const uint32_t kUsageLeftShift = 225;
   SynaraIndigoButtonFn _buttonFn;
   SynaraIndigoKeyboardFn _keyboardFn;
   SynaraIndigoMouseFn _mouseFn;
+  NSInteger _undelivered;
+}
+
+- (NSInteger)undeliveredEventCount {
+  @synchronized(self) {
+    return _undelivered;
+  }
+}
+
+/// Record an event that never reached the guest. Every early return in the
+/// injection paths below funnels through here, so no failure stays invisible.
+- (void)noteUndelivered {
+  @synchronized(self) {
+    _undelivered += 1;
+  }
 }
 
 - (BOOL)attachToDevice:(id)device error:(NSError **)error {
@@ -258,6 +273,7 @@ static const uint32_t kUsageLeftShift = 225;
 
 - (void)sendMessage:(SynaraIndigoMessage *)message {
   if (_client == nil || message == NULL) {
+    [self noteUndelivered];
     return;
   }
   SEL selector = NSSelectorFromString(@"sendWithMessage:freeWhenDone:completionQueue:completion:");
@@ -270,11 +286,13 @@ static const uint32_t kUsageLeftShift = 225;
 
 - (void)sendTouchAtX:(double)x y:(double)y down:(BOOL)down {
   if (_mouseFn == NULL) {
+    [self noteUndelivered];
     return;
   }
   CGPoint point = CGPointMake(x, y);
   SynaraIndigoMessage *seed = _mouseFn(&point, NULL, kTouchTarget, down ? kButtonOpDown : kButtonOpUp, NO);
   if (seed == NULL) {
+    [self noteUndelivered];
     return;
   }
 
@@ -284,6 +302,7 @@ static const uint32_t kUsageLeftShift = 225;
   SynaraIndigoMessage *message = calloc(1, sizeof(SynaraIndigoMessage) + stride);
   if (message == NULL) {
     free(seed);
+    [self noteUndelivered];
     return;
   }
   message->innerSize = (unsigned int)stride;
@@ -336,6 +355,7 @@ static const uint32_t kUsageLeftShift = 225;
 
 - (void)sendKeyUsage:(uint32_t)usage down:(BOOL)down {
   if (_keyboardFn == NULL) {
+    [self noteUndelivered];
     return;
   }
   SynaraIndigoMessage *message = _keyboardFn(usage, down ? kButtonOpDown : kButtonOpUp);
@@ -374,6 +394,7 @@ static const uint32_t kUsageLeftShift = 225;
 
 - (void)sendButton:(SynaraHardwareButton)button down:(BOOL)down {
   if (_buttonFn == NULL) {
+    [self noteUndelivered];
     return;
   }
   SynaraIndigoMessage *message =

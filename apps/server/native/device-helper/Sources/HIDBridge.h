@@ -32,6 +32,16 @@ BOOL SynaraHardwareButtonFromName(NSString *name, SynaraHardwareButton *outButto
 - (BOOL)attachToDevice:(id)device
                  error:(NSError **)error NS_SWIFT_NAME(attach(toDevice:));
 
+/// Count of events this bridge could not deliver: no client, a missing private
+/// symbol, or a send the simulator rejected.
+///
+/// Every injection path used to fail silently while the RPC layer still acked
+/// `{"ok": true}`, so a stale or half-attached HID client looked identical to a
+/// working one. An agent cannot see the screen, so a silent no-op is the worst
+/// possible failure mode; callers compare this before and after an injection
+/// and turn any increase into an error.
+@property(nonatomic, readonly) NSInteger undeliveredEventCount;
+
 /// Touch down/up at a normalized display point (0..1, origin top-left).
 - (void)sendTouchAtX:(double)x y:(double)y down:(BOOL)down
     NS_SWIFT_NAME(sendTouch(x:y:down:));

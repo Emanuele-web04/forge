@@ -26,6 +26,9 @@ enum RPCErrorCode: Int {
   case internalError = -32603
   case notAttached = -32000
   case simulatorFailure = -32001
+  /// Input this process accepted but could not deliver to the guest. Reported
+  /// as an error so a caller never treats an injection that vanished as applied.
+  case inputNotDelivered = -32002
 }
 
 struct RPCError: Error {
@@ -304,6 +307,24 @@ final class HelperSession {
 
 // MARK: - Method dispatch
 
+/// Run one HID injection and fail if the bridge could not deliver it.
+///
+/// Every injection path in SynaraHIDBridge returns silently when it has no
+/// client or a private symbol is missing, and this layer used to answer
+/// `{"ok": true}` regardless. A half-attached HID client therefore looked
+/// exactly like a working one: taps were acked and nothing moved. Comparing the
+/// undelivered counter around the call turns that into a real error.
+private func withHIDDelivery(_ hid: SynaraHIDBridge, _ body: () -> Void) throws {
+  let before = hid.undeliveredEventCount
+  body()
+  let dropped = hid.undeliveredEventCount - before
+  if dropped > 0 {
+    throw RPCError(
+      .inputNotDelivered,
+      "\(dropped) HID event(s) were not delivered to the simulator; re-attach and retry")
+  }
+}
+
 func handle(method: String, params: Params, session: HelperSession) throws -> Any {
   switch method {
 
@@ -341,29 +362,37 @@ func handle(method: String, params: Params, session: HelperSession) throws -> An
 
   case "tap":
     let hid = try session.requireHID()
-    hid.tap(x: try params.normalized("x"), y: try params.normalized("y"),
-            holdMs: params.optionalInt("holdMs", default: 80))
+    let tapX = try params.normalized("x")
+    let tapY = try params.normalized("y")
+    try withHIDDelivery(hid) {
+      hid.tap(x: tapX, y: tapY, holdMs: params.optionalInt("holdMs", default: 80))
+    }
     return ["ok": true]
 
   case "touch":
     let hid = try session.requireHID()
     let phase = try params.string("phase")
-    switch phase {
-    case "down", "move":
-      hid.sendTouch(x: try params.normalized("x"), y: try params.normalized("y"), down: true)
-    case "up":
-      hid.sendTouch(x: try params.normalized("x"), y: try params.normalized("y"), down: false)
-    default:
+    let touchX = try params.normalized("x")
+    let touchY = try params.normalized("y")
+    guard phase == "down" || phase == "move" || phase == "up" else {
       throw RPCError(.invalidParams, "phase must be one of down, move, up")
+    }
+    try withHIDDelivery(hid) {
+      hid.sendTouch(x: touchX, y: touchY, down: phase != "up")
     }
     return ["ok": true]
 
   case "swipe", "drag":
     let hid = try session.requireHID()
-    hid.drag(
-      startX: try params.normalized("startX"), startY: try params.normalized("startY"),
-      endX: try params.normalized("endX"), endY: try params.normalized("endY"),
-      durationMs: params.optionalInt("durationMs", default: 250))
+    let startX = try params.normalized("startX")
+    let startY = try params.normalized("startY")
+    let endX = try params.normalized("endX")
+    let endY = try params.normalized("endY")
+    try withHIDDelivery(hid) {
+      hid.drag(
+        startX: startX, startY: startY, endX: endX, endY: endY,
+        durationMs: params.optionalInt("durationMs", default: 250))
+    }
     return ["ok": true]
 
   case "key":
@@ -372,21 +401,24 @@ func handle(method: String, params: Params, session: HelperSession) throws -> An
     guard usage > 0, usage <= 0xFFFF else {
       throw RPCError(.invalidParams, "usage must be a positive USB HID usage code")
     }
-    if let phase = params.optionalString("phase") {
-      switch phase {
+    let keyPhase = params.optionalString("phase")
+    if let keyPhase, keyPhase != "down", keyPhase != "up" {
+      throw RPCError(.invalidParams, "phase must be 'down' or 'up'")
+    }
+    try withHIDDelivery(hid) {
+      switch keyPhase {
       case "down": hid.sendKey(usage: UInt32(usage), down: true)
       case "up": hid.sendKey(usage: UInt32(usage), down: false)
-      default: throw RPCError(.invalidParams, "phase must be 'down' or 'up'")
+      default: hid.tapKey(usage: UInt32(usage))
       }
-    } else {
-      hid.tapKey(usage: UInt32(usage))
     }
     return ["ok": true]
 
   case "text":
     let hid = try session.requireHID()
     let text = try params.string("text")
-    let skipped = hid.type(text: text)
+    var skipped = 0
+    try withHIDDelivery(hid) { skipped = hid.type(text: text) }
     // Reported rather than thrown: partial entry is usually still what the
     // caller wanted, and silence would hide the gap.
     return ["ok": true, "characters": text.count, "skipped": skipped]
@@ -400,14 +432,16 @@ func handle(method: String, params: Params, session: HelperSession) throws -> An
         .invalidParams,
         "unknown button '\(name)'; expected home, lock, side, siri, volume-up or volume-down")
     }
-    if let phase = params.optionalString("phase") {
-      switch phase {
+    let buttonPhase = params.optionalString("phase")
+    if let buttonPhase, buttonPhase != "down", buttonPhase != "up" {
+      throw RPCError(.invalidParams, "phase must be 'down' or 'up'")
+    }
+    try withHIDDelivery(hid) {
+      switch buttonPhase {
       case "down": hid.sendButton(button, down: true)
       case "up": hid.sendButton(button, down: false)
-      default: throw RPCError(.invalidParams, "phase must be 'down' or 'up'")
+      default: hid.tapButton(button)
       }
-    } else {
-      hid.tapButton(button)
     }
     return ["ok": true]
 

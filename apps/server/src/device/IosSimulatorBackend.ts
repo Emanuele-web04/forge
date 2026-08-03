@@ -379,47 +379,70 @@ export class IosSimulatorBackend implements DeviceBackend {
   // from this list on purpose: they run on `simctl io`, so they survive even a
   // completely broken framebuffer path.
 
-  async tap(udid: string, x: number, y: number): Promise<void> {
+  /**
+   * Send one HID injection, rebinding the helper's input client if the first
+   * attempt was accepted but never reached the guest.
+   *
+   * The helper's HID client is bound to one boot of one simulator. When it goes
+   * stale (the app under test relaunched, the device was rebooted outside
+   * Synara, SimulatorKit dropped the connection) the injection silently
+   * vanishes. The helper now reports that instead of acking it, and a forced
+   * re-attach rebuilds the client, so the retry lands on a live one.
+   */
+  private async injectInput(
+    udid: string,
+    method: string,
+    buildParams: (helper: HelperClient) => Record<string, unknown>,
+  ): Promise<void> {
     await this.assertCapability("hid");
     const helper = await this.attachedHelper(udid);
-    await this.helperRequest(HELPER_METHODS.tap, helper.normalize(x, y));
+    try {
+      await this.helperRequest(method, buildParams(helper));
+      return;
+    } catch (error) {
+      if (!isInputNotDeliveredError(error)) throw error;
+    }
+    const rebound = await this.attachedHelper(udid, { force: true });
+    await this.helperRequest(method, buildParams(rebound));
+  }
+
+  async tap(udid: string, x: number, y: number): Promise<void> {
+    await this.injectInput(udid, HELPER_METHODS.tap, (helper) => helper.normalize(x, y));
   }
 
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
-    await this.assertCapability("hid");
-    const helper = await this.attachedHelper(udid);
-    const start = helper.normalize(gesture.fromX, gesture.fromY);
-    const end = helper.normalize(gesture.toX, gesture.toY);
-    await this.helperRequest(HELPER_METHODS.swipe, {
-      startX: start.x,
-      startY: start.y,
-      endX: end.x,
-      endY: end.y,
-      durationMs: gesture.durationMs,
+    await this.injectInput(udid, HELPER_METHODS.swipe, (helper) => {
+      const start = helper.normalize(gesture.fromX, gesture.fromY);
+      const end = helper.normalize(gesture.toX, gesture.toY);
+      return {
+        startX: start.x,
+        startY: start.y,
+        endX: end.x,
+        endY: end.y,
+        durationMs: gesture.durationMs,
+      };
     });
   }
 
   async typeText(udid: string, text: string): Promise<void> {
-    await this.assertCapability("hid");
-    await this.attachedHelper(udid);
-    await this.helperRequest(HELPER_METHODS.text, { text });
+    await this.injectInput(udid, HELPER_METHODS.text, () => ({ text }));
   }
 
   async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
-    await this.assertCapability("hid");
-    await this.attachedHelper(udid);
     // The helper takes one USB HID usage per call and tracks held modifiers
     // itself, so a chord is sent as its modifier keys around the main key.
     for (const modifier of event.modifiers) {
       const usage = HID_MODIFIER_USAGES[modifier];
-      if (usage !== undefined) {
-        await this.helperRequest(HELPER_METHODS.key, { usage, phase: event.direction });
-      }
+      if (usage === undefined) continue;
+      await this.injectInput(udid, HELPER_METHODS.key, () => ({
+        usage,
+        phase: event.direction,
+      }));
     }
-    await this.helperRequest(HELPER_METHODS.key, {
+    await this.injectInput(udid, HELPER_METHODS.key, () => ({
       usage: event.keyCode,
       phase: event.direction,
-    });
+    }));
   }
 
   async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
@@ -432,8 +455,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       );
     }
     await this.assertCapability("hid");
-    await this.attachedHelper(udid);
-    await this.helperRequest(HELPER_METHODS.button, { name: button });
+    await this.injectInput(udid, HELPER_METHODS.button, () => ({ name: button }));
   }
 
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
@@ -565,10 +587,13 @@ export class IosSimulatorBackend implements DeviceBackend {
    * method acts on that binding, so each call re-asserts it. `attach` is a
    * no-op when the device is already the attached one.
    */
-  private async attachedHelper(udid: string): Promise<HelperClient> {
+  private async attachedHelper(
+    udid: string,
+    options: { readonly force?: boolean } = {},
+  ): Promise<HelperClient> {
     const helper = await this.requireHelper();
     try {
-      await helper.attach(udid);
+      await helper.attach(udid, options);
     } catch (error) {
       // A device can also be rebooted outside Synara (Simulator.app, or simctl
       // in the agent's own shell), which no invalidation hook here can observe.
@@ -680,6 +705,16 @@ export class IosSimulatorBackend implements DeviceBackend {
  * previous boot? The helper reports it as a missing framebuffer surface, since
  * from its side the descriptor is valid but has nothing behind it.
  */
+/**
+ * Did the helper accept an injection it could not deliver? Distinct from a
+ * stale descriptor: the attachment is live enough to answer, but its HID client
+ * is bound to a boot that is gone, so the fix is to rebind and retry once.
+ */
+export function isInputNotDeliveredError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not delivered to the simulator/iu.test(message);
+}
+
 export function isStaleDescriptorError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /framebuffer surface|display has no|not attached/iu.test(message);

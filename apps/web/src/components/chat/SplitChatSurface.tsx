@@ -24,6 +24,7 @@ import {
   noopChatSurfaceAction,
 } from "./ChatThreadSurfacePrimitives";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
+import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
 import type { ChatRightPanel } from "../../diffRouteSearch";
 import { stripDiffSearchParams } from "../../diffRouteSearch";
@@ -751,6 +752,12 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
         }
       : null,
   });
+
+  // Split view has no device panel yet: ChatRightPanel is browser|diff, so
+  // there is nowhere to open one. The bridge still runs with a null open
+  // handler because its other half keeps device state fresh, which the pane on
+  // a single-surface tab and the composer screenshot both read.
+  useDeviceEventBridge({ onOpenPaneRequested: null });
 
   const closePanePanel = (paneId: PaneId) => {
     updatePanePanelState(paneId, { panel: null });

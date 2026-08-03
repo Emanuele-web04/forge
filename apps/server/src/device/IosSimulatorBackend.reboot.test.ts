@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProcessRunResult } from "../processRunner.ts";
-import { IosSimulatorBackend, isStaleDescriptorError } from "./IosSimulatorBackend.ts";
+import {
+  IosSimulatorBackend,
+  isInputNotDeliveredError,
+  isStaleDescriptorError,
+} from "./IosSimulatorBackend.ts";
 import type { HelperClient } from "./helperClient.ts";
 
 const DEVICE = "AAAA-1111";
@@ -64,10 +68,19 @@ class FakeHelper {
     return this.attachedDevice!;
   }
 
-  async request() {
+  /** Set by a test to make the next N injections report non-delivery. */
+  undeliverableCalls = 0;
+  requestCalls: string[] = [];
+
+  async request(method = "unknown") {
+    this.requestCalls.push(method);
     if (this.attachment === null) throw new Error("not attached");
     if (this.attachment.generation !== this.bootGeneration) {
       throw new Error("display has no framebuffer surface yet");
+    }
+    if (this.undeliverableCalls > 0) {
+      this.undeliverableCalls -= 1;
+      throw new Error("1 HID event(s) were not delivered to the simulator; re-attach and retry");
     }
     return { ok: true };
   }
@@ -164,5 +177,42 @@ describe("simulator reboot", () => {
     };
 
     await expect(backend.tap(DEVICE, 1, 1)).rejects.toThrow("not booted");
+  });
+});
+
+describe("undelivered input recovery", () => {
+  it("recognizes the helper's non-delivery report", () => {
+    expect(
+      isInputNotDeliveredError(
+        new Error("1 HID event(s) were not delivered to the simulator; re-attach and retry"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not confuse it with unrelated failures", () => {
+    expect(isInputNotDeliveredError(new Error("simulator is not booted"))).toBe(false);
+    expect(isInputNotDeliveredError(new Error("display has no framebuffer surface"))).toBe(false);
+  });
+
+  it("rebinds the HID client and retries once when input does not reach the guest", async () => {
+    const { backend, helper } = makeBackend();
+    await backend.tap(DEVICE, 10, 10);
+    helper.attachCalls.length = 0;
+
+    // A stale HID client accepts the call but the event never lands. Before the
+    // fix the helper acked this as success and the tap silently vanished.
+    helper.undeliverableCalls = 1;
+    await backend.tap(DEVICE, 20, 20);
+
+    // The recovery path re-asserts the attachment and then forces a rebind, so
+    // the retry lands on a freshly built HID client.
+    expect(helper.attachCalls.some((call) => call.force)).toBe(true);
+  });
+
+  it("surfaces the failure when the retry also fails to deliver", async () => {
+    const { backend, helper } = makeBackend();
+    helper.undeliverableCalls = 5;
+
+    await expect(backend.tap(DEVICE, 1, 1)).rejects.toThrow("not delivered");
   });
 });
