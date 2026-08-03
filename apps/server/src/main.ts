@@ -51,6 +51,13 @@ import {
   serveExternalMcpStdio,
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
+import {
+  ACCOUNT_URL_ENV_NAME,
+  resolveAccountUrl,
+  runAuthLogin,
+  runAuthLogout,
+  runStatus,
+} from "./accountAuth";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -579,9 +586,87 @@ const mcpCommand = Command.make("mcp").pipe(
   Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
 );
 
+const accountUrlFlag = Flag.string("account-url").pipe(
+  Flag.withDescription(`Synara account server to talk to (overrides ${ACCOUNT_URL_ENV_NAME}).`),
+  Flag.optional,
+);
+
+const requireAccountUrl = (flag: Option.Option<string>) =>
+  Effect.gen(function* () {
+    const accountUrl = resolveAccountUrl({ flag: Option.getOrUndefined(flag) });
+    if (!accountUrl) {
+      return yield* new StartupError({
+        message: `Account features are not configured — set ${ACCOUNT_URL_ENV_NAME} or pass --account-url.`,
+      });
+    }
+    return accountUrl;
+  });
+
+// `--account-url` lives only on the base `auth` command: the Effect CLI rejects
+// a flag declared on both a parent and its subcommand, so `logout` reads the
+// parsed value out of the parent's context (same shape as `--home-dir` above).
+const baseAuthCommand = Command.make("auth", { accountUrl: accountUrlFlag }).pipe(
+  Command.withDescription("Sign in to a Synara account and register this machine as a host."),
+);
+
+const authLogoutCommand = Command.make("logout", {}, () =>
+  Effect.gen(function* () {
+    const root = yield* baseServerCommand;
+    const auth = yield* baseAuthCommand;
+    const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+    const resolved = yield* requireAccountUrl(auth.accountUrl);
+    yield* Effect.tryPromise({
+      try: () => runAuthLogout({ accountUrl: resolved, baseDir }),
+      catch: (cause) => new StartupError({ message: "Sign-out failed.", cause }),
+    });
+  }),
+).pipe(
+  Command.withDescription(
+    "Sign this machine out, deregistering the host and deleting credentials.",
+  ),
+);
+
+const authCommand = baseAuthCommand.pipe(
+  Command.withHandler(({ accountUrl }) =>
+    Effect.gen(function* () {
+      const root = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+      const resolved = yield* requireAccountUrl(accountUrl);
+      yield* Effect.tryPromise({
+        try: () =>
+          runAuthLogin({
+            accountUrl: resolved,
+            baseDir,
+            ...(Option.isSome(root.devUrl) ? { devUrl: root.devUrl.value } : {}),
+          }),
+        catch: (cause) => new StartupError({ message: "Sign-in failed.", cause }),
+      });
+    }),
+  ),
+  Command.withSubcommands([authLogoutCommand]),
+);
+
+const statusCommand = Command.make("status", { accountUrl: accountUrlFlag }, ({ accountUrl }) =>
+  Effect.gen(function* () {
+    const parent = yield* baseServerCommand;
+    const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+    yield* Effect.tryPromise({
+      try: () =>
+        runStatus({
+          accountUrl: resolveAccountUrl({ flag: Option.getOrUndefined(accountUrl) }),
+          baseDir,
+          ...(Option.isSome(parent.devUrl) ? { devUrl: parent.devUrl.value } : {}),
+        }),
+      catch: (cause) => new StartupError({ message: "Failed to read account status.", cause }),
+    });
+  }),
+).pipe(
+  Command.withDescription("Show the signed-in account, this host, and every registered host."),
+);
+
 const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
-  Command.withSubcommands([mcpCommand]),
+  Command.withSubcommands([mcpCommand, authCommand, statusCommand]),
 );
 
 export const synaraCli = serverCommand;
