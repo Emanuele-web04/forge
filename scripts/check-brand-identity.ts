@@ -42,6 +42,22 @@ const forbiddenPatterns = [
   new RegExp(escapeRegExp(incorrectBundleDomain), "i"),
 ] as const;
 
+// Legally required attribution keeps the retired identity, but only as the
+// exact lines reviewed here. Any other occurrence — or any edit to these
+// lines — still fails, so loosening the attribution requires updating this
+// allowlist in the same change.
+const retiredCompanyDisplayName = `${characters(84, 51)} ${characters(84, 111, 111, 108, 115)} Inc.`;
+const retiredFirstDisplayName = `${characters(84, 51)}${characters(67, 111, 100, 101)}`;
+const approvedAttributionLines = new Map<string, ReadonlySet<string>>([
+  ["LICENSE", new Set([`Copyright (c) 2026 ${retiredCompanyDisplayName}`])],
+  [
+    "README.md",
+    new Set([
+      `Synara began as a clone of [${retiredFirstDisplayName}](https://github.com/pingdotgg/${retiredFirstName}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`,
+    ]),
+  ],
+]);
+
 // Raster images cannot be searched for embedded text. Keep the user-facing
 // screenshots behind reviewed digests so changing either one requires another
 // explicit visual identity audit instead of silently bypassing this guard.
@@ -78,14 +94,17 @@ function containsForbiddenIdentity(value: string): boolean {
 
 export function findBrandIdentityViolations(
   files: readonly BrandIdentityFile[],
+  approvedLines: ReadonlyMap<string, ReadonlySet<string>> = approvedAttributionLines,
 ): BrandIdentityViolation[] {
   const violations: BrandIdentityViolation[] = [];
   for (const file of files) {
     if (containsForbiddenIdentity(file.path)) {
       violations.push({ path: file.path, line: null, text: file.path });
     }
+    const approvedForFile = approvedLines.get(file.path);
     for (const [index, line] of file.contents.split(/\r?\n/).entries()) {
       if (!containsForbiddenIdentity(line)) continue;
+      if (approvedForFile?.has(line.trim())) continue;
       violations.push({ path: file.path, line: index + 1, text: line.trim() });
     }
   }
