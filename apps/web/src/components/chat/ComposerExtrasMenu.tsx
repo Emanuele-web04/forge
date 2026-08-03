@@ -7,7 +7,7 @@ import { type ProviderInteractionMode } from "@synara/contracts";
 import { useId, useRef, type ChangeEvent } from "react";
 import { GoTasklist } from "react-icons/go";
 
-import { PaperclipIcon, PlusIcon } from "~/lib/icons";
+import { HashIcon, PaperclipIcon, PlusIcon } from "~/lib/icons";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { Button } from "../ui/button";
 import {
@@ -27,6 +27,7 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
   supportsFastMode: boolean;
   fastModeEnabled: boolean;
   onAddPhotos: (files: File[]) => void;
+  onAddReference?: () => void;
   onToggleFastMode: () => void;
   onSetPlanMode: (enabled: boolean) => void;
 }) {
@@ -76,6 +77,12 @@ export const ComposerExtrasMenu = function ComposerExtrasMenu(props: {
             <PaperclipIcon className="size-4 shrink-0" />
             Add image
           </MenuItem>
+          {props.onAddReference ? (
+            <MenuItem onClick={props.onAddReference}>
+              <HashIcon className="size-4 shrink-0" />
+              Add reference…
+            </MenuItem>
+          ) : null}
 
           <MenuSeparator />
           <MenuCheckboxItem

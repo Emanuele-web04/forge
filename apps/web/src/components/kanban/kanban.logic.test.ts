@@ -764,6 +764,7 @@ describe("buildKanbanComposerDraftSnapshot", () => {
       ],
       assistantSelections: [],
       fileComments: [],
+      workItemReferences: [],
       activeProvider: null,
     });
 
@@ -792,6 +793,7 @@ describe("buildKanbanComposerDraftSnapshot", () => {
       terminalContexts: [],
       assistantSelections: [],
       fileComments: [],
+      workItemReferences: [],
       activeProvider: null,
     });
 

@@ -30,6 +30,7 @@ import {
   normalizeAssistantSelections,
   normalizeDraftThreadEntryPoint,
   normalizeFileComments,
+  normalizeWorkItemReferences,
   normalizeTerminalContextsForThread,
   projectDraftThreadEntryPointFromKey,
   projectIdFromDraftThreadMappingKey,
@@ -105,6 +106,19 @@ const PersistedFileCommentDraft = Schema.Struct({
 
 type PersistedFileCommentDraft = typeof PersistedFileCommentDraft.Type;
 
+const PersistedWorkItemReferenceDraft = Schema.Struct({
+  draftId: Schema.String,
+  source: Schema.Literals(["github-issue", "github-pr", "linear-issue"]),
+  id: Schema.String,
+  url: Schema.String,
+  title: Schema.String,
+  identifier: Schema.String,
+  body: Schema.String,
+  bodyPreview: Schema.String,
+  repository: Schema.NullOr(Schema.String),
+});
+type PersistedWorkItemReferenceDraft = typeof PersistedWorkItemReferenceDraft.Type;
+
 const PersistedPastedTextDraft = Schema.Struct({
   id: Schema.String,
   createdAt: Schema.String,
@@ -162,6 +176,7 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   browserAnnotations: Schema.optionalKey(Schema.Array(PersistedBrowserAnnotationDraft)),
   terminalContexts: Schema.Array(PersistedQueuedTerminalContextDraft),
   fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
+  workItemReferences: Schema.optionalKey(Schema.Array(PersistedWorkItemReferenceDraft)),
   pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
   skills: Schema.Array(ProviderSkillReference),
   mentions: Schema.Array(ProviderMentionReference),
@@ -211,6 +226,7 @@ const PersistedComposerPromptHistorySavedDraft = Schema.Union([
     browserAnnotations: Schema.optionalKey(Schema.Array(PersistedBrowserAnnotationDraft)),
     terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
     fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
+    workItemReferences: Schema.optionalKey(Schema.Array(PersistedWorkItemReferenceDraft)),
     pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
     skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
@@ -238,6 +254,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   browserAnnotations: Schema.optionalKey(Schema.Array(PersistedBrowserAnnotationDraft)),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
   fileComments: Schema.optionalKey(Schema.Array(PersistedFileCommentDraft)),
+  workItemReferences: Schema.optionalKey(Schema.Array(PersistedWorkItemReferenceDraft)),
   pastedTexts: Schema.optionalKey(Schema.Array(PersistedPastedTextDraft)),
   skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
@@ -366,6 +383,12 @@ function normalizePersistedPromptHistorySavedDraft(
         return normalized ? [normalized] : [];
       })
     : [];
+  const workItemReferences = Array.isArray(candidate.workItemReferences)
+    ? candidate.workItemReferences.flatMap((entry) => {
+        const normalized = normalizePersistedWorkItemReferenceDraft(entry);
+        return normalized ? [normalized] : [];
+      })
+    : [];
   const pastedTexts = Array.isArray(candidate.pastedTexts)
     ? candidate.pastedTexts.flatMap((entry) => {
         const normalized = normalizePersistedPastedTextDraft(entry);
@@ -385,6 +408,7 @@ function normalizePersistedPromptHistorySavedDraft(
     ...(browserAnnotations.length > 0 ? { browserAnnotations } : {}),
     ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
     ...(fileComments.length > 0 ? { fileComments } : {}),
+    ...(workItemReferences.length > 0 ? { workItemReferences } : {}),
     ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
     ...(skills.length > 0 ? { skills } : {}),
     ...(mentions.length > 0 ? { mentions } : {}),
@@ -499,6 +523,44 @@ function normalizePersistedFileCommentDraft(value: unknown): PersistedFileCommen
   return { id, ...normalized };
 }
 
+function normalizePersistedWorkItemReferenceDraft(
+  value: unknown,
+): PersistedWorkItemReferenceDraft | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const draftId = typeof candidate.draftId === "string" ? candidate.draftId : "";
+  const source = candidate.source;
+  if (
+    draftId.length === 0 ||
+    (source !== "github-issue" && source !== "github-pr" && source !== "linear-issue")
+  ) {
+    return null;
+  }
+  const id = typeof candidate.id === "string" ? candidate.id : "";
+  const url = typeof candidate.url === "string" ? candidate.url : "";
+  const title = typeof candidate.title === "string" ? candidate.title : "";
+  const identifier = typeof candidate.identifier === "string" ? candidate.identifier : "";
+  if (!id || !url || !title || !identifier) {
+    return null;
+  }
+  return {
+    draftId,
+    source,
+    id,
+    url,
+    title,
+    identifier,
+    body: typeof candidate.body === "string" ? candidate.body : "",
+    bodyPreview: typeof candidate.bodyPreview === "string" ? candidate.bodyPreview : "",
+    repository:
+      typeof candidate.repository === "string" && candidate.repository.trim().length > 0
+        ? candidate.repository.trim()
+        : null,
+  };
+}
+
 function normalizePersistedPastedTextDraft(value: unknown): PersistedPastedTextDraft | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -599,6 +661,12 @@ function normalizePersistedQueuedTurns(
             return normalized ? [normalized] : [];
           })
         : [];
+      const workItemReferences = Array.isArray(candidate.workItemReferences)
+        ? candidate.workItemReferences.flatMap((entry) => {
+            const normalized = normalizePersistedWorkItemReferenceDraft(entry);
+            return normalized ? [normalized] : [];
+          })
+        : [];
       const pastedTexts = Array.isArray(candidate.pastedTexts)
         ? candidate.pastedTexts.flatMap((pasted) => {
             const normalized = normalizePersistedPastedTextDraft(pasted);
@@ -633,6 +701,7 @@ function normalizePersistedQueuedTurns(
         ...(browserAnnotations.length > 0 ? { browserAnnotations } : {}),
         terminalContexts,
         ...(fileComments.length > 0 ? { fileComments } : {}),
+        ...(workItemReferences.length > 0 ? { workItemReferences } : {}),
         ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
         skills: [...skills],
         mentions: [...mentions],
@@ -856,6 +925,12 @@ function normalizePersistedDraftsByThreadId(
           return normalized ? [normalized] : [];
         })
       : [];
+    const workItemReferences = Array.isArray(draftCandidate.workItemReferences)
+      ? draftCandidate.workItemReferences.flatMap((entry) => {
+          const normalized = normalizePersistedWorkItemReferenceDraft(entry);
+          return normalized ? [normalized] : [];
+        })
+      : [];
     const pastedTexts = Array.isArray(draftCandidate.pastedTexts)
       ? draftCandidate.pastedTexts.flatMap((entry) => {
           const normalized = normalizePersistedPastedTextDraft(entry);
@@ -944,6 +1019,7 @@ function normalizePersistedDraftsByThreadId(
       assistantSelections.length === 0 &&
       browserAnnotations.length === 0 &&
       fileComments.length === 0 &&
+      workItemReferences.length === 0 &&
       pastedTexts.length === 0 &&
       !hasReferenceData &&
       !hasQueuedTurns &&
@@ -962,6 +1038,7 @@ function normalizePersistedDraftsByThreadId(
       ...(browserAnnotations.length > 0 ? { browserAnnotations } : {}),
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
       ...(fileComments.length > 0 ? { fileComments } : {}),
+      ...(workItemReferences.length > 0 ? { workItemReferences } : {}),
       ...(pastedTexts.length > 0 ? { pastedTexts } : {}),
       ...(skills.length > 0 ? { skills } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
@@ -1046,6 +1123,21 @@ export function partializeComposerDraftStoreState(
                 })),
               }
             : {}),
+          ...(queuedTurn.workItemReferences.length > 0
+            ? {
+                workItemReferences: queuedTurn.workItemReferences.map((reference) => ({
+                  draftId: reference.draftId,
+                  source: reference.source,
+                  id: reference.id,
+                  url: reference.url,
+                  title: reference.title,
+                  identifier: reference.identifier,
+                  body: reference.body,
+                  bodyPreview: reference.bodyPreview,
+                  repository: reference.repository,
+                })),
+              }
+            : {}),
           ...(queuedTurn.pastedTexts.length > 0
             ? {
                 pastedTexts: queuedTurn.pastedTexts.map((pasted) => ({
@@ -1102,6 +1194,7 @@ export function partializeComposerDraftStoreState(
       draft.browserAnnotations.length === 0 &&
       draft.terminalContexts.length === 0 &&
       draft.fileComments.length === 0 &&
+      draft.workItemReferences.length === 0 &&
       draft.pastedTexts.length === 0 &&
       !hasReferenceData &&
       !hasQueuedTurns &&
@@ -1162,6 +1255,23 @@ export function partializeComposerDraftStoreState(
                       endLine: comment.endLine,
                       text: comment.text,
                     })),
+                  }
+                : {}),
+              ...(draft.promptHistorySavedDraft.workItemReferences.length > 0
+                ? {
+                    workItemReferences: draft.promptHistorySavedDraft.workItemReferences.map(
+                      (reference) => ({
+                        draftId: reference.draftId,
+                        source: reference.source,
+                        id: reference.id,
+                        url: reference.url,
+                        title: reference.title,
+                        identifier: reference.identifier,
+                        body: reference.body,
+                        bodyPreview: reference.bodyPreview,
+                        repository: reference.repository,
+                      }),
+                    ),
                   }
                 : {}),
               ...(draft.promptHistorySavedDraft.pastedTexts.length > 0
@@ -1227,6 +1337,21 @@ export function partializeComposerDraftStoreState(
               id: pasted.id,
               createdAt: pasted.createdAt,
               text: pasted.text,
+            })),
+          }
+        : {}),
+      ...(draft.workItemReferences.length > 0
+        ? {
+            workItemReferences: draft.workItemReferences.map((reference) => ({
+              draftId: reference.draftId,
+              source: reference.source,
+              id: reference.id,
+              url: reference.url,
+              title: reference.title,
+              identifier: reference.identifier,
+              body: reference.body,
+              bodyPreview: reference.bodyPreview,
+              repository: reference.repository,
             })),
           }
         : {}),
@@ -1334,6 +1459,7 @@ function hydrateQueuedTurnsFromPersisted(
         browserAnnotations: normalizeBrowserAnnotations(queuedTurn.browserAnnotations ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
         fileComments: normalizeFileComments(queuedTurn.fileComments ?? []),
+        workItemReferences: normalizeWorkItemReferences(queuedTurn.workItemReferences ?? []),
         pastedTexts: hydratePastedTextsFromPersisted(queuedTurn.pastedTexts),
         skills: [...queuedTurn.skills],
         mentions: [...queuedTurn.mentions],
@@ -1360,6 +1486,7 @@ function hydratePromptHistorySavedDraft(
       browserAnnotations: [],
       terminalContexts: [],
       fileComments: [],
+      workItemReferences: [],
       pastedTexts: [],
       skills: [],
       mentions: [],
@@ -1380,6 +1507,7 @@ function hydratePromptHistorySavedDraft(
         text: "",
       })) ?? [],
     fileComments: normalizeFileComments(savedDraft.fileComments ?? []),
+    workItemReferences: normalizeWorkItemReferences(savedDraft.workItemReferences ?? []),
     pastedTexts: hydratePastedTextsFromPersisted(savedDraft.pastedTexts),
     skills: [...(savedDraft.skills ?? [])],
     mentions: [...(savedDraft.mentions ?? [])],
@@ -1410,6 +1538,7 @@ export function toHydratedThreadDraft(
         text: "",
       })) ?? [],
     fileComments: normalizeFileComments(persistedDraft.fileComments ?? []),
+    workItemReferences: normalizeWorkItemReferences(persistedDraft.workItemReferences ?? []),
     pastedTexts: hydratePastedTextsFromPersisted(persistedDraft.pastedTexts),
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],

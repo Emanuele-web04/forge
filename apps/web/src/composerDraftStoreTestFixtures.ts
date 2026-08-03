@@ -138,6 +138,7 @@ export function makeQueuedChatTurn(
     browserAnnotations: [],
     terminalContexts: [makeTerminalContext({ id: `ctx-${id}` })],
     fileComments: [],
+    workItemReferences: [],
     pastedTexts: [],
     skills: [{ name: "check-code", path: "/skills/check-code" }],
     mentions: [{ name: "repo", path: "/mentions/repo" }],

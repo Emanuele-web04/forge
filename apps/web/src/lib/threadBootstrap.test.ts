@@ -56,6 +56,7 @@ function makeComposerDraftState(
     browserAnnotations: [],
     terminalContexts: [],
     fileComments: [],
+    workItemReferences: [],
     pastedTexts: [],
     skills: [],
     mentions: [],

@@ -22,6 +22,8 @@ import {
 } from "../Layers/GitHubCli.ts";
 import {
   type GitHubCliShape,
+  type GitHubIssueDetail,
+  type GitHubIssueSummary,
   type GitHubPullRequestDetailData,
   type GitHubPullRequestListItem,
   type GitHubPullRequestSummary,
@@ -58,6 +60,8 @@ export interface FakeGhScenario {
   reviewRequestedPullRequestNumbers?: number[];
   mergeCapabilities?: PullRequestMergeCapabilities;
   pullRequestDiff?: { patch: string; truncated: boolean };
+  repositoryIssues?: GitHubIssueSummary[];
+  issueDetail?: GitHubIssueDetail;
 }
 
 export type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -304,6 +308,29 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
                 operation: "getPullRequestDetail",
                 detail: "Fake pull request detail was not configured.",
               }),
+            );
+      },
+      listRepositoryIssues: (input) => {
+        ghCalls.push(
+          `issue list --repo ${input.repository}${input.query ? ` --search ${input.query}` : ""}`,
+        );
+        return scenario.failWith
+          ? Effect.fail(scenario.failWith)
+          : Effect.succeed(scenario.repositoryIssues ?? []);
+      },
+      getIssue: (input) => {
+        ghCalls.push(`issue view ${input.number} --repo ${input.repository}`);
+        const issue =
+          scenario.issueDetail ??
+          scenario.repositoryIssues?.find((entry) => entry.number === input.number);
+        return issue
+          ? Effect.succeed(issue)
+          : Effect.fail(
+              scenario.failWith ??
+                new GitHubCliError({
+                  operation: "getIssue",
+                  detail: "Fake issue detail was not configured.",
+                }),
             );
       },
       getRepositoryMergeCapabilities: (input) => {

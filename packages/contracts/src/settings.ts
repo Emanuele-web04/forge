@@ -90,6 +90,12 @@ export const SkillsServerSettings = Schema.Struct({
 });
 export type SkillsServerSettings = typeof SkillsServerSettings.Type;
 
+/** Third-party integrations used by composer work-item references (Linear, etc.). */
+export const IntegrationsServerSettings = Schema.Struct({
+  linearApiKey: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+});
+export type IntegrationsServerSettings = typeof IntegrationsServerSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
@@ -113,6 +119,7 @@ export const ServerSettings = Schema.Struct({
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  integrations: IntegrationsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -195,6 +202,11 @@ export const ServerSettingsPatch = Schema.Struct({
   skills: Schema.optionalKey(
     Schema.Struct({
       disabled: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(256)))),
+    }),
+  ),
+  integrations: Schema.optionalKey(
+    Schema.Struct({
+      linearApiKey: Schema.optionalKey(StringSetting),
     }),
   ),
 });
