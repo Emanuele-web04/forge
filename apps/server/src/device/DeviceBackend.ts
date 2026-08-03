@@ -14,6 +14,7 @@
  */
 import type {
   DeviceAvailability,
+  DeviceGeometry,
   DeviceDescribeUiResult,
   DeviceDescriptor,
   DeviceHardwareButton,
@@ -116,6 +117,13 @@ export interface DeviceBackend {
    * Begin (or join) the encoded video stream for a device. Calling twice for
    * the same udid replaces the listener rather than starting a second capture.
    */
+  /**
+   * Screen geometry for a device, when the backend knows it. Null until
+   * something has attached to the device, since the values come from the
+   * native helper rather than from discovery.
+   */
+  geometry(udid: string): DeviceGeometry | null;
+
   attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void>;
   detachStream(udid: string): Promise<void>;
 

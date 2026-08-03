@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { decodeDeviceFrame, encodeDeviceFrame } from "@synara/shared/deviceFrame";
 
-import { DeviceFramePrefixParser, DeviceHelperError, encodeFrameRecord } from "./helperClient.ts";
+import {
+  DeviceFramePrefixParser,
+  DeviceHelperError,
+  HelperClient,
+  encodeFrameRecord,
+} from "./helperClient.ts";
 
 const DEVICE = "FAKE-0001";
 
@@ -129,5 +134,53 @@ describe("helper frame envelope handling", () => {
     if (!republished.ok) return;
     expect(Array.from(republished.frame.payload)).toEqual(Array.from(accessUnit));
     expect(republished.frame.header.keyframe).toBe(true);
+  });
+});
+
+describe("device point bounds", () => {
+  const attachment = {
+    udid: DEVICE,
+    pointWidth: 402,
+    pointHeight: 874,
+    pixelWidth: 1206,
+    pixelHeight: 2622,
+    scale: 3,
+    inputAvailable: true,
+    accessibilityAvailable: true,
+  };
+
+  /** A client with a fixed attachment, so normalize() can be exercised alone. */
+  const attachedClient = () => {
+    const client = new HelperClient({ binaryPath: "/nonexistent" });
+    (client as unknown as { attachment: typeof attachment }).attachment = attachment;
+    return client;
+  };
+
+  it("maps in-bounds device points onto the 0..1 range the helper wants", () => {
+    expect(attachedClient().normalize(201, 437)).toEqual({ x: 0.5, y: 0.5 });
+    expect(attachedClient().normalize(0, 0)).toEqual({ x: 0, y: 0 });
+    expect(attachedClient().normalize(402, 874)).toEqual({ x: 1, y: 1 });
+  });
+
+  it("rejects a coordinate past the right edge instead of clamping it", () => {
+    // 1019 is a frame pixel on a 1206px canvas. Clamping pinned this to the
+    // screen edge and reported success, which hid the whole pixel-vs-point bug.
+    expect(() => attachedClient().normalize(1019, 400)).toThrow(/outside the screen bounds/u);
+  });
+
+  it("rejects a coordinate past the bottom edge", () => {
+    expect(() => attachedClient().normalize(200, 2000)).toThrow(/outside the screen bounds/u);
+  });
+
+  it("rejects negative and non-finite coordinates", () => {
+    expect(() => attachedClient().normalize(-1, 100)).toThrow(/outside the screen bounds/u);
+    expect(() => attachedClient().normalize(100, Number.NaN)).toThrow(/outside the screen bounds/u);
+  });
+
+  it("names the valid bounds and the scale so the caller can see the mistake", () => {
+    // "1019 is outside 0..402 (402x874 at 3x)" makes the scale factor obvious.
+    expect(() => attachedClient().normalize(1019, 400)).toThrow(/0\.\.402/u);
+    expect(() => attachedClient().normalize(1019, 400)).toThrow(/402x874 points at 3x/u);
+    expect(() => attachedClient().normalize(1019, 400)).toThrow(/not frame pixels/u);
   });
 });

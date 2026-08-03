@@ -129,7 +129,7 @@ export class DeviceManager {
     // Already reported through `availability`; an empty list is the honest
     // answer when simctl itself cannot run.
     const devices = await this.backend.listDevices(options).catch(() => []);
-    return devices.map((device) => this.withBootSource(device));
+    return devices.map((device) => this.describe(device));
   }
 
   async getThreadState(threadId: string): Promise<ThreadDeviceState> {
@@ -141,7 +141,7 @@ export class DeviceManager {
     const devices = await this.backend.listDevices({ includeShutdown: true }).catch(() => []);
     return devices
       .filter((device) => this.synaraBooted.has(device.udid))
-      .map((device) => this.withBootSource(device));
+      .map((device) => this.describe(device));
   }
 
   // ── Boot / shutdown ────────────────────────────────────────────────
@@ -154,7 +154,7 @@ export class DeviceManager {
     // Viewing an already-booted device is uncapped: the cap exists to stop
     // Synara from accumulating simulators, not to limit what the user watches.
     if (known?.state === "booted") {
-      return { kind: "booted", device: this.withBootSource(known) };
+      return { kind: "booted", device: this.describe(known) };
     }
     if (this.synaraBooted.size >= this.bootLimit) {
       return {
@@ -374,8 +374,16 @@ export class DeviceManager {
     return attachment;
   }
 
-  private withBootSource(device: DeviceDescriptor): DeviceDescriptor {
-    return this.synaraBooted.has(device.udid) ? { ...device, bootSource: "synara" } : device;
+  /**
+   * Fill in the fields discovery cannot know: who booted the device, and its
+   * screen geometry. Every descriptor the manager hands out passes through
+   * here, so the pane always sees geometry once the device has been attached.
+   */
+  private describe(device: DeviceDescriptor): DeviceDescriptor {
+    const bootSource = this.synaraBooted.has(device.udid) ? "synara" : device.bootSource;
+    const geometry = this.backend.geometry(device.udid) ?? device.geometry;
+    if (bootSource === device.bootSource && geometry === device.geometry) return device;
+    return { ...device, bootSource, ...(geometry ? { geometry } : {}) };
   }
 
   private isAttachedAnywhere(udid: string): boolean {

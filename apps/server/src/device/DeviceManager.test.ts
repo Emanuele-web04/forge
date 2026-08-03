@@ -462,3 +462,43 @@ describe("DeviceManager agent auto-attach", () => {
     expect((await manager.getThreadState(THREAD_B)).attachedDeviceUdid).toBe(DEVICE_B);
   });
 });
+
+describe("DeviceManager device geometry", () => {
+  it("reports geometry once the device has been attached", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    const before = (await manager.list({ includeShutdown: true })).devices.find(
+      (device) => device.udid === DEVICE_A,
+    );
+    await manager.attach(THREAD_A, DEVICE_A);
+    const after = (await manager.list({ includeShutdown: true })).devices.find(
+      (device) => device.udid === DEVICE_A,
+    );
+
+    // Geometry comes from the helper attachment, so discovery alone cannot
+    // supply it; the pane needs it to map canvas pixels onto device points.
+    expect(before?.geometry).toBeUndefined();
+    expect(after?.geometry).toEqual({ pointWidth: 402, pointHeight: 874, scale: 3 });
+  });
+
+  it("carries geometry in the pushed thread state", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+
+    const state = await manager.getThreadState(THREAD_A);
+
+    const attached = state.devices.find((device) => device.udid === state.attachedDeviceUdid);
+    expect(attached?.geometry?.scale).toBe(3);
+  });
+
+  it("leaves never-attached devices without geometry rather than guessing", async () => {
+    const { manager } = makeManager();
+
+    const listed = await manager.list({ includeShutdown: true });
+
+    // Optional on the contract precisely so this case stays representable.
+    expect(listed.devices.every((device) => device.geometry === undefined)).toBe(true);
+  });
+});

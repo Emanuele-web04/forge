@@ -11,6 +11,7 @@ import type {
   DeviceAvailability,
   DeviceDescribeUiResult,
   DeviceDescriptor,
+  DeviceGeometry,
   DeviceHardwareButton,
   DeviceInstallAppResult,
   DeviceLaunchAppResult,
@@ -56,6 +57,13 @@ export interface FakeDeviceBackendOptions {
   readonly now?: () => number;
 }
 
+/** iPhone 17 Pro geometry: the shape that exposed the pixel-vs-point bug. */
+export const DEFAULT_FAKE_GEOMETRY: DeviceGeometry = {
+  pointWidth: 402,
+  pointHeight: 874,
+  scale: 3,
+};
+
 const DEFAULT_DEVICES: readonly FakeDeviceSeed[] = [
   { udid: "FAKE-0001", name: "iPhone 17 Pro", runtime: "iOS 26.0", state: "shutdown" },
   { udid: "FAKE-0002", name: "iPhone 17", runtime: "iOS 26.0", state: "shutdown" },
@@ -82,6 +90,7 @@ export class FakeDeviceBackend implements DeviceBackend {
   private readonly listeners = new Map<string, DeviceFrameListener>();
   private readonly sequences = new Map<string, number>();
   private readonly installedBundles = new Map<string, string>();
+  private readonly attachedGeometry = new Set<string>();
 
   constructor(options: FakeDeviceBackendOptions = {}) {
     this.availabilityValue = options.availability ?? { kind: "available" };
@@ -266,9 +275,15 @@ export class FakeDeviceBackend implements DeviceBackend {
     };
   }
 
+  geometry(udid: string): DeviceGeometry | null {
+    // Mirrors the real backend: geometry only exists once something attached.
+    return this.attachedGeometry.has(udid) ? DEFAULT_FAKE_GEOMETRY : null;
+  }
+
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
     this.record({ kind: "attachStream", udid });
     this.requireBooted(udid);
+    this.attachedGeometry.add(udid);
     this.listeners.set(udid, onFrame);
   }
 

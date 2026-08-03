@@ -73,8 +73,30 @@ export const DeviceDescriptor = Schema.Struct({
   runtime: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
   state: DeviceRuntimeState,
   bootSource: DeviceBootSource,
+  /**
+   * Screen size in device points, and the pixel-per-point scale.
+   *
+   * Input coordinates are device points while video frames are pixels, so a
+   * pane mapping a canvas click without dividing by the scale sends
+   * coordinates several times too large (1206x2622 pixels against a 402x874
+   * point screen). These fields are what let it convert.
+   *
+   * Optional because the values come from the native helper's attachment: a
+   * device that has never been attached has no geometry to report, and
+   * requiring it would break every listing on a host where the helper is not
+   * built yet.
+   */
+  geometry: Schema.optional(
+    Schema.Struct({
+      pointWidth: Schema.Finite.check(Schema.isGreaterThan(0)),
+      pointHeight: Schema.Finite.check(Schema.isGreaterThan(0)),
+      scale: Schema.Finite.check(Schema.isGreaterThan(0)),
+    }),
+  ),
 });
 export type DeviceDescriptor = typeof DeviceDescriptor.Type;
+
+export type DeviceGeometry = NonNullable<DeviceDescriptor["geometry"]>;
 
 /** Alias kept because the pane talks about "device state" while the manager stores descriptors. */
 export const DeviceState = DeviceDescriptor;

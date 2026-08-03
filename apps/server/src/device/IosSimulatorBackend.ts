@@ -25,6 +25,7 @@ import type {
   DeviceCapabilityId,
   DeviceDescribeUiResult,
   DeviceDescriptor,
+  DeviceGeometry,
   DeviceHardwareButton,
   DeviceInstallAppResult,
   DeviceKeyModifier,
@@ -156,6 +157,8 @@ export class IosSimulatorBackend implements DeviceBackend {
   private readonly run: typeof runProcess;
   private readonly makeHelperClient: (binaryPath: string) => HelperClient;
 
+  /** Geometry learned from helper attachments, keyed by udid. */
+  private readonly deviceGeometry = new Map<string, DeviceGeometry>();
   private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
@@ -473,6 +476,10 @@ export class IosSimulatorBackend implements DeviceBackend {
     };
   }
 
+  geometry(udid: string): DeviceGeometry | null {
+    return this.deviceGeometry.get(udid) ?? null;
+  }
+
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
     // Streaming needs both halves of the pipeline: the framebuffer to read and
     // the encoder to compress it.
@@ -592,8 +599,19 @@ export class IosSimulatorBackend implements DeviceBackend {
     options: { readonly force?: boolean } = {},
   ): Promise<HelperClient> {
     const helper = await this.requireHelper();
+    const remember = () => {
+      const attachment = helper.attachedDevice;
+      if (attachment?.udid === udid) {
+        this.deviceGeometry.set(udid, {
+          pointWidth: attachment.pointWidth,
+          pointHeight: attachment.pointHeight,
+          scale: attachment.scale,
+        });
+      }
+    };
     try {
       await helper.attach(udid, options);
+      remember();
     } catch (error) {
       // A device can also be rebooted outside Synara (Simulator.app, or simctl
       // in the agent's own shell), which no invalidation hook here can observe.
@@ -602,6 +620,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       if (!isStaleDescriptorError(error)) throw this.helperError(error);
       try {
         await helper.attach(udid, { force: true });
+        remember();
       } catch (retryError) {
         throw this.helperError(retryError);
       }

@@ -99,8 +99,28 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
-function clampNormalized(value: number, extent: number): number {
-  return Math.min(1, Math.max(0, value / extent));
+/**
+ * One axis of a device-point coordinate as a 0..1 fraction of the screen.
+ *
+ * The error names both the offending value and the valid range, because the
+ * overwhelmingly common cause is a caller passing frame pixels: seeing
+ * "1019 is outside 0..402" makes the scale factor obvious immediately.
+ */
+function normalizeCoordinate(
+  value: number,
+  extent: number,
+  axis: "x" | "y",
+  attachment: DeviceHelperAttachment,
+): number {
+  if (!Number.isFinite(value) || value < 0 || value > extent) {
+    throw new DeviceHelperError(
+      "device_coordinate_out_of_bounds",
+      `Device ${axis}=${value} is outside the screen bounds 0..${extent} device points ` +
+        `(${attachment.pointWidth}x${attachment.pointHeight} points at ${attachment.scale}x; ` +
+        `pass device points, not frame pixels).`,
+    );
+  }
+  return extent === 0 ? 0 : value / extent;
 }
 
 function readNumber(record: Record<string, unknown>, key: string, fallback: number): number {
@@ -298,7 +318,14 @@ export class HelperClient {
 
   /**
    * Convert device points to the normalized 0..1 coordinates the helper's input
-   * methods expect, clamped so a mis-scaled canvas cannot produce a rejection.
+   * methods expect.
+   *
+   * Out-of-bounds coordinates are rejected, never clamped. Clamping looked
+   * forgiving but was the worst possible behaviour: a caller sending frame
+   * pixels instead of points (1206x2622 rather than 402x874) had every tap
+   * pinned to the screen edge and acked as success, hiding a real
+   * coordinate-space bug behind a green result. A caller wrong about the
+   * coordinate space has to hear about it.
    */
   normalize(x: number, y: number): { readonly x: number; readonly y: number } {
     const attachment = this.attachment;
@@ -309,8 +336,8 @@ export class HelperClient {
       );
     }
     return {
-      x: clampNormalized(x, attachment.pointWidth),
-      y: clampNormalized(y, attachment.pointHeight),
+      x: normalizeCoordinate(x, attachment.pointWidth, "x", attachment),
+      y: normalizeCoordinate(y, attachment.pointHeight, "y", attachment),
     };
   }
 
