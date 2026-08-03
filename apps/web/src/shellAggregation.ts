@@ -38,12 +38,30 @@ export function attachEnvironmentShellStream(
   // alone, so applying one would write into whichever environment happens to
   // hold that id. Staleness between snapshots is the accepted cost until that
   // path is environment-keyed; a wrong-environment write would not be.
-  return client.api.orchestration.onShellEvent((item) => {
+  const detachListener = client.api.orchestration.onShellEvent((item) => {
     if (item.kind !== "snapshot") return;
     // The store fences per environment, so no fence is tracked here — a second
     // server's sequence 1 must not be compared against the first server's.
     store.syncServerShellSnapshot(item.snapshot, environmentId);
   });
+
+  // ASK FOR THE STREAM, do not merely listen for it. A listener is not a
+  // subscription: the server only starts sending shell snapshots once
+  // `subscribeShell` has been called on that connection. Attaching without it
+  // left every environment — including the local one — waiting on a producer
+  // nobody started, so the sidebar stayed empty and `threadIds` never
+  // populated. Before this module existed the call lived in the route effect;
+  // moving attachment per-environment moved the listener and dropped the
+  // request.
+  void client.api.orchestration.subscribeShell().catch(() => {
+    // A failed subscribe must not tear down the listener: the transport
+    // resubscribes on reconnect, and a snapshot pushed later still lands.
+  });
+
+  return () => {
+    detachListener();
+    void client.api.orchestration.unsubscribeShell().catch(() => undefined);
+  };
 }
 
 /**

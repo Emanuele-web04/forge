@@ -30,6 +30,7 @@ import {
   runProjectId,
 } from "./environmentAutomationOwnership";
 import { environmentLabel } from "./environmentDirectory";
+import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
 import { useStore } from "./store";
 
 /**
@@ -402,7 +403,15 @@ export function createEnvironmentRoutedApi(localApi: NativeApi): NativeApi {
 
       routedGroup[method] = (...args: readonly unknown[]) => {
         const environmentId = resolveCallEnvironmentId(args[0]);
-        if (environmentId === null) {
+        // Null means "no owner named"; LOCAL means "the owner IS this server".
+        // Both run the implementation we were HANDED, never one re-fetched from
+        // the registry. The id resolvers default to LOCAL rather than null, so
+        // re-fetching sent every unowned call to `localWsEnvironmentClient()`,
+        // bypassing the injected local api and dispatching into a client that
+        // resolves nothing before its socket is up. Ten browser tests failed
+        // with `expected undefined to match object { _tag: "automation.create" }`
+        // — the command was never delivered to the api under test.
+        if (environmentId === null || environmentId === LOCAL_ENVIRONMENT_ID) {
           return (localImplementation as (...a: readonly unknown[]) => unknown)(...args);
         }
         const owner = environmentNativeApi(environmentId);
