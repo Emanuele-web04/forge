@@ -116,7 +116,18 @@ export function resolveSshControlDirectory(
       `${directory} is a symbolic link; SSH connection sharing was refused because its target's ownership cannot be trusted.`,
     );
   }
-  if ((stats.mode & 0o077) !== 0) {
+  // POSIX ONLY. Windows does not implement POSIX mode bits: `lstat` synthesises
+  // them from the read-only attribute, so a perfectly ordinary user directory
+  // reports 0666 and this check refused to start the server AT ALL on Windows —
+  // not a remote-hosts failure, a boot failure, because the broker is
+  // constructed during startup. Windows access control lives in ACLs, which
+  // `mode` cannot express, so there is nothing here to verify; `chmodSync` is
+  // equally a no-op beyond the read-only flag.
+  //
+  // The guarantee is unchanged where it is enforceable. ControlMaster sockets
+  // are a POSIX mechanism (OpenSSH on Windows does not support ControlPath at
+  // all), so on Windows there is no shared socket to protect.
+  if (process.platform !== "win32" && (stats.mode & 0o077) !== 0) {
     // Do not silently continue with a permissive directory: fix it, and fail if
     // that is not possible.
     fs.chmodSync(directory, 0o700);

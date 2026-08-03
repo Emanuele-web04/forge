@@ -133,6 +133,30 @@ describe("resolveSshControlDirectory", () => {
     );
   });
 
+  it("does not apply the POSIX mode check on Windows, where mode is synthesised", () => {
+    // Windows has no POSIX mode bits: lstat synthesises them from the read-only
+    // attribute, so an ordinary user directory reports 0666 and the check above
+    // refused. The broker is constructed during startup, so that refusal did not
+    // merely disable remote hosts — THE SERVER DID NOT BOOT. Caught by the
+    // Windows CI job, which is the only place this branch runs.
+    //
+    // Nothing is given up: ControlMaster is POSIX-only (OpenSSH on Windows does
+    // not support ControlPath), so there is no shared socket to protect there.
+    const home = makeTempDirectory();
+    const fake = {
+      mkdirSync: () => undefined,
+      chmodSync: () => undefined,
+      lstatSync: () => ({ mode: 0o40666, isSymbolicLink: () => false }) as unknown as FS.Stats,
+    };
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      expect(() => resolveSshControlDirectory(home, fake as unknown as typeof FS)).not.toThrow();
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  });
+
   it("refuses a symlinked control directory, whose target it does not own", () => {
     // A real symlink planted before us, pointing at a directory an attacker owns
     // and has chmod'd 0700. stat() follows the link and reports that innocent
