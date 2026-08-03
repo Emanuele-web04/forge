@@ -630,3 +630,36 @@ describe("DeviceManager scrolling to an element", () => {
     expect(backend.callsOfKind("swipe").length).toBeGreaterThan(0);
   });
 });
+
+describe("DeviceManager scrolling through a virtualized list", () => {
+  it("keeps paging when the label is not in the tree yet", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    // "Deep Row" is not rendered at all until scrolling brings it near, which
+    // is how real Settings behaves: the first describe has no such node, and a
+    // loop that treated absence as failure gave up here.
+    const first = await manager.describeUi(DEVICE_A);
+    const labels = (function collect(node): string[] {
+      return [node.label ?? "", ...node.children.flatMap(collect)];
+    })(first.root);
+    expect(labels).not.toContain("Deep Row");
+
+    const match = await manager.scrollToElement(DEVICE_A, { label: "Deep Row" });
+    expect(match.node.label).toBe("Deep Row");
+  });
+
+  it("reports a label that never appears, naming what it did find", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    const error = await manager
+      .scrollToElement(DEVICE_A, { label: "Nonexistent Row" })
+      .then(() => null)
+      .catch((cause: Error) => cause);
+
+    expect(error?.message).toMatch(/No element labelled/);
+    // Naming the labels it did see is what turns a dead end into a next step.
+    expect(error?.message).toMatch(/Fake Toggle|Continue|Deep Row/);
+  });
+});

@@ -36,8 +36,17 @@ export interface DeviceUiTargetMatch {
 export class DeviceUiTargetError extends Error {
   /** Candidate descriptions, so the agent can retry with a real label. */
   readonly candidates: readonly string[];
+  /**
+   * True when nothing matched the label at all.
+   *
+   * Distinguished from an ambiguous or off-screen match because long lists are
+   * virtualized: UIKit only materializes the rows near the viewport, so a row
+   * further down is genuinely absent from the tree until scrolling reaches it.
+   * A scroll loop must keep looking; an ambiguity must not be retried.
+   */
+  readonly notFound: boolean;
 
-  constructor(message: string, candidates: readonly string[] = []) {
+  constructor(message: string, candidates: readonly string[] = [], notFound = false) {
     // Candidates go in the message, not just a field: every transport between
     // here and the agent (MCP tool errors, WsRpcError) carries only the
     // message, and a "no such label" with no list of real ones is a dead end.
@@ -48,6 +57,7 @@ export class DeviceUiTargetError extends Error {
     super(listed);
     this.name = "DeviceUiTargetError";
     this.candidates = candidates;
+    this.notFound = notFound;
   }
 }
 
@@ -62,6 +72,13 @@ function flatten(root: DeviceUiNode): DeviceUiNode[] {
   };
   walk(root);
   return out;
+}
+
+/** Every label currently rendered, used to tell a moving list from a stuck one. */
+export function visibleLabels(root: DeviceUiNode): string[] {
+  return flatten(root)
+    .filter((node) => node.label !== null && node.label.length > 0)
+    .map((node) => node.label as string);
 }
 
 /** Where a tap on this node lands: its own control point, else the frame centre. */
@@ -136,6 +153,7 @@ export function findTarget(root: DeviceUiNode, target: DeviceUiTarget): DeviceUi
       `No element labelled ${JSON.stringify(target.label)}${roleNote} is in the accessibility tree. ` +
         `It may belong to a screen you have not opened yet; call device_describe_ui and use a label listed there.`,
       labelled.slice(0, MAX_REPORTED_CANDIDATES).map(describe),
+      true,
     );
   }
 

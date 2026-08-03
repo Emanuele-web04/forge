@@ -82,6 +82,9 @@ const FAKE_DEEP_ROW_START_Y = 2_400;
 /** The list's end: past this the deep row stops moving, however hard you swipe. */
 const FAKE_MAX_SCROLL_OFFSET = 2_000;
 
+/** Rows further down than this are not rendered yet, as UIKit virtualizes them. */
+const FAKE_VIRTUALIZATION_HORIZON = 1_600;
+
 export class FakeDeviceBackend implements DeviceBackend {
   readonly platform = "ios-simulator" as const;
 
@@ -303,17 +306,22 @@ export class FakeDeviceBackend implements DeviceBackend {
             activationPoint: { x: 340, y: 222 },
             children: [],
           },
-          // Starts far below the fold and rises as the list scrolls, so the
-          // scroll loop has something that genuinely needs several swipes.
-          {
-            role: "Button",
-            subrole: null,
-            label: "Deep Row",
-            value: null,
-            frame: { x: 24, y: this.deepRowY(), width: 345, height: 44 },
-            activationPoint: { x: 196, y: this.deepRowY() + 22 },
-            children: [],
-          },
+          // Virtualized, like a real UIKit list: absent from the tree until
+          // scrolling brings it near, then rising with each further swipe.
+          // This is the shape that broke the first scroll implementation.
+          ...(this.deepRowY() <= FAKE_VIRTUALIZATION_HORIZON
+            ? [
+                {
+                  role: "Button",
+                  subrole: null,
+                  label: "Deep Row",
+                  value: null,
+                  frame: { x: 24, y: this.deepRowY(), width: 345, height: 44 },
+                  activationPoint: { x: 196, y: this.deepRowY() + 22 },
+                  children: [],
+                },
+              ]
+            : []),
         ],
       },
     };

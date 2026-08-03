@@ -34,6 +34,7 @@ import {
   type DeviceListResult,
   type DeviceOpenPaneReason,
   type DeviceScreenshotResult,
+  type DeviceUiNode,
   type ThreadDeviceState,
 } from "@synara/contracts";
 
@@ -46,8 +47,10 @@ import {
 import { DeviceFrameTransport, type DeviceFrameSink } from "./deviceFrameTransport.ts";
 import {
   DeviceUiTargetError,
+  SCROLL_SWIPE_DURATION_MS,
   findTarget,
   planScrollStep,
+  visibleLabels,
   type DeviceUiTarget,
   type DeviceUiTargetMatch,
 } from "./uiTreeTargeting.ts";
@@ -300,6 +303,12 @@ export class DeviceManager {
    * it is motor control, not judgement: an agent driving it by hand guesses
    * distances, overshoots, and re-describes between every attempt. Already
    * visible targets cost one describe and no swipes.
+   *
+   * A label missing from the tree is treated as "not reached yet" rather than
+   * as a failure. Long lists are virtualized, so UIKit only materializes the
+   * rows near the viewport: Settings genuinely has no "Developer" node until
+   * scrolling gets close to it. The loop keeps paging down while the label is
+   * absent, and only reports it missing once the list stops moving.
    */
   async scrollToElement(
     udid: string,
@@ -308,35 +317,75 @@ export class DeviceManager {
   ): Promise<DeviceUiTargetMatch> {
     const maxScrolls = options.maxScrolls ?? DEVICE_DEFAULT_MAX_SCROLLS;
     let tree = await this.describeUi(udid);
-    let match = findTarget(tree.root, target);
-    let previousY: number | null = null;
+    let match = this.locate(tree.root, target);
+    let previousPosition: string | null = null;
 
     for (let scrolls = 0; scrolls < maxScrolls; scrolls += 1) {
-      const step = planScrollStep(match.node, tree.root);
-      if (step === null) return match;
+      // Nothing to aim at yet: page down by a screenful to materialize more of
+      // the list. Once the node exists, the planner takes over and aims at it.
+      const step =
+        match === null ? this.pageDownStep(tree.root) : planScrollStep(match.node, tree.root);
+      if (step === null) return match as DeviceUiTargetMatch;
 
       await this.backend.swipe(udid, step);
       tree = await this.describeUi(udid);
-      match = findTarget(tree.root, target);
+      match = this.locate(tree.root, target);
 
-      // A list that has hit its end keeps returning the same frame; swiping
-      // again would burn the whole budget to no effect.
-      const y = match.node.frame.y;
-      if (previousY !== null && y === previousY) {
+      // A list at its end keeps rendering the same thing; swiping again would
+      // burn the whole budget to no effect. Compared across the visible labels
+      // as well as the target's own position, since an absent target has none.
+      const position = match === null ? this.treeFingerprint(tree.root) : `y:${match.node.frame.y}`;
+      if (previousPosition !== null && position === previousPosition) {
         throw new DeviceUiTargetError(
-          `Scrolling stopped moving ${JSON.stringify(target.label)} after ${scrolls + 1} ` +
-            `swipe${scrolls === 0 ? "" : "s"}; the list appears to be at its end and the element is still out of reach.`,
+          match === null
+            ? `No element labelled ${JSON.stringify(target.label)} appeared after scrolling to the end of the screen.`
+            : `Scrolling stopped moving ${JSON.stringify(target.label)} after ${scrolls + 1} ` +
+                `swipe${scrolls === 0 ? "" : "s"}; the list appears to be at its end and the element is still out of reach.`,
+          match === null ? visibleLabels(tree.root) : [],
+          match === null,
         );
       }
-      previousY = y;
+      previousPosition = position;
     }
 
-    const step = planScrollStep(match.node, tree.root);
-    if (step === null) return match;
+    if (match !== null && planScrollStep(match.node, tree.root) === null) return match;
     throw new DeviceUiTargetError(
       `Could not bring ${JSON.stringify(target.label)} into view within ${maxScrolls} swipes. ` +
         `Raise maxSwipes, or scroll manually with device_swipe if it sits in a nested scroll area.`,
+      match === null ? visibleLabels(tree.root) : [],
+      match === null,
     );
+  }
+
+  /** The match, or null when the label has not been rendered into the tree yet. */
+  private locate(root: DeviceUiNode, target: DeviceUiTarget): DeviceUiTargetMatch | null {
+    try {
+      return findTarget(root, target);
+    } catch (error) {
+      // Only absence means "keep scrolling". An ambiguous label is a real
+      // answer the caller must resolve, so it propagates immediately.
+      if (error instanceof DeviceUiTargetError && error.notFound) return null;
+      throw error;
+    }
+  }
+
+  /** A blind screenful downward, for when the target has not appeared yet. */
+  private pageDownStep(root: DeviceUiNode): DeviceSwipeGesture {
+    const midX = root.frame.x + root.frame.width / 2;
+    const centre = root.frame.y + root.frame.height / 2;
+    const distance = root.frame.height * 0.6;
+    return {
+      fromX: midX,
+      fromY: centre + distance / 2,
+      toX: midX,
+      toY: centre - distance / 2,
+      durationMs: SCROLL_SWIPE_DURATION_MS,
+    };
+  }
+
+  /** What is on screen right now, to tell a moving list from a stuck one. */
+  private treeFingerprint(root: DeviceUiNode): string {
+    return visibleLabels(root).join("|");
   }
 
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
