@@ -16,6 +16,10 @@
       "types": "./src/git.ts",
       "import": "./src/git.ts"
     },
+    "./account": {
+      "types": "./src/account.ts",
+      "import": "./src/account.ts"
+    },
     "./githubAvatar": {
       "types": "./src/githubAvatar.ts",
       "import": "./src/githubAvatar.ts"
