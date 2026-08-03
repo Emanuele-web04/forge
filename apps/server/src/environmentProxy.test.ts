@@ -130,6 +130,14 @@ async function startFakeRemote(
 }
 
 /** The local server: nothing but the proxy dispatch wired the way production wires it. */
+/**
+ * A gate that allows everything, for tests exercising TRANSPORT behaviour.
+ *
+ * Stated explicitly rather than omitted: `authorize` is required precisely
+ * because an absent gate used to be indistinguishable from a deliberate one.
+ */
+const allowAll: EnvironmentProxyAuthorizer = async () => ({ allowed: true });
+
 async function startLocalProxy(input: {
   readonly registry: ReturnType<typeof makeEnvironmentProxyRegistry>;
   readonly queueOptions?: { maxBytes?: number; maxFrames?: number };
@@ -141,7 +149,7 @@ async function startLocalProxy(input: {
   const dispatch = makeEnvironmentProxyDispatch({
     registry: input.registry,
     ...(input.queueOptions ? { queueOptions: input.queueOptions } : {}),
-    ...(input.authorize ? { authorize: input.authorize } : {}),
+    authorize: input.authorize ?? allowAll,
     ...(input.upstreamTimeoutMs !== undefined
       ? { upstreamTimeoutMs: input.upstreamTimeoutMs }
       : {}),
@@ -950,6 +958,7 @@ describe("environment proxy — flow control and head-of-line blocking", () => {
     proxyEnvironmentWebSocket(
       {
         registry,
+        authorize: allowAll,
         connect: () => upstream.socket,
         ...(queueOptions ? { queueOptions } : {}),
         onError: (message) => proxyErrors.push(message),

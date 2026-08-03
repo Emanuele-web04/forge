@@ -90,10 +90,22 @@ export interface EnvironmentProxyDeps {
   /**
    * Local authorization gate. Runs BEFORE any upstream is resolved or
    * contacted, so an unauthenticated caller cannot even prove an environment
-   * exists. Optional only so tests can exercise transport behaviour in
-   * isolation; production always passes one (see effectServer.ts).
+   * exists.
+   *
+   * REQUIRED. It was optional "only so tests can exercise transport behaviour
+   * in isolation", and that convenience is precisely what let production lose
+   * it: deleting `authorize:` from effectServer.ts left 48 proxy tests green,
+   * including one named for checking the real construction path — which passes
+   * its own authorizer and so tests the plumbing rather than the wiring.
+   *
+   * A gate the caller may omit is a gate that will be omitted, and the failure
+   * is silent: the proxy answers requests the local router never saw and
+   * attaches the environment's provisioned credential to them, upgrading an
+   * unauthenticated caller into an authenticated remote one. Tests that want no
+   * gate now pass one that allows everything, which states that intent instead
+   * of leaving it to a default.
    */
-  readonly authorize?: EnvironmentProxyAuthorizer;
+  readonly authorize: EnvironmentProxyAuthorizer;
   /** Test seam: opens the TCP connection to the upstream. */
   readonly connect?: (options: { host: string; port: number }) => Duplex;
   /** Test seam: issues the upstream HTTP request. */

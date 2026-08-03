@@ -41,7 +41,8 @@ async function startServerWithProxy(input: {
   });
   const environmentProxy = makeEnvironmentProxyDispatch({
     registry,
-    ...(input.authorize ? { authorize: input.authorize } : {}),
+    // Explicit allow-all when a test is not exercising the gate itself.
+    authorize: input.authorize ?? (async () => ({ allowed: true })),
   });
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;

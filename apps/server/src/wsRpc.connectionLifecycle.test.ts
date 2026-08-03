@@ -842,6 +842,41 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
     }
   }, 4_000);
 
+  it("records a MISMATCHED client build as skewed on the real upgrade path", async () => {
+    // The other half of the assertion above, and the one that was missing.
+    // Every existing skew test injects `buildSkewed` into a session directly,
+    // and the matching-build case above cannot tell a working classifier from
+    // a hardcoded `false` — so replacing the call at wsRpc.ts:1858 with
+    // `false` left 53 tests green here and 92 across the skew files.
+    //
+    // This is the ONLY server-side classification there is. The code it feeds
+    // exists precisely because a client's own guard cannot be trusted, so a
+    // silent regression disarms enforcement for every client while the
+    // client-side banner keeps claiming writes are blocked.
+    const server = await startTestServer();
+    try {
+      const issued = await Effect.runPromise(server.sessions.issue({ role: "owner" }));
+      const websocket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(issued.sessionId),
+      );
+      // Negotiation still has to succeed, so only the BUILD differs from the
+      // server's — everything else is the compatible handshake.
+      const searchParams = makeCurrentWsFeatureCompatibilitySearchParams(serverPackage.version);
+      searchParams.set(WS_COMPATIBILITY_QUERY.clientBuild, "0.0.0-different-build");
+      searchParams.set("wsToken", websocket.token);
+      const socket = await connect(`${server.origin}/ws?${searchParams.toString()}`);
+
+      expect(server.observedConnectionSessionKeys).toHaveLength(1);
+      const sessionKey = server.observedConnectionSessionKeys[0]!;
+      expect(server.connectionSessions.lookup(sessionKey)?.buildSkewed).toBe(true);
+
+      socket.close();
+      await waitForClose(socket);
+    } finally {
+      await server.close();
+    }
+  }, 4_000);
+
   it("closes with an established socket and finalizes its RPC work", async () => {
     const server = await startTestServer();
     let serverClosed = false;
