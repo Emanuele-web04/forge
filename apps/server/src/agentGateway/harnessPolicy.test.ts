@@ -111,6 +111,16 @@ describe("Synara harness policy", () => {
     assert.include(policy, "device_install and device_launch");
     assert.include(policy, "com.apple.Preferences");
 
+    // Expo/RN CLI paths boot the sim through Simulator.app, which foregrounds
+    // a window the user is not watching and leaves the Synara pane empty. A
+    // real demo also stalled for minutes on a dev server holding the shell.
+    assert.include(policy, "For Expo or React Native work");
+    assert.include(policy, "expo start --ios");
+    assert.include(policy, "npm run ios");
+    assert.include(policy, "opens Simulator.app");
+    assert.include(policy, "exp://127.0.0.1:8081");
+    assert.include(policy, "start it detached in the background");
+
     // Interaction discipline: describe before tapping, verify after.
     assert.include(policy, "device points from device_describe_ui, never screenshot pixels");
     assert.include(policy, "again afterwards to confirm the screen changed");
