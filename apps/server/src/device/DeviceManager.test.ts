@@ -33,6 +33,23 @@ describe("DeviceManager attachment", () => {
     expect(events.at(-1)).toMatchObject({ type: "device.thread-state" });
   });
 
+  it("nudges a still screen so a fresh viewer is not left on Connecting", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    await manager.attach(THREAD_A, DEVICE_A);
+    // The nudge is fire-and-forget so the attach is not held up by it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Capture is damage-driven: without a repaint an idle device emits nothing
+    // after the first keyframe and the pane never shows a picture.
+    expect(backend.calls).toContainEqual({
+      kind: "pressButton",
+      udid: DEVICE_A,
+      button: "volume-up",
+    });
+  });
+
   it("versions thread snapshots monotonically so panes can drop stale pushes", async () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);

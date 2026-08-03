@@ -558,10 +558,30 @@ export class DeviceManager {
     this.streaming.add(udid);
     try {
       await this.backend.attachStream(udid, (frame) => this.transport.publish(udid, frame));
+      this.nudgeScreen(udid);
     } catch (error) {
       this.streaming.delete(udid);
       throw error;
     }
+  }
+
+  /**
+   * Make a still screen paint once so a fresh viewer sees it.
+   *
+   * Capture is damage-driven: the helper emits frames when the guest redraws,
+   * so attaching to an idle screen — an app sitting on its home view, a device
+   * nobody has touched — produces nothing after the initial keyframe and the
+   * pane sits on "Connecting…" until something moves. Asking for a keyframe is
+   * not enough; the encoder needs a damage event to have something to encode.
+   *
+   * A volume-up press is the cheapest guest-visible no-op: it repaints the
+   * screen through the volume HUD, changes no app state, and needs no
+   * accessibility read first. Failures are ignored — this is a nicety, and a
+   * device whose HID is unavailable still streams the moment the user or the
+   * agent touches it.
+   */
+  private nudgeScreen(udid: string): void {
+    void this.backend.pressButton(udid, "volume-up").catch(() => undefined);
   }
 
   /**

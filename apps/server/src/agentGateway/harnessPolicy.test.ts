@@ -107,7 +107,10 @@ describe("Synara harness policy", () => {
     assert.include(policy, "rather than reading skill files first");
 
     // The workflow, so the agent does not have to guess an ordering.
-    assert.include(policy, "device_list for a udid");
+    assert.include(policy, "device_list first");
+    // Reusing a booted device rather than starting a second one: two live
+    // simulators compete for the pane and the user watches the wrong screen.
+    assert.include(policy, "already booted, use that one");
     assert.include(policy, "device_install and device_launch");
     assert.include(policy, "com.apple.Preferences");
 
