@@ -52,7 +52,12 @@ import {
   SUBMIT_IDLE,
   SUBMIT_IN_FLIGHT,
 } from "./remoteHostsCopy";
-import { type AddHostStage, canTrustHostKey, isDestinationComplete } from "./remoteHostsModel";
+import {
+  type AddHostStage,
+  type BootstrapStageLine,
+  canTrustHostKey,
+  isDestinationComplete,
+} from "./remoteHostsModel";
 
 const FIELD_LABEL_CLASS =
   "text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-foreground/80";
@@ -67,6 +72,15 @@ export interface AddRemoteHostDialogProps {
   readonly onSubmit: (host: RemoteHostConfig) => void;
   readonly onTrustAndConnect: (host: RemoteHostConfig) => void;
   readonly error: string | undefined;
+  /**
+   * Live bootstrap stages, already mapped to approved copy.
+   *
+   * The dialog renders what it is handed and never maps a step itself: a line
+   * exists here only because `appendBootstrapStage` found approved copy for a
+   * step that actually fired, so there is no path by which a raw step name
+   * reaches the screen.
+   */
+  readonly stageLines?: readonly BootstrapStageLine[];
 }
 
 function ProbeMessage({ probe }: { probe: RemoteHostProbeResult }) {
@@ -79,6 +93,27 @@ function ProbeMessage({ probe }: { probe: RemoteHostProbeResult }) {
         </pre>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The stages that have fired, in order.
+ *
+ * Append-only, with no placeholder rows for steps that have not happened:
+ * `uploading` and `reusing-staged` are alternatives rather than a sequence, so
+ * a pre-rendered checklist would leave one of them permanently unreached on
+ * every successful run.
+ */
+function StageLines({ lines }: { lines: readonly BootstrapStageLine[] }) {
+  if (lines.length === 0) return null;
+  return (
+    <ul className="space-y-1">
+      {lines.map((line) => (
+        <li key={line.step} className="text-xs text-muted-foreground">
+          {line.label}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -102,7 +137,16 @@ function Fingerprint({ result }: { result: RemoteHostFingerprintResult | undefin
 }
 
 export function AddRemoteHostDialog(props: AddRemoteHostDialogProps) {
-  const { open, onOpenChange, stage, fingerprint, onSubmit, onTrustAndConnect, error } = props;
+  const {
+    open,
+    onOpenChange,
+    stage,
+    fingerprint,
+    onSubmit,
+    onTrustAndConnect,
+    error,
+    stageLines = [],
+  } = props;
 
   const [destination, setDestination] = useState("");
   const [label, setLabel] = useState("");
@@ -305,6 +349,7 @@ export function AddRemoteHostDialog(props: AddRemoteHostDialogProps) {
             </DisclosureRegion>
           </div>
 
+          <StageLines lines={stageLines} />
           {stage.kind === "failed" ? <ProbeMessage probe={stage.probe} /> : null}
           {(buildError ?? error) ? (
             <p className={cn(HELPER_CLASS, "text-destructive")}>{buildError ?? error}</p>

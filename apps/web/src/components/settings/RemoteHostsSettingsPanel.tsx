@@ -8,6 +8,7 @@
 // in remoteHostsCopy.ts, so the component is assembly only.
 
 import type {
+  RemoteEnvironmentStatus,
   RemoteHostConfig,
   RemoteHostConnectivityStatus,
   RemoteHostFingerprintResult,
@@ -16,10 +17,11 @@ import type {
 } from "@synara/contracts";
 import { removeRemoteHost, upsertRemoteHost } from "@synara/shared/remoteHostDraft";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { serverQueryKeys, serverSettingsQueryOptions } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
+import { onRemoteEnvironmentStatusesUpdated } from "~/wsEnvironmentRegistry";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -42,7 +44,13 @@ import {
   REMOVE_CONFIRM_BODY,
   removeConfirmTitle,
 } from "./remoteHostsCopy";
-import { type AddHostStage, addHostStageFromProbe, connectivityLabelFor } from "./remoteHostsModel";
+import {
+  type AddHostStage,
+  addHostStageFromProbe,
+  appendBootstrapStage,
+  type BootstrapStageLine,
+  connectivityLabelFor,
+} from "./remoteHostsModel";
 import { SettingsCard, SettingsEmptyState, SettingsSectionShell } from "./SettingsPanelPrimitives";
 
 /**
@@ -72,6 +80,31 @@ export function RemoteHostsSettingsPanel({ active }: RemoteHostsSettingsPanelPro
     Readonly<Record<string, RemoteHostConnectivityStatus>>
   >({});
   const [pendingRemoval, setPendingRemoval] = useState<RemoteHostConfig | undefined>(undefined);
+  const [environmentStatuses, setEnvironmentStatuses] = useState<
+    readonly RemoteEnvironmentStatus[]
+  >([]);
+  const [stageLines, setStageLines] = useState<readonly BootstrapStageLine[]>([]);
+  /** The host the add dialog is currently following, so other hosts' steps do not leak into it. */
+  const addingHostIdRef = useRef<RemoteHostId | undefined>(undefined);
+
+  /**
+   * Follows the server's supervision status.
+   *
+   * This is what makes the dialog's stages REAL: the steps come from the
+   * bootstrap as it runs, not from a local guess about how long each phase
+   * takes. Lines are appended only for the host being added, so a background
+   * retry on an unrelated host cannot write into this dialog.
+   */
+  useEffect(() => {
+    return onRemoteEnvironmentStatusesUpdated((payload) => {
+      setEnvironmentStatuses(payload.statuses);
+      const hostId = addingHostIdRef.current;
+      if (hostId === undefined) return;
+      const status = payload.statuses.find((entry) => entry.hostId === hostId);
+      if (status?.bootstrapStep === undefined) return;
+      setStageLines((current) => appendBootstrapStage(current, status.bootstrapStep as string));
+    });
+  }, []);
 
   const writeHosts = useCallback(
     async (next: readonly RemoteHostConfig[]) => {
@@ -96,6 +129,9 @@ export function RemoteHostsSettingsPanel({ active }: RemoteHostsSettingsPanelPro
     async (host: RemoteHostConfig) => {
       setAddError(undefined);
       setStage({ kind: "checking" });
+      // Scope the live stages to THIS host before any step can arrive.
+      addingHostIdRef.current = host.hostId;
+      setStageLines([]);
       try {
         const result = await probeMutation.mutateAsync(host);
         setConnectivity((current) => ({ ...current, [host.hostId]: result.connectivity }));
@@ -111,6 +147,9 @@ export function RemoteHostsSettingsPanel({ active }: RemoteHostsSettingsPanelPro
           return;
         }
         if (nextStage.kind === "ready") {
+          // Persisting is what starts the server-side pipeline: the supervisor
+          // watches this list, so the write below is the trigger for the
+          // bootstrap whose steps the dialog is already following.
           await writeHosts(upsertRemoteHost(hosts, host));
           setAddOpen(false);
           setStage({ kind: "form" });
@@ -195,7 +234,12 @@ export function RemoteHostsSettingsPanel({ active }: RemoteHostsSettingsPanelPro
           <SettingsCard>
             {hosts.map((host) => {
               const status = connectivity[host.hostId];
-              const connected = status !== undefined && status.state !== "down";
+              // The supervision phase, not the ssh probe, decides what the row
+              // says: a host can answer ssh and still have no reachable Synara
+              // on it, and "Ready" must mean the environment is actually
+              // published rather than that the box replied.
+              const environment = environmentStatuses.find((entry) => entry.hostId === host.hostId);
+              const connected = environment?.phase === "ready";
               return (
                 <div key={host.hostId} className="px-4 py-3">
                   <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
@@ -239,11 +283,14 @@ export function RemoteHostsSettingsPanel({ active }: RemoteHostsSettingsPanelPro
           if (!open) {
             setStage({ kind: "form" });
             setFingerprint(undefined);
+            addingHostIdRef.current = undefined;
+            setStageLines([]);
           }
         }}
         stage={stage}
         fingerprint={fingerprint}
         error={addError}
+        stageLines={stageLines}
         onSubmit={(host) => void runAdd(host)}
         onTrustAndConnect={trustAndConnect}
       />
