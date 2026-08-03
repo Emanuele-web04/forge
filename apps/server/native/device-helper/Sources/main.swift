@@ -444,45 +444,61 @@ func handle(method: String, params: Params, session: HelperSession) throws -> An
 
 let arguments = CommandLine.arguments
 let developerDirectory = resolveDeveloperDirectory()
+let isProbe = arguments.contains("--probe")
 
-do {
-  try loadPrivateFrameworks(developerDirectory: developerDirectory)
-} catch {
-  // Preflight failure is reported as structured JSON so the setup checklist in
-  // the pane can render the reason.
-  let payload: [String: Any] = [
-    "ok": false,
-    "developerDirectory": developerDirectory,
-    "error": "\(error)",
-  ]
-  if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
-    FileHandle.standardOutput.write(data)
-    FileHandle.standardOutput.write(Data("\n".utf8))
-  }
-  exit(2)
-}
-
-// `--probe` answers "can this machine run the helper at all?" and exits. The
-// build script and the pane's setup checklist both use it.
-if arguments.contains("--probe") {
-  var payload: [String: Any] = [
-    "ok": true,
-    "developerDirectory": developerDirectory,
-    "protocolVersion": 1,
-  ]
-  do {
-    let deviceSet = try SimulatorDeviceSet.resolve(developerDirectory: developerDirectory)
-    payload["deviceCount"] = deviceSet.devices.count
-    payload["bootedCount"] = deviceSet.devices.filter(\.isBooted).count
-  } catch {
-    payload["ok"] = false
-    payload["error"] = "\(error)"
-  }
+func emitPayloadAndExit(_ payload: [String: Any]) -> Never {
   if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data("\n".utf8))
   }
   exit(payload["ok"] as? Bool == true ? 0 : 2)
+}
+
+let frameworkHandles: PrivateFrameworkHandles
+do {
+  // The probe tolerates a missing SimulatorKit so it can still measure the
+  // other three capabilities; a serving helper does not.
+  frameworkHandles = try loadPrivateFrameworks(
+    developerDirectory: developerDirectory, requireSimulatorKit: !isProbe)
+} catch {
+  // A load failure is still reported per capability, so the pane renders "all
+  // four unavailable on this Xcode" rather than an untyped error.
+  var payload: [String: Any] = [
+    "ok": false,
+    "protocolVersion": 1,
+    "developerDirectory": developerDirectory,
+    "error": "\(error)",
+    "toolchain": CapabilityProbe.toolchainInfo(developerDirectory: developerDirectory),
+  ]
+  var capabilities: [String: Any] = [:]
+  for capability in HelperCapability.allCases {
+    capabilities[capability.rawValue] = ["error": "\(error)"]
+  }
+  payload["capabilities"] = capabilities
+  emitPayloadAndExit(payload)
+}
+
+// `--probe` reports each capability separately and exits. The build script, the
+// pane's setup checklist and the smoke CLI all read it.
+if isProbe {
+  let reports = CapabilityProbe.run(simulatorKitHandle: frameworkHandles.simulatorKit)
+  var deviceSetError: String?
+  var deviceCount: Int?
+  var bootedCount: Int?
+  do {
+    let deviceSet = try SimulatorDeviceSet.resolve(developerDirectory: developerDirectory)
+    deviceCount = deviceSet.devices.count
+    bootedCount = deviceSet.devices.filter(\.isBooted).count
+  } catch {
+    deviceSetError = "\(error)"
+  }
+  emitPayloadAndExit(
+    CapabilityProbe.payload(
+      reports: reports,
+      developerDirectory: developerDirectory,
+      deviceSetError: deviceSetError,
+      deviceCount: deviceCount,
+      bootedCount: bootedCount))
 }
 
 let deviceSet: SimulatorDeviceSet

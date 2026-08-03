@@ -56,9 +56,24 @@ func resolveDeveloperDirectory() -> String {
   return path.isEmpty ? "/Applications/Xcode.app/Contents/Developer" : path
 }
 
+/// The dlopen handles the capability probe needs for `dlsym` lookups.
+struct PrivateFrameworkHandles {
+  /// nil when SimulatorKit itself would not load. The probe reports that as one
+  /// HID failure rather than listing every Indigo symbol as missing.
+  let simulatorKit: UnsafeMutableRawPointer?
+}
+
 /// dlopens CoreSimulator, SimulatorKit and the accessibility translator.
 /// Idempotent; safe to call from any entry point.
-func loadPrivateFrameworks(developerDirectory: String) throws {
+///
+/// Only CoreSimulator is load-fatal. `requireSimulatorKit: false` lets the probe
+/// keep going when SimulatorKit is missing, so it can report input as broken
+/// while still measuring framebuffer, accessibility and encoder.
+@discardableResult
+func loadPrivateFrameworks(
+  developerDirectory: String,
+  requireSimulatorKit: Bool = true
+) throws -> PrivateFrameworkHandles {
   // CoreSimulator lives outside the Xcode bundle and is required.
   let coreSimulator = "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator"
   if dlopen(coreSimulator, RTLD_NOW) == nil {
@@ -66,11 +81,12 @@ func loadPrivateFrameworks(developerDirectory: String) throws {
     throw SimulatorError.frameworkLoadFailed("CoreSimulator (\(message))")
   }
 
-  let simulatorKit = developerDirectory
+  let simulatorKitPath = developerDirectory
     + "/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"
-  if dlopen(simulatorKit, RTLD_NOW) == nil {
+  let simulatorKit = dlopen(simulatorKitPath, RTLD_NOW)
+  if simulatorKit == nil && requireSimulatorKit {
     let message = String(cString: dlerror())
-    throw SimulatorError.frameworkLoadFailed("SimulatorKit at \(simulatorKit) (\(message))")
+    throw SimulatorError.frameworkLoadFailed("SimulatorKit at \(simulatorKitPath) (\(message))")
   }
 
   // Accessibility translation is optional: without it `describe-ui` degrades,
@@ -82,6 +98,8 @@ func loadPrivateFrameworks(developerDirectory: String) throws {
   // The HID bridge re-derives the SimulatorKit path; hand it the same directory
   // so an overridden DEVELOPER_DIR cannot pull the two out of agreement.
   setenv("SYNARA_DEVELOPER_DIR", developerDirectory, 1)
+
+  return PrivateFrameworkHandles(simulatorKit: simulatorKit)
 }
 
 /// The CoreSimulator device-set, and lookups over it.
