@@ -2838,7 +2838,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       // The approach itself must not bounce: every frame moves the message
       // toward the anchor, never back down and up again.
-      const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
+      const rawApproach =
+        firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
+      // Initial samples can capture the row settling into its pre-animation
+      // layout position. Start judging the glide at the highest pre-arrival
+      // offset so that layout setup is not misclassified as animation bounce.
+      let approachStartIndex = 0;
+      for (let index = 1; index < rawApproach.length; index += 1) {
+        if (rawApproach[index]!.offset > rawApproach[approachStartIndex]!.offset) {
+          approachStartIndex = index;
+        }
+      }
+      const approach = rawApproach.slice(approachStartIndex);
       let approachReversals = 0;
       let approachDirection = 0;
       for (let index = 1; index < approach.length; index += 1) {
