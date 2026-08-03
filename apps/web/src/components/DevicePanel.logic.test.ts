@@ -262,6 +262,78 @@ describe("device point size", () => {
   // Regression: the pane shipped sending frame *pixels* as tap coordinates. On a
   // 3x phone that put every tap ~3x off the right edge of the screen, where the
   // backend clamps silently — clicks appeared to do nothing at all.
+  it("prefers the contract geometry over everything else", () => {
+    // The helper's own attachment geometry is what the backend validates input
+    // against, so a coordinate derived from it can never be rejected.
+    expect(
+      resolveDevicePointSize({
+        framePixelWidth: 1206,
+        framePixelHeight: 2622,
+        geometry: { pointWidth: 402, pointHeight: 874, scale: 3 },
+        measured: { width: 390, height: 844 },
+      }),
+    ).toEqual({ width: 402, height: 874 });
+  });
+
+  it("falls back to the measured size when the descriptor has no geometry", () => {
+    // A server that predates the geometry field, or a device nothing has
+    // attached to yet, still has to produce landable taps.
+    expect(
+      resolveDevicePointSize({
+        framePixelWidth: 1206,
+        framePixelHeight: 2622,
+        geometry: undefined,
+        measured: { width: 402, height: 874 },
+      }),
+    ).toEqual({ width: 402, height: 874 });
+  });
+
+  it("falls back past a degenerate geometry rather than dividing by zero", () => {
+    expect(
+      resolveDevicePointSize({
+        framePixelWidth: 1206,
+        framePixelHeight: 2622,
+        geometry: { pointWidth: 0, pointHeight: 874, scale: 3 },
+        measured: { width: 402, height: 874 },
+      }),
+    ).toEqual({ width: 402, height: 874 });
+  });
+
+  it("falls back to the inferred scale when neither source is available", () => {
+    expect(
+      resolveDevicePointSize({
+        framePixelWidth: 1206,
+        framePixelHeight: 2622,
+        geometry: null,
+        measured: null,
+      }),
+    ).toEqual({ width: 402, height: 874 });
+  });
+
+  it("maps a canvas click through the contract geometry, not frame pixels", () => {
+    const size = resolveDevicePointSize({
+      framePixelWidth: 1206,
+      framePixelHeight: 2622,
+      geometry: { pointWidth: 402, pointHeight: 874, scale: 3 },
+    });
+    const point = canvasPointToDevicePoint(
+      {
+        frameWidth: 1206,
+        frameHeight: 2622,
+        displayWidth: 368,
+        displayHeight: 816,
+        devicePointWidth: size?.width ?? 0,
+        devicePointHeight: size?.height ?? 0,
+      },
+      368 * 0.845,
+      816 * 0.365,
+    );
+    expect(point?.x).toBeCloseTo(340, 0);
+    // Short of 0.365 * 874: the 1206x2622 frame letterboxes 8px top and bottom
+    // in the 368x816 box, and the mapping accounts for the bars.
+    expect(point?.y).toBeCloseTo(317, 0);
+  });
+
   it("prefers the measured accessibility size over anything inferred", () => {
     expect(
       resolveDevicePointSize({

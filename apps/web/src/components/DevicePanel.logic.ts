@@ -10,6 +10,7 @@ import type {
   DeviceCapabilityStatus,
   DeviceDescriptor,
   DeviceFrameHeader,
+  DeviceGeometry,
   DeviceHardwareButton,
   DeviceKeyModifier,
   DeviceSetupStep,
@@ -604,25 +605,39 @@ export function inferDeviceScaleFactor(framePixelWidth: number): number {
   return framePixelWidth >= 640 ? 2 : 1;
 }
 
+function usablePointSize(
+  size: { readonly width: number; readonly height: number } | null | undefined,
+): { readonly width: number; readonly height: number } | null {
+  if (!size) return null;
+  const { width, height } = size;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
 /**
- * Resolves the device's point dimensions, preferring the measured size from the
- * accessibility tree and falling back to the scale inferred from the frame.
+ * Resolves the device's point dimensions, in descending order of authority:
+ *
+ * 1. `geometry` from the device descriptor. This is the helper's own attachment
+ *    geometry — the exact numbers the backend validates input against — so a
+ *    coordinate derived from it can never be rejected as out of bounds.
+ * 2. The accessibility tree's root frame, for a server that predates the
+ *    geometry field or a device attached elsewhere.
+ * 3. The scale inferred from the frame width, which only has to pick between
+ *    Apple's three scale factors.
  */
 export function resolveDevicePointSize(input: {
   readonly framePixelWidth: number;
   readonly framePixelHeight: number;
+  readonly geometry?: DeviceGeometry | null;
   readonly measured?: { readonly width: number; readonly height: number } | null;
 }): { readonly width: number; readonly height: number } | null {
-  const { framePixelWidth, framePixelHeight, measured } = input;
-  if (
-    measured &&
-    Number.isFinite(measured.width) &&
-    Number.isFinite(measured.height) &&
-    measured.width > 0 &&
-    measured.height > 0
-  ) {
-    return { width: measured.width, height: measured.height };
-  }
+  const { framePixelWidth, framePixelHeight, geometry, measured } = input;
+  const fromContract = usablePointSize(
+    geometry ? { width: geometry.pointWidth, height: geometry.pointHeight } : null,
+  );
+  if (fromContract) return fromContract;
+  const fromAccessibility = usablePointSize(measured);
+  if (fromAccessibility) return fromAccessibility;
   if (framePixelWidth <= 0 || framePixelHeight <= 0) return null;
   const scale = inferDeviceScaleFactor(framePixelWidth);
   return {

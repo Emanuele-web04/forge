@@ -253,9 +253,13 @@ export default function DevicePanel(props: {
   } | null>(null);
   const attachedUdid = attachedDevice?.udid ?? null;
 
+  // Only a fallback: when the descriptor carries geometry, resolveDevicePointSize
+  // prefers it and this round trip would be spent on a value we discard.
+  const needsMeasuredPointSize = attachedDevice?.geometry === undefined;
+
   useEffect(() => {
     setMeasuredPointSize(null);
-    if (!attachedUdid || attachedDevice?.state !== "booted") return;
+    if (!attachedUdid || attachedDevice?.state !== "booted" || !needsMeasuredPointSize) return;
     let cancelled = false;
     void ensureNativeApi()
       .device.describeUi({ udid: attachedUdid })
@@ -271,7 +275,7 @@ export default function DevicePanel(props: {
     return () => {
       cancelled = true;
     };
-  }, [attachedUdid, attachedDevice?.state]);
+  }, [attachedUdid, attachedDevice?.state, needsMeasuredPointSize]);
 
   const pointFromEvent = useCallback(
     (event: { clientX: number; clientY: number }): DevicePoint | null => {
@@ -281,6 +285,7 @@ export default function DevicePanel(props: {
       const pointSize = resolveDevicePointSize({
         framePixelWidth: dimensions.width,
         framePixelHeight: dimensions.height,
+        geometry: attachedDevice?.geometry,
         measured: measuredPointSize,
       });
       return canvasPointToDevicePoint(
@@ -297,7 +302,7 @@ export default function DevicePanel(props: {
         event.clientY - rect.top,
       );
     },
-    [dimensions, measuredPointSize],
+    [dimensions, measuredPointSize, attachedDevice?.geometry],
   );
 
   const handlePointerDown = useCallback(
