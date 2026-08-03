@@ -383,9 +383,20 @@ export function useTailAnchorScroll({
       // its coordinate before paint; waiting for the next rAF instead leaves the
       // anchored message visibly displaced for that frame. The observer only
       // lives for the duration of the slide and its hold.
+      //
+      // childList and characterData as well as style: rows above the anchor
+      // also grow when their CONTENT settles late — streamed markdown, a
+      // remeasured code block — which mutates text and children, never style.
+      // With only the style filter that growth went uncompensated and the
+      // anchored row visibly fell: a per-frame CI trace showed scrollHeight
+      // +65px with scrollTop unchanged in roughly half of runs. The correction
+      // is idempotent and cheap, so the wider net costs only spurious calls
+      // during the slide's short lifetime.
       layoutObserver.observe(timelineRoot, {
         attributes: true,
         attributeFilter: ["style"],
+        childList: true,
+        characterData: true,
         subtree: true,
       });
     }
