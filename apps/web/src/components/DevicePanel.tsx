@@ -24,19 +24,30 @@ import {
   attachedDeviceFromThreadState,
   buildDevicePickerEntries,
   canvasPointToDevicePoint,
+  createDeviceRecordingState,
   deviceHidUsageForKey,
   deviceKeyModifiers,
+  deviceOrientationTransform,
+  deviceRecordingClickIntent,
   deviceSetupCheckingLabel,
+  isDeviceRecordingActive,
+  nextDeviceOrientation,
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
   resolveDevicePointSize,
   resolveDeviceSetupAction,
   shouldSubscribeToDeviceStream,
+  stepDeviceRecording,
+  type DeviceOrientation,
   type DevicePoint,
 } from "./DevicePanel.logic";
 import { DeviceBezel } from "./device/DeviceBezel";
-import { DEVICE_RAIL_HEIGHT_CLASS, DeviceControlRail } from "./device/DeviceControlRail";
+import {
+  DEVICE_RAIL_HEIGHT_CLASS,
+  DeviceControlRail,
+  type DeviceRailAction,
+} from "./device/DeviceControlRail";
 import {
   DeviceBootingScreen,
   DeviceEmptyScreen,
@@ -46,7 +57,16 @@ import { useDeviceVideoStream } from "./device/useDeviceVideoStream";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Button } from "./ui/button";
-import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 import {
   Dialog,
   DialogDescription,
@@ -74,6 +94,8 @@ export default function DevicePanel(props: {
   const threadState = useDeviceStateStore(selectThreadDeviceState(threadId));
   const upsertThreadState = useDeviceStateStore((store) => store.upsertThreadState);
   const [busy, setBusy] = useState(false);
+  const [orientation, setOrientation] = useState<DeviceOrientation>("portrait");
+  const [shutdownConfirm, setShutdownConfirm] = useState(false);
   const [bootLimit, setBootLimit] = useState<{
     readonly limit: number;
     readonly candidates: readonly DeviceDescriptor[];
@@ -221,6 +243,70 @@ export default function DevicePanel(props: {
     [attachedDevice, runDeviceAction],
   );
 
+  // ── Recording ──────────────────────────────────────────────────────
+
+  const [recording, setRecording] = useState(createDeviceRecordingState);
+
+  // A recording belongs to the device it was started on. When that device goes
+  // away the server has already stopped and finalised the file, so the pane
+  // drops its state rather than leaving a red button no click can clear.
+  useEffect(() => {
+    if (attachedDevice?.state === "booted") return;
+    setRecording((state) => stepDeviceRecording(state, { kind: "device-lost" }));
+  }, [attachedDevice?.state]);
+
+  const toggleRecording = useCallback(() => {
+    if (!attachedDevice) return;
+    const intent = deviceRecordingClickIntent(recording);
+    if (!intent) return;
+    const udid = attachedDevice.udid;
+    const api = ensureNativeApi();
+
+    if (intent === "start") {
+      setRecording((state) => stepDeviceRecording(state, { kind: "start-requested" }));
+      void api.device
+        .startRecording({ udid })
+        .then((result) => {
+          setRecording((state) =>
+            stepDeviceRecording(state, {
+              kind: "started",
+              path: result.path,
+              startedAtMs: Date.parse(result.startedAt),
+            }),
+          );
+        })
+        .catch((error: unknown) => {
+          setRecording((state) => stepDeviceRecording(state, { kind: "failed" }));
+          toastManager.add({
+            type: "error",
+            title: "Could not start recording",
+            description: errorMessage(error, "The simulator did not start recording."),
+          });
+        });
+      return;
+    }
+
+    setRecording((state) => stepDeviceRecording(state, { kind: "stop-requested" }));
+    void api.device
+      .stopRecording({ udid })
+      .then((result) => {
+        setRecording((state) => stepDeviceRecording(state, { kind: "stopped" }));
+        toastManager.add({
+          type: "success",
+          title: "Recording saved",
+          description: result.path,
+        });
+      })
+      .catch((error: unknown) => {
+        setRecording((state) => stepDeviceRecording(state, { kind: "failed" }));
+        toastManager.add({
+          type: "error",
+          title: "Could not stop recording",
+          description: errorMessage(error, "The recording may be incomplete."),
+        });
+      });
+  }, [attachedDevice, recording]);
+
   const saveScreenshot = useCallback(() => {
     if (!attachedDevice) return;
     void runDeviceAction(async () => {
@@ -277,29 +363,39 @@ export default function DevicePanel(props: {
     };
   }, [attachedUdid, attachedDevice?.state, needsMeasuredPointSize]);
 
+  const devicePointSize = resolveDevicePointSize({
+    framePixelWidth: dimensions?.width ?? 0,
+    framePixelHeight: dimensions?.height ?? 0,
+    geometry: attachedDevice?.geometry,
+    measured: measuredPointSize,
+  });
+
   const pointFromEvent = useCallback(
-    (event: { clientX: number; clientY: number }): DevicePoint | null => {
+    (event: { offsetX: number; offsetY: number }): DevicePoint | null => {
       const canvas = canvasRef.current;
       if (!canvas || !dimensions) return null;
-      const rect = canvas.getBoundingClientRect();
       const pointSize = resolveDevicePointSize({
         framePixelWidth: dimensions.width,
         framePixelHeight: dimensions.height,
         geometry: attachedDevice?.geometry,
         measured: measuredPointSize,
       });
+      // offsetX/offsetY rather than clientX minus the bounding rect: the canvas
+      // may be rotated for landscape, and offsets are reported in the target's
+      // own pre-transform box, so this needs no inverse rotation while the
+      // bounding rect would.
       return canvasPointToDevicePoint(
         {
           frameWidth: dimensions.width,
           frameHeight: dimensions.height,
-          displayWidth: rect.width,
-          displayHeight: rect.height,
+          displayWidth: canvas.clientWidth,
+          displayHeight: canvas.clientHeight,
           ...(pointSize
             ? { devicePointWidth: pointSize.width, devicePointHeight: pointSize.height }
             : {}),
         },
-        event.clientX - rect.left,
-        event.clientY - rect.top,
+        event.offsetX,
+        event.offsetY,
       );
     },
     [dimensions, measuredPointSize, attachedDevice?.geometry],
@@ -312,7 +408,7 @@ export default function DevicePanel(props: {
       // Focus on press so keyboard passthrough follows the click without a
       // separate tab stop.
       event.currentTarget.focus();
-      pressRef.current = { point: pointFromEvent(event), startedAt: performance.now() };
+      pressRef.current = { point: pointFromEvent(event.nativeEvent), startedAt: performance.now() };
     },
     [attachedDevice, pointFromEvent],
   );
@@ -326,7 +422,7 @@ export default function DevicePanel(props: {
 
       const gesture = resolveDevicePointerGesture({
         from: press.point,
-        to: pointFromEvent(event),
+        to: pointFromEvent(event.nativeEvent),
         durationMs: performance.now() - press.startedAt,
       });
       if (!gesture) return;
@@ -390,6 +486,35 @@ export default function DevicePanel(props: {
     [attachedDevice, pressButton],
   );
 
+  // ── Toolbar ────────────────────────────────────────────────────────
+
+  const deviceControlsDisabled = !attachedDevice || attachedDevice.state !== "booted" || busy;
+
+  const runRailAction = useCallback(
+    (action: DeviceRailAction) => {
+      switch (action) {
+        case "home":
+          pressButton("home");
+          return;
+        case "screenshot":
+          saveScreenshot();
+          return;
+        case "record":
+          toggleRecording();
+          return;
+        case "rotate":
+          setOrientation(nextDeviceOrientation);
+          return;
+        case "shutdown":
+          setShutdownConfirm(true);
+          return;
+        case "detach":
+          detachDevice();
+      }
+    },
+    [detachDevice, pressButton, saveScreenshot, toggleRecording],
+  );
+
   // ── Render ─────────────────────────────────────────────────────────
 
   // Nothing is selectable until the backend can list devices, so a blocked pane
@@ -431,13 +556,8 @@ export default function DevicePanel(props: {
                 </MenuItem>
               ))
             )}
-            {attachedDevice ? (
-              <>
-                <MenuSeparator />
-                <MenuItem onClick={detachDevice}>Detach</MenuItem>
-                <MenuItem onClick={shutdownAttached}>Shut down {attachedDevice.name}</MenuItem>
-              </>
-            ) : null}
+            {/* Detach and shut down live on the toolbar below the bezel, with
+                the rest of the device actions, rather than being duplicated here. */}
           </ComposerPickerMenuPopup>
         </Menu>
       )}
@@ -511,6 +631,23 @@ export default function DevicePanel(props: {
           // object-cover so the frame is filled edge to edge: the canvas already
           // carries the device's own aspect ratio, so nothing is actually cropped.
           className="h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70"
+          style={
+            orientation === "landscape"
+              ? {
+                  // The chassis has already swapped its aspect, so the screen
+                  // box is wide while the frames are still portrait. The canvas
+                  // is given the box's dimensions transposed (via the screen's
+                  // container-query units) and then turned into it, which lands
+                  // a portrait frame in a landscape screen with no distortion.
+                  position: "absolute",
+                  top: "50%",
+                  left: "50%",
+                  width: "100cqh",
+                  height: "100cqw",
+                  transform: `translate(-50%, -50%) ${deviceOrientationTransform(orientation)}`,
+                }
+              : undefined
+          }
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={() => {
@@ -555,11 +692,20 @@ export default function DevicePanel(props: {
       */}
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-3">
         <div aria-hidden className={DEVICE_RAIL_HEIGHT_CLASS} />
-        <DeviceBezel className="min-h-0 w-full flex-1">{screen}</DeviceBezel>
-        <DeviceControlRail
-          disabled={!attachedDevice || attachedDevice.state !== "booted" || busy}
+        <DeviceBezel
+          className="min-h-0 w-full flex-1"
+          pointSize={devicePointSize}
+          landscape={orientation === "landscape"}
+          buttonsDisabled={deviceControlsDisabled}
           onPressButton={pressButton}
-          onScreenshot={saveScreenshot}
+        >
+          {screen}
+        </DeviceBezel>
+        <DeviceControlRail
+          disabled={deviceControlsDisabled}
+          recording={isDeviceRecordingActive(recording)}
+          landscape={orientation === "landscape"}
+          onAction={runRailAction}
         />
       </div>
 
@@ -590,6 +736,39 @@ export default function DevicePanel(props: {
         onDismiss={() => setBootLimit(null)}
         onShutdown={shutdownForBootLimit}
       />
+
+      {/*
+        Shutting down loses whatever is running on the device — an app mid-flow,
+        a build the agent just installed — and booting it back takes a minute,
+        so it asks first, the way every other destructive action here does.
+      */}
+      <AlertDialog open={shutdownConfirm} onOpenChange={setShutdownConfirm}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Shut down {attachedDevice?.name ?? "this simulator"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Anything running on the simulator closes. Booting it again takes about a minute.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                setShutdownConfirm(false);
+                shutdownAttached();
+              }}
+            >
+              Shut down
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </DiffPanelShell>
   );
 }

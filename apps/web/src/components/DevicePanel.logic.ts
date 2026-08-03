@@ -646,6 +646,112 @@ export function resolveDevicePointSize(input: {
   };
 }
 
+// ── Screen recording ─────────────────────────────────────────────────
+
+/**
+ * The pane's view of a recording.
+ *
+ * `starting` and `stopping` exist because both RPCs are slow enough to see:
+ * the server waits for simctl's "Recording started" before acking, and stopping
+ * sends SIGINT and waits for the container to finalise. Without the two
+ * transitional phases the toolbar button would sit in its old state for a
+ * second and invite a second click, which is exactly the double-start the
+ * backend refuses.
+ */
+export type DeviceRecordingState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "starting" }
+  | { readonly kind: "recording"; readonly path: string; readonly startedAtMs: number }
+  | { readonly kind: "stopping"; readonly path: string };
+
+export type DeviceRecordingEvent =
+  | { readonly kind: "start-requested" }
+  | { readonly kind: "started"; readonly path: string; readonly startedAtMs: number }
+  | { readonly kind: "stop-requested" }
+  | { readonly kind: "stopped" }
+  | { readonly kind: "failed" }
+  /** The device went away (detached, shut down, or the stream ended). */
+  | { readonly kind: "device-lost" };
+
+export function createDeviceRecordingState(): DeviceRecordingState {
+  return { kind: "idle" };
+}
+
+/**
+ * Advances the recording state, ignoring events that do not apply to the
+ * current phase. Ignoring rather than throwing is deliberate: a stop that
+ * arrives after a failure, or a second click that beats the first response, is
+ * a race the UI should absorb silently rather than a bug to surface.
+ */
+export function stepDeviceRecording(
+  state: DeviceRecordingState,
+  event: DeviceRecordingEvent,
+): DeviceRecordingState {
+  if (event.kind === "device-lost" || event.kind === "failed") {
+    return { kind: "idle" };
+  }
+  switch (state.kind) {
+    case "idle":
+      return event.kind === "start-requested" ? { kind: "starting" } : state;
+    case "starting":
+      return event.kind === "started"
+        ? { kind: "recording", path: event.path, startedAtMs: event.startedAtMs }
+        : state;
+    case "recording":
+      return event.kind === "stop-requested" ? { kind: "stopping", path: state.path } : state;
+    case "stopping":
+      return event.kind === "stopped" ? { kind: "idle" } : state;
+  }
+}
+
+/** Whether the toolbar's record button should read as active. */
+export function isDeviceRecordingActive(state: DeviceRecordingState): boolean {
+  return state.kind === "recording" || state.kind === "stopping";
+}
+
+/**
+ * Which RPC a click on the record button should send, or null while a
+ * transition is already in flight and a second call would be refused.
+ */
+export function deviceRecordingClickIntent(state: DeviceRecordingState): "start" | "stop" | null {
+  if (state.kind === "idle") return "start";
+  if (state.kind === "recording") return "stop";
+  return null;
+}
+
+// ── Orientation ──────────────────────────────────────────────────────
+
+/**
+ * Rotation is a *view* transform, not a device command.
+ *
+ * The native helper exposes no rotation button (SimulatorKit has no HID usage
+ * for it) and `simctl` has no orientation subcommand, so there is nothing to
+ * send. Turning the rendered device is honest about what it does: it reframes
+ * the same portrait framebuffer, which is what a person wanting to see a
+ * landscape layout beside a portrait one actually needs. Input coordinates are
+ * un-rotated before they are sent so taps still land where they are aimed.
+ */
+export type DeviceOrientation = "portrait" | "landscape";
+
+export function nextDeviceOrientation(orientation: DeviceOrientation): DeviceOrientation {
+  return orientation === "portrait" ? "landscape" : "portrait";
+}
+
+/**
+ * The CSS transform that turns the rendered device, and the layout box it is
+ * applied to.
+ *
+ * Taps need no inverse mapping to go with it: a pointer event's `offsetX`/
+ * `offsetY` are measured in the target's own pre-transform box, so a rotated
+ * canvas reports the same local coordinates it would unrotated. Deriving the
+ * point from the bounding rect instead would need the inverse rotation, which
+ * is the kind of arithmetic that looks right in a screenshot and puts every tap
+ * on the wrong side of the screen.
+ */
+export function deviceOrientationTransform(orientation: DeviceOrientation): string | undefined {
+  return orientation === "landscape" ? "rotate(90deg)" : undefined;
+}
+
 export interface DeviceSetupAction {
   readonly label: string;
   readonly url: string;

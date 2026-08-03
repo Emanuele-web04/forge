@@ -6,20 +6,26 @@ import {
   buildDevicePickerEntries,
   canvasPointToDevicePoint,
   createDeviceFrameGateState,
+  createDeviceRecordingState,
   DEVICE_TAP_MOVEMENT_THRESHOLD_POINTS,
   deviceContainRect,
   deviceHidUsageForKey,
   deviceKeyModifiers,
+  deviceOrientationTransform,
+  deviceRecordingClickIntent,
   deviceSetupProgress,
   describeDegradedCapabilities,
   inferDeviceScaleFactor,
+  isDeviceRecordingActive,
   isNextDeviceFrameSequence,
+  nextDeviceOrientation,
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
   resolveDevicePointSize,
   shouldSubscribeToDeviceStream,
   stepDeviceFrameGate,
+  stepDeviceRecording,
   type DeviceFrameGateState,
 } from "./DevicePanel.logic";
 
@@ -727,5 +733,71 @@ describe("thread state helpers", () => {
         lastError: null,
       } as never),
     ).toBeNull();
+  });
+});
+
+describe("device recording state machine", () => {
+  it("walks start → recording → stop → idle", () => {
+    let state = createDeviceRecordingState();
+    expect(deviceRecordingClickIntent(state)).toBe("start");
+
+    state = stepDeviceRecording(state, { kind: "start-requested" });
+    expect(state.kind).toBe("starting");
+    // Mid-transition a second click must send nothing: the backend refuses a
+    // concurrent start, so the UI has to swallow it rather than surface an error.
+    expect(deviceRecordingClickIntent(state)).toBeNull();
+
+    state = stepDeviceRecording(state, {
+      kind: "started",
+      path: "/tmp/sim.mp4",
+      startedAtMs: 1000,
+    });
+    expect(state).toEqual({ kind: "recording", path: "/tmp/sim.mp4", startedAtMs: 1000 });
+    expect(isDeviceRecordingActive(state)).toBe(true);
+    expect(deviceRecordingClickIntent(state)).toBe("stop");
+
+    state = stepDeviceRecording(state, { kind: "stop-requested" });
+    expect(state).toEqual({ kind: "stopping", path: "/tmp/sim.mp4" });
+    // Still "active" while stopping: the button must not flip back to an idle
+    // record affordance before the file has actually been finalised.
+    expect(isDeviceRecordingActive(state)).toBe(true);
+    expect(deviceRecordingClickIntent(state)).toBeNull();
+
+    state = stepDeviceRecording(state, { kind: "stopped" });
+    expect(state).toEqual({ kind: "idle" });
+    expect(isDeviceRecordingActive(state)).toBe(false);
+  });
+
+  it("ignores events that do not apply to the current phase", () => {
+    const idle = createDeviceRecordingState();
+    expect(stepDeviceRecording(idle, { kind: "stop-requested" })).toBe(idle);
+    expect(stepDeviceRecording(idle, { kind: "stopped" })).toBe(idle);
+
+    const starting = stepDeviceRecording(idle, { kind: "start-requested" });
+    expect(stepDeviceRecording(starting, { kind: "start-requested" })).toBe(starting);
+  });
+
+  it("returns to idle on failure or when the device goes away", () => {
+    const recording = stepDeviceRecording(
+      stepDeviceRecording(createDeviceRecordingState(), { kind: "start-requested" }),
+      { kind: "started", path: "/tmp/sim.mp4", startedAtMs: 0 },
+    );
+
+    expect(stepDeviceRecording(recording, { kind: "failed" })).toEqual({ kind: "idle" });
+    expect(stepDeviceRecording(recording, { kind: "device-lost" })).toEqual({ kind: "idle" });
+    // A start that never resolved must clear too, or the toolbar stays stuck.
+    const starting = stepDeviceRecording(createDeviceRecordingState(), {
+      kind: "start-requested",
+    });
+    expect(stepDeviceRecording(starting, { kind: "device-lost" })).toEqual({ kind: "idle" });
+  });
+});
+
+describe("device orientation", () => {
+  it("toggles and maps to a quarter-turn transform", () => {
+    expect(nextDeviceOrientation("portrait")).toBe("landscape");
+    expect(nextDeviceOrientation("landscape")).toBe("portrait");
+    expect(deviceOrientationTransform("portrait")).toBeUndefined();
+    expect(deviceOrientationTransform("landscape")).toBe("rotate(90deg)");
   });
 });
