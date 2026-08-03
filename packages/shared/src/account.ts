@@ -23,6 +23,10 @@ const DEFAULT_DEVICE_POLL_INTERVAL_SECONDS = 5;
 // RFC 8628 section 3.5: on `slow_down`, the client must increase its polling
 // interval by at least 5 seconds for each subsequent request.
 const SLOW_DOWN_INCREMENT_SECONDS = 5;
+// Bounds the poll loop even if the server never returns a terminal status
+// (expired_token, access_denied, ...). 30 minutes comfortably exceeds any
+// device-code TTL the server is expected to configure.
+const DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS = 30 * 60;
 
 type FetchLike = typeof fetch;
 type SleepFn = (milliseconds: number) => Promise<void>;
@@ -72,6 +76,23 @@ function isDeviceErrorBody(value: unknown): value is DeviceErrorBody {
   );
 }
 
+/**
+ * Maps a device-flow error response (device/code or device/token) to an
+ * `AccountApiError`. Device error codes (`invalid_request`, `expired_token`,
+ * `access_denied`, ...) aren't part of the `AccountErrorCode` contract, so
+ * they always surface as `internal_error` — callers that need to
+ * distinguish cases should match on `message`, which carries the raw
+ * `error_description`.
+ */
+function toDeviceApiError(response: Response, raw: unknown): AccountApiError {
+  const description = isDeviceErrorBody(raw) ? raw.error_description : undefined;
+  return new AccountApiError({
+    code: "internal_error",
+    status: response.status,
+    message: description ?? `Request failed with status ${response.status}`,
+  });
+}
+
 async function defaultSleep(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -97,7 +118,10 @@ export interface AccountClient {
   listSessions(token: string): Promise<ListSessionsResponse>;
   deleteSession(token: string, sessionId: string): Promise<void>;
   requestDeviceCode(): Promise<DeviceCodeResponse>;
-  pollDeviceToken(deviceCode: string, options?: { interval?: number }): Promise<DeviceTokenSuccess>;
+  pollDeviceToken(
+    deviceCode: string,
+    options?: { interval?: number; expiresIn?: number },
+  ): Promise<DeviceTokenSuccess>;
 }
 
 export function createAccountClient(options: CreateAccountClientOptions): AccountClient {
@@ -240,12 +264,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       });
       const raw: unknown = await response.json().catch(() => null);
       if (!response.ok) {
-        const description = isDeviceErrorBody(raw) ? raw.error_description : undefined;
-        throw new AccountApiError({
-          code: "internal_error",
-          status: response.status,
-          message: description ?? `Request failed with status ${response.status}`,
-        });
+        throw toDeviceApiError(response, raw);
       }
       const body = raw as {
         device_code: string;
@@ -267,9 +286,23 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
 
     async pollDeviceToken(deviceCode, pollOptions) {
       let interval = pollOptions?.interval ?? DEFAULT_DEVICE_POLL_INTERVAL_SECONDS;
+      const deadlineMs = (pollOptions?.expiresIn ?? DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS) * 1000;
+      let elapsedMs = 0;
 
       for (;;) {
         await sleep(interval * 1000);
+        elapsedMs += interval * 1000;
+
+        // Client-side bound: without this, a misbehaving server that never
+        // returns a terminal status (only `authorization_pending`) would
+        // keep this loop running forever.
+        if (elapsedMs > deadlineMs) {
+          throw new AccountApiError({
+            code: "internal_error",
+            status: 408,
+            message: "Device authorization timed out",
+          });
+        }
 
         const response = await fetchFn(`${baseUrl}/api/auth/device/token`, {
           method: "POST",
@@ -305,18 +338,9 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
             interval += SLOW_DOWN_INCREMENT_SECONDS;
             continue;
           }
-          throw new AccountApiError({
-            code: "internal_error",
-            status: response.status,
-            message: raw.error_description,
-          });
         }
 
-        throw new AccountApiError({
-          code: "internal_error",
-          status: response.status,
-          message: `Device token request failed with status ${response.status}`,
-        });
+        throw toDeviceApiError(response, raw);
       }
     },
   };

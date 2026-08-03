@@ -409,5 +409,59 @@ describe("createAccountClient", () => {
         message: "The user denied the request",
       });
     });
+
+    it("stops polling and throws a timeout once the deadline elapses, even if the server keeps saying pending", async () => {
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      // A fresh Response per call: a Response body can only be read once, so
+      // reusing a single instance across polls (mockResolvedValue) would
+      // break the second `response.json()` read.
+      const fetchMock = vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve(
+            jsonResponse(
+              { error: "authorization_pending", error_description: "still waiting" },
+              { status: 400 },
+            ),
+          ),
+        );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
+
+      await expect(
+        client.pollDeviceToken("dc1", { interval: 5, expiresIn: 12 }),
+      ).rejects.toMatchObject({
+        code: "internal_error",
+        status: 408,
+        message: "Device authorization timed out",
+      });
+      // interval=5s against expiresIn=12s: elapsed hits 5s, then 10s (both
+      // within budget and worth a poll), then 15s exceeds the deadline and
+      // the loop must throw before issuing a third fetch.
+      expect(sleep).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("defaults to a bounded deadline when none is given", async () => {
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { error: "authorization_pending", error_description: "still waiting" },
+            { status: 400 },
+          ),
+        );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
+
+      // A huge interval blows past the default 30-minute deadline on the
+      // very first tick, proving the loop is bounded even without an
+      // explicit `expiresIn`.
+      await expect(client.pollDeviceToken("dc1", { interval: 60 * 60 })).rejects.toMatchObject({
+        code: "internal_error",
+        status: 408,
+        message: "Device authorization timed out",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 });
