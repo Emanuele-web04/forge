@@ -131,6 +131,7 @@ const CLIENT_ALLOWED_WS_METHOD_LIST = [
   WS_METHODS.studioListThreadOutputs,
   WS_METHODS.subscribeAutomationEvents,
   WS_METHODS.subscribeOrchestrationDomainEvents,
+  WS_METHODS.subscribeRemoteEnvironmentStatuses,
   WS_METHODS.subscribeProjectDevServerEvents,
   WS_METHODS.subscribeServerConfig,
   WS_METHODS.subscribeServerLifecycle,

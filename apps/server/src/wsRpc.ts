@@ -44,6 +44,10 @@ import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuer
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
+import {
+  currentRemoteEnvironmentStatuses,
+  remoteEnvironmentStatusStream,
+} from "./remoteEnvironmentSupervisorRuntime";
 import { RemoteHostRateLimitError, sharedRemoteHostBroker } from "./remoteHostBroker";
 import { fetchRemoteHostFingerprint } from "./remoteHostFingerprintService";
 import { detectPhoneReachability } from "./phoneReachability";
@@ -1628,6 +1632,29 @@ const makeWsRpcHandlersLayer = () =>
               }).pipe(Stream.map((settings) => ({ settings }))),
             ).pipe(
               Stream.mapError((cause) => toWsRpcError(cause, "Server settings stream failed")),
+            ),
+          ),
+        /**
+         * Per-host supervision status.
+         *
+         * Snapshot first, then live updates — the same shape as the provider
+         * status stream, so a client that subscribes after a host settled still
+         * learns its phase instead of waiting for a push that may never come.
+         */
+        [WS_METHODS.subscribeRemoteEnvironmentStatuses]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.remoteEnvironmentStatuses" },
+            Stream.concat(
+              Stream.sync(() => ({ statuses: currentRemoteEnvironmentStatuses() })),
+              bufferLiveUiStream(remoteEnvironmentStatusStream(), {
+                label: "server.remote-environment-statuses",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }).pipe(Stream.map((statuses) => ({ statuses }))),
+            ).pipe(
+              Stream.mapError((cause) =>
+                toWsRpcError(cause, "Remote environment status stream failed"),
+              ),
             ),
           ),
 

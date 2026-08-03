@@ -45,6 +45,7 @@ import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import { makeEnvironmentProxyDispatch } from "./environmentProxy";
 import { makeEnvironmentProxyAuthorizer } from "./environmentProxyAuthorization";
 import { sharedEnvironmentProxyRegistry } from "./environmentProxyRegistry";
+import { startRemoteEnvironmentSupervision } from "./remoteEnvironmentSupervisorRuntime";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import { websocketRpcRouteLayer } from "./wsRpc";
 import { recoverGitHandoffOperations } from "./gitHandoffOperations";
@@ -237,6 +238,10 @@ export const createEffectServer = Effect.fn(function* (
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
   yield* Scope.provide(providerRuntimeReconciler.start(), subscriptionsScope);
+  // Saved remote hosts become reachable environments here. Without this, adding
+  // a host persists a config and nothing observes the write: no tunnel opens,
+  // and no environment is ever published to the proxy.
+  yield* Scope.provide(startRemoteEnvironmentSupervision, subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
   // Heal turns orphaned by the previous process exit (their in-memory runtimes
