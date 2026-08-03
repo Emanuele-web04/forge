@@ -98,6 +98,52 @@ Passing `-o UserKnownHostsFile=…` through `sshArgs` was REFUSED, with the
 guidance the design promises: put it under a `Host` alias in `~/.ssh/config`
 and use the alias. Doing that worked.
 
+## A real remote Mac over Tailscale
+
+Not a container: a separate physical machine (`platos-mac-studio`, darwin-arm64)
+reached over Tailscale, driven by the shipped broker.
+
+**The probe diagnosed a real environment problem and said how to fix it.** Node
+was not on the non-interactive PATH — the common macOS case. Rather than
+failing, the probe retried through a login shell and reported:
+
+```json
+{
+  "outcome": "ok",
+  "message": "The host works through a login shell. Switch this host's launcher to login-shell.",
+  "version": "v24.18.0",
+  "suggestedLauncher": { "kind": "login-shell" }
+}
+```
+
+Taking its advice produced `"The host is ready."` — and the probe SIGNATURE
+changed (`b91bdef…` → `2764db0…`), so the freshness rule held: editing the
+launcher invalidated the cached result instead of vouching for a command that
+would no longer run.
+
+**Real code ran on the real remote machine** via `broker.sessionInvocation`,
+the only supported way to build a session command:
+
+```
+ARGV: ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 …
+REMOTE SAYS: {"host":"Platos-Mac-Studio.local","arch":"arm64","node":"v24.18.0"}
+```
+
+The security posture is visible in that argv on a live connection, not only in
+tests: batch mode, strict host-key checking, explicit timeout.
+
+**Bootstrap was not attempted there, by design.** The artifact fetcher supports
+`linux-x64` and `linux-arm64` only and refuses anything else by name, matching
+`supervisorCapability`'s darwin refusal. Shipping a Linux runtime to a Mac
+would have proven nothing.
+
+**An honest aside that is itself evidence.** The first attempts failed because
+the authorized key was passphrase-protected and not in the agent: ssh offered
+it, the server ACCEPTED it, and the client then could not sign under
+`BatchMode=yes`. That is exactly the failure Synara's `auth` copy describes —
+"Add a key ssh can use without a passphrase prompt, or load it into your
+agent." The message was accurate about a failure hit for real.
+
 ## What did NOT work, and why
 
 ### The supervisor step fails on these containers
