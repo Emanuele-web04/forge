@@ -38,6 +38,12 @@ import {
   type ThreadDeviceState,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { Effect } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
@@ -131,6 +137,47 @@ function firstTappableRow(node: unknown): { readonly x: number; readonly y: numb
 }
 
 const SETTINGS_BUNDLE_ID = "com.apple.Preferences";
+
+/**
+ * Reboot the simulator behind Synara's back, the way `simctl` from a terminal,
+ * Simulator.app, or an agent's own shell does. Nothing tells the server, so the
+ * long-running helper is left holding an attachment bound to the dead boot.
+ */
+function simctl(args: readonly string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile("xcrun", ["simctl", ...args], { timeout: 180_000 }, (error) =>
+      error ? reject(error) : resolve(),
+    );
+  });
+}
+
+async function externalReboot(udid: string): Promise<void> {
+  await simctl(["shutdown", udid]);
+  await simctl(["boot", udid]);
+  // `bootstatus -b` returns once CoreSimulator reports the boot complete.
+  await simctl(["bootstatus", udid, "-b"]);
+}
+
+/** Kill an app so a later `launch` starts it at its root screen. */
+function terminateApp(udid: string, bundleId: string): Promise<void> {
+  return simctl(["terminate", udid, bundleId]);
+}
+
+/**
+ * Capture the screen without going through the server. `device.screenshot`
+ * would do, but every server-side device call routes through the attach path
+ * that transparently rebinds a stale helper attachment — which is the very
+ * recovery a reboot test must not trigger before its tap.
+ */
+async function screenshotViaSimctl(udid: string): Promise<Buffer> {
+  const path = join(tmpdir(), `synara-device-e2e-${randomUUID()}.png`);
+  try {
+    await simctl(["io", udid, "screenshot", path]);
+    return await readFile(path);
+  } finally {
+    await rm(path, { force: true }).catch(() => undefined);
+  }
+}
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -458,6 +505,101 @@ describeE2e("device pane end-to-end", () => {
 
     await rpc.call(DEVICE_WS_METHODS.detach, { threadId: THREAD_ID });
   }, 300_000);
+
+  it("keeps input working after the simulator is rebooted outside Synara", async () => {
+    if (!target) throw new Error("no target device");
+    const udid = target.udid;
+
+    // Regression: the helper outlives the simulator and held a HID client bound
+    // to one boot. Injecting into a dead boot does not error — events are
+    // accepted and vanish — so every tap after an external reboot was acked as
+    // Success with zero effect. Reads kept working, which hid it completely.
+    // A "Success" ack is therefore worthless here: the only proof is the
+    // accessibility tree changing.
+    const describeUi = () =>
+      rpc
+        .call<{ root: unknown }>(DEVICE_WS_METHODS.describeUi, { udid })
+        .then((result) => result.root);
+
+    /**
+     * Put Settings on screen and return the labels showing plus a row to tap.
+     * Polls rather than sleeping: a fresh boot leaves SpringBoard settling and
+     * raises permission alerts over whatever is running.
+     */
+    const settleOnATappableScreen = async (): Promise<{
+      readonly labels: readonly string[];
+      readonly tapAt: { readonly x: number; readonly y: number };
+    }> => {
+      await rpc.call(DEVICE_WS_METHODS.launchApp, { udid, bundleId: SETTINGS_BUNDLE_ID });
+      let labels: string[] = [];
+      let tapAt: { readonly x: number; readonly y: number } | null = null;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        const root = await describeUi();
+        labels = labelsOf(root);
+        const dismiss = alertDismissButton(root);
+        if (dismiss) {
+          await rpc.call(DEVICE_WS_METHODS.tap, { udid, x: dismiss.x, y: dismiss.y });
+          continue;
+        }
+        tapAt = firstTappableRow(root);
+        if (labels.length > 6 && tapAt !== null) break;
+      }
+      expect(labels.length, "expected a populated accessibility tree").toBeGreaterThan(6);
+      expect(tapAt, "expected a tappable row in the accessibility tree").not.toBeNull();
+      return { labels, tapAt: tapAt! };
+    };
+
+    const attached = await rpc.call<ThreadDeviceState>(DEVICE_WS_METHODS.attach, {
+      threadId: THREAD_ID,
+      udid,
+    });
+    expect(attached.attachedDeviceUdid).toBe(udid);
+
+    try {
+      const before = await settleOnATappableScreen();
+      await rpc.call(DEVICE_WS_METHODS.tap, { udid, x: before.tapAt.x, y: before.tapAt.y });
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      expect(labelsOf(await describeUi()), "the tap must change the screen").not.toEqual(
+        before.labels,
+      );
+
+      // Nothing tells the server this happened; the helper keeps its attachment.
+      await externalReboot(udid);
+
+      // Everything from here to the tap runs through simctl, never the server.
+      // `device.describeUi` and `device.launchApp` both route through the same
+      // attach path, which recovers a dead descriptor on its own — so a single
+      // read standing between the reboot and the tap rebinds the HID client and
+      // hides exactly the bug under test. The tap has to be the first helper
+      // call against the new boot, which also means the screen it changes must
+      // be observed without the helper: simctl screenshots do that.
+      await simctl(["launch", udid, SETTINGS_BUNDLE_ID]);
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+
+      const beforeShot = await screenshotViaSimctl(udid);
+      // The same row as before the reboot: Settings relaunched at its root, and
+      // the point came from that screen's own accessibility tree.
+      await rpc.call(DEVICE_WS_METHODS.tap, { udid, x: before.tapAt.x, y: before.tapAt.y });
+      await new Promise((resolve) => setTimeout(resolve, 4_000));
+      const afterShot = await screenshotViaSimctl(udid);
+
+      expect(
+        afterShot.equals(beforeShot),
+        "the tap must change the screen after an external reboot, not just be acked",
+      ).toBe(false);
+
+      // And the helper is healthy afterwards rather than merely lucky once.
+      expect(labelsOf(await describeUi()).length).toBeGreaterThan(6);
+    } finally {
+      // Leave Settings dead, not parked on whatever sub-screen the taps
+      // reached: `simctl launch` on a live process is a no-op, so a later case
+      // launching Settings would silently inherit this screen instead of its
+      // root and tap a row that goes nowhere.
+      await terminateApp(udid, SETTINGS_BUNDLE_ID).catch(() => undefined);
+      await rpc.call(DEVICE_WS_METHODS.detach, { threadId: THREAD_ID }).catch(() => undefined);
+    }
+  }, 600_000);
 
   it("drives the device through the MCP tools with no pane and no stream", async () => {
     // The agent path: MCP tool handlers only, nothing attached, no frame

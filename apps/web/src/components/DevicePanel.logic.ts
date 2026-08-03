@@ -628,8 +628,8 @@ function usablePointSize(
 export function resolveDevicePointSize(input: {
   readonly framePixelWidth: number;
   readonly framePixelHeight: number;
-  readonly geometry?: DeviceGeometry | null;
-  readonly measured?: { readonly width: number; readonly height: number } | null;
+  readonly geometry?: DeviceGeometry | null | undefined;
+  readonly measured?: { readonly width: number; readonly height: number } | null | undefined;
 }): { readonly width: number; readonly height: number } | null {
   const { framePixelWidth, framePixelHeight, geometry, measured } = input;
   const fromContract = usablePointSize(
