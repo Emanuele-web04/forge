@@ -1180,6 +1180,29 @@ describe("WsTransport", () => {
     );
   });
 
+  it("keeps a proxied environment's mount prefix on every socket path", () => {
+    // Same origin as the local server; the `/env/<id>` prefix is the ONLY thing
+    // that distinguishes them, so overwriting the pathname would silently point
+    // the remote's socket at the local one.
+    const environmentId = "8c51b4b7-c11d-4d16-a9c5-4bd9e3cb12db";
+    const proxied = `ws://local.test/env/${environmentId}/ws`;
+
+    expect(new URL(makeNegotiateHttpUrl(proxied)).pathname).toBe(
+      `/env/${environmentId}/ws/negotiate`,
+    );
+    expect(
+      new URL(
+        makeFeatureSocketUrl(proxied, {
+          protocolEpoch: WS_PROTOCOL_EPOCH,
+          negotiatedRevision: WS_PROTOCOL_MAX_REVISION,
+          serverBuild: "0.5.2",
+          serverInstanceId: "server-instance",
+          capabilities: ["orchestration.cursor-safe-streams"],
+        }),
+      ).pathname,
+    ).toBe(`/env/${environmentId}/ws`);
+  });
+
   it("binds a transport constructed without an environmentId to the local cursor scope", async () => {
     // The single-local-server regression bar, pinned directly: an env-unaware
     // caller's cursor must be the one a default-constructed transport resumes

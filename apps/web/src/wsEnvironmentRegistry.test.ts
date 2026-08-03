@@ -1317,6 +1317,59 @@ describe("wsEnvironmentRegistry", () => {
     }
   });
 
+  it("keeps the proxy prefix when the environment shares the local origin", async () => {
+    // The shape the feature ACTUALLY produces, and the one no fixture used: a
+    // proxied environment is same-protocol, same-host, and differs from the
+    // local server only by `/env/<id>`. The different-origin fixture above
+    // needs no prefix, so it passed while every remote auth call went to the
+    // local server. The oracle is the proxy parser, not the string: the
+    // question is which server would answer.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ authenticated: false, revoked: true, text: "hi" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { ensureWsEnvironmentClient } = await import("./wsEnvironmentRegistry");
+    const { parseEnvironmentProxyTarget } = await import("@synara/shared/environmentProxyPath");
+
+    const remote = ensureWsEnvironmentClient({
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      url: `ws://local.test/env/${REMOTE_ENVIRONMENT_ID}/ws`,
+    });
+
+    await remote.api.server.getAuthSession();
+    await remote.api.server.revokeAuthClient({ sessionId: "session-1" } as never);
+    await remote.api.server
+      .transcribeVoice({
+        provider: "codex",
+        cwd: "/tmp",
+        mimeType: "audio/webm",
+        sampleRateHz: 48_000,
+        durationMs: 1_000,
+        audioBase64: "",
+      })
+      .catch(() => undefined);
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    for (const [rawUrl] of fetchMock.mock.calls) {
+      const url = new URL(String(rawUrl));
+      expect(url.origin).toBe("http://local.test");
+      // Parsed on the PATH alone. A query value may legitimately carry a
+      // percent-encoded separator (`cwd=%2Ftmp` on the voice route), which the
+      // parser refuses for its own reasons; that is a separate question from
+      // whether this URL is addressed to the right environment.
+      const target = parseEnvironmentProxyTarget(url.pathname);
+      expect(target.ok).toBe(true);
+      if (!target.ok) continue;
+      expect(target.environmentId).toBe(REMOTE_ENVIRONMENT_ID);
+      // The prefix goes on the FRONT: the upstream must still see the route
+      // it publishes, unrewritten.
+      expect(target.upstreamTarget.startsWith("/api/")).toBe(true);
+    }
+  });
+
   it("leaves the local environment's HTTP requests on their existing relative paths", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ authenticated: false }), {

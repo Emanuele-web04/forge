@@ -59,6 +59,7 @@ import { classifyBuildSkew, isReadOnlySafeWsMethod } from "@synara/shared/buildS
 
 import { APP_VERSION } from "./branding";
 import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
+import { withWsPathPrefix, wsUrlPathPrefix } from "./lib/wsUrlPathPrefix";
 import { useStore } from "./store";
 import {
   threadDetailResumeCursors,
@@ -179,9 +180,14 @@ const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
 const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 10_000;
 
+// Mounts `path` on the server `rawUrl` addresses, keeping whatever prefix that
+// URL is mounted under. Assigning `url.pathname = path` instead would send a
+// proxied environment's socket (`/env/<id>/ws`) to the LOCAL `/ws` — same
+// origin, right-looking URL, wrong server. The prefix is the only thing that
+// distinguishes them, so it is the one part that must survive.
 function resolveRpcUrl(rawUrl: string, path: string): string {
   const url = new URL(rawUrl);
-  url.pathname = path;
+  url.pathname = withWsPathPrefix(wsUrlPathPrefix(url), path);
   return url.toString();
 }
 

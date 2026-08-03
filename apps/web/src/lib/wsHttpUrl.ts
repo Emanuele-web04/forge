@@ -7,6 +7,7 @@
 import { WS_COMPATIBILITY_QUERY } from "@synara/contracts";
 
 import { APP_VERSION } from "../branding";
+import { withWsPathPrefix, wsUrlPathPrefix } from "./wsUrlPathPrefix";
 
 /**
  * Stamps this client's build onto an HTTP write path so the server can apply
@@ -27,12 +28,21 @@ export function withClientBuildIdentity(rawPath: string): string {
 // Maps a WS URL onto the HTTP URL for `rawPath` on that same server, forwarding the legacy
 // token query param so authenticated GET routes can authorize without touching cookies.
 // Returns null when `wsCandidate` is unusable, letting callers pick their own fallback.
+//
+// The WS URL's PATH PREFIX is carried over, not just its protocol and host. A
+// remote environment reached through the single-origin proxy differs from the
+// local server ONLY by that prefix (`/env/<id>/ws` vs `/ws`), so dropping it
+// produced a URL that was well-formed, same-origin, and pointed at the wrong
+// machine — the proxy never saw it and the local server answered.
 function httpUrlFromWsUrl(wsCandidate: string, rawPath: string): string | null {
   try {
     const wsUrl = new URL(wsCandidate);
     const protocol =
       wsUrl.protocol === "wss:" ? "https:" : wsUrl.protocol === "ws:" ? "http:" : wsUrl.protocol;
-    const httpUrl = new URL(rawPath, `${protocol}//${wsUrl.host}`);
+    const httpUrl = new URL(
+      withWsPathPrefix(wsUrlPathPrefix(wsUrl), rawPath),
+      `${protocol}//${wsUrl.host}`,
+    );
     const legacyToken = wsUrl.searchParams.get("token");
     if (legacyToken && !httpUrl.searchParams.has("token")) {
       httpUrl.searchParams.set("token", legacyToken);

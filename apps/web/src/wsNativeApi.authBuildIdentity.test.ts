@@ -25,8 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createWsEnvironmentClient } from "./wsNativeApi";
 
-const fetchMock = vi.fn(
-  async (..._args: readonly unknown[]) => Response.json({ revoked: true }, { status: 200 }),
+const fetchMock = vi.fn(async (..._args: readonly unknown[]) =>
+  Response.json({ revoked: true }, { status: 200 }),
 );
 
 function requestedUrls(): string[] {
