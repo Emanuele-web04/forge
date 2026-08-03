@@ -31,6 +31,7 @@ import {
   type ProjectDevServerEvent,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
+  type RemoteEnvironmentStatusesPayload,
   type ServerProviderStatusesUpdatedPayload,
   type ServerSettingsUpdatedPayload,
   type TerminalEvent,
@@ -1473,6 +1474,15 @@ export class WsTransport {
               this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.remoteEnvironmentStatusesUpdated) {
+          this.startStream(
+            client,
+            "server.remoteEnvironments",
+            client[WS_METHODS.subscribeRemoteEnvironmentStatuses]({}),
+            (payload: RemoteEnvironmentStatusesPayload) =>
+              this.emit(WS_CHANNELS.remoteEnvironmentStatusesUpdated, payload),
+            restartChannel,
+          );
         } else if (channel === WS_CHANNELS.terminalEvent) {
           this.startStream(
             client,
@@ -1527,6 +1537,8 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.serverProviderStatusesUpdated)
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
+    else if (channel === WS_CHANNELS.remoteEnvironmentStatusesUpdated)
+      this.stopStream("server.remoteEnvironments");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");

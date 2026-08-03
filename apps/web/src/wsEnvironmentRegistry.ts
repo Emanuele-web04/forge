@@ -6,6 +6,7 @@
 import {
   WS_CHANNELS,
   type EnvironmentId,
+  type RemoteEnvironmentStatusesPayload,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
   type ServerSettingsUpdatedPayload,
@@ -273,6 +274,26 @@ export function onServerSettingsUpdated(
     registry: client.channels.serverSettingsUpdated,
     listener,
     latest: client.getLatestPush(WS_CHANNELS.serverSettingsUpdated)?.data ?? null,
+  });
+}
+
+/**
+ * Subscribe to per-host remote environment supervision status.
+ *
+ * Defaults to the LOCAL environment, and that is the only sensible scope: the
+ * local server owns the SSH tunnels and the proxy registry, so it is the only
+ * server that can speak for a remote host's bring-up.
+ */
+export function onRemoteEnvironmentStatusesUpdated(
+  listener: (payload: RemoteEnvironmentStatusesPayload) => void,
+  options?: WsEnvironmentSubscriptionOptions,
+): () => void {
+  const client = scopedClient(options);
+  if (!client) return () => undefined;
+  return subscribeWithReplay({
+    registry: client.channels.remoteEnvironmentStatusesUpdated,
+    listener,
+    latest: client.getLatestPush(WS_CHANNELS.remoteEnvironmentStatusesUpdated)?.data ?? null,
   });
 }
 

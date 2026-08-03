@@ -75,6 +75,7 @@ import { LOCAL_ENVIRONMENT_ID } from "~/environmentIdentity";
 import { createEnvironmentDescriptorSync } from "../environmentDescriptorSync";
 import { createThreadStreamAggregator } from "../threadStreamAggregation";
 import { createEnvironmentProviderStatusSync } from "../environmentProviderStatusSync";
+import { createRemoteEnvironmentClientSync } from "../remoteEnvironmentClientSync";
 import {
   addWsBuildSkewListener,
   addWsCompatibilityIssueListener,
@@ -2038,6 +2039,11 @@ function EventRouter() {
     // Provider statuses are what let the picker say whether a host can actually
     // run a chat, rather than silently offering one that has nothing to talk to.
     const providerStatuses = createEnvironmentProviderStatusSync();
+    // The source of every remote entry in the registry above. A host the server
+    // brought up to `ready` is registered here — and ONLY here — which is what
+    // makes the three syncs above pick it up without any of them knowing a
+    // remote host exists.
+    const remoteClients = createRemoteEnvironmentClientSync();
     const syncAll = () => {
       const clients = listWsEnvironmentClients();
       aggregator.sync(clients);
@@ -2048,6 +2054,7 @@ function EventRouter() {
     const unsubscribe = onWsEnvironmentRegistryChange(syncAll);
     return () => {
       unsubscribe();
+      remoteClients.dispose();
       aggregator.detachAll();
       descriptors.dispose();
       providerStatuses.dispose();

@@ -29,6 +29,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
+  type RemoteEnvironmentStatusesPayload,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
@@ -83,6 +84,7 @@ export interface WsEnvironmentChannels {
   readonly serverProviderStatusesUpdated: ListenerRegistry<ServerProviderStatusesUpdatedPayload>;
   readonly serverMaintenanceUpdated: ListenerRegistry<ServerLifecycleStreamEvent>;
   readonly serverSettingsUpdated: ListenerRegistry<ServerSettingsUpdatedPayload>;
+  readonly remoteEnvironmentStatusesUpdated: ListenerRegistry<RemoteEnvironmentStatusesPayload>;
   readonly threadStreamFailure: ListenerRegistry<WsThreadStreamFailure>;
 }
 
@@ -237,6 +239,7 @@ export function createWsEnvironmentClient(
     serverProviderStatusesUpdated: createListenerRegistry<ServerProviderStatusesUpdatedPayload>(),
     serverMaintenanceUpdated: createListenerRegistry<ServerLifecycleStreamEvent>(),
     serverSettingsUpdated: createListenerRegistry<ServerSettingsUpdatedPayload>(),
+    remoteEnvironmentStatusesUpdated: createListenerRegistry<RemoteEnvironmentStatusesPayload>(),
     threadStreamFailure: createListenerRegistry<WsThreadStreamFailure>(),
   };
   const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
@@ -269,6 +272,9 @@ export function createWsEnvironmentClient(
   });
   transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
     channels.serverSettingsUpdated.emit(message.data);
+  });
+  transport.subscribe(WS_CHANNELS.remoteEnvironmentStatusesUpdated, (message) => {
+    channels.remoteEnvironmentStatusesUpdated.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
