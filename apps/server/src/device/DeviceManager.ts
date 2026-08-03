@@ -77,6 +77,12 @@ interface ThreadAttachment {
   attachedDeviceUdid: string | null;
   agentActiveCount: number;
   lastError: string | null;
+  /**
+   * Device this thread has already asked the pane to open for. An agent driving
+   * a device calls a tool every few seconds, so the second and later requests
+   * would be pure noise; this is what makes them a no-op.
+   */
+  paneSurfacedUdid: string | null;
 }
 
 export class DeviceManager {
@@ -449,12 +455,38 @@ export class DeviceManager {
 
   /** Auto-open the pane when an agent puts an app on a device. */
   requestOpenPane(threadId: string, udid: string, reason: DeviceOpenPaneReason): void {
+    this.threadState(threadId).paneSurfacedUdid = udid;
     this.emit({
       type: "device.open-pane-requested",
       threadId: ThreadId.makeUnsafe(threadId),
       udid,
       reason,
     });
+  }
+
+  /**
+   * Put the agent's device in front of the user: attach the thread to it so the
+   * pane has something to stream, then ask the pane to open.
+   *
+   * Every device interaction calls this, not just install and launch. An agent
+   * working on an app that is already running never installs or launches
+   * anything, so gating on those left the user watching a blank right side for
+   * the whole turn while the agent tapped through their app.
+   *
+   * Interactions arrive every few seconds, so this is a no-op once the pane has
+   * been surfaced for that device on that thread: repeating the request would
+   * emit an event per tap and could yank a user who navigated away back to the
+   * pane. Attaching first means the open request lands on a state that already
+   * names a device rather than the empty picker.
+   */
+  async surfaceDeviceForAgent(
+    threadId: string,
+    udid: string,
+    reason: DeviceOpenPaneReason,
+  ): Promise<void> {
+    if (this.threadState(threadId).paneSurfacedUdid === udid) return;
+    await this.ensureThreadAttached(threadId, udid).catch(() => undefined);
+    this.requestOpenPane(threadId, udid, reason);
   }
 
   async recordThreadError(threadId: string, message: string): Promise<void> {
@@ -490,7 +522,13 @@ export class DeviceManager {
   private threadState(threadId: string): ThreadAttachment {
     let attachment = this.threads.get(threadId);
     if (!attachment) {
-      attachment = { version: 0, attachedDeviceUdid: null, agentActiveCount: 0, lastError: null };
+      attachment = {
+        version: 0,
+        attachedDeviceUdid: null,
+        agentActiveCount: 0,
+        lastError: null,
+        paneSurfacedUdid: null,
+      };
       this.threads.set(threadId, attachment);
     }
     return attachment;

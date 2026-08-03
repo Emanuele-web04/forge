@@ -450,6 +450,47 @@ describe("DeviceManager agent auto-attach", () => {
     expect(backend.callsOfKind("attachStream")).toHaveLength(1);
   });
 
+  it("attaches and requests the pane in one step when an agent drives a device", async () => {
+    const { backend, manager, events } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    await manager.surfaceDeviceForAgent(THREAD_A, DEVICE_A, "agent-tool");
+
+    expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_A);
+    expect(events.at(-1)).toEqual({
+      type: "device.open-pane-requested",
+      threadId: THREAD_A,
+      udid: DEVICE_A,
+      reason: "agent-tool",
+    });
+  });
+
+  it("requests the pane once no matter how many times the agent surfaces", async () => {
+    const { backend, manager, events } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    for (let call = 0; call < 5; call += 1) {
+      await manager.surfaceDeviceForAgent(THREAD_A, DEVICE_A, "agent-tool");
+    }
+
+    const opened = events.filter((event) => event.type === "device.open-pane-requested");
+    expect(opened).toHaveLength(1);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(1);
+  });
+
+  it("surfaces again when the agent moves the thread to another device", async () => {
+    const { backend, manager, events } = makeManager();
+    await backend.boot(DEVICE_A);
+    await backend.boot(DEVICE_B);
+
+    await manager.surfaceDeviceForAgent(THREAD_A, DEVICE_A, "agent-tool");
+    await manager.surfaceDeviceForAgent(THREAD_A, DEVICE_B, "agent-tool");
+
+    const opened = events.filter((event) => event.type === "device.open-pane-requested");
+    expect(opened.map((event) => (event.type === "device.open-pane-requested" ? event.udid : null)))
+      .toEqual([DEVICE_A, DEVICE_B]);
+  });
+
   it("attaches each thread independently", async () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);

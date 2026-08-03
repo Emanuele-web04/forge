@@ -59,6 +59,25 @@ async function setup() {
   return { backend, manager, tools, byName, call, structured };
 }
 
+function collectOpenPaneRequests(manager: DeviceManager): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = [];
+  manager.onEvent((event) => {
+    if (event.type === "device.open-pane-requested") events.push(event);
+  });
+  return events;
+}
+
+/** Every tool that drives or reads the device the user is watching. */
+const INTERACTION_CALLS = [
+  ["device_tap", { udid: DEVICE, x: 10, y: 10 }],
+  ["device_swipe", { udid: DEVICE, fromX: 0, fromY: 0, toX: 10, toY: 10 }],
+  ["device_type", { udid: DEVICE, text: "hello" }],
+  ["device_press_button", { udid: DEVICE, button: "home" }],
+  ["device_scroll_to_element", { udid: DEVICE, label: "Deep Row" }],
+  ["device_describe_ui", { udid: DEVICE }],
+  ["device_screenshot", { udid: DEVICE }],
+] as const;
+
 describe("agent gateway device tools surface", () => {
   it("exposes the full device tool set behind the device:control capability", async () => {
     const { tools } = await setup();
@@ -170,15 +189,11 @@ describe("agent gateway device tool handlers", () => {
     expect(image && image.type === "image" ? image.mimeType : null).toBe("image/png");
   });
 
-  it("opens the pane when the agent installs or launches an app", async () => {
+  it("opens the pane when the agent installs an app", async () => {
     const { manager, structured } = await setup();
-    const events: unknown[] = [];
-    manager.onEvent((event) => {
-      if (event.type === "device.open-pane-requested") events.push(event);
-    });
+    const events = collectOpenPaneRequests(manager);
 
     await structured("device_install", { udid: DEVICE, appPath: "/tmp/Demo.app" });
-    await structured("device_launch", { udid: DEVICE, bundleId: "com.example.Demo" });
 
     expect(events).toEqual([
       {
@@ -187,6 +202,16 @@ describe("agent gateway device tool handlers", () => {
         udid: DEVICE,
         reason: "agent-install",
       },
+    ]);
+  });
+
+  it("opens the pane when the agent launches an app", async () => {
+    const { manager, structured } = await setup();
+    const events = collectOpenPaneRequests(manager);
+
+    await structured("device_launch", { udid: DEVICE, bundleId: "com.example.Demo" });
+
+    expect(events).toEqual([
       {
         type: "device.open-pane-requested",
         threadId: THREAD,
@@ -301,15 +326,12 @@ describe("agent gateway device tools auto-attach", () => {
 
   it("attaches on boot without opening the pane", async () => {
     const { manager, structured } = await setup();
-    const opened: unknown[] = [];
-    manager.onEvent((event) => {
-      if (event.type === "device.open-pane-requested") opened.push(event);
-    });
+    const opened = collectOpenPaneRequests(manager);
 
     await structured("device_boot", { udid: "FAKE-0002" });
 
-    // An agent that only boots and drives Settings still needs something to
-    // watch, but the pane opens for install/launch, when there is an app.
+    // Booting alone has nothing to watch yet, and the first real interaction
+    // surfaces the pane anyway.
     expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
     expect(opened).toHaveLength(0);
   });
@@ -335,5 +357,88 @@ describe("agent gateway device tools auto-attach", () => {
 
     // A stream failure must not turn a successful launch into a tool error.
     expect(result.bundleId).toBe("com.example.Demo");
+  });
+});
+
+describe("agent gateway device tools surface the pane on any interaction", () => {
+  // The demo failure: an Expo app already running on a booted simulator, so the
+  // agent never installs or launches and goes straight to describe/tap.
+  for (const [name, args] of INTERACTION_CALLS) {
+    it(`attaches and opens the pane on ${name}`, async () => {
+      const { manager, call } = await setup();
+      const opened = collectOpenPaneRequests(manager);
+
+      const result = await call(name, { ...args });
+
+      expect(result.isError, `${name} should succeed`).not.toBe(true);
+      expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
+      expect(opened).toEqual([
+        {
+          type: "device.open-pane-requested",
+          threadId: THREAD,
+          udid: DEVICE,
+          reason: "agent-tool",
+        },
+      ]);
+    });
+
+    it(`asks the pane to open only once across repeated ${name} calls`, async () => {
+      const { manager, call } = await setup();
+      const opened = collectOpenPaneRequests(manager);
+
+      await call(name, { ...args });
+      await call(name, { ...args });
+      await call(name, { ...args });
+
+      // An agent taps every few seconds; re-requesting per call would spam the
+      // UI and could yank back a user who navigated away.
+      expect(opened).toHaveLength(1);
+    });
+
+    it(`never steals a thread already watching another device on ${name}`, async () => {
+      const { backend, manager, call } = await setup();
+      await backend.boot("FAKE-0002");
+      await manager.attach(THREAD, "FAKE-0002");
+      const opened = collectOpenPaneRequests(manager);
+
+      await call(name, { ...args });
+
+      expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
+      // The attachment the user chose survives; the request names the agent's
+      // device, which stays reachable from the picker.
+      expect(opened.map((event) => event.udid)).toEqual([DEVICE]);
+    });
+  }
+
+  it("does not surface the pane for device_list", async () => {
+    const { manager, structured } = await setup();
+    const opened = collectOpenPaneRequests(manager);
+
+    await structured("device_list", { includeShutdown: true });
+
+    // Pure discovery, usually called before the agent has picked a device.
+    expect(opened).toHaveLength(0);
+    expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBeNull();
+  });
+
+  it("does not surface the pane when the interaction fails", async () => {
+    const { manager, call } = await setup();
+    const opened = collectOpenPaneRequests(manager);
+
+    const result = await call("device_tap", { udid: "FAKE-0002", x: 1, y: 1 });
+
+    expect(result.isError).toBe(true);
+    expect(opened).toHaveLength(0);
+  });
+
+  it("keeps the pane request idempotent across different interaction tools", async () => {
+    const { manager, call } = await setup();
+    const opened = collectOpenPaneRequests(manager);
+
+    for (const [name, args] of INTERACTION_CALLS) await call(name, { ...args });
+
+    expect(opened).toHaveLength(1);
+    // One attach, so no duplicate stream for the pane to reconcile.
+    expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
   });
 });

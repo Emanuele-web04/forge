@@ -159,20 +159,33 @@ export function makeAgentGatewayDeviceTools(
       });
   };
 
-  /**
-   * Put the agent's device in front of the user: attach the thread to it (so
-   * the pane has something to stream) and ask the pane to open. Attaching
-   * first means the open request lands on a state that already names a device,
-   * rather than a pane showing the empty picker.
-   */
   const surfaceDevice = async (
     context: ToolContext,
     udid: string,
     reason: DeviceOpenPaneReason,
   ): Promise<void> => {
-    await manager.ensureThreadAttached(context.callerThreadId, udid).catch(() => undefined);
-    manager.requestOpenPane(context.callerThreadId, udid, reason);
+    await manager.surfaceDeviceForAgent(context.callerThreadId, udid, reason);
   };
+
+  /**
+   * Wrap an interaction tool so driving the device also puts it in front of the
+   * user. Any interaction counts, not just install and launch: the common case
+   * is an app already running on a booted simulator, where the agent goes
+   * straight to describe/tap and the pane would otherwise never open.
+   *
+   * Surfacing runs after the action so a failed tap does not open a pane on a
+   * device the agent could not drive, and it is a no-op once the pane has been
+   * surfaced for that thread and device.
+   */
+  const handleInteraction = (
+    name: string,
+    run: (args: Record<string, unknown>, context: ToolContext) => Promise<unknown>,
+  ) =>
+    handle(name, async (args, context) => {
+      const result = await run(args, context);
+      await surfaceDevice(context, readUdid(args), "agent-tool");
+      return result;
+    });
 
   const tools: ToolEntry[] = [
     {
@@ -339,7 +352,7 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Tap", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handle("device_tap", async (args) => {
+      handler: handleInteraction("device_tap", async (args) => {
         const udid = readUdid(args);
         const request = readTapRequest({
           x: readNumberArg(args, "x"),
@@ -393,7 +406,7 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Swipe", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handle("device_swipe", async (args) => {
+      handler: handleInteraction("device_swipe", async (args) => {
         const udid = readUdid(args);
         const gesture = {
           fromX: readCoordinate(args, "fromX"),
@@ -424,7 +437,7 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Type text", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handle("device_type", async (args) => {
+      handler: handleInteraction("device_type", async (args) => {
         const udid = readUdid(args);
         const text = args.text;
         if (typeof text !== "string") throw new ToolInputError('Argument "text" must be a string.');
@@ -453,7 +466,7 @@ export function makeAgentGatewayDeviceTools(
           destructiveHint: false,
         },
       },
-      handler: handle("device_press_button", async (args) => {
+      handler: handleInteraction("device_press_button", async (args) => {
         const udid = readUdid(args);
         const button = readStringArg(args, "button", { required: true })!;
         if (!(DEVICE_HARDWARE_BUTTONS as readonly string[]).includes(button)) {
@@ -487,6 +500,7 @@ export function makeAgentGatewayDeviceTools(
               const result = await manager.withAgentActivity(context.callerThreadId, () =>
                 manager.screenshot(readUdid(args)),
               );
+              await surfaceDevice(context, readUdid(args), "agent-tool");
               // Image content beside the JSON so the model sees the screen
               // without a second decode step, matching browser_screenshot.
               const { bytesBase64, ...metadata } = result;
@@ -517,7 +531,9 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Describe device UI", ...READ_ONLY_TOOL_ANNOTATIONS },
       },
-      handler: handle("device_describe_ui", async (args) => manager.describeUi(readUdid(args))),
+      handler: handleInteraction("device_describe_ui", async (args) =>
+        manager.describeUi(readUdid(args)),
+      ),
     },
     {
       requiredCapability: DEVICE_CONTROL_CAPABILITY,
@@ -552,7 +568,7 @@ export function makeAgentGatewayDeviceTools(
           destructiveHint: false,
         },
       },
-      handler: handle("device_scroll_to_element", async (args) => {
+      handler: handleInteraction("device_scroll_to_element", async (args) => {
         const udid = readUdid(args);
         const match = await manager.scrollToElement(
           udid,
