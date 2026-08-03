@@ -22,6 +22,52 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.6.5",
+    date: "Aug 2",
+    features: [
+      {
+        id: "sidebar-activity-inbox",
+        title: "See what needs attention from one Activity view",
+        description:
+          "Switch the sidebar to a compact task inbox that keeps running work, input requests, failures, and recently finished tasks easy to scan.",
+        details:
+          "Activity groups tasks by urgency and recency, keeps important pinned work visible, supports project-scoped filtering, and opens new chats in the latest relevant project. Status indicators settle predictably, stale filters recover to all projects, and the selected view stays in sync across tabs.",
+      },
+      {
+        id: "reliable-task-lifecycle",
+        title: "Tasks settle and recover more reliably",
+        description:
+          "Conversation state now stays closer to the provider's real lifecycle through starts, reconnects, handoffs, and delayed events.",
+        details:
+          "Session orchestration now fences more stale updates, repairs workspace metadata immediately after a worktree handoff, keeps runtime activity attributed to the correct task, and strengthens recovery when provider or projection state arrives out of order.",
+      },
+      {
+        id: "calmer-transcript-control",
+        title: "Take back scroll control instantly",
+        description:
+          "Touching the transcript during an automatic jump now stops smooth scrolling at the current position instead of fighting your input.",
+        details:
+          "The transcript cancels both native and virtual-list scroll state at the visible offset, guards late tail-settle work after user takeover or task replacement, and preserves the simpler non-virtualized path for ordinary conversation sizes.",
+      },
+      {
+        id: "safer-composer-images",
+        title: "Image attachments fail more safely",
+        description:
+          "Large or awkward images are prepared more defensively before they enter a prompt, with clearer limits and fewer browser-worker edge cases.",
+        details:
+          "Composer image handling now bounds resize attempts, keeps worker communication scoped correctly, and hardens attachment intake so unsupported or oversized payloads fail predictably instead of destabilizing the draft.",
+      },
+      {
+        id: "sidebar-and-tool-polish",
+        title: "Sidebar and tool details are easier to read",
+        description:
+          "Surface switching, task hover cards, browser tool rows, and active states received a focused visual and accessibility pass.",
+        details:
+          "The sidebar surface picker has calmer styling, thread cards keep their active state while hovered, browser actions use clearer presentation, Search is located by its accessible name, and urgent or completed states stay legible in dense task lists.",
+      },
+    ],
+  },
+  {
     version: "0.6.4",
     date: "Aug 1",
     features: [

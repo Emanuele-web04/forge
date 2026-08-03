@@ -87,6 +87,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at,
           updated_at,
           archived_at,
+          settled_at,
           deleted_at
         )
         VALUES (
@@ -129,6 +130,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.createdAt},
           ${row.updatedAt},
           ${row.archivedAt ?? null},
+          ${row.settledAt ?? null},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -171,6 +173,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at,
+          settled_at = excluded.settled_at,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -220,6 +223,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          settled_at AS "settledAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -271,6 +275,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          settled_at AS "settledAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

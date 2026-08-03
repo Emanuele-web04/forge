@@ -100,6 +100,7 @@ const harness = vi.hoisted(() => ({
   resolveSplitViewPaneIdForThread: vi.fn(),
   resolveSplitViewFocusedThreadId: vi.fn(),
   splitViewsById: {} as Record<string, unknown>,
+  shellSnapshotSequence: 0,
 }));
 
 vi.mock("react", () => ({
@@ -168,13 +169,16 @@ vi.mock("../lib/deletedThreadClientReconciliation", () => ({
   reconcileDeletedThreadsFromClient: harness.reconcileDeletedThreads,
 }));
 vi.mock("../components/ui/toast", () => ({ toastManager: { add: harness.toast } }));
-vi.mock("../store", () => ({
-  useStore: {
-    getState: () => ({
-      removeDeletedThreadFromClientState: harness.removeDeletedThreadFromClientState,
-    }),
-  },
-}));
+vi.mock("../store", () => {
+  const useStore = (selector: (state: unknown) => unknown) =>
+    selector({ shellSnapshotSequence: harness.shellSnapshotSequence });
+  useStore.getState = () => ({
+    shellSnapshotSequence: harness.shellSnapshotSequence,
+    removeDeletedThreadFromClientState: harness.removeDeletedThreadFromClientState,
+  });
+  useStore.subscribe = () => () => {};
+  return { useStore };
+});
 vi.mock("../threadDerivation", () => ({
   getThreadFromState: (_state: unknown, threadId: ThreadId) => ({ id: threadId }),
 }));
@@ -255,6 +259,7 @@ beforeEach(() => {
   reactHarness.reset();
   sidebarThreads = [makeThread(THREAD_ID), makeThread(FALLBACK_ID)];
   harness.pinnedThreadIds = [];
+  harness.shellSnapshotSequence = 0;
   harness.alreadyUnarchived = false;
   harness.splitViewsById = {};
   for (const mock of [
@@ -287,7 +292,7 @@ beforeEach(() => {
   harness.unpinThread.mockImplementation((threadId: ThreadId) => {
     harness.pinnedThreadIds = harness.pinnedThreadIds.filter((id) => id !== threadId);
   });
-  harness.dispatchCommand.mockResolvedValue(undefined);
+  harness.dispatchCommand.mockResolvedValue({ sequence: 1 });
   harness.archiveThread.mockResolvedValue(undefined);
   harness.unarchiveThread.mockResolvedValue(undefined);
   harness.confirm.mockResolvedValue(true);

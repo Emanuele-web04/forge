@@ -2691,7 +2691,8 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('data-tool-icon="synara"');
     expect(markup).toContain("Open browser tab");
-    expect(markup).toContain("1s elapsed");
+    // A settled call reads as its action alone — no lifecycle or timing tail.
+    expect(markup).not.toContain("elapsed");
     expect(markup).not.toContain("Completed tool");
     expect(markup).not.toContain("Synara: Browser Open");
   });

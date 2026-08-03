@@ -228,6 +228,11 @@ const DEFAULT_BINDINGS = compile([
     command: "sidebar.search",
     whenAst: whenNot(whenIdentifier("isMac")),
   },
+  {
+    shortcut: modShortcut("u", { altKey: true }),
+    command: "sidebar.activity",
+    whenAst: whenCreationAllowed,
+  },
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
     shortcut: modShortcut("d"),
@@ -615,6 +620,38 @@ describe("settings shortcuts", () => {
     assert.isNull(
       resolveShortcutCommand(event({ key: "u", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+});
+
+describe("Activity shortcut", () => {
+  it("opens Activity with Cmd+Option+U, including from a focused macOS terminal", () => {
+    for (const terminalFocus of [false, true]) {
+      assert.equal(
+        resolveShortcutCommand(event({ key: "u", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
+          platform: "MacIntel",
+          context: { terminalFocus },
+        }),
+        "sidebar.activity",
+      );
+    }
+    assert.equal(shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.activity", "MacIntel"), "⌥⌘U");
+  });
+
+  it("uses Ctrl+Alt+U off macOS without stealing input from a focused terminal", () => {
+    const shortcut = event({ key: "u", ctrlKey: true, altKey: true });
+    assert.equal(
+      resolveShortcutCommand(shortcut, DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false },
+      }),
+      "sidebar.activity",
+    );
+    assert.isNull(
+      resolveShortcutCommand(shortcut, DEFAULT_BINDINGS, {
+        platform: "Linux",
         context: { terminalFocus: true },
       }),
     );

@@ -6,12 +6,9 @@
 
 import { GoRepoForked } from "react-icons/go";
 
-import {
-  PR_STATE_PRESENTATION_ICONS,
-  resolvePrStatePresentation,
-} from "../pullRequest/pullRequestStatePresentation";
-import { PR_FINE_TEXT_CLASS_NAME } from "../pullRequest/pullRequestText";
+import { PrStateChip } from "../pullRequest/PrStateChip";
 import { resolveThreadStatusPill } from "../Sidebar.logic";
+import { ThreadStatusPillChip } from "../ThreadStatusPillChip";
 import { ProviderIcon } from "../ProviderIcon";
 import {
   GitBranchIcon,
@@ -80,41 +77,7 @@ function KanbanCardStatusPill({ card }: { card: KanbanCard }) {
   if (!pill || REDUNDANT_COLUMN_PILL_LABELS.has(pill.label)) {
     return null;
   }
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5 text-[11px]", pill.colorClass)}>
-      <span
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          pill.dotClass,
-          pill.pulse ? "animate-pulse" : "",
-        )}
-      />
-      <span className="truncate">{pill.label}</span>
-    </span>
-  );
-}
-
-function KanbanCardPrChip({
-  pr,
-}: {
-  pr: NonNullable<NonNullable<KanbanCard["thread"]>["lastKnownPr"]>;
-}) {
-  const presentation = resolvePrStatePresentation(pr);
-  const PrIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
-  return (
-    <span
-      title={`#${pr.number} ${presentation.label}: ${pr.title}`}
-      className={cn(
-        // The PR type scale, not a pixel: this chip is the same fine print as every other PR
-        // surface, so it tracks the user's font-size setting with them.
-        PR_FINE_TEXT_CLASS_NAME,
-        "flex shrink-0 items-center gap-0.5",
-        presentation.colorClass,
-      )}
-    >
-      <PrIcon className="size-3 shrink-0" aria-hidden />#{pr.number}
-    </span>
-  );
+  return <ThreadStatusPillChip pill={pill} />;
 }
 
 function KanbanCardViewComponent({
@@ -207,7 +170,7 @@ function KanbanCardViewComponent({
             />
           </span>
         ) : null}
-        {pr ? <KanbanCardPrChip pr={pr} /> : null}
+        {pr ? <PrStateChip pr={pr} /> : null}
         {card.draftHasAttachments ? (
           <PaperclipIcon className="size-3 shrink-0 text-muted-foreground/70" aria-hidden />
         ) : null}

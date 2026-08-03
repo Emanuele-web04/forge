@@ -3,6 +3,7 @@ import { Effect, Exit, Layer, Option, Scope, Stream } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery";
+import { fakeProjectionSnapshotQuery } from "../../orchestration/testing/fakeProjectionSnapshotQuery";
 import {
   ProviderSessionDirectory,
   type ProviderSessionDirectoryShape,
@@ -47,27 +48,12 @@ function makeLayer(input: {
     Layer.provide(Layer.succeed(ProviderSessionDirectory, input.directory)),
     Layer.provide(Layer.succeed(ProviderService, input.providerService)),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
-        getSnapshot: () => unsupported(),
-        getCommandReadModel: () => unsupported(),
-        getCounts: () => unsupported(),
-        getSnapshotSequence: () => unsupported(),
-        listStaleInFlightThreadIds: () => unsupported(),
-        listManagedWorktreeThreads: () => unsupported(),
-        getShellSnapshot: () => unsupported(),
-        getActiveProjectByWorkspaceRoot: () => unsupported(),
-        getProjectShellById: () => unsupported(),
-        getSpaceShellById: () => unsupported(),
-        getFirstActiveThreadIdByProjectId: () => unsupported(),
-        getThreadCheckpointContext: () => unsupported(),
-        listGeneratedImageActivitiesByTurn: () => unsupported(),
-        getFullThreadDiffContext: () => unsupported(),
-        getThreadShellById: () => Effect.succeed(Option.some(input.threadShell)),
-        findSyntheticSubagentParentThread: () => unsupported(),
-        getThreadDetailById: () => unsupported(),
-        getThreadDetailForExportById: () => unsupported(),
-        getThreadDetailSnapshotById: () => unsupported(),
-      }),
+      Layer.succeed(
+        ProjectionSnapshotQuery,
+        fakeProjectionSnapshotQuery({
+          getThreadShellById: () => Effect.succeed(Option.some(input.threadShell)),
+        }),
+      ),
     ),
   );
 }

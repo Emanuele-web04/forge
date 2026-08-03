@@ -75,6 +75,7 @@ const SIDEBAR_SEARCH_DEFAULT_KEYBINDINGS = [
 export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle", when: "!terminalFocus" },
   ...SIDEBAR_SEARCH_DEFAULT_KEYBINDINGS,
+  { key: "mod+alt+u", command: "sidebar.activity", when: "!terminalFocus || isMac" },
   { key: "mod+shift+o", command: "sidebar.addProject", when: "!terminalFocus" },
   { key: "mod+i", command: "sidebar.importThread", when: "!terminalFocus" },
   { key: "mod+alt+arrowleft", command: "space.previous", when: "!terminalFocus" },

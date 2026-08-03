@@ -10,6 +10,7 @@ const { browserSession, rendererWebContentsById, rendererWebContentsFromId } = v
     browserSession: {
       setUserAgent: vi.fn(),
       webRequest: { onBeforeSendHeaders: vi.fn() },
+      protocol: { handle: vi.fn(), unhandle: vi.fn() },
     },
     rendererWebContentsById,
     rendererWebContentsFromId: vi.fn((id: number) => rendererWebContentsById.get(id) ?? null),
@@ -56,6 +57,8 @@ class FakeWebContents extends EventEmitter {
 
   setUserAgent = vi.fn();
   isDestroyed = () => false;
+  currentUrl = "https://example.test/";
+  getURL = () => this.currentUrl;
 
   setWindowOpenHandler(handler: WindowOpenHandler): void {
     this.windowOpenHandler = handler;
@@ -64,6 +67,11 @@ class FakeWebContents extends EventEmitter {
 
 class FakeRendererWebContents extends FakeWebContents {
   private destroyed = false;
+
+  constructor(id = 1) {
+    super(id);
+    this.currentUrl = "about:blank";
+  }
 
   readonly debugger = {
     isAttached: () => false,
@@ -74,11 +82,14 @@ class FakeRendererWebContents extends FakeWebContents {
 
   override isDestroyed = () => this.destroyed;
   getType = () => "webview";
-  getURL = () => "about:blank";
   getTitle = () => "New tab";
   isLoading = () => false;
   canGoBack = () => false;
   canGoForward = () => false;
+  loadURL = vi.fn((url: string) => {
+    this.currentUrl = url;
+    return Promise.resolve();
+  });
 
   destroyGuest(): void {
     this.destroyed = true;
@@ -357,7 +368,128 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
       };
       contents.emit("will-redirect", blockedRedirect);
       expect(blockedRedirect.preventDefault).toHaveBeenCalledOnce();
+
+      contents.currentUrl = "synara-local-preview://preview-token/index.html";
+      const allowedLocalNavigation = {
+        url: "synara-local-preview://preview-token/about.html",
+        isMainFrame: true,
+        preventDefault: vi.fn(),
+      };
+      contents.emit("will-navigate", allowedLocalNavigation);
+      expect(allowedLocalNavigation.preventDefault).not.toHaveBeenCalled();
+
+      contents.currentUrl = "https://example.test/";
+      const blockedLocalNavigation = {
+        url: "synara-local-preview://preview-token/about.html",
+        isMainFrame: true,
+        preventDefault: vi.fn(),
+      };
+      contents.emit("will-navigate", blockedLocalNavigation);
+      expect(blockedLocalNavigation.preventDefault).toHaveBeenCalledOnce();
     }
+  });
+
+  it("translates an explicit file URL before loading the visible browser guest", async () => {
+    const manager = new DesktopBrowserManager();
+    const initial = manager.open({ threadId: THREAD_ID });
+    const tabId = initial.activeTabId!;
+    const guest = new FakeRendererWebContents(83);
+    rendererWebContentsById.set(guest.id, guest);
+
+    manager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: guest.id }, 41);
+    const state = manager.navigate({
+      threadId: THREAD_ID,
+      tabId,
+      url: "file:///tmp/synara-preview/index.html",
+    });
+
+    expect(state.tabs.find((tab) => tab.id === tabId)?.url).toBe(
+      "file:///tmp/synara-preview/index.html",
+    );
+    await vi.waitFor(() => {
+      expect(guest.loadURL).toHaveBeenCalledWith(
+        expect.stringMatching(/^synara-local-preview:\/\/[a-f0-9]+\/index\.html$/u),
+      );
+    });
+  });
+
+  it("preserves an initial file URL while the blank guest starts its preview load", async () => {
+    const manager = new DesktopBrowserManager();
+    const sourceUrl = "file:///tmp/synara-preview/index.html";
+    const initial = manager.open({ threadId: THREAD_ID, initialUrl: sourceUrl });
+    const tabId = initial.activeTabId!;
+    const guest = new FakeRendererWebContents(84);
+    let finishLoad: (() => void) | undefined;
+    guest.loadURL.mockImplementation(
+      (url: string) =>
+        new Promise<void>((resolve) => {
+          finishLoad = () => {
+            guest.currentUrl = url;
+            resolve();
+          };
+        }),
+    );
+    rendererWebContentsById.set(guest.id, guest);
+
+    const attached = manager.attachWebview(
+      { threadId: THREAD_ID, tabId, webContentsId: guest.id },
+      41,
+    );
+
+    expect(attached.tabs.find((tab) => tab.id === tabId)).toMatchObject({
+      url: sourceUrl,
+      isLoading: true,
+      lastError: null,
+    });
+    await Promise.resolve();
+    expect(
+      manager.getState({ threadId: THREAD_ID }).tabs.find((tab) => tab.id === tabId),
+    ).toMatchObject({
+      url: sourceUrl,
+      isLoading: true,
+      lastError: null,
+    });
+
+    expect(finishLoad).toBeTypeOf("function");
+    finishLoad?.();
+    await vi.waitFor(() => {
+      expect(
+        manager.getState({ threadId: THREAD_ID }).tabs.find((tab) => tab.id === tabId),
+      ).toMatchObject({
+        url: sourceUrl,
+        isLoading: false,
+        lastError: null,
+      });
+    });
+  });
+
+  it("keeps the load error when an initial local file is not HTML", async () => {
+    const manager = new DesktopBrowserManager();
+    const sourceUrl = "file:///tmp/synara-preview/notes.txt";
+    const initial = manager.open({ threadId: THREAD_ID, initialUrl: sourceUrl });
+    const tabId = initial.activeTabId!;
+    const guest = new FakeRendererWebContents(85);
+    rendererWebContentsById.set(guest.id, guest);
+
+    const attached = manager.attachWebview(
+      { threadId: THREAD_ID, tabId, webContentsId: guest.id },
+      41,
+    );
+
+    expect(guest.loadURL).not.toHaveBeenCalled();
+    expect(attached.tabs.find((tab) => tab.id === tabId)).toMatchObject({
+      url: sourceUrl,
+      isLoading: false,
+      lastError: "Couldn't open this page.",
+    });
+    await Promise.resolve();
+    expect(
+      manager.getState({ threadId: THREAD_ID }).tabs.find((tab) => tab.id === tabId),
+    ).toMatchObject({
+      url: sourceUrl,
+      isLoading: false,
+      lastError: "Couldn't open this page.",
+    });
   });
 
   it("treats keyboard and pointer interaction inside an OAuth popup as human control", () => {

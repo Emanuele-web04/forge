@@ -3,6 +3,7 @@
 // Exports: Sidebar
 
 import {
+  AddPlusIcon,
   ArchiveIcon,
   BookIcon,
   ChatBubbleIcon,
@@ -14,6 +15,7 @@ import {
   GiftIcon,
   KanbanIcon,
   KeyboardIcon,
+  BellIcon,
   type LucideIcon,
   NewThreadIcon,
   PencilIcon,
@@ -29,7 +31,7 @@ import {
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
-import { CentralIcon, createCentralIconComponent } from "~/lib/central-icons";
+import { createCentralIconComponent } from "~/lib/central-icons";
 import {
   PR_STATE_PRESENTATION_ICONS,
   resolvePrStatePresentation,
@@ -41,7 +43,6 @@ import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
 import { IoIosGitCompare } from "react-icons/io";
 import { GoRepoForked } from "react-icons/go";
-import { HiOutlineArchiveBox } from "react-icons/hi2";
 import {
   useCallback,
   useEffect,
@@ -165,7 +166,6 @@ import {
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
-import { SynaraLogo } from "./SynaraLogo";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
@@ -180,14 +180,17 @@ import {
   createThreadHoverCardAnchor,
 } from "./sidebarHoverCardAnchors";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
-import { SidebarIconButton } from "./SidebarIconButton";
+import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
+import { SidebarActivityView } from "./SidebarActivityView";
+import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
+import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
-import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import {
   SidebarThreadRowContent,
   type SidebarThreadTerminalStatus,
@@ -211,6 +214,7 @@ import {
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
+  subscribeSidebarUiState,
 } from "./Sidebar.uiState";
 import {
   getArm64IntelBuildWarningDescription,
@@ -291,14 +295,15 @@ import {
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
   resolveProjectStatusIndicator,
-  resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   type SettingsBackTarget,
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
+  resolveThreadProjectLabel,
   resolveThreadRowClassName,
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
+  resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
   type SidebarDerivedProjectData,
   type SidebarActionBadge,
@@ -338,6 +343,7 @@ import {
   SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
   SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
+  SIDEBAR_ROW_FOCUS_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
@@ -400,7 +406,6 @@ import {
 const ExpandAllIcon = createCentralIconComponent("expand-45");
 const CollapseAllIcon = createCentralIconComponent("minimize-45");
 const SortFilterIcon = createCentralIconComponent("filter-2");
-const AddPlusIcon = createCentralIconComponent("plus-medium");
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
@@ -433,7 +438,6 @@ const SIDEBAR_VIEW_LABELS: Record<SidebarView, string> = {
   studio: "Studio",
 };
 /** Snap the optimistic segment selection back if the navigation never lands. */
-const SIDEBAR_SEGMENT_PENDING_RESET_MS = 2000;
 const EMPTY_PROJECT_SIDEBAR_DATA: ReadonlyMap<ProjectId, SidebarDerivedProjectData> = new Map();
 const DebugFeatureFlagsMenu = import.meta.env.DEV
   ? lazy(() =>
@@ -544,30 +548,6 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
   return <WorktreeIcon aria-hidden="true" className={sidebarGlyphClass("meta", className)} />;
 }
 
-// Trailing row status: spinner while working, check when completed, otherwise a
-// colored status dot. Thread rows and project headers use the same glyph so a
-// collapsed project still advertises active child chats.
-function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
-  if (status.label === "Completed") {
-    // Match the worktree/other trailing chips' optical size (15px) so the green
-    // check reads as part of the same right-side icon cluster. Same filled glyph
-    // as a passing PR check (PullRequestCheckStatusIcon).
-    return (
-      <CentralIcon
-        name="circle-check"
-        variant="fill"
-        className={cn(SIDEBAR_TRAILING_ICON_CLASS, status.colorClass)}
-      />
-    );
-  }
-  if (status.pulse) {
-    return <ThreadRunningSpinner />;
-  }
-  return (
-    <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)} />
-  );
-}
-
 /** Pulsing green dot shown before a project name while a dev run is live. */
 function ProjectRunIndicatorDot({ className }: { className?: string }) {
   return (
@@ -588,23 +568,16 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
   sidebarHoverRevealHideClassName("thread-row"),
 );
 
-/** Fixed-width status column; fades on hover so pin/archive can overlay this slot. */
-function threadRowTimestampSlotClassName(
-  isSubagentThread: boolean,
-  toneClassName?: string,
-): string {
+/** Status glyph slot; matches the 15px meta-chip column so trailing icons stay compact. */
+function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?: string): string {
   return cn(
-    // No right margin: the timestamp moved to the hover card, so this column now
-    // only carries the status glyph (check/spinner/dot). It must sit flush at the
-    // row's right padding like the meta chips (worktree, fork) — a leftover `mr-1`
-    // pushed the completed check ~4px past them and broke the trailing-cluster line.
-    "flex shrink-0 items-center justify-end leading-none tabular-nums",
+    "flex w-[15px] shrink-0 items-center justify-center leading-none tabular-nums",
     sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
-      ? "w-[1.2rem] text-[10px]"
+      ? "text-[10px]"
       : // Nudge the timestamp a hair above the meta scale while still tracking the user's
         // typography setting (the CSS var is always set; the 11px is just an SSR fallback).
-        "w-[1.625rem] text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
+        "text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
     toneClassName ?? (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
   );
 }
@@ -991,6 +964,7 @@ function ChatSortMenu({
 
 function SidebarPrimaryAction({
   icon: Icon,
+  iconClassName,
   label,
   onClick,
   onMouseEnter,
@@ -1002,6 +976,8 @@ function SidebarPrimaryAction({
 }: {
   // Accepts both Lucide adapters and raw react-icons glyphs (rendered via SidebarGlyph).
   icon: ComponentType<{ className?: string }>;
+  /** Optional optical correction for glyphs whose artwork fills more of its view box. */
+  iconClassName?: string;
   label: string;
   onClick?: () => void;
   onMouseEnter?: () => void;
@@ -1037,7 +1013,11 @@ function SidebarPrimaryAction({
         onFocus={onFocus}
       >
         <SidebarLeadingIcon size="sm" tone="text-inherit">
-          <SidebarGlyph icon={Icon} variant="leading" />
+          <SidebarGlyph
+            icon={Icon}
+            variant="leading"
+            {...(iconClassName ? { className: iconClassName } : {})}
+          />
         </SidebarLeadingIcon>
         <span className="truncate">{label}</span>
         {badge ? (
@@ -1101,7 +1081,128 @@ function SortableProjectItem({
   );
 }
 
-export function SidebarSegmentedPicker({
+/**
+ * Header Activity toggle: a bell that lights up in the accent tone while the
+ * Activity view is on, with an unread dot when completions are waiting.
+ */
+const ACTIVITY_ONBOARDING_STORAGE_KEY = "synara:activity-onboarding:v1";
+const ACTIVITY_ONBOARDING_DURATION_MS = 8_000;
+
+function shouldShowActivityOnboarding(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(ACTIVITY_ONBOARDING_STORAGE_KEY) !== "seen";
+  } catch {
+    return true;
+  }
+}
+
+function SidebarActivityBellButton({
+  active,
+  showUnreadDot,
+  shortcutLabel,
+  onClick,
+}: {
+  active: boolean;
+  showUnreadDot: boolean;
+  shortcutLabel: string | null;
+  onClick: () => void;
+}) {
+  const [onboardingVisible, setOnboardingVisible] = useState(shouldShowActivityOnboarding);
+  const [tooltipOpen, setTooltipOpen] = useState(onboardingVisible);
+
+  useEffect(() => {
+    if (!onboardingVisible) return;
+    try {
+      window.localStorage.setItem(ACTIVITY_ONBOARDING_STORAGE_KEY, "seen");
+    } catch {
+      // Storage can be unavailable in private or restricted browser contexts.
+    }
+    const timeout = window.setTimeout(() => {
+      setOnboardingVisible(false);
+      setTooltipOpen(false);
+    }, ACTIVITY_ONBOARDING_DURATION_MS);
+    return () => window.clearTimeout(timeout);
+  }, [onboardingVisible]);
+
+  const dismissOnboarding = () => {
+    setOnboardingVisible(false);
+    setTooltipOpen(false);
+  };
+
+  return (
+    <Tooltip
+      open={tooltipOpen}
+      onOpenChange={(open) => {
+        if (onboardingVisible && !open) return;
+        setTooltipOpen(open);
+      }}
+    >
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={active ? "Switch to classic view" : "Switch to activity view"}
+            aria-pressed={active}
+            onClick={() => {
+              dismissOnboarding();
+              onClick();
+            }}
+            className={cn(
+              "relative inline-flex shrink-0 cursor-pointer items-center justify-center transition-colors",
+              sidebarIconButtonSlotClass("header"),
+              SIDEBAR_ROW_FOCUS_CLASS_NAME,
+              active
+                ? "bg-[color-mix(in_srgb,var(--color-text-accent)_15%,transparent)] text-[var(--color-text-accent)]"
+                : "sidebar-icon-button text-muted-foreground/75 hover:text-foreground",
+            )}
+          />
+        }
+      >
+        <BellIcon className={sidebarGlyphClass("leading")} />
+        {showUnreadDot ? (
+          <span
+            aria-hidden
+            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-[var(--color-text-accent)] ring-2 ring-[var(--sidebar-background,var(--background))]"
+          />
+        ) : null}
+      </TooltipTrigger>
+      <TooltipPopup
+        side={onboardingVisible ? "right" : "bottom"}
+        align={onboardingVisible ? "start" : "center"}
+        sideOffset={onboardingVisible ? 8 : 4}
+        className={cn(
+          onboardingVisible &&
+            "max-w-64 border-[var(--color-text-accent)] bg-[var(--color-text-accent)] text-white shadow-lg",
+        )}
+        viewportClassName={cn(onboardingVisible && "px-3 py-2.5")}
+      >
+        {onboardingVisible ? (
+          <div className="text-left">
+            <div className="text-xs font-semibold">Activity</div>
+            <div className="mt-0.5 text-[11px] leading-4 text-white/85">
+              See running tasks, completed work, and anything that needs your attention.
+            </div>
+          </div>
+        ) : (
+          `Activity view${shortcutLabel ? ` (${shortcutLabel})` : ""}`
+        )}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+const SIDEBAR_SURFACE_PICKER_COPY: Record<SidebarView, { title: string; description: string }> = {
+  threads: { title: "Synara", description: "Build, debug, and ship" },
+  studio: { title: "Studio", description: "Open-ended agent work" },
+};
+
+/**
+ * App-switcher style surface picker: a compact pill with the active surface
+ * name that opens a menu of surfaces, each with a one-line description and a
+ * check on the active entry.
+ */
+export function SidebarSurfacePicker({
   views,
   activeView,
   onSelectView,
@@ -1112,132 +1213,72 @@ export function SidebarSegmentedPicker({
   onSelectView: (view: SidebarView) => void;
   onPrewarmView?: (view: SidebarView) => void;
 }) {
-  // Optimistic selection: activeView is derived from the route, which only updates
-  // after the segment switch's (heavy) render commits — the thumb would otherwise
-  // sit still for the whole switch and the click would feel dead. Drive the thumb
-  // from the clicked segment immediately (the navigation itself runs in a
-  // transition, see navigateToBackTarget) and let the route catch up; the timeout
-  // snaps back if the navigation never lands.
-  // Stamp an optimistic selection with the route it started from. When the route
-  // changes, synchronously replace that state before React commits the new props.
-  // Merely hiding a mismatched key is insufficient: browser Back can return to the
-  // old key after the route-landing effect has cancelled the snap-back timeout.
-  const [pendingView, setPendingView] = useState<{
-    key: SidebarView;
-    value: SidebarView | null;
-  }>(() => ({ key: activeView, value: null }));
-  if (pendingView.key !== activeView) {
-    setPendingView({ key: activeView, value: null });
-  }
-  const pendingViewResetTimeoutRef = useRef<number | null>(null);
-  const clearPendingViewResetTimeout = useCallback(() => {
-    if (pendingViewResetTimeoutRef.current !== null) {
-      window.clearTimeout(pendingViewResetTimeoutRef.current);
-      pendingViewResetTimeoutRef.current = null;
-    }
-  }, []);
-  // Cancel the pending snap-back timer once the route lands. The synchronous reset
-  // above owns the state transition; this effect only releases the timer.
-  useEffect(() => {
-    clearPendingViewResetTimeout();
-  }, [activeView, clearPendingViewResetTimeout]);
-  useEffect(() => clearPendingViewResetTimeout, [clearPendingViewResetTimeout]);
+  const activeCopy = SIDEBAR_SURFACE_PICKER_COPY[activeView];
 
-  // A single-option switcher is just a static label, so hide it entirely when the
-  // user has turned off one of the two sections in Settings.
-  if (views.length < 2) {
-    return null;
-  }
-  const effectivePendingView = pendingView.key === activeView ? pendingView.value : null;
-  const displayedView = effectivePendingView ?? activeView;
-  const handleSelectView = (view: SidebarView) => {
-    const nextPendingView = resolvePendingSidebarViewSelection(activeView, view);
-    clearPendingViewResetTimeout();
-    setPendingView({ key: activeView, value: nextPendingView });
-    if (nextPendingView !== null) {
-      // Start the detail subscription before the transition render so the
-      // destination transcript is already loading while React works.
-      onPrewarmView?.(view);
-      pendingViewResetTimeoutRef.current = window.setTimeout(() => {
-        pendingViewResetTimeoutRef.current = null;
-        setPendingView((current) => ({ ...current, value: null }));
-      }, SIDEBAR_SEGMENT_PENDING_RESET_MS);
-    }
-    onSelectView(view);
-  };
-  // displayedView can name a hidden view (e.g. a Studio thread is open while the Studio section is
-  // toggled off) — show no selection then, instead of parking the thumb on the wrong segment.
-  const activeIndex = displayedView === null ? -1 : views.indexOf(displayedView);
-  const segmentCount = views.length;
-  const activeSegment = Math.max(0, activeIndex);
-  const isFirstActive = activeSegment === 0;
-  const isLastActive = activeSegment === segmentCount - 1;
-  // One segment's share of the track interior: the padding box (100%) minus the two 0.5 side
-  // paddings. The chip fills exactly one cell for interior segments.
-  const cell = `(100% - 0.25rem) / ${segmentCount}`;
-  // The active *outer* segment leans a few px past the track's outer edge so it reads as a
-  // raised chip tilting toward that side (macOS style). Its inner edge stays glued to the
-  // segment boundary — only the width grows — so no gap opens next to the neighbour.
-  const OVERHANG = "5px";
-  const chipLeft = isFirstActive
-    ? `calc(-1px - ${OVERHANG})`
-    : `calc(0.125rem + ${activeSegment} * (${cell}))`;
-  const chipWidth =
-    isFirstActive || isLastActive
-      ? `calc(${cell} + 0.125rem + 1px + ${OVERHANG})`
-      : `calc(${cell})`;
   return (
-    <div className="px-3 pt-0.5 pb-2.5">
-      <div className="sidebar-segmented-picker relative isolate inline-flex w-full rounded-lg p-0.5">
-        {/* Single highlighted pill that glides between segments instead of snapping per-button.
-            A slim vertical overhang plus an outward horizontal lean on the end segments make
-            the selected segment read as a raised chip lifted out of the recessed well. */}
-        <div
-          aria-hidden
+    <Menu>
+      <MenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Switch sidebar surface"
+            className={cn(
+              "flex h-8 min-w-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5",
+              SIDEBAR_ROW_FOCUS_CLASS_NAME,
+              SIDEBAR_ROW_HOVER_CLASS_NAME,
+            )}
+          />
+        }
+      >
+        <span
           className={cn(
-            "sidebar-segmented-thumb pointer-events-none absolute -inset-y-[1.5px] z-0 rounded-md transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
-            activeIndex < 0 && "opacity-0",
+            "font-display min-w-0 truncate text-foreground",
+            activeView === "threads" ? "text-[17px]" : "text-[15px]",
           )}
-          style={{ left: chipLeft, width: chipWidth }}
-        />
-        {views.map((view, index) => {
-          const active = displayedView === view;
-          // The end-segment chip grows outward by 0.125rem + 1px + OVERHANG, so its visual
-          // center sits half that off the cell center. Follow it with the label (same motion
-          // as the thumb) so the text stays centered inside the chip.
-          const isOuterSegment = index === 0 || index === segmentCount - 1;
-          const labelShift =
-            active && isOuterSegment
-              ? `calc(${index === 0 ? "-1 * " : ""}(0.125rem + 1px + ${OVERHANG}) / 2)`
-              : "0px";
-          return (
-            <button
-              key={view}
-              type="button"
-              className={cn(
-                "relative z-10 flex-1 rounded-md px-2.5 py-0.5 text-[11.5px] font-medium transition-colors duration-200",
-                active
-                  ? "text-[var(--color-text-foreground)]"
-                  : "text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]",
-              )}
-              onPointerEnter={() => {
-                if (view !== activeView) {
-                  onPrewarmView?.(view);
-                }
-              }}
-              onClick={() => handleSelectView(view)}
-            >
-              <span
-                className="block transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
-                style={{ transform: `translateX(${labelShift})` }}
+        >
+          {activeCopy.title}
+        </span>
+        <DisclosureChevron open className="text-muted-foreground/70" />
+      </MenuTrigger>
+      <ComposerPickerMenuPopup
+        align="start"
+        side="bottom"
+        className="sidebar-surface-picker-menu min-w-64"
+      >
+        <MenuRadioGroup
+          className="flex flex-col gap-0.5"
+          value={activeView}
+          onValueChange={(value) => {
+            const view = value as SidebarView;
+            onPrewarmView?.(view);
+            onSelectView(view);
+          }}
+        >
+          {views.map((view) => {
+            const copy = SIDEBAR_SURFACE_PICKER_COPY[view];
+            return (
+              <MenuRadioItem
+                key={view}
+                value={view}
+                // Base UI radio items keep the menu open by default; this picker is a
+                // one-shot surface switch, so selecting an entry should dismiss it.
+                closeOnClick
+                className="items-center rounded-[10px] data-checked:bg-[var(--color-background-button-secondary-hover)]"
               >
-                {SIDEBAR_VIEW_LABELS[view]}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="text-[13px] font-medium leading-none text-foreground">
+                    {copy.title}
+                  </span>
+                  <span className="text-[11px] leading-snug text-muted-foreground">
+                    {copy.description}
+                  </span>
+                </span>
+              </MenuRadioItem>
+            );
+          })}
+        </MenuRadioGroup>
+      </ComposerPickerMenuPopup>
+    </Menu>
   );
 }
 
@@ -1463,6 +1504,7 @@ export default function Sidebar() {
   const searchShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.search") ??
     (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+  const activityShortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.activity");
   const importThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
     (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
@@ -1497,6 +1539,45 @@ export default function Sidebar() {
   const [lastThreadRoute, setLastThreadRoute] = useState(
     () => readSidebarUiState().lastThreadRoute,
   );
+  const [activityViewEnabled, setActivityViewEnabled] = useState(
+    () => readSidebarUiState().activityViewEnabled,
+  );
+  const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
+  const handleActivityVisibleThreadIdsChange = useCallback((threadIds: readonly ThreadId[]) => {
+    setActivityVisibleThreadIds((current) => {
+      if (
+        current.length === threadIds.length &&
+        current.every((threadId, index) => threadId === threadIds[index])
+      ) {
+        return current;
+      }
+      return [...threadIds];
+    });
+  }, []);
+  // Sidebar UI state is stored as one blob. Adopt the complete external write
+  // so this tab cannot persist stale paging, dismissal, or route fields over a
+  // newer tab merely because the Activity toggle changed there.
+  useEffect(
+    () =>
+      subscribeSidebarUiState((state) => {
+        setChatSectionExpanded(state.chatSectionExpanded);
+        setChatThreadListExtraPages(state.chatThreadListExtraPages);
+        setThreadListExtraPagesByProjectCwd(
+          new Map(Object.entries(state.projectThreadListExtraPagesByCwd)),
+        );
+        setDismissedThreadStatusKeyByThreadId(state.dismissedThreadStatusKeyByThreadId);
+        setLastThreadRoute(state.lastThreadRoute);
+        setActivityViewEnabled(state.activityViewEnabled);
+      }),
+    [],
+  );
+  // The swap unmounts one full surface and mounts the other; a transition keeps
+  // the click responsive instead of blocking the main thread on large sidebars.
+  const setActivityViewEnabledSmoothly = useCallback((enabled: boolean) => {
+    startTransition(() => {
+      setActivityViewEnabled(enabled);
+    });
+  }, []);
   const [optimisticActiveThreadId, setOptimisticActiveThreadId] = useState<ThreadId | null>(null);
   const lastThreadRenameTapRef = useRef<{
     threadId: ThreadId;
@@ -1542,6 +1623,11 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
       [sidebarTreeThreads, studioProjectIdSet],
     );
+  // Drives the unread dot on the header Activity bell.
+  const hasUnreadActivity = useMemo(
+    () => hasUnreadActivityOutsideActiveThread(nonStudioSidebarThreads, activeSidebarThreadId),
+    [activeSidebarThreadId, nonStudioSidebarThreads],
+  );
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
       if (!statusKey) {
@@ -1645,6 +1731,8 @@ export default function Sidebar() {
     pinnedThreadIds,
     pinnedThreadIdSet,
     toggleThreadPinned,
+    setThreadSettledWithToast,
+    settledOverrideByThreadId,
     deleteThread,
     confirmAndDeleteThread,
     archiveThread,
@@ -3081,9 +3169,11 @@ export default function Sidebar() {
         projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
+        activityViewEnabled,
       });
     },
     [
+      activityViewEnabled,
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
@@ -3703,8 +3793,10 @@ export default function Sidebar() {
       projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
+      activityViewEnabled,
     });
   }, [
+    activityViewEnabled,
     chatSectionExpanded,
     chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
@@ -3758,7 +3850,7 @@ export default function Sidebar() {
     [activateThreadFromSidebarIntent, rangeSelectTo, toggleThreadSelection],
   );
 
-  const visibleSidebarThreadIds = useMemo(() => {
+  const classicVisibleSidebarThreadIds = useMemo(() => {
     const visibleThreadIdSet = new Set<ThreadId>();
     const addVisibleThreadId = (threadId: ThreadId) => {
       visibleThreadIdSet.add(threadId);
@@ -3796,9 +3888,22 @@ export default function Sidebar() {
 
     return [...visibleThreadIdSet];
   }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
+  const visibleSidebarThreadIds =
+    activityViewEnabled && !isOnStudio ? activityVisibleThreadIds : classicVisibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
-    () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds]),
-    [studioChatThreadIds, visibleChatThreadIds, visibleSidebarThreadIds],
+    () =>
+      new Set(
+        activityViewEnabled && !isOnStudio
+          ? visibleSidebarThreadIds
+          : [...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds],
+      ),
+    [
+      activityViewEnabled,
+      isOnStudio,
+      studioChatThreadIds,
+      visibleChatThreadIds,
+      visibleSidebarThreadIds,
+    ],
   );
   const visibleSidebarThreads = useMemo(
     // Tree source so an active subagent row also gets PR badges and git targets.
@@ -3966,11 +4071,10 @@ export default function Sidebar() {
     };
   }, [activeSidebarThreadId, visibleSidebarThreadIds]);
 
-  // Pinned rows should show the user-facing project label, not the raw folder basename.
-  function resolvePinnedThreadProjectLabel(projectId: ProjectId): string | null {
-    const project = projectById.get(projectId);
-    if (!project) return null;
-    return project.name ?? project.folderName ?? null;
+  // Pinned rows share the thread-container label rule (project name, or
+  // "Synara" for project-less chats) with the hover cards and Activity rows.
+  function resolvePinnedThreadProjectLabel(projectId: ProjectId): string {
+    return resolveThreadProjectLabel(projectById.get(projectId));
   }
 
   // Keep hover actions in the same trailing slot used by the timestamp they replace.
@@ -3981,28 +4085,12 @@ export default function Sidebar() {
       compact?: boolean;
     },
   ) {
-    const compact = options?.compact === true;
-
     return (
-      <SidebarIconButton
-        icon={HiOutlineArchiveBox}
-        label="Archive thread"
-        title="Archive thread"
-        data-testid={`thread-archive-${threadId}`}
-        size={compact ? "sm" : "md"}
-        // Match the pin and the right-side meta chips (shared trailing-icon size); subagent
-        // rows stay on the denser "compact" scale.
-        iconClassName={compact ? sidebarGlyphClass("compact") : SIDEBAR_TRAILING_ICON_CLASS}
-        className={cn("hover:text-foreground/89", toneClassName)}
-        onMouseDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        }}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          void archiveThreadWithUndo(threadId);
-        }}
+      <ThreadArchiveActionButton
+        threadId={threadId}
+        toneClassName={toneClassName}
+        compact={options?.compact === true}
+        onArchive={() => void archiveThreadWithUndo(threadId)}
       />
     );
   }
@@ -4049,8 +4137,14 @@ export default function Sidebar() {
     timestampToneClassName?: string;
     hoverActions: ReactNode;
   }) {
+    // The jump shortcut owns the slot while it is visible; otherwise the shared
+    // rule decides which status glyph shows here.
+    const trailingStatus = resolveThreadStatusTrailingIndicator({
+      status: input.threadStatus,
+      slotOccupied: Boolean(input.threadJumpLabel),
+    });
     return (
-      <div className="relative flex shrink-0 items-center justify-end gap-1">
+      <div className="relative flex shrink-0 items-center justify-end gap-[3px]">
         {input.rightMetaChips.length > 0 ? (
           <div className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
@@ -4063,17 +4157,18 @@ export default function Sidebar() {
             ))}
           </KbdGroup>
         ) : null}
-        {!input.threadJumpLabel && input.threadStatus ? (
+        {trailingStatus ? (
           // The relative time now lives in the row hover card, so the trailing
           // slot only carries the live status/loader glyph; when idle it
           // collapses and the hover action icons sit flush at the end.
           <span
-            className={threadRowTimestampSlotClassName(
+            title={trailingStatus.label}
+            className={threadRowStatusSlotClassName(
               input.isSubagentThread,
               input.timestampToneClassName,
             )}
           >
-            <SidebarStatusTrailingGlyph status={input.threadStatus} />
+            <SidebarStatusTrailingGlyph status={trailingStatus} />
           </span>
         ) : null}
         {input.hoverActions}
@@ -4120,11 +4215,19 @@ export default function Sidebar() {
 
   // Shared rich hover card for thread/chat rows. Worktree metadata is resolved
   // once here so pinned and nested rows stay visually and semantically identical.
-  function renderThreadHoverCardPopup(thread: SidebarThreadSummary, hoverAnchorId: string) {
+  function renderThreadHoverCardPopup(
+    thread: SidebarThreadSummary,
+    hoverAnchorId: string,
+    isActive: boolean,
+  ) {
     const hoverProject = projectById.get(thread.projectId) ?? null;
     const hoverMetadata = resolveThreadHoverCardMetadata({
       thread,
       project: hoverProject,
+    });
+    const hoverStatus = resolveThreadStatusTrailingIndicator({
+      status: resolveThreadStatusForSidebar(thread),
+      isActive,
     });
     return (
       <TooltipPopup
@@ -4145,6 +4248,7 @@ export default function Sidebar() {
           branch={hoverMetadata.branch}
           worktreeName={hoverMetadata.worktreeName}
           model={resolveThreadModelSummary(thread.modelSelection)}
+          status={hoverStatus}
         />
       </TooltipPopup>
     );
@@ -4321,7 +4425,7 @@ export default function Sidebar() {
             </div>
           </div>
         </TooltipTrigger>
-        {renderThreadHoverCardPopup(thread, hoverAnchorId)}
+        {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
       </Tooltip>
     );
   }
@@ -4517,7 +4621,7 @@ export default function Sidebar() {
               })}
             </div>
           </TooltipTrigger>
-          {renderThreadHoverCardPopup(thread, hoverAnchorId)}
+          {renderThreadHoverCardPopup(thread, hoverAnchorId, isActive)}
         </Tooltip>
       </SidebarMenuSubItem>
     );
@@ -4917,6 +5021,16 @@ export default function Sidebar() {
         setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
         return;
       }
+      if (command === "sidebar.activity") {
+        event.preventDefault();
+        event.stopPropagation();
+        const shouldOpenActivity = isOnSettings || isOnStudio || !activityViewEnabled;
+        setActivityViewEnabledSmoothly(shouldOpenActivity);
+        if (shouldOpenActivity && (isOnSettings || isOnStudio)) {
+          handleSidebarViewChange("threads");
+        }
+        return;
+      }
       if (command === "sidebar.addProject") {
         event.preventDefault();
         event.stopPropagation();
@@ -5035,7 +5149,9 @@ export default function Sidebar() {
     activateThreadFromSidebarIntent,
     activeSidebarThreadId,
     activeSpaceId,
+    activityViewEnabled,
     handleSelectSpace,
+    handleSidebarViewChange,
     keybindings,
     getCurrentSidebarShortcutContext,
     homeDir,
@@ -5043,6 +5159,7 @@ export default function Sidebar() {
     isOnStudio,
     navigate,
     searchPaletteMode,
+    setActivityViewEnabledSmoothly,
     spaces,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
@@ -5572,10 +5689,6 @@ export default function Sidebar() {
             )}
           >
             {titlebarControls}
-            <SynaraLogo
-              aria-label="Synara"
-              className="pointer-events-none ml-auto size-3.5 text-[var(--color-text-foreground-secondary)] opacity-80"
-            />
           </SidebarHeader>
         </>
       ) : (
@@ -5629,15 +5742,41 @@ export default function Sidebar() {
           </SidebarGroup>
         ) : (
           <>
-            <SidebarSegmentedPicker
-              views={[...(studioSectionVisible ? (["studio"] as const) : []), "threads"]}
-              activeView={isOnStudio ? "studio" : "threads"}
-              onSelectView={handleSidebarViewChange}
-              onPrewarmView={prewarmSidebarViewTarget}
-            />
+            <div className="flex items-center gap-1 pt-0 pb-1 pr-2.5 pl-1.5">
+              <SidebarSurfacePicker
+                views={["threads", ...(studioSectionVisible ? (["studio"] as const) : [])]}
+                activeView={isOnStudio ? "studio" : "threads"}
+                onSelectView={handleSidebarViewChange}
+                onPrewarmView={prewarmSidebarViewTarget}
+              />
+              <div className="ml-auto flex items-center gap-1.5">
+                <SidebarIconButton
+                  icon={SearchIcon}
+                  label="Search"
+                  glyph="leading"
+                  size="header"
+                  tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
+                  tooltipSide="bottom"
+                  onClick={() => {
+                    setSearchPaletteOpen(true);
+                  }}
+                />
+                {!isOnStudio ? (
+                  <SidebarActivityBellButton
+                    active={activityViewEnabled}
+                    showUnreadDot={hasUnreadActivity}
+                    shortcutLabel={activityShortcutLabel}
+                    onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
+                  />
+                ) : null}
+              </div>
+            </div>
             {/* The keyed content remounts with a short enter animation while the picker
                 stays mounted so its thumb can glide between Projects and Studio. */}
-            <div key={isOnStudio ? "studio" : "threads"} className="sidebar-surface-enter">
+            <div
+              key={isOnStudio ? "studio" : activityViewEnabled ? "activity" : "threads"}
+              className="sidebar-surface-enter"
+            >
               {/* Primary sidebar actions stay limited to features we currently ship. */}
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <SidebarMenu className="gap-0.5">
@@ -5645,36 +5784,20 @@ export default function Sidebar() {
                     <>
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
+                        iconClassName="size-3.5"
                         label="New studio chat"
                         onClick={handleCreateStudioChat}
-                      />
-                      <SidebarPrimaryAction
-                        icon={SearchIcon}
-                        label="Search"
-                        active={searchPaletteOpen}
-                        onClick={() => {
-                          setSearchPaletteOpen(true);
-                        }}
-                        shortcutLabel={searchShortcutLabel}
                       />
                     </>
                   ) : (
                     <>
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
+                        iconClassName="size-3.5"
                         label="New thread"
                         onClick={handlePrimaryNewThread}
                         onMouseEnter={prefetchModelsForPrimaryNewThread}
                         onFocus={prefetchModelsForPrimaryNewThread}
-                      />
-                      <SidebarPrimaryAction
-                        icon={SearchIcon}
-                        label="Search"
-                        active={searchPaletteOpen}
-                        onClick={() => {
-                          setSearchPaletteOpen(true);
-                        }}
-                        shortcutLabel={searchShortcutLabel}
                       />
                       <SidebarPrimaryAction
                         icon={KanbanIcon}
@@ -5744,6 +5867,34 @@ export default function Sidebar() {
                       </div>
                     )}
                   </SidebarMenu>
+                </SidebarGroup>
+              ) : activityViewEnabled ? (
+                <SidebarGroup className="px-1.5 py-1.5">
+                  <SidebarActivityView
+                    threads={nonStudioSidebarThreads}
+                    projectById={projectById}
+                    activeThreadId={visualActiveSidebarThreadId}
+                    pinnedThreadIdSet={pinnedThreadIdSet}
+                    settledOverrideByThreadId={settledOverrideByThreadId}
+                    threadsHydrated={threadsHydrated}
+                    resolveThreadStatus={resolveThreadStatusForSidebar}
+                    onOpenThread={activateThreadFromSidebarIntent}
+                    onSetThreadSettled={setThreadSettledWithToast}
+                    onToggleThreadPinned={toggleThreadPinned}
+                    onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
+                    onMarkThreadRead={markThreadVisited}
+                    prByThreadId={prByThreadId}
+                    onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
+                    renderThreadHoverCard={(thread, anchorId) =>
+                      renderThreadHoverCardPopup(
+                        thread,
+                        anchorId,
+                        visualActiveSidebarThreadId === thread.id,
+                      )
+                    }
+                    onCreateChat={handlePrimaryNewThread}
+                    onAddProject={handleStartAddProject}
+                  />
                 </SidebarGroup>
               ) : (
                 <SidebarGroup className="px-1.5 py-1.5">
@@ -5875,7 +6026,7 @@ export default function Sidebar() {
             </div>
           </>
         )}
-        {!isOnSettings && !isOnStudio && chatsSectionVisible ? (
+        {!isOnSettings && !isOnStudio && !activityViewEnabled && chatsSectionVisible ? (
           // sidebar-surface-enter: mounts on the Studio -> Projects switch, so it
           // animates in step with the keyed surface wrapper above.
           <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
@@ -5995,7 +6146,7 @@ export default function Sidebar() {
         ) : null}
       </SidebarContent>
 
-      <SidebarFooter className="gap-2 p-2 font-system-ui">
+      <SidebarFooter className="gap-2 border-sidebar-border border-t p-2 font-system-ui">
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">

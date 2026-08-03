@@ -52,6 +52,11 @@ import {
   BrowserAnnotationCoordinator,
   type BrowserAnnotationRuntime,
 } from "./browserAnnotations/coordinator";
+import {
+  isLocalFileUrl,
+  isLocalHtmlPreviewUrl,
+  isSameLocalHtmlPreviewGrant,
+} from "./localHtmlPreviewProtocol";
 
 export { BROWSER_SESSION_PARTITION } from "./browserSessionPolicy";
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
@@ -330,11 +335,14 @@ function browserBoundsSignature(bounds: BrowserPanelBounds | null): string {
   return `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
 }
 
-function isAllowedBrowserRuntimeNavigation(url: string): boolean {
+function isAllowedBrowserRuntimeNavigation(url: string, currentUrl: string): boolean {
   if (url === ABOUT_BLANK_URL) return true;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return true;
+    }
+    return isLocalHtmlPreviewUrl(url) && isSameLocalHtmlPreviewGrant(currentUrl, url);
   } catch {
     return false;
   }
@@ -650,7 +658,7 @@ export class DesktopBrowserManager {
         typeof details.isMainFrame === "boolean"
           ? details.isMainFrame
           : legacyIsMainFrame !== false;
-      if (isMainFrame && !isAllowedBrowserRuntimeNavigation(url)) {
+      if (isMainFrame && !isAllowedBrowserRuntimeNavigation(url, webContents.getURL())) {
         details.preventDefault();
       }
     };
@@ -1590,6 +1598,18 @@ export class DesktopBrowserManager {
       this.attachRuntime(runtime, bounds);
     }
 
+    const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
+    const requiresLocalPreviewBootstrap =
+      isLocalFileUrl(expectedUrl) &&
+      this.sessionPolicy.resolveDisplayUrl(webContents.getURL()) !== expectedUrl;
+    if (requiresLocalPreviewBootstrap) {
+      void this.loadTab(input.threadId, tab.id, {
+        force: true,
+        ...(runtime ? { runtime } : {}),
+      });
+      return this.snapshotThreadState(input.threadId, state);
+    }
+
     const didChange = tab.status !== LIVE_TAB_STATUS || tab.lastError !== null;
     tab.status = LIVE_TAB_STATUS;
     tab.lastError = null;
@@ -1811,7 +1831,7 @@ export class DesktopBrowserManager {
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
     const webContents = runtime.webContents;
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
-    const currentUrl = webContents.getURL();
+    const currentUrl = this.sessionPolicy.resolveDisplayUrl(webContents.getURL());
     const bounds = this.getVisibleBoundsForThread(input.threadId);
     if (bounds) {
       this.attachActiveTab(input.threadId, bounds);
@@ -1948,7 +1968,10 @@ export class DesktopBrowserManager {
       if (wasSuspended) {
         void this.loadTab(threadId, tab.id, { force: true, runtime });
       } else {
-        didChange = syncTabStateFromRuntime(state, tab, runtime.webContents) || didChange;
+        didChange =
+          syncTabStateFromRuntime(state, tab, runtime.webContents, (url) =>
+            this.sessionPolicy.resolveDisplayUrl(url),
+          ) || didChange;
       }
     }
 
@@ -2428,7 +2451,7 @@ export class DesktopBrowserManager {
         return;
       }
 
-      tab.url = validatedURL || tab.url;
+      tab.url = validatedURL ? this.sessionPolicy.resolveDisplayUrl(validatedURL) : tab.url;
       tab.title = defaultTitleForUrl(tab.url);
       tab.isLoading = false;
       tab.lastError = mapBrowserLoadError(errorCode);
@@ -2491,7 +2514,7 @@ export class DesktopBrowserManager {
     const nextUrl = normalizeUrlInput(
       options.force === true ? tab.url : (tab.lastCommittedUrl ?? tab.url),
     );
-    const currentUrl = webContents.getURL();
+    const currentUrl = this.sessionPolicy.resolveDisplayUrl(webContents.getURL());
     const shouldLoad = options.force === true || currentUrl !== nextUrl || currentUrl.length === 0;
 
     if (!shouldLoad) {
@@ -2508,7 +2531,7 @@ export class DesktopBrowserManager {
     this.emitState(threadId);
 
     try {
-      await webContents.loadURL(nextUrl);
+      await webContents.loadURL(this.sessionPolicy.resolveRuntimeUrl(nextUrl));
       this.queueRuntimeStateSync(threadId, tabId);
     } catch (error) {
       if (isAbortedNavigationError(error)) {
@@ -2533,7 +2556,13 @@ export class DesktopBrowserManager {
       return;
     }
 
-    const didChange = syncTabStateFromRuntime(state, tab, runtime.webContents, faviconUrls);
+    const didChange = syncTabStateFromRuntime(
+      state,
+      tab,
+      runtime.webContents,
+      (url) => this.sessionPolicy.resolveDisplayUrl(url),
+      faviconUrls,
+    );
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(threadId);
@@ -3007,9 +3036,10 @@ function syncTabStateFromRuntime(
   state: ThreadBrowserState,
   tab: BrowserTabState,
   webContents: WebContents,
+  resolveDisplayUrl: (url: string) => string,
   faviconUrls?: string[],
 ): boolean {
-  const currentUrl = webContents.getURL();
+  const currentUrl = resolveDisplayUrl(webContents.getURL());
   const nextUrl = currentUrl || tab.url;
   const nextTitle = webContents.getTitle();
   let didChange = false;

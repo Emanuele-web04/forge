@@ -4,6 +4,7 @@
 
 import {
   app,
+  net,
   session,
   type BrowserWindow,
   type BrowserWindowConstructorOptions,
@@ -16,6 +17,7 @@ import {
   buildChromeClientHints,
   deriveChromeUserAgent,
 } from "@synara/shared/browserSession";
+import { LOCAL_HTML_PREVIEW_SCHEME, LocalHtmlPreviewRegistry } from "./localHtmlPreviewProtocol";
 
 export const BROWSER_SESSION_PARTITION = "persist:synara-browser";
 
@@ -46,6 +48,7 @@ function replaceRequestHeadersCaseInsensitive(
 }
 
 export class BrowserSessionPolicy {
+  private readonly localHtmlPreviews = new LocalHtmlPreviewRegistry();
   private spoofedUserAgent: string | null = null;
   private configured = false;
   private configuredSession: Session | null = null;
@@ -81,15 +84,25 @@ export class BrowserSessionPolicy {
         });
         callback({ requestHeaders });
       });
+      partitionSession.protocol.handle(LOCAL_HTML_PREVIEW_SCHEME, async (request) => {
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          return new Response("Method not allowed", { status: 405 });
+        }
+        const fileUrl = await this.localHtmlPreviews.resolveRequestFileUrl(request.url);
+        if (!fileUrl) {
+          return new Response("Not found", { status: 404 });
+        }
+        return net.fetch(fileUrl, { method: request.method });
+      });
       const onWillDownload = this.onWillDownload;
       if (onWillDownload) {
         const listener = (event: Electron.Event, item: DownloadItem, webContents: WebContents) => {
           onWillDownload({ event, item, webContents });
         };
         partitionSession.on("will-download", listener);
-        this.configuredSession = partitionSession;
         this.willDownloadListener = listener;
       }
+      this.configuredSession = partitionSession;
       this.configured = true;
     } catch {
       // Session creation can race Electron readiness. Retrying the next call preserves the
@@ -104,11 +117,15 @@ export class BrowserSessionPolicy {
     this.configuredSession = null;
     this.willDownloadListener = null;
     this.configured = false;
-    if (!partitionSession || !listener) {
+    this.localHtmlPreviews.clear();
+    if (!partitionSession) {
       return;
     }
     try {
-      partitionSession.removeListener("will-download", listener);
+      if (listener) {
+        partitionSession.removeListener("will-download", listener);
+      }
+      partitionSession.protocol.unhandle(LOCAL_HTML_PREVIEW_SCHEME);
     } catch {
       // Electron may already be tearing the session down during app quit.
       // The manager reference is cleared above, so no retained callback remains here.
@@ -117,6 +134,14 @@ export class BrowserSessionPolicy {
 
   applyUserAgent(webContents: Pick<WebContents, "setUserAgent">): void {
     webContents.setUserAgent(this.resolveUserAgent());
+  }
+
+  resolveRuntimeUrl(url: string): string {
+    return this.localHtmlPreviews.toRuntimeUrl(url);
+  }
+
+  resolveDisplayUrl(url: string): string {
+    return this.localHtmlPreviews.toDisplayUrl(url);
   }
 
   buildOAuthPopupWindowOptions(parent: BrowserWindow | null): BrowserWindowConstructorOptions {

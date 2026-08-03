@@ -55,6 +55,9 @@ export function normalizeBrowserUrlInput(input: string | undefined): string {
     if (withScheme.protocol === "about:") {
       return withScheme.toString();
     }
+    if (withScheme.protocol === "file:") {
+      return withScheme.toString();
+    }
   } catch {
     // Fall through to browser-style heuristics below.
   }

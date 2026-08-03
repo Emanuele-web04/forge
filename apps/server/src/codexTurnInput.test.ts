@@ -39,4 +39,12 @@ describe("buildCodexTurnInput", () => {
       { type: "mention", name: "README", path: "/repo/README.md" },
     ]);
   });
+
+  it("preserves local image paths without converting them to URLs", () => {
+    expect(
+      buildCodexTurnInput({
+        attachments: [{ type: "localImage", path: "/tmp/screenshot.png" }],
+      }),
+    ).toEqual([{ type: "localImage", path: "/tmp/screenshot.png" }]);
+  });
 });

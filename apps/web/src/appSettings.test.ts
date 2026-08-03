@@ -240,6 +240,28 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("environment panel defaults", () => {
+  it("starts optional text sections disabled without overriding explicit preferences", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+    expect(defaults).toMatchObject({
+      showEnvironmentMarkers: false,
+      showEnvironmentInstructions: false,
+      showEnvironmentNotepad: false,
+    });
+
+    const enabled = AppSettingsSchema.makeUnsafe({
+      showEnvironmentMarkers: true,
+      showEnvironmentInstructions: true,
+      showEnvironmentNotepad: true,
+    });
+    expect(enabled).toMatchObject({
+      showEnvironmentMarkers: true,
+      showEnvironmentInstructions: true,
+      showEnvironmentNotepad: true,
+    });
+  });
+});
+
 describe("resolveAppModelSelection", () => {
   it("preserves saved custom model slugs instead of falling back to the default", () => {
     expect(

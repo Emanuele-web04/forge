@@ -287,7 +287,7 @@ export interface ComposerDraftStoreState {
     savedDraft: ComposerPromptHistorySavedDraft | null,
   ) => void;
   restorePromptHistorySavedDraft: (threadId: ThreadId) => void;
-  addPromptHistorySavedDraftImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
+  addPromptHistorySavedDraftImage: (threadId: ThreadId, image: ComposerImageAttachment) => boolean;
   syncPromptHistorySavedDraftPersistedAttachments: (
     threadId: ThreadId,
     attachments: PersistedComposerImageAttachment[],
@@ -322,11 +322,11 @@ export interface ComposerDraftStoreState {
   enqueueQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn) => void;
   insertQueuedTurn: (threadId: ThreadId, queuedTurn: QueuedComposerTurn, index: number) => void;
   removeQueuedTurn: (threadId: ThreadId, queuedTurnId: string) => void;
-  addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
-  addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
+  addImage: (threadId: ThreadId, image: ComposerImageAttachment) => boolean;
+  addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => number;
   removeImage: (threadId: ThreadId, imageId: string) => void;
   removeAppSnapCapture: (captureId: string) => void;
-  addFiles: (threadId: ThreadId, files: ComposerFileAttachment[]) => void;
+  addFiles: (threadId: ThreadId, files: ComposerFileAttachment[]) => number;
   removeFile: (threadId: ThreadId, fileId: string) => void;
   addAssistantSelection: (
     threadId: ThreadId,

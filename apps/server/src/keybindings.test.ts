@@ -90,6 +90,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("defaults Activity to Cmd+Option+U with terminal-safe cross-platform behavior", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "sidebar.activity"),
+        {
+          key: "mod+alt+u",
+          command: "sidebar.activity",
+          when: "!terminalFocus || isMac",
+        },
+      );
+    }),
+  );
+
   it.effect("compiles valid rule with parsed when AST", () =>
     Effect.sync(() => {
       const compiled = compileResolvedKeybindingRule({

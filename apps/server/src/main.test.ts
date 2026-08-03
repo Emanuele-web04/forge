@@ -21,6 +21,7 @@ import { NetService } from "@synara/shared/Net";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { Open, type OpenShape } from "./open";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { fakeProjectionSnapshotQuery } from "./orchestration/testing/fakeProjectionSnapshotQuery";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { Server, type ServerShape } from "./effectServer";
 import { makeServerShutdownController } from "./serverShutdown";
@@ -740,41 +741,29 @@ it.layer(testLayer)("server CLI command", (it) => {
       );
 
       yield* recordStartupHeartbeat.pipe(
-        Effect.provideService(ProjectionSnapshotQuery, {
-          getSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              spaces: [],
-              projects: [] as OrchestrationReadModel["projects"],
-              threads: [] as OrchestrationReadModel["threads"],
-              updatedAt: new Date(0).toISOString(),
-            }),
-          getCommandReadModel: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              spaces: [],
-              projects: [] as OrchestrationReadModel["projects"],
-              threads: [] as OrchestrationReadModel["threads"],
-              updatedAt: new Date(0).toISOString(),
-            }),
-          getCounts,
-          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-          listStaleInFlightThreadIds: () => Effect.die("unused"),
-          listManagedWorktreeThreads: () => Effect.die("unused"),
-          getShellSnapshot: () => Effect.die("unused"),
-          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
-          getProjectShellById: () => Effect.die("unused"),
-          getSpaceShellById: () => Effect.die("unused"),
-          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-          getThreadCheckpointContext: () => Effect.die("unused"),
-          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
-          getFullThreadDiffContext: () => Effect.die("unused"),
-          getThreadShellById: () => Effect.die("unused"),
-          findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.die("unused"),
-          getThreadDetailForExportById: () => Effect.die("unused"),
-          getThreadDetailSnapshotById: () => Effect.die("unused"),
-        }),
+        Effect.provideService(
+          ProjectionSnapshotQuery,
+          fakeProjectionSnapshotQuery({
+            getSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                spaces: [],
+                projects: [] as OrchestrationReadModel["projects"],
+                threads: [] as OrchestrationReadModel["threads"],
+                updatedAt: new Date(0).toISOString(),
+              }),
+            getCommandReadModel: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                spaces: [],
+                projects: [] as OrchestrationReadModel["projects"],
+                threads: [] as OrchestrationReadModel["threads"],
+                updatedAt: new Date(0).toISOString(),
+              }),
+            getCounts,
+            getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+          }),
+        ),
         Effect.provideService(AnalyticsService, {
           record: recordTelemetry,
           flush: Effect.void,

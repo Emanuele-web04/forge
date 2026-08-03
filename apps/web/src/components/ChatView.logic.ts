@@ -273,6 +273,20 @@ export function buildTranscriptAutoFollowSignal(input: {
   return `${input.messageCount}\u001f${input.tailKey}`;
 }
 
+export function resolveThreadArtifactWorkspaceRoot(input: {
+  readonly isStudioContainer: boolean;
+  readonly projectCwd: string | null;
+  readonly threadWorkspaceCwd: string | null;
+}): string | null {
+  if (input.threadWorkspaceCwd) {
+    return input.threadWorkspaceCwd;
+  }
+  // A normal thread can expose project files while a requested worktree is
+  // still being materialized. Studio has no equivalent project-root fallback:
+  // its selected working directory is the artifact boundary.
+  return input.isStudioContainer ? null : input.projectCwd;
+}
+
 export interface PromptHistoryNavigationState {
   index: number;
   draft: string;

@@ -13,6 +13,7 @@ const { browserSession, fromId, webContentsViewConstructor, willDownloadListener
       browserSession: {
         setUserAgent: vi.fn(),
         webRequest: { onBeforeSendHeaders: vi.fn() },
+        protocol: { handle: vi.fn(), unhandle: vi.fn() },
         on: vi.fn((event: string, listener: typeof willDownloadListener.current) => {
           if (event === "will-download") willDownloadListener.current = listener;
         }),

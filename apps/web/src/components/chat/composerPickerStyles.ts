@@ -67,22 +67,18 @@ export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[46rem]";
 /** Main chat column background — matches the theme Background setting exactly. */
 export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]";
 
-/** Turns the main content column into a distinct, opaque card that floats over the
- *  (optionally translucent) sidebar instead of sharing one continuous surface with it.
- *  - The rounded seam edge, the 1px inset ring divider, and the depth shadow all live in
- *    `index.css` and are applied per `data-sidebar-side` ONLY while the sidebar is expanded
- *    — when it collapses (offcanvas) the card fills the window edge-to-edge and stays square
- *    so its corner doesn't double up with the macOS window's own rounded corner.
- *  - The single seam divider is a 1px inset ring on the card (see `index.css`), so it
- *    follows the rounded corner. The `SidebarRail`
- *    (`placement="content-seam"`, z-[25]) is just the resize hit-area and intensifies
- *    that same border on hover via `:has()` — never put a seam border on the sidebar,
- *    and never draw a second divider/shadow line on the rail.
+/** Turns the main content column into a distinct, opaque surface over the
+ *  (optionally translucent) sidebar instead of sharing one continuous material with it.
+ *  - The square 1px seam divider and depth shadow live in `index.css` and are visible
+ *    only while the sidebar is expanded.
+ *  - The `SidebarRail` (`placement="content-seam"`, z-[25]) remains only the resize
+ *    hit-area and intensifies that same divider on hover via `:has()` — never put a seam
+ *    border on the sidebar or draw a second divider/shadow line on the rail.
  *  - `data-sidebar-side` on `SidebarProvider` picks left vs right seam geometry.
  *  - `relative z-[15]` stacks the card above the sidebar shell but below the content-seam
  *    rail (`z-[25]`), so on collapse the sidebar slides *under* the card (the
  *    movement goes "over") rather than the card shifting sideways with it.
- *  - `overflow-hidden` clips children to the rounded edge.
+ *  - `overflow-hidden` keeps route content inside the shared surface.
  *
  *  Apply this to the OPAQUE content surface (e.g. the chat wrapper, or a
  *  SidebarInset `surfaceClassName`) — never to a transparent, full-width

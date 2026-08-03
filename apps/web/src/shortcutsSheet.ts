@@ -69,6 +69,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Open the sidebar search palette from anywhere in the app.",
   },
   {
+    command: "sidebar.activity",
+    label: "Toggle Activity",
+    description: "Show or hide running tasks, completed work, and items that need attention.",
+  },
+  {
     command: "sidebar.importThread",
     label: "Import thread",
     description: "Bring an existing conversation into the current workspace.",

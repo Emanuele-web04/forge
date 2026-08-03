@@ -1,5 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
+import {
+  resolveWorktreeHandoffIntent,
+  resolveWorktreeHandoffWorkspaceMetadata,
+} from "@synara/shared/worktreeHandoff";
 import { useCallback, useState } from "react";
 import { gitHandoffThreadMutationOptions } from "~/lib/gitReactQuery";
 import { buildSuggestedWorktreeName } from "../components/ChatView.logic";
@@ -10,6 +13,7 @@ import {
   type ProjectScriptRunOptions,
   type ProjectScriptRunResult,
 } from "../projectScripts";
+import { useStore } from "../store";
 import type { Project, ProjectScript, Thread } from "../types";
 
 /** Success toast for one handoff. Module scope: its ternaries live outside the caller's `try`. */
@@ -42,6 +46,7 @@ export function useThreadWorkspaceHandoff(input: {
   ) => Promise<ProjectScriptRunResult | null>;
 }) {
   const queryClient = useQueryClient();
+  const setThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const handoffThreadMutation = useMutation(
     gitHandoffThreadMutationOptions({ cwd: input.activeProject?.cwd ?? null, queryClient }),
   );
@@ -82,6 +87,11 @@ export function useThreadWorkspaceHandoff(input: {
       try {
         await input.stopActiveThreadSession();
         const result = await handoffThreadMutation.mutateAsync(handoffPayload);
+        // The RPC returns only after the Git result and metadata command are
+        // durable. Apply that result locally as well so cwd-bound surfaces
+        // (file preview, explorer, terminal) do not wait for the asynchronous
+        // domain-event round trip and briefly keep targeting the old checkout.
+        setThreadWorkspace(input.activeThread.id, resolveWorktreeHandoffWorkspaceMetadata(result));
 
         // Nested `if`s rather than `&&`, and the toast assembled outside: every value block —
         // `&&`, `??`, a ternary, a conditional spread — is one React Compiler refuses to lower
@@ -115,7 +125,7 @@ export function useThreadWorkspaceHandoff(input: {
         return false;
       }
     },
-    [handoffThreadMutation, input],
+    [handoffThreadMutation, input, setThreadWorkspace],
   );
 
   const onHandoffToWorktree = useCallback(() => {

@@ -71,7 +71,11 @@ import {
   CodexJsonlFramer,
   CodexJsonlWriter,
 } from "./codexAppServerTransport.ts";
-import { buildCodexTurnInput, type CodexTurnInputItem } from "./codexTurnInput.ts";
+import {
+  buildCodexTurnInput,
+  type CodexImageInputItem,
+  type CodexTurnInputItem,
+} from "./codexTurnInput.ts";
 import {
   parseCodexModelListResponse,
   parseCodexPluginListResponse,
@@ -248,7 +252,7 @@ interface CodexVoiceTranscriptionAuthContext {
 export interface CodexAppServerSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
-  readonly attachments?: ReadonlyArray<{ type: "image"; url: string }>;
+  readonly attachments?: ReadonlyArray<CodexImageInputItem>;
   readonly skills?: ReadonlyArray<ProviderSkillReference>;
   readonly mentions?: ReadonlyArray<ProviderMentionReference>;
   readonly model?: string;

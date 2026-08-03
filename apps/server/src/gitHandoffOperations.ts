@@ -3,6 +3,7 @@ import {
   GitHandoffThreadResult,
   type OrchestrationCommand,
 } from "@synara/contracts";
+import { resolveWorktreeHandoffWorkspaceMetadata } from "@synara/shared/worktreeHandoff";
 import { Data, Effect, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -124,13 +125,7 @@ export const gitHandoffMetadataCommand = (
   type: "thread.meta.update",
   commandId: input.commandId,
   threadId: input.threadId,
-  envMode: result.targetMode,
-  branch: result.branch,
-  worktreePath: result.worktreePath,
-  associatedWorktreePath: result.associatedWorktreePath,
-  associatedWorktreeBranch: result.associatedWorktreeBranch,
-  associatedWorktreeRef: result.associatedWorktreeRef,
-  ...(result.targetMode === "worktree" ? { createBranchFlowCompleted: false } : {}),
+  ...resolveWorktreeHandoffWorkspaceMetadata(result),
 });
 
 export const recoverGitHandoffOperations = (

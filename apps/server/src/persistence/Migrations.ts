@@ -103,6 +103,7 @@ import Migration0084 from "./Migrations/084_AutomationNotificationPolicy.ts";
 import Migration0085 from "./Migrations/085_AutomationSettings.ts";
 import Migration0086 from "./Migrations/086_NormalizeStudioThreadWorkspaces.ts";
 import Migration0087 from "./Migrations/087_DropUnusedOrchestrationEventIndexes.ts";
+import Migration0088 from "./Migrations/088_ProjectionThreadsSettledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -205,6 +206,7 @@ export const migrationEntries = [
   [85, "AutomationSettings", Migration0085],
   [86, "NormalizeStudioThreadWorkspaces", Migration0086],
   [87, "DropUnusedOrchestrationEventIndexes", Migration0087],
+  [88, "ProjectionThreadsSettledAt", Migration0088],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

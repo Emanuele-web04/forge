@@ -216,6 +216,18 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
+   * True when the thread id is already bound to an aggregate, including
+   * soft-deleted threads that the active-only reads above hide.
+   *
+   * Callers that decide whether to dispatch `thread.create` must use this:
+   * the command decider rejects re-creating a thread id that still has a
+   * tombstone, so an active-only existence check would loop on rejections.
+   */
+  readonly threadIdExistsIncludingDeleted: (
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
+
+  /**
    * Recover the parent thread for legacy synthetic subagent IDs.
    */
   readonly findSyntheticSubagentParentThread: (

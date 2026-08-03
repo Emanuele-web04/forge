@@ -569,6 +569,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
+            settledAt: null,
             deletedAt: null,
           });
           return;
@@ -642,6 +643,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   }
                 : {}),
               ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
+              ...(event.payload.settledAt !== undefined
+                ? { settledAt: event.payload.settledAt }
+                : {}),
               ...(event.payload.parentThreadId !== undefined
                 ? { parentThreadId: event.payload.parentThreadId }
                 : {}),

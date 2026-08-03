@@ -26,6 +26,13 @@ import {
   isThreadAlreadyUnarchivedError,
   unarchiveThreadFromClient,
 } from "../lib/threadArchive";
+import {
+  createOptimisticSettledMutation,
+  recordOptimisticSettledMutationSequence,
+  reconcileOptimisticSettledMutation,
+  setThreadSettledFromClient,
+  type OptimisticSettledMutation,
+} from "../lib/threadSettle";
 import { newCommandId, randomUUID } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
@@ -43,6 +50,13 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import type { Project, SidebarThreadSummary } from "../types";
 
 const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
+/**
+ * How long a confirmed settle override may outlive its projection push. Well
+ * past normal push latency: the expiry is a last resort against a lost or
+ * reordered push, not part of the happy path, where reconciliation clears the
+ * override as soon as the projection agrees.
+ */
+const SETTLE_OVERRIDE_MAX_LIFETIME_MS = 15_000;
 
 /**
  * Unarchives a thread, treating "it was already unarchived" as success.
@@ -118,6 +132,8 @@ export function useSidebarThreadActions(input: {
   const legacyPinMigrationThreadIdsRef = useRef(new Set<ThreadId>());
   const optimisticPinnedStateByThreadIdRef = useRef(new Map<ThreadId, boolean>());
   const latestPinnedMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
+  const latestSettledMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
+  const settleOverrideExpiryTimeoutsRef = useRef(new Map<ThreadId, number>());
   const sidebarThreadSummaryByIdRef = useRef(sidebarThreadSummaryById);
   const [optimisticPinnedStateByThreadId, setOptimisticPinnedStateByThreadId] = useState<
     ReadonlyMap<ThreadId, boolean>
@@ -224,6 +240,164 @@ export function useSidebarThreadActions(input: {
     },
     [pinnedThreadIdSet, setThreadPinned],
   );
+
+  const [optimisticSettledMutationByThreadId, setOptimisticSettledMutationByThreadId] = useState<
+    ReadonlyMap<ThreadId, OptimisticSettledMutation>
+  >(() => new Map());
+
+  const clearOptimisticThreadSettled = useCallback((threadId: ThreadId) => {
+    setOptimisticSettledMutationByThreadId((current) => {
+      if (!current.has(threadId)) return current;
+      const next = new Map(current);
+      next.delete(threadId);
+      return next;
+    });
+  }, []);
+
+  const setThreadSettled = useCallback(
+    async (threadId: ThreadId, isSettled: boolean) => {
+      const api = readNativeApi();
+      if (!api) throw new Error("Unable to connect to the app server.");
+      const requestVersion =
+        (latestSettledMutationVersionByThreadIdRef.current.get(threadId) ?? 0) + 1;
+      latestSettledMutationVersionByThreadIdRef.current.set(threadId, requestVersion);
+      const isLatestRequest = () =>
+        latestSettledMutationVersionByThreadIdRef.current.get(threadId) === requestVersion;
+
+      const previousExpiry = settleOverrideExpiryTimeoutsRef.current.get(threadId);
+      if (previousExpiry !== undefined) {
+        window.clearTimeout(previousExpiry);
+        settleOverrideExpiryTimeoutsRef.current.delete(threadId);
+      }
+      const serverSettledAtDispatch =
+        (sidebarThreadSummaryByIdRef.current[threadId]?.settledAt ?? null) !== null;
+      setOptimisticSettledMutationByThreadId((current) => {
+        const next = new Map(current);
+        next.set(
+          threadId,
+          createOptimisticSettledMutation({
+            desiredSettled: isSettled,
+            serverSettledAtDispatch,
+          }),
+        );
+        return next;
+      });
+      try {
+        const commandSequence = await setThreadSettledFromClient(
+          api.orchestration,
+          threadId,
+          isSettled,
+        );
+        if (isLatestRequest()) {
+          setOptimisticSettledMutationByThreadId((current) => {
+            const mutation = current.get(threadId);
+            if (!mutation) return current;
+            const next = new Map(current);
+            next.set(threadId, recordOptimisticSettledMutationSequence(mutation, commandSequence));
+            return next;
+          });
+        }
+      } catch (error) {
+        // A newer toggle owns the override now; dropping it here would revert to
+        // a state the user has already moved on from.
+        if (isLatestRequest()) clearOptimisticThreadSettled(threadId);
+        throw error;
+      }
+      // The command is durable, so the override only bridges the gap until the
+      // projection push lands. Expiring it keeps a lost or reordered push from
+      // pinning the row to a stale state forever.
+      if (!isLatestRequest()) return;
+      const expiry = window.setTimeout(() => {
+        settleOverrideExpiryTimeoutsRef.current.delete(threadId);
+        if (isLatestRequest()) clearOptimisticThreadSettled(threadId);
+      }, SETTLE_OVERRIDE_MAX_LIFETIME_MS);
+      settleOverrideExpiryTimeoutsRef.current.set(threadId, expiry);
+    },
+    [clearOptimisticThreadSettled],
+  );
+
+  const setThreadSettledWithToast = useCallback(
+    (threadId: ThreadId, isSettled: boolean) => {
+      void setThreadSettled(threadId, isSettled).catch((error) => {
+        console.error("Failed to update settled thread state", { threadId, error });
+        toastManager.add({
+          type: "error",
+          title: isSettled ? "Unable to mark thread as done" : "Unable to undo done",
+        });
+      });
+    },
+    [setThreadSettled],
+  );
+
+  // Drop optimistic settle entries once the server-confirmed state agrees, so
+  // later pushes from other clients are no longer masked by a stale override.
+  useEffect(() => {
+    if (optimisticSettledMutationByThreadId.size === 0) return;
+    let settle: number | undefined;
+    const scheduleReconciliation = () => {
+      if (settle !== undefined) window.clearTimeout(settle);
+      settle = window.setTimeout(() => {
+        settle = undefined;
+        const projectionSequence = useStore.getState().shellSnapshotSequence ?? 0;
+        setOptimisticSettledMutationByThreadId((current) => {
+          let next: Map<ThreadId, OptimisticSettledMutation> | null = null;
+          for (const [threadId, mutation] of current) {
+            const serverThread = sidebarThreadSummaryByIdRef.current[threadId];
+            if (!serverThread) {
+              if (next === null) next = new Map(current);
+              next.delete(threadId);
+              continue;
+            }
+            const reconciliation = reconcileOptimisticSettledMutation(
+              mutation,
+              (serverThread.settledAt ?? null) !== null,
+              projectionSequence,
+            );
+            if (reconciliation.acknowledged) {
+              if (next === null) next = new Map(current);
+              next.delete(threadId);
+              const expiry = settleOverrideExpiryTimeoutsRef.current.get(threadId);
+              if (expiry !== undefined) window.clearTimeout(expiry);
+              settleOverrideExpiryTimeoutsRef.current.delete(threadId);
+            } else if (reconciliation.mutation !== mutation) {
+              if (next === null) next = new Map(current);
+              next.set(threadId, reconciliation.mutation);
+            }
+          }
+          return next ?? current;
+        });
+      }, 0);
+    };
+    scheduleReconciliation();
+    const unsubscribe = useStore.subscribe((state, previousState) => {
+      if (state.shellSnapshotSequence !== previousState.shellSnapshotSequence) {
+        scheduleReconciliation();
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (settle !== undefined) window.clearTimeout(settle);
+    };
+  }, [sidebarThreads, optimisticSettledMutationByThreadId]);
+
+  const optimisticSettledStateByThreadId = useMemo(
+    () =>
+      new Map(
+        Array.from(
+          optimisticSettledMutationByThreadId,
+          ([threadId, mutation]) => [threadId, mutation.desiredSettled] as const,
+        ),
+      ),
+    [optimisticSettledMutationByThreadId],
+  );
+
+  useEffect(() => {
+    const expiryTimeouts = settleOverrideExpiryTimeoutsRef.current;
+    return () => {
+      for (const timeout of expiryTimeouts.values()) window.clearTimeout(timeout);
+      expiryTimeouts.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (optimisticPinnedStateByThreadId.size === 0) return;
@@ -688,6 +862,8 @@ export function useSidebarThreadActions(input: {
     pinnedThreadIds,
     pinnedThreadIdSet,
     toggleThreadPinned,
+    setThreadSettledWithToast,
+    settledOverrideByThreadId: optimisticSettledStateByThreadId,
     deleteThread,
     confirmAndDeleteThread,
     archiveThread,

@@ -14,6 +14,8 @@ export type SidebarUiState = {
   projectThreadListExtraPagesByCwd: Record<string, number>;
   dismissedThreadStatusKeyByThreadId: Record<string, string>;
   lastThreadRoute: LastThreadRoute | null;
+  /** Swaps the Projects surface for the flat task-feed Activity view. */
+  activityViewEnabled: boolean;
 };
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
@@ -22,6 +24,7 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   projectThreadListExtraPagesByCwd: {},
   dismissedThreadStatusKeyByThreadId: {},
   lastThreadRoute: null,
+  activityViewEnabled: false,
 };
 
 // Persisted paging is a request, not a promise: render-time clamping trims it to the real
@@ -81,6 +84,7 @@ export function readSidebarUiState(): SidebarUiState {
         threadId?: unknown;
         splitViewId?: unknown;
       } | null;
+      activityViewEnabled?: boolean;
     };
 
     const lastThreadRoute =
@@ -128,10 +132,29 @@ export function readSidebarUiState(): SidebarUiState {
         ),
       ),
       lastThreadRoute,
+      activityViewEnabled: parsed.activityViewEnabled === true,
     };
   } catch {
     return DEFAULT_SIDEBAR_UI_STATE;
   }
+}
+
+/**
+ * Notifies when another tab rewrites the persisted sidebar UI state. Every tab
+ * persists this key wholesale from its in-memory state, so without adopting
+ * external writes a two-tab session silently fights over fields like the
+ * Activity view toggle (last writer wins and the toggle feels "stuck").
+ */
+export function subscribeSidebarUiState(listener: (state: SidebarUiState) => void): () => void {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key !== SIDEBAR_UI_STATE_STORAGE_KEY) return;
+    listener(readSidebarUiState());
+  };
+  window.addEventListener("storage", handleStorage);
+  return () => window.removeEventListener("storage", handleStorage);
 }
 
 export function persistSidebarUiState(input: SidebarUiState): void {
@@ -161,6 +184,7 @@ export function persistSidebarUiState(input: SidebarUiState): void {
                 : {}),
             }
           : null,
+        activityViewEnabled: input.activityViewEnabled,
       }),
     );
   } catch {

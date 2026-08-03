@@ -60,7 +60,7 @@ import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesFo
 import { useComposerDropzone } from "~/hooks/useComposerDropzone";
 import { toastManager } from "~/components/ui/toast";
 import { useTheme } from "~/hooks/useTheme";
-import { ChevronRightIcon, PaperclipIcon } from "~/lib/icons";
+import { ChevronRightIcon, LoaderCircleIcon, PaperclipIcon } from "~/lib/icons";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { findProviderStatus } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
@@ -142,6 +142,9 @@ export function KanbanNewTaskDialog({
     composerSkills,
     composerMentions,
     nonPersistedComposerImageIdSet,
+    isPreparingImages,
+    pendingImageCount,
+    waitForPendingImages,
     selectedProvider,
     selectedModel,
     selectedModelSupportsAutoMode,
@@ -272,6 +275,8 @@ export function KanbanNewTaskDialog({
     assistantDeliveryMode,
     providerOptionsForDispatch,
     providerStatuses,
+    isPreparingImages,
+    waitForPendingImages,
     onOpenChange,
   });
   const handleCreateRequest = useCallback(() => {
@@ -519,6 +524,15 @@ export function KanbanNewTaskDialog({
               onRemoveFile={ignoreComposerFileRemoval}
               onRemoveImage={removeComposerImage}
             />
+            {isPreparingImages ? (
+              <div
+                className="flex items-center gap-1.5 py-1 text-xs text-muted-foreground"
+                role="status"
+              >
+                <LoaderCircleIcon className="size-3.5 animate-spin" />
+                Optimizing {pendingImageCount === 1 ? "image" : "images"}…
+              </div>
+            ) : null}
             <ComposerPromptEditor
               ref={composerEditorRef}
               value={prompt}
@@ -648,7 +662,7 @@ export function KanbanNewTaskDialog({
                 Send as draft
               </label>
               <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
-                {isCreating ? "Creating..." : "Create task"}
+                {isCreating ? "Creating..." : isPreparingImages ? "Optimizing..." : "Create task"}
               </Button>
             </div>
           </div>

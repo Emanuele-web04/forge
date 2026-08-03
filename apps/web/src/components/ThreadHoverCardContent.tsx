@@ -15,6 +15,8 @@ import type { ThreadModelSummary } from "~/lib/threadModelSummary";
 import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon } from "./ProviderIcon";
+import type { ThreadStatusPill } from "./Sidebar.logic";
+import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import {
   SIDEBAR_HOVER_CARD_CONTAINER_PADDING_CLASS_NAME,
   SIDEBAR_HOVER_CARD_ROW_CLASS_NAME,
@@ -34,6 +36,8 @@ export type ThreadHoverCardContentProps = {
   worktreeName: string | null;
   /** Provider/model/effort currently selected for this chat. */
   model: ThreadModelSummary | null;
+  /** Current live/actionable state, shown as text so compact row glyphs stay discoverable. */
+  status: ThreadStatusPill | null;
 };
 
 const META_ROW_CLASS_NAME = `${SIDEBAR_HOVER_CARD_ROW_CLASS_NAME} text-foreground/80`;
@@ -74,13 +78,15 @@ export function ThreadHoverCardContent({
   branch,
   worktreeName,
   model,
+  status,
 }: ThreadHoverCardContentProps) {
   const hasMeta =
     Boolean(projectName) ||
     Boolean(sourceProjectName) ||
     Boolean(branch) ||
     Boolean(worktreeName) ||
-    Boolean(model);
+    Boolean(model) ||
+    Boolean(status);
 
   return (
     <div
@@ -98,6 +104,20 @@ export function ThreadHoverCardContent({
       </div>
       {hasMeta ? (
         <div className="flex flex-col gap-0">
+          {status ? (
+            <MetaRow
+              icon={
+                <span
+                  aria-hidden="true"
+                  className="inline-flex size-3.5 items-center justify-center"
+                >
+                  <SidebarStatusTrailingGlyph status={status} />
+                </span>
+              }
+            >
+              {status.label}
+            </MetaRow>
+          ) : null}
           {projectName ? (
             <MetaRow
               icon={

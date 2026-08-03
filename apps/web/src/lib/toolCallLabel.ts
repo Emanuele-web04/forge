@@ -1,7 +1,7 @@
 // FILE: toolCallLabel.ts
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveFriendlyCommandTarget, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
 // Depends on: @synara/contracts tool lifecycle item types
 
 import type { BrowserToolName, ToolLifecycleItemType } from "@synara/contracts";
@@ -780,6 +780,34 @@ export function deriveReadableCommandDisplay(
         fullCommand: rawCommand,
       };
   }
+}
+
+function firstCommandExecutable(rawCommand: string): string {
+  const trimmed = rawCommand.trim();
+  const match = /^(?:"([^"]+)"|'([^']+)'|(\S+))/u.exec(trimmed);
+  const executable = match?.[1] ?? match?.[2] ?? match?.[3] ?? "";
+  return executable.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
+}
+
+// The object half of a command row's sentence ("Searched <for foo in src>"),
+// kept short enough to read inline. Shell wrappers that carry no meaning for a
+// human (a full pwsh.exe path) collapse to the shell's friendly name.
+export function deriveFriendlyCommandTarget(rawCommand: string): string {
+  const executable = firstCommandExecutable(rawCommand);
+  if (
+    executable === "pwsh" ||
+    executable === "pwsh.exe" ||
+    executable === "powershell" ||
+    executable === "powershell.exe"
+  ) {
+    return "PowerShell";
+  }
+  if (executable === "cmd" || executable === "cmd.exe") {
+    return "Command Prompt";
+  }
+
+  const target = deriveReadableCommandDisplay(rawCommand).target.trim();
+  return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
 }
 
 // Whether a shell command is a read-only inspection (read/search/find/list).

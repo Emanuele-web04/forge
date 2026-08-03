@@ -26,7 +26,7 @@ import {
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -1339,6 +1339,44 @@ async function waitForLayout(): Promise<void> {
   await nextFrame();
 }
 
+function installImmediateScrollToSpy(
+  scrollContainer: HTMLElement,
+  config?: { readonly suspendSmoothScroll?: boolean },
+): {
+  readonly calls: ScrollToOptions[];
+  readonly restore: () => void;
+} {
+  const originalScrollTo = scrollContainer.scrollTo;
+  const calls: ScrollToOptions[] = [];
+  scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
+    const normalized: ScrollToOptions =
+      typeof options === "object" && options !== null
+        ? options
+        : {
+            ...(typeof options === "number" ? { left: options } : {}),
+            ...(typeof y === "number" ? { top: y } : {}),
+          };
+    calls.push(normalized);
+    if (config?.suspendSmoothScroll && normalized.behavior === "smooth") {
+      return;
+    }
+    if (typeof normalized.left === "number") {
+      scrollContainer.scrollLeft = normalized.left;
+    }
+    if (typeof normalized.top === "number") {
+      scrollContainer.scrollTop = normalized.top;
+    }
+    scrollContainer.dispatchEvent(new Event("scroll"));
+  }) as typeof scrollContainer.scrollTo;
+
+  return {
+    calls,
+    restore: () => {
+      scrollContainer.scrollTo = originalScrollTo;
+    },
+  };
+}
+
 async function setViewport(viewport: ViewportSpec): Promise<void> {
   await page.viewport(viewport.width, viewport.height);
   await waitForLayout();
@@ -2220,7 +2258,130 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("smoothly re-sticks to the bottom after sending an optimistic user message", async () => {
+  it("settles the scroll-to-bottom arrow at the measured transcript end", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+    let restoreScrollTo = () => {};
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await vi.waitFor(() => {
+        expect(scrollContainer.scrollHeight).toBeGreaterThan(scrollContainer.clientHeight);
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+      scrollContainer.scrollTo({ top: 0, behavior: "auto" });
+      await vi.waitFor(() => {
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      const scrollButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            "button[aria-label='Scroll to bottom'][aria-hidden='false']",
+          ),
+        "Unable to find the visible scroll-to-bottom button.",
+      );
+
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer);
+      restoreScrollTo = scrollSpy.restore;
+
+      scrollButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(scrollSpy.calls.some((call) => call.behavior === "smooth")).toBe(true);
+          expect(scrollSpy.calls.some((call) => call.behavior === "auto")).toBe(true);
+          expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(
+            AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      restoreScrollTo();
+      await mounted.cleanup();
+    }
+  });
+
+  it("stops the arrow's smooth scroll when the user scrolls upward", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+    let restoreScrollTo = () => {};
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await vi.waitFor(() => {
+        expect(scrollContainer.scrollHeight).toBeGreaterThan(scrollContainer.clientHeight);
+      });
+      // Let mount-time tail expansion retries (max 260ms) finish before
+      // isolating the arrow scroll and the user's takeover gesture.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      await waitForLayout();
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+      scrollContainer.scrollTo({ top: 0, behavior: "auto" });
+      await vi.waitFor(() => {
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      const scrollButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            "button[aria-label='Scroll to bottom'][aria-hidden='false']",
+          ),
+        "Unable to find the visible scroll-to-bottom button.",
+      );
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer, {
+        suspendSmoothScroll: true,
+      });
+      restoreScrollTo = scrollSpy.restore;
+
+      scrollButton.click();
+      await vi.waitFor(() => {
+        expect(scrollSpy.calls.some((call) => call.behavior === "smooth")).toBe(true);
+      });
+      const takeoverOffset = scrollContainer.scrollTop;
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+
+      await vi.waitFor(() => {
+        expect(scrollSpy.calls.some((call) => call.behavior === "auto")).toBe(true);
+      });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+      const smoothCalls = scrollSpy.calls.filter((call) => call.behavior === "smooth");
+      const takeoverCalls = scrollSpy.calls.filter((call) => call.behavior === "auto");
+      expect(smoothCalls).toHaveLength(1);
+      expect(takeoverCalls.length).toBeGreaterThanOrEqual(1);
+      expect(
+        takeoverCalls.every(
+          (call) =>
+            typeof call.top === "number" &&
+            call.top <= takeoverOffset + AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        ),
+      ).toBe(true);
+    } finally {
+      restoreScrollTo();
+      await mounted.cleanup();
+    }
+  });
+
+  // How the transcript gets there — one motion, no bouncing — is covered by
+  // "moves a sent message to its anchor once…"; this guards the outcome: a send
+  // from far up the transcript ends pinned at the live edge with focus kept.
+  it("re-sticks to the bottom after sending an optimistic user message", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -2229,8 +2390,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetText: "bottom stick target",
       }),
     });
-    let patchedScrollContainer: HTMLElement | null = null;
-    let originalScrollTo: HTMLElement["scrollTo"] | null = null;
+    let restoreScrollTo = () => {};
 
     try {
       const scrollContainer = await waitForElement(
@@ -2244,26 +2404,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
       );
 
-      const scrollToCalls: ScrollToOptions[] = [];
-      patchedScrollContainer = scrollContainer;
-      originalScrollTo = scrollContainer.scrollTo;
-      scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
-        const normalized: ScrollToOptions =
-          typeof options === "object" && options !== null
-            ? options
-            : {
-                ...(typeof options === "number" ? { left: options } : {}),
-                ...(typeof y === "number" ? { top: y } : {}),
-              };
-        scrollToCalls.push(normalized);
-        if (typeof normalized.left === "number") {
-          scrollContainer.scrollLeft = normalized.left;
-        }
-        if (typeof normalized.top === "number") {
-          scrollContainer.scrollTop = normalized.top;
-        }
-        scrollContainer.dispatchEvent(new Event("scroll"));
-      }) as typeof scrollContainer.scrollTo;
+      // Installed so any native smooth scroll resolves immediately; the send
+      // path itself drives the container frame by frame, so this spy is here for
+      // determinism rather than to observe the motion.
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer);
+      restoreScrollTo = scrollSpy.restore;
 
       const prompt = "keep me pinned after send";
       useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
@@ -2276,18 +2421,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
         async () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.activeElement).toBe(await waitForComposerEditor());
-          expect(scrollToCalls.some((call) => call.behavior === "smooth")).toBe(true);
           const layout = await mounted.measureLayout();
           expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
         },
         { timeout: 8_000, interval: 16 },
       );
-      scrollContainer.scrollTo = originalScrollTo;
+      expect(scrollContainer.scrollTop, "transcript never left the top").toBeGreaterThan(0);
     } finally {
-      if (patchedScrollContainer && originalScrollTo) {
-        patchedScrollContainer.scrollTo = originalScrollTo;
-      }
+      restoreScrollTo();
       await mounted.cleanup();
       restoreNativeApi();
     }
@@ -2490,17 +2632,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
+  // Regression: the sent message must reach its anchored coordinate in one
+  // motion and then stay there for the rest of the turn. The failure this guards
+  // is the message visibly jumping up and down through send → Thinking →
+  // "Working for" → streaming, which is what a fixed-target scroll produces once
+  // the coordinate moves under it (reserve sizing, rows above being remeasured).
+  it("moves a sent message to its anchor once and holds it across the turn lifecycle", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
-      targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
-      targetText: "auto-follow wiring target",
+      targetMessageId: "msg-user-send-jitter" as MessageId,
+      targetText: "jitter target",
     });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: currentSnapshot,
     });
-    let patchedScrollContainer: HTMLElement | null = null;
-    let originalScrollTo: HTMLElement["scrollTo"] | null = null;
 
     const syncActiveThread = (
       update: (
@@ -2528,27 +2674,266 @@ describe("ChatView timeline estimator parity (full app)", () => {
       scrollContainer.dispatchEvent(new Event("scroll"));
       await waitForLayout();
 
-      const scrollToCalls: ScrollToOptions[] = [];
-      patchedScrollContainer = scrollContainer;
-      originalScrollTo = scrollContainer.scrollTo;
-      scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
-        const normalized: ScrollToOptions =
-          typeof options === "object" && options !== null
-            ? options
-            : {
-                ...(typeof options === "number" ? { left: options } : {}),
-                ...(typeof y === "number" ? { top: y } : {}),
-              };
-        scrollToCalls.push(normalized);
-        if (typeof normalized.left === "number") scrollContainer.scrollLeft = normalized.left;
-        if (typeof normalized.top === "number") scrollContainer.scrollTop = normalized.top;
-        scrollContainer.dispatchEvent(new Event("scroll"));
-      }) as typeof scrollContainer.scrollTo;
+      const prompt = "measure the anchor motion for this send";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      const findSentRow = () => {
+        const rows = document.querySelectorAll<HTMLElement>(
+          "[data-message-id][data-message-role='user']",
+        );
+        for (const row of rows) {
+          if (row.textContent?.includes(prompt)) return row;
+        }
+        return null;
+      };
+      const topGapPx = Number.parseFloat(getComputedStyle(scrollContainer).paddingTop) || 0;
+
+      // Sampled every frame: the regression is a single-frame hop, so polling for
+      // the settled state would not see it.
+      const samples: Array<{ t: number; offset: number | null }> = [];
+      const startedAt = performance.now();
+      let sampling = true;
+      const sample = () => {
+        if (!sampling) return;
+        const row = findSentRow();
+        samples.push({
+          t: performance.now() - startedAt,
+          offset: row
+            ? row.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top
+            : null,
+        });
+        window.requestAnimationFrame(sample);
+      };
+      window.requestAnimationFrame(sample);
+
+      const at = (ms: number, action: () => void) => window.setTimeout(action, ms);
+      const activeTurnId = TurnId.makeUnsafe("turn-jitter");
+      const streamingId = MessageId.makeUnsafe("msg-assistant-jitter-stream");
+
+      // Server ack: durable user row + running turn (Thinking appears).
+      at(140, () => {
+        const sentMessageId = findSentRow()?.dataset.messageId;
+        if (!sentMessageId) return;
+        syncActiveThread((thread) => ({
+          ...thread,
+          messages: [
+            ...thread.messages,
+            {
+              id: MessageId.makeUnsafe(sentMessageId),
+              role: "user" as const,
+              text: prompt,
+              turnId: activeTurnId,
+              streaming: false,
+              source: "native" as const,
+              createdAt: isoAt(1_300),
+              updatedAt: isoAt(1_300),
+            },
+          ],
+          latestTurn: {
+            turnId: activeTurnId,
+            state: "running" as const,
+            requestedAt: isoAt(1_300),
+            startedAt: null,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: thread.session
+            ? {
+                ...thread.session,
+                status: "running" as const,
+                activeTurnId,
+                updatedAt: isoAt(1_301),
+              }
+            : null,
+          updatedAt: isoAt(1_301),
+        }));
+      });
+      // Turn actually starts: the "Working for" header replaces Thinking.
+      at(420, () => {
+        syncActiveThread((thread) => ({
+          ...thread,
+          latestTurn: thread.latestTurn
+            ? { ...thread.latestTurn, startedAt: isoAt(1_310) }
+            : thread.latestTurn,
+          updatedAt: isoAt(1_310),
+        }));
+      });
+      // Rows above the anchor settle to their real height mid-slide (late image
+      // loads, markdown remeasure, estimated virtualized rows mounting). Visible
+      // content preservation is off while an anchor is set, so this is exactly
+      // what shifts the anchored row under the in-flight slide.
+      const earlierMessageId = currentSnapshot.threads
+        .find((thread) => thread.id === THREAD_ID)!
+        .messages.at(-2)!.id;
+      for (const [index, delayMs] of [260, 340, 430].entries()) {
+        at(delayMs, () => {
+          syncActiveThread((thread) => ({
+            ...thread,
+            messages: thread.messages.map((message) =>
+              message.id === earlierMessageId
+                ? {
+                    ...message,
+                    text: `${message.text}\n\n${"Late-measured earlier content. ".repeat(6 * (index + 1))}`,
+                    updatedAt: isoAt(1_250 + index),
+                  }
+                : message,
+            ),
+            updatedAt: isoAt(1_250 + index),
+          }));
+        });
+      }
+      // Assistant text streams in below the anchor, chunk by chunk.
+      for (let chunk = 1; chunk <= 24; chunk += 1) {
+        at(560 + chunk * 33, () => {
+          syncActiveThread((thread) => ({
+            ...thread,
+            messages: [
+              ...thread.messages.filter((message) => message.id !== streamingId),
+              {
+                id: streamingId,
+                role: "assistant" as const,
+                text: "Streaming response paragraph.\n\n".repeat(chunk),
+                turnId: activeTurnId,
+                streaming: true,
+                source: "native" as const,
+                createdAt: isoAt(1_320),
+                updatedAt: isoAt(1_320 + chunk),
+              },
+            ],
+            updatedAt: isoAt(1_320 + chunk),
+          }));
+        });
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 1_600);
+      });
+      sampling = false;
+
+      const visible = samples.filter(
+        (entry): entry is { t: number; offset: number } => entry.offset !== null,
+      );
+      const firstArrivalIndex = visible.findIndex(
+        (entry) => Math.abs(entry.offset - topGapPx) <= 2,
+      );
+      const settled = firstArrivalIndex >= 0 ? visible.slice(firstArrivalIndex) : [];
+      let reversals = 0;
+      let travelAfterArrivalPx = 0;
+      let maxDownwardJumpPx = 0;
+      let previousDirection = 0;
+      for (let index = 1; index < settled.length; index += 1) {
+        const delta = settled[index]!.offset - settled[index - 1]!.offset;
+        travelAfterArrivalPx += Math.abs(delta);
+        maxDownwardJumpPx = Math.max(maxDownwardJumpPx, delta);
+        if (Math.abs(delta) <= 0.5) continue;
+        const direction = Math.sign(delta);
+        if (previousDirection !== 0 && direction !== previousDirection) reversals += 1;
+        previousDirection = direction;
+      }
+      const maxDriftAfterArrivalPx = settled.reduce(
+        (worst, entry) => Math.max(worst, Math.abs(entry.offset - topGapPx)),
+        0,
+      );
+      // The approach itself must not bounce: every frame moves the message
+      // toward the anchor, never back down and up again.
+      const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
+      let approachReversals = 0;
+      let approachDirection = 0;
+      for (let index = 1; index < approach.length; index += 1) {
+        const delta = approach[index]!.offset - approach[index - 1]!.offset;
+        if (Math.abs(delta) <= 0.5) continue;
+        const direction = Math.sign(delta);
+        if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
+        approachDirection = direction;
+      }
+      // ...and it has to be a glide, not a teleport. Without an explicit bound
+      // on how much ground a single frame may cover, every assertion above is
+      // also satisfied by the message simply appearing at the anchor.
+      const approachDistancePx = (approach[0]?.offset ?? topGapPx) - topGapPx;
+      let maxApproachFrameJumpPx = 0;
+      let animatedFrames = 0;
+      for (let index = 1; index < approach.length; index += 1) {
+        const travelled = approach[index - 1]!.offset - approach[index]!.offset;
+        maxApproachFrameJumpPx = Math.max(maxApproachFrameJumpPx, travelled);
+        if (travelled > 0.5) animatedFrames += 1;
+      }
+
+      const trace = () =>
+        visible.map((entry) => `${Math.round(entry.t)}:${Math.round(entry.offset)}`).join(" ");
+      expect(
+        firstArrivalIndex,
+        `sent message never reached its anchor: ${trace()}`,
+      ).toBeGreaterThan(-1);
+      expect(
+        visible[firstArrivalIndex]!.t,
+        `anchor took too long to land: ${trace()}`,
+      ).toBeLessThan(900);
+      expect(approachReversals, `anchor bounced on its way up: ${trace()}`).toBeLessThanOrEqual(1);
+      expect(animatedFrames, `anchor jumped instead of gliding: ${trace()}`).toBeGreaterThanOrEqual(
+        8,
+      );
+      expect(
+        maxApproachFrameJumpPx,
+        `anchor covered too much ground in one frame: ${trace()}`,
+      ).toBeLessThan(approachDistancePx * 0.5);
+      expect(reversals, `anchor moved back and forth after landing: ${trace()}`).toBe(0);
+      expect(maxDownwardJumpPx, `anchor slid back down after landing: ${trace()}`).toBeLessThan(2);
+      expect(travelAfterArrivalPx, `anchor kept moving after landing: ${trace()}`).toBeLessThan(8);
+      expect(maxDriftAfterArrivalPx, `anchor drifted off its coordinate: ${trace()}`).toBeLessThan(
+        4,
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
+      targetText: "auto-follow wiring target",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+    let restoreScrollTo = () => {};
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer);
+      restoreScrollTo = scrollSpy.restore;
       // Let mount-time tail/image expansion retries (max 260ms) settle before
       // isolating scrolls caused by the state transitions below.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
       await waitForLayout();
-      scrollToCalls.length = 0;
+      scrollSpy.calls.length = 0;
 
       // Buffering/connecting state changes generic turn chrome, but does not add a
       // transcript message and therefore must not re-stick the transcript.
@@ -2564,7 +2949,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(1_201),
       }));
       await waitForLayout();
-      expect(scrollToCalls).toHaveLength(0);
+      expect(scrollSpy.calls).toHaveLength(0);
 
       const activeTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
       syncActiveThread((thread) => ({
@@ -2604,7 +2989,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(1_204),
       }));
       await waitForLayout();
-      expect(scrollToCalls).toHaveLength(0);
+      expect(scrollSpy.calls).toHaveLength(0);
 
       syncActiveThread((thread) => ({
         ...thread,
@@ -2626,11 +3011,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         updatedAt: isoAt(1_205),
       }));
       await waitForLayout();
-      expect(scrollToCalls).toHaveLength(0);
+      expect(scrollSpy.calls).toHaveLength(0);
 
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
       scrollContainer.dispatchEvent(new Event("scroll"));
-      scrollToCalls.length = 0;
+      scrollSpy.calls.length = 0;
       const liveAssistantMessage = {
         ...createAssistantMessage({
           id: MessageId.makeUnsafe("msg-assistant-auto-follow-live"),
@@ -2645,12 +3030,31 @@ describe("ChatView timeline estimator parity (full app)", () => {
         messages: [...thread.messages, liveAssistantMessage],
         updatedAt: isoAt(1_206),
       }));
-      await vi.waitFor(() => expect(scrollToCalls.length).toBeGreaterThan(0), {
+      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
         timeout: 4_000,
         interval: 16,
       });
 
-      scrollToCalls.length = 0;
+      scrollSpy.calls.length = 0;
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === liveAssistantMessage.id
+            ? {
+                ...message,
+                text: `${message.text}\n\nA second streamed chunk that grows the live response.`,
+                updatedAt: isoAt(1_207),
+              }
+            : message,
+        ),
+        updatedAt: isoAt(1_207),
+      }));
+      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
+        timeout: 4_000,
+        interval: 16,
+      });
+
+      scrollSpy.calls.length = 0;
       syncActiveThread((thread) => ({
         ...thread,
         messages: thread.messages.map((message) =>
@@ -2658,21 +3062,19 @@ describe("ChatView timeline estimator parity (full app)", () => {
             ? {
                 ...message,
                 streaming: false,
-                completedAt: isoAt(1_207),
-                updatedAt: isoAt(1_207),
+                completedAt: isoAt(1_208),
+                updatedAt: isoAt(1_208),
               }
             : message,
         ),
-        updatedAt: isoAt(1_207),
+        updatedAt: isoAt(1_208),
       }));
-      await vi.waitFor(() => expect(scrollToCalls.length).toBeGreaterThan(0), {
+      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
         timeout: 4_000,
         interval: 16,
       });
     } finally {
-      if (patchedScrollContainer && originalScrollTo) {
-        patchedScrollContainer.scrollTo = originalScrollTo;
-      }
+      restoreScrollTo();
       await mounted.cleanup();
     }
   });
@@ -4294,6 +4696,40 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("uses the latest ordinary project when New chat is clicked from Activity", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-activity-new-chat-latest-project" as MessageId,
+          targetText: "activity new chat latest project",
+        }),
+      ),
+    });
+
+    try {
+      await page.getByRole("button", { name: "Switch to activity view" }).click();
+      const activityNewChatButton = page.getByRole("button", {
+        name: "Start new chat in last used project",
+      });
+      await expect.element(activityNewChatButton).toBeInTheDocument();
+      await activityNewChatButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Activity New chat should create a draft in the latest ordinary project.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.projectId).toBe(
+        PROJECT_ID,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("uses the latest ordinary project from Home for the command-palette New thread action", async () => {
     useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
     const mounted = await mountChatView({
@@ -4307,11 +4743,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
+      // The sidebar header renders Search as an icon button, so its accessible
+      // name is the only stable handle.
       const searchButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
-            button.textContent?.trim().startsWith("Search"),
-          ) ?? null,
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Search"]'),
         "Unable to find the global Search button.",
       );
       searchButton.click();
@@ -4432,11 +4867,37 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toHaveTextContent("project");
-      await projectPickerTrigger.click();
+      const inlineResetButton = page.getByTestId("project-picker-reset-trigger");
+      const inlineFolderIcon = projectPickerTrigger
+        .element()
+        .querySelector<HTMLElement>("[class*='transition-opacity']");
+      expect(inlineFolderIcon).not.toBeNull();
+      projectPickerTrigger.element().focus();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("1");
+      });
+      await userEvent.keyboard("{Tab}");
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(inlineResetButton.element());
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("1");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("0");
+      });
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(projectPickerTrigger.element());
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+        expect(getComputedStyle(inlineFolderIcon!).opacity).toBe("1");
+      });
+      await userEvent.keyboard("{Enter}");
 
       await expect.element(page.getByText("New project")).toBeInTheDocument();
       await expect.element(page.getByText("Don't work in a project")).toBeInTheDocument();
       await expect.element(page.getByText(/Folders on this/)).not.toBeInTheDocument();
+      await page.getByText("New project").hover();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
+      });
 
       const currentProjectOption = await waitForElement(
         () =>
@@ -4635,22 +5096,43 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      expect(document.activeElement).toBe(composerEditor);
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toBeInTheDocument();
-      await projectPickerTrigger.click();
-      await page.getByText("Don't work in a project").click();
+      const resetProjectButton = page.getByTestId("project-picker-reset-trigger");
+      await projectPickerTrigger.hover();
+      await vi.waitFor(() => {
+        expect(getComputedStyle(resetProjectButton.element()).opacity).toBe("1");
+      });
 
-      await vi.waitFor(
-        () => {
-          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
-            projectId: HOME_PROJECT_ID,
-            envMode: "local",
-            branch: null,
-            worktreePath: null,
-          });
-        },
-        { timeout: 8_000, interval: 16 },
-      );
+      const originalRequestAnimationFrame = window.requestAnimationFrame;
+      let frameRequestCount = 0;
+      window.requestAnimationFrame = (callback) => {
+        frameRequestCount += 1;
+        return originalRequestAnimationFrame(callback);
+      };
+      try {
+        await resetProjectButton.click();
+        await vi.waitFor(
+          () => {
+            expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+              projectId: HOME_PROJECT_ID,
+              envMode: "local",
+              branch: null,
+              worktreePath: null,
+            });
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+
+      expect(frameRequestCount).toBe(0);
+      expect(document.activeElement).toBe(composerEditor);
+      await expect.element(page.getByText("Don't work in a project")).not.toBeInTheDocument();
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();

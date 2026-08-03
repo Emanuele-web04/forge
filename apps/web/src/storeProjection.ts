@@ -85,6 +85,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     error: thread.error,
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
+    settledAt: thread.settledAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
     envMode: thread.envMode,
@@ -331,6 +332,7 @@ function sidebarThreadSummariesEqual(
     left.session === right.session &&
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
+    (left.settledAt ?? null) === (right.settledAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
     left.latestTurn === right.latestTurn &&
@@ -372,6 +374,7 @@ function buildSidebarThreadSummary(
     session: thread.session,
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
+    settledAt: thread.settledAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
     latestTurn: thread.latestTurn,

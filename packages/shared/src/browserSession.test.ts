@@ -77,6 +77,12 @@ describe("normalizeBrowserUrlInput", () => {
     expect(normalizeBrowserUrlInput("localhost:5173")).toBe("http://localhost:5173/");
   });
 
+  it("preserves explicit local file URLs", () => {
+    expect(normalizeBrowserUrlInput("file:///Users/example/project/index.html")).toBe(
+      "file:///Users/example/project/index.html",
+    );
+  });
+
   it("turns spaced text into a search url", () => {
     expect(normalizeBrowserUrlInput("how to bake bread")).toBe(
       `${BROWSER_SEARCH_URL_PREFIX}how%20to%20bake%20bread`,

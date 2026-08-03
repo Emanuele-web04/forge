@@ -30,6 +30,7 @@ Total quarantined cases: **11**.
 Explicitly not quarantined:
 
 - delayed attachment loading must remain bottom-stuck;
-- optimistic user sends must smoothly re-stick to the bottom;
+- optimistic user sends must re-stick to the bottom, and the sent message must
+  glide to its anchor in one motion and hold it;
 - orchestration event replay/deduplication and keybinding config notifications;
 - any browser runtime or unhandled error.

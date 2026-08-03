@@ -900,6 +900,8 @@ function applyOrchestrationEvent(
             nextCreateBranchFlowCompleted === (thread.createBranchFlowCompleted ?? false) &&
             (event.payload.isPinned === undefined ||
               event.payload.isPinned === (thread.isPinned ?? false)) &&
+            (event.payload.settledAt === undefined ||
+              (event.payload.settledAt ?? null) === (thread.settledAt ?? null)) &&
             (event.payload.parentThreadId === undefined ||
               (event.payload.parentThreadId ?? null) === (thread.parentThreadId ?? null)) &&
             (event.payload.subagentAgentId === undefined ||
@@ -935,6 +937,9 @@ function applyOrchestrationEvent(
             associatedWorktreeRef: nextAssociatedWorktreeRef,
             createBranchFlowCompleted: nextCreateBranchFlowCompleted,
             ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
+            ...(event.payload.settledAt !== undefined
+              ? { settledAt: event.payload.settledAt }
+              : {}),
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
               : {}),

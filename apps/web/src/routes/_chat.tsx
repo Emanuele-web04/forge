@@ -575,13 +575,13 @@ function ChatRouteLayout() {
   );
 
   // Chat column shell. The content-seam rail is the resize hit-area for the seam —
-  // the visible divider + depth shadow live on the chat card's inner edge (see
+  // the visible straight divider + depth shadow live on the route surface (see
   // `.chat-content-card` in index.css). It sits OUTSIDE <Sidebar> so it stacks above
   // the card, so SidebarInstanceProvider re-supplies the same resize config/side it
   // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
   // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
-    <div className="chat-content-card-backing relative flex h-svh min-h-0 min-w-0 flex-1">
+    <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
       {isEditorView ? null : (
         <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
           <SidebarRail placement="content-seam" />

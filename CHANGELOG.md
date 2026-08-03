@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.5 - 2026-08-02
+
+### Added
+
+- Added a sidebar Activity view that acts as a compact task inbox for running work, input requests, failures, and recently settled tasks, with project grouping, project-scoped filters, pinned rows, urgency-aware ordering, and a persistent cross-tab view preference.
+- Added focused transcript-scroll cancellation coverage so user input can stop both native smooth scrolling and virtual-list bookkeeping at the currently visible offset.
+
+### Changed
+
+- Refined Activity rows into a denser two-line presentation, renamed settled work to Done, kept urgent state visible on completed rows, and made new-chat creation use the latest project relevant to the current Activity scope.
+- Improved session orchestration, runtime activity attribution, workspace-root resolution, and worktree handoff metadata so conversation and cwd-bound surfaces converge sooner after delayed lifecycle events or repository changes.
+- Improved browser tool presentation, sidebar surface-picker styling, thread hover-card active states, and accessible Search targeting.
+- Bumped Synara release package versions to `0.6.5` across the server, desktop, web, and contracts packages.
+
+### Fixed
+
+- Fixed transcript auto-scroll continuing after user takeover, late smooth-scroll completion snapping a replaced conversation, and tail settling fighting direct viewport input.
+- Fixed Activity ordering and status indicators drifting as tasks settle, stale project scopes hiding available work, pinned rows ignoring the active project filter, and empty states retaining expired settle overrides.
+- Fixed composer image preparation edge cases by bounding resize attempts, correcting worker message handling, and hardening unsupported or oversized attachment intake.
+- Fixed worktree handoffs briefly leaving file preview, explorer, or terminal surfaces pointed at the previous checkout.
+- Fixed thread hover cards losing their active treatment while hovered and improved dense sidebar state readability.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,678 files after formatting three release-delta files.
+- `bun run lint` passed with 364 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages after fixing two release-blocking exact-optional/narrowing errors; only existing informational and deprecation notices remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph. Its first sandboxed attempt was blocked from writing a temporary package workspace; the unrestricted rerun passed.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecations and plugin timing notices remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 3m4.522s. The first sandboxed run failed four `packages/shared/src/Net.test.ts` cases because loopback binding returned `EPERM` and then terminated sibling workers; the complete unrestricted rerun passed. Web passed 279 files / 3,442 tests; server/CLI passed 292 files / 3,193 tests with 2 skipped files / 7 skipped tests. No flaky product test was identified.
+
 ## 0.6.4 - 2026-08-01
 
 ### Added

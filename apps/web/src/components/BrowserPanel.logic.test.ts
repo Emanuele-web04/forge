@@ -6,6 +6,7 @@ import {
   browserAnnotationTheme,
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
+  browserWebviewInitialUrl,
   createBrowserPanelHideScheduler,
   createBrowserRendererLossHandler,
   formatBrowserAnnotationActionError,
@@ -323,6 +324,21 @@ describe("normalizeBrowserAddressInput", () => {
     expect(normalizeBrowserAddressInput("how to bake bread")).toContain(
       "https://www.google.com/search?q=how%20to%20bake%20bread",
     );
+  });
+
+  it("preserves local file URLs", () => {
+    expect(normalizeBrowserAddressInput("file:///Users/example/project/index.html")).toBe(
+      "file:///Users/example/project/index.html",
+    );
+  });
+});
+
+describe("browserWebviewInitialUrl", () => {
+  it("defers local files to the desktop preview protocol", () => {
+    expect(browserWebviewInitialUrl("file:///Users/example/project/index.html")).toBe(
+      "about:blank",
+    );
+    expect(browserWebviewInitialUrl("https://example.test/")).toBe("https://example.test/");
   });
 });
 

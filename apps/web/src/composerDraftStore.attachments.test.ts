@@ -1,4 +1,8 @@
-import { OrchestrationProposedPlanId, ThreadId } from "@synara/contracts";
+import {
+  OrchestrationProposedPlanId,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  ThreadId,
+} from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pendingComposerAttachmentSyncGenerationCount } from "./composerDraftAttachments";
@@ -104,6 +108,58 @@ describe("composerDraftStore addImages", () => {
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
     expect(draft?.images.map((image) => image.id)).toEqual(["img-shared"]);
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:shared");
+  });
+
+  it("enforces the attachment limit atomically when another reference wins the last slot", () => {
+    const store = useComposerDraftStore.getState();
+    const initialImages = Array.from(
+      { length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1 },
+      (_, index) =>
+        makeImage({
+          id: `img-${index}`,
+          name: `image-${index}.png`,
+          sizeBytes: index + 1,
+          previewUrl: `blob:image-${index}`,
+        }),
+    );
+    expect(store.addImages(threadId, initialImages)).toBe(PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1);
+    expect(store.addFiles(threadId, [makeFile({ id: "last-slot" })])).toBe(1);
+
+    const lateImage = makeImage({
+      id: "late-image",
+      name: "late-image.png",
+      previewUrl: "blob:late-image",
+    });
+    expect(store.addImage(threadId, lateImage)).toBe(false);
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect((draft?.images.length ?? 0) + (draft?.files.length ?? 0)).toBe(
+      PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+    );
+    expect(revokeSpy).toHaveBeenCalledWith("blob:late-image");
+  });
+
+  it("allows persisted-image hydration without consuming a second slot", async () => {
+    const store = useComposerDraftStore.getState();
+    const persistedImage = makeImage({
+      id: "persisted-image",
+      name: "persisted.png",
+      previewUrl: "blob:persisted",
+    });
+    await store.syncPersistedAttachments(threadId, [
+      {
+        id: persistedImage.id,
+        name: persistedImage.name,
+        mimeType: persistedImage.mimeType,
+        sizeBytes: persistedImage.sizeBytes,
+        dataUrl: "data:image/png;base64,aGk=",
+      },
+    ]);
+
+    expect(useComposerDraftStore.getState().addImage(threadId, persistedImage)).toBe(true);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.images.map((image) => image.id),
+    ).toEqual(["persisted-image"]);
   });
 });
 

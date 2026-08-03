@@ -6,7 +6,6 @@ import { useSyncExternalStore } from "react";
 
 import type { WorkLogLiveActivity } from "../workLog";
 import { formatClockDuration } from "../session-logic";
-import { deriveReadableCommandDisplay } from "./toolCallLabel";
 
 const NO_ACTIVITY_THRESHOLD_MS = 30_000;
 const LIVE_ACTIVITY_TICK_MS = 1_000;
@@ -98,43 +97,6 @@ export function liveActivityElapsedMs(activity: WorkLogLiveActivity, nowMs: numb
   return lastActivityAtMs - startedAtMs;
 }
 
-function firstCommandExecutable(rawCommand: string): string {
-  const trimmed = rawCommand.trim();
-  const match = /^(?:"([^"]+)"|'([^']+)'|(\S+))/u.exec(trimmed);
-  const executable = match?.[1] ?? match?.[2] ?? match?.[3] ?? "";
-  return executable.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
-}
-
-export function friendlyLiveCommandTarget(rawCommand: string): string {
-  const executable = firstCommandExecutable(rawCommand);
-  if (
-    executable === "pwsh" ||
-    executable === "pwsh.exe" ||
-    executable === "powershell" ||
-    executable === "powershell.exe"
-  ) {
-    return "PowerShell";
-  }
-  if (executable === "cmd" || executable === "cmd.exe") {
-    return "Command Prompt";
-  }
-
-  const target = deriveReadableCommandDisplay(rawCommand, true).target.trim();
-  return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
-}
-
-export function formatLiveActivityPrimary(input: {
-  activity: WorkLogLiveActivity;
-  heading: string;
-  displayTarget?: string | undefined;
-  rawCommand?: string | undefined;
-}): string {
-  if (input.rawCommand) {
-    return `${input.heading} · ${friendlyLiveCommandTarget(input.rawCommand)}`;
-  }
-  return (input.displayTarget || input.activity.label || input.heading).trim();
-}
-
 export function formatLiveActivityProgress(progress: number): string {
   const percent = progress >= 0 && progress <= 1 ? progress * 100 : progress;
   return `${Math.round(Math.min(100, Math.max(0, percent)))}%`;
@@ -169,10 +131,18 @@ export function formatLiveActivityElapsed(
   return elapsedMs === null ? null : formatClockDuration(elapsedMs);
 }
 
+// Live meta only exists to explain work the row can't state on its own: how long
+// something in flight has been running, or that it ended badly. A tool call that
+// simply succeeded already reads as a finished sentence ("Searched for foo in
+// src"), so it gets no status/elapsed tail — that detail lives in the disclosure.
 export function formatLiveActivityMeta(
   activity: WorkLogLiveActivity,
   nowMs: number,
 ): string | null {
+  if (activity.state === "completed") {
+    return null;
+  }
+
   const parts: string[] = [];
   const elapsed = formatLiveActivityElapsed(activity, nowMs);
   const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
@@ -188,7 +158,7 @@ export function formatLiveActivityMeta(
             : `Active ${formatClockDuration(idleMs)} ago`,
       );
     }
-  } else if (activity.state !== "completed") {
+  } else {
     parts.push(formatLiveActivityStateLabel(activity.state));
   }
 

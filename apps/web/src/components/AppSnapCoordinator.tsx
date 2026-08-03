@@ -31,8 +31,8 @@ import { requestComposerFocus } from "../composerFocusRequestStore";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import {
-  buildComposerImageAttachmentsFromFiles,
   effectiveComposerAttachmentCount,
+  prepareComposerImageAttachmentsFromFiles,
 } from "../lib/composerSend";
 import {
   deleteComposerImageBlob,
@@ -398,7 +398,7 @@ export function AppSnapCoordinator() {
       const draftStore = useComposerDraftStore.getState();
       const draft = draftStore.draftsByThreadId[target.threadId];
       const existingAttachmentCount = effectiveComposerAttachmentCount(draft);
-      const { images, error } = buildComposerImageAttachmentsFromFiles({
+      const { images, error } = await prepareComposerImageAttachmentsFromFiles({
         files: [file],
         existingAttachmentCount,
       });
@@ -428,7 +428,11 @@ export function AppSnapCoordinator() {
 
         // Match ordinary composer mutations: recalled prompt-history state no longer owns the draft.
         draftStore.setPromptHistorySavedDraft(target.threadId, null);
-        draftStore.addImage(target.threadId, appSnapImage);
+        if (!draftStore.addImage(target.threadId, appSnapImage)) {
+          throw new Error(
+            "The AppSnap was prepared, but this message already has the maximum number of references.",
+          );
+        }
         imageAddedToDraft = true;
         const currentPersistedAttachments =
           useComposerDraftStore.getState().draftsByThreadId[target.threadId]
