@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
-import { deviceAuthorization, jwt } from "better-auth/plugins";
+import { bearer, deviceAuthorization, jwt } from "better-auth/plugins";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { ApiConfig, OAuthPair } from "./config";
 import type * as schema from "./db/schema";
@@ -180,6 +180,6 @@ export function createAuth(config: ApiConfig, db: NodePgDatabase<typeof schema>)
         },
       },
     },
-    plugins: [jwt(), deviceAuthorization()],
+    plugins: [jwt(), deviceAuthorization(), bearer()],
   }) as unknown as Auth;
 }

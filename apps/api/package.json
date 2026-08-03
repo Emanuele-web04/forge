@@ -13,8 +13,10 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",
+    "@synara/contracts": "workspace:*",
     "better-auth": "^1.4.4",
     "drizzle-orm": "^0.44.0",
+    "effect": "catalog:",
     "hono": "^4.7.0",
     "pg": "^8.16.0"
   },
