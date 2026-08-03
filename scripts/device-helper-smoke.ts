@@ -15,7 +15,7 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { createServer, type Server, type Socket } from "node:net";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,9 +70,25 @@ interface SimctlDevice {
   readonly runtime: string;
 }
 
-function listDevices(): SimctlDevice[] {
+/**
+ * The Xcode this run targets. `DEVELOPER_DIR` wins over the machine-wide
+ * selection, matching how `xcrun` and the helper resolve it, so a sweep can
+ * point successive runs at different toolchains without `sudo xcode-select`.
+ */
+function resolveDeveloperDirectory(): string {
+  const override = process.env.DEVELOPER_DIR?.trim();
+  if (override) return override;
+  try {
+    return execFileSync("xcode-select", ["-p"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    fail("xcode-select is unavailable; install Xcode or set DEVELOPER_DIR", error);
+  }
+}
+
+function listDevices(env: NodeJS.ProcessEnv): SimctlDevice[] {
   const raw = execFileSync("xcrun", ["simctl", "list", "devices", "available", "--json"], {
     encoding: "utf8",
+    env,
   });
   const parsed = JSON.parse(raw) as { devices: Record<string, Omit<SimctlDevice, "runtime">[]> };
   const devices: SimctlDevice[] = [];
@@ -266,30 +282,40 @@ async function main(): Promise<void> {
     fail("the device helper is macOS only");
   }
 
+  const probeOnly = process.argv.includes("--probe-only");
+
   step("Checking Xcode");
-  let developerDir: string;
-  try {
-    developerDir = execFileSync("xcode-select", ["-p"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    fail("xcode-select is unavailable; install Xcode", error);
-  }
+  // DEVELOPER_DIR is how the whole toolchain is redirected: xcode-select,
+  // xcodebuild, xcrun and the helper itself all honour it, so pointing it at
+  // another Xcode.app is enough to build and probe against that toolchain
+  // without touching the machine-wide selection. This is what lets the sweep
+  // and the CI matrix cover several Xcodes in one run.
+  const developerDir = resolveDeveloperDirectory();
   if (!developerDir.endsWith("/Contents/Developer")) {
     fail(
-      `xcode-select points at '${developerDir}', which is not a full Xcode; ` +
-        "run 'sudo xcode-select -s /Applications/Xcode.app'",
+      `the active developer directory is '${developerDir}', which is not a full Xcode; ` +
+        "run 'sudo xcode-select -s /Applications/Xcode.app' or set DEVELOPER_DIR",
     );
   }
-  const xcodeVersion = execFileSync("xcodebuild", ["-version"], { encoding: "utf8" }).trim();
+  // Every toolchain invocation from here inherits the same override, so the
+  // build, the probe and the simulator all agree on which Xcode is in play.
+  const toolchainEnv = { ...process.env, DEVELOPER_DIR: developerDir };
+  const xcodeVersion = execFileSync("xcodebuild", ["-version"], {
+    encoding: "utf8",
+    env: toolchainEnv,
+  }).trim();
   const cacheKey = deviceHelperCacheKey(xcodeVersion);
   assert(cacheKey !== null, "cannot determine Xcode build version");
-  info(xcodeVersion.replace("\n", " / "));
+  info(`${xcodeVersion.replace("\n", " / ")} (${developerDir})`);
 
   step("Compiling the helper");
   // Cached by Xcode version: private API surface moves with the toolchain, so a
   // binary built against one Xcode must not be reused after an upgrade. The key
   // comes from @synara/shared so this build lands in the same directory the
   // server reads; deriving it here separately meant a passing smoke run
-  // populated a directory the server never looked in.
+  // populated a directory the server never looked in. Because the key is
+  // derived from the *overridden* toolchain, sweeping Xcodes fills one cache
+  // directory per toolchain instead of overwriting a single one.
   const cacheDir = join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS, cacheKey);
   mkdirSync(cacheDir, { recursive: true });
   const buildStarted = Date.now();
@@ -297,6 +323,7 @@ async function main(): Promise<void> {
   try {
     const { stdout } = await execFileAsync(join(helperDir, "build.sh"), [cacheDir], {
       maxBuffer: 8 * 1024 * 1024,
+      env: toolchainEnv,
     });
     helperPath = stdout.trim().split("\n").at(-1)!;
   } catch (error) {
@@ -306,13 +333,54 @@ async function main(): Promise<void> {
   info(`${helperPath} (${Date.now() - buildStarted}ms)`);
 
   step("Preflighting the helper");
-  const probeRaw = execFileSync(helperPath, ["--probe"], { encoding: "utf8" }).trim();
-  const probe = JSON.parse(probeRaw) as { ok: boolean; deviceCount?: number; error?: string };
-  assert(probe.ok, `helper preflight failed: ${probe.error ?? "unknown"}`);
+  // A probe that finds a missing symbol exits non-zero, and its JSON body names
+  // which capability broke — exactly the signal this check exists to surface.
+  // Reading stdout off the thrown error keeps that detail instead of letting it
+  // die inside a child_process stack trace.
+  let probeRaw: string;
+  try {
+    probeRaw = execFileSync(helperPath, ["--probe"], {
+      encoding: "utf8",
+      env: toolchainEnv,
+    }).trim();
+  } catch (error) {
+    const stdout = (error as { stdout?: string }).stdout?.trim();
+    if (!stdout) fail("helper preflight produced no output", error);
+    probeRaw = stdout;
+  }
+  // Written before the assertion so a failing probe is still uploaded as the
+  // CI artifact; that JSON is the whole diagnostic for a broken toolchain.
+  const probeJsonPath = process.env.DEVICE_HELPER_PROBE_JSON;
+  if (probeJsonPath) {
+    writeFileSync(probeJsonPath, `${probeRaw}\n`);
+    info(`probe JSON written to ${probeJsonPath}`);
+  }
+  const probe = JSON.parse(probeRaw) as {
+    ok: boolean;
+    deviceCount?: number;
+    error?: string;
+    capabilities?: Record<string, unknown>;
+  };
+  if (!probe.ok) {
+    for (const [name, status] of Object.entries(probe.capabilities ?? {})) {
+      if (status === "ok") continue;
+      info(`capability ${name}: ${JSON.stringify(status)}`);
+    }
+    fail(`helper preflight failed: ${probe.error ?? "see capabilities above"}`);
+  }
   info(`CoreSimulator reachable, ${probe.deviceCount} devices`);
 
+  // Compile + probe is the symbol tripwire: it catches a private API that moved
+  // under a new Xcode, which is the failure this whole matrix exists to find,
+  // and it needs no simulator runtime. CI runs this first and on every runner;
+  // the booted-simulator run below is the expensive part.
+  if (probeOnly) {
+    console.log("\n[device-smoke] PASS (probe only; no simulator was booted)");
+    return;
+  }
+
   step("Selecting a simulator");
-  const { device, wasBooted } = chooseDevice(listDevices());
+  const { device, wasBooted } = chooseDevice(listDevices(toolchainEnv));
   info(`${device.name} (${device.udid}) ${wasBooted ? "already booted" : "shutdown"}`);
 
   let bootedByUs = false;
@@ -324,15 +392,21 @@ async function main(): Promise<void> {
   try {
     if (!wasBooted) {
       step("Booting the simulator");
-      execFileSync("xcrun", ["simctl", "boot", device.udid], { stdio: "inherit" });
+      execFileSync("xcrun", ["simctl", "boot", device.udid], {
+        stdio: "inherit",
+        env: toolchainEnv,
+      });
       bootedByUs = true;
-      execFileSync("xcrun", ["simctl", "bootstatus", device.udid, "-b"], { stdio: "inherit" });
+      execFileSync("xcrun", ["simctl", "bootstatus", device.udid, "-b"], {
+        stdio: "inherit",
+        env: toolchainEnv,
+      });
       // SpringBoard needs a moment past bootstatus before accessibility answers.
       await sleep(3000);
     }
 
     step("Starting the helper");
-    child = spawn(helperPath, [], { stdio: ["pipe", "pipe", "pipe"] });
+    child = spawn(helperPath, [], { stdio: ["pipe", "pipe", "pipe"], env: toolchainEnv });
     client = new HelperClient(child);
 
     step("Attaching");
@@ -458,7 +532,10 @@ async function main(): Promise<void> {
     if (bootedByUs) {
       console.log("[device-smoke] shutting down the simulator this run booted");
       try {
-        execFileSync("xcrun", ["simctl", "shutdown", device.udid], { stdio: "inherit" });
+        execFileSync("xcrun", ["simctl", "shutdown", device.udid], {
+          stdio: "inherit",
+          env: toolchainEnv,
+        });
       } catch (error) {
         console.error("[device-smoke] warning: shutdown failed", error);
       }
