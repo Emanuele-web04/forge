@@ -1,0 +1,29 @@
+{
+  "name": "@synara/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "build": "bun run scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "better-auth": "^1.4.4",
+    "drizzle-orm": "^0.44.0",
+    "hono": "^4.7.0",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "@types/pg": "^8.15.0",
+    "drizzle-kit": "^0.31.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
