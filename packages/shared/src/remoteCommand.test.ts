@@ -98,11 +98,15 @@ describe("posixShellQuote", () => {
     ]);
   });
 
+  // 30s, not the default 5s: each of the 400 samples spawns a real /bin/sh
+  // through execFileSync, so the wall-clock cost is subprocess creation, not the
+  // quoting under test. A loaded CI runner overran 5s and timed out — a
+  // scheduler artefact, not a correctness one. The headroom still catches a hang.
   it("round-trips arbitrary strings, preserving argv boundaries", () => {
     expectRoundTrip(
       FastCheck.sample(FastCheck.string({ minLength: 0, maxLength: 200, unit: "binary" }), 400),
     );
-  });
+  }, 30_000);
 
   it("round-trips spaces, quotes, newlines, unicode and control characters", () => {
     const alphabet = FastCheck.oneof(
