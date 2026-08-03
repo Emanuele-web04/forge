@@ -124,6 +124,8 @@ import type {
   DeviceBootInput,
   DeviceBootResult,
   DeviceDescribeUiInput,
+  DeviceScrollToElementInput,
+  DeviceScrollToElementResult,
   DeviceDescribeUiResult,
   DeviceDetachInput,
   DeviceEvent,
@@ -810,6 +812,7 @@ export interface NativeApi {
     openUrl: (input: DeviceOpenUrlInput) => Promise<void>;
     screenshot: (input: DeviceScreenshotInput) => Promise<DeviceScreenshotResult>;
     describeUi: (input: DeviceDescribeUiInput) => Promise<DeviceDescribeUiResult>;
+    scrollToElement: (input: DeviceScrollToElementInput) => Promise<DeviceScrollToElementResult>;
     onEvent: (callback: (event: DeviceEvent) => void) => () => void;
   };
 }

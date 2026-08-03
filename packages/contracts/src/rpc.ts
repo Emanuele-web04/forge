@@ -52,6 +52,8 @@ import {
   DeviceScreenshotResult,
   DeviceShutdownInput,
   DeviceSwipeInput,
+  DeviceScrollToElementInput,
+  DeviceScrollToElementResult,
   DeviceTapInput,
   DeviceThreadInput,
   DeviceTypeTextInput,
@@ -550,6 +552,12 @@ export const WsDeviceDescribeUiRpc = Rpc.make(DEVICE_WS_METHODS.describeUi, {
   error: WsRpcError,
 });
 
+export const WsDeviceScrollToElementRpc = Rpc.make(DEVICE_WS_METHODS.scrollToElement, {
+  payload: DeviceScrollToElementInput,
+  success: DeviceScrollToElementResult,
+  error: WsRpcError,
+});
+
 export const WsSubscribeDeviceEventsRpc = Rpc.make(DEVICE_WS_METHODS.subscribeEvents, {
   payload: Schema.Struct({}),
   success: DeviceEvent,
@@ -574,6 +582,7 @@ export const WsDeviceRpcGroup = RpcGroup.make(
   WsDeviceOpenUrlRpc,
   WsDeviceScreenshotRpc,
   WsDeviceDescribeUiRpc,
+  WsDeviceScrollToElementRpc,
   WsSubscribeDeviceEventsRpc,
 );
 

@@ -75,6 +75,7 @@ describe("agent gateway device tools surface", () => {
       "device_press_button",
       "device_screenshot",
       "device_describe_ui",
+      "device_scroll_to_element",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "device:control")).toBe(true);
   });
@@ -114,6 +115,49 @@ describe("agent gateway device tool handlers", () => {
     await structured("device_tap", { udid: DEVICE, x: 100, y: 220 });
 
     expect(backend.callsOfKind("tap")[0]).toMatchObject({ udid: DEVICE, x: 100, y: 220 });
+  });
+
+  it("taps a label at the control's own point and reports its prior state", async () => {
+    const { backend, structured } = await setup();
+
+    const result = (await structured("device_tap", {
+      udid: DEVICE,
+      label: "Fake Toggle",
+    })) as { x: number; element: { subrole: string; valueBeforeTap: string } };
+
+    // The switch, not the row centre at x=196.
+    expect(result.x).toBe(340);
+    expect(result.element).toMatchObject({ subrole: "Switch", valueBeforeTap: "0" });
+    expect(backend.callsOfKind("tap")[0]).toMatchObject({ x: 340, y: 222 });
+  });
+
+  it("scrolls a below-the-fold element into view without the agent swiping", async () => {
+    const { backend, structured } = await setup();
+
+    const result = (await structured("device_scroll_to_element", {
+      udid: DEVICE,
+      label: "Deep Row",
+    })) as { element: { label: string }; tapPoint: { y: number } };
+
+    expect(result.element.label).toBe("Deep Row");
+    expect(backend.callsOfKind("swipe").length).toBeGreaterThan(0);
+    // Landed somewhere tappable rather than merely on screen.
+    expect(result.tapPoint.y).toBeGreaterThan(0);
+    expect(result.tapPoint.y).toBeLessThan(852);
+  });
+
+  it("reports the labels on screen when a scroll target does not exist", async () => {
+    const { call } = await setup();
+
+    const result = await call("device_scroll_to_element", { udid: DEVICE, label: "Nope" });
+
+    const entry = result.content.find((item) => item.type === "text");
+    const message = entry && entry.type === "text" ? entry.text : "";
+    expect(result.isError).toBe(true);
+    // A dead-end error is one that names no alternative; the real labels have
+    // to survive into the message the agent reads.
+    expect(message).toMatch(/No element labelled/);
+    expect(message).toMatch(/Fake Toggle/);
   });
 
   it("returns the screenshot bytes as image content beside the metadata", async () => {

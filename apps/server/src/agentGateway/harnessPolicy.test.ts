@@ -125,6 +125,14 @@ describe("Synara harness policy", () => {
     // Why a row-centre tap does nothing, for the cases still using coordinates.
     assert.include(policy, "the row's frame centre is dead space");
 
+    // Scrolling is motor control the server owns. A demo agent swiped three
+    // times to reach Developer when one call should have done it.
+    assert.include(policy, "Never write a swipe loop");
+    assert.include(policy, "device_scroll_to_element {udid, label}");
+    assert.include(policy, "device_tap with a label already scrolls");
+    // device_swipe still has a job; this must not read as a blanket ban.
+    assert.include(policy, "gestures that are the point in themselves");
+
     // Reading and verifying toggle state from the tree instead of pixels. The
     // same run took a screenshot purely to work out whether the switch moved.
     assert.include(policy, "A toggle reports its state in the node's value");

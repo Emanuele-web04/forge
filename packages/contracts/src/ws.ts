@@ -91,6 +91,7 @@ import {
   DeviceAttachInput,
   DeviceBootInput,
   DeviceDescribeUiInput,
+  DeviceScrollToElementInput,
   DeviceDetachInput,
   DeviceEvent,
   DeviceInstallAppInput,
@@ -360,6 +361,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(DEVICE_WS_METHODS.openUrl, DeviceOpenUrlInput),
   tagRequestBody(DEVICE_WS_METHODS.screenshot, DeviceScreenshotInput),
   tagRequestBody(DEVICE_WS_METHODS.describeUi, DeviceDescribeUiInput),
+  tagRequestBody(DEVICE_WS_METHODS.scrollToElement, DeviceScrollToElementInput),
   tagRequestBody(DEVICE_WS_METHODS.subscribeEvents, Schema.Struct({})),
 
   // Shell methods

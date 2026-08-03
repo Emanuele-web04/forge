@@ -4,6 +4,8 @@ import type { DeviceUiNode } from "@synara/contracts";
 
 import {
   DeviceUiTargetError,
+  findTarget,
+  planScrollStep,
   readTapRequest,
   resolveTapTarget,
   tapPointForNode,
@@ -174,5 +176,97 @@ describe("reading a tap request", () => {
     // Both forms at once is ambiguous: silently preferring one would make the
     // other's presence a lie about what got tapped.
     expect(() => readTapRequest({ label: "A", x: 1, y: 2 })).toThrow(/not both/);
+  });
+});
+
+describe("planning a scroll step", () => {
+  const screen = node({ role: "Application", frame: { x: 0, y: 0, width: 402, height: 874 } });
+
+  it("asks for no swipe when the target is already in the band", () => {
+    const middle = node({ role: "Button", frame: { x: 0, y: 400, width: 402, height: 44 } });
+    expect(planScrollStep(middle, screen)).toBeNull();
+  });
+
+  it("treats a row under the status bar as needing a scroll, not as visible", () => {
+    // On screen by coordinates, untappable in practice: the band exists so a
+    // target does not end up beneath the status bar or home indicator.
+    const underStatusBar = node({ role: "Button", frame: { x: 0, y: 10, width: 402, height: 30 } });
+    expect(planScrollStep(underStatusBar, screen)).not.toBeNull();
+  });
+
+  it("swipes upward to pull a target below the fold into view", () => {
+    const below = node({ role: "Button", frame: { x: 0, y: 1_500, width: 402, height: 44 } });
+    const step = planScrollStep(below, screen);
+    // Content follows the finger, so reaching downward means dragging up.
+    expect(step).not.toBeNull();
+    expect((step as NonNullable<typeof step>).toY).toBeLessThan(
+      (step as NonNullable<typeof step>).fromY,
+    );
+  });
+
+  it("swipes downward to pull a target above the fold into view", () => {
+    const above = node({ role: "Button", frame: { x: 0, y: -600, width: 402, height: 44 } });
+    const step = planScrollStep(above, screen);
+    expect(step).not.toBeNull();
+    expect((step as NonNullable<typeof step>).toY).toBeGreaterThan(
+      (step as NonNullable<typeof step>).fromY,
+    );
+  });
+
+  it("never swipes further than the gap, so a near target is not flung past", () => {
+    const justBelow = node({ role: "Button", frame: { x: 0, y: 800, width: 402, height: 44 } });
+    const step = planScrollStep(justBelow, screen);
+    expect(step).not.toBeNull();
+    const travelled = Math.abs(
+      (step as NonNullable<typeof step>).toY - (step as NonNullable<typeof step>).fromY,
+    );
+    const gap = Math.abs(822 - 437);
+    expect(travelled).toBeLessThanOrEqual(gap + 1);
+  });
+
+  it("keeps the swipe inside the screen so the gesture is deliverable", () => {
+    const farBelow = node({ role: "Button", frame: { x: 0, y: 5_000, width: 402, height: 44 } });
+    const step = planScrollStep(farBelow, screen);
+    expect(step).not.toBeNull();
+    for (const y of [
+      (step as NonNullable<typeof step>).fromY,
+      (step as NonNullable<typeof step>).toY,
+    ]) {
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(874);
+    }
+  });
+});
+
+describe("finding a target that is off screen", () => {
+  it("reports an off-screen match rather than refusing it outright", () => {
+    // findTarget locates it for the scroll loop; resolveTapTarget is the one
+    // that insists on visibility, for callers that will not scroll.
+    const screen = node({
+      role: "Application",
+      frame: { x: 0, y: 0, width: 402, height: 874 },
+      children: [
+        node({
+          role: "Button",
+          label: "Far Below",
+          frame: { x: 0, y: 1_800, width: 402, height: 50 },
+        }),
+      ],
+    });
+    const match = findTarget(screen, { label: "Far Below" });
+    expect(match.onScreen).toBe(false);
+    expect(() => resolveTapTarget(screen, { label: "Far Below" })).toThrow(/scrolled off screen/);
+  });
+
+  it("prefers the visible match when a label repeats down a long list", () => {
+    const screen = node({
+      role: "Application",
+      frame: { x: 0, y: 0, width: 402, height: 874 },
+      children: [
+        node({ role: "Button", label: "Row", frame: { x: 0, y: 400, width: 402, height: 44 } }),
+        node({ role: "Button", label: "Row", frame: { x: 0, y: 2_000, width: 402, height: 44 } }),
+      ],
+    });
+    expect(findTarget(screen, { label: "Row" }).node.frame.y).toBe(400);
   });
 });

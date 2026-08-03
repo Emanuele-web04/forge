@@ -538,3 +538,95 @@ describe("DeviceManager element targeting", () => {
     expect(backend.calls.some((call) => call.kind === "tap")).toBe(false);
   });
 });
+
+describe("DeviceManager scrolling to an element", () => {
+  it("swipes until the target lands in the tappable band, then stops", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    const match = await manager.scrollToElement(DEVICE_A, { label: "Deep Row" });
+
+    // It arrives inside the safe band rather than merely on screen.
+    const centre = match.node.frame.y + match.node.frame.height / 2;
+    expect(centre).toBeGreaterThan(852 * 0.12);
+    expect(centre).toBeLessThan(852 * 0.88);
+    // Several swipes were needed, and each was followed by a fresh read.
+    const swipes = backend.callsOfKind("swipe").length;
+    expect(swipes).toBeGreaterThan(1);
+    expect(backend.callsOfKind("describeUi").length).toBe(swipes + 1);
+  });
+
+  it("costs no swipes when the target is already visible", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    const match = await manager.scrollToElement(DEVICE_A, { label: "Fake Toggle" });
+
+    expect(match.node.label).toBe("Fake Toggle");
+    expect(backend.callsOfKind("swipe")).toHaveLength(0);
+  });
+
+  it("gives up within the swipe budget rather than scrolling forever", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    await expect(
+      manager.scrollToElement(DEVICE_A, { label: "Deep Row" }, { maxScrolls: 1 }),
+    ).rejects.toThrow(/within 1 swipes/);
+    expect(backend.callsOfKind("swipe")).toHaveLength(1);
+  });
+
+  it("stops when the list stops moving instead of burning the budget", async () => {
+    const backend = new FakeDeviceBackend();
+    // A screen that ignores scrolling entirely: the target stays put however
+    // often it is swiped, which is what a list at its end looks like.
+    backend.describeUi = (udid: string) =>
+      Promise.resolve({
+        udid,
+        capturedAt: new Date().toISOString(),
+        root: {
+          role: "Application",
+          subrole: null,
+          label: "Stuck",
+          value: null,
+          frame: { x: 0, y: 0, width: 393, height: 852 },
+          activationPoint: null,
+          children: [
+            {
+              role: "Button",
+              subrole: null,
+              label: "Unreachable",
+              value: null,
+              frame: { x: 24, y: 2_000, width: 345, height: 44 },
+              activationPoint: null,
+              children: [],
+            },
+          ],
+        },
+      });
+    const { manager } = makeManager(backend);
+    await backend.boot(DEVICE_A);
+
+    await expect(manager.scrollToElement(DEVICE_A, { label: "Unreachable" })).rejects.toThrow(
+      /appears to be at its end/,
+    );
+    // Two swipes: one that could have moved it, one that proves it did not.
+    expect(backend.callsOfKind("swipe")).toHaveLength(2);
+  });
+
+  it("taps a below-the-fold element in one call, scrolling on the way", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    const match = await manager.tapElement(DEVICE_A, { label: "Deep Row" });
+
+    // The tap is the last thing that happens, at the post-scroll point.
+    expect(backend.calls.at(-1)).toEqual({
+      kind: "tap",
+      udid: DEVICE_A,
+      x: match.point.x,
+      y: match.point.y,
+    });
+    expect(backend.callsOfKind("swipe").length).toBeGreaterThan(0);
+  });
+});

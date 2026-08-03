@@ -21,6 +21,7 @@ export const DEVICE_WS_METHODS = {
   openUrl: "device.openUrl",
   screenshot: "device.screenshot",
   describeUi: "device.describeUi",
+  scrollToElement: "device.scrollToElement",
   subscribeEvents: "device.subscribeEvents",
 } as const;
 
@@ -480,6 +481,28 @@ export const DeviceDescribeUiResult = Schema.Struct({
   root: DeviceUiNode,
 });
 export type DeviceDescribeUiResult = typeof DeviceDescribeUiResult.Type;
+
+/**
+ * Scroll a labelled element into the tappable band.
+ *
+ * The swipe loop belongs to the server: driven by hand it becomes a guess at
+ * distances, an overshoot, and a describe between every attempt.
+ */
+export const DeviceScrollToElementInput = Schema.Struct({
+  udid: DeviceUdid,
+  label: TrimmedNonEmptyString.check(Schema.isMaxLength(1_024)),
+  role: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  maxSwipes: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 }))),
+});
+export type DeviceScrollToElementInput = typeof DeviceScrollToElementInput.Type;
+
+export const DeviceScrollToElementResult = Schema.Struct({
+  udid: DeviceUdid,
+  /** The element as it stands after scrolling, ready to tap without re-reading. */
+  element: DeviceUiNode,
+  tapPoint: DeviceUiPoint,
+});
+export type DeviceScrollToElementResult = typeof DeviceScrollToElementResult.Type;
 
 // ── Push events ──────────────────────────────────────────────────────
 

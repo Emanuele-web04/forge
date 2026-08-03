@@ -45,13 +45,18 @@ import {
 } from "./DeviceBackend.ts";
 import { DeviceFrameTransport, type DeviceFrameSink } from "./deviceFrameTransport.ts";
 import {
-  resolveTapTarget,
+  DeviceUiTargetError,
+  findTarget,
+  planScrollStep,
   type DeviceUiTarget,
   type DeviceUiTargetMatch,
 } from "./uiTreeTargeting.ts";
 
 /** How long a Synara-booted device stays up with no thread attached. */
 export const DEVICE_IDLE_SHUTDOWN_MS = 10 * 60 * 1000;
+
+/** Enough to cross a long Settings list; short enough to fail fast on a typo. */
+export const DEVICE_DEFAULT_MAX_SCROLLS = 8;
 
 export type DeviceEventListener = (event: DeviceEvent) => void;
 
@@ -272,17 +277,66 @@ export class DeviceManager {
   }
 
   /**
-   * Tap the element a label names, resolving the point server-side.
+   * Tap the element a label names, scrolling it into view first if needed.
    *
    * The tree is read fresh rather than cached: a stale frame is exactly how a
    * tap lands on whatever scrolled into that position instead. Returns the
    * node so the caller can report what it actually hit and its state.
    */
-  async tapElement(udid: string, target: DeviceUiTarget): Promise<DeviceUiTargetMatch> {
-    const tree = await this.describeUi(udid);
-    const match = resolveTapTarget(tree.root, target);
+  async tapElement(
+    udid: string,
+    target: DeviceUiTarget,
+    options: { readonly maxScrolls?: number | undefined } = {},
+  ): Promise<DeviceUiTargetMatch> {
+    const match = await this.scrollToElement(udid, target, options);
     await this.backend.tap(udid, match.point.x, match.point.y);
     return match;
+  }
+
+  /**
+   * Bring the element a label names into the tappable band and return it.
+   *
+   * The swipe-describe-check loop lives here rather than in the agent because
+   * it is motor control, not judgement: an agent driving it by hand guesses
+   * distances, overshoots, and re-describes between every attempt. Already
+   * visible targets cost one describe and no swipes.
+   */
+  async scrollToElement(
+    udid: string,
+    target: DeviceUiTarget,
+    options: { readonly maxScrolls?: number | undefined } = {},
+  ): Promise<DeviceUiTargetMatch> {
+    const maxScrolls = options.maxScrolls ?? DEVICE_DEFAULT_MAX_SCROLLS;
+    let tree = await this.describeUi(udid);
+    let match = findTarget(tree.root, target);
+    let previousY: number | null = null;
+
+    for (let scrolls = 0; scrolls < maxScrolls; scrolls += 1) {
+      const step = planScrollStep(match.node, tree.root);
+      if (step === null) return match;
+
+      await this.backend.swipe(udid, step);
+      tree = await this.describeUi(udid);
+      match = findTarget(tree.root, target);
+
+      // A list that has hit its end keeps returning the same frame; swiping
+      // again would burn the whole budget to no effect.
+      const y = match.node.frame.y;
+      if (previousY !== null && y === previousY) {
+        throw new DeviceUiTargetError(
+          `Scrolling stopped moving ${JSON.stringify(target.label)} after ${scrolls + 1} ` +
+            `swipe${scrolls === 0 ? "" : "s"}; the list appears to be at its end and the element is still out of reach.`,
+        );
+      }
+      previousY = y;
+    }
+
+    const step = planScrollStep(match.node, tree.root);
+    if (step === null) return match;
+    throw new DeviceUiTargetError(
+      `Could not bring ${JSON.stringify(target.label)} into view within ${maxScrolls} swipes. ` +
+        `Raise maxSwipes, or scroll manually with device_swipe if it sits in a nested scroll area.`,
+    );
   }
 
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {

@@ -76,6 +76,12 @@ const DEFAULT_DEVICES: readonly FakeDeviceSeed[] = [
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
+/** Far enough below the 852pt screen to need several swipes to reach. */
+const FAKE_DEEP_ROW_START_Y = 2_400;
+
+/** The list's end: past this the deep row stops moving, however hard you swipe. */
+const FAKE_MAX_SCROLL_OFFSET = 2_000;
+
 export class FakeDeviceBackend implements DeviceBackend {
   readonly platform = "ios-simulator" as const;
 
@@ -85,6 +91,8 @@ export class FakeDeviceBackend implements DeviceBackend {
   disposed = false;
 
   private availabilityValue: DeviceAvailability;
+  /** How far the fake list has been scrolled, in device points. */
+  private scrollOffset = 0;
   private readonly now: () => number;
   private readonly devices = new Map<string, DeviceDescriptor>();
   private readonly listeners = new Map<string, DeviceFrameListener>();
@@ -219,6 +227,16 @@ export class FakeDeviceBackend implements DeviceBackend {
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
     this.record({ kind: "swipe", udid, gesture });
     this.requireBooted(udid);
+    // Content follows the finger, so an upward swipe pulls lower rows up.
+    // Clamped at the list's end, which is what makes an unreachable target
+    // stop moving instead of scrolling forever.
+    const delta = gesture.toY - gesture.fromY;
+    this.scrollOffset = Math.max(0, Math.min(FAKE_MAX_SCROLL_OFFSET, this.scrollOffset - delta));
+  }
+
+  /** Where the deep row currently sits, given how far the list has scrolled. */
+  private deepRowY(): number {
+    return FAKE_DEEP_ROW_START_Y - this.scrollOffset;
   }
 
   async typeText(udid: string, text: string): Promise<void> {
@@ -283,6 +301,17 @@ export class FakeDeviceBackend implements DeviceBackend {
             value: "0",
             frame: { x: 24, y: 200, width: 345, height: 44 },
             activationPoint: { x: 340, y: 222 },
+            children: [],
+          },
+          // Starts far below the fold and rises as the list scrolls, so the
+          // scroll loop has something that genuinely needs several swipes.
+          {
+            role: "Button",
+            subrole: null,
+            label: "Deep Row",
+            value: null,
+            frame: { x: 24, y: this.deepRowY(), width: 345, height: 44 },
+            activationPoint: { x: 196, y: this.deepRowY() + 22 },
             children: [],
           },
         ],

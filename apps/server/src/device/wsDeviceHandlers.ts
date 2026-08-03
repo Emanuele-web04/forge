@@ -29,6 +29,8 @@ import {
   type DevicePressButtonInput,
   type DeviceScreenshotInput,
   type DeviceScreenshotResult,
+  type DeviceScrollToElementInput,
+  type DeviceScrollToElementResult,
   type DeviceShutdownInput,
   type DeviceSwipeInput,
   type DeviceTapInput,
@@ -116,6 +118,9 @@ export interface WsDeviceHandlers {
   readonly [DEVICE_WS_METHODS.screenshot]: (
     input: DeviceScreenshotInput,
   ) => Effect.Effect<DeviceScreenshotResult, WsRpcError>;
+  readonly [DEVICE_WS_METHODS.scrollToElement]: (
+    input: DeviceScrollToElementInput,
+  ) => Effect.Effect<DeviceScrollToElementResult, WsRpcError>;
   readonly [DEVICE_WS_METHODS.describeUi]: (
     input: DeviceDescribeUiInput,
   ) => Effect.Effect<DeviceDescribeUiResult, WsRpcError>;
@@ -159,6 +164,7 @@ export function makeWsDeviceHandlers(
       [DEVICE_WS_METHODS.openUrl]: () => unsupported(),
       [DEVICE_WS_METHODS.screenshot]: () => unsupported(),
       [DEVICE_WS_METHODS.describeUi]: () => unsupported(),
+      [DEVICE_WS_METHODS.scrollToElement]: () => unsupported(),
     };
   }
 
@@ -234,5 +240,14 @@ export function makeWsDeviceHandlers(
       attempt(() => manager.screenshot(input.udid), "Failed to capture device screenshot"),
     [DEVICE_WS_METHODS.describeUi]: (input) =>
       attempt(() => manager.describeUi(input.udid), "Failed to read device accessibility tree"),
+    [DEVICE_WS_METHODS.scrollToElement]: (input) =>
+      attempt(async () => {
+        const match = await manager.scrollToElement(
+          input.udid,
+          { label: input.label, role: input.role },
+          { maxScrolls: input.maxSwipes },
+        );
+        return { udid: input.udid, element: match.node, tapPoint: match.point };
+      }, "Failed to scroll to element"),
   };
 }
