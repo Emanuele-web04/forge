@@ -35,6 +35,7 @@ vi.mock("~/appSettings", () => ({
 vi.mock("~/hooks/useCopyToClipboard", () => ({
   useCopyPathToClipboard: () => vi.fn(),
   useCopyThreadIdToClipboard: () => vi.fn(),
+  useCopyThreadLinkToClipboard: () => vi.fn(),
 }));
 vi.mock("~/lib/activeThreadDelete", () => ({
   deleteActiveThreadFromClient: harness.deleteActiveThread,
