@@ -176,6 +176,10 @@ import {
   PROJECT_ROUTED_METHODS,
   ROUTED_METHODS,
 } from "./environmentRoutedApi";
+import {
+  recordAutomationOwnership,
+  resetAutomationOwnershipForTests,
+} from "./environmentAutomationOwnership";
 import { UnknownPathEnvironmentError } from "./environmentPathRouting";
 import { stageUploadComposerAttachments } from "./lib/composerSend";
 import {
@@ -877,6 +881,135 @@ describe("spaceId-keyed commands route by space ownership", () => {
       } as never),
     ).rejects.toBeInstanceOf(EnvironmentUnavailableError);
     expect(localDispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("automation methods route through their project's owner", () => {
+  const REMOTE_AUTOMATION = "automation-remote";
+  const REMOTE_RUN = "run-remote";
+
+  beforeEach(() => {
+    resetAutomationOwnershipForTests();
+  });
+
+  it("runs a REMOTE automation on the host that holds it", async () => {
+    // The gap: `create`/`update` carry projectId and WERE routed, so a user
+    // could create an automation on a remote host and then run it against the
+    // LOCAL server, which does not have it.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote");
+    recordAutomationOwnership({
+      automations: [{ id: REMOTE_AUTOMATION as never, projectId: "project-remote" as never }],
+    });
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.automation.runNow({ automationId: REMOTE_AUTOMATION } as never);
+
+    expect(spyFor(remoteClient, "automation", "runNow")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "automation", "runNow")).not.toHaveBeenCalled();
+  });
+
+  it("cancels a run on the host that started it, via the run's own id", async () => {
+    // Runs carry their project directly, so a runId resolves without the
+    // automation ever having been listed.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote");
+    recordAutomationOwnership({
+      runs: [
+        {
+          id: REMOTE_RUN as never,
+          automationId: REMOTE_AUTOMATION as never,
+          projectId: "project-remote" as never,
+        },
+      ],
+    });
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.automation.cancelRun({ runId: REMOTE_RUN } as never);
+
+    expect(spyFor(remoteClient, "automation", "cancelRun")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "automation", "cancelRun")).not.toHaveBeenCalled();
+  });
+
+  it("stays local for an automation nobody has listed", async () => {
+    // The index is a cache of observations, not an authority. An unknown id
+    // resolves local — the same answer as before this existed, so an unlisted
+    // automation is never worse off than it was.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.automation.runNow({ automationId: "automation-unknown" } as never);
+
+    expect(spyFor(localClient, "automation", "runNow")).toHaveBeenCalledTimes(1);
+  });
+
+  it("learns ownership from a list response, with no manual recording", async () => {
+    // Production never calls `recordAutomationOwnership` directly — the wrapper
+    // hooks `automation.list`, because several screens list automations and an
+    // index fed by only some of them resolves for some ids and not others.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote");
+    (localClient.api as Record<string, Record<string, unknown>>).automation!.list = vi.fn(
+      async () => ({
+        definitions: [{ id: REMOTE_AUTOMATION, projectId: "project-remote" }],
+        runs: [],
+      }),
+    );
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.automation.list({} as never);
+    await api.automation.runNow({ automationId: REMOTE_AUTOMATION } as never);
+
+    expect(spyFor(remoteClient, "automation", "runNow")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "automation", "runNow")).not.toHaveBeenCalled();
+  });
+
+  it("keeps a local automation local", async () => {
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(LOCAL_ENVIRONMENT_ID, "project-local");
+    recordAutomationOwnership({
+      automations: [{ id: "automation-local" as never, projectId: "project-local" as never }],
+    });
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.automation.delete({ automationId: "automation-local" } as never);
+
+    expect(spyFor(localClient, "automation", "delete")).toHaveBeenCalledTimes(1);
+    expect(spyFor(remoteClient, "automation", "delete")).not.toHaveBeenCalled();
+  });
+});
+
+describe("pull-request queries scoped to a project route to its host", () => {
+  it("lists a REMOTE project's pull requests on that host", async () => {
+    // `projectId` here is optional AND nullable, which is why the coverage
+    // check could not see it: a PR list filtered to a remote project silently
+    // queried the local server, which has a different repository.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.pullRequests.list({ projectId: "project-remote" } as never);
+
+    expect(spyFor(remoteClient, "pullRequests", "list")).toHaveBeenCalledTimes(1);
+    expect(spyFor(localClient, "pullRequests", "list")).not.toHaveBeenCalled();
+  });
+
+  it("stays local for a server-wide list with no project", async () => {
+    // Absent projectId is a server-wide query, not an ambiguous one.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.pullRequests.list({} as never);
+
+    expect(spyFor(localClient, "pullRequests", "list")).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an explicit null project as server-wide too", async () => {
+    // `Schema.optional(Schema.NullOr(...))` means null is a real wire value,
+    // not just absence, and it must not resolve to some arbitrary host.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.pullRequests.reviewRequestCount({ projectId: null } as never);
+
+    expect(spyFor(localClient, "pullRequests", "reviewRequestCount")).toHaveBeenCalledTimes(1);
   });
 });
 

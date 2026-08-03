@@ -46,7 +46,13 @@ type MethodsWithKey<Group, Key extends string> = {
     ? Method
     : undefined extends FirstArgument<Group[Method]>
       ? never
-      : FirstArgument<Group[Method]> extends Partial<Record<Key, string | undefined>>
+      : // NULL as well as undefined. `Schema.optional(Schema.NullOr(ProjectId))`
+        // produces `string | null | undefined`, which does NOT satisfy
+        // `Partial<Record<Key, string | undefined>>` — so `pullRequests.list`
+        // and `reviewRequestCount` were invisible here, and a PR list filtered
+        // to a remote project silently queried the local server. A fifth shape,
+        // found by type probe rather than by a bug report.
+        FirstArgument<Group[Method]> extends Partial<Record<Key, string | null | undefined>>
         ? [FirstArgument<Group[Method]>] extends [never]
           ? never
           : Method
@@ -229,12 +235,52 @@ const _everyProjectScopedMethodHasARoutingDecision: never = null as unknown as E
 >;
 void _everyProjectScopedMethodHasARoutingDecision;
 
-/** Nothing is project-routed that the contract does not actually key that way. */
+/**
+ * Nothing is project-routed that the contract does not actually key that way.
+ *
+ * The automation methods are the exception and are excused BY NAME rather than
+ * by widening the rule. They carry only an automationId or runId, and are
+ * routed INDIRECTLY: every automation and run names its project, so the
+ * resolver maps id -> project -> environment at runtime. There is no static
+ * `projectId` on their inputs for this check to see, which is exactly why they
+ * were invisible to it — and to the router — until a reviewer found them.
+ */
 const _nothingProjectRoutedThatIsNotProjectScoped: never = null as unknown as Exclude<
   DeclaredIn<typeof PROJECT_ROUTED_METHODS>,
-  ProjectScopedByContract
+  | ProjectScopedByContract
+  | "automation.archiveRun"
+  | "automation.cancelRun"
+  | "automation.delete"
+  | "automation.getMemory"
+  | "automation.markRunRead"
+  | "automation.resolveProposal"
+  | "automation.runNow"
 >;
 void _nothingProjectRoutedThatIsNotProjectScoped;
+
+/**
+ * Every `automationId`/`runId`-keyed method has a routing decision.
+ *
+ * The SIXTH key shape, and the second one a reviewer found rather than this
+ * check. Both were the same omission: the check enumerates the shapes someone
+ * thought of, so a key nobody listed is invisible by construction — being
+ * type-level makes it exhaustive over METHODS, never over KEYS.
+ */
+type AutomationScopedByContract = ByContract<"automationId"> | ByContract<"runId">;
+
+const _everyAutomationScopedMethodHasARoutingDecision: never = null as unknown as Exclude<
+  AutomationScopedByContract,
+  | DeclaredIn<typeof PROJECT_ROUTED_METHODS>
+  // NOT a method: `browser.annotations` is a nested GROUP, and this matcher
+  // walks a group's members as if each were a method — so it reads the
+  // annotations sub-methods' inputs and finds `runId` on them. A limitation of
+  // the matcher rather than an unrouted call: the whole browser group is
+  // local-only (see LOCAL_ONLY_THREAD_METHODS), because the webview is a panel
+  // in the user's own window. Nested groups are the SEVENTH shape this check
+  // does not see, and it is recorded here rather than silently excluded.
+  | "browser.annotations"
+>;
+void _everyAutomationScopedMethodHasARoutingDecision;
 
 /**
  * No method is routed by BOTH its project and its path.

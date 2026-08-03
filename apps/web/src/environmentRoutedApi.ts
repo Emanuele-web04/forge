@@ -24,6 +24,11 @@ import {
   UnknownPathEnvironmentError,
   unknownPathRefusalMessage,
 } from "./environmentPathRouting";
+import {
+  automationProjectId,
+  recordAutomationOwnership,
+  runProjectId,
+} from "./environmentAutomationOwnership";
 import { environmentLabel } from "./environmentDirectory";
 import { useStore } from "./store";
 
@@ -243,11 +248,30 @@ export const POSITIONAL_PATH_METHODS = {
  */
 export const PROJECT_ROUTED_METHODS = {
   projects: ["stopDevServer"],
-  pullRequests: ["action", "comment", "detail", "diff", "setPinned"],
+  // `list` and `reviewRequestCount` take an OPTIONAL, NULLABLE projectId. When
+  // one is supplied the query is scoped to that project and must run on its
+  // host; when absent it is a server-wide query and resolves local, exactly as
+  // before. They were invisible to the coverage check until its matcher learned
+  // to see `string | null | undefined`.
+  pullRequests: ["action", "comment", "detail", "diff", "list", "reviewRequestCount", "setPinned"],
   // An automation runs turns in its project's checkout, so it belongs to that
   // project's host. `update` takes an OPTIONAL projectId — when absent the call
   // resolves local, the same answer as before, since nothing names another host.
-  automation: ["create", "update"],
+  // `create`/`update` carry projectId. The rest carry only automationId or
+  // runId and are resolved through the ownership index — without them a user
+  // could create an automation on a remote host and then run, cancel or delete
+  // it against the LOCAL server.
+  automation: [
+    "archiveRun",
+    "cancelRun",
+    "create",
+    "delete",
+    "getMemory",
+    "markRunRead",
+    "resolveProposal",
+    "runNow",
+    "update",
+  ],
 } as const satisfies { readonly [G in keyof NativeApi]?: ReadonlyArray<keyof NativeApi[G]> };
 
 /**
@@ -330,6 +354,22 @@ function resolveCallEnvironmentId(
   // expressible in one command anyway.
   const spaceId = readStringField(argument, "spaceId");
   if (spaceId !== null) return resolveSpaceEnvironmentId(spaceId, state);
+
+  // Automations and their runs carry neither a thread, a project nor a path —
+  // only their own id. `create` and `update` DO carry projectId and were
+  // routed, so a user could create an automation on a remote host and then
+  // run, cancel or delete it against the LOCAL server, which does not have it.
+  //
+  // Resolved indirectly: every automation and run names its project, and
+  // projects are positional. `automationProjectId` is a cache of what the app
+  // has already listed, so an id nobody has reported yields null and falls
+  // through to local — the same answer as before, never worse.
+  const automationId = readStringField(argument, "automationId");
+  const runId = readStringField(argument, "runId");
+  const ownerProjectId =
+    (automationId === null ? null : automationProjectId(automationId)) ??
+    (runId === null ? null : runProjectId(runId));
+  if (ownerProjectId !== null) return resolveProjectEnvironmentId(ownerProjectId, state);
 
   return null;
 }
@@ -423,13 +463,18 @@ export function createEnvironmentRoutedApi(localApi: NativeApi): NativeApi {
       if (typeof localImplementation !== "function") continue;
 
       routedGroup[method] = (...args: readonly unknown[]) => {
-        const projectId = readStringField(args[0], "projectId");
-        // No project named is not ambiguous — nothing identifies another host,
-        // so this is a server-wide call and stays where it always ran.
-        if (projectId === null) {
+        // The FULL resolver, not a bare `projectId` read. These methods are
+        // keyed several ways — projectId directly, or an automationId/runId
+        // that names its project — and a loop that only knew about projectId
+        // silently ran every automation command locally while `create` and
+        // `update` routed correctly. One resolver means a key added there is
+        // honoured here without anyone remembering to update this loop.
+        const environmentId = resolveCallEnvironmentId(args[0]);
+        // Nothing identifies another host: a server-wide call that stays where
+        // it always ran.
+        if (environmentId === null) {
           return (localImplementation as (...a: readonly unknown[]) => unknown)(...args);
         }
-        const environmentId = resolveProjectEnvironmentId(projectId);
         const owner = environmentNativeApi(environmentId);
         if (!owner) return Promise.reject(new EnvironmentUnavailableError(environmentId));
         const ownerGroup = owner[group as keyof NativeApi] as Record<string, unknown>;
@@ -438,6 +483,36 @@ export function createEnvironmentRoutedApi(localApi: NativeApi): NativeApi {
     }
 
     routed[group] = routedGroup;
+  }
+
+  // Learn automation ownership from whatever the app lists.
+  //
+  // Wrapped HERE rather than at each call site for the same reason routing is:
+  // there are several list callers and an index fed by only some of them is an
+  // index that resolves for some ids and not others. `automation.list` returns
+  // both definitions and runs, each naming its project, so one hook teaches the
+  // resolver everything a listing knows.
+  const automationGroup = routed.automation ?? (localApi.automation as never);
+  if (automationGroup && typeof automationGroup.list === "function") {
+    const localList = automationGroup.list as (...a: readonly unknown[]) => Promise<unknown>;
+    routed.automation = {
+      ...automationGroup,
+      list: async (...args: readonly unknown[]) => {
+        const result = (await localList(...args)) as {
+          readonly definitions?: ReadonlyArray<{ readonly id: string; readonly projectId: string }>;
+          readonly runs?: ReadonlyArray<{
+            readonly id: string;
+            readonly automationId: string;
+            readonly projectId: string;
+          }>;
+        };
+        recordAutomationOwnership({
+          automations: result?.definitions as never,
+          runs: result?.runs as never,
+        });
+        return result;
+      },
+    };
   }
 
   for (const [group, methods] of Object.entries(POSITIONAL_PATH_METHODS)) {
