@@ -1,0 +1,37 @@
+# A remote host WITH systemd, so the supervisor step can actually run.
+# node:22 images have no init; this uses a systemd-capable base and adds Node.
+# Requires: docker run --privileged (systemd needs it) — documented in up-systemd.sh.
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      systemd systemd-sysv dbus openssh-server sudo ca-certificates curl xz-utils \
+    && rm -rf /var/lib/apt/lists/* && mkdir -p /run/sshd
+
+# Node from nodejs.org rather than apt: the version must satisfy the server's
+# engines range, and Debian's node is far older.
+ARG NODE_VERSION=22.21.1
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in amd64) na=x64 ;; arm64) na=arm64 ;; *) echo "unsupported $arch" >&2; exit 1 ;; esac \
+    && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${na}.tar.xz" -o /tmp/node.tar.xz \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+    && rm /tmp/node.tar.xz && node --version
+
+RUN useradd -m -s /bin/bash synara \
+    && echo 'synara ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/synara \
+    && loginctl enable-linger synara 2>/dev/null || true
+
+COPY authorized_keys /tmp/authorized_keys
+RUN mkdir -p /home/synara/.ssh \
+    && cp /tmp/authorized_keys /home/synara/.ssh/authorized_keys \
+    && chown -R synara:synara /home/synara/.ssh \
+    && chmod 700 /home/synara/.ssh && chmod 600 /home/synara/.ssh/authorized_keys \
+    && rm /tmp/authorized_keys
+
+# sshd must run under systemd so the user session/linger machinery is real.
+RUN systemctl enable ssh
+
+# A user manager needs the user's runtime dir; linger provides it at boot.
+EXPOSE 22
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
