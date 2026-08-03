@@ -1083,8 +1083,9 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
   it("bounds hidden automation runtimes globally and restores an evicted tab on demand", async () => {
     vi.useFakeTimers();
     try {
-      const nativeWebContents = Array.from({ length: 6 }, (_, index) =>
-        new FakeWebContents(100 + index),
+      const nativeWebContents = Array.from(
+        { length: 6 },
+        (_, index) => new FakeWebContents(100 + index),
       );
       for (const webContents of nativeWebContents) {
         webContentsViewConstructor.mockReturnValueOnce({
@@ -1113,9 +1114,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
       expect(nativeWebContents[0]!.close).toHaveBeenCalledOnce();
       expect(
-        nativeWebContents
-          .slice(1, 5)
-          .every((webContents) => !webContents.close.mock.calls.length),
+        nativeWebContents.slice(1, 5).every((webContents) => !webContents.close.mock.calls.length),
       ).toBe(true);
       expect(manager.getState({ threadId: tabs[0]!.threadId }).tabs[0]?.status).toBe("suspended");
 

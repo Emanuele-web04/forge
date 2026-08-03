@@ -32,9 +32,7 @@ describe("brand identity guard", () => {
   });
 
   it("allows the exact legal attribution once in LICENSE", () => {
-    expect(
-      findBrandIdentityViolations([{ path: "LICENSE", contents: legalNotice }]),
-    ).toEqual([]);
+    expect(findBrandIdentityViolations([{ path: "LICENSE", contents: legalNotice }])).toEqual([]);
     expect(
       findBrandIdentityViolations([{ path: "docs/license-copy.md", contents: legalNotice }]),
     ).toHaveLength(1);

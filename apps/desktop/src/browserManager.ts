@@ -2101,9 +2101,7 @@ export class DesktopBrowserManager {
 
     const now = Date.now();
     const evictionCandidates = backgroundRuntimes
-      .filter(
-        (runtime) => (this.automationRuntimeProtectedUntilByKey.get(runtime.key) ?? 0) <= now,
-      )
+      .filter((runtime) => (this.automationRuntimeProtectedUntilByKey.get(runtime.key) ?? 0) <= now)
       .toSorted(
         (left, right) =>
           (this.runtimeLastActiveAtByKey.get(left.key) ?? 0) -
@@ -2138,10 +2136,13 @@ export class DesktopBrowserManager {
       .toSorted((left, right) => left - right)[0];
     if (nextProtectionExpiry === undefined) return;
 
-    this.backgroundAutomationEvictionTimer = setTimeout(() => {
-      this.backgroundAutomationEvictionTimer = null;
-      this.enforceBackgroundAutomationRuntimeBudget();
-    }, Math.max(1, nextProtectionExpiry - now + 1));
+    this.backgroundAutomationEvictionTimer = setTimeout(
+      () => {
+        this.backgroundAutomationEvictionTimer = null;
+        this.enforceBackgroundAutomationRuntimeBudget();
+      },
+      Math.max(1, nextProtectionExpiry - now + 1),
+    );
     this.backgroundAutomationEvictionTimer.unref();
   }
 
