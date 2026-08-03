@@ -159,6 +159,12 @@ function ownProject(environmentId: string, projectId: string, cwd?: string): voi
   (record.projects as unknown[]).push({ id: projectId, ...(cwd ? { cwd } : {}) });
 }
 
+/** Places a space in an environment's record. */
+function ownSpace(environmentId: string, spaceId: string): void {
+  const record = environmentRecord(environmentId);
+  (record.spaces as unknown[]).push({ id: spaceId });
+}
+
 vi.mock("./store", () => ({
   useStore: { getState: () => storeState },
 }));
@@ -765,6 +771,112 @@ describe("positional path arguments refuse rather than open the wrong machine's 
     await api.shell.showInFolder("/tmp/anywhere");
 
     expect(spyFor(localClient, "shell", "showInFolder")).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("spaceId-keyed commands route by space ownership", () => {
+  it("applies a REMOTE space's rename on the host that owns it", async () => {
+    // The panel finding. Space commands carry ONLY a spaceId, so before this
+    // they fell through to the LOCAL client while the aggregated sidebar showed
+    // the remote space — renaming it changed nothing the user could see.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownSpace(REMOTE_ENVIRONMENT_ID, "space-remote");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.orchestration.dispatchCommand({
+      type: "space.meta.update",
+      commandId: "command-1",
+      spaceId: "space-remote",
+      name: "Renamed",
+    } as never);
+
+    expect(remoteDispatch).toHaveBeenCalledTimes(1);
+    expect(localDispatch).not.toHaveBeenCalled();
+  });
+
+  it("deletes a REMOTE space on its own host, not a local one sharing the id", async () => {
+    // The sharper case: two servers can hold the same id, so an unrouted delete
+    // does not merely fail — it can destroy the LOCAL space of that id while
+    // the remote one survives.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownSpace(LOCAL_ENVIRONMENT_ID, "space-local");
+    ownSpace(REMOTE_ENVIRONMENT_ID, "space-remote");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.orchestration.dispatchCommand({
+      type: "space.delete",
+      commandId: "command-1",
+      spaceId: "space-remote",
+    } as never);
+
+    expect(remoteDispatch).toHaveBeenCalledTimes(1);
+    expect(localDispatch).not.toHaveBeenCalled();
+  });
+
+  it("routes space.reorder by its own spaceId", async () => {
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownSpace(REMOTE_ENVIRONMENT_ID, "space-remote");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.orchestration.dispatchCommand({
+      type: "space.reorder",
+      commandId: "command-1",
+      spaceId: "space-remote",
+      orderedSpaceIds: ["space-remote"],
+    } as never);
+
+    expect(remoteDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a local space's command local", async () => {
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownSpace(LOCAL_ENVIRONMENT_ID, "space-local");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.orchestration.dispatchCommand({
+      type: "space.meta.update",
+      commandId: "command-1",
+      spaceId: "space-local",
+      name: "Renamed",
+    } as never);
+
+    expect(localDispatch).toHaveBeenCalledTimes(1);
+    expect(remoteDispatch).not.toHaveBeenCalled();
+  });
+
+  it("lets the PROJECTS win for space.projects.assign, which carries both keys", async () => {
+    // Precedence, and it is load-bearing: the projects are what the command
+    // moves, so they name the server the write lands on. Resolving by spaceId
+    // instead would send the move to the space's host while the projects live
+    // elsewhere.
+    registeredClients.set(REMOTE_ENVIRONMENT_ID, remoteClient);
+    ownSpace(LOCAL_ENVIRONMENT_ID, "space-local");
+    ownProject(REMOTE_ENVIRONMENT_ID, "project-remote");
+
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+    await api.orchestration.dispatchCommand({
+      type: "space.projects.assign",
+      commandId: "command-1",
+      spaceId: "space-local",
+      projectIds: ["project-remote"],
+    } as never);
+
+    expect(remoteDispatch).toHaveBeenCalledTimes(1);
+    expect(localDispatch).not.toHaveBeenCalled();
+  });
+
+  it("refuses rather than running locally when the space's host is disconnected", async () => {
+    ownSpace(REMOTE_ENVIRONMENT_ID, "space-remote");
+    const api = createEnvironmentRoutedApi(localClient.api as never);
+
+    await expect(
+      api.orchestration.dispatchCommand({
+        type: "space.delete",
+        commandId: "command-1",
+        spaceId: "space-remote",
+      } as never),
+    ).rejects.toBeInstanceOf(EnvironmentUnavailableError);
+    expect(localDispatch).not.toHaveBeenCalled();
   });
 });
 

@@ -15,7 +15,11 @@
 import type { EnvironmentId, NativeApi, ThreadId } from "@synara/contracts";
 
 import { LOCAL_ENVIRONMENT_ID } from "./environmentIdentity";
-import { findEnvironmentIdForProject, findEnvironmentIdForThread } from "./storeAggregation";
+import {
+  findEnvironmentIdForProject,
+  findEnvironmentIdForSpace,
+  findEnvironmentIdForThread,
+} from "./storeAggregation";
 import { getWsEnvironmentClient, localWsEnvironmentClient } from "./wsEnvironmentRegistry";
 import { resolveEnvironmentHttpUrl } from "./lib/wsHttpUrl";
 import {
@@ -24,7 +28,7 @@ import {
 } from "./threadDetailResumeCursors";
 import { useStore } from "./store";
 import type { AppState } from "./storeState";
-import type { Project } from "./types";
+import type { Project, Space } from "./types";
 
 /**
  * Threads a client has decided to create on a remote environment but which no
@@ -121,6 +125,26 @@ export function resolveProjectEnvironmentId(
   // store already holds, so an id that is not a real project matches nothing
   // and resolves local — the same answer as an absent field.
   return findEnvironmentIdForProject(source, projectId as Project["id"]) ?? LOCAL_ENVIRONMENT_ID;
+}
+
+/**
+ * The environment that owns `spaceId`.
+ *
+ * Space commands (`space.meta.update`, `space.delete`, `space.reorder`) carry
+ * ONLY a spaceId — no thread and no project — so neither of the lookups above
+ * can answer for them. Unrouted they ran on the LOCAL server while the
+ * aggregated sidebar showed remote spaces: deleting a remote space deleted
+ * nothing, or silently deleted a local space that happened to share the id.
+ */
+export function resolveSpaceEnvironmentId(
+  spaceId: string,
+  source: ThreadOwnershipSource = readOwnershipSource(),
+): EnvironmentId {
+  // Bare string for the same reason `resolveProjectEnvironmentId` takes one:
+  // the routed API reads this off an untyped request argument, so the brand
+  // cannot be honestly proven at the call site. An id no environment holds
+  // matches nothing and resolves local — the same answer as an absent field.
+  return findEnvironmentIdForSpace(source, spaceId as Space["id"]) ?? LOCAL_ENVIRONMENT_ID;
 }
 
 /**

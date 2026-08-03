@@ -411,6 +411,28 @@ export function findEnvironmentIdForProject(
   return null;
 }
 
+/**
+ * The environment whose record holds `spaceId`, or `null` when none does.
+ *
+ * Spaces are per-environment for the same reason projects are, so a space
+ * command carries an id that means nothing without its owner. Added after the
+ * panel found `space.meta.update` / `space.delete` / `space.reorder` dispatching
+ * to the LOCAL server while the aggregated sidebar showed a remote space —
+ * deleting a remote space deleted nothing, or a same-id local one.
+ */
+export function findEnvironmentIdForSpace(
+  state: AppState,
+  spaceId: Space["id"],
+): EnvironmentId | null {
+  // First-wins in aggregate order; see `findEnvironmentIdForThread`.
+  for (const [environmentId, environment] of orderedEnvironmentEntries(state)) {
+    if (environment.spaces.some((space) => space.id === spaceId)) {
+      return environmentId as EnvironmentId;
+    }
+  }
+  return null;
+}
+
 /** The environment that owns a project, or the local one when no record claims it. */
 export function environmentIdForProject(state: AppState, projectId: Project["id"]): EnvironmentId {
   return findEnvironmentIdForProject(state, projectId) ?? LOCAL_ENVIRONMENT_ID;

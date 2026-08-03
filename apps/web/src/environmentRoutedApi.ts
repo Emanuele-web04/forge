@@ -16,6 +16,7 @@ import {
   EnvironmentUnavailableError,
   findThreadEnvironmentId,
   resolveProjectEnvironmentId,
+  resolveSpaceEnvironmentId,
   resolveThreadEnvironmentId,
 } from "./environmentRouting";
 import {
@@ -312,11 +313,23 @@ function resolveCallEnvironmentId(
   if (threadId !== null) return resolveThreadEnvironmentId(threadId as ThreadId, state);
 
   // `space.projects.assign` names the projects it moves; they share an owner.
+  // Checked BEFORE spaceId: that command carries both, and the projects are the
+  // thing being moved, so they are the more specific claim about which server
+  // the write lands on.
   const projectIds = (argument as { readonly projectIds?: unknown } | null)?.projectIds;
   if (Array.isArray(projectIds)) {
     const first = projectIds.find((id): id is string => typeof id === "string");
     if (first !== undefined) return resolveProjectEnvironmentId(first, state);
   }
+
+  // Space commands carry ONLY a spaceId. Without this they dispatched to the
+  // LOCAL server while the aggregated sidebar showed remote spaces, so deleting
+  // or renaming a remote space did nothing — or hit a local space sharing the
+  // id. `space.reorder` also carries `orderedSpaceIds`, but its own `spaceId`
+  // already names the owner, and a reorder spanning two servers is not
+  // expressible in one command anyway.
+  const spaceId = readStringField(argument, "spaceId");
+  if (spaceId !== null) return resolveSpaceEnvironmentId(spaceId, state);
 
   return null;
 }
