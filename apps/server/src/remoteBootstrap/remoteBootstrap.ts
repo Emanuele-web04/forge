@@ -120,6 +120,30 @@ const REMOTE_DIRECTORY_MODE = "700";
 const REMOTE_SECRET_MODE = "600";
 const REMOTE_EXECUTABLE_MODE = "700";
 
+type RemotePlatform = "darwin" | "linux";
+
+/** The supervisor kind is the one place the far host's OS is already known. */
+function platformOfSupervisor(supervisor: SupervisorPlan): RemotePlatform {
+  return supervisor.kind === "launchd-user" ? "darwin" : "linux";
+}
+
+/**
+ * Atomically replace a SYMLINK without following it when it points at a
+ * directory. GNU spells this `mv -T`; BSD/macOS `mv` has no `-T` (it errors) and
+ * follows a symlink-to-directory target, moving the source INTO it instead of
+ * over it — so on a Mac the `current` swap silently did not happen. BSD's `-h`
+ * is the equivalent "do not descend into a symlinked directory target". Neither
+ * flag exists on the other platform, so the choice is made from the known OS.
+ */
+export function symlinkSwapArgv(
+  platform: RemotePlatform,
+  source: string,
+  destination: string,
+): readonly string[] {
+  const flag = platform === "darwin" ? "-fh" : "-fT";
+  return ["mv", flag, "--", source, destination];
+}
+
 /**
  * Where an artifact is uploaded to.
  *
@@ -206,10 +230,12 @@ async function ensureDirectories(input: BootstrapInput): Promise<void> {
   ]);
   // The state directory holds the credential; a group/other-readable tree would
   // hand it to every other account on a shared host.
+  //
+  // No `--`: BSD/macOS chmod rejects it. Both paths are absolute under the
+  // install root, so neither can be misread as a flag.
   await expectRemoteSuccess(connection, [
     "chmod",
     REMOTE_DIRECTORY_MODE,
-    "--",
     layout.root,
     layout.stateDirectory,
   ]);
@@ -334,7 +360,7 @@ async function installReleaseRuntime(
     throw new Error(`Refusing to install a runtime outside the install root: ${runtimePath}`);
   }
   await expectRemoteSuccess(connection, ["cp", "-f", "--", stagedRuntimePath, runtimePath]);
-  await expectRemoteSuccess(connection, ["chmod", REMOTE_EXECUTABLE_MODE, "--", runtimePath]);
+  await expectRemoteSuccess(connection, ["chmod", REMOTE_EXECUTABLE_MODE, runtimePath]);
 }
 
 /**
@@ -362,8 +388,11 @@ async function writeRemoteSecret(
     ["sh", "-c", 'umask 077; cat > "$1"', "sh", temporaryPath],
     { stdin: contents },
   );
-  await expectRemoteSuccess(connection, ["chmod", REMOTE_SECRET_MODE, "--", temporaryPath]);
-  await expectRemoteSuccess(connection, ["mv", "-fT", "--", temporaryPath, remotePath]);
+  await expectRemoteSuccess(connection, ["chmod", REMOTE_SECRET_MODE, temporaryPath]);
+  // A regular-file destination: plain `mv -f` is an atomic rename on both GNU
+  // and BSD, so no `-T` (which BSD rejects) is needed. The path is absolute
+  // under the install root, so no `--` guard is needed either.
+  await expectRemoteSuccess(connection, ["mv", "-f", temporaryPath, remotePath]);
 }
 
 /**
@@ -380,7 +409,7 @@ async function installCredential(
   layout: RemoteInstallLayout,
   credential: RemoteCredential,
 ): Promise<void> {
-  const existing = await connection.exec(["cat", "--", layout.credentialFile]);
+  const existing = await connection.exec(["cat", layout.credentialFile]);
   if (existing.exitCode === 0 && existing.stdout.trim().length > 0) {
     await expectRemoteSuccess(connection, [
       "cp",
@@ -392,7 +421,6 @@ async function installCredential(
     await expectRemoteSuccess(connection, [
       "chmod",
       REMOTE_SECRET_MODE,
-      "--",
       layout.previousCredentialFile,
     ]);
   }
@@ -404,7 +432,7 @@ async function restorePreviousCredential(
   connection: RemoteConnection,
   layout: RemoteInstallLayout,
 ): Promise<void> {
-  const previous = await connection.exec(["cat", "--", layout.previousCredentialFile]);
+  const previous = await connection.exec(["cat", layout.previousCredentialFile]);
   if (previous.exitCode !== 0 || previous.stdout.trim().length === 0) return;
   await writeRemoteSecret(connection, layout, layout.credentialFile, `${previous.stdout.trim()}\n`);
 }
@@ -422,6 +450,7 @@ async function restorePreviousCredential(
 async function atomicSymlinkSwap(
   connection: RemoteConnection,
   layout: RemoteInstallLayout,
+  platform: RemotePlatform,
   input: { readonly target: string; readonly linkPath: string },
 ): Promise<void> {
   const temporaryLink = `${input.linkPath}.swap`;
@@ -430,7 +459,7 @@ async function atomicSymlinkSwap(
   }
   await expectRemoteSuccess(connection, ["rm", "-f", "--", temporaryLink]);
   await expectRemoteSuccess(connection, ["ln", "-sfn", "--", input.target, temporaryLink]);
-  await expectRemoteSuccess(connection, ["mv", "-fT", "--", temporaryLink, input.linkPath]);
+  await expectRemoteSuccess(connection, symlinkSwapArgv(platform, temporaryLink, input.linkPath));
 }
 
 /** Points `current` at `releaseId`, recording the outgoing one as `previous`. */
@@ -440,15 +469,16 @@ async function activateRelease(
   previousReleaseId: string | null,
 ): Promise<void> {
   const { connection, layout } = input;
+  const platform = platformOfSupervisor(input.supervisor);
   input.onProgress?.({ step: "activating" });
   const releaseDirectory = remoteReleaseDirectory(layout, releaseId);
   if (previousReleaseId !== null) {
-    await atomicSymlinkSwap(connection, layout, {
+    await atomicSymlinkSwap(connection, layout, platform, {
       target: remoteReleaseDirectory(layout, previousReleaseId),
       linkPath: layout.previousLink,
     });
   }
-  await atomicSymlinkSwap(connection, layout, {
+  await atomicSymlinkSwap(connection, layout, platform, {
     target: releaseDirectory,
     linkPath: layout.currentLink,
   });
@@ -494,7 +524,7 @@ export async function rollbackRemoteServer(input: {
   // with; restarting it under the newly minted one would leave a running server
   // the broker cannot talk to.
   await restorePreviousCredential(connection, layout);
-  await atomicSymlinkSwap(connection, layout, {
+  await atomicSymlinkSwap(connection, layout, platformOfSupervisor(supervisor), {
     target: remoteReleaseDirectory(layout, previousReleaseId),
     linkPath: layout.currentLink,
   });
@@ -631,7 +661,7 @@ async function terminateOwnedProcess(
   connection: RemoteConnection,
   layout: RemoteInstallLayout,
 ): Promise<void> {
-  const pidResult = await connection.exec(["cat", "--", layout.pidFile]);
+  const pidResult = await connection.exec(["cat", layout.pidFile]);
   if (pidResult.exitCode !== 0) return;
   const pid = parseOwnedPid(pidResult.stdout);
   if (pid === null) return;

@@ -99,8 +99,13 @@ export async function readRemoteHostFacts(connection: RemoteConnection): Promise
 export function remoteArtifactTargetFor(
   facts: RemoteHostFacts,
 ): BootstrapArtifactManifestTarget | undefined {
-  if (facts.os !== "linux") return undefined;
-  return facts.arch === "arm64" ? "linux-arm64" : "linux-x64";
+  // linux and darwin are both supported hosts; each splits x64/arm64 the same
+  // way. A Mac mini is a first-class remote, proven end to end against a real
+  // launchctl.
+  const arch = facts.arch === "arm64" ? "arm64" : "x64";
+  if (facts.os === "linux") return `linux-${arch}`;
+  if (facts.os === "darwin") return `darwin-${arch}`;
+  return undefined;
 }
 
 /** Ports the remote server may bind. Unprivileged, and clear of the ephemeral range. */

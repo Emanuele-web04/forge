@@ -17,7 +17,7 @@ const TAR_BLOCK_SIZE = 512;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const NODE_VERSION_PATTERN = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
-export type NodeRuntimeTarget = "linux-arm64" | "linux-x64";
+export type NodeRuntimeTarget = "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64";
 
 export interface FetchNodeRuntimeInput {
   readonly nodeVersion: string;
@@ -74,8 +74,13 @@ export class NodeRuntimeChecksumMismatchError extends Error {
 export function nodeRuntimeTarget(platform: string, arch: string): NodeRuntimeTarget {
   if (platform === "linux" && arch === "x64") return "linux-x64";
   if (platform === "linux" && arch === "arm64") return "linux-arm64";
+  // darwin publishes the same `node-v<ver>-<target>.tar.gz` with `bin/node`, so
+  // a Mac remote host (a Mac mini, say) fetches its runtime the same way.
+  if (platform === "darwin" && arch === "x64") return "darwin-x64";
+  if (platform === "darwin" && arch === "arm64") return "darwin-arm64";
   throw new Error(
-    `Unsupported Node runtime target: ${platform}-${arch}. Supported targets: linux-x64, linux-arm64.`,
+    `Unsupported Node runtime target: ${platform}-${arch}. ` +
+      `Supported targets: linux-x64, linux-arm64, darwin-x64, darwin-arm64.`,
   );
 }
 
@@ -346,7 +351,7 @@ function parseCommandLine(argv: readonly string[]): CommandLineArguments {
     const value = argv[index + 1];
     if (!name?.startsWith("--") || value === undefined || value.startsWith("--")) {
       throw new Error(
-        "Usage: fetch-node-runtime.ts --node-version <version> --platform linux --arch <x64|arm64> --out <directory>",
+        "Usage: fetch-node-runtime.ts --node-version <version> --platform <linux|darwin> --arch <x64|arm64> --out <directory>",
       );
     }
     if (values.has(name)) throw new Error(`Duplicate argument: ${name}`);
@@ -362,7 +367,7 @@ function parseCommandLine(argv: readonly string[]): CommandLineArguments {
   const outputDirectory = values.get("--out");
   if (!nodeVersion || !platform || !arch || !outputDirectory) {
     throw new Error(
-      "Usage: fetch-node-runtime.ts --node-version <version> --platform linux --arch <x64|arm64> --out <directory>",
+      "Usage: fetch-node-runtime.ts --node-version <version> --platform <linux|darwin> --arch <x64|arm64> --out <directory>",
     );
   }
   return { nodeVersion, platform, arch, outputDirectory };

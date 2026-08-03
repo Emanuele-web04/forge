@@ -13,6 +13,7 @@ import {
   bootstrapRemoteServer,
   type BootstrapInput,
   readRemoteReleaseId,
+  symlinkSwapArgv,
   uninstallRemoteServer,
   UpgradeRefusedError,
 } from "./remoteBootstrap";
@@ -159,10 +160,11 @@ describe("clean-host bootstrap", () => {
   it("makes the installed runtime executable", async () => {
     const host = createFakeRemoteHost();
     await bootstrapRemoteServer(bootstrapInput(host));
+    // No `--`: BSD/macOS chmod rejects it, and the path is absolute under the
+    // install root so it can never be read as a flag. Verified on a real Mac.
     expect(host.commands).toContainEqual([
       "chmod",
       "700",
-      "--",
       `${layout.releasesDirectory}/0.6.3/node`,
     ]);
   });
@@ -208,8 +210,8 @@ describe("clean-host bootstrap", () => {
     const chmods = host.commands.filter((argv) => argv[0] === "chmod");
     // 0600 is set on the temp file BEFORE it is renamed into place, so the
     // credential is never briefly world-readable at its real path.
-    expect(chmods).toContainEqual(["chmod", "600", "--", `${layout.credentialFile}.new`]);
-    expect(chmods).toContainEqual(["chmod", "700", "--", layout.root, layout.stateDirectory]);
+    expect(chmods).toContainEqual(["chmod", "600", `${layout.credentialFile}.new`]);
+    expect(chmods).toContainEqual(["chmod", "700", layout.root, layout.stateDirectory]);
     expect(host.readFile(layout.credentialFile)).not.toBeNull();
   });
 
@@ -1114,10 +1116,11 @@ describe("credential rotation is crash-safe", () => {
         expect(argv).not.toContain(layout.credentialFile);
       }
     }
+    // A regular-file replace: plain `mv -f` is atomic on GNU and BSD alike, so
+    // no GNU-only `-T` (which BSD rejects). Verified on a real Mac.
     expect(host.commands).toContainEqual([
       "mv",
-      "-fT",
-      "--",
+      "-f",
       `${layout.credentialFile}.new`,
       layout.credentialFile,
     ]);
@@ -1168,5 +1171,28 @@ describe("credential rotation is crash-safe", () => {
 
     expect(host.readLink(layout.currentLink)).toBe(`${layout.releasesDirectory}/0.6.3`);
     expect(host.readFile(layout.credentialFile)?.trim()).toBe(first.credential.token);
+  });
+});
+
+describe("the current-symlink swap is chosen for the remote OS", () => {
+  // Found by running a real bootstrap on a Mac over Tailscale: BSD `mv` has no
+  // `-T` (it errors) and follows a symlink-to-directory target, moving the new
+  // link INTO the old release instead of over it — so `current` never advanced.
+  // BSD `-h` is the equivalent. Neither flag exists on the other platform.
+  it("uses mv -fT on linux (GNU) and mv -fh on darwin (BSD)", () => {
+    expect(symlinkSwapArgv("linux", "/i/current.swap", "/i/current")).toEqual([
+      "mv",
+      "-fT",
+      "--",
+      "/i/current.swap",
+      "/i/current",
+    ]);
+    expect(symlinkSwapArgv("darwin", "/i/current.swap", "/i/current")).toEqual([
+      "mv",
+      "-fh",
+      "--",
+      "/i/current.swap",
+      "/i/current",
+    ]);
   });
 });

@@ -179,7 +179,9 @@ export function createRemoteHostConnection(
         );
       }
       if (mode !== undefined) {
-        await invoke(["chmod", mode.toString(8).padStart(3, "0"), "--", temporaryPath]);
+        // No `--`: BSD/macOS chmod rejects it, and the temp path is absolute
+        // under the install root, so it can never be read as a flag.
+        await invoke(["chmod", mode.toString(8).padStart(3, "0"), temporaryPath]);
       }
       const renamed = await invoke(["mv", "--", temporaryPath, remotePath]);
       if (renamed.exitCode !== 0) {

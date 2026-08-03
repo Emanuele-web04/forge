@@ -29,18 +29,16 @@ export interface SupervisorCapability {
 }
 
 /**
- * macOS/launchd is rendered and unit-tested, but the install flow is not yet
- * exercised end to end, so it is gated rather than silently half-working.
+ * Both platforms are supported. macOS matters as a remote host in its own right
+ * — a Mac mini is a common always-on machine — and its launchd plan (bootstrap,
+ * kickstart, bootout, a user LaunchAgent under ~/Library/LaunchAgents) is the
+ * peer of the systemd-user plan, verified against a real `launchctl` on a Mac
+ * over Tailscale, not only unit-tested.
  */
 export function supervisorCapability(os: "linux" | "darwin"): SupervisorCapability {
   return os === "linux"
     ? { kind: "systemd-user", supported: true }
-    : {
-        kind: "launchd-user",
-        supported: false,
-        reason:
-          "launchd bootstrap is not enabled yet; use a Linux host or run the remote server manually.",
-      };
+    : { kind: "launchd-user", supported: true };
 }
 
 export interface SupervisorPlan {

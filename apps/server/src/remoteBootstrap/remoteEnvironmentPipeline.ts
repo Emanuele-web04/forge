@@ -95,7 +95,7 @@ async function resolveEnvironmentId(
   connection: RemoteConnection,
   environmentIdFile: string,
 ): Promise<string> {
-  const result = await connection.exec(["cat", "--", environmentIdFile]);
+  const result = await connection.exec(["cat", environmentIdFile]);
   const existing = result.exitCode === 0 ? result.stdout.trim() : "";
   return existing.length > 0 ? existing : crypto.randomUUID();
 }
@@ -175,7 +175,7 @@ export async function bringUpRemoteEnvironment(
     // would restart a server that may be mid-turn for no gain, so this path
     // reuses the install — but it still has to obtain a credential, and the one
     // on the host is the only one that server accepts.
-    const stored = await connection.exec(["cat", "--", layout.credentialFile]);
+    const stored = await connection.exec(["cat", layout.credentialFile]);
     const token = stored.exitCode === 0 ? stored.stdout.trim() : "";
     if (token.length === 0) {
       throw new Error(

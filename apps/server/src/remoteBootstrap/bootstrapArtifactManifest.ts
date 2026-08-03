@@ -13,9 +13,20 @@ import { normalizeReleaseId, normalizeRemoteFileName } from "./remoteInputs";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const SERVER_VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const NODE_RUNTIME_FILE_PATTERN = /^node-v\d+\.\d+\.\d+-(linux-(?:x64|arm64))$/;
+const NODE_RUNTIME_FILE_PATTERN = /^node-v\d+\.\d+\.\d+-((?:linux|darwin)-(?:x64|arm64))$/;
 
-export type BootstrapArtifactManifestTarget = "linux-arm64" | "linux-x64";
+export type BootstrapArtifactManifestTarget =
+  | "darwin-arm64"
+  | "darwin-x64"
+  | "linux-arm64"
+  | "linux-x64";
+
+const MANIFEST_TARGETS: ReadonlySet<string> = new Set<BootstrapArtifactManifestTarget>([
+  "linux-x64",
+  "linux-arm64",
+  "darwin-x64",
+  "darwin-arm64",
+]);
 
 interface ManifestArtifact {
   readonly fileName: string;
@@ -97,10 +108,14 @@ function parseManifest(value: unknown): BootstrapArtifactManifest {
   if (record.schemaVersion !== 1) {
     throw new Error("Invalid bootstrap artifact manifest: schemaVersion must be 1");
   }
-  const target = record.target;
-  if (target !== "linux-x64" && target !== "linux-arm64") {
-    throw new Error("Invalid bootstrap artifact manifest: target must be linux-x64 or linux-arm64");
+  const rawTarget = record.target;
+  if (typeof rawTarget !== "string" || !MANIFEST_TARGETS.has(rawTarget)) {
+    throw new Error(
+      "Invalid bootstrap artifact manifest: target must be one of linux-x64, linux-arm64, darwin-x64, darwin-arm64",
+    );
   }
+  // Membership in MANIFEST_TARGETS proves the literal type; Set.has does not narrow.
+  const target = rawTarget as BootstrapArtifactManifestTarget;
 
   const releaseIdValue = stringAt(record, "releaseId", "root");
   let releaseId: string;

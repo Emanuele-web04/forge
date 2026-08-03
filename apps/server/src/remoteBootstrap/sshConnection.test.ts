@@ -171,7 +171,7 @@ describe("uploadFile", () => {
       mode: 0o700,
     });
     const chmod = invocations.find((invocation) => invocation.argv.at(-1)?.startsWith("chmod"));
-    expect(chmod?.argv.at(-1)).toBe("chmod 700 -- /remote/staging/node.partial");
+    expect(chmod?.argv.at(-1)).toBe("chmod 700 /remote/staging/node.partial");
   });
 
   it("throws instead of silently leaving a partial file when scp fails", async () => {

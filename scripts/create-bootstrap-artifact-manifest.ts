@@ -139,7 +139,7 @@ function parseCommandLine(argv: readonly string[]): CreateBootstrapArtifactManif
     const value = argv[index + 1];
     if (!name?.startsWith("--") || value === undefined || value.startsWith("--")) {
       throw new Error(
-        "Usage: create-bootstrap-artifact-manifest.ts --release-id <id> --server-version <version> --target <linux-x64|linux-arm64> --server-tarball <path> --node-runtime <path> --out <path>",
+        "Usage: create-bootstrap-artifact-manifest.ts --release-id <id> --server-version <version> --target <linux-x64|linux-arm64|darwin-x64|darwin-arm64> --server-tarball <path> --node-runtime <path> --out <path>",
       );
     }
     if (values.has(name)) throw new Error(`Duplicate argument: ${name}`);
@@ -165,13 +165,16 @@ function parseCommandLine(argv: readonly string[]): CreateBootstrapArtifactManif
   if (
     !releaseId ||
     !serverVersion ||
-    (target !== "linux-x64" && target !== "linux-arm64") ||
+    (target !== "linux-x64" &&
+      target !== "linux-arm64" &&
+      target !== "darwin-x64" &&
+      target !== "darwin-arm64") ||
     !serverTarballPath ||
     !nodeRuntimePath ||
     !outputPath
   ) {
     throw new Error(
-      "Usage: create-bootstrap-artifact-manifest.ts --release-id <id> --server-version <version> --target <linux-x64|linux-arm64> --server-tarball <path> --node-runtime <path> --out <path>",
+      "Usage: create-bootstrap-artifact-manifest.ts --release-id <id> --server-version <version> --target <linux-x64|linux-arm64|darwin-x64|darwin-arm64> --server-tarball <path> --node-runtime <path> --out <path>",
     );
   }
   return {

@@ -39,11 +39,13 @@ describe("supervisorCapability", () => {
 
   // Mutation guard: flipping this to `supported: true` would let a caller start
   // an end-to-end macOS bootstrap that is not wired up.
-  it("gates launchd behind an unsupported capability with a reason", () => {
+  it("supports launchd on darwin, the same as systemd on linux", () => {
+    // Was gated `supported: false` until the launchd install was run against a
+    // real launchctl on a Mac over Tailscale: the plist loads and launchd
+    // schedules the spawn. A Mac mini is a first-class remote host.
     const capability = supervisorCapability("darwin");
     expect(capability.kind).toBe("launchd-user");
-    expect(capability.supported).toBe(false);
-    expect(capability.reason).toMatch(/not enabled yet/);
+    expect(capability.supported).toBe(true);
   });
 });
 

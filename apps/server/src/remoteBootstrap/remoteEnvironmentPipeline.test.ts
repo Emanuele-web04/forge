@@ -60,37 +60,24 @@ function factsConnection(input: {
 }
 
 describe("bringUpRemoteEnvironment", () => {
-  it("refuses a darwin host as a structured reason, before uploading anything", async () => {
-    const host = createFakeRemoteHost();
-    const connection = factsConnection({ os: "Darwin", arch: "arm64", host });
-
-    await expect(
-      bringUpRemoteEnvironment({
-        config: hostConfig(),
-        installRoot: "/home/deploy/.synara/remote",
-        createConnection: () => connection,
-        resolveArtifacts: () => {
-          throw new Error("artifacts must not be resolved for an unsupported host");
-        },
-      }),
-    ).rejects.toThrow(RemoteEnvironmentUnsupportedError);
-
-    // The whole point of refusing early: no bytes crossed the WAN, and no
-    // half-install was left behind for the user to clean up.
-    expect(host.commands.some((argv) => argv[0] === "scp")).toBe(false);
-    expect(host.commands.some((argv) => argv[0] === "tar")).toBe(false);
-  });
-
-  it("surfaces the capability's own reason rather than a generic failure", async () => {
+  it("accepts a darwin host and proceeds past the capability gate", async () => {
+    // Was refused as unsupported; launchd is now a peer of systemd, proven
+    // against a real launchctl on a Mac. A darwin host is no longer rejected —
+    // it proceeds to resolve artifacts exactly like linux. The sentinel proves
+    // the pipeline reached artifact resolution rather than short-circuiting.
     const connection = factsConnection({ os: "Darwin", arch: "arm64" });
-    await expect(
-      bringUpRemoteEnvironment({
-        config: hostConfig(),
-        installRoot: "/home/deploy/.synara/remote",
-        createConnection: () => connection,
-        resolveArtifacts: () => Promise.resolve({ available: true, artifacts: {} as never }),
-      }),
-    ).rejects.toThrow(/launchd/);
+    const failure = await bringUpRemoteEnvironment({
+      config: hostConfig(),
+      installRoot: "/home/deploy/.synara/remote",
+      createConnection: () => connection,
+      resolveArtifacts: () => {
+        throw new Error("reached-artifact-resolution");
+      },
+    }).catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(RemoteEnvironmentUnsupportedError);
+    expect((failure as Error).message).toBe("reached-artifact-resolution");
   });
 
   it("reports missing artifacts as an ordinary error, NOT as unsupported", async () => {

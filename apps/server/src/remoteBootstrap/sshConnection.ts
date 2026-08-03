@@ -266,12 +266,7 @@ export function createSshConnection(
         );
       }
       if (mode !== undefined) {
-        const chmod = await this.exec([
-          "chmod",
-          mode.toString(8).padStart(3, "0"),
-          "--",
-          temporaryPath,
-        ]);
+        const chmod = await this.exec(["chmod", mode.toString(8).padStart(3, "0"), temporaryPath]);
         if (chmod.exitCode !== 0) {
           throw new Error(`Failed to set mode on ${remotePath}: ${chmod.stderr.trim()}`);
         }
