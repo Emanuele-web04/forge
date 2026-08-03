@@ -132,18 +132,33 @@ async function requestAuthJson<T>(
   } = {},
 ): Promise<T> {
   const hasBody = options.body !== undefined;
-  // Local keeps the bare relative path (same-origin cookie auth); a remote
-  // environment is addressed absolutely on its own host.
-  const response = await fetch(resolveEnvironmentHttpUrl(explicitUrl, path, relativePathFallback), {
-    method: options.method ?? "GET",
-    credentials: "same-origin",
-    ...(hasBody
-      ? {
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(options.body),
-        }
-      : {}),
-  });
+  // Stamp the build HERE, not at each call site.
+  //
+  // The server's skew guard deliberately treats a request with no declared
+  // build as non-skewed: HTTP has no negotiation, and pre-guard clients must
+  // not be locked out of the recovery routes. That leniency is only sound if
+  // OUR client always declares. It did not — the voice upload route stamped and
+  // the auth routes did not, so every `clients/revoke`, `revoke-others` and
+  // `pairing-links/revoke` arrived unstamped and a stale read-only client sailed
+  // through a guard that was itself correct. The server-side allowlist was
+  // right and irrelevant, because its classification input was missing.
+  //
+  // Per-call-site stamping is exactly how that split happened, so this is the
+  // one place: every auth call inherits it, including ones not yet written.
+  // The server stays lenient by design; the fix is only that we tell the truth.
+  const response = await fetch(
+    resolveEnvironmentHttpUrl(explicitUrl, withClientBuildIdentity(path), relativePathFallback),
+    {
+      method: options.method ?? "GET",
+      credentials: "same-origin",
+      ...(hasBody
+        ? {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(options.body),
+          }
+        : {}),
+    },
+  );
   const payload = (await response.json().catch(() => null)) as unknown;
   if (!response.ok) {
     const message =

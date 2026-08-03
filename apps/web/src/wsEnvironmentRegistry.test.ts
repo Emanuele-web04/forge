@@ -758,7 +758,11 @@ describe("wsEnvironmentRegistry", () => {
     const result = await api.server.getAuthSession();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/session",
+      // Carries the client build: the server's skew guard treats an undeclared
+      // build as non-skewed, so an unstamped auth request is unclassifiable and
+      // a stale client walks through the guard. Asserted as a prefix because
+      // the build value moves with the package version.
+      expect.stringContaining("/api/auth/session?"),
       expect.objectContaining({ credentials: "same-origin", method: "GET" }),
     );
     expect(result).toMatchObject({ authenticated: false });
@@ -783,7 +787,11 @@ describe("wsEnvironmentRegistry", () => {
     const result = await api.server.bootstrapAuth({ credential: "PAIRINGTOKEN" });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/bootstrap",
+      // Carries the client build: the server's skew guard treats an undeclared
+      // build as non-skewed, so an unstamped auth request is unclassifiable and
+      // a stale client walks through the guard. Asserted as a prefix because
+      // the build value moves with the package version.
+      expect.stringContaining("/api/auth/bootstrap?"),
       expect.objectContaining({
         method: "POST",
         credentials: "same-origin",
@@ -807,7 +815,11 @@ describe("wsEnvironmentRegistry", () => {
     await expect(api.server.logoutAuthSession()).resolves.toEqual({ revoked: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/logout",
+      // Carries the client build: the server's skew guard treats an undeclared
+      // build as non-skewed, so an unstamped auth request is unclassifiable and
+      // a stale client walks through the guard. Asserted as a prefix because
+      // the build value moves with the package version.
+      expect.stringContaining("/api/auth/logout?"),
       expect.objectContaining({
         method: "POST",
         credentials: "same-origin",
@@ -1318,7 +1330,10 @@ describe("wsEnvironmentRegistry", () => {
     await localWsEnvironmentClient().api.server.getAuthSession();
 
     // Regression bar: the single-local-server case is byte-identical.
-    expect(fetchMock).toHaveBeenCalledWith("/api/auth/session", expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/auth/session?"),
+      expect.anything(),
+    );
   });
 
   it("discards an environment's resume cursors when it is removed", async () => {
