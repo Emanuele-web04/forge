@@ -2,12 +2,12 @@
 // Purpose: Own model-setting discovery, selection, and custom-model editing workflows.
 // Layer: Settings panel
 
+import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import {
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
-  PROVIDER_DISPLAY_NAMES,
-  type ProviderKind,
-} from "@synara/contracts";
-import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
+  defaultGitTextGenerationSelectionFor,
+  getModelOptions,
+  normalizeModelSlug,
+} from "@synara/shared/model";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
@@ -20,6 +20,7 @@ import {
   getGitTextGenerationModelOptions,
   isGitTextGenerationSettingsDirty,
   patchCustomModels,
+  resolveGitTextGenerationSelection,
 } from "~/appSettings";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { PlusIcon, XIcon } from "~/lib/icons";
@@ -105,10 +106,19 @@ export function ModelsSettingsPanel({
     textGenerationModel,
     textGenerationProvider,
   } = settings;
-  const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
-  const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+  const resolvedGitTextGenerationSelection = resolveGitTextGenerationSelection({
+    provider: textGenerationProvider ?? null,
+    model: textGenerationModel ?? null,
+  });
+  const currentGitTextGenerationProvider = resolvedGitTextGenerationSelection.provider;
+  const currentGitTextGenerationModel = resolvedGitTextGenerationSelection.model;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
-    () => ({ [currentGitTextGenerationProvider]: currentGitTextGenerationModel }),
+    () => ({
+      codex: defaultGitTextGenerationSelectionFor("codex").model,
+      kilo: defaultGitTextGenerationSelectionFor("kilo").model,
+      opencode: defaultGitTextGenerationSelectionFor("opencode").model,
+      [currentGitTextGenerationProvider]: currentGitTextGenerationModel,
+    }),
     [currentGitTextGenerationModel, currentGitTextGenerationProvider],
   );
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({

@@ -6,15 +6,14 @@
  * and process-authoritative on the server.
  */
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
-  type ProviderWithDefaultModel,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
   type ServerSettingsView,
 } from "@synara/contracts";
+import { defaultGitTextGenerationSelectionFor } from "@synara/shared/model";
 import { deepMerge, type DeepPartial } from "@synara/shared/Struct";
 import { applyServerSettingsPatch } from "@synara/shared/serverSettings";
 import {
@@ -129,12 +128,13 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
-const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
-  "codex",
-  "claudeAgent",
-  "kilo",
-  "opencode",
-];
+type GitWritingFallbackProvider = "codex" | "kilo" | "opencode";
+
+// Only providers with a dedicated Git writing default participate in the
+// fallback. Searching over chat providers (e.g. claudeAgent) would let the
+// fallback "resolve" to a provider that cannot generate Git text, or worse
+// rewrite to Codex even when Codex itself is disabled.
+const PROVIDER_ORDER: readonly GitWritingFallbackProvider[] = ["codex", "kilo", "opencode"];
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
@@ -147,11 +147,15 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
     return settings;
   }
 
+  // The fallback selection is the complete Git writing default for that
+  // provider (PROVIDER_ORDER only contains Git-writing-capable providers).
+  const gitWritingFallback = defaultGitTextGenerationSelectionFor(fallback);
+
   return {
     ...settings,
     textGenerationModelSelection: {
-      provider: fallback,
-      model: DEFAULT_MODEL_BY_PROVIDER[fallback],
+      provider: gitWritingFallback.provider,
+      model: gitWritingFallback.model,
     } as ModelSelection,
   };
 }

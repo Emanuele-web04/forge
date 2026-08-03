@@ -9,7 +9,6 @@ import { Option, Schema, SchemaTransformation } from "effect";
 import {
   type AssistantDeliveryMode,
   DesktopAppIcon,
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
   TrimmedNonEmptyString,
@@ -18,6 +17,7 @@ import {
   type ServerSettingsView,
   type ServerSettingsPatch,
 } from "@synara/contracts";
+import { defaultGitTextGenerationSelectionFor } from "@synara/shared/model";
 import {
   getDefaultModel,
   getModelOptions,
@@ -300,10 +300,18 @@ export function isGitTextGenerationSettingsDirty(
   settings: AppSettings,
   defaults: AppSettings,
 ): boolean {
+  const resolvedSettings = resolveGitTextGenerationSelection({
+    provider: settings.textGenerationProvider ?? null,
+    model: settings.textGenerationModel ?? null,
+  });
+  const resolvedDefaults = resolveGitTextGenerationSelection({
+    provider: defaults.textGenerationProvider ?? null,
+    model: defaults.textGenerationModel ?? null,
+  });
+
   return (
-    (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
-    (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
-      (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
+    resolvedSettings.provider !== resolvedDefaults.provider ||
+    resolvedSettings.model !== resolvedDefaults.model
   );
 }
 
@@ -598,8 +606,89 @@ function resolveTextGenerationProvider(input: {
   if (input.provider) {
     return input.provider;
   }
-  const model = input.model;
-  return model?.includes("/") ? "opencode" : "codex";
+  const model = input.model?.trim();
+  if (!model) {
+    return "codex";
+  }
+  // Kilo slugs are provider/model shaped too ("kilo/kilo-auto/free"), so a
+  // bare model alone cannot always mean OpenCode — check the kilo prefix first.
+  if (model.startsWith("kilo/")) {
+    return "kilo";
+  }
+  return model.includes("/") ? "opencode" : "codex";
+}
+
+const GIT_WRITING_DEFAULT_PROVIDERS = new Set<ProviderKind>(["codex", "kilo", "opencode"]);
+
+function isGitWritingDefaultProvider(
+  provider: ProviderKind,
+): provider is "codex" | "kilo" | "opencode" {
+  return GIT_WRITING_DEFAULT_PROVIDERS.has(provider);
+}
+
+/**
+ * Resolve the complete Git writing {provider, model} selection atomically so a
+ * partial patch (provider-only, model-only, or neither) can never produce a
+ * mismatched pair (e.g. {provider: "cursor", model: "gpt-5.6-luna"}).
+ *
+ * - Explicit provider + explicit model → that pair.
+ * - Provider-only → that provider's default model (Codex/Luna for providers
+ *   outside the Git writing map, e.g. legacy Cursor selections).
+ * - Model-only → infer the provider from the slug shape, falling back to the
+ *   currently active provider when the slug is ambiguous (custom slugs).
+ * - Neither → the Codex/Luna default.
+ */
+export function resolveGitTextGenerationSelection(input: {
+  readonly provider?: ProviderKind | null | undefined;
+  readonly model?: string | null | undefined;
+  readonly currentProvider?: ProviderKind | null | undefined;
+}): { readonly provider: ProviderKind; readonly model: string } {
+  const model = input.model?.trim();
+  const provider = input.provider;
+
+  if (provider) {
+    if (isGitWritingDefaultProvider(provider)) {
+      return { provider, model: model || defaultGitTextGenerationSelectionFor(provider).model };
+    }
+    if (model) {
+      // Explicit unsupported provider + explicit model: preserve the legacy pair.
+      return { provider, model };
+    }
+    // Unsupported provider with no model: return the complete Codex/Luna
+    // selection so the pair stays atomic (never {cursor, gpt-5.6-luna}).
+    return defaultGitTextGenerationSelectionFor("codex");
+  }
+
+  if (model) {
+    // Recognized slug prefixes are authoritative: kilo/ and opencode/ models
+    // belong to their provider regardless of the currently active provider.
+    if (model.startsWith("kilo/")) {
+      return { provider: "kilo", model };
+    }
+    if (model.startsWith("opencode/")) {
+      return { provider: "opencode", model };
+    }
+    if (!model.includes("/")) {
+      return { provider: "codex", model };
+    }
+    // Genuinely ambiguous vendor/model slug (e.g. openrouter/...): prefer the
+    // currently active provider when it is a supported Git writing provider.
+    if (input.currentProvider && isGitWritingDefaultProvider(input.currentProvider)) {
+      return {
+        provider: input.currentProvider,
+        model,
+      };
+    }
+    return { provider: "opencode", model };
+  }
+
+  // Neither explicit provider nor model: fall back to the currently active
+  // supported provider's default (e.g. clearing only the model while Kilo is
+  // active should stay on Kilo/free, not reset to Codex), else Codex/Luna.
+  if (input.currentProvider && isGitWritingDefaultProvider(input.currentProvider)) {
+    return defaultGitTextGenerationSelectionFor(input.currentProvider);
+  }
+  return defaultGitTextGenerationSelectionFor("codex");
 }
 
 function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key: Key): boolean {
@@ -619,7 +708,10 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
   );
 }
 
-function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): ServerSettingsPatch {
+function appSettingsPatchToServerSettingsPatch(
+  patch: Partial<AppSettings>,
+  currentProvider?: ProviderKind | null,
+): ServerSettingsPatch {
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
 
@@ -633,16 +725,15 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
-    const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
-    serverPatch.textGenerationModelSelection = {
-      provider: resolveTextGenerationProvider({
-        ...(patch.textGenerationProvider !== undefined
-          ? { provider: patch.textGenerationProvider }
-          : {}),
-        model,
-      }),
-      model,
-    };
+    // Resolve provider and model atomically so a partial patch (provider-only,
+    // model-only, or neither) can never produce a mismatched pair.
+    serverPatch.textGenerationModelSelection = resolveGitTextGenerationSelection({
+      ...(patch.textGenerationProvider !== undefined
+        ? { provider: patch.textGenerationProvider }
+        : {}),
+      ...(patch.textGenerationModel !== undefined ? { model: patch.textGenerationModel } : {}),
+      ...(currentProvider !== undefined && currentProvider !== null ? { currentProvider } : {}),
+    });
   }
 
   if (
@@ -1272,7 +1363,10 @@ export function useAppSettings() {
       void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
     }
 
-    const serverPatch = appSettingsPatchToServerSettingsPatch(patch);
+    const serverPatch = appSettingsPatchToServerSettingsPatch(
+      patch,
+      settings.textGenerationProvider,
+    );
     if (isServerSettingsPatchEmpty(serverPatch)) {
       return;
     }

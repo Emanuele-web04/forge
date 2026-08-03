@@ -1,4 +1,5 @@
 import {
+  DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_CAPABILITIES_INDEX,
   MODEL_OPTIONS_BY_PROVIDER,
@@ -20,6 +21,7 @@ import {
   type PiThinkingLevel,
   type ProviderKind,
   type ProviderWithDefaultModel,
+  type GitTextGenerationDefaultProvider,
   CodexReasoningEffort,
 } from "@synara/contracts";
 
@@ -70,6 +72,18 @@ export function getDefaultModel(provider?: ProviderWithDefaultModel): ModelSlug;
 export function getDefaultModel(provider: ProviderKind): ModelSlug | null;
 export function getDefaultModel(provider: ProviderKind = "codex"): ModelSlug | null {
   return hasDefaultModel(provider) ? DEFAULT_MODEL_BY_PROVIDER[provider] : null;
+}
+
+/**
+ * Return the complete default Git writing selection (commit messages, PR
+ * titles/branches, diff summaries) for a provider exposed in the Git writing
+ * picker. The map lives in contracts (data); this lookup helper is shared
+ * runtime logic used by both server and web.
+ */
+export function defaultGitTextGenerationSelectionFor(
+  provider: GitTextGenerationDefaultProvider,
+): (typeof DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER)[GitTextGenerationDefaultProvider] {
+  return DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER[provider];
 }
 
 const MODEL_NAME_BY_SLUG = new Map(

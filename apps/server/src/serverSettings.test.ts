@@ -126,6 +126,37 @@ describe("ServerSettingsService", () => {
     );
 
     expect(settings.textGenerationModelSelection.provider).toBe("codex");
-    expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
+    // The fallback is a Git writing default, not the general chat default.
+    expect(settings.textGenerationModelSelection.model).toBe("gpt-5.6-luna");
+  });
+
+  it("skips disabled Codex and picks an enabled Git-writing provider", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "antigravity",
+              model: DEFAULT_MODEL_BY_PROVIDER.antigravity,
+            },
+            providers: {
+              codex: { enabled: false },
+              claudeAgent: { enabled: true },
+              kilo: { enabled: true },
+              opencode: { enabled: false },
+              antigravity: { enabled: false },
+            },
+          }),
+        ),
+      ),
+    );
+
+    // The fallback search only considers Git-writing-capable providers, so it
+    // skips both the disabled Codex and the enabled-but-unsupported Claude.
+    expect(settings.textGenerationModelSelection.provider).toBe("kilo");
+    expect(settings.textGenerationModelSelection.model).toBe("kilo/kilo-auto/free");
   });
 });

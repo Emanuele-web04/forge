@@ -34,6 +34,7 @@ import {
   patchCustomModels,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
+  resolveGitTextGenerationSelection,
   resolveTerminalFontFamilyStack,
 } from "./appSettings";
 
@@ -237,6 +238,116 @@ describe("isGitTextGenerationSettingsDirty", () => {
         defaults,
       ),
     ).toBe(true);
+  });
+});
+
+describe("resolveGitTextGenerationSelection", () => {
+  it("returns the Codex/Luna default when nothing is provided", () => {
+    expect(resolveGitTextGenerationSelection({})).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+  });
+
+  it("returns a complete pair for a provider-only patch", () => {
+    expect(resolveGitTextGenerationSelection({ provider: "kilo" })).toEqual({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+    });
+    expect(resolveGitTextGenerationSelection({ provider: "opencode" })).toEqual({
+      provider: "opencode",
+      model: "opencode/big-pickle",
+    });
+  });
+
+  it("routes a bare Kilo slug to the Kilo provider", () => {
+    expect(resolveGitTextGenerationSelection({ model: "kilo/kilo-auto/free" })).toEqual({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+    });
+  });
+
+  it("lets a recognized Kilo slug win over a conflicting current provider", () => {
+    expect(
+      resolveGitTextGenerationSelection({
+        model: "kilo/kilo-auto/free",
+        currentProvider: "opencode",
+      }),
+    ).toEqual({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+    });
+  });
+
+  it("lets a recognized OpenCode slug win over a conflicting current provider", () => {
+    expect(
+      resolveGitTextGenerationSelection({
+        model: "opencode/big-pickle",
+        currentProvider: "kilo",
+      }),
+    ).toEqual({
+      provider: "opencode",
+      model: "opencode/big-pickle",
+    });
+  });
+
+  it("preserves an explicit provider+model pair", () => {
+    expect(
+      resolveGitTextGenerationSelection({ provider: "opencode", model: "openrouter/gpt-oss-120b" }),
+    ).toEqual({
+      provider: "opencode",
+      model: "openrouter/gpt-oss-120b",
+    });
+  });
+
+  it("falls back to the complete Codex/Luna selection for an unsupported provider with no model", () => {
+    expect(resolveGitTextGenerationSelection({ provider: "cursor" })).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+  });
+
+  it("preserves an explicit model for an unsupported provider (legacy Cursor)", () => {
+    expect(resolveGitTextGenerationSelection({ provider: "cursor", model: "auto" })).toEqual({
+      provider: "cursor",
+      model: "auto",
+    });
+  });
+
+  it("prefers the current supported provider for an ambiguous custom slug", () => {
+    expect(
+      resolveGitTextGenerationSelection({
+        model: "openrouter/custom-model",
+        currentProvider: "kilo",
+      }),
+    ).toEqual({
+      provider: "kilo",
+      model: "openrouter/custom-model",
+    });
+  });
+
+  it("clearing the model under Kilo stays on the Kilo default", () => {
+    expect(
+      resolveGitTextGenerationSelection({
+        model: "",
+        currentProvider: "kilo",
+      }),
+    ).toEqual({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+    });
+  });
+
+  it("clearing the model under OpenCode stays on the OpenCode default", () => {
+    expect(
+      resolveGitTextGenerationSelection({
+        model: null,
+        currentProvider: "opencode",
+      }),
+    ).toEqual({
+      provider: "opencode",
+      model: "opencode/big-pickle",
+    });
   });
 });
 

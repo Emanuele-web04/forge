@@ -9,6 +9,10 @@ import {
   GitResolvePullRequestResult,
   GitSummarizeDiffInput,
 } from "./git";
+import {
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER,
+} from "./model";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(GitCreateWorktreeInput);
 const decodeHandoffThreadInput = Schema.decodeUnknownSync(GitHandoffThreadInput);
@@ -142,5 +146,44 @@ describe("GitSummarizeDiffInput", () => {
 
     expect(parsed.codexHomePath).toBe("/tmp/custom-codex-home");
     expect(parsed.scope).toBe("staged");
+  });
+});
+
+describe("DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER", () => {
+  it("defaults Codex to GPT-5.6 Luna", () => {
+    expect(DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.codex).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+  });
+
+  it("defaults Kilo to its stable free alias", () => {
+    expect(DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.kilo).toEqual({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+    });
+  });
+
+  it("defaults OpenCode to the free Big Pickle model", () => {
+    expect(DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.opencode).toEqual({
+      provider: "opencode",
+      model: "opencode/big-pickle",
+    });
+  });
+
+  it("derives the legacy Codex-shaped constant from the map", () => {
+    expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe("gpt-5.6-luna");
+    expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe(
+      DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.codex.model,
+    );
+  });
+
+  it("returns atomic provider+model pairs for every exposed provider", () => {
+    const providers = ["codex", "kilo", "opencode"] as const;
+    for (const provider of providers) {
+      const selection = DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER[provider];
+      expect(selection.provider).toBe(provider);
+      expect(selection.model.length).toBeGreaterThan(0);
+    }
   });
 });

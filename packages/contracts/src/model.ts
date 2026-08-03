@@ -1034,7 +1034,39 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
 // Backward compatibility for existing Codex-only call sites.
 export const MODEL_OPTIONS = MODEL_OPTIONS_BY_PROVIDER.codex;
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
-export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.4-mini" as const;
+
+/**
+ * Default Git writing model selections (commit messages, PR titles/branches,
+ * diff summaries) per provider. Stored as complete provider+model pairs so a
+ * provider change can never produce a mismatched selection (e.g. an OpenCode
+ * model under the Codex provider). These are the recommended defaults for the
+ * providers Synara exposes in the Git writing picker.
+ */
+export const DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER = {
+  codex: {
+    provider: "codex",
+    model: "gpt-5.6-luna",
+  },
+  kilo: {
+    provider: "kilo",
+    model: "kilo/kilo-auto/free",
+  },
+  opencode: {
+    provider: "opencode",
+    model: "opencode/big-pickle",
+  },
+} as const satisfies Record<
+  "codex" | "kilo" | "opencode",
+  { readonly provider: "codex" | "kilo" | "opencode"; readonly model: string }
+>;
+
+export type GitTextGenerationDefaultProvider =
+  keyof typeof DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER;
+
+// Backward-compatible Codex-shaped default for existing call sites that only
+// thread a raw model slug. Derived from the map so the two cannot drift.
+export const DEFAULT_GIT_TEXT_GENERATION_MODEL =
+  DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.codex.model;
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {

@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { TrimmedString } from "./baseSchemas";
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
+import { DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
@@ -96,10 +96,7 @@ export const ServerSettings = Schema.Struct({
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   textGenerationModelSelection: ModelSelection.pipe(
-    Schema.withDecodingDefault(() => ({
-      provider: "codex" as const,
-      model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
-    })),
+    Schema.withDecodingDefault(() => DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.codex),
   ),
   providers: Schema.Struct({
     codex: CodexServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
