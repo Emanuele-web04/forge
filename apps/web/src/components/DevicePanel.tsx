@@ -450,6 +450,18 @@ export default function DevicePanel(props: {
         </PanelStateMessage>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
+          {/*
+            A degraded capability is a notice, not a wall: the pane keeps
+            streaming and accepting input while saying what stopped working.
+          */}
+          {availabilityView.kind === "degraded" ? (
+            <p
+              role="status"
+              className="border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-muted-foreground"
+            >
+              {availabilityView.notice}
+            </p>
+          ) : null}
           <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black/90 p-3">
             {/*
               biome-ignore lint/a11y/noNoninteractiveElementInteractions: the canvas

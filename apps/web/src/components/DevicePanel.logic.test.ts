@@ -11,6 +11,7 @@ import {
   deviceHidUsageForKey,
   deviceKeyModifiers,
   deviceSetupProgress,
+  describeDegradedCapabilities,
   isNextDeviceFrameSequence,
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
@@ -465,6 +466,52 @@ describe("availability", () => {
     if (view.kind !== "blocked") return;
     expect(view.description).toBe("Swift compile failed: no such module 'SimulatorKit'");
     expect(view.retryable).toBe(true);
+  });
+
+  it("does not block the pane when a capability is degraded", () => {
+    const view = resolveDeviceAvailabilityView({
+      kind: "degraded",
+      capabilities: [
+        { id: "framebuffer", ok: true },
+        { id: "hid", ok: true },
+        { id: "accessibility", ok: false, missingSymbol: "AXPTranslator" },
+        { id: "encoder", ok: true },
+      ],
+      toolchain: { xcodeVersion: "26.3" },
+    });
+
+    // Blocking here would cost streaming and input over a broken tree read.
+    expect(view.kind).toBe("degraded");
+    if (view.kind !== "degraded") return;
+    expect(view.brokenCapabilities).toEqual(["accessibility"]);
+  });
+
+  it("names what broke, the Xcode, and what still works", () => {
+    const notice = describeDegradedCapabilities(
+      [
+        { id: "framebuffer", ok: true },
+        { id: "hid", ok: true },
+        { id: "accessibility", ok: false },
+        { id: "encoder", ok: true },
+      ],
+      { xcodeVersion: "26.3" },
+    );
+
+    expect(notice).toBe(
+      "Accessibility inspection unavailable with Xcode 26.3 — screen capture, touch and keyboard input and video encoding unaffected.",
+    );
+  });
+
+  it("omits the unaffected clause when nothing else works", () => {
+    const notice = describeDegradedCapabilities(
+      [
+        { id: "accessibility", ok: false },
+        { id: "hid", ok: false },
+      ],
+      undefined,
+    );
+
+    expect(notice).toBe("Accessibility inspection and touch and keyboard input unavailable.");
   });
 });
 

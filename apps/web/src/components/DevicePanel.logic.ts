@@ -6,14 +6,19 @@
 
 import type {
   DeviceAvailability,
+  DeviceCapabilityId,
+  DeviceCapabilityStatus,
   DeviceDescriptor,
   DeviceFrameHeader,
   DeviceHardwareButton,
   DeviceKeyModifier,
   DeviceSetupStep,
+  DeviceToolchain,
   DeviceUdid,
   ThreadDeviceState,
 } from "@synara/contracts";
+
+import { DEVICE_CAPABILITY_LABELS } from "@synara/contracts";
 
 // ── Frame gating ─────────────────────────────────────────────────────
 //
@@ -473,6 +478,17 @@ export function buildDevicePickerEntries(input: {
 
 export type DeviceAvailabilityView =
   | { readonly kind: "ready" }
+  /**
+   * The pane opens and works, but some capability failed its preflight. Kept
+   * separate from "blocked" because the user has nothing to fix and everything
+   * else still runs: blocking the pane over a broken accessibility path would
+   * cost streaming and input for no reason.
+   */
+  | {
+      readonly kind: "degraded";
+      readonly notice: string;
+      readonly brokenCapabilities: readonly DeviceCapabilityId[];
+    }
   | {
       readonly kind: "blocked";
       readonly title: string;
@@ -482,6 +498,32 @@ export type DeviceAvailabilityView =
       /** Whether the pane should keep polling/listening for a state change. */
       readonly retryable: boolean;
     };
+
+/**
+ * "Accessibility inspection unavailable with Xcode 26.3 — streaming and input
+ * unaffected": names what broke, the toolchain that broke it, and what still
+ * works, so the notice answers the obvious next question in one line.
+ */
+export function describeDegradedCapabilities(
+  capabilities: readonly DeviceCapabilityStatus[],
+  toolchain: DeviceToolchain | undefined,
+): string {
+  const broken = capabilities.filter((capability) => !capability.ok);
+  const working = capabilities.filter((capability) => capability.ok);
+  const list = (entries: readonly DeviceCapabilityStatus[]): string => {
+    const names = entries.map((entry) => DEVICE_CAPABILITY_LABELS[entry.id]);
+    if (names.length <= 1) return names[0] ?? "";
+    return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!.toLowerCase()}`;
+  };
+
+  const xcode = toolchain?.xcodeVersion
+    ? ` with Xcode ${toolchain.xcodeVersion}`
+    : toolchain?.xcodeBuild
+      ? ` with Xcode build ${toolchain.xcodeBuild}`
+      : "";
+  const unaffected = working.length > 0 ? ` — ${list(working).toLowerCase()} unaffected` : "";
+  return `${list(broken)} unavailable${xcode}${unaffected}.`;
+}
 
 export function resolveDeviceAvailabilityView(
   availability: DeviceAvailability,
@@ -505,6 +547,14 @@ export function resolveDeviceAvailabilityView(
           "Synara needs Xcode and an iOS runtime before it can stream a simulator. Steps check off on their own as you complete them.",
         steps: availability.steps,
         retryable: true,
+      };
+    case "degraded":
+      return {
+        kind: "degraded",
+        notice: describeDegradedCapabilities(availability.capabilities, availability.toolchain),
+        brokenCapabilities: availability.capabilities
+          .filter((capability) => !capability.ok)
+          .map((capability) => capability.id),
       };
     case "helper-unavailable":
       return {

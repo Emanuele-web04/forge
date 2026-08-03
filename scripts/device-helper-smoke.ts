@@ -360,12 +360,34 @@ async function main(): Promise<void> {
     deviceCount?: number;
     error?: string;
     capabilities?: Record<string, unknown>;
+    toolchain?: { xcodeVersion?: string; xcodeBuild?: string; macOS?: string };
   };
+
+  // Every capability is printed, passing or not: a green run is the record of
+  // which symbols still resolve on this toolchain, which is what makes the next
+  // Xcode's regression obvious by comparison.
+  const capabilities = Object.entries(probe.capabilities ?? {});
+  if (capabilities.length === 0) {
+    info("helper reported no per-capability detail (older helper)");
+  }
+  for (const [name, status] of capabilities) {
+    info(
+      status === "ok" ? `capability ${name}: ok` : `capability ${name}: ${JSON.stringify(status)}`,
+    );
+  }
+  if (probe.toolchain) {
+    const { xcodeVersion, xcodeBuild, macOS } = probe.toolchain;
+    info(`toolchain: Xcode ${xcodeVersion ?? "?"} (${xcodeBuild ?? "?"}), macOS ${macOS ?? "?"}`);
+  }
+
+  // The smoke run is strict where the app is forgiving: the app degrades around
+  // a broken capability, but a release check that tolerated one would let the
+  // regression ship.
+  const broken = capabilities.filter(([, status]) => status !== "ok").map(([name]) => name);
+  if (broken.length > 0) {
+    fail(`helper capabilities unavailable: ${broken.join(", ")}`);
+  }
   if (!probe.ok) {
-    for (const [name, status] of Object.entries(probe.capabilities ?? {})) {
-      if (status === "ok") continue;
-      info(`capability ${name}: ${JSON.stringify(status)}`);
-    }
     fail(`helper preflight failed: ${probe.error ?? "see capabilities above"}`);
   }
   info(`CoreSimulator reachable, ${probe.deviceCount} devices`);

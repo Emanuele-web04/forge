@@ -101,11 +101,61 @@ export const DeviceSetupStep = Schema.Struct({
 export type DeviceSetupStep = typeof DeviceSetupStep.Type;
 
 /**
+ * The helper capabilities that can fail independently.
+ *
+ * Each maps to one group of private symbols the helper resolves at runtime
+ * (see `apps/server/native/device-helper/Sources/SymbolManifest.swift`). Apple
+ * moves these between Xcode releases, and they do not move together: naming
+ * them individually is what lets a broken accessibility path leave streaming
+ * and input working.
+ */
+export const DeviceCapabilityId = Schema.Literals([
+  /** Reading the device framebuffer — the live video stream. */
+  "framebuffer",
+  /** Injecting touches, keys and hardware buttons. */
+  "hid",
+  /** Reading the accessibility tree (`device_describe_ui`). */
+  "accessibility",
+  /** Hardware H.264 encoding of captured frames. */
+  "encoder",
+]);
+export type DeviceCapabilityId = typeof DeviceCapabilityId.Type;
+
+export const DeviceCapabilityStatus = Schema.Struct({
+  id: DeviceCapabilityId,
+  ok: Schema.Boolean,
+  /** The private symbol that could not be resolved, when that is the cause. */
+  missingSymbol: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  /** A failure that is not a missing symbol (framework load, encoder refusal). */
+  detail: Schema.optional(Schema.String.check(Schema.isMaxLength(DEVICE_MESSAGE_MAX_LENGTH))),
+});
+export type DeviceCapabilityStatus = typeof DeviceCapabilityStatus.Type;
+
+/** The toolchain a capability report was measured against. */
+export const DeviceToolchain = Schema.Struct({
+  xcodeVersion: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  xcodeBuild: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  macOS: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+});
+export type DeviceToolchain = typeof DeviceToolchain.Type;
+
+/**
  * Why (or whether) the pane can run, modelled the way AppSnap models its
  * permission states: the UI renders one of these instead of guessing from errors.
  */
 export const DeviceAvailability = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("available") }),
+  Schema.Struct({
+    kind: Schema.Literal("available"),
+    /**
+     * Present when the helper reported per-capability results. Optional so an
+     * older server (or a fake backend) that only answers "available" still
+     * validates; absent means "no capability detail", not "nothing works".
+     */
+    capabilities: Schema.optional(
+      Schema.Array(DeviceCapabilityStatus).check(Schema.isMaxLength(16)),
+    ),
+    toolchain: Schema.optional(DeviceToolchain),
+  }),
   Schema.Struct({
     kind: Schema.Literal("unsupported-platform"),
     platform: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
@@ -113,6 +163,19 @@ export const DeviceAvailability = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("setup-required"),
     steps: Schema.Array(DeviceSetupStep).check(Schema.isMaxLength(16)),
+  }),
+  /**
+   * Setup is complete and the helper runs, but at least one capability failed
+   * its preflight — typically a private symbol Apple moved in a new Xcode.
+   *
+   * Distinct from `setup-required` because there is nothing for the user to
+   * install: the pane opens and everything backed by a working capability keeps
+   * working. Only the broken parts refuse, and they say which Xcode broke them.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("degraded"),
+    capabilities: Schema.Array(DeviceCapabilityStatus).check(Schema.isMaxLength(16)),
+    toolchain: Schema.optional(DeviceToolchain),
   }),
   // The private-framework helper is compiled on demand against the user's Xcode;
   // a compile or launch failure is a designed state, not a generic error toast.
@@ -122,6 +185,19 @@ export const DeviceAvailability = Schema.Union([
   }),
 ]);
 export type DeviceAvailability = typeof DeviceAvailability.Type;
+
+/** The capabilities each device operation depends on, for precise failures. */
+export const DEVICE_CAPABILITY_LABELS: Record<DeviceCapabilityId, string> = {
+  framebuffer: "Screen capture",
+  hid: "Touch and keyboard input",
+  accessibility: "Accessibility inspection",
+  encoder: "Video encoding",
+};
+
+/** Capabilities that are broken, in manifest order. */
+export const brokenDeviceCapabilities = (
+  capabilities: readonly DeviceCapabilityStatus[],
+): readonly DeviceCapabilityStatus[] => capabilities.filter((capability) => !capability.ok);
 
 // ── Thread-scoped state ──────────────────────────────────────────────
 

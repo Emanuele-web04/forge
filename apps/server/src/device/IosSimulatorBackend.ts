@@ -22,6 +22,7 @@ import * as path from "node:path";
 
 import type {
   DeviceAvailability,
+  DeviceCapabilityId,
   DeviceDescribeUiResult,
   DeviceDescriptor,
   DeviceHardwareButton,
@@ -48,6 +49,12 @@ import {
   type DeviceListOptions,
   type DeviceSwipeGesture,
 } from "./DeviceBackend.ts";
+import {
+  availabilityFromProbe,
+  capabilityUnavailableMessage,
+  parseHelperProbe,
+  type HelperProbeResult,
+} from "./helperCapabilities.ts";
 import { HELPER_METHODS, HelperClient, type DeviceHelperError } from "./helperClient.ts";
 
 const SIMCTL_TIMEOUT_MS = 30_000;
@@ -152,6 +159,8 @@ export class IosSimulatorBackend implements DeviceBackend {
   private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
+  /** Keyed on the binary so a rebuilt helper is re-probed rather than assumed. */
+  private helperProbe: { binaryPath: string; result: HelperProbeResult } | null = null;
 
   constructor(options: IosSimulatorBackendOptions = {}) {
     this.osPlatform = options.platform ?? process.platform;
@@ -219,9 +228,62 @@ export class IosSimulatorBackend implements DeviceBackend {
       detail: helperBuilt ? undefined : "Built automatically the first time you attach a device.",
     });
 
-    return steps.every((step) => step.done)
-      ? { kind: "available" }
-      : { kind: "setup-required", steps };
+    if (!steps.every((step) => step.done)) {
+      return { kind: "setup-required", steps };
+    }
+
+    // Setup is complete, so the remaining question is whether the private
+    // symbols the helper needs still exist on this Xcode. A failure there is
+    // degraded, not setup-required: nothing is left for the user to install.
+    const probe = await this.probeHelperCapabilities();
+    return probe === null ? { kind: "available" } : availabilityFromProbe(probe);
+  }
+
+  /**
+   * Run the built helper's per-capability preflight.
+   *
+   * Cached for the process lifetime, keyed on the helper binary path: the
+   * answer only changes when the toolchain does, and a new toolchain produces a
+   * different cache key and therefore a different path. Returns null when no
+   * helper is built yet, since there is nothing to probe.
+   */
+  private async probeHelperCapabilities(): Promise<HelperProbeResult | null> {
+    const binaryPath = await this.cachedHelperPath();
+    if (binaryPath === null) return null;
+    if (this.helperProbe?.binaryPath === binaryPath) return this.helperProbe.result;
+
+    const result = await this.run(binaryPath, ["--probe"], {
+      timeoutMs: 30_000,
+      allowNonZeroExit: true,
+    }).catch(() => null);
+
+    // A helper that will not launch is reported through the same shape, so
+    // callers have one path to handle rather than two.
+    const probe: HelperProbeResult =
+      result === null
+        ? {
+            ok: false,
+            capabilities: [],
+            toolchain: undefined,
+            error: "The device helper could not be launched.",
+          }
+        : parseHelperProbe(result.stdout);
+
+    this.helperProbe = { binaryPath, result: probe };
+    return probe;
+  }
+
+  /**
+   * Throw when `capability` is broken on this machine, naming it and the Xcode
+   * it broke on. Operations backed by a working capability never call this, so
+   * one missing symbol cannot take the rest of the pane down.
+   */
+  async assertCapability(capability: DeviceCapabilityId): Promise<void> {
+    const probe = await this.probeHelperCapabilities();
+    if (probe === null) return;
+    const status = probe.capabilities.find((entry) => entry.id === capability);
+    if (!status || status.ok) return;
+    throw new DeviceBackendError(capabilityUnavailableMessage(status, probe.toolchain));
   }
 
   // ── Discovery and lifecycle ────────────────────────────────────────
@@ -311,13 +373,20 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   // ── Helper-backed capabilities ─────────────────────────────────────
+  //
+  // Each operation asserts only the capability it actually needs, so a symbol
+  // Apple moved in one area cannot disable the others. Screenshots are absent
+  // from this list on purpose: they run on `simctl io`, so they survive even a
+  // completely broken framebuffer path.
 
   async tap(udid: string, x: number, y: number): Promise<void> {
+    await this.assertCapability("hid");
     const helper = await this.attachedHelper(udid);
     await this.helperRequest(HELPER_METHODS.tap, helper.normalize(x, y));
   }
 
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
+    await this.assertCapability("hid");
     const helper = await this.attachedHelper(udid);
     const start = helper.normalize(gesture.fromX, gesture.fromY);
     const end = helper.normalize(gesture.toX, gesture.toY);
@@ -331,11 +400,13 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async typeText(udid: string, text: string): Promise<void> {
+    await this.assertCapability("hid");
     await this.attachedHelper(udid);
     await this.helperRequest(HELPER_METHODS.text, { text });
   }
 
   async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
+    await this.assertCapability("hid");
     await this.attachedHelper(udid);
     // The helper takes one USB HID usage per call and tracks held modifiers
     // itself, so a chord is sent as its modifier keys around the main key.
@@ -360,11 +431,13 @@ export class IosSimulatorBackend implements DeviceBackend {
         "Rotating a headless simulator is not supported; rotate the device from inside the app or use Simulator.app.",
       );
     }
+    await this.assertCapability("hid");
     await this.attachedHelper(udid);
     await this.helperRequest(HELPER_METHODS.button, { name: button });
   }
 
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
+    await this.assertCapability("accessibility");
     await this.attachedHelper(udid);
     const result = await this.helperRequest(HELPER_METHODS.describeUi, {});
     const tree = (result as { tree?: unknown } | null)?.tree;
@@ -379,6 +452,10 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
+    // Streaming needs both halves of the pipeline: the framebuffer to read and
+    // the encoder to compress it.
+    await this.assertCapability("framebuffer");
+    await this.assertCapability("encoder");
     const helper = await this.attachedHelper(udid);
     await helper.startStream(udid, onFrame);
   }
