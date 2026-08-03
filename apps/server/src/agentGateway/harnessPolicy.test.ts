@@ -101,6 +101,10 @@ describe("Synara harness policy", () => {
     assert.include(policy, "run, test, check, demo, debug, or interact with an iOS app");
     assert.include(policy, "whether or not the user names a tool");
     assert.include(policy, "never drive the simulator with xcrun simctl");
+    // A rival agent-device skill on the host was read before the tools were
+    // tried; the browser guidance names its competitors, so this does too.
+    assert.include(policy, "do not load or use an agent-device");
+    assert.include(policy, "rather than reading skill files first");
 
     // The workflow, so the agent does not have to guess an ordering.
     assert.include(policy, "device_list for a udid");
