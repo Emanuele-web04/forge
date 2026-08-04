@@ -65,10 +65,6 @@ enum CapabilityProbe {
     case .simulatorKitFunction:
       guard let simulatorKitHandle else { return false }
       return dlsym(simulatorKitHandle, symbol.name) != nil
-    case .libxpcFunction:
-      // RTLD_DEFAULT: libxpc is already in every process, and these private
-      // entry points are exported from no header to link against.
-      return dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbol.name) != nil
     case .selector(let className):
       guard let owner = NSClassFromString(className) else { return false }
       let selector = NSSelectorFromString(symbol.name)

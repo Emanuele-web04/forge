@@ -88,7 +88,6 @@ xcrun swiftc \
   "$SOURCE_DIR/Sources/SymbolManifest.swift" \
   "$SOURCE_DIR/Sources/CapabilityProbe.swift" \
   "$SOURCE_DIR/Sources/CoreSimulatorBridge.swift" \
-  "$SOURCE_DIR/Sources/DTUHIDTransport.swift" \
   "$SOURCE_DIR/Sources/FrameStream.swift" \
   "$SOURCE_DIR/Sources/Screenshot.swift" \
   "$SOURCE_DIR/Sources/main.swift" \
