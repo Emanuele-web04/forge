@@ -1769,12 +1769,16 @@ function showDesktopNotification(input: {
   title: string;
   body?: string;
   silent?: boolean;
+  suppressWhenForeground?: boolean;
   threadId?: string;
 }): boolean {
   const title = typeof input.title === "string" ? input.title.trim() : "";
   const body = typeof input.body === "string" ? input.body.trim() : "";
   const threadId = typeof input.threadId === "string" ? input.threadId.trim() : "";
   if (title.length === 0 || !Notification.isSupported()) {
+    return false;
+  }
+  if (input.suppressWhenForeground === true && isMainWindowForeground(mainWindow)) {
     return false;
   }
 
@@ -3806,6 +3810,7 @@ function registerIpcHandlers(): void {
             title?: unknown;
             body?: unknown;
             silent?: unknown;
+            suppressWhenForeground?: unknown;
             threadId?: unknown;
           }
         | null
@@ -3815,6 +3820,7 @@ function registerIpcHandlers(): void {
         title: typeof input?.title === "string" ? input.title : "",
         body: typeof input?.body === "string" ? input.body : "",
         silent: input?.silent === true,
+        suppressWhenForeground: input?.suppressWhenForeground === true,
         ...(typeof input?.threadId === "string" ? { threadId: input.threadId } : {}),
       }),
   );

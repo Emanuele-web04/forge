@@ -461,6 +461,7 @@ export interface DesktopNotificationInput {
   title: string;
   body?: string;
   silent?: boolean;
+  suppressWhenForeground?: boolean;
   threadId?: ThreadId;
 }
 

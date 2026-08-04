@@ -19,11 +19,7 @@ export function isPendingInteractionResponseClaimable(input: {
   readonly responseRequestedAt: string | null;
   readonly requestedAt: string;
 }): boolean {
-  if (
-    input.status === "pending" ||
-    input.status === "retryable" ||
-    input.status === "uncertain"
-  ) {
+  if (input.status === "pending" || input.status === "retryable" || input.status === "uncertain") {
     return true;
   }
   if (input.status !== "responding") {
