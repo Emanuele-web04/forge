@@ -27,6 +27,8 @@ describe("isProviderInstallSettingsDirty", () => {
       { openCodeExperimentalWebSockets: true },
       { piBinaryPath: "/opt/pi" },
       { piAgentDir: "/tmp/pi-agent" },
+      { acpBinaryPath: "/opt/acp-agent" },
+      { acpArgs: "serve\n--acp" },
     ] satisfies ReadonlyArray<Partial<AppSettings>>;
 
     expect(isProviderInstallSettingsDirty(defaults, defaults)).toBe(false);
@@ -61,6 +63,8 @@ describe("createProviderInstallResetPatch", () => {
 
     expect(Object.keys(patch).sort()).toEqual(
       [
+        "acpArgs",
+        "acpBinaryPath",
         "antigravityBinaryPath",
         "claudeBinaryPath",
         "codexBinaryPath",

@@ -9,7 +9,7 @@
 import type { ProviderKind } from "@synara/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
-import type { AppSettings } from "../appSettings";
+import { parseAcpArgs, type AppSettings } from "../appSettings";
 import { resolveProviderDiscoveryCwd } from "./providerDiscovery";
 import {
   providerAgentsQueryOptions,
@@ -29,7 +29,8 @@ export type ProviderModelPrefetchSettings = Pick<
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
->;
+> &
+  Partial<Pick<AppSettings, "acpBinaryPath" | "acpArgs">>;
 
 export function resolveNewThreadModelPrefetchProvider(input: {
   draftActiveProvider?: ProviderKind | null | undefined;
@@ -115,6 +116,13 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "pi",
         binaryPath: settings.piBinaryPath || null,
         agentDir: settings.piAgentDir || null,
+        cwd,
+      });
+    case "acp":
+      return providerModelsQueryOptions({
+        provider: "acp",
+        binaryPath: settings.acpBinaryPath || null,
+        ...(settings.acpArgs !== undefined ? { args: parseAcpArgs(settings.acpArgs) } : {}),
         cwd,
       });
   }

@@ -24,6 +24,24 @@ import {
 
 export type ProviderIconTone = "default" | "header";
 
+/** Generic plug glyph for standards-based ACP agents without a vendor logo. */
+const AcpIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    className={className}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M8 7v4m8-4v4" />
+    <path d="M6 11h12v2a6 6 0 0 1-12 0v-2Z" />
+    <path d="M12 19v3m-4 0h8" />
+  </svg>
+);
+
 // The bundled SVG has a dark outer fill, so dark mode swaps to the reversed Central asset.
 // React's SVGProps has no `title`, so accept it via an explicit prop type and forward it
 // only to CentralIcon (an HTML span, which supports `title`); the light-mode SVG conveys
@@ -73,6 +91,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
+  acp: AcpIcon,
 };
 
 export function providerIconToneClassName(

@@ -99,6 +99,7 @@ describe("threadHandoff", () => {
       "kilo",
       "opencode",
       "pi",
+      "acp",
     ] as const;
 
     for (const source of providers) {

@@ -81,7 +81,9 @@ type ProviderInstallTextKey =
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
   | "piBinaryPath"
-  | "piAgentDir";
+  | "piAgentDir"
+  | "acpBinaryPath"
+  | "acpArgs";
 type ProviderInstallPasswordKey = "kiloServerPassword" | "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey =
   | "kiloServerPasswordConfigured"
@@ -375,6 +377,38 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
       },
     ],
   },
+  {
+    provider: "acp",
+    docs: [
+      { label: "ACP specification", href: "https://agentclientprotocol.com/" },
+      { label: "Cline ACP", href: "https://docs.cline.bot/acp" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "acpBinaryPath",
+        label: "ACP agent command",
+        placeholder: "cline",
+        description: (
+          <>
+            Executable or absolute path for the ACP agent. Defaults to <code>cline</code>.
+          </>
+        ),
+      },
+      {
+        kind: "text",
+        settingsKey: "acpArgs",
+        label: "ACP arguments (one per line)",
+        placeholder: "--acp",
+        description: (
+          <>
+            Arguments are passed directly, without a shell. Enter one argument per line; the default
+            is <code>--acp</code>.
+          </>
+        ),
+      },
+    ],
+  },
 ];
 
 function isProviderInstallFieldDirty(
@@ -606,27 +640,42 @@ function ProviderInstallFieldControl(props: {
   const configured =
     props.field.kind === "password" ? props.settings[props.field.configuredKey] : false;
   const isPassword = props.field.kind === "password";
+  const value = isPassword ? "" : props.settings[props.field.settingsKey];
+  const placeholder =
+    isPassword && configured
+      ? "Configured — enter a replacement or leave blank"
+      : props.field.placeholder;
+  const commit = (nextValue: string) =>
+    props.updateSettings({ [props.field.settingsKey]: nextValue } as Partial<AppSettings>);
   return (
     <label htmlFor={id} className="block">
       <span className="block text-xs font-medium text-foreground">{props.field.label}</span>
-      <DebouncedSettingTextInput
-        id={id}
-        size="sm"
-        variant="soft"
-        className="mt-1"
-        value={isPassword ? "" : props.settings[props.field.settingsKey]}
-        onCommit={(nextValue) =>
-          props.updateSettings({ [props.field.settingsKey]: nextValue } as Partial<AppSettings>)
-        }
-        placeholder={
-          isPassword && configured
-            ? "Configured — enter a replacement or leave blank"
-            : props.field.placeholder
-        }
-        type={isPassword ? "password" : undefined}
-        autoComplete={isPassword ? "new-password" : undefined}
-        spellCheck={false}
-      />
+      {props.field.settingsKey === "acpArgs" ? (
+        <DebouncedSettingTextInput
+          id={id}
+          size="sm"
+          className="mt-1"
+          multiline
+          rows={3}
+          value={value}
+          onCommit={commit}
+          placeholder={placeholder}
+          spellCheck={false}
+        />
+      ) : (
+        <DebouncedSettingTextInput
+          id={id}
+          size="sm"
+          variant="soft"
+          className="mt-1"
+          value={value}
+          onCommit={commit}
+          placeholder={placeholder}
+          type={isPassword ? "password" : undefined}
+          autoComplete={isPassword ? "new-password" : undefined}
+          spellCheck={false}
+        />
+      )}
       <span className="mt-1 block text-xs text-muted-foreground">{props.field.description}</span>
     </label>
   );

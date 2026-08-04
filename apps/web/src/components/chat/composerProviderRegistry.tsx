@@ -237,6 +237,12 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizePiModelOptions(providerOptions);
       break;
     }
+    case "acp":
+      // ACP model/config controls are negotiated per agent. The generic
+      // selection currently carries only an empty marker object, so do not
+      // invent provider-specific trait controls here.
+      normalizedOptions = modelOptions?.acp;
+      break;
   }
 
   const draftEffort = trimOrNull(rawEffort);
@@ -318,6 +324,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("pi", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("pi", input),
+  },
+  acp: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("acp", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("acp", input),
   },
 };
 

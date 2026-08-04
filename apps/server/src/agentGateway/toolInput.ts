@@ -19,6 +19,7 @@ export const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "kilo",
   "opencode",
   "pi",
+  "acp",
 ];
 
 export const MODEL_SELECTION_INPUT_SCHEMA = {

@@ -70,6 +70,22 @@ function cloneBrowserAnnotation(annotation: BrowserAnnotationDraft): BrowserAnno
   };
 }
 
+function cloneProviderStartOptions(
+  options: ProviderStartOptions,
+): DeepMutable<ProviderStartOptions> {
+  return {
+    ...options,
+    ...(options.acp
+      ? {
+          acp: {
+            ...(options.acp.binaryPath ? { binaryPath: options.acp.binaryPath } : {}),
+            ...(options.acp.args ? { args: [...options.acp.args] } : {}),
+          },
+        }
+      : {}),
+  } as DeepMutable<ProviderStartOptions>;
+}
+
 const PersistedTerminalContextDraft = Schema.Struct({
   id: Schema.String,
   threadId: ThreadId,
@@ -640,7 +656,9 @@ function normalizePersistedQueuedTurns(
         selectedModel,
         selectedPromptEffort,
         modelSelection,
-        ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        ...(providerOptionsForDispatch
+          ? { providerOptionsForDispatch: cloneProviderStartOptions(providerOptionsForDispatch) }
+          : {}),
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         runtimeMode,
         interactionMode,
@@ -669,7 +687,9 @@ function normalizePersistedQueuedTurns(
         selectedModel,
         selectedPromptEffort,
         modelSelection,
-        ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        ...(providerOptionsForDispatch
+          ? { providerOptionsForDispatch: cloneProviderStartOptions(providerOptionsForDispatch) }
+          : {}),
         runtimeMode,
       });
       seenIds.add(id);
@@ -1062,7 +1082,11 @@ export function partializeComposerDraftStoreState(
           selectedPromptEffort: queuedTurn.selectedPromptEffort,
           modelSelection: queuedTurn.modelSelection,
           ...(queuedTurn.providerOptionsForDispatch
-            ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+            ? {
+                providerOptionsForDispatch: cloneProviderStartOptions(
+                  queuedTurn.providerOptionsForDispatch,
+                ),
+              }
             : {}),
           ...(queuedTurn.sourceProposedPlan
             ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
@@ -1085,7 +1109,11 @@ export function partializeComposerDraftStoreState(
         selectedPromptEffort: queuedTurn.selectedPromptEffort,
         modelSelection: queuedTurn.modelSelection,
         ...(queuedTurn.providerOptionsForDispatch
-          ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+          ? {
+              providerOptionsForDispatch: cloneProviderStartOptions(
+                queuedTurn.providerOptionsForDispatch,
+              ),
+            }
           : {}),
         runtimeMode: queuedTurn.runtimeMode,
       });

@@ -27,6 +27,7 @@ import {
   checkPiProviderStatus,
   hasCustomModelProvider,
   makeDisabledProviderStatus,
+  makeCheckAcpProviderStatus,
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
@@ -156,6 +157,7 @@ const allProvidersDisabledSettings = {
     kilo: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
+    acp: { enabled: false },
   },
 } as const;
 
@@ -171,6 +173,7 @@ const allProvidersDisabledServerSettings = {
     kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
+    acp: { ...DEFAULT_SERVER_SETTINGS.providers.acp, enabled: false },
   },
 } satisfies typeof DEFAULT_SERVER_SETTINGS;
 
@@ -378,7 +381,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 9);
+      assert.strictEqual(statuses.length, 10);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -513,7 +516,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 9);
+        assert.strictEqual(statuses.length, 10);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
@@ -1796,6 +1799,36 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         );
       }).pipe(Effect.provide(failingSpawnerLayer("spawn opencode ENOENT"))),
+    );
+  });
+
+  describe("checkAcpProviderStatus", () => {
+    it.effect("uses the configured ACP executable for its advisory version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckAcpProviderStatus("/custom/bin/acp-agent");
+        assert.strictEqual(status.provider, "acp");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.version, "2.4.1");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/acp-agent");
+            assert.deepStrictEqual(args, ["--version"]);
+            return { stdout: "acp-agent 2.4.1\n", stderr: "", code: 0 };
+          }),
+        ),
+      ),
+    );
+
+    it.effect("reports an unavailable configured ACP executable", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckAcpProviderStatus("missing-acp-agent");
+        assert.strictEqual(status.provider, "acp");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn missing-acp-agent ENOENT"))),
     );
   });
 

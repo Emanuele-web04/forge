@@ -326,6 +326,7 @@ describe("wsNativeApi", () => {
             customModels: [],
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
+          acp: { enabled: true, binaryPath: "cline", args: ["--acp"], customModels: [] },
         },
         skills: { disabled: [] },
       },

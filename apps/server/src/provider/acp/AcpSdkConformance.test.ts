@@ -110,6 +110,23 @@ function runtimeLayer(logPath: string, env: Record<string, string> = {}) {
   });
 }
 
+function noAuthenticationRuntimeLayer(logPath: string) {
+  return AcpSessionRuntime.layer({
+    spawn: {
+      command: process.execPath,
+      args: [fixturePath],
+      env: {
+        VITEST: "true",
+        SYNARA_ACP_CONFORMANCE_LOG_PATH: logPath,
+        SYNARA_ACP_CONFORMANCE_NO_AUTH: "1",
+      },
+    },
+    cwd: process.cwd(),
+    clientInfo: { name: "synara-no-auth-test", version: "0.0.0" },
+    authentication: "when-advertised",
+  });
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -167,6 +184,24 @@ describe("official ACP SDK conformance at the current Synara boundary", () => {
       });
     }).pipe(
       Effect.provide(runtimeLayer(logPath)),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("skips authentication when a generic ACP agent advertises no methods", () => {
+    const logPath = createFixtureLog();
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+
+      expect(started.initializeResult.authMethods).toEqual([]);
+      expect(readFixtureLog(logPath).map((entry) => entry.type)).toEqual([
+        "initialize",
+        "session/new",
+      ]);
+    }).pipe(
+      Effect.provide(noAuthenticationRuntimeLayer(logPath)),
       Effect.scoped,
       Effect.provide(NodeServices.layer),
     );

@@ -116,7 +116,8 @@ type CustomModelSettingsKey =
   | "customDroidModels"
   | "customKiloModels"
   | "customOpenCodeModels"
-  | "customPiModels";
+  | "customPiModels"
+  | "customAcpModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -137,6 +138,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
+  acp: new Set(getModelOptions("acp").map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -163,6 +165,7 @@ const PersistedProviderKind = Schema.Literals([
   "kilo",
   "opencode",
   "pi",
+  "acp",
 ]).pipe(
   Schema.decodeTo(
     ProviderKind,
@@ -198,6 +201,11 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  // Generic ACP launcher configuration. Arguments are entered one per line so
+  // spaces inside a single argument remain intact when projected to the server
+  // `args` array (for example: `--name` followed by `My Agent`).
+  acpBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  acpArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "--acp")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
@@ -262,6 +270,7 @@ export const AppSettingsSchema = Schema.Struct({
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customAcpModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
@@ -399,6 +408,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "provider/model",
     example: "anthropic/claude-sonnet-4-5",
   },
+  acp: {
+    provider: "acp",
+    settingsKey: "customAcpModels",
+    defaultSettingsKey: "customAcpModels",
+    title: "ACP Agent",
+    description: "Save additional ACP model ids advertised by the configured agent.",
+    placeholder: "agent-model-id",
+    example: "default",
+  },
 };
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
@@ -466,6 +484,22 @@ export function normalizeTerminalFontFamily(value: string | null | undefined): s
   return (value ?? "").replace(/[;{}<>\n\r]/g, "").slice(0, 256);
 }
 
+/** Parse the newline-delimited ACP launcher arguments used by the settings UI. */
+export function parseAcpArgs(value: string | null | undefined): string[] {
+  return (value ?? "")
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+/** Serialize ACP arguments for the settings UI without losing argv boundaries. */
+export function formatAcpArgs(args: ReadonlyArray<string> | null | undefined): string {
+  return (args ?? [])
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 // Build the CSS font-family stack written to `--terminal-font-family`, or null
 // when the bundled default (defined in index.css) should stay in effect.
 //
@@ -531,6 +565,8 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       settings.openCodeBinaryPath,
     ),
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
+    acpBinaryPath: normalizeProviderBinaryPathOverride("acp", settings.acpBinaryPath),
+    acpArgs: formatAcpArgs(parseAcpArgs(settings.acpArgs)),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
@@ -547,6 +583,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
+    customAcpModels: normalizeCustomModelSlugs(settings.customAcpModels, "acp"),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
     hiddenModels: [],
@@ -575,6 +612,8 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     openCodeServerUrl: settings.providers.opencode.serverUrl,
     piAgentDir: settings.providers.pi.agentDir,
     piBinaryPath: settings.providers.pi.binaryPath,
+    acpBinaryPath: settings.providers.acp.binaryPath,
+    acpArgs: formatAcpArgs(settings.providers.acp.args),
     customCodexModels: settings.providers.codex.customModels,
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
@@ -584,6 +623,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
+    customAcpModels: settings.providers.acp.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
@@ -613,7 +653,9 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "openCodeServerUrl") ||
-    hasOwn(patch, "piAgentDir")
+    hasOwn(patch, "piAgentDir") ||
+    hasOwn(patch, "acpBinaryPath") ||
+    hasOwn(patch, "acpArgs")
   );
 }
 
@@ -750,6 +792,17 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
     };
   }
+  if (
+    hasOwn(patch, "acpBinaryPath") ||
+    hasOwn(patch, "acpArgs") ||
+    hasOwn(patch, "customAcpModels")
+  ) {
+    providers.acp = {
+      ...(hasOwn(patch, "acpBinaryPath") ? { binaryPath: patch.acpBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "acpArgs") ? { args: parseAcpArgs(patch.acpArgs) } : {}),
+      ...(hasOwn(patch, "customAcpModels") ? { customModels: patch.customAcpModels ?? [] } : {}),
+    };
+  }
 
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
@@ -787,6 +840,8 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "openCodeServerUrl",
     "piAgentDir",
     "piBinaryPath",
+    "acpBinaryPath",
+    "acpArgs",
     "textGenerationModel",
     "textGenerationProvider",
   ] as const) {
@@ -814,6 +869,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customKiloModels",
     "customOpenCodeModels",
     "customPiModels",
+    "customAcpModels",
   ] as const) {
     if (normalizedSettings[key].length > 0) {
       patch[key] = normalizedSettings[key] as never;
@@ -863,6 +919,7 @@ export function getCustomModelsByProvider(
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
+    acp: getCustomModelsForProvider(settings, "acp"),
   };
 }
 
@@ -1011,6 +1068,7 @@ export function getCustomModelOptionsByProvider(
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
+    acp: getAppModelOptions("acp", customModelsByProvider.acp),
   };
 }
 
@@ -1032,7 +1090,8 @@ export function getProviderStartOptions(
     | "openCodeServerUrl"
     | "piAgentDir"
     | "piBinaryPath"
-  >,
+  > &
+    Partial<Pick<AppSettings, "acpBinaryPath" | "acpArgs">>,
 ): ProviderStartOptions | undefined {
   const claudeBinaryPath = normalizeProviderBinaryPathOverride(
     "claudeAgent",
@@ -1052,6 +1111,17 @@ export function getProviderStartOptions(
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
+  const acpBinaryPath = normalizeProviderBinaryPathOverride("acp", settings.acpBinaryPath);
+  const defaultAcpArgs = DEFAULT_SERVER_SETTINGS.providers.acp.args;
+  // Older callers/tests may pass a pre-ACP settings snapshot. Treat an omitted
+  // ACP args field as the server default instead of accidentally overriding it
+  // with an empty argv array.
+  const acpArgs =
+    settings.acpArgs === undefined ? [...defaultAcpArgs] : parseAcpArgs(settings.acpArgs);
+  const hasAcpStartOptions =
+    Boolean(acpBinaryPath) ||
+    acpArgs.length !== defaultAcpArgs.length ||
+    acpArgs.some((arg, index) => arg !== defaultAcpArgs[index]);
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
   );
@@ -1125,6 +1195,14 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(hasAcpStartOptions
+      ? {
+          acp: {
+            ...(acpBinaryPath ? { binaryPath: acpBinaryPath } : {}),
+            ...(hasAcpStartOptions ? { args: acpArgs } : {}),
+          },
+        }
+      : {}),
   };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
@@ -1170,7 +1248,8 @@ export function getCustomBinaryPathForProvider(
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
     | "piBinaryPath"
-  >,
+  > &
+    Partial<Pick<AppSettings, "acpBinaryPath">>,
   provider: ProviderKind,
 ): string {
   switch (provider) {
@@ -1192,6 +1271,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.openCodeBinaryPath);
     case "pi":
       return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
+    case "acp":
+      return normalizeProviderBinaryPathOverride(provider, settings.acpBinaryPath);
   }
 }
 

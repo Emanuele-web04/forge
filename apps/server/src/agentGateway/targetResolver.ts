@@ -236,6 +236,13 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  // ACP model ids and mode/config options are negotiated at runtime. Keep the
+  // static provider rule empty so generic ACP targets remain valid without
+  // pretending that every agent exposes the same option vocabulary.
+  acp: {
+    primaryOptionKey: "model",
+    options: {},
+  },
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
 
 function providerDefaultModel(provider: ProviderKind): string | null {
@@ -464,7 +471,11 @@ function providerOptionRuleSpec(
   provider: ProviderKind,
   optionId: string,
 ): ResolvedProviderTargetOptionRuleSpec | undefined {
-  const rule = PROVIDER_TARGET_OPTION_RULES[provider].options[optionId];
+  const rule = (
+    PROVIDER_TARGET_OPTION_RULES[provider].options as Readonly<
+      Record<string, ProviderTargetOptionRuleSpec>
+    >
+  )[optionId];
   return rule ? { key: optionId, ...rule } : undefined;
 }
 

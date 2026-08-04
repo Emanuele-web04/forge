@@ -94,6 +94,13 @@ export const PROVIDER_DESCRIPTORS = [
     supportsNativeTurnSteering: true,
     usage: null,
   },
+  {
+    kind: "acp",
+    displayName: PROVIDER_DISPLAY_NAMES.acp,
+    available: true,
+    supportsNativeTurnSteering: false,
+    usage: null,
+  },
 ] as const satisfies readonly ProviderDescriptor[];
 
 export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(

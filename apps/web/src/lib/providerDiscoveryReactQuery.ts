@@ -75,7 +75,18 @@ export const providerDiscoveryQueryKeys = {
     apiEndpoint: string | null,
     agentDir: string | null,
     cwd: string | null,
-  ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
+    args: ReadonlyArray<string> | null = null,
+  ) =>
+    [
+      "provider-discovery",
+      "models",
+      provider,
+      binaryPath,
+      apiEndpoint,
+      agentDir,
+      cwd,
+      args,
+    ] as const,
   agentsForProvider: (provider: ProviderKind) =>
     ["provider-discovery", "agents", provider] as const,
   agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
@@ -200,6 +211,7 @@ export function isInitialModelDiscoveryPending(query: {
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
   binaryPath?: string | null;
+  args?: ReadonlyArray<string> | null;
   apiEndpoint?: string | null;
   agentDir?: string | null;
   cwd?: string | null;
@@ -212,12 +224,14 @@ export function providerModelsQueryOptions(input: {
       input.apiEndpoint ?? null,
       input.agentDir ?? null,
       input.cwd ?? null,
+      input.args ?? null,
     ),
     queryFn: async (): Promise<ProviderListModelsResult> => {
       const api = ensureNativeApi();
       return api.provider.listModels({
         provider: input.provider,
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.args !== undefined && input.args !== null ? { args: [...input.args] } : {}),
         ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -226,9 +240,12 @@ export function providerModelsQueryOptions(input: {
     enabled: input.enabled ?? true,
     // Cursor/droid failures are permanent for a session (missing CLI/auth): fail
     // fast so the picker settles to static options instead of spinning (#103).
-    retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
-    staleTime: input.provider === "droid" ? 5 * 60_000 : 60_000,
-    ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
+    retry:
+      input.provider === "droid" || input.provider === "cursor" || input.provider === "acp" ? 0 : 3,
+    staleTime: input.provider === "droid" || input.provider === "acp" ? 5 * 60_000 : 60_000,
+    ...(input.provider === "droid" || input.provider === "acp"
+      ? { refetchOnWindowFocus: false }
+      : {}),
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
 }

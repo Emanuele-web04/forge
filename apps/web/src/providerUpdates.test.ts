@@ -74,6 +74,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         experimentalWebSockets: false,
       },
       pi: { ...provider, binaryPath: "pi", agentDir: "" },
+      acp: { ...provider, binaryPath: "cline", args: ["--acp"] },
       ...overrides,
     },
     skills: { disabled: [] },

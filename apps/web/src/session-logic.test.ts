@@ -860,6 +860,7 @@ describe("PROVIDER_OPTIONS", () => {
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
+    const acp = PROVIDER_OPTIONS.find((option) => option.value === "acp");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
@@ -870,6 +871,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
       { value: "pi", label: "Pi", available: true },
+      { value: "acp", label: "ACP Agent", available: true },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",
@@ -904,6 +906,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(pi).toEqual({
       value: "pi",
       label: "Pi",
+      available: true,
+    });
+    expect(acp).toEqual({
+      value: "acp",
+      label: "ACP Agent",
       available: true,
     });
   });

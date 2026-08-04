@@ -34,6 +34,8 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
+  // ACP agents advertise their live model catalog during session setup.
+  acp: new Set(MODEL_OPTIONS_BY_PROVIDER.acp.map((option) => option.slug)),
 };
 
 export interface SelectableModelOption {

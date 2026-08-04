@@ -10,6 +10,7 @@ import { z } from "zod";
 const sessionId = "official-sdk-session-1";
 const logPath = process.env.SYNARA_ACP_CONFORMANCE_LOG_PATH;
 const malformedPrefix = process.env.SYNARA_ACP_CONFORMANCE_MALFORMED_PREFIX === "1";
+const noAuthentication = process.env.SYNARA_ACP_CONFORMANCE_NO_AUTH === "1";
 
 function log(type: string, payload: unknown): void {
   if (logPath) {
@@ -32,7 +33,7 @@ const app = agent({ name: "synara-official-sdk-conformance-agent" })
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: { loadSession: false },
-      authMethods: [{ id: "test", name: "Test authentication" }],
+      authMethods: noAuthentication ? [] : [{ id: "test", name: "Test authentication" }],
       agentInfo: { name: "official-sdk-conformance-agent", version: "1.0.0" },
       _meta: {
         primitive: "initialize-meta",
@@ -46,6 +47,12 @@ const app = agent({ name: "synara-official-sdk-conformance-agent" })
   })
   .onRequest(methods.agent.session.new, async (ctx) => {
     log("session/new", ctx.params);
+    if (noAuthentication) {
+      // The no-auth conformance case only needs to prove the startup request
+      // sequence. Exit independently so Windows process-tree teardown does not
+      // depend on signal delivery semantics in the test runner.
+      setTimeout(() => process.exit(0), 250);
+    }
     await ctx.client.notify(methods.client.session.update, {
       sessionId,
       update: {

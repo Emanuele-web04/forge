@@ -120,6 +120,7 @@ const DROID_PROVIDER = "droid" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
+const ACP_PROVIDER = "acp" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
 const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
@@ -134,6 +135,7 @@ const PROVIDERS = [
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
+  ACP_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
@@ -831,6 +833,15 @@ const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
 
 const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") =>
   runProviderCommand(executable, args, providerCommandEnv(ANTIGRAVITY_PROVIDER)).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
+const runAcpCommand = (args: ReadonlyArray<string>, executable = "cline") =>
+  runProviderCommand(executable, args, providerCommandEnv(ACP_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1607,6 +1618,73 @@ export const checkPiProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
+// ── Generic ACP health check ──────────────────────────────────────
+
+/**
+ * ACP agents do not share an authentication/status CLI. Probe only the
+ * executable's conventional version flag and keep unsupported version output
+ * advisory: the real ACP initialize/authenticate handshake remains the source
+ * of truth when a session starts.
+ */
+export const makeCheckAcpProviderStatus = (
+  binaryPath?: string,
+  _args?: ReadonlyArray<string>,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "cline";
+    const versionProbe = yield* probeProviderCliVersion(
+      runAcpCommand(["--version"], executable),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing") {
+      return {
+        provider: ACP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: `ACP agent executable (${executable}) is not installed or not on PATH.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "success") {
+      const version = versionProbe.result;
+      return {
+        provider: ACP_PROVIDER,
+        status: "ready" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parseGenericCliVersion(`${version.stdout}\n${version.stderr}`),
+        checkedAt,
+        message:
+          "ACP agent executable is installed. Authentication and capabilities are negotiated when a session starts.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const detail =
+      versionProbe.outcome === "failure"
+        ? versionProbe.cause instanceof Error
+          ? versionProbe.cause.message
+          : String(versionProbe.cause)
+        : versionProbe.outcome === "timeout"
+          ? "The version probe timed out."
+          : detailFromResult(versionProbe.result);
+    return {
+      provider: ACP_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: detail
+        ? `ACP agent is present, but its version probe was inconclusive: ${detail}`
+        : "ACP agent is present, but its version probe was inconclusive.",
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkAcpProviderStatus = makeCheckAcpProviderStatus();
+
 // ── Antigravity CLI health check ──────────────────────────────────
 
 export const checkAntigravityProviderStatus = (
@@ -2183,6 +2261,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.opencode.binaryPath;
           case "pi":
             return settings.providers.pi.binaryPath;
+          case "acp":
+            return settings.providers.acp.binaryPath;
         }
       };
 
@@ -2394,6 +2474,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   checkPiProviderStatus(
                     settings.providers.pi.agentDir,
                     settings.providers.pi.binaryPath,
+                  ),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  ACP_PROVIDER,
+                  makeCheckAcpProviderStatus(
+                    settings.providers.acp.binaryPath,
+                    settings.providers.acp.args,
                   ),
                 ),
               ],

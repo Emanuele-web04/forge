@@ -12,7 +12,12 @@ import type {
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from "../appSettings";
+import {
+  getAppModelOptions,
+  getCustomModelsByProvider,
+  parseAcpArgs,
+  useAppSettings,
+} from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
 import {
@@ -52,7 +57,7 @@ const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
 export function useProviderModelCatalog(input: {
   selectedProvider: ProviderKind;
   /**
-   * Enables discovery for the on-demand providers (cursor/grok/droid/kilo/opencode/pi)
+   * Enables discovery for the on-demand providers (cursor/grok/droid/kilo/opencode/pi/acp)
    * even when they are not selected — pass the picker's open state so their lists
    * are warm by the time the user browses them.
    */
@@ -114,6 +119,7 @@ export function useProviderModelCatalog(input: {
   const kiloModelDiscoveryEnabled = shouldDiscoverProvider("kilo");
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
+  const acpModelDiscoveryEnabled = shouldDiscoverProvider("acp");
 
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
@@ -184,6 +190,15 @@ export function useProviderModelCatalog(input: {
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
       enabled: piModelDiscoveryEnabled,
+    }),
+  );
+  const acpDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "acp",
+      binaryPath: settings.acpBinaryPath || null,
+      args: parseAcpArgs(settings.acpArgs),
+      cwd: discoveryCwd,
+      enabled: acpModelDiscoveryEnabled,
     }),
   );
 
@@ -260,6 +275,13 @@ export function useProviderModelCatalog(input: {
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
+  const hasResolvedAcpModelDiscovery =
+    acpDynamicModelsQuery.data?.source === "acp" &&
+    (acpDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const acpModelDiscoveryPending =
+    acpModelDiscoveryEnabled &&
+    !hasResolvedAcpModelDiscovery &&
+    isInitialModelDiscoveryPending(acpDynamicModelsQuery);
   const antigravityModelDiscoveryPending =
     antigravityModelDiscoveryEnabled &&
     !(
@@ -295,6 +317,7 @@ export function useProviderModelCatalog(input: {
         modelHintByProvider?.opencode,
       ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
+      acp: getAppModelOptions("acp", customModelsByProvider.acp, modelHintByProvider?.acp),
     };
     const result: Record<
       ProviderKind,
@@ -313,6 +336,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
+      acp: acpDynamicModelsQuery.data,
     };
     for (const provider of [
       "claudeAgent",
@@ -324,6 +348,7 @@ export function useProviderModelCatalog(input: {
       "kilo",
       "opencode",
       "pi",
+      "acp",
     ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
@@ -348,6 +373,7 @@ export function useProviderModelCatalog(input: {
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
+    acpDynamicModelsQuery.data,
   ]);
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
@@ -358,6 +384,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
+      acp: acpModelDiscoveryPending,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -366,6 +393,7 @@ export function useProviderModelCatalog(input: {
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
+      acpModelDiscoveryPending,
     ],
   );
 
@@ -382,6 +410,7 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
+      acp: acpDynamicModelsQuery.data?.models ?? [],
     }),
     [
       antigravityModelsQuery.data?.models,
@@ -393,6 +422,7 @@ export function useProviderModelCatalog(input: {
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
+      acpDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -413,7 +443,9 @@ export function useProviderModelCatalog(input: {
         ? (kiloDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
         : selectedProvider === "opencode"
           ? (openCodeDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
-          : (codexDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS);
+          : selectedProvider === "codex"
+            ? (codexDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
+            : EMPTY_PROVIDER_AGENTS;
   const selectedRuntimeAgents = useMemo<ReadonlyArray<ProviderAgentDescriptor>>(
     () =>
       selectedDynamicAgents.map((agent) =>
@@ -443,7 +475,9 @@ export function useProviderModelCatalog(input: {
                   ? kiloDynamicModelsQuery
                   : selectedProvider === "opencode"
                     ? openCodeDynamicModelsQuery
-                    : piDynamicModelsQuery;
+                    : selectedProvider === "pi"
+                      ? piDynamicModelsQuery
+                      : acpDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&
