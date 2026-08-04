@@ -494,6 +494,36 @@ describe("runStatus", () => {
 });
 
 describe("refreshHostRegistration", () => {
+  /**
+   * A client that records every method reached instead of rejecting. The
+   * default `makeClient` mock rejects, which `refreshHostRegistration`'s own
+   * catch swallows — so a "must not call" assertion built on rejection would
+   * still pass with the guard deleted. Only an explicit record proves it.
+   */
+  function makeRecordingClient(): { client: AccountClient; reached: string[] } {
+    const reached: string[] = [];
+    const record =
+      (name: string) =>
+      (...args: unknown[]) => {
+        reached.push(name);
+        void args;
+        return Promise.resolve(host);
+      };
+    const client = {
+      instance: record("instance"),
+      me: record("me"),
+      listHosts: record("listHosts"),
+      registerHost: record("registerHost"),
+      updateHost: record("updateHost"),
+      deleteHost: record("deleteHost"),
+      listSessions: record("listSessions"),
+      deleteSession: record("deleteSession"),
+      requestDeviceCode: record("requestDeviceCode"),
+      pollDeviceToken: record("pollDeviceToken"),
+    } as unknown as AccountClient;
+    return { client, reached };
+  }
+
   function writeRuntimeState(baseDir: string, origin: string, host: string): void {
     const stateDir = path.join(baseDir, "userdata");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -553,28 +583,38 @@ describe("refreshHostRegistration", () => {
       hostId: "host_1",
     });
 
+    let attempted = false;
     await expect(
       refreshHostRegistration({
         baseDir,
         client: makeClient({
-          updateHost: () =>
-            Promise.reject(
+          updateHost: () => {
+            attempted = true;
+            return Promise.reject(
               new AccountApiError({
                 code: "token_revoked",
                 status: 403,
                 message: "Host token invalid",
               }),
-            ),
+            );
+          },
         }),
       }),
     ).resolves.toBeUndefined();
+
+    // Without this the test would also pass if the refresh never ran at all,
+    // which is the opposite of what it is meant to prove.
+    expect(attempted).toBe(true);
   });
 
   it("does not call the account when no credentials are stored", async () => {
     const baseDir = makeBaseDir();
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
 
-    await refreshHostRegistration({ baseDir, client: makeClient({}) });
+    const { client, reached } = makeRecordingClient();
+    await refreshHostRegistration({ baseDir, client });
+
+    expect(reached).toEqual([]);
   });
 
   it("does not call the account when credentials exist without a host token", async () => {
@@ -585,7 +625,25 @@ describe("refreshHostRegistration", () => {
       deviceToken: "device-token",
     });
 
-    await refreshHostRegistration({ baseDir, client: makeClient({}) });
+    const { client, reached } = makeRecordingClient();
+    await refreshHostRegistration({ baseDir, client });
+
+    expect(reached).toEqual([]);
+  });
+
+  it("does not call the account when credentials carry a host token but no host id", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      deviceToken: "device-token",
+      hostToken: "host-token",
+    });
+
+    const { client, reached } = makeRecordingClient();
+    await refreshHostRegistration({ baseDir, client });
+
+    expect(reached).toEqual([]);
   });
 
   it("clears stale endpoints when the server is only reachable on loopback", async () => {
