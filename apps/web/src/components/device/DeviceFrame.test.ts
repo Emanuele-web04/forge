@@ -3,24 +3,22 @@ import { describe, expect, it } from "vitest";
 import { NUB_ACTIONS, deviceKindFor, screenGeometry } from "./DeviceFrame";
 
 describe("side button controls", () => {
-  it("only offers a press for the nubs the transport can deliver", () => {
+  it("presses every nub the hardware has", () => {
     // Lock lands: it blanks the screen and shows up in SpringBoard's log.
     expect(NUB_ACTIONS.power).toMatchObject({ label: "Lock", button: "lock" });
-    // Volume is a Consumer-page usage the simulator's HID transport does not
-    // carry, so no press is offered — a control that always refuses is the
-    // "button that lies" state the pane must never ship.
-    for (const nub of ["volumeUp", "volumeDown", "volumeRocker"]) {
-      expect(NUB_ACTIONS[nub]?.button).toBeUndefined();
-    }
+    // Volume travels as a HID Consumer-page event rather than an Indigo button
+    // source, which is how Simulator.app's own menu items send it. Verified
+    // against the volume HUD in the framebuffer.
+    expect(NUB_ACTIONS.volumeUp).toMatchObject({ button: "volume-up" });
+    expect(NUB_ACTIONS.volumeDown).toMatchObject({ button: "volume-down" });
   });
 
-  it("explains the nubs it cannot press rather than dropping them silently", () => {
-    // The hardware is still drawn, so the tooltip has to answer "why did
-    // nothing happen when I clicked this?" before the user asks it.
-    expect(NUB_ACTIONS.volumeUp?.hint).toMatch(/cannot receive volume/);
-    expect(NUB_ACTIONS.volumeDown?.hint).toMatch(/cannot receive volume/);
-    // Lock works, so it needs no explanation.
-    expect(NUB_ACTIONS.power?.hint).toBeUndefined();
+  it("offers no hint for a nub that works", () => {
+    // A hint exists to answer "why did nothing happen?", so a working control
+    // must not carry one.
+    for (const nub of ["power", "volumeUp", "volumeDown"]) {
+      expect(NUB_ACTIONS[nub]?.hint).toBeUndefined();
+    }
   });
 });
 

@@ -75,8 +75,14 @@ static const int kButtonSourceHome = 0x0;
 static const int kButtonSourceLock = 0x1;
 static const int kButtonSourceSide = 0xbb8;
 static const int kButtonSourceSiri = 0x400002;
-static const int kButtonSourceVolumeUp = 0x2;
-static const int kButtonSourceVolumeDown = 0x3;
+
+// Volume is not a button. Indigo's button sources are a sparse enum with no
+// volume member; the guest receives volume as a HID Consumer-page event, which
+// is how Simulator.app's own Increase/Decrease Volume menu items send it. Only
+// the button-shaped controls above go through IndigoHIDMessageForButton.
+static const uint32_t kHIDPageConsumer = 0x0c;
+static const uint32_t kHIDUsageVolumeIncrement = 0xe9;
+static const uint32_t kHIDUsageVolumeDecrement = 0xea;
 
 static const int kButtonTargetHardware = 0x33;
 static const int kButtonOpDown = 0x1;
@@ -89,6 +95,8 @@ typedef SynaraIndigoMessage *(*SynaraIndigoButtonFn)(int keyCode, int op, int ta
 typedef SynaraIndigoMessage *(*SynaraIndigoKeyboardFn)(uint32_t usage, int op);
 typedef SynaraIndigoMessage *(*SynaraIndigoMouseFn)(CGPoint *point0, CGPoint *point1, int target,
                                                     int eventType, BOOL extra);
+typedef SynaraIndigoMessage *(*SynaraIndigoArbitraryFn)(int target, uint32_t page, uint32_t usage,
+                                                        int op);
 
 BOOL SynaraHardwareButtonFromName(NSString *name, SynaraHardwareButton *outButton) {
   NSDictionary<NSString *, NSNumber *> *map = @{
@@ -115,10 +123,20 @@ static int SynaraButtonSource(SynaraHardwareButton button) {
     case SynaraHardwareButtonLock: return kButtonSourceLock;
     case SynaraHardwareButtonSide: return kButtonSourceSide;
     case SynaraHardwareButtonSiri: return kButtonSourceSiri;
-    case SynaraHardwareButtonVolumeUp: return kButtonSourceVolumeUp;
-    case SynaraHardwareButtonVolumeDown: return kButtonSourceVolumeDown;
+    case SynaraHardwareButtonVolumeUp:
+    case SynaraHardwareButtonVolumeDown: return -1;
   }
   return kButtonSourceHome;
+}
+
+/// Consumer-page usage for the two volume keys, or 0 for the buttons that
+/// travel as Indigo button events instead.
+static uint32_t SynaraConsumerUsage(SynaraHardwareButton button) {
+  switch (button) {
+    case SynaraHardwareButtonVolumeUp: return kHIDUsageVolumeIncrement;
+    case SynaraHardwareButtonVolumeDown: return kHIDUsageVolumeDecrement;
+    default: return 0;
+  }
 }
 
 /// USB HID usage for a printable ASCII character, plus whether shift is needed.
@@ -193,6 +211,7 @@ static const uint32_t kUsageLeftShift = 225;
   SynaraIndigoButtonFn _buttonFn;
   SynaraIndigoKeyboardFn _keyboardFn;
   SynaraIndigoMouseFn _mouseFn;
+  SynaraIndigoArbitraryFn _arbitraryFn;
   NSInteger _undelivered;
 }
 
@@ -228,10 +247,11 @@ static const uint32_t kUsageLeftShift = 225;
     return NO;
   }
 
+  _arbitraryFn = (SynaraIndigoArbitraryFn)dlsym(kit, "IndigoHIDMessageForHIDArbitrary");
   _buttonFn = (SynaraIndigoButtonFn)dlsym(kit, "IndigoHIDMessageForButton");
   _keyboardFn = (SynaraIndigoKeyboardFn)dlsym(kit, "IndigoHIDMessageForKeyboardArbitrary");
   _mouseFn = (SynaraIndigoMouseFn)dlsym(kit, "IndigoHIDMessageForMouseNSEvent");
-  if (_buttonFn == NULL || _keyboardFn == NULL || _mouseFn == NULL) {
+  if (_buttonFn == NULL || _keyboardFn == NULL || _mouseFn == NULL || _arbitraryFn == NULL) {
     if (error) {
       *error = [NSError errorWithDomain:@"dev.synara.device-helper.hid"
                                    code:2
@@ -393,13 +413,23 @@ static const uint32_t kUsageLeftShift = 225;
 }
 
 - (void)sendButton:(SynaraHardwareButton)button down:(BOOL)down {
+  int op = down ? kButtonOpDown : kButtonOpUp;
+  uint32_t consumerUsage = SynaraConsumerUsage(button);
+
+  if (consumerUsage != 0) {
+    if (_arbitraryFn == NULL) {
+      [self noteUndelivered];
+      return;
+    }
+    [self sendMessage:_arbitraryFn(kButtonTargetHardware, kHIDPageConsumer, consumerUsage, op)];
+    return;
+  }
+
   if (_buttonFn == NULL) {
     [self noteUndelivered];
     return;
   }
-  SynaraIndigoMessage *message =
-      _buttonFn(SynaraButtonSource(button), down ? kButtonOpDown : kButtonOpUp, kButtonTargetHardware);
-  [self sendMessage:message];
+  [self sendMessage:_buttonFn(SynaraButtonSource(button), op, kButtonTargetHardware)];
 }
 
 - (void)tapButton:(SynaraHardwareButton)button {

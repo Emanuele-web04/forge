@@ -332,31 +332,25 @@ export const DeviceSilhouette = memo(function DeviceSilhouette({
   );
 });
 
-const VOLUME_UNAVAILABLE_HINT =
-  "A headless simulator cannot receive volume — change it inside the app, or use Simulator.app";
-
 /**
  * Every nub the frame draws, and what pressing it does.
  *
  * `button` is what the press sends. A nub with no `button` is drawn metal with
  * a tooltip: it explains why there is nothing to press rather than offering a
- * control that would refuse, which is the state the pane must never ship.
+ * control that would refuse, which is the state the pane must never ship. The
+ * action button (the ring/silent switch's replacement) is the only such nub;
+ * it maps to nothing the helper can inject.
  *
- * - The action button (the ring/silent switch's replacement) maps to nothing
- *   the helper can inject.
- * - Volume is a Consumer-page usage, and the simulator's HID transport does not
- *   carry that page — probed across every Indigo encoding against backboardd's
- *   delivery log, where consumer usages produced zero deliveries and a keyboard
- *   usage through the same client produced two. The backend refuses these
- *   presses explicitly, so the pane does not offer them.
+ * Apple puts volume up and down on two separate buttons, so both chassis draw
+ * two nubs. `volumeRocker` belongs to the Android spec, whose backend does not
+ * exist yet; it gets its press when that lands.
  */
 export const NUB_ACTIONS: Record<
   string,
   { readonly label: string; readonly button?: DeviceHardwareButton; readonly hint?: string }
 > = {
-  volumeUp: { label: "Volume up", hint: VOLUME_UNAVAILABLE_HINT },
-  volumeDown: { label: "Volume down", hint: VOLUME_UNAVAILABLE_HINT },
-  volumeRocker: { label: "Volume", hint: VOLUME_UNAVAILABLE_HINT },
+  volumeUp: { label: "Volume up", button: "volume-up" },
+  volumeDown: { label: "Volume down", button: "volume-down" },
   power: { label: "Lock", button: "lock" },
 };
 

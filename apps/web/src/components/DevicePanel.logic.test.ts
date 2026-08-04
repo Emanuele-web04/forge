@@ -464,13 +464,9 @@ describe("hardware button shortcuts", () => {
     expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowRight" })).toBeNull();
   });
 
-  it("leaves the volume chords unclaimed, since the transport cannot carry them", () => {
-    // Volume is a Consumer-page usage, and the simulator's HID transport drops
-    // that page: probed on a booted iPhone 17 Pro, consumer usages produced
-    // zero backboardd deliveries where a keyboard usage produced two. Claiming
-    // ⌘↑/⌘↓ would swallow the keystroke to reach a refusal.
-    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowUp" })).toBeNull();
-    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowDown" })).toBeNull();
+  it("matches Simulator.app's volume chords", () => {
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowUp" })).toBe("volume-up");
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowDown" })).toBe("volume-down");
   });
 
   it("leaves unrelated chords to the app", () => {

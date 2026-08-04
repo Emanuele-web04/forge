@@ -332,13 +332,10 @@ export interface DeviceShortcutEventLike {
  * browser/app rather than injected, since Cmd+W/Cmd+R on a focused canvas must
  * still reach Synara.
  *
- * Two of Simulator.app's chords are deliberately absent, for one reason:
+ * One of Simulator.app's chords is deliberately absent, for one reason:
  * claiming a chord swallows the keystroke, so a chord the backend refuses is
- * worse than no chord at all.
- *
- * - ⌘→ rotate: a window command with no HID usage and no simctl equivalent.
- * - ⌘↑/⌘↓ volume: a Consumer-page usage, and the simulator's HID transport does
- *   not carry that page (NUB_ACTIONS records the probe).
+ * worse than no chord at all. ⌘→ rotate is a window command with no HID usage
+ * and no simctl equivalent.
  */
 export function resolveDeviceHardwareButtonShortcut(
   event: DeviceShortcutEventLike,
@@ -349,6 +346,8 @@ export function resolveDeviceHardwareButtonShortcut(
   if (event.shiftKey) {
     return key === "h" ? "home" : null;
   }
+  if (key === "arrowup") return "volume-up";
+  if (key === "arrowdown") return "volume-down";
   return key === "l" ? "lock" : null;
 }
 
