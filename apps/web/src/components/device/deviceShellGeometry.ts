@@ -1,7 +1,7 @@
 // FILE: deviceShellGeometry.ts
-// Purpose: Derive the drawn phone chassis (radii, bezel, Dynamic Island, side buttons) from a device's real point size.
+// Purpose: Derive the drawn phone chassis (radii, bezel, Dynamic Island, side buttons) from a device's real point size, in either orientation.
 // Layer: Device pane presentation logic
-// Exports: resolveDeviceShellMetrics, deviceShellClass, DEVICE_SHELL_FALLBACK_POINT_SIZE
+// Exports: resolveDeviceShellMetrics, deviceShellClass, fitDeviceShellSize, DEVICE_SHELL_FALLBACK_POINT_SIZE
 // Depends on: nothing — pure arithmetic, no DOM, no React.
 //
 // The chassis is drawn in CSS rather than composited from Apple's bezel
@@ -10,6 +10,14 @@
 // fixed image is one device, while this pane has to frame anything from an
 // iPhone SE to a 13" iPad. Everything below is therefore expressed as a
 // fraction of the device's own point size so one shell fits every aspect.
+//
+// Landscape is a true 90° turn of the same hardware, not a second set of
+// numbers: the point size is normalised to portrait, the chassis is measured
+// there, and the result is rotated as a final step. Every dimension the
+// component consumes is already expressed against the box it will actually be
+// drawn in, because CSS percentages do not agree on which axis they resolve
+// against — `padding-block: 2%` resolves against *width*, which is exactly what
+// squashed the first landscape build into a letterboxed slab.
 
 /**
  * The three hardware shapes worth drawing differently. The class decides the
@@ -57,31 +65,55 @@ export interface DeviceShellRadius {
   readonly yPercent: number;
 }
 
+/** Which physical edge of the drawn chassis something sits on. */
+export type DeviceShellEdge = "top" | "right" | "bottom" | "left";
+
 export interface DeviceShellButton {
   readonly id: "action" | "volume-up" | "volume-down" | "power";
-  readonly edge: "left" | "right";
-  /** Distance from the top of the chassis to the button's top, as a % of chassis height. */
-  readonly topPercent: number;
-  /** Button length as a % of chassis height. */
-  readonly heightPercent: number;
+  readonly edge: DeviceShellEdge;
+  /**
+   * Distance from the start of that edge — its top for a vertical edge, its
+   * left for a horizontal one — as a % of the chassis dimension the edge runs
+   * along.
+   */
+  readonly offsetPercent: number;
+  /** Button length along the edge, as a % of that same dimension. */
+  readonly lengthPercent: number;
+}
+
+/**
+ * The Dynamic Island, positioned against the *screen* rather than the chassis.
+ * Stated relative to the edge it hugs so the same three numbers survive
+ * rotation: turning the device only changes which edge that is.
+ */
+export interface DeviceShellIsland {
+  readonly edge: DeviceShellEdge;
+  /** Gap between the island and its edge, as a % of the screen dimension across that edge. */
+  readonly insetPercent: number;
+  /** Island size along the edge, as a % of the screen dimension the edge runs along. */
+  readonly lengthPercent: number;
+  /** Island size across the edge, as a % of the screen dimension across it. */
+  readonly thicknessPercent: number;
 }
 
 export interface DeviceShellMetrics {
   readonly shellClass: DeviceShellClass;
-  /** Screen width / height. Drives the chassis `aspect-ratio` so nothing is squashed. */
+  readonly landscape: boolean;
+  /** Screen width / height as drawn. Portrait for an upright phone, its reciprocal turned. */
   readonly screenAspectRatio: number;
-  /** Chassis width / height, including the bezel on all four sides. */
+  /** Chassis width / height as drawn, including the bezel on all four sides. */
   readonly chassisAspectRatio: number;
-  /** Bezel thickness as a % of the chassis's own width, for symmetric padding. */
+  /**
+   * Bezel thickness as an inset on the screen: `x` is a % of the chassis's
+   * width, `y` a % of its height. Two axes rather than one number because the
+   * bezel is only square in points — on a chassis that is twice as tall as it
+   * is wide, one percentage cannot describe both.
+   */
   readonly bezelInsetPercent: { readonly x: number; readonly y: number };
   readonly chassisRadius: DeviceShellRadius;
   readonly screenRadius: DeviceShellRadius;
   /** Null for anything that is not an edge-to-edge iPhone. */
-  readonly dynamicIsland: {
-    readonly widthPercent: number;
-    readonly heightPercent: number;
-    readonly topPercent: number;
-  } | null;
+  readonly dynamicIsland: DeviceShellIsland | null;
   readonly buttons: readonly DeviceShellButton[];
 }
 
@@ -112,9 +144,9 @@ const ISLAND_HEIGHT_RATIO = 37 / 402;
 const ISLAND_TOP_RATIO = 11 / 402;
 
 /**
- * Side-button placement, in fractions of the *chassis* height measured from its
- * top edge. Phones follow the hardware: action button, then the volume pair on
- * the left, power on the right and slightly lower.
+ * Side-button placement in the upright device, as fractions of the *chassis*
+ * height measured from its top edge. Phones follow the hardware: action button,
+ * then the volume pair on the left, power on the right and slightly lower.
  *
  * The tablet row is a deliberate approximation — an iPad's power button is on
  * the top edge, which this shell has no way to draw — so it is placed at the
@@ -123,23 +155,54 @@ const ISLAND_TOP_RATIO = 11 / 402;
  */
 const BUTTON_LAYOUTS: Record<DeviceShellClass, readonly DeviceShellButton[]> = {
   "modern-phone": [
-    { id: "action", edge: "left", topPercent: 13.2, heightPercent: 3.4 },
-    { id: "volume-up", edge: "left", topPercent: 19.6, heightPercent: 6.6 },
-    { id: "volume-down", edge: "left", topPercent: 28.0, heightPercent: 6.6 },
-    { id: "power", edge: "right", topPercent: 22.4, heightPercent: 9.4 },
+    { id: "action", edge: "left", offsetPercent: 13.2, lengthPercent: 3.4 },
+    { id: "volume-up", edge: "left", offsetPercent: 19.6, lengthPercent: 6.6 },
+    { id: "volume-down", edge: "left", offsetPercent: 28.0, lengthPercent: 6.6 },
+    { id: "power", edge: "right", offsetPercent: 22.4, lengthPercent: 9.4 },
   ],
   "classic-phone": [
-    { id: "action", edge: "left", topPercent: 20.5, heightPercent: 3.0 },
-    { id: "volume-up", edge: "left", topPercent: 26.0, heightPercent: 5.4 },
-    { id: "volume-down", edge: "left", topPercent: 33.0, heightPercent: 5.4 },
-    { id: "power", edge: "right", topPercent: 24.0, heightPercent: 8.0 },
+    { id: "action", edge: "left", offsetPercent: 20.5, lengthPercent: 3.0 },
+    { id: "volume-up", edge: "left", offsetPercent: 26.0, lengthPercent: 5.4 },
+    { id: "volume-down", edge: "left", offsetPercent: 33.0, lengthPercent: 5.4 },
+    { id: "power", edge: "right", offsetPercent: 24.0, lengthPercent: 8.0 },
   ],
   tablet: [
-    { id: "power", edge: "right", topPercent: 6.0, heightPercent: 4.6 },
-    { id: "volume-up", edge: "right", topPercent: 13.0, heightPercent: 4.2 },
-    { id: "volume-down", edge: "right", topPercent: 18.4, heightPercent: 4.2 },
+    { id: "power", edge: "right", offsetPercent: 6.0, lengthPercent: 4.6 },
+    { id: "volume-up", edge: "right", offsetPercent: 13.0, lengthPercent: 4.2 },
+    { id: "volume-down", edge: "right", offsetPercent: 18.4, lengthPercent: 4.2 },
   ],
 };
+
+/**
+ * Where each edge lands after the quarter turn the pane applies to the view.
+ * The rotation is clockwise, so what was the top of the phone ends up on the
+ * right — which is why the volume rocker leaves the left edge for the top one
+ * and the Dynamic Island leaves the top edge for the right one.
+ */
+const ROTATED_EDGE: Record<DeviceShellEdge, DeviceShellEdge> = {
+  left: "top",
+  top: "right",
+  right: "bottom",
+  bottom: "left",
+};
+
+/**
+ * A quarter turn also reverses the direction each edge is measured in: the
+ * button nearest the top of an upright phone is the one nearest the *right*
+ * once it is lying down.
+ *
+ * The percentages themselves carry over untouched, because the landscape
+ * chassis is the portrait one transposed — its width is the portrait height, so
+ * a fraction of one is the same fraction of the other.
+ */
+function rotateButton(button: DeviceShellButton): DeviceShellButton {
+  return {
+    id: button.id,
+    edge: ROTATED_EDGE[button.edge],
+    offsetPercent: 100 - button.offsetPercent - button.lengthPercent,
+    lengthPercent: button.lengthPercent,
+  };
+}
 
 function radiusPercent(radius: number, width: number, height: number): DeviceShellRadius {
   return { xPercent: (radius / width) * 100, yPercent: (radius / height) * 100 };
@@ -149,14 +212,15 @@ function usablePointSize(width: number, height: number): { width: number; height
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return { ...DEVICE_SHELL_FALLBACK_POINT_SIZE };
   }
-  // Landscape geometry describes the same hardware rotated; the chassis is
-  // always drawn upright and the *view* is what rotates, so normalise here
-  // rather than growing a second set of profiles.
+  // A device reporting landscape points is the same hardware turned, and the
+  // pane drives orientation from its own rotate control, so normalise to
+  // upright here rather than growing a second set of profiles.
   return width > height ? { width: height, height: width } : { width, height };
 }
 
 /**
- * Everything the chassis needs, derived from the device's screen in points.
+ * Everything the chassis needs, derived from the device's screen in points and
+ * the orientation it is being drawn in.
  *
  * Point size rather than frame pixels: the frame is 3x on a phone and 2x on an
  * iPad, so pixel dimensions would put an iPad and a phone in the same size
@@ -165,15 +229,16 @@ function usablePointSize(width: number, height: number): { width: number; height
 export function resolveDeviceShellMetrics(input: {
   readonly pointWidth: number;
   readonly pointHeight: number;
+  readonly landscape?: boolean;
 }): DeviceShellMetrics {
   const { width, height } = usablePointSize(input.pointWidth, input.pointHeight);
+  const landscape = input.landscape ?? false;
   const shellClass = deviceShellClass(width, height);
   const profile = SHELL_PROFILES[shellClass];
 
   const sideBezel = width * profile.sideBezelRatio;
   const endBezel = width * profile.endBezelRatio;
-  const chassisWidth = width + sideBezel * 2;
-  const chassisHeight = height + endBezel * 2;
+  const uprightChassis = { width: width + sideBezel * 2, height: height + endBezel * 2 };
 
   const screenRadius = width * profile.screenRadiusRatio;
   // Concentric, not merely rounded: an outer radius equal to the inner one plus
@@ -181,26 +246,86 @@ export function resolveDeviceShellMetrics(input: {
   // whole reason a real chassis looks milled rather than drawn.
   const chassisRadius = screenRadius + Math.min(sideBezel, endBezel);
 
+  // Transposing rather than recomputing is the point: a turned phone is the
+  // same milled object, so its chassis thickness, radii and screen are
+  // identical and only the axis they are measured against changes.
+  const screen = landscape ? { width: height, height: width } : { width, height };
+  const chassis = landscape
+    ? { width: uprightChassis.height, height: uprightChassis.width }
+    : uprightChassis;
+  const bezel = landscape ? { x: endBezel, y: sideBezel } : { x: sideBezel, y: endBezel };
+
   return {
     shellClass,
-    screenAspectRatio: width / height,
-    chassisAspectRatio: chassisWidth / chassisHeight,
+    landscape,
+    screenAspectRatio: screen.width / screen.height,
+    chassisAspectRatio: chassis.width / chassis.height,
     bezelInsetPercent: {
-      x: (sideBezel / chassisWidth) * 100,
-      y: (endBezel / chassisHeight) * 100,
+      x: (bezel.x / chassis.width) * 100,
+      y: (bezel.y / chassis.height) * 100,
     },
-    chassisRadius: radiusPercent(chassisRadius, chassisWidth, chassisHeight),
-    screenRadius: radiusPercent(screenRadius, width, height),
+    chassisRadius: radiusPercent(chassisRadius, chassis.width, chassis.height),
+    screenRadius: radiusPercent(screenRadius, screen.width, screen.height),
     dynamicIsland:
       shellClass === "modern-phone"
         ? {
-            widthPercent: ISLAND_WIDTH_RATIO * 100,
-            heightPercent: ((width * ISLAND_HEIGHT_RATIO) / height) * 100,
-            topPercent: ((width * ISLAND_TOP_RATIO) / height) * 100,
+            edge: landscape ? "right" : "top",
+            // Measured across the short axis of the screen either way, which in
+            // the upright device is its width.
+            insetPercent: ((width * ISLAND_TOP_RATIO) / height) * 100,
+            lengthPercent: ISLAND_WIDTH_RATIO * 100,
+            thicknessPercent: ((width * ISLAND_HEIGHT_RATIO) / height) * 100,
           }
         : null,
-    buttons: BUTTON_LAYOUTS[shellClass],
+    buttons: landscape ? BUTTON_LAYOUTS[shellClass].map(rotateButton) : BUTTON_LAYOUTS[shellClass],
   };
+}
+
+/**
+ * Breathing room left around the device inside its pane. Filling the pane
+ * exactly would wedge the chassis against the edges and clip the side buttons,
+ * which protrude past it.
+ */
+export const DEVICE_SHELL_FIT_MARGIN = 0.94;
+
+/**
+ * The largest chassis of the given aspect that fits the available box.
+ *
+ * Both axes are constraints, not one: a portrait phone in a tall pane is bound
+ * by width, the same phone turned is bound by height, and taking only one of
+ * them is what left the landscape device floating in a third of the space it
+ * had.
+ */
+export function fitDeviceShellSize(
+  available: { readonly width: number; readonly height: number },
+  chassisAspectRatio: number,
+  margin: number = DEVICE_SHELL_FIT_MARGIN,
+): { readonly width: number; readonly height: number } {
+  if (
+    !Number.isFinite(available.width) ||
+    !Number.isFinite(available.height) ||
+    !Number.isFinite(chassisAspectRatio) ||
+    available.width <= 0 ||
+    available.height <= 0 ||
+    chassisAspectRatio <= 0
+  ) {
+    return { width: 0, height: 0 };
+  }
+  const width = Math.min(available.width * margin, available.height * margin * chassisAspectRatio);
+  return { width, height: width / chassisAspectRatio };
+}
+
+/**
+ * The same fit as a CSS length, resolved by the browser against the pane's size
+ * container. Kept next to `fitDeviceShellSize` so the two can never drift; the
+ * component uses this one so a pane resize costs no JS at all.
+ */
+export function deviceShellFitWidth(
+  chassisAspectRatio: number,
+  margin: number = DEVICE_SHELL_FIT_MARGIN,
+): string {
+  const percent = margin * 100;
+  return `min(${percent}cqw, ${percent}cqh * ${chassisAspectRatio})`;
 }
 
 /** CSS `border-radius` shorthand for a radius pair. */

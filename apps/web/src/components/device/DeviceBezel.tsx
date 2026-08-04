@@ -24,9 +24,12 @@ import { cn } from "~/lib/utils";
 
 import {
   DEVICE_SHELL_FALLBACK_POINT_SIZE,
+  deviceShellFitWidth,
   deviceShellRadiusValue,
   resolveDeviceShellMetrics,
   type DeviceShellButton,
+  type DeviceShellEdge,
+  type DeviceShellIsland,
   type DeviceShellMetrics,
 } from "./deviceShellGeometry";
 
@@ -44,6 +47,31 @@ const SHELL_BUTTON_ACTIONS: Record<
   power: { label: "Lock", button: "lock" },
 };
 
+/** Thickness of the drawn metal sliver, and of the larger box that catches the click. */
+const BUTTON_SLIVER_PX = 3.5;
+const BUTTON_HIT_PX = 10;
+/** How far the sliver sits proud of the chassis, matching the hardware's protrusion. */
+const BUTTON_PROTRUSION_PX = 6;
+
+/** True for the two edges a button runs horizontally along. */
+function isHorizontalEdge(edge: DeviceShellEdge): boolean {
+  return edge === "top" || edge === "bottom";
+}
+
+/**
+ * The sliver's own layout box, positioned on whichever edge the geometry put it
+ * on. Both orientations are one expression rather than two branches, because
+ * a landscape button is the same control on a different axis and the pair would
+ * drift the first time one of them was tweaked.
+ */
+function buttonPosition(spec: DeviceShellButton): Record<string, string> {
+  const along = { offset: `${spec.offsetPercent}%`, length: `${spec.lengthPercent}%` };
+  const proud = `-${BUTTON_PROTRUSION_PX}px`;
+  return isHorizontalEdge(spec.edge)
+    ? { left: along.offset, width: along.length, [spec.edge]: proud }
+    : { top: along.offset, height: along.length, [spec.edge]: proud };
+}
+
 /**
  * One side button, drawn as a sliver protruding from the chassis edge the way
  * it does on hardware.
@@ -60,33 +88,51 @@ function ShellButton(props: {
 }) {
   const { spec } = props;
   const action = SHELL_BUTTON_ACTIONS[spec.id];
+  const horizontal = isHorizontalEdge(spec.edge);
 
   // The sliver protrudes past the chassis onto the pane's own background, which
   // is light in the default theme. Machined titanium rather than a white
   // overlay for exactly that reason: a translucent highlight reads as metal
-  // against the dark chassis and disappears entirely against the pane.
+  // against the dark chassis and disappears entirely against the pane. The
+  // gradient runs across the sliver's short axis, so it turns with the device.
   const metal = cn(
-    "pointer-events-none absolute inset-y-0 w-[3.5px] rounded-full",
-    "bg-[linear-gradient(180deg,#7c828a_0%,#4c5158_28%,#3a3e44_72%,#5e646c_100%)]",
-    "shadow-[0_0_2px_0_rgba(0,0,0,0.45)]",
+    "pointer-events-none absolute rounded-full shadow-[0_0_2px_0_rgba(0,0,0,0.45)]",
+    horizontal
+      ? "inset-x-0 h-[3.5px] bg-[linear-gradient(90deg,#7c828a_0%,#4c5158_28%,#3a3e44_72%,#5e646c_100%)]"
+      : "inset-y-0 w-[3.5px] bg-[linear-gradient(180deg,#7c828a_0%,#4c5158_28%,#3a3e44_72%,#5e646c_100%)]",
   );
 
-  // Position and length come from the geometry; the box is wider than the
+  // Position and length come from the geometry; the box is thicker than the
   // visible sliver so there is something to actually hit. 3.5px of hardware is
   // a fine thing to look at and a miserable thing to click.
-  const position = {
-    top: `${spec.topPercent}%`,
-    height: `${spec.heightPercent}%`,
-    ...(spec.edge === "left" ? { left: "-6px" } : { right: "-6px" }),
-  };
+  const position = buttonPosition(spec);
 
   if (!action.button) {
     return (
-      <span aria-hidden className="absolute w-[3.5px]" style={position}>
+      <span
+        aria-hidden
+        className="absolute"
+        style={{
+          ...position,
+          ...(horizontal
+            ? { height: `${BUTTON_SLIVER_PX}px` }
+            : { width: `${BUTTON_SLIVER_PX}px` }),
+        }}
+      >
         <span className={metal} />
       </span>
     );
   }
+
+  // Pressing translates the sliver into the chassis, which is the one
+  // affordance that reads as "button" on a shape this small. The direction is
+  // always inward, so it follows the edge the button ended up on.
+  const pressIn: Record<DeviceShellEdge, string> = {
+    left: "active:translate-x-[1.5px]",
+    right: "active:-translate-x-[1.5px]",
+    top: "active:translate-y-[1.5px]",
+    bottom: "active:-translate-y-[1.5px]",
+  };
 
   const button = action.button;
   return (
@@ -96,25 +142,55 @@ function ShellButton(props: {
       disabled={props.disabled}
       onClick={() => props.onPress(button)}
       className={cn(
-        "group absolute flex w-[10px] cursor-pointer items-stretch justify-center rounded-full outline-none",
+        "group absolute flex cursor-pointer items-stretch justify-center rounded-full outline-none",
         "transition-transform duration-220 motion-reduce:transition-none",
-        // Pressing translates the sliver into the chassis, which is the one
-        // affordance that reads as "button" on a shape this small.
-        spec.edge === "left" ? "active:translate-x-[1.5px]" : "active:-translate-x-[1.5px]",
+        pressIn[spec.edge],
         "focus-visible:ring-2 focus-visible:ring-ring/80",
         "disabled:pointer-events-none disabled:opacity-50",
       )}
-      style={position}
+      style={{
+        ...position,
+        ...(horizontal ? { height: `${BUTTON_HIT_PX}px` } : { width: `${BUTTON_HIT_PX}px` }),
+      }}
     >
       <span
         className={cn(
           metal,
-          "inset-x-auto left-1/2 -translate-x-1/2",
+          horizontal
+            ? "inset-y-auto top-1/2 -translate-y-1/2"
+            : "inset-x-auto left-1/2 -translate-x-1/2",
           "transition-[filter] duration-220 motion-reduce:transition-none",
           "group-hover:brightness-150 group-active:brightness-125",
         )}
       />
     </button>
+  );
+}
+
+/**
+ * The Dynamic Island, drawn over the video the way the real cutout sits over
+ * the display. Positioned from the edge the geometry names, so a turned device
+ * carries its cutout around to the side rather than losing it.
+ */
+function ShellIsland(props: { island: DeviceShellIsland }) {
+  const { island } = props;
+  const horizontal = isHorizontalEdge(island.edge);
+  const centered = horizontal
+    ? { left: "50%", transform: "translateX(-50%)" }
+    : { top: "50%", transform: "translateY(-50%)" };
+
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute rounded-full bg-black"
+      style={{
+        ...centered,
+        [island.edge]: `${island.insetPercent}%`,
+        ...(horizontal
+          ? { width: `${island.lengthPercent}%`, height: `${island.thicknessPercent}%` }
+          : { height: `${island.lengthPercent}%`, width: `${island.thicknessPercent}%` }),
+      }}
+    />
   );
 }
 
@@ -134,16 +210,16 @@ export function DeviceBezel(props: {
   onPressButton?: (button: DeviceHardwareButton) => void;
 }) {
   const pointSize = props.pointSize ?? DEVICE_SHELL_FALLBACK_POINT_SIZE;
+  const landscape = props.landscape ?? false;
+  // Rotating the chassis element itself would take its bounding box with it and
+  // break every percentage below, so the geometry hands back an already-turned
+  // chassis and the screen's contents rotate inside it.
   const metrics: DeviceShellMetrics = resolveDeviceShellMetrics({
     pointWidth: pointSize.width,
     pointHeight: pointSize.height,
+    landscape,
   });
   const onPressButton = props.onPressButton;
-  const landscape = props.landscape ?? false;
-  // Rotating the chassis element itself would take its bounding box with it and
-  // break every percentage below, so landscape swaps the aspect instead and the
-  // screen's contents rotate inside it.
-  const chassisAspect = landscape ? 1 / metrics.chassisAspectRatio : metrics.chassisAspectRatio;
 
   return (
     // No conditional siblings here, by design. The chassis is the only child, so
@@ -152,11 +228,8 @@ export function DeviceBezel(props: {
     // visibly jumped 30px every time an agent started or finished a tool call.
     <div className={cn("flex min-h-0 min-w-0 flex-col items-center", props.className)}>
       {/*
-        Two nested constraints keep the phone proportional in any pane shape:
-        this box fills the space and clamps its own width to whatever the
-        available height allows at the phone's aspect ratio, and the chassis
-        below then fills that box. Clamping only one axis would squash the
-        device the moment the other became the tighter bound.
+        A size container so the chassis can measure itself against the pane in
+        `cq` units and scale to fit without any JS measuring the box.
       */}
       <div
         className="flex min-h-0 w-full flex-1 items-center justify-center"
@@ -164,7 +237,7 @@ export function DeviceBezel(props: {
       >
         <div
           className={cn(
-            "relative h-full max-h-full",
+            "relative",
             // Titanium: a cool highlight along the top edge falling through a
             // near-black body, with a second highlight at the very bottom so
             // the chassis reads as a rounded solid rather than a flat fill.
@@ -174,14 +247,12 @@ export function DeviceBezel(props: {
             "shadow-[inset_0_0_0_0.5px_rgba(255,255,255,0.16),inset_0_1px_1px_0_rgba(255,255,255,0.22),0_2px_4px_-1px_rgba(0,0,0,0.5),0_24px_48px_-20px_rgba(0,0,0,0.95)]",
           )}
           style={{
-            aspectRatio: chassisAspect,
+            aspectRatio: metrics.chassisAspectRatio,
             borderRadius: deviceShellRadiusValue(metrics.chassisRadius),
-            paddingInline: `${metrics.bezelInsetPercent.x}%`,
-            paddingBlock: `${metrics.bezelInsetPercent.y}%`,
-            // Height is the driver; the width term caps it so the derived width
-            // still fits, and stopping short of the full pane width leaves the
-            // device sitting *in* the pane rather than wedged against its edges.
-            height: `min(100cqh, calc(84cqw / ${chassisAspect}))`,
+            // Width is the driver and the height term caps it, so whichever
+            // axis is tighter wins. Taking only one of them is what left a
+            // turned device floating in a third of the space it had.
+            width: deviceShellFitWidth(metrics.chassisAspectRatio),
           }}
         >
           {metrics.buttons.map((spec) => (
@@ -193,12 +264,24 @@ export function DeviceBezel(props: {
             />
           ))}
 
+          {/*
+            Inset rather than padded. A percentage `padding-block` resolves
+            against the box's *width*, so on a landscape chassis the top and
+            bottom bezels inflated to a share of the long axis and crushed the
+            screen into a letterboxed slab. Insets resolve against their own
+            axis, which is the only way to state a bezel that is square in
+            points on a box that is not.
+          */}
           <div
-            className={cn("relative h-full w-full overflow-hidden bg-black", props.screenClassName)}
+            className={cn("absolute overflow-hidden bg-black", props.screenClassName)}
             // A size container so the screen's contents can address its own
             // box in cq units — which is how a portrait canvas is sized and
             // turned into a landscape screen without measuring anything in JS.
             style={{
+              left: `${metrics.bezelInsetPercent.x}%`,
+              right: `${metrics.bezelInsetPercent.x}%`,
+              top: `${metrics.bezelInsetPercent.y}%`,
+              bottom: `${metrics.bezelInsetPercent.y}%`,
               borderRadius: deviceShellRadiusValue(metrics.screenRadius),
               containerType: "size",
             }}
@@ -209,17 +292,7 @@ export function DeviceBezel(props: {
               over the display. Gated on the shell class, so an iPad or an SE
               never grows an island it does not have.
             */}
-            {metrics.dynamicIsland && !landscape ? (
-              <span
-                aria-hidden
-                className="-translate-x-1/2 pointer-events-none absolute left-1/2 rounded-full bg-black"
-                style={{
-                  top: `${metrics.dynamicIsland.topPercent}%`,
-                  width: `${metrics.dynamicIsland.widthPercent}%`,
-                  height: `${metrics.dynamicIsland.heightPercent}%`,
-                }}
-              />
-            ) : null}
+            {metrics.dynamicIsland ? <ShellIsland island={metrics.dynamicIsland} /> : null}
           </div>
         </div>
       </div>
