@@ -57,10 +57,12 @@ export const RIGHT_DOCK_MIN_WIDTH = 26 * 16;
 export const RIGHT_DOCK_DEFAULT_WIDTH = "max(28rem, calc(50vw - 8rem))";
 
 // Pane kinds whose content has a natural width, opened at that size rather than
-// at the even split. The device pane frames a portrait phone: past ~420px the
-// bezel stops growing (it is height-bound) and the extra width is dead space.
+// at the even split. The device pane frames a portrait phone, so its useful
+// width is whatever lets the phone reach full height: a ~19.5:9 chassis stays
+// height-bound well past 480px, and opening narrower only shrinks the device
+// while leaving empty space above and below it.
 const RIGHT_DOCK_PREFERRED_WIDTH: Partial<Record<RightDockPaneKind, number>> = {
-  device: 30 * 16,
+  device: 38 * 16,
 };
 
 interface RightDockProps {

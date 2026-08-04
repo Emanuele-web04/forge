@@ -6,16 +6,23 @@
  * process runner so a broken capability can be simulated without an Xcode that
  * actually broke.
  */
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ProcessRunResult } from "../processRunner.ts";
-import { DEVICE_HELPER_BINARY_NAME } from "@synara/shared/deviceHelperCache";
+import {
+  DEVICE_HELPER_BINARY_NAME,
+  deviceHelperCacheKey,
+  deviceHelperSourceRevision,
+} from "@synara/shared/deviceHelperCache";
 import { IosSimulatorBackend } from "./IosSimulatorBackend.ts";
 import type { HelperClient } from "./helperClient.ts";
+
+/** The real helper sources, whose digest forms part of the cache key. */
+const HELPER_SOURCE_DIR = path.resolve(import.meta.dirname, "..", "..", "native", "device-helper");
 
 const DEVICE = "AAAA-1111";
 
@@ -81,14 +88,34 @@ class StubHelper {
 }
 
 /**
+ * The cache directory name the backend will look for, derived rather than
+ * hardcoded so this fixture keeps matching when the helper sources change.
+ */
+async function capabilityCacheKey(): Promise<string> {
+  const sourcesDir = path.join(HELPER_SOURCE_DIR, "Sources");
+  const names = await readdir(sourcesDir);
+  const files = await Promise.all(
+    names.map(async (name) => ({
+      name,
+      contents: await readFile(path.join(sourcesDir, name), "utf8"),
+    })),
+  );
+  const script = await readFile(path.join(HELPER_SOURCE_DIR, "build.sh"), "utf8");
+  const revision = deviceHelperSourceRevision([...files, { name: "build.sh", contents: script }]);
+  return deviceHelperCacheKey("Xcode 26.3\nBuild version 17D1", revision)!;
+}
+
+/**
  * A backend wired to a cache directory containing a fake helper binary, so
  * `cachedHelperPath()` resolves and the probe runs.
  */
 async function makeBackend(capabilities: Record<string, unknown>) {
   const cacheRoot = await mkdtemp(path.join(tmpdir(), "synara-capability-"));
-  // The directory name must match the key the backend derives from the stubbed
-  // `xcodebuild -version` output, or the cache lookup misses and no probe runs.
-  const binaryDir = path.join(cacheRoot, "26.3-17D1");
+  // The directory name must match the key the backend derives, or the cache
+  // lookup misses and no probe runs. That key is the stubbed `xcodebuild
+  // -version` output plus a digest of the helper sources, so it is derived here
+  // the same way rather than hardcoded — a helper change must move the cache.
+  const binaryDir = path.join(cacheRoot, await capabilityCacheKey());
   await mkdir(binaryDir, { recursive: true });
   const binaryPath = path.join(binaryDir, DEVICE_HELPER_BINARY_NAME);
   await writeFile(binaryPath, "#!/bin/sh\n");

@@ -18,7 +18,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -44,6 +44,7 @@ import {
   DEVICE_HELPER_BINARY_NAME,
   DEVICE_HELPER_CACHE_SEGMENTS,
   deviceHelperCacheKey,
+  deviceHelperSourceRevision,
 } from "@synara/shared/deviceHelperCache";
 
 import { runProcess, type ProcessRunResult } from "../processRunner.ts";
@@ -1107,6 +1108,32 @@ export class IosSimulatorBackend implements DeviceBackend {
     );
   }
 
+  /**
+   * Digest of the helper's sources, so a helper fix invalidates the cache.
+   *
+   * Read fresh rather than memoised: it runs once per attach, and a stale
+   * digest would reintroduce exactly the bug it exists to prevent. If the
+   * sources cannot be read the digest is omitted, which falls back to keying on
+   * the toolchain alone rather than failing the attach outright.
+   */
+  private async helperSourceRevision(): Promise<string | undefined> {
+    const sourcesDir = path.join(this.helperSourceDir, "Sources");
+    const files = await readdir(sourcesDir).catch(() => null);
+    if (files === null) return undefined;
+
+    const contents = await Promise.all(
+      files.map(async (name) => ({
+        name,
+        contents: await readFile(path.join(sourcesDir, name), "utf8").catch(() => ""),
+      })),
+    );
+    // build.sh drives the compile, so a change to it changes the binary too.
+    const script = await readFile(path.join(this.helperSourceDir, "build.sh"), "utf8").catch(
+      () => "",
+    );
+    return deviceHelperSourceRevision([...contents, { name: "build.sh", contents: script }]);
+  }
+
   private async xcodeBuildKey(): Promise<string> {
     const result = await this.run("xcodebuild", ["-version"], {
       timeoutMs: 20_000,
@@ -1115,7 +1142,10 @@ export class IosSimulatorBackend implements DeviceBackend {
     }).catch(() => null);
     // Derived by the shared helper so the smoke CLI writes the directory the
     // server reads; deriving it here independently is what let them diverge.
-    const key = result?.code === 0 ? deviceHelperCacheKey(result.stdout) : null;
+    const key =
+      result?.code === 0
+        ? deviceHelperCacheKey(result.stdout, await this.helperSourceRevision())
+        : null;
     if (key === null) {
       throw this.recordHelperFailure(
         "Could not determine the Xcode version. Install Xcode and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",

@@ -579,6 +579,35 @@ describe("availability", () => {
     expect(resolveDeviceAvailabilityView({ kind: "available" })).toEqual({ kind: "ready" });
   });
 
+  it("shows the picker when only the helper build is left", () => {
+    // The deadlock this prevents: the helper is built on first attach, so
+    // blocking the picker on it means the user is shown a checklist whose one
+    // remaining step is the thing the checklist itself makes impossible.
+    const view = resolveDeviceAvailabilityView({
+      kind: "setup-required",
+      steps: [
+        { id: "install-xcode", label: "Install Xcode", done: true },
+        { id: "install-ios-runtime", label: "Install an iOS runtime", done: true },
+        { id: "build-device-helper", label: "Build the Synara device helper", done: false },
+      ],
+    });
+    expect(view).toEqual({ kind: "ready" });
+  });
+
+  it("still blocks when a step the user must perform is outstanding", () => {
+    // Only the helper is self-healing; anything the user has to install keeps
+    // the checklist up.
+    const view = resolveDeviceAvailabilityView({
+      kind: "setup-required",
+      steps: [
+        { id: "install-xcode", label: "Install Xcode", done: true },
+        { id: "install-ios-runtime", label: "Install an iOS runtime", done: false },
+        { id: "build-device-helper", label: "Build the Synara device helper", done: false },
+      ],
+    });
+    expect(view.kind).toBe("blocked");
+  });
+
   it("explains an unsupported platform and marks it unrecoverable", () => {
     const view = resolveDeviceAvailabilityView({
       kind: "unsupported-platform",

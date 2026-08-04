@@ -527,6 +527,16 @@ export function describeDegradedCapabilities(
   return `${list(broken)} unavailable${xcode}${unaffected}.`;
 }
 
+/**
+ * True when every setup step the user can act on is done and only the helper
+ * build is left. Xcode, the license and a runtime all need the user; the helper
+ * only needs an attach, which the picker provides.
+ */
+function onlyHelperBuildRemains(steps: readonly DeviceSetupStep[]): boolean {
+  const remaining = steps.filter((step) => !step.done);
+  return remaining.length > 0 && remaining.every((step) => step.id === "build-device-helper");
+}
+
 export function resolveDeviceAvailabilityView(
   availability: DeviceAvailability,
 ): DeviceAvailabilityView {
@@ -542,6 +552,12 @@ export function resolveDeviceAvailabilityView(
         retryable: false,
       };
     case "setup-required":
+      // The helper is the one step the user cannot perform: it is built on
+      // first attach. Blocking on it hid the picker, so there was no way to
+      // attach, so it never built — the setup card asked for the one thing it
+      // prevented. When it is all that remains, show the picker and let
+      // choosing a device do the build.
+      if (onlyHelperBuildRemains(availability.steps)) return { kind: "ready" };
       return {
         kind: "blocked",
         title: "Set up the iOS Simulator",

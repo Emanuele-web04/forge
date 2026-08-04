@@ -4,6 +4,7 @@ import {
   DEVICE_HELPER_BINARY_NAME,
   DEVICE_HELPER_CACHE_SEGMENTS,
   deviceHelperCacheKey,
+  deviceHelperSourceRevision,
 } from "./deviceHelperCache";
 
 const XCODEBUILD_OUTPUT = "Xcode 26.2\nBuild version 17C52";
@@ -35,6 +36,39 @@ describe("device helper cache key", () => {
     expect(
       deviceHelperCacheKey("xcode-select: error: tool 'xcodebuild' requires Xcode"),
     ).toBeNull();
+  });
+
+  it("changes when the helper's own sources change", () => {
+    // Without this the cache never invalidates on a helper fix: the toolchain
+    // is identical, so every existing user keeps running the binary they
+    // already built and the fix silently never reaches them.
+    const before = deviceHelperSourceRevision([{ name: "HIDBridge.m", contents: "volume = 0x2;" }]);
+    const after = deviceHelperSourceRevision([{ name: "HIDBridge.m", contents: "volume = 0xe9;" }]);
+    expect(after).not.toBe(before);
+    expect(deviceHelperCacheKey(XCODEBUILD_OUTPUT, after)).not.toBe(
+      deviceHelperCacheKey(XCODEBUILD_OUTPUT, before),
+    );
+  });
+
+  it("treats a rename as a change, and file order as irrelevant", () => {
+    const a = [
+      { name: "A.swift", contents: "x" },
+      { name: "B.swift", contents: "y" },
+    ];
+    // Same tree, listed the other way round: readdir order must not shift the key.
+    expect(deviceHelperSourceRevision([...a].reverse())).toBe(deviceHelperSourceRevision(a));
+    // A rename with identical contents is still a different build.
+    expect(
+      deviceHelperSourceRevision([
+        { name: "A.swift", contents: "x" },
+        { name: "Renamed.swift", contents: "y" },
+      ]),
+    ).not.toBe(deviceHelperSourceRevision(a));
+  });
+
+  it("keys on the toolchain alone when the sources cannot be read", () => {
+    // Falling back beats failing the attach outright.
+    expect(deviceHelperCacheKey(XCODEBUILD_OUTPUT, undefined)).toBe("26.2-17C52");
   });
 
   it("pins the cache location both callers build from", () => {
