@@ -127,8 +127,12 @@ async function makeBackend(capabilities: Record<string, unknown>) {
     helperCacheRoot: cacheRoot,
     makeHelperClient: () => new StubHelper() as unknown as HelperClient,
     run: async (command, args) => {
-      if (command === binaryPath) {
-        probeCalls.push(args);
+      // The probe is confined like the real run, so on macOS it arrives as
+      // `sandbox-exec ... <binary> --probe`. Match either shape and record the
+      // helper's own argv, so this asserts on the probe rather than the wrapper.
+      const probeIndex = args.indexOf(binaryPath);
+      if (command === binaryPath || (command.endsWith("sandbox-exec") && probeIndex !== -1)) {
+        probeCalls.push(command === binaryPath ? args : args.slice(probeIndex + 1));
         return ok(probePayload(capabilities));
       }
       if (command === "xcode-select") return ok("/Applications/Xcode.app/Contents/Developer");

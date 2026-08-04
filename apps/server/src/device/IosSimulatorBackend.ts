@@ -44,7 +44,7 @@ import {
   DEVICE_HELPER_BINARY_NAME,
   DEVICE_HELPER_CACHE_SEGMENTS,
   deviceHelperCacheKey,
-  deviceHelperSourceRevision,
+  readDeviceHelperSourceRevision,
 } from "@synara/shared/deviceHelperCache";
 
 import { runProcess, type ProcessRunResult } from "../processRunner.ts";
@@ -64,6 +64,11 @@ import {
   type HelperProbeResult,
 } from "./helperCapabilities.ts";
 import { HELPER_METHODS, HelperClient, type DeviceHelperError } from "./helperClient.ts";
+import {
+  SANDBOX_OPT_OUT_ENV,
+  sandboxedHelperCommand,
+  type HelperSandboxCommand,
+} from "./helperSandbox.ts";
 
 const SIMCTL_TIMEOUT_MS = 30_000;
 const BOOT_TIMEOUT_MS = 120_000;
@@ -88,7 +93,11 @@ export interface IosSimulatorBackendOptions {
   readonly helperSourceDir?: string;
   readonly helperCacheRoot?: string;
   readonly run?: typeof runProcess;
-  readonly makeHelperClient?: (binaryPath: string, env?: NodeJS.ProcessEnv) => HelperClient;
+  readonly makeHelperClient?: (
+    binaryPath: string,
+    env?: NodeJS.ProcessEnv,
+    launch?: HelperSandboxCommand,
+  ) => HelperClient;
   /** Keeps the long-lived simctl process controllable in tests. */
   readonly spawnProcess?: SpawnRecordingProcess;
   /** Tests isolate output without changing the user's normal save location. */
@@ -216,7 +225,13 @@ export class IosSimulatorBackend implements DeviceBackend {
   private readonly helperSourceDir: string;
   private readonly helperCacheRoot: string;
   private readonly run: typeof runProcess;
-  private readonly makeHelperClient: (binaryPath: string, env?: NodeJS.ProcessEnv) => HelperClient;
+  private readonly makeHelperClient: (
+    binaryPath: string,
+    env?: NodeJS.ProcessEnv,
+    launch?: HelperSandboxCommand,
+  ) => HelperClient;
+  /** One warning per backend when the helper runs unconfined. */
+  private warnedUnsandboxed = false;
   private readonly spawnProcess: SpawnRecordingProcess;
   private readonly recordingDirectoryOverride: string | undefined;
   private readonly now: () => number;
@@ -251,7 +266,8 @@ export class IosSimulatorBackend implements DeviceBackend {
     this.helperCacheRoot = options.helperCacheRoot ?? DEVICE_HELPER_CACHE_ROOT;
     this.run = options.run ?? runProcess;
     this.makeHelperClient =
-      options.makeHelperClient ?? ((binaryPath, env) => new HelperClient({ binaryPath, env }));
+      options.makeHelperClient ??
+      ((binaryPath, env, launch) => new HelperClient({ binaryPath, env, launch }));
     this.spawnProcess =
       options.spawnProcess ??
       ((command, args) => spawn(command, [...args], { stdio: "pipe", windowsHide: true }));
@@ -339,10 +355,14 @@ export class IosSimulatorBackend implements DeviceBackend {
     if (binaryPath === null) return null;
     if (this.helperProbe?.binaryPath === binaryPath) return this.helperProbe.result;
 
-    const result = await this.run(binaryPath, ["--probe"], {
+    // Confined exactly like the real run: a preflight under looser privileges
+    // would report capabilities the sandboxed helper cannot actually deliver.
+    const env = await this.toolchainEnv();
+    const launch = await this.sandboxFor([binaryPath, "--probe"], env);
+    const result = await this.run(launch.command, [...launch.args], {
       timeoutMs: 30_000,
       allowNonZeroExit: true,
-      env: await this.toolchainEnv(),
+      env,
     }).catch(() => null);
 
     // A helper that will not launch is reported through the same shape, so
@@ -1034,7 +1054,8 @@ export class IosSimulatorBackend implements DeviceBackend {
     const binaryPath = await this.compileHelperIfNeeded();
     // The helper resolves CoreSimulator out of DEVELOPER_DIR at runtime, so it
     // has to inherit the same toolchain the binary was built against.
-    const helper = this.makeHelperClient(binaryPath, await this.toolchainEnv());
+    const env = await this.toolchainEnv();
+    const helper = this.makeHelperClient(binaryPath, env, await this.sandboxFor([binaryPath], env));
     helper.start();
     this.helper = helper;
     return helper;
@@ -1109,6 +1130,36 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   /**
+   * The Seatbelt-wrapped command for a helper run, or the plain one.
+   *
+   * Shared by the long-lived RPC helper and the one-shot `--probe`: preflighting
+   * unconfined while the real run is confined would let a broken profile pass
+   * the setup checklist and then hang on attach. Logs once when confinement is
+   * skipped, since a silently unconfined helper is the thing worth noticing.
+   */
+  private async sandboxFor(
+    argv: readonly string[],
+    env: NodeJS.ProcessEnv | undefined,
+  ): Promise<HelperSandboxCommand> {
+    const binaryPath = argv[0] ?? "";
+    const launch = await sandboxedHelperCommand(argv, {
+      binaryPath,
+      helperSourceDir: this.helperSourceDir,
+      developerDir: await this.xcodeSelectPath(),
+      env: env ?? this.processEnv,
+    });
+    if (launch.profilePath === null && process.platform === "darwin" && !this.warnedUnsandboxed) {
+      this.warnedUnsandboxed = true;
+      console.warn(
+        `[device] the iOS Simulator helper is running WITHOUT its Seatbelt sandbox. It can read` +
+          ` your files and open network sockets. Unset ${SANDBOX_OPT_OUT_ENV} to restore` +
+          ` confinement.`,
+      );
+    }
+    return launch;
+  }
+
+  /**
    * Digest of the helper's sources, so a helper fix invalidates the cache.
    *
    * Read fresh rather than memoised: it runs once per attach, and a stale
@@ -1116,22 +1167,19 @@ export class IosSimulatorBackend implements DeviceBackend {
    * sources cannot be read the digest is omitted, which falls back to keying on
    * the toolchain alone rather than failing the attach outright.
    */
+  /**
+   * Digest of the helper's sources, so a helper fix invalidates the cache.
+   *
+   * Derived through the shared reader that `scripts/device-helper-smoke.ts`
+   * also uses: a second derivation here is what made the smoke run build into a
+   * directory this backend never read.
+   */
   private async helperSourceRevision(): Promise<string | undefined> {
-    const sourcesDir = path.join(this.helperSourceDir, "Sources");
-    const files = await readdir(sourcesDir).catch(() => null);
-    if (files === null) return undefined;
-
-    const contents = await Promise.all(
-      files.map(async (name) => ({
-        name,
-        contents: await readFile(path.join(sourcesDir, name), "utf8").catch(() => ""),
-      })),
-    );
-    // build.sh drives the compile, so a change to it changes the binary too.
-    const script = await readFile(path.join(this.helperSourceDir, "build.sh"), "utf8").catch(
-      () => "",
-    );
-    return deviceHelperSourceRevision([...contents, { name: "build.sh", contents: script }]);
+    return await readDeviceHelperSourceRevision(this.helperSourceDir, {
+      listSources: readdir,
+      readFile: (file) => readFile(file, "utf8"),
+      join: path.join,
+    });
   }
 
   private async xcodeBuildKey(): Promise<string> {

@@ -33,6 +33,7 @@ import * as path from "node:path";
 import { decodeDeviceFrame } from "@synara/shared/deviceFrame";
 
 import type { DeviceStreamFrame } from "./DeviceBackend.ts";
+import { describeSandboxSuspicion, type HelperSandboxCommand } from "./helperSandbox.ts";
 
 export const HELPER_METHODS = {
   ping: "ping",
@@ -93,6 +94,14 @@ export interface HelperClientOptions {
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly requestTimeoutMs?: number;
   readonly onExit?: (reason: string) => void;
+  /**
+   * The confined command to spawn instead of `binaryPath` directly.
+   *
+   * Resolved by the caller because building it reads the filesystem while
+   * `start()` is synchronous. Absent means the helper runs unconfined, which is
+   * also what happens off macOS or with the opt-out set.
+   */
+  readonly launch?: HelperSandboxCommand | undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -209,7 +218,11 @@ export class HelperClient {
 
   start(): void {
     if (this.process) return;
-    const child = spawn(this.options.binaryPath, [...(this.options.args ?? [])], {
+    const launch = this.options.launch;
+    const [command, args] = launch
+      ? [launch.command, [...launch.args]]
+      : [this.options.binaryPath, [...(this.options.args ?? [])]];
+    const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: this.options.env ?? process.env,
     });
@@ -250,7 +263,17 @@ export class HelperClient {
     return await new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new DeviceHelperError("helper_timeout", `Device helper ${method} timed out`));
+        // A denied sandbox rule does not raise: CoreSimulator swallows it and
+        // the helper simply never answers, which is indistinguishable from a
+        // hang. Name the profile here so that is the first thing checked.
+        reject(
+          new DeviceHelperError(
+            "helper_timeout",
+            `Device helper ${method} timed out.${describeSandboxSuspicion(
+              this.options.launch?.profilePath ?? null,
+            )}`,
+          ),
+        );
       }, this.requestTimeoutMs);
       // `unref` so a stuck request cannot hold the process open at exit.
       timer.unref?.();

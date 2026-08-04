@@ -16,6 +16,7 @@ import {
 } from "node:child_process";
 import { createServer, type Server, type Socket } from "node:net";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +26,9 @@ import { decodeDeviceFrame } from "@synara/shared/deviceFrame";
 import {
   DEVICE_HELPER_CACHE_SEGMENTS,
   deviceHelperCacheKey,
+  readDeviceHelperSourceRevision,
 } from "@synara/shared/deviceHelperCache";
+import { sandboxedHelperCommand } from "../apps/server/src/device/helperSandbox.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -304,7 +307,15 @@ async function main(): Promise<void> {
     encoding: "utf8",
     env: toolchainEnv,
   }).trim();
-  const cacheKey = deviceHelperCacheKey(xcodeVersion);
+  // Same key the server derives: toolchain plus a digest of the helper sources.
+  // Deriving it from the toolchain alone here would build into a directory the
+  // server never reads, so a passing smoke run would prove nothing about it.
+  const sourceRevision = await readDeviceHelperSourceRevision(helperDir, {
+    listSources: (dir) => readdir(dir),
+    readFile: (file) => readFile(file, "utf8"),
+    join,
+  });
+  const cacheKey = deviceHelperCacheKey(xcodeVersion, sourceRevision);
   assert(cacheKey !== null, "cannot determine Xcode build version");
   info(`${xcodeVersion.replace("\n", " / ")} (${developerDir})`);
 
@@ -428,7 +439,24 @@ async function main(): Promise<void> {
     }
 
     step("Starting the helper");
-    child = spawn(helperPath, [], { stdio: ["pipe", "pipe", "pipe"], env: toolchainEnv });
+    // Through the same wrapper the server uses: a smoke run that spawned the
+    // helper directly would exercise none of the confinement it is meant to
+    // validate, and the sandbox is exactly the thing that fails as a hang.
+    const launch = await sandboxedHelperCommand([helperPath], {
+      binaryPath: helperPath,
+      helperSourceDir: helperDir,
+      developerDir: toolchainEnv.DEVELOPER_DIR ?? null,
+      env: toolchainEnv,
+    });
+    console.log(
+      launch.profilePath === null
+        ? "  sandbox: OFF (unconfined)"
+        : `  sandbox: ON (${launch.profilePath})`,
+    );
+    child = spawn(launch.command, [...launch.args], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: toolchainEnv,
+    });
     client = new HelperClient(child);
 
     step("Attaching");
