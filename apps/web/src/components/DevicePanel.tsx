@@ -27,11 +27,9 @@ import {
   createDeviceRecordingState,
   deviceHidUsageForKey,
   deviceKeyModifiers,
-  deviceOrientationTransform,
   deviceRecordingClickIntent,
   deviceSetupCheckingLabel,
   isDeviceRecordingActive,
-  nextDeviceOrientation,
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
@@ -39,7 +37,6 @@ import {
   resolveDeviceSetupAction,
   shouldSubscribeToDeviceStream,
   stepDeviceRecording,
-  type DeviceOrientation,
   type DevicePoint,
 } from "./DevicePanel.logic";
 import { DeviceBezel } from "./device/DeviceBezel";
@@ -94,7 +91,6 @@ export default function DevicePanel(props: {
   const threadState = useDeviceStateStore(selectThreadDeviceState(threadId));
   const upsertThreadState = useDeviceStateStore((store) => store.upsertThreadState);
   const [busy, setBusy] = useState(false);
-  const [orientation, setOrientation] = useState<DeviceOrientation>("portrait");
   const [shutdownConfirm, setShutdownConfirm] = useState(false);
   const [bootLimit, setBootLimit] = useState<{
     readonly limit: number;
@@ -502,9 +498,6 @@ export default function DevicePanel(props: {
         case "record":
           toggleRecording();
           return;
-        case "rotate":
-          setOrientation(nextDeviceOrientation);
-          return;
         case "shutdown":
           setShutdownConfirm(true);
           return;
@@ -631,23 +624,6 @@ export default function DevicePanel(props: {
           // object-cover so the frame is filled edge to edge: the canvas already
           // carries the device's own aspect ratio, so nothing is actually cropped.
           className="h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70"
-          style={
-            orientation === "landscape"
-              ? {
-                  // The chassis has already swapped its aspect, so the screen
-                  // box is wide while the frames are still portrait. The canvas
-                  // is given the box's dimensions transposed (via the screen's
-                  // container-query units) and then turned into it, which lands
-                  // a portrait frame in a landscape screen with no distortion.
-                  position: "absolute",
-                  top: "50%",
-                  left: "50%",
-                  width: "100cqh",
-                  height: "100cqw",
-                  transform: `translate(-50%, -50%) ${deviceOrientationTransform(orientation)}`,
-                }
-              : undefined
-          }
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={() => {
@@ -695,7 +671,6 @@ export default function DevicePanel(props: {
         <DeviceBezel
           className="min-h-0 w-full flex-1"
           pointSize={devicePointSize}
-          landscape={orientation === "landscape"}
           buttonsDisabled={deviceControlsDisabled}
           onPressButton={pressButton}
         >
@@ -704,7 +679,6 @@ export default function DevicePanel(props: {
         <DeviceControlRail
           disabled={deviceControlsDisabled}
           recording={isDeviceRecordingActive(recording)}
-          landscape={orientation === "landscape"}
           onAction={runRailAction}
         />
       </div>

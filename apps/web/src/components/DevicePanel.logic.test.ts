@@ -11,14 +11,12 @@ import {
   deviceContainRect,
   deviceHidUsageForKey,
   deviceKeyModifiers,
-  deviceOrientationTransform,
   deviceRecordingClickIntent,
   deviceSetupProgress,
   describeDegradedCapabilities,
   inferDeviceScaleFactor,
   isDeviceRecordingActive,
   isNextDeviceFrameSequence,
-  nextDeviceOrientation,
   resolveDeviceAvailabilityView,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
@@ -790,18 +788,5 @@ describe("device recording state machine", () => {
       kind: "start-requested",
     });
     expect(stepDeviceRecording(starting, { kind: "device-lost" })).toEqual({ kind: "idle" });
-  });
-});
-
-describe("device orientation", () => {
-  it("toggles and maps to a quarter-turn transform", () => {
-    expect(nextDeviceOrientation("portrait")).toBe("landscape");
-    expect(nextDeviceOrientation("landscape")).toBe("portrait");
-    expect(deviceOrientationTransform("portrait")).toBeUndefined();
-    // Clockwise, the same way the chassis is drawn turning. The guest cannot be
-    // rotated, so neither direction makes its picture upright; clockwise is the
-    // one that lands its status bar and cutout on the edge where the shell
-    // draws the Dynamic Island, instead of on the opposite one.
-    expect(deviceOrientationTransform("landscape")).toBe("rotate(90deg)");
   });
 });

@@ -30,10 +30,49 @@ A fully interactive iOS Simulator pane in Synara, on par with Claude Code Deskto
 | Lifecycle           | Thread-scoped attachment (mirrors ThreadBrowserState). Synara-booted devices shut down on app quit, thread archive, or idle timeout after detach. User-booted devices (pane picker or Simulator.app) are never auto-shutdown. Cap Synara-booted devices at 3 globally; boot requests beyond that prompt to shut one down. Viewing already-booted devices is uncapped. |
 | Build story         | Agent builds via its own shell (xcodebuild/tuist/whatever). MCP `device_install`/`device_launch` are the integration points; a launch through MCP auto-opens the pane on that thread.                                                                                                                                                                                 |
 | Open triggers       | Auto-open on agent install/launch (requestOpenPanel-style push). Manual: "Device" entry always in the right-dock add menu on macOS, plus a `device.toggle` keybinding command. Off-macOS: entry hidden entirely. On Mac without Xcode/runtimes: pane opens to a live setup checklist (install Xcode → install iOS platform → attach), items check off as completed.   |
-| Pane UX (v1)        | Click=tap, drag=swipe, keyboard passthrough; hardware buttons with Simulator.app shortcuts (Cmd+Shift+H Home, Cmd+L lock, Cmd+↑/↓ volume, Cmd+→ rotate); device picker showing runtime + boot state, boot-on-select; attach/detach/shutdown; screenshot save; "Agent is using this device" badge while MCP input tools are active.                                    |
+| Pane UX (v1)        | Click=tap, drag=swipe, keyboard passthrough; hardware buttons with Simulator.app shortcuts (Cmd+Shift+H Home, Cmd+L lock, Cmd+↑/↓ volume); no rotate — see below; device picker showing runtime + boot state, boot-on-select; attach/detach/shutdown; screenshot save; "Agent is using this device" badge while MCP input tools are active.                           |
 | Prompt nicety       | browserPromptContext-style: mentioning the simulator in the composer attaches a `device_screenshot` PNG.                                                                                                                                                                                                                                                              |
 | Testing             | Fake `DeviceBackend` for Vitest coverage of manager state machine, MCP handlers, frame framing, pane logic (runs in normal CI). Helper gets a standalone smoke CLI (capture N frames, inject tap, dump AX) via `bun run test:device`, run on a real Mac before release, documented, not in PR CI.                                                                     |
 | Upstream            | One complete feature PR from `aristotl-dylan/synara`, feature-complete end to end.                                                                                                                                                                                                                                                                                    |
+
+## Rotation is unavailable (and why)
+
+The pane ships no rotate control. A headless CoreSimulator device cannot be
+turned, and rotating only the pane's picture is worse than not offering it: the
+guest keeps composing a portrait frame, so the app inside ends up lying on its
+side inside a landscape chassis, with its own status bar and Dynamic Island on
+the wrong edge. That reads as a broken pane rather than a rotated phone.
+
+What was probed, so this is not re-litigated:
+
+- `simctl` has no orientation subcommand. `simctl ui` covers only `appearance`,
+  `increase_contrast`, and `content_size`.
+- CoreSimulator exports zero symbols matching `orientation` or `rotate`, and a
+  booted `SimDevice` responds to none of `gsEventsSendOrientation:`,
+  `sendPurpleEvent:`, or `setOrientation:`.
+- SimulatorKit has `SimScreenUIOrientation` and
+  `SimDisplayUIOrientationChangeDelegate`, but they are notification-side: they
+  report the orientation a display is in, with no setter.
+- Simulator.app rotates through `SimDevice(GSEventsPrivate)`, a category _it_
+  adds, which posts a Purple event to `PurpleWorkspacePort`. That category is
+  compiled into the Simulator executable, not into CoreSimulator, so it does not
+  exist on a headless boot.
+- Loading the Simulator executable with `dlopen` does register the category, and
+  `gsEventsSendOrientation:` can then be called against a headlessly booted
+  device without error — but it is a silent no-op. Verified against a booted
+  iPhone 17 Pro running Safari (an app that does rotate): the framebuffer stayed
+  1206x2622 and a pixel diff of before/after screenshots was empty for every
+  orientation value. The Purple port is only wired when Simulator.app owns the
+  device.
+
+If rotation is wanted later, the paths are driving Simulator.app itself (giving
+up the headless, permission-free design the pane is built on) or an
+accelerometer event through `IndigoHIDMessageForDeviceMotionLiteEvent`, which is
+unexplored and would rotate only apps that honour device motion.
+
+The shell geometry keeps its landscape support (`resolveDeviceShellMetrics`
+takes a `landscape` flag and is tested in both orientations), so the drawing
+side is ready if a real orientation path ever appears.
 
 ## Integration map (existing code to follow)
 

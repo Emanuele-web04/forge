@@ -127,21 +127,45 @@ interface ShellProfile {
 }
 
 /**
- * Measured off Apple's published dimensions and normalised to screen width:
- * the iPhone 17 Pro's 55pt screen radius over its 402pt width is 0.137, and
- * its ~4pt border is 0.010. The SE's chin and forehead are what make its
- * profile asymmetric.
+ * The modern-phone row is calibrated against Eldora UI's MIT-licensed iPhone 17
+ * Pro mockup, normalised to its screen width:
+ * https://github.com/karthikmudunuri/eldoraui — apps/www/registry/eldoraui/iphone-17-pro.tsx
+ *
+ * MIT is the reason this one is usable as a reference at all; Apple's own bezel
+ * artwork is licensed for unmodified marketing use and may not be built into
+ * buttons. Its screen rect is 171.98x374.37 with a 24.62 corner radius, and its
+ * body sits 5.25 off each side — hence 0.1432 and 0.0305 below.
+ *
+ * The end bezel keeps its own value rather than the mockup's 0.0321/0.0324: a
+ * real 17 Pro's border is uniform, and the mockup's asymmetry is a rounding
+ * artefact of drawing the chassis as two stacked paths. Splitting the
+ * difference at 0.0305 keeps the border even, which is what the hardware looks
+ * like and what makes the concentric corners come out right.
+ *
+ * The SE and iPad rows have no equivalent reference and stay as they were,
+ * derived from Apple's published dimensions. The SE's chin and forehead are
+ * what make its profile asymmetric.
  */
 const SHELL_PROFILES: Record<DeviceShellClass, ShellProfile> = {
-  "modern-phone": { screenRadiusRatio: 0.137, sideBezelRatio: 0.028, endBezelRatio: 0.028 },
+  "modern-phone": { screenRadiusRatio: 0.1432, sideBezelRatio: 0.0305, endBezelRatio: 0.0305 },
   "classic-phone": { screenRadiusRatio: 0.02, sideBezelRatio: 0.035, endBezelRatio: 0.155 },
   tablet: { screenRadiusRatio: 0.06, sideBezelRatio: 0.045, endBezelRatio: 0.045 },
 };
 
-/** Dynamic Island on the 17 Pro: 126x37pt, 11pt below the top of the screen. */
-const ISLAND_WIDTH_RATIO = 126 / 402;
-const ISLAND_HEIGHT_RATIO = 37 / 402;
-const ISLAND_TOP_RATIO = 11 / 402;
+/**
+ * Dynamic Island, also from the Eldora mockup: a 15.96-tall pill whose straight
+ * run spans 80.68 to 119.61 with 7.98 end caps, so the full width is 54.89 of a
+ * 171.98 screen, sitting 5.09 below the screen's top edge.
+ *
+ * Worth stating because it is easy to measure wrong: the width must include
+ * *both* caps. Taking the straight run plus one cap gives 0.2728, a visibly
+ * stubby island. The full pill is 0.3192, which lands within half a percent of
+ * the 126/402 = 0.3134 that Apple's published 17 Pro dimensions give — the two
+ * independent sources agreeing is the reason to trust it.
+ */
+const ISLAND_WIDTH_RATIO = 54.89 / 171.98;
+const ISLAND_HEIGHT_RATIO = 15.96 / 171.98;
+const ISLAND_TOP_RATIO = 5.09 / 171.98;
 
 /**
  * Side-button placement in the upright device, as fractions of the *chassis*

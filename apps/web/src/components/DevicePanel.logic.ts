@@ -719,52 +719,6 @@ export function deviceRecordingClickIntent(state: DeviceRecordingState): "start"
   return null;
 }
 
-// ── Orientation ──────────────────────────────────────────────────────
-
-/**
- * Rotation is a *view* transform, not a device command.
- *
- * The native helper exposes no rotation button (SimulatorKit has no HID usage
- * for it) and `simctl` has no orientation subcommand, so there is nothing to
- * send. Turning the rendered device is honest about what it does: it reframes
- * the same portrait framebuffer, which is what a person wanting to see a
- * landscape layout beside a portrait one actually needs. Input coordinates are
- * un-rotated before they are sent so taps still land where they are aimed.
- */
-export type DeviceOrientation = "portrait" | "landscape";
-
-export function nextDeviceOrientation(orientation: DeviceOrientation): DeviceOrientation {
-  return orientation === "portrait" ? "landscape" : "portrait";
-}
-
-/**
- * The CSS transform that turns the rendered device, and the layout box it is
- * applied to.
- *
- * Taps need no inverse mapping to go with it: a pointer event's `offsetX`/
- * `offsetY` are measured in the target's own pre-transform box, so a rotated
- * canvas reports the same local coordinates it would unrotated. Deriving the
- * point from the bounding rect instead would need the inverse rotation, which
- * is the kind of arithmetic that looks right in a screenshot and puts every tap
- * on the wrong side of the screen.
- */
-export function deviceOrientationTransform(orientation: DeviceOrientation): string | undefined {
-  // Clockwise, matching the direction the chassis is drawn turning.
-  //
-  // Neither direction makes the guest's picture upright, and it is worth being
-  // precise about why: CoreSimulator exposes no way to rotate the device, so
-  // the app inside keeps composing a portrait frame — status bar along one long
-  // edge, home indicator on a short one. Rotating the canvas turns that picture
-  // bodily; it cannot reflow it. The only thing the direction decides is which
-  // long edge the guest's status bar ends up on.
-  //
-  // Clockwise puts it on the same edge as the Dynamic Island the shell draws.
-  // Counter-clockwise leaves the guest's own cutout and status bar on the left
-  // while the drawn cutout stays on the right, which reads as two phones
-  // overlaid.
-  return orientation === "landscape" ? "rotate(90deg)" : undefined;
-}
-
 export interface DeviceSetupAction {
   readonly label: string;
   readonly url: string;
