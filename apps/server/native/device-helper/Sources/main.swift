@@ -464,17 +464,39 @@ func handle(method: String, params: Params, session: HelperSession) throws -> An
     return ["ok": true, "characters": text.count, "skipped": skipped]
 
   case "button":
-    let hid = try session.requireHID()
     let name = try params.string("name")
+    let buttonPhase = params.optionalString("phase")
+    if let buttonPhase, buttonPhase != "down", buttonPhase != "up" {
+      throw RPCError(.invalidParams, "phase must be 'down' or 'up'")
+    }
+
+    // Consumer-page buttons (volume) cannot travel over Indigo at all: it has
+    // no event source for them, so an Indigo press is built and acked and then
+    // arrives nowhere. They go to dtuhidd instead, and when that daemon is
+    // absent the press is refused with the reason rather than silently lost.
+    if let usage = consumerUsage(forButtonNamed: name) {
+      guard let device = session.device else {
+        throw RPCError(.simulatorFailure, "not attached to a device")
+      }
+      let transport = DTUHIDTransport(device: device)
+      do {
+        switch buttonPhase {
+        case "down": try transport.send(usagePage: HIDUsage.consumerPage, usageCode: usage, state: .down)
+        case "up": try transport.send(usagePage: HIDUsage.consumerPage, usageCode: usage, state: .up)
+        default: try transport.tap(usagePage: HIDUsage.consumerPage, usageCode: usage)
+        }
+      } catch let unavailable as DTUHIDUnavailable {
+        throw RPCError(.simulatorFailure, unavailable.reason)
+      }
+      return ["ok": true, "transport": "dtuhid"]
+    }
+
+    let hid = try session.requireHID()
     var button = SynaraHardwareButton.home
     guard SynaraHardwareButtonFromName(name, &button) else {
       throw RPCError(
         .invalidParams,
         "unknown button '\(name)'; expected home, lock, side, siri, volume-up or volume-down")
-    }
-    let buttonPhase = params.optionalString("phase")
-    if let buttonPhase, buttonPhase != "down", buttonPhase != "up" {
-      throw RPCError(.invalidParams, "phase must be 'down' or 'up'")
     }
     try withHIDDelivery(hid) {
       switch buttonPhase {
@@ -483,7 +505,7 @@ func handle(method: String, params: Params, session: HelperSession) throws -> An
       default: hid.tapButton(button)
       }
     }
-    return ["ok": true]
+    return ["ok": true, "transport": "indigo"]
 
   case "screenshot":
     let surface = try session.currentSurface()

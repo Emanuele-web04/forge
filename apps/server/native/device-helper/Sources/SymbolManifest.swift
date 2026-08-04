@@ -37,6 +37,9 @@ enum SymbolKind {
   case objcProtocol
   /// A C function in SimulatorKit, via `dlsym`.
   case simulatorKitFunction
+  /// A private C function in libxpc, via `dlsym` against the global handle.
+  /// These carry the DTUHID path to `dtuhidd`.
+  case libxpcFunction
   /// A selector that must exist on a resolved class.
   case selector(onClass: String)
   /// A selector declared by a protocol. The concrete display classes are
@@ -97,6 +100,22 @@ enum SymbolManifest {
     RuntimeSymbol(
       name: "IndigoHIDMessageForMouseNSEvent", kind: .simulatorKitFunction, capability: .hid,
       purpose: "seeds the touch event the helper rewrites into a digitizer message"),
+
+    // The DTUHID path, for the Consumer-page buttons Indigo has no event source
+    // for (volume). These live in libxpc rather than SimulatorKit, and their
+    // absence disables volume only — every Indigo button keeps working.
+    RuntimeSymbol(
+      name: "xpc_endpoint_create_mach_port_4sim", kind: .libxpcFunction, capability: .hid,
+      purpose: "wraps a simulator service port as an XPC endpoint"),
+    RuntimeSymbol(
+      name: "xpc_connection_create_from_endpoint", kind: .libxpcFunction, capability: .hid,
+      purpose: "opens the connection to dtuhidd that carries volume presses"),
+    RuntimeSymbol(
+      name: "xpc_connection_enable_sim2host_4sim", kind: .libxpcFunction, capability: .hid,
+      purpose: "lets a host process talk to a daemon inside the guest"),
+    RuntimeSymbol(
+      name: "lookup:error:", kind: .selector(onClass: "SimDevice"), capability: .hid,
+      purpose: "resolves the dtuhidd service port; absent runtimes have no volume path"),
 
     // ── Accessibility ────────────────────────────────────────────────
     RuntimeSymbol(
