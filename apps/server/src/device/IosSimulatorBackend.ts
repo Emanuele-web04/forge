@@ -86,12 +86,14 @@ export interface IosSimulatorBackendOptions {
   readonly helperSourceDir?: string;
   readonly helperCacheRoot?: string;
   readonly run?: typeof runProcess;
-  readonly makeHelperClient?: (binaryPath: string) => HelperClient;
+  readonly makeHelperClient?: (binaryPath: string, env?: NodeJS.ProcessEnv) => HelperClient;
   /** Keeps the long-lived simctl process controllable in tests. */
   readonly spawnProcess?: SpawnRecordingProcess;
   /** Tests isolate output without changing the user's normal save location. */
   readonly recordingDirectory?: string;
   readonly now?: () => number;
+  /** Overridden in tests to exercise DEVELOPER_DIR without mutating process.env. */
+  readonly processEnv?: NodeJS.ProcessEnv;
 }
 
 interface ActiveRecording {
@@ -201,10 +203,12 @@ export class IosSimulatorBackend implements DeviceBackend {
   private readonly helperSourceDir: string;
   private readonly helperCacheRoot: string;
   private readonly run: typeof runProcess;
-  private readonly makeHelperClient: (binaryPath: string) => HelperClient;
+  private readonly makeHelperClient: (binaryPath: string, env?: NodeJS.ProcessEnv) => HelperClient;
   private readonly spawnProcess: SpawnRecordingProcess;
   private readonly recordingDirectoryOverride: string | undefined;
   private readonly now: () => number;
+  /** Injected so a test can set DEVELOPER_DIR without touching the real process. */
+  private readonly processEnv: NodeJS.ProcessEnv;
 
   /** Geometry learned from helper attachments, keyed by udid. */
   private readonly deviceGeometry = new Map<string, DeviceGeometry>();
@@ -227,12 +231,13 @@ export class IosSimulatorBackend implements DeviceBackend {
     this.helperCacheRoot = options.helperCacheRoot ?? DEVICE_HELPER_CACHE_ROOT;
     this.run = options.run ?? runProcess;
     this.makeHelperClient =
-      options.makeHelperClient ?? ((binaryPath) => new HelperClient({ binaryPath }));
+      options.makeHelperClient ?? ((binaryPath, env) => new HelperClient({ binaryPath, env }));
     this.spawnProcess =
       options.spawnProcess ??
       ((command, args) => spawn(command, [...args], { stdio: "pipe", windowsHide: true }));
     this.recordingDirectoryOverride = options.recordingDirectory;
     this.now = options.now ?? Date.now;
+    this.processEnv = options.processEnv ?? process.env;
   }
 
   // ── Availability ───────────────────────────────────────────────────
@@ -317,6 +322,7 @@ export class IosSimulatorBackend implements DeviceBackend {
     const result = await this.run(binaryPath, ["--probe"], {
       timeoutMs: 30_000,
       allowNonZeroExit: true,
+      env: await this.toolchainEnv(),
     }).catch(() => null);
 
     // A helper that will not launch is reported through the same shape, so
@@ -807,6 +813,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       timeoutMs: options.timeoutMs ?? SIMCTL_TIMEOUT_MS,
       allowNonZeroExit: true,
       outputMode: "truncate",
+      env: await this.toolchainEnv(),
     });
   }
 
@@ -830,7 +837,34 @@ export class IosSimulatorBackend implements DeviceBackend {
     }
   }
 
+  /**
+   * The developer directory every simulator command runs against.
+   *
+   * `DEVELOPER_DIR` wins over the machine-wide selection, because that is how a
+   * beta Xcode gets targeted: pointing one process at `Xcode-beta.app` is the
+   * whole point, and `sudo xcode-select -s` would move every other build on the
+   * machine onto the beta as well. Reading only `xcode-select -p` meant a user
+   * who set the variable silently got the stable toolchain instead.
+   */
+  private developerDirOverride(): string | null {
+    const override = this.processEnv.DEVELOPER_DIR?.trim();
+    return override !== undefined && override.length > 0 ? override : null;
+  }
+
+  /**
+   * Environment for `simctl`, `xcodebuild` and the helper build, pinning them
+   * all to one toolchain. Without it a child process resolving `xcode-select -p`
+   * for itself could pick a different Xcode than the one availability just
+   * reported, which is how a beta run ends up half on each.
+   */
+  private async toolchainEnv(): Promise<NodeJS.ProcessEnv | undefined> {
+    const developerDir = await this.xcodeSelectPath();
+    return developerDir === null ? undefined : { ...this.processEnv, DEVELOPER_DIR: developerDir };
+  }
+
   private async xcodeSelectPath(): Promise<string | null> {
+    const override = this.developerDirOverride();
+    if (override !== null) return override;
     const result = await this.run("xcode-select", ["-p"], {
       timeoutMs: 10_000,
       allowNonZeroExit: true,
@@ -844,6 +878,7 @@ export class IosSimulatorBackend implements DeviceBackend {
     const result = await this.run("xcodebuild", ["-version"], {
       timeoutMs: 20_000,
       allowNonZeroExit: true,
+      env: await this.toolchainEnv(),
     }).catch(() => null);
     return result !== null && result.code === 0;
   }
@@ -924,7 +959,9 @@ export class IosSimulatorBackend implements DeviceBackend {
   private async requireHelper(): Promise<HelperClient> {
     if (this.helper?.running) return this.helper;
     const binaryPath = await this.compileHelperIfNeeded();
-    const helper = this.makeHelperClient(binaryPath);
+    // The helper resolves CoreSimulator out of DEVELOPER_DIR at runtime, so it
+    // has to inherit the same toolchain the binary was built against.
+    const helper = this.makeHelperClient(binaryPath, await this.toolchainEnv());
     helper.start();
     this.helper = helper;
     return helper;
@@ -954,6 +991,9 @@ export class IosSimulatorBackend implements DeviceBackend {
       timeoutMs: 300_000,
       allowNonZeroExit: true,
       outputMode: "truncate",
+      // The helper links this toolchain's private frameworks, so it must build
+      // against the same Xcode the rest of the session talks to.
+      env: await this.toolchainEnv(),
     }).catch((error: unknown) => {
       throw this.recordHelperFailure(
         error instanceof Error ? error.message : "Device helper build could not start",
@@ -999,6 +1039,7 @@ export class IosSimulatorBackend implements DeviceBackend {
     const result = await this.run("xcodebuild", ["-version"], {
       timeoutMs: 20_000,
       allowNonZeroExit: true,
+      env: await this.toolchainEnv(),
     }).catch(() => null);
     // Derived by the shared helper so the smoke CLI writes the directory the
     // server reads; deriving it here independently is what let them diverge.

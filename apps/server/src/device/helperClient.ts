@@ -90,7 +90,7 @@ interface PendingRequest {
 export interface HelperClientOptions {
   readonly binaryPath: string;
   readonly args?: readonly string[];
-  readonly env?: NodeJS.ProcessEnv;
+  readonly env?: NodeJS.ProcessEnv | undefined;
   readonly requestTimeoutMs?: number;
   readonly onExit?: (reason: string) => void;
 }

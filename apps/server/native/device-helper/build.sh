@@ -24,7 +24,13 @@ fi
 
 # A full Xcode is required, not just the CLI tools: SimulatorKit ships inside the
 # Xcode bundle and CoreSimulator is only usable alongside it.
-DEVELOPER_DIR_PATH="$(xcode-select -p 2>/dev/null || true)"
+# DEVELOPER_DIR wins over the machine-wide selection: that is how a beta Xcode
+# is targeted without moving every other build on the machine onto it. The
+# server exports it for this script, so both agree on one toolchain.
+DEVELOPER_DIR_PATH="${DEVELOPER_DIR:-}"
+if [ -z "$DEVELOPER_DIR_PATH" ]; then
+  DEVELOPER_DIR_PATH="$(xcode-select -p 2>/dev/null || true)"
+fi
 if [ -z "$DEVELOPER_DIR_PATH" ]; then
   echo "error: no active developer directory; run 'sudo xcode-select -s /Applications/Xcode.app'" >&2
   exit 1

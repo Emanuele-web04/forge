@@ -39,7 +39,7 @@ import {
   stepDeviceRecording,
   type DevicePoint,
 } from "./DevicePanel.logic";
-import { DeviceBezel } from "./device/DeviceBezel";
+import { DeviceScreen, deviceKindFor, RESOLUTION_SCALE } from "./device/DeviceFrame";
 import {
   DEVICE_RAIL_HEIGHT_CLASS,
   DeviceControlRail,
@@ -366,6 +366,18 @@ export default function DevicePanel(props: {
     measured: measuredPointSize,
   });
 
+  // The frame is drawn in device pixels. Derived from the point size rather
+  // than the stream's frame dimensions so the chassis keeps its shape before
+  // the first frame arrives and across stream restarts.
+  const deviceKind = attachedDevice ? deviceKindFor(attachedDevice) : "iPhone";
+  const deviceScale = attachedDevice?.geometry?.scale ?? RESOLUTION_SCALE[deviceKind];
+  const devicePixelSize = devicePointSize
+    ? {
+        width: Math.round(devicePointSize.width * deviceScale),
+        height: Math.round(devicePointSize.height * deviceScale),
+      }
+    : null;
+
   const pointFromEvent = useCallback(
     (event: { offsetX: number; offsetY: number }): DevicePoint | null => {
       const canvas = canvasRef.current;
@@ -668,14 +680,16 @@ export default function DevicePanel(props: {
       */}
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 py-3">
         <div aria-hidden className={DEVICE_RAIL_HEIGHT_CLASS} />
-        <DeviceBezel
+        <DeviceScreen
           className="min-h-0 w-full flex-1"
-          pointSize={devicePointSize}
+          kind={deviceKind}
+          pixelWidth={devicePixelSize?.width}
+          pixelHeight={devicePixelSize?.height}
           buttonsDisabled={deviceControlsDisabled}
           onPressButton={pressButton}
         >
           {screen}
-        </DeviceBezel>
+        </DeviceScreen>
         <DeviceControlRail
           disabled={deviceControlsDisabled}
           recording={isDeviceRecordingActive(recording)}
