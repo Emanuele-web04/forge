@@ -3,13 +3,23 @@ import { describe, expect, it } from "vitest";
 import { NUB_ACTIONS, deviceKindFor, screenGeometry } from "./DeviceFrame";
 
 describe("side button controls", () => {
-  it("only makes a drawn nub clickable when the press reaches the guest", () => {
-    // Lock is the one that lands headlessly: it blanks the screen, and the
-    // press shows up in SpringBoard's log. Volume and the action button are
-    // drawn but not offered — a button that reliably does nothing is worse
-    // than metal the user never tries to click.
-    expect(Object.keys(NUB_ACTIONS)).toEqual(["power"]);
-    expect(NUB_ACTIONS.power).toEqual({ label: "Lock", button: "lock" });
+  it("wires every drawn nub the helper has a button for", () => {
+    expect(Object.keys(NUB_ACTIONS).toSorted()).toEqual([
+      "power",
+      "volumeDown",
+      "volumeRocker",
+      "volumeUp",
+    ]);
+    expect(NUB_ACTIONS.power).toMatchObject({ label: "Lock", button: "lock" });
+  });
+
+  it("says so when a press lands without any on-screen confirmation", () => {
+    // A headless boot paints no volume HUD, so pressing these looks like
+    // nothing happened. The hint is what keeps them from reading as broken.
+    expect(NUB_ACTIONS.volumeUp?.hint).toMatch(/no volume HUD/);
+    expect(NUB_ACTIONS.volumeDown?.hint).toMatch(/no volume HUD/);
+    // Lock blanks the screen, so it needs no explanation.
+    expect(NUB_ACTIONS.power?.hint).toBeUndefined();
   });
 });
 
