@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:net";
 import { describe, expect, it } from "vitest";
 
-import { outboundHttp } from "./outboundHttp.ts";
+import { outboundHttp } from "./outboundHttp";
 
 /**
  * A port nothing is listening on, so every connection attempt is refused.
