@@ -10,10 +10,15 @@
 
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
-import { useMemo, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
+import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { dockTerminalThreadId } from "~/lib/dockTerminalScope";
+import {
+  getTerminalContextComposerTarget,
+  subscribeTerminalContextComposerTarget,
+} from "~/lib/terminalContextComposerRegistry";
 import { projectScriptRuntimeEnv } from "~/projectScripts";
 import { useStore } from "~/store";
 import { createProjectSelector, createThreadWorkspaceMetadataSelector } from "~/storeSelectors";
@@ -50,6 +55,20 @@ export function DockTerminalPane(props: {
 
   const terminal = useTerminalSurfaceController(scopeId);
   const { terminalState, openTerminalThreadPage, bumpFocusRequest, newTerminalGroup } = terminal;
+  const subscribeToComposerTarget = useCallback(
+    (listener: () => void) =>
+      subscribeTerminalContextComposerTarget(SINGLE_CHAT_PANE_SCOPE_ID, listener),
+    [],
+  );
+  const readComposerTarget = useCallback(
+    () => getTerminalContextComposerTarget(SINGLE_CHAT_PANE_SCOPE_ID),
+    [],
+  );
+  const composerTarget = useSyncExternalStore(
+    subscribeToComposerTarget,
+    readComposerTarget,
+    readComposerTarget,
+  );
 
   // A dock terminal pane always shows a live terminal: ensure one is open on mount
   // and re-open if the user closes the last tab (normalize guarantees a default id).
@@ -100,7 +119,7 @@ export function DockTerminalPane(props: {
       onResizeTerminalSplit={terminal.resizeTerminalSplit}
       onTerminalMetadataChange={terminal.setTerminalMetadata}
       onTerminalActivityChange={terminal.setTerminalActivity}
-      onAddTerminalContext={() => {}}
+      onAddTerminalContext={composerTarget}
     />
   );
 }

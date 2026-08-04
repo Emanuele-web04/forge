@@ -2490,6 +2490,125 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("still announces a task backgrounded via task_updated before the snapshot", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const warningsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "runtime.warning"),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      // The SDK can patch the individual task before the aggregate snapshot
+      // lands. The patch must not pre-seed the announce diff, or the snapshot
+      // would treat the task as already known and never emit the notice.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bg-race-1",
+        patch: { is_backgrounded: true },
+        session_id: "sdk-session-bg-race",
+        uuid: "bg-race-update-1",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "bg-race-1", task_type: "local_bash", description: "sleep 5" }],
+        session_id: "sdk-session-bg-race",
+        uuid: "bg-race-change-1",
+      } as unknown as SDKMessage);
+      // Sentinel unknown subtype closes the collection window; the notice must
+      // arrive before it.
+      harness.query.emit({
+        type: "system",
+        subtype: "totally_unknown_subtype",
+        session_id: "sdk-session-bg-race",
+        uuid: "bg-race-sentinel",
+      } as unknown as SDKMessage);
+
+      const warnings = Array.from(yield* Fiber.join(warningsFiber));
+      assert.deepEqual(
+        warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
+        ["sleep 5", "Unhandled Claude system message subtype 'totally_unknown_subtype'."],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("announces a task again after a foreground patch", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const warningsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "runtime.warning"),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const backgroundSnapshot = (uuid: string, description: string) =>
+        harness.query.emit({
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "bg-returning", task_type: "local_bash", description }],
+          session_id: "sdk-session-bg-returning",
+          uuid,
+        } as unknown as SDKMessage);
+
+      backgroundSnapshot("bg-returning-change-1", "first background run");
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bg-returning",
+        patch: { is_backgrounded: false },
+        session_id: "sdk-session-bg-returning",
+        uuid: "bg-returning-update-foreground",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bg-returning",
+        patch: { is_backgrounded: true },
+        session_id: "sdk-session-bg-returning",
+        uuid: "bg-returning-update-background",
+      } as unknown as SDKMessage);
+      backgroundSnapshot("bg-returning-change-2", "second background run");
+      harness.query.emit({
+        type: "system",
+        subtype: "totally_unknown_subtype",
+        session_id: "sdk-session-bg-returning",
+        uuid: "bg-returning-sentinel",
+      } as unknown as SDKMessage);
+
+      const warnings = Array.from(yield* Fiber.join(warningsFiber));
+      assert.deepEqual(
+        warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
+        [
+          "first background run",
+          "second background run",
+          "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
+        ],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("surfaces Claude Auto permission denials as a specific warning", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

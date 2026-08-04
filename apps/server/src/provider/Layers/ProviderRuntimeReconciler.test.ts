@@ -21,6 +21,10 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  ProviderRuntimeEventRepository,
+  type ProviderRuntimeEventRepositoryShape,
+} from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { ProviderRuntimeReconciler } from "../Services/ProviderRuntimeReconciler.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
@@ -126,12 +130,21 @@ describe("ProviderRuntimeReconcilerLive", () => {
         ]),
     } as unknown as ProviderServiceShape;
 
+    const runtimeEvents = {
+      hasPendingEventsForThreads: (input: { readonly threadIds: ReadonlyArray<string> }) =>
+        Effect.sync(() => {
+          expect(input.threadIds).toEqual([THREAD_ID]);
+          return false;
+        }),
+    } as unknown as ProviderRuntimeEventRepositoryShape;
+
     const layer = makeProviderRuntimeReconcilerLive({ staleAfterMs: 1 }).pipe(
       Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
       Layer.provide(Layer.succeed(OrchestrationReactor, reactor)),
       Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
       Layer.provide(Layer.succeed(ProviderSessionDirectory, directory)),
       Layer.provide(Layer.succeed(ProviderService, provider)),
+      Layer.provide(Layer.succeed(ProviderRuntimeEventRepository, runtimeEvents)),
     );
 
     await Effect.gen(function* () {

@@ -30,9 +30,9 @@ export const ComposerVoiceButton = function ComposerVoiceButton(props: {
       onClick={props.onClick}
     >
       {props.isTranscribing ? (
-        <Loader2Icon aria-hidden="true" className="size-4 animate-spin text-white" />
+        <Loader2Icon aria-hidden="true" className="size-4 animate-spin text-primary" />
       ) : (
-        <MicIcon aria-hidden="true" className="size-4 text-white" />
+        <MicIcon aria-hidden="true" className="size-4 text-primary" />
       )}
     </Button>
   );

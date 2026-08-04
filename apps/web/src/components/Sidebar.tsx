@@ -190,6 +190,7 @@ import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
+import { createSidebarThreadRowGestures } from "./sidebarThreadRowGestures";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
@@ -4360,25 +4361,20 @@ export default function Sidebar() {
             )}
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
             onClick={() => activateThreadFromSidebarIntent(thread.id)}
-            onDoubleClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              openRenameThreadDialog(thread.id);
-            }}
-            onPointerUp={(event) => handleThreadRenamePointerUp(event, thread.id)}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 activateThreadFromSidebarIntent(thread.id);
               }
             }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              void handleThreadContextMenu(thread.id, {
-                x: event.clientX,
-                y: event.clientY,
-              });
-            }}
+            {...createSidebarThreadRowGestures({
+              threadId: thread.id,
+              onRename: openRenameThreadDialog,
+              onRenamePointerUp: handleThreadRenamePointerUp,
+              onContextMenu: (threadId, position) => {
+                void handleThreadContextMenu(threadId, position);
+              },
+            })}
           >
             <SidebarThreadRowContent
               thread={thread}
@@ -4544,34 +4540,28 @@ export default function Sidebar() {
                   handleThreadClick(event, thread.id, orderedProjectThreadIds);
                 }}
                 onPointerDown={(event) => primeThreadActivation(event, thread.id)}
-                onDoubleClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  openRenameThreadDialog(thread.id);
-                }}
-                onPointerUp={(event) => handleThreadRenamePointerUp(event, thread.id)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
                   activateThreadFromSidebarIntent(thread.id);
                 }}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  if (selectedThreadIds.size > 0 && selectedThreadIds.has(thread.id)) {
-                    void handleMultiSelectContextMenu({
-                      x: event.clientX,
-                      y: event.clientY,
-                    });
-                  } else {
+                {...createSidebarThreadRowGestures({
+                  threadId: thread.id,
+                  onRename: openRenameThreadDialog,
+                  onRenamePointerUp: handleThreadRenamePointerUp,
+                  onContextMenu: (threadId, position) => {
+                    // A right-click inside an active multi-selection acts on the whole
+                    // selection; anywhere else it drops the selection and targets the row.
+                    if (selectedThreadIds.size > 0 && selectedThreadIds.has(threadId)) {
+                      void handleMultiSelectContextMenu(position);
+                      return;
+                    }
                     if (selectedThreadIds.size > 0) {
                       clearSelection();
                     }
-                    void handleThreadContextMenu(thread.id, {
-                      x: event.clientX,
-                      y: event.clientY,
-                    });
-                  }
-                }}
+                    void handleThreadContextMenu(threadId, position);
+                  },
+                })}
               />
             }
           >
@@ -5886,6 +5876,12 @@ export default function Sidebar() {
                     onToggleThreadPinned={toggleThreadPinned}
                     onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
                     onMarkThreadRead={markThreadVisited}
+                    onRenameThread={openRenameThreadDialog}
+                    onThreadRenamePointerUp={handleThreadRenamePointerUp}
+                    onThreadContextMenu={(threadId, position) => {
+                      void handleThreadContextMenu(threadId, position);
+                    }}
+                    onProjectContextMenu={handleProjectContextMenu}
                     prByThreadId={prByThreadId}
                     onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
                     renderThreadHoverCard={(thread, anchorId) =>

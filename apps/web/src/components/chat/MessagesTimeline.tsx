@@ -133,6 +133,7 @@ import {
   getChatTranscriptUserMessageTextStyle,
   USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
   USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+  userMessageBubbleBorderClassName,
 } from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -393,6 +394,8 @@ interface MessagesTimelineProps {
   tailAnchorScrollInFlightRef?: RefObject<boolean> | undefined;
   /** Provenance for a conversation created from another Synara task. */
   crossTaskOrigin?: CrossTaskOrigin | null;
+  /** Marks the transcript as a temporary chat so user bubbles render the dashed primary outline. */
+  isTemporaryThread?: boolean;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -453,6 +456,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   tailAnchorMessageId: tailAnchorMessageIdProp,
   tailAnchorScrollInFlightRef,
   crossTaskOrigin: crossTaskOriginProp,
+  isTemporaryThread: isTemporaryThreadProp,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -498,6 +502,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const threadMarkers = threadMarkersProp ?? EMPTY_MESSAGE_MARKERS;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
+  const isTemporaryThread = isTemporaryThreadProp ?? false;
+  const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
   // The timeline remounts per thread (and when the agent-activity detail view
   // closes), but the anchor lives above it and survives those remounts. An
   // anchor that is already set at mount time therefore describes a slide that
@@ -1343,6 +1349,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       disabled={isSubmittingThisEdit || isRevertingCheckpoint}
                       allowEmpty={renderedBrowserAnnotations.length > 0}
                       chatTypographyStyle={userMessageTypographyStyle}
+                      borderClassName={userMessageBubbleBorderClass}
                       onCancel={cancelUserMessageEdit}
                       onSubmit={(text) =>
                         void submitUserMessageEdit(
@@ -1357,6 +1364,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       className={cn(
                         "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
                         USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+                        userMessageBubbleBorderClass,
                         bubbleIsChipOnly
                           ? "py-0.5 px-3"
                           : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
@@ -2757,6 +2765,7 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   disabled: boolean;
   allowEmpty: boolean;
   chatTypographyStyle: CSSProperties;
+  borderClassName: string;
   onCancel: () => void;
   onSubmit: (value: string) => void;
 }) {
@@ -2805,6 +2814,7 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
       className={cn(
         "w-full bg-[var(--app-user-message-background)]",
         USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+        props.borderClassName,
         USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
       )}
       onSubmit={(event) => {

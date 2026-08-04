@@ -44,6 +44,7 @@ interface ChatTranscriptPaneProps {
   expandedWorkGroups?: Record<string, boolean>;
   hasMessages: boolean;
   isRevertingCheckpoint: boolean;
+  isTemporaryThread?: boolean;
   isWorking: boolean;
   followLiveOutput: boolean;
   listRef: RefObject<LegendListRef | null>;
@@ -105,6 +106,7 @@ export function ChatTranscriptPane({
   expandedWorkGroups,
   hasMessages,
   isRevertingCheckpoint,
+  isTemporaryThread,
   isWorking,
   followLiveOutput,
   listRef,
@@ -207,6 +209,7 @@ export function ChatTranscriptPane({
             tailAnchorMessageId={tailAnchorMessageId ?? null}
             {...(tailAnchorScrollInFlightRef ? { tailAnchorScrollInFlightRef } : {})}
             {...(crossTaskOrigin ? { crossTaskOrigin } : {})}
+            isTemporaryThread={isTemporaryThread ?? false}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             onOpenTurnDiff={onOpenTurnDiff}

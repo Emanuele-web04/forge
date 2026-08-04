@@ -370,6 +370,7 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
+import { registerTerminalContextComposerTarget } from "../lib/terminalContextComposerRegistry";
 import {
   appendPastedTextsToPrompt,
   createPastedTextDraft,
@@ -4196,7 +4197,7 @@ export default function ChatView({
   });
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
-      if (!activeThread) {
+      if (!activeThreadId) {
         return;
       }
       discardPromptHistoryNavigationForComposerMutation();
@@ -4216,11 +4217,11 @@ export default function ChatView({
         insertion.cursor,
       );
       const inserted = insertComposerDraftTerminalContext(
-        activeThread.id,
+        activeThreadId,
         insertion.prompt,
         {
           id: randomUUID(),
-          threadId: activeThread.id,
+          threadId: activeThreadId,
           createdAt: new Date().toISOString(),
           ...selection,
         },
@@ -4237,13 +4238,31 @@ export default function ChatView({
       });
     },
     [
-      activeThread,
+      activeThreadId,
       composerCursor,
       composerTerminalContexts,
       discardPromptHistoryNavigationForComposerMutation,
       insertComposerDraftTerminalContext,
     ],
   );
+  // Terminal-only workspaces intentionally have no mounted composer. Do not
+  // publish a global-looking action with nowhere to insert the selection.
+  const canAddTerminalContextToChat = activeThread !== undefined && shouldRenderChatPaneContent;
+  // Keep the published capability stable while cursor and draft state change;
+  // dock terminals should not rerender for ordinary composer edits.
+  const addTerminalContextToDraftRef = useRef(addTerminalContextToDraft);
+  useLayoutEffect(() => {
+    addTerminalContextToDraftRef.current = addTerminalContextToDraft;
+  }, [addTerminalContextToDraft]);
+  const addRegisteredTerminalContextToDraft = useCallback((selection: TerminalContextSelection) => {
+    addTerminalContextToDraftRef.current(selection);
+  }, []);
+  useLayoutEffect(() => {
+    if (!canAddTerminalContextToChat) {
+      return;
+    }
+    return registerTerminalContextComposerTarget(paneScopeId, addRegisteredTerminalContextToDraft);
+  }, [addRegisteredTerminalContextToDraft, canAddTerminalContextToChat, paneScopeId]);
   // Collapse an oversized paste into an attachment card above the composer instead
   // of flooding the editor with raw text. The card holds the full content until the
   // user sends or clicks "Show in text field".
@@ -4392,7 +4411,7 @@ export default function ChatView({
         if (!activeThreadId) return;
         storeSetTerminalActivity(activeThreadId, terminalId, activity);
       },
-      onAddTerminalContext: addTerminalContextToDraft,
+      ...(canAddTerminalContextToChat ? { onAddTerminalContext: addTerminalContextToDraft } : {}),
     }),
     [
       activeProject?.cwd,
@@ -4432,6 +4451,7 @@ export default function ChatView({
       toggleRightDock,
       rightDockOpen,
       hasRightDockPanes,
+      canAddTerminalContextToChat,
     ],
   );
   const runProjectScript = useCallback(
@@ -11539,6 +11559,7 @@ export default function ChatView({
                     }
                     tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
                     crossTaskOrigin={crossTaskOrigin}
+                    isTemporaryThread={isThreadTemporary}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}

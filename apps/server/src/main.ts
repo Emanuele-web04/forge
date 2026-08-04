@@ -32,6 +32,7 @@ import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
+import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
 import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
@@ -301,6 +302,7 @@ const LayerLive = (input: CliInput) => {
     Layer.provideMerge(providerLayer),
   );
   const providerRuntimeReconcilerLayer = ProviderRuntimeReconcilerLive.pipe(
+    Layer.provide(ProviderRuntimeEventRepositoryLive),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
   );

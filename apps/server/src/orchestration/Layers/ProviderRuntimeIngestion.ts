@@ -52,7 +52,10 @@ import {
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
-import { OrchestrationCommandIdentityCollisionError } from "../Errors.ts";
+import {
+  OrchestrationCommandIdentityCollisionError,
+  OrchestrationCommandPreviouslyRejectedError,
+} from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
@@ -1688,12 +1691,17 @@ const make = Effect.gen(function* () {
                 yield* projectionSnapshotQuery.getThreadShellById(childThreadId),
                 threadDetailFromShell,
               );
+          // Reuse the parent's full selection when the models match so capability
+          // flags (e.g. supportsAutoMode) survive; a diverging subagent model gets
+          // a bare selection because the parent's flags don't describe it.
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
-              ? {
-                  provider: parentThread.modelSelection.provider,
-                  model: identity.model,
-                }
+              ? identity.model === parentThread.modelSelection.model
+                ? parentThread.modelSelection
+                : {
+                    provider: parentThread.modelSelection.provider,
+                    model: identity.model,
+                  }
               : undefined;
 
           if (Option.isNone(existingThread)) {
@@ -2551,15 +2559,17 @@ const make = Effect.gen(function* () {
   // inputs still drain, and the durable poll retries from the exact cursor.
   let runtimeJournalPageBlocked = false;
 
-  const quarantineCommandIdentityCollision = Effect.fnUntraced(function* (
+  const quarantineUnreplayableCommand = Effect.fnUntraced(function* (
     input: Extract<RuntimeIngestionInput, { source: "runtime" }>,
-    error: OrchestrationCommandIdentityCollisionError,
+    error: OrchestrationCommandIdentityCollisionError | OrchestrationCommandPreviouslyRejectedError,
   ) {
-    // A command receipt permanently binds one command id to one fingerprint.
+    // A command receipt permanently binds one command id to one fingerprint,
+    // and a stored rejection permanently binds one command id to its refusal.
     // Retrying the same runtime row can therefore never make an identity
-    // collision succeed. This most commonly happens when a crash or upgrade
-    // leaves a partially projected event whose remaining command is rebuilt
-    // from newer thread state.
+    // collision or a previously rejected command succeed. This most commonly
+    // happens when a crash or upgrade leaves a partially projected event whose
+    // remaining command is rebuilt from newer thread state, or when a command
+    // was durably rejected by an invariant on first dispatch.
     //
     // The runtime journal has one global cursor, so waiting for the generic
     // poison gate here drops every later event for every provider — including
@@ -2575,7 +2585,7 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.catchCause((cause) => {
           runtimeJournalPageBlocked = true;
-          return Effect.logWarning("provider runtime command collision quarantine failed", {
+          return Effect.logWarning("provider runtime unreplayable command quarantine failed", {
             sequence: input.sequence,
             eventId: input.event.eventId,
             eventType: input.event.type,
@@ -2591,7 +2601,7 @@ const make = Effect.gen(function* () {
     }
     if (!advanced) {
       runtimeJournalPageBlocked = true;
-      yield* Effect.logWarning("provider runtime command collision could not be quarantined", {
+      yield* Effect.logWarning("provider runtime unreplayable command could not be quarantined", {
         sequence: input.sequence,
         eventId: input.event.eventId,
         eventType: input.event.type,
@@ -2603,7 +2613,7 @@ const make = Effect.gen(function* () {
       return;
     }
     yield* Effect.logError(
-      "provider runtime command collision quarantined without blocking the journal",
+      "provider runtime unreplayable command quarantined without blocking the journal",
       {
         sequence: input.sequence,
         eventId: input.event.eventId,
@@ -2627,9 +2637,10 @@ const make = Effect.gen(function* () {
             const error = Option.getOrUndefined(Cause.findErrorOption(cause));
             if (
               input.source === "runtime" &&
-              error instanceof OrchestrationCommandIdentityCollisionError
+              (error instanceof OrchestrationCommandIdentityCollisionError ||
+                error instanceof OrchestrationCommandPreviouslyRejectedError)
             ) {
-              return quarantineCommandIdentityCollision(input, error);
+              return quarantineUnreplayableCommand(input, error);
             }
             if (input.source === "runtime") {
               runtimeJournalPageBlocked = true;

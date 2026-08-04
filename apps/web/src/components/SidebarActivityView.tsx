@@ -4,7 +4,15 @@
 // Layer: Sidebar UI component
 // Exports: SidebarActivityView
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 
 import type { OrchestrationThreadPullRequest, ProjectId, ThreadId } from "@synara/contracts";
 
@@ -55,6 +63,10 @@ import {
 } from "./SidebarActivityView.logic";
 import { SIDEBAR_TRAILING_ICON_CLASS, sidebarGlyphClass } from "./sidebarGlyphs";
 import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
+import {
+  createSidebarThreadRowGestures,
+  type SidebarRowContextMenuPosition,
+} from "./sidebarThreadRowGestures";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
@@ -95,6 +107,9 @@ function ActivityThreadRow({
   onSetSettled,
   onTogglePinned,
   onArchive,
+  onRename,
+  onRenamePointerUp,
+  onContextMenu,
   renderHoverCard,
 }: {
   thread: SidebarThreadSummary;
@@ -108,6 +123,9 @@ function ActivityThreadRow({
   onSetSettled: (settled: boolean) => void;
   onTogglePinned: () => void;
   onArchive: () => void;
+  onRename: (threadId: ThreadId) => void;
+  onRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
+  onContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
   renderHoverCard: (anchorId: string) => ReactNode;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
@@ -121,6 +139,15 @@ function ActivityThreadRow({
   // unread completion and the running spinner (or state dot) for everything
   // else — same rule and same glyphs the classic thread/project rows use.
   const trailingStatus = resolveThreadStatusTrailingIndicator({ status, isActive });
+  // Rename/context-menu gestures live on the row wrapper (not the title button) so
+  // they also fire over the trailing status and hover-action cluster, which are
+  // absolutely positioned siblings of the button.
+  const rowGestures = createSidebarThreadRowGestures({
+    threadId: thread.id,
+    onRename,
+    onRenamePointerUp,
+    onContextMenu,
+  });
 
   return (
     <Tooltip>
@@ -131,6 +158,7 @@ function ActivityThreadRow({
             data-thread-hover-anchor={hoverAnchorId}
             className="group/activity-row relative"
             data-thread-item
+            {...rowGestures}
           />
         }
       >
@@ -198,7 +226,14 @@ function ActivityThreadRow({
             <SidebarStatusTrailingGlyph status={trailingStatus} />
           </span>
         ) : null}
-        <span className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
+        <span
+          className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100"
+          // Double-clicking an action button toggles it twice; it must not also open
+          // the row's rename dialog. Pointer-up is the touch/pen double-tap signal,
+          // so keep action taps out of that detector too.
+          onDoubleClick={stopRowActivation}
+          onPointerUp={(event) => event.stopPropagation()}
+        >
           <ThreadPinToggleButton
             pinned={isPinned}
             presentation="inline"
@@ -232,9 +267,28 @@ function ActivityThreadRow({
   );
 }
 
-function ActivitySectionLabel({ label }: { label: string }) {
+function ActivitySectionLabel({
+  label,
+  onContextMenu,
+}: {
+  label: string;
+  /** Project blocks carry the same right-click menu as a classic project row. */
+  onContextMenu?: (position: SidebarRowContextMenuPosition) => void;
+}) {
   return (
-    <div className="mb-1.5 px-2">
+    <div
+      data-slot="activity-section-label"
+      className="mb-1.5 px-2"
+      {...(onContextMenu
+        ? {
+            onContextMenu: (event: MouseEvent) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onContextMenu({ x: event.clientX, y: event.clientY });
+            },
+          }
+        : {})}
+    >
       <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>{label}</span>
     </div>
   );
@@ -465,6 +519,10 @@ export function SidebarActivityView({
   onToggleThreadPinned,
   onArchiveThread,
   onMarkThreadRead,
+  onRenameThread,
+  onThreadRenamePointerUp,
+  onThreadContextMenu,
+  onProjectContextMenu,
   renderThreadHoverCard,
   prByThreadId,
   onVisibleThreadIdsChange,
@@ -486,6 +544,14 @@ export function SidebarActivityView({
   onArchiveThread: (threadId: ThreadId) => void;
   /** Records a completion as seen (the classic sidebar's markThreadVisited). */
   onMarkThreadRead: (threadId: ThreadId, completedAt?: string) => void;
+  /** Double-click a row (the classic sidebar's rename gesture). */
+  onRenameThread: (threadId: ThreadId) => void;
+  /** Touch/pen double-tap fallback for the same rename gesture. */
+  onThreadRenamePointerUp: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
+  /** Right-click a row: the full thread menu, including Copy Thread ID. */
+  onThreadContextMenu: (threadId: ThreadId, position: SidebarRowContextMenuPosition) => void;
+  /** Right-click a project block header: the same menu a classic project row opens. */
+  onProjectContextMenu: (projectId: ProjectId, position: SidebarRowContextMenuPosition) => void;
   /** Same rich hover card the classic thread rows show at the sidebar edge. */
   renderThreadHoverCard: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
   /** Starts a new chat in the current or most recently used ordinary project. */
@@ -634,6 +700,9 @@ export function SidebarActivityView({
       }}
       onTogglePinned={() => onToggleThreadPinned(thread.id)}
       onArchive={() => onArchiveThread(thread.id)}
+      onRename={onRenameThread}
+      onRenamePointerUp={onThreadRenamePointerUp}
+      onContextMenu={onThreadContextMenu}
       renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
     />
   );
@@ -712,6 +781,12 @@ export function SidebarActivityView({
                   ? "Synara"
                   : resolveThreadProjectLabel(projectById.get(group.projectId))
               }
+              {...(group.kind === "project"
+                ? {
+                    onContextMenu: (position: SidebarRowContextMenuPosition) =>
+                      onProjectContextMenu(group.projectId, position),
+                  }
+                : {})}
             />
             <div className="flex flex-col gap-0.5">
               {visibleThreads.map(renderActiveRow)}

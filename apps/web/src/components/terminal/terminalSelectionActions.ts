@@ -2,7 +2,15 @@
 // Purpose: Keep pure selection-action positioning helpers separate from the browser-heavy drawer.
 // Layer: Chat terminal workspace helpers
 
+import type { ContextMenuItem } from "@synara/contracts";
+
 const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
+
+export function resolveTerminalSelectionContextMenuItems(
+  hasComposerTarget: boolean,
+): readonly ContextMenuItem<"add-to-chat">[] {
+  return hasComposerTarget ? [{ id: "add-to-chat", label: "Add to chat" }] : [];
+}
 
 export function resolveTerminalSelectionActionPosition(options: {
   bounds: { left: number; top: number; width: number; height: number };

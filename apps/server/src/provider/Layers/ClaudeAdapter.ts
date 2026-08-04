@@ -380,8 +380,11 @@ interface ClaudeSessionContext {
   // Stop requests that arrived before task_started mapped the tool_use_id to an
   // SDK task id; fired via query.stopTask the moment the mapping lands.
   readonly pendingSubagentStops: Set<string>;
-  // Live background-task ids. background_tasks_changed replaces the set while
-  // task_updated patches close the ordering window around individual tasks.
+  // Last background-task ids from background_tasks_changed (REPLACE
+  // semantics); diffed so only newly backgrounded work gets announced.
+  // Foreground/terminal patches may evict ids, but background patches never
+  // seed the set because they can race the aggregate snapshot and suppress its
+  // "Moved to background" notice entirely.
   readonly knownBackgroundTaskIds: Set<string>;
   // Task ids with provider-terminal evidence. Agent-scoped human interactions
   // are cancelled only on this evidence (or whole-session stop), never merely
@@ -3855,10 +3858,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             context.terminalTaskIds.add(message.task_id);
             yield* settlePendingHumanInteractionsForAgent(context, message.task_id);
           }
+          // A foreground/terminal patch can safely evict an id from the last
+          // background snapshot. Do not add on `true`: that patch may arrive
+          // before the aggregate snapshot whose newly-backgrounded notice we
+          // still need to emit.
           if (isTerminalStatus || isBackgrounded === false) {
             context.knownBackgroundTaskIds.delete(message.task_id);
-          } else if (isBackgrounded === true) {
-            context.knownBackgroundTaskIds.add(message.task_id);
           }
           const isSettledRuntimeStatus = isTerminalStatus || status === "paused";
           if (isSettledRuntimeStatus && context.liveWorkflowTaskIds.has(message.task_id)) {
