@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DeviceEvent } from "@synara/contracts";
 
+import type { BootOwnershipStore } from "./bootOwnership.ts";
 import { DeviceBackendError } from "./DeviceBackend.ts";
 import { DEVICE_IDLE_SHUTDOWN_MS, DeviceManager } from "./DeviceManager.ts";
 import { FakeDeviceBackend } from "./FakeDeviceBackend.ts";
@@ -15,11 +16,16 @@ const DEVICE_D = "FAKE-0004";
 
 function makeManager(
   backend = new FakeDeviceBackend(),
-  options: { readonly attachDeadlineMs?: number; readonly attachRetryMs?: number } = {},
+  options: {
+    readonly attachDeadlineMs?: number;
+    readonly attachRetryMs?: number;
+    readonly bootOwnership?: BootOwnershipStore;
+  } = {},
 ) {
   const events: DeviceEvent[] = [];
   const manager = new DeviceManager({
     backend,
+    ...(options.bootOwnership ? { bootOwnership: options.bootOwnership } : {}),
     // Attach retries are the default for cold boots; a test that is not about
     // the retry loop wants the first failure to be final.
     attachDeadlineMs: options.attachDeadlineMs ?? 0,
@@ -480,6 +486,92 @@ describe("DeviceManager device switching", () => {
     // a row just works instead of prompting for a shutdown.
     expect(fourth.kind).toBe("booted");
     expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_A, DEVICE_B]);
+  });
+});
+
+describe("surviving a crash", () => {
+  /** An in-memory stand-in for the on-disk record. */
+  const makeStore = () => {
+    let saved: { pid: number; udids: readonly string[] } | null = null;
+    return {
+      store: {
+        read: async () => saved,
+        write: async (udids: readonly string[]) => {
+          saved = { pid: 4242, udids: [...udids] };
+        },
+        clear: async () => {
+          saved = { pid: 4242, udids: [] };
+        },
+      },
+      get saved() {
+        return saved;
+      },
+    };
+  };
+
+  it("writes down every device it boots, so a crash leaves a trail", async () => {
+    // dispose() is the only thing that shuts these down, and a SIGKILL never
+    // reaches it; without this record the next run cannot tell our orphans from
+    // the user's own simulators.
+    const owner = makeStore();
+    const { manager } = makeManager(new FakeDeviceBackend(), { bootOwnership: owner.store });
+
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+
+    expect(owner.saved?.udids).toEqual([DEVICE_A, DEVICE_B]);
+  });
+
+  it("forgets a device as soon as it is shut down", async () => {
+    const owner = makeStore();
+    const { manager } = makeManager(new FakeDeviceBackend(), { bootOwnership: owner.store });
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+
+    await manager.shutdown(DEVICE_A);
+
+    expect(owner.saved?.udids).toEqual([DEVICE_B]);
+  });
+
+  it("leaves an empty record after a clean quit", async () => {
+    // A clean quit already shut everything down, so the next start must not
+    // adopt these udids and kill whatever the user booted since.
+    const owner = makeStore();
+    const { manager } = makeManager(new FakeDeviceBackend(), { bootOwnership: owner.store });
+    await manager.boot(DEVICE_A);
+
+    await manager.dispose();
+
+    expect(owner.saved?.udids).toEqual([]);
+  });
+
+  it("shuts down simulators a crashed run left behind", async () => {
+    const owner = makeStore();
+    const { backend, manager } = makeManager(new FakeDeviceBackend(), {
+      bootOwnership: owner.store,
+    });
+    await owner.store.write([DEVICE_A]);
+    backend.bootExternally(DEVICE_A);
+
+    const reclaimed = await manager.reclaimOrphanedBoots(() => false);
+
+    expect(reclaimed).toEqual([DEVICE_A]);
+    expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_A]);
+  });
+
+  it("leaves the devices of a server that is still running", async () => {
+    // Two Synara processes can overlap; the record belongs to the live one.
+    const owner = makeStore();
+    const { backend, manager } = makeManager(new FakeDeviceBackend(), {
+      bootOwnership: owner.store,
+    });
+    await owner.store.write([DEVICE_A]);
+    backend.bootExternally(DEVICE_A);
+
+    const reclaimed = await manager.reclaimOrphanedBoots(() => true);
+
+    expect(reclaimed).toEqual([]);
+    expect(backend.callsOfKind("shutdown")).toEqual([]);
   });
 });
 

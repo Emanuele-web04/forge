@@ -21,6 +21,12 @@
  * @module device/DeviceManager
  */
 import {
+  NULL_BOOT_OWNERSHIP,
+  orphanedBootUdids,
+  processIsAlive,
+  type BootOwnershipStore,
+} from "./bootOwnership.ts";
+import {
   DEVICE_SYNARA_BOOT_LIMIT,
   ThreadId,
   type DeviceAttachPhase,
@@ -111,6 +117,8 @@ export interface DeviceManagerOptions {
   readonly transport?: DeviceFrameTransport;
   readonly idleShutdownMs?: number;
   readonly bootLimit?: number;
+  /** Remembers Synara's boots across a crash; defaults to remembering nothing. */
+  readonly bootOwnership?: BootOwnershipStore;
   readonly attachDeadlineMs?: number;
   readonly attachRetryMs?: number;
   readonly setTimeout?: (handler: () => void, ms: number) => NodeJS.Timeout;
@@ -144,6 +152,7 @@ export class DeviceManager {
   private readonly transport: DeviceFrameTransport;
   private readonly idleShutdownMs: number;
   private readonly bootLimit: number;
+  private readonly bootOwnership: BootOwnershipStore;
   private readonly attachDeadlineMs: number;
   private readonly attachRetryMs: number;
   private readonly schedule: (handler: () => void, ms: number) => NodeJS.Timeout;
@@ -164,11 +173,48 @@ export class DeviceManager {
     this.transport = options.transport ?? new DeviceFrameTransport();
     this.idleShutdownMs = options.idleShutdownMs ?? DEVICE_IDLE_SHUTDOWN_MS;
     this.bootLimit = options.bootLimit ?? DEVICE_SYNARA_BOOT_LIMIT;
+    this.bootOwnership = options.bootOwnership ?? NULL_BOOT_OWNERSHIP;
     this.attachDeadlineMs = options.attachDeadlineMs ?? DEVICE_ATTACH_DEADLINE_MS;
     this.attachRetryMs = options.attachRetryMs ?? DEVICE_ATTACH_RETRY_MS;
     this.schedule = options.setTimeout ?? ((handler, ms) => setTimeout(handler, ms));
     this.cancel = options.clearTimeout ?? ((handle) => clearTimeout(handle));
     this.now = options.now ?? Date.now;
+  }
+
+  private async recordBootOwnership(): Promise<void> {
+    await this.bootOwnership.write([...this.synaraBooted]).catch(() => undefined);
+  }
+
+  /**
+   * Shut down simulators a previous run booted and never got to clean up.
+   *
+   * Called once at startup. A clean quit leaves an empty record, so this is a
+   * no-op; a crash leaves udids behind, and without this they would linger
+   * forever, because the next run sees them as user-booted and therefore
+   * outside the cap, the idle sweep and the quit-time shutdown alike.
+   *
+   * Returns the udids it shut down so the caller can log them: silently killing
+   * a simulator the user can see would be its own surprise.
+   */
+  async reclaimOrphanedBoots(
+    isProcessAlive: (pid: number) => boolean = processIsAlive,
+  ): Promise<readonly string[]> {
+    const recorded = await this.bootOwnership.read().catch(() => null);
+    if (recorded === null || recorded.udids.length === 0) return [];
+
+    const devices = await this.backend.listDevices({ includeShutdown: false }).catch(() => []);
+    const orphans = orphanedBootUdids(
+      recorded,
+      devices.map((device) => device.udid),
+      isProcessAlive,
+    );
+    for (const udid of orphans) {
+      await this.backend.shutdown(udid).catch(() => undefined);
+    }
+    // Cleared even when nothing was shut down: the record described a dead
+    // process, so keeping it would re-run this every start.
+    if (!isProcessAlive(recorded.pid)) await this.bootOwnership.clear().catch(() => undefined);
+    return orphans;
   }
 
   /** Waits without holding the process open, and shares the injected scheduler. */
@@ -282,6 +328,9 @@ export class DeviceManager {
 
     const device = await this.backend.boot(udid);
     this.synaraBooted.add(udid);
+    // Persisted before the caller is told the boot succeeded, so a crash in the
+    // next instant still leaves a record to reclaim from.
+    await this.recordBootOwnership();
     // A device booted for a new purpose is no longer idle-condemned.
     this.clearIdleTimer(udid);
     await this.publishAllThreads();
@@ -293,6 +342,7 @@ export class DeviceManager {
     await this.stopStream(udid);
     await this.backend.shutdown(udid);
     this.synaraBooted.delete(udid);
+    await this.recordBootOwnership();
     this.clearIdleTimer(udid);
     // Any thread watching this device loses its attachment rather than pointing
     // at a shut-down simulator.
@@ -714,6 +764,8 @@ export class DeviceManager {
       await this.backend.shutdown(udid).catch(() => undefined);
       this.synaraBooted.delete(udid);
     }
+    // Nothing is ours any more, so a later start must not adopt these.
+    await this.bootOwnership.clear().catch(() => undefined);
     this.listeners.clear();
     await this.backend.dispose().catch(() => undefined);
   }
