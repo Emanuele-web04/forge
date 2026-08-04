@@ -227,18 +227,46 @@ export class DeviceManager {
   /** Devices the pane may offer as shutdown candidates when the cap is hit. */
   async synaraBootedDevices(): Promise<readonly DeviceDescriptor[]> {
     const devices = await this.backend.listDevices({ includeShutdown: true }).catch(() => []);
+    this.reconcileSynaraBooted(devices);
     return devices
       .filter((device) => this.synaraBooted.has(device.udid))
       .map((device) => this.describe(device));
   }
 
+  /**
+   * Forget devices that are no longer running.
+   *
+   * The set is Synara's own bookkeeping, but the simulators are not Synara's to
+   * keep: `simctl shutdown all` from a shell, Simulator.app quitting, a crashed
+   * runtime, or the agent tidying up all shut a device down without telling us.
+   * Every one of those left a phantom holding a slot, and three phantoms made
+   * the pane refuse the next boot and offer to shut down devices that were
+   * already off — including, absurdly, the one being asked for.
+   *
+   * Reconciled from the listing every caller already has rather than by polling:
+   * the cap is only consulted on boot, and that path lists devices anyway.
+   */
+  private reconcileSynaraBooted(devices: readonly DeviceDescriptor[]): void {
+    const running = new Set(
+      devices
+        .filter((device) => device.state === "booted" || device.state === "booting")
+        .map((device) => device.udid),
+    );
+    for (const udid of this.synaraBooted) {
+      if (running.has(udid)) continue;
+      this.synaraBooted.delete(udid);
+      this.clearIdleTimer(udid);
+    }
+  }
+
   // ── Boot / shutdown ────────────────────────────────────────────────
 
   async boot(udid: string): Promise<DeviceBootResult> {
-    const known = await this.backend
-      .listDevices({ includeShutdown: true })
-      .then((devices) => devices.find((device) => device.udid === udid) ?? null)
-      .catch(() => null);
+    const devices = await this.backend.listDevices({ includeShutdown: true }).catch(() => []);
+    // Devices that stopped without Synara doing it still held their slots, so
+    // three shutdowns from a shell were enough to make every later boot refuse.
+    this.reconcileSynaraBooted(devices);
+    const known = devices.find((device) => device.udid === udid) ?? null;
     // Viewing an already-booted device is uncapped: the cap exists to stop
     // Synara from accumulating simulators, not to limit what the user watches.
     if (known?.state === "booted") {

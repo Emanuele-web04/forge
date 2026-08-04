@@ -299,6 +299,38 @@ describe("DeviceManager boot ownership", () => {
     ]);
   });
 
+  it("stops counting devices that were shut down behind its back", async () => {
+    const { backend, manager } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await manager.boot(DEVICE_C);
+
+    // `simctl shutdown all` from the agent's shell, Simulator.app quitting, a
+    // crashed runtime. Each used to leave a phantom holding a slot, so three of
+    // them refused every later boot and offered to shut down devices that were
+    // already off — including the one being asked for.
+    backend.shutdownExternally(DEVICE_A);
+    backend.shutdownExternally(DEVICE_B);
+    backend.shutdownExternally(DEVICE_C);
+
+    expect(await manager.boot(DEVICE_D)).toMatchObject({ kind: "booted" });
+  });
+
+  it("only offers shutdown candidates that are actually running", async () => {
+    const { backend, manager } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await manager.boot(DEVICE_C);
+    backend.shutdownExternally(DEVICE_B);
+
+    // Still at the cap on paper, but B is gone, so it must not be offered as
+    // something the user can free.
+    expect((await manager.synaraBootedDevices()).map((device) => device.udid)).toEqual([
+      DEVICE_A,
+      DEVICE_C,
+    ]);
+  });
+
   it("does not count an already-booted device against the cap", async () => {
     const { backend, manager } = makeManager();
     await manager.boot(DEVICE_A);
