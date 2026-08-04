@@ -69,6 +69,13 @@ export function shouldShowThreadNotificationToast(input: {
   return !input.visibleThreadIds.has(input.threadId);
 }
 
+export function shouldAttemptSystemTaskNotification(input: {
+  enabled: boolean;
+  isWindowForeground: boolean;
+}): boolean {
+  return input.enabled && !input.isWindowForeground;
+}
+
 // Treat sidebar "working" states as the only notification-worthy starting point.
 function isRunningStatus(status: ThreadSessionStatus | null | undefined): boolean {
   return status === "running" || status === "connecting";

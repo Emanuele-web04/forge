@@ -15,6 +15,7 @@ import {
   collectInputNeededThreadCandidates,
   completedThreadNotificationKey,
   isNotificationRuntimeFreshTimestamp,
+  shouldAttemptSystemTaskNotification,
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 import type { Thread } from "../types";
@@ -119,6 +120,20 @@ function buildCollectedTaskCompletionCopy(assistantText: string) {
   }
   return buildTaskCompletionCopy(candidate);
 }
+
+describe("shouldAttemptSystemTaskNotification", () => {
+  it("only attempts enabled notifications while the window is in the background", () => {
+    expect(shouldAttemptSystemTaskNotification({ enabled: true, isWindowForeground: false })).toBe(
+      true,
+    );
+    expect(shouldAttemptSystemTaskNotification({ enabled: true, isWindowForeground: true })).toBe(
+      false,
+    );
+    expect(shouldAttemptSystemTaskNotification({ enabled: false, isWindowForeground: false })).toBe(
+      false,
+    );
+  });
+});
 
 describe("collectCompletedThreadCandidates", () => {
   it("returns threads that moved from working to completed", () => {

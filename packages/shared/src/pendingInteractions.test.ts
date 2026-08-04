@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isPendingInteractionResponseClaimable,
   respondingInteractionReclaimCutoff,
-} from "./pendingInteractions.ts";
+} from "./pendingInteractions";
 
 describe("pending interaction response claims", () => {
   it.each(["pending", "retryable", "uncertain"] as const)(
