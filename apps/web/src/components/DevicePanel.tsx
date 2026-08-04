@@ -92,6 +92,7 @@ export default function DevicePanel(props: {
   const upsertThreadState = useDeviceStateStore((store) => store.upsertThreadState);
   const [busy, setBusy] = useState(false);
   const [shutdownConfirm, setShutdownConfirm] = useState(false);
+  const [landscape, setLandscape] = useState(false);
   const [bootLimit, setBootLimit] = useState<{
     readonly limit: number;
     readonly candidates: readonly DeviceDescriptor[];
@@ -510,6 +511,9 @@ export default function DevicePanel(props: {
         case "record":
           toggleRecording();
           return;
+        case "rotate":
+          setLandscape((current) => !current);
+          return;
         case "shutdown":
           setShutdownConfirm(true);
           return;
@@ -687,12 +691,14 @@ export default function DevicePanel(props: {
           pixelHeight={devicePixelSize?.height}
           buttonsDisabled={deviceControlsDisabled}
           onPressButton={pressButton}
+          landscape={landscape}
         >
           {screen}
         </DeviceScreen>
         <DeviceControlRail
           disabled={deviceControlsDisabled}
           recording={isDeviceRecordingActive(recording)}
+          landscape={landscape}
           onAction={runRailAction}
         />
       </div>

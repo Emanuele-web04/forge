@@ -376,6 +376,7 @@ export const DeviceScreen = memo(function DeviceScreen({
   pixelHeight,
   className,
   buttonsDisabled,
+  landscape = false,
   onPressButton,
 }: {
   children: ReactNode;
@@ -384,6 +385,12 @@ export const DeviceScreen = memo(function DeviceScreen({
   pixelHeight?: number | undefined;
   className?: string;
   buttonsDisabled?: boolean;
+  /**
+   * Turn the whole device a quarter turn. The guest keeps rendering portrait —
+   * CoreSimulator has no orientation API — so this rotates the assembled
+   * device, buttons and all, rather than re-deriving a landscape chassis.
+   */
+  landscape?: boolean;
   onPressButton?: ((button: DeviceHardwareButton) => void) | undefined;
 }) {
   const geo = useMemo(
@@ -414,7 +421,16 @@ export const DeviceScreen = memo(function DeviceScreen({
     >
       <div
         className="relative"
-        style={{ height: `min(100cqh, calc(100cqw / ${geo.aspect}))`, aspectRatio: geo.aspect }}
+        style={{
+          // Turned, the device's height runs across the pane, so the fit is
+          // measured against the transposed axis; without this the rotated
+          // device shrinks to whatever its untumbled height allowed.
+          height: landscape
+            ? `min(100cqw, calc(100cqh / ${geo.aspect}))`
+            : `min(100cqh, calc(100cqw / ${geo.aspect}))`,
+          aspectRatio: geo.aspect,
+          ...(landscape ? { transform: "rotate(90deg)" } : {}),
+        }}
       >
         <DeviceSilhouette
           kind={kind}

@@ -14,13 +14,14 @@ import {
   DevicePowerIcon,
   DeviceRecordIcon,
   DeviceRecordStopIcon,
+  DeviceRotateIcon,
   DeviceShutterIcon,
   type LucideIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-export type DeviceRailAction = "home" | "screenshot" | "record" | "shutdown" | "detach";
+export type DeviceRailAction = "home" | "screenshot" | "record" | "rotate" | "shutdown" | "detach";
 
 export interface DeviceRailItem {
   readonly id: DeviceRailAction;
@@ -38,16 +39,18 @@ export interface DeviceRailGroup {
  * Grouped by what the action touches: what the device is showing, what leaves
  * the device as a file, and what ends the session. A thin divider marks each seam.
  *
- * There is deliberately no rotate control. A headless simulator cannot be
- * turned — see the note on the device pane spec — and the only thing the pane
- * could offer instead is rotating its own picture, which leaves the app inside
- * rendering portrait and lying on its side. A missing control is better than
- * one that makes the device look broken.
+ * Rotate turns the pane's picture, not the guest: CoreSimulator exposes no
+ * orientation API, so the app inside keeps rendering portrait. The control is
+ * still worth having — it is how you look at a landscape layout — and it is
+ * named for what it actually turns.
  */
 export const DEVICE_RAIL_GROUPS: readonly DeviceRailGroup[] = [
   {
     id: "screen",
-    items: [{ id: "home", label: "Home", shortcut: "⌘⇧H", Icon: DeviceHomeIcon }],
+    items: [
+      { id: "home", label: "Home", shortcut: "⌘⇧H", Icon: DeviceHomeIcon },
+      { id: "rotate", label: "Rotate view", Icon: DeviceRotateIcon },
+    ],
   },
   {
     id: "capture",
@@ -75,6 +78,8 @@ export const DEVICE_RAIL_HEIGHT_CLASS = "h-[2.75rem] shrink-0";
 export function DeviceControlRail(props: {
   disabled: boolean;
   recording: boolean;
+  /** Rotation is a view transform, so it stays available mid-capture. */
+  landscape: boolean;
   onAction: (action: DeviceRailAction) => void;
 }) {
   return (
@@ -88,7 +93,12 @@ export function DeviceControlRail(props: {
             const isRecordStop = item.id === "record" && props.recording;
             const Icon = isRecordStop ? DeviceRecordStopIcon : item.Icon;
             const label = isRecordStop ? "Stop recording" : item.label;
-            const pressed = item.id === "record" ? props.recording : null;
+            const pressed =
+              item.id === "record"
+                ? props.recording
+                : item.id === "rotate"
+                  ? props.landscape
+                  : null;
 
             return (
               <Tooltip key={item.id}>
