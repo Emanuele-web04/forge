@@ -581,6 +581,28 @@ export class IosSimulatorBackend implements DeviceBackend {
         "Rotating a headless simulator is not supported; rotate the device from inside the app or use Simulator.app.",
       );
     }
+    if (button === "volume-up" || button === "volume-down") {
+      // Volume is a Consumer-page usage (page 0x0C, 0xE9/0xEA) and the legacy
+      // Indigo HID client does not deliver that page. Probed exhaustively on a
+      // booted iPhone 17 Pro against backboardd's HID delivery log:
+      //
+      // - `IndigoHIDMessageForButton` has no volume source at all; idb reports
+      //   the same gap for every Consumer-page button.
+      // - `IndigoHIDMessageForHIDArbitrary` does encode the page (0x0c at byte
+      //   56, usage at byte 68, event type 0x2711), but every consumer usage
+      //   produced 0 deliveries where a keyboard usage through the identical
+      //   client produced 2.
+      // - `IndigoHIDMessageForKeyboardArbitrary` delivers a packed page|usage,
+      //   but stamps page 0x07, so the usage lands as a meaningless keycode.
+      //
+      // The modern DTUHID transport would carry it, but its daemon ships with
+      // Xcode 27 / iOS 26 and is absent on older toolchains. Refused explicitly
+      // rather than acked and dropped — the same rule rotate follows.
+      throw new DeviceBackendError(
+        "Volume cannot be changed on a headless simulator: its HID transport does not carry " +
+          "Consumer-page buttons. Change the volume inside the app, or use Simulator.app.",
+      );
+    }
     await this.assertCapability("hid");
     await this.injectInput(udid, HELPER_METHODS.button, () => ({ name: button }));
   }

@@ -332,28 +332,31 @@ export const DeviceSilhouette = memo(function DeviceSilhouette({
   );
 });
 
-const NO_HUD_HINT = "Changes the ringer volume; a headless simulator paints no volume HUD";
+const VOLUME_UNAVAILABLE_HINT =
+  "A headless simulator cannot receive volume — change it inside the app, or use Simulator.app";
 
 /**
- * Which contract button each drawn nub presses, and how it names itself. The
- * action button (the ring/silent switch's replacement) maps to nothing the
- * helper can inject, so it stays decorative rather than shipping a control
- * that does nothing when pressed.
+ * Every nub the frame draws, and what pressing it does.
  *
- * The volume nubs do inject: the HID event is built, sent, and acked, and an
- * app that listens for volume-button events receives it. What a headless boot
- * does not do is paint the system volume HUD, because SpringBoard only wires
- * that up when Simulator.app owns the device — so pressing these changes the
- * ringer volume without any on-screen confirmation. `hint` says so in the
- * tooltip, which is what keeps the button honest rather than apparently dead.
+ * `button` is what the press sends. A nub with no `button` is drawn metal with
+ * a tooltip: it explains why there is nothing to press rather than offering a
+ * control that would refuse, which is the state the pane must never ship.
+ *
+ * - The action button (the ring/silent switch's replacement) maps to nothing
+ *   the helper can inject.
+ * - Volume is a Consumer-page usage, and the simulator's HID transport does not
+ *   carry that page — probed across every Indigo encoding against backboardd's
+ *   delivery log, where consumer usages produced zero deliveries and a keyboard
+ *   usage through the same client produced two. The backend refuses these
+ *   presses explicitly, so the pane does not offer them.
  */
 export const NUB_ACTIONS: Record<
   string,
-  { readonly label: string; readonly button: DeviceHardwareButton; readonly hint?: string }
+  { readonly label: string; readonly button?: DeviceHardwareButton; readonly hint?: string }
 > = {
-  volumeUp: { label: "Volume up", button: "volume-up", hint: NO_HUD_HINT },
-  volumeDown: { label: "Volume down", button: "volume-down", hint: NO_HUD_HINT },
-  volumeRocker: { label: "Volume", button: "volume-up", hint: NO_HUD_HINT },
+  volumeUp: { label: "Volume up", hint: VOLUME_UNAVAILABLE_HINT },
+  volumeDown: { label: "Volume down", hint: VOLUME_UNAVAILABLE_HINT },
+  volumeRocker: { label: "Volume", hint: VOLUME_UNAVAILABLE_HINT },
   power: { label: "Lock", button: "lock" },
 };
 
@@ -476,31 +479,48 @@ export const DeviceScreen = memo(function DeviceScreen({
           className="pointer-events-none absolute inset-0 h-full w-full select-none"
         />
         {/*
-          The frame draws the hardware; these are the controls. Simulator.app's
-          side buttons are clickable and so are these, which is why each carries
-          an accessible name and a focus ring even though its face is the SVG's.
+          The frame draws the hardware; this lays the controls over it.
+          Simulator.app's side buttons are clickable and so are the ones backed
+          by a real press, which is why each carries an accessible name and a
+          focus ring even though its face is the SVG's. A nub with no button is
+          rendered as a plain hover target instead: it explains itself rather
+          than inviting a click that the backend would only refuse.
         */}
         {nubs.map(({ name, side, style }) => {
           const action = NUB_ACTIONS[name];
-          if (!action || !onPressButton) return null;
+          if (!action) return null;
+          const press = action.button;
+          const interactive = press !== undefined && onPressButton !== undefined;
+          if (!interactive && !action.hint) return null;
           return (
             <Tooltip key={name}>
               <TooltipTrigger
                 render={
-                  <button
-                    type="button"
-                    aria-label={action.label}
-                    disabled={buttonsDisabled}
-                    onClick={() => onPressButton(action.button)}
-                    className={cn(
-                      "absolute cursor-pointer rounded-full outline-none",
-                      "transition-transform duration-220 motion-reduce:transition-none",
-                      NUB_PRESS_IN[side],
-                      "focus-visible:ring-2 focus-visible:ring-ring/80",
-                      "disabled:pointer-events-none",
-                    )}
-                    style={style}
-                  />
+                  interactive ? (
+                    <button
+                      type="button"
+                      aria-label={action.label}
+                      disabled={buttonsDisabled}
+                      onClick={() => onPressButton?.(press)}
+                      className={cn(
+                        "absolute cursor-pointer rounded-full outline-none",
+                        "transition-transform duration-220 motion-reduce:transition-none",
+                        NUB_PRESS_IN[side],
+                        "focus-visible:ring-2 focus-visible:ring-ring/80",
+                        "disabled:pointer-events-none",
+                      )}
+                      style={style}
+                    />
+                  ) : (
+                    // Not a button: it has nothing to activate, so it takes no
+                    // tab stop and offers no press affordance — only the
+                    // tooltip that says why.
+                    <span
+                      aria-label={action.label}
+                      className="absolute cursor-default rounded-full"
+                      style={style}
+                    />
+                  )
                 }
               />
               <TooltipPopup side={side === "top" ? "top" : side}>

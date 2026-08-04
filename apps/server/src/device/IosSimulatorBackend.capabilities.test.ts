@@ -180,6 +180,30 @@ describe("operations backed by a broken capability", () => {
   });
 });
 
+describe("buttons the simulator's HID transport cannot carry", () => {
+  it("refuses volume instead of acking an event that never arrives", async () => {
+    const { backend } = await makeBackend(ALL_OK);
+
+    // Volume is a Consumer-page usage (page 0x0C, 0xE9/0xEA). Probed on a
+    // booted iPhone 17 Pro against backboardd's HID delivery log, every Indigo
+    // encoding produced zero deliveries where a keyboard usage through the
+    // identical client produced two. Acking that press would ship a button
+    // that lies, so it is refused with what the user can do instead.
+    for (const button of ["volume-up", "volume-down"] as const) {
+      await expect(backend.pressButton(DEVICE, button)).rejects.toThrow(
+        /Volume cannot be changed on a headless simulator[\s\S]*Simulator\.app/u,
+      );
+    }
+  });
+
+  it("still presses the buttons that do arrive", async () => {
+    const { backend } = await makeBackend(ALL_OK);
+
+    await expect(backend.pressButton(DEVICE, "home")).resolves.toBeUndefined();
+    await expect(backend.pressButton(DEVICE, "lock")).resolves.toBeUndefined();
+  });
+});
+
 describe("a broken input path", () => {
   it("fails tap precisely while accessibility keeps working", async () => {
     const { backend } = await makeBackend({
