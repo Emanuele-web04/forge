@@ -347,7 +347,11 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Open URL", ...WRITE_TOOL_ANNOTATIONS, openWorldHint: true },
       },
-      handler: handle("device_open_url", async (args) => {
+      // Surfaced like any other interaction. Opening a deep link is how an Expo
+      // or React Native app reaches the screen, so it is exactly the moment the
+      // user needs to see the device; without this the dock stays shut until a
+      // later tap or describe happens to open it.
+      handler: handleInteraction("device_open_url", async (args) => {
         const udid = readUdid(args);
         await manager.openUrl(udid, readStringArg(args, "url", { required: true })!);
         return { udid, opened: true };

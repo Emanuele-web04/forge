@@ -235,11 +235,6 @@ export const DEVICE_CAPABILITY_LABELS: Record<DeviceCapabilityId, string> = {
   encoder: "Video encoding",
 };
 
-/** Capabilities that are broken, in manifest order. */
-export const brokenDeviceCapabilities = (
-  capabilities: readonly DeviceCapabilityStatus[],
-): readonly DeviceCapabilityStatus[] => capabilities.filter((capability) => !capability.ok);
-
 // ── Thread-scoped state ──────────────────────────────────────────────
 
 /**

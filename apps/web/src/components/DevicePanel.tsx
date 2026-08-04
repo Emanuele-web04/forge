@@ -15,6 +15,7 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ensureNativeApi } from "~/nativeApi";
+import { addWsTransportStateListener } from "~/wsTransportEvents";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -127,19 +128,31 @@ export default function DevicePanel(props: {
 
   // The pane is the only reader of this thread's device state, so it seeds the
   // store on mount; every later change arrives on the device.event push.
+  //
+  // Re-seeded whenever the socket comes back, because that push carries no
+  // snapshot: a boot, attach or shutdown that completed while the browser was
+  // disconnected is simply missed, and the pane would sit on the pre-outage
+  // phase and device list until some unrelated device event arrived.
   useEffect(() => {
     let cancelled = false;
-    void ensureNativeApi()
-      .device.getThreadState({ threadId })
-      .then((state) => {
-        if (!cancelled) upsertThreadState(state);
-      })
-      .catch(() => {
-        // A refusal here is the off-macOS / no-engine case; the pane keeps
-        // rendering its blocked state from whatever availability it has.
-      });
+    const seed = () => {
+      void ensureNativeApi()
+        .device.getThreadState({ threadId })
+        .then((state) => {
+          if (!cancelled) upsertThreadState(state);
+        })
+        .catch(() => {
+          // A refusal here is the off-macOS / no-engine case; the pane keeps
+          // rendering its blocked state from whatever availability it has.
+        });
+    };
+    seed();
+    const unsubscribe = addWsTransportStateListener((state) => {
+      if (state === "open") seed();
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [threadId, upsertThreadState]);
 

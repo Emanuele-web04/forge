@@ -61,6 +61,7 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
+import { useDeviceStateStore } from "./deviceStateStore";
 import {
   buildThreadSubscribeInput,
   resetThreadDetailResumeCursors,
@@ -871,6 +872,11 @@ export class WsTransport {
       // plain restarts of the same journal, acceptable until the protocol
       // carries a durable journal epoch.
       resetThreadDetailResumeCursors();
+      // Device thread state is gated on a per-thread version that the server
+      // restarts at 0. A stale higher version would reject the new instance's
+      // snapshots as stragglers and leave the pane showing pre-restart devices
+      // and attachments forever, so the cache is dropped with the cursors.
+      useDeviceStateStore.getState().clear();
     }
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);

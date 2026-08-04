@@ -19,6 +19,14 @@ import {
   type DeviceFrameSourceResetReason,
 } from "~/lib/deviceFrameSource";
 
+/**
+ * Ceiling on the frame-socket reconnect backoff.
+ *
+ * Long enough that a server that stays down is not hammered, short enough that
+ * a restart is picked up without the user reopening the pane.
+ */
+const FRAME_RECONNECT_MAX_DELAY_MS = 5_000;
+
 export interface DeviceVideoDimensions {
   readonly width: number;
   readonly height: number;
@@ -107,6 +115,14 @@ export function useDeviceVideoStream(input: {
     let decoder: VideoDecoder | null = null;
     let source: DeviceFrameSource | null = null;
     let disposed = false;
+    let reconnectAttempts = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const openFrameSource = () =>
+      createDeviceFrameSource({
+        udid,
+        handlers: { onFrame: handleFrame, onReset: handleReset },
+      });
     // The codec-config frame carries SPS/PPS only, with no slice data, so it
     // cannot itself be decoded as a key chunk — WebCodecs rejects it with "a key
     // frame is required after configure()". Hold the parameter sets and prepend
@@ -224,6 +240,9 @@ export function useDeviceVideoStream(input: {
     };
 
     const handleFrame = (frame: DeviceFrame) => {
+      // Any delivered frame proves the socket is healthy, so the next drop
+      // starts its backoff from the beginning rather than from a long delay.
+      reconnectAttempts = 0;
       if (!isCurrent() || disposed) return;
       const step = stepDeviceFrameGate(gate, frame.header, udid);
       gate = step.state;
@@ -247,6 +266,17 @@ export function useDeviceVideoStream(input: {
       gate = createDeviceFrameGateState();
       if (reason === "closed") {
         setStatus({ kind: "connecting" });
+        // A frame source is single-use, so a socket that closes under a still
+        // mounted pane (a server restart, a network blip) leaves nothing to
+        // reconnect it and the pane spins forever. Open a fresh one, backing
+        // off so a server that is down does not become a reconnect loop.
+        reconnectAttempts += 1;
+        const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), FRAME_RECONNECT_MAX_DELAY_MS);
+        reconnectTimer = setTimeout(() => {
+          if (disposed || !isCurrent()) return;
+          source?.close();
+          source = openFrameSource();
+        }, delay);
         return;
       }
       setStatus({
@@ -258,14 +288,12 @@ export function useDeviceVideoStream(input: {
       });
     };
 
-    source = createDeviceFrameSource({
-      udid,
-      handlers: { onFrame: handleFrame, onReset: handleReset },
-    });
+    source = openFrameSource();
 
     return () => {
       disposed = true;
       generationRef.current += 1;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
       source?.close();
       teardownDecoder();
     };
