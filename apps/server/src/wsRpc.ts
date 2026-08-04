@@ -15,6 +15,7 @@ import {
   WsFeatureRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
+  WorkItemsUnavailableError,
   type GitActionProgressEvent,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -130,6 +131,7 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
+import { WorkItemService } from "./workItems/Services/WorkItemService";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
@@ -318,6 +320,7 @@ const makeWsRpcHandlersLayer = () =>
       const providerCommandReactor = yield* ProviderCommandReactor;
       const path = yield* Path.Path;
       const pullRequests = yield* PullRequestService;
+      const workItems = yield* WorkItemService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
@@ -1172,6 +1175,30 @@ const makeWsRpcHandlersLayer = () =>
           pullRequestsEffect(pullRequests.comment(input), "Could not post the comment"),
         [WS_METHODS.pullRequestsSetPinned]: (input) =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
+        [WS_METHODS.workItemsSearch]: (input) =>
+          workItems.search(input).pipe(
+            Effect.mapError((cause) =>
+              cause instanceof WorkItemsUnavailableError
+                ? cause
+                : toWsRpcError(cause, "Failed to search work items"),
+            ),
+          ),
+        [WS_METHODS.workItemsGet]: (input) =>
+          workItems.get(input).pipe(
+            Effect.mapError((cause) =>
+              cause instanceof WorkItemsUnavailableError
+                ? cause
+                : toWsRpcError(cause, "Failed to load work item"),
+            ),
+          ),
+        [WS_METHODS.workItemsAuthStatus]: (input) =>
+          workItems.authStatus(input).pipe(
+            Effect.mapError((cause) =>
+              cause instanceof WorkItemsUnavailableError
+                ? cause
+                : toWsRpcError(cause, "Failed to check work item auth"),
+            ),
+          ),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
