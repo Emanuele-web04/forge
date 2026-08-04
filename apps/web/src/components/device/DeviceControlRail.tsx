@@ -44,7 +44,11 @@ export const DEVICE_RAIL_GROUPS: readonly DeviceRailGroup[] = [
     id: "screen",
     items: [
       { id: "home", label: "Home", shortcut: "⌘⇧H", Icon: DeviceHomeIcon },
-      { id: "rotate", label: "Rotate device", Icon: DeviceRotateIcon },
+      // "Rotate view", not "Rotate device": CoreSimulator exposes no way to
+      // turn the guest, so the app keeps rendering portrait and this turns the
+      // pane's picture. Naming it for the device would promise an orientation
+      // change the app inside never sees.
+      { id: "rotate", label: "Rotate view", Icon: DeviceRotateIcon },
     ],
   },
   {
