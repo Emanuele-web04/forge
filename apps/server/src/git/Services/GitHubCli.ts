@@ -134,6 +134,9 @@ export interface GitHubCliShape {
     readonly outputMode?: "error" | "truncate";
     /** Piped to the child's stdin — for payloads that must never appear in argv. */
     readonly stdin?: string;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly onStdoutChunk?: (chunk: string) => void;
+    readonly onStderrChunk?: (chunk: string) => void;
   }) => Effect.Effect<ProcessRunResult, GitHubCliError>;
 
   readonly getViewerLogin: (input: {

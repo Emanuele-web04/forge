@@ -143,6 +143,15 @@ export function getVisibleProviderUpdateStatuses(
   );
 }
 
+export function getNotifiableProviderUpdateStatuses(
+  input: ProviderUpdateFilterInput & { readonly liveVersionCheckCompleted: boolean },
+): ServerProviderStatus[] {
+  if (!input.liveVersionCheckCompleted) {
+    return [];
+  }
+  return getVisibleProviderUpdateStatuses({ ...input, oneClickOnly: true });
+}
+
 export function providerUpdateNotificationKey(
   providers: ReadonlyArray<ServerProviderStatus>,
 ): string | null {

@@ -8,6 +8,7 @@ import {
   type TerminalCliKind,
   type TerminalVisualState,
 } from "@synara/shared/terminalThreads";
+import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
@@ -19,6 +20,7 @@ export interface CompletedThreadCandidate {
   threadId: Thread["id"];
   projectId: Thread["projectId"];
   title: string;
+  turnId: NonNullable<Thread["latestTurn"]>["turnId"];
   completedAt: string;
   assistantSummary: string | null;
 }
@@ -522,8 +524,15 @@ export function collectCompletedThreadCandidates(
       continue;
     }
 
-    const completedAt = thread.latestTurn?.completedAt;
-    if (!completedAt) {
+    const latestTurn = thread.latestTurn;
+    const completedAt = latestTurn?.completedAt;
+    if (!latestTurn || !completedAt) {
+      continue;
+    }
+    // Interrupted/error settlements are not completions: the stop was either
+    // user-initiated or already surfaced through the error state, and "Finished
+    // working." copy would be wrong for both.
+    if (latestTurn.state !== "completed") {
       continue;
     }
     if (!isCompletionNotificationSettled(thread)) {
@@ -546,12 +555,24 @@ export function collectCompletedThreadCandidates(
       threadId: thread.id,
       projectId: thread.projectId,
       title: thread.title,
+      turnId: latestTurn.turnId,
       completedAt,
       assistantSummary: summarizeLatestAssistantMessage(thread),
     });
   }
 
   return candidates;
+}
+
+// Identity of one settled completion. The snapshot diff above can re-emit the
+// same completion when the session status wobbles out of and back into a settled
+// state (e.g. a follow-up turn spinning up while latestTurn still points at the
+// finished one); callers dedupe on this key so each completion notifies once.
+// completedAt is deliberately excluded: the same turn's completedAt is rewritten
+// by later events (assistant message, session settle, checkpoint diff) with
+// slightly different timestamps, and a turn only ever completes once.
+export function completedThreadNotificationKey(candidate: CompletedThreadCandidate): string {
+  return `${candidate.threadId}:${candidate.turnId}`;
 }
 function resolveTerminalNotificationState(
   threadState: TerminalNotificationThreadState | undefined,
@@ -633,6 +654,28 @@ function approvalSummary(
   }
 }
 
+function requestedActivityInstanceKeys(
+  activities: Thread["activities"],
+  kind: "approval.requested" | "user-input.requested",
+): Set<string> {
+  return new Set(
+    activities.flatMap((activity) => {
+      if (activity.kind !== kind || !activity.payload) return [];
+      const payload = activity.payload as Record<string, unknown>;
+      return typeof payload.requestId === "string"
+        ? [
+            pendingRequestInstanceKey(
+              payload.requestId,
+              typeof payload.lifecycleGeneration === "string"
+                ? payload.lifecycleGeneration
+                : undefined,
+            ),
+          ]
+        : [];
+    }),
+  );
+}
+
 // Compare consecutive activity snapshots and emit only fresh input-needed transitions.
 export function collectThreadAttentionCandidates(
   previousThreads: readonly Thread[],
@@ -648,18 +691,37 @@ export function collectThreadAttentionCandidates(
     }
 
     const previousApprovalIds = new Set(
-      derivePendingApprovals(previousThread.activities, previousThread.pendingInteractions).map(
-        (approval) => approval.requestId,
-      ),
+      derivePendingApprovals(previousThread.activities, previousThread.pendingInteractions, {
+        authoritativeHasPending: previousThread.hasPendingApprovals,
+        latestTurnId: previousThread.latestTurn?.turnId,
+      }).map((approval) => approval.requestId),
     );
     const previousUserInputIds = new Set(
-      derivePendingUserInputs(previousThread.activities, previousThread.pendingInteractions).map(
-        (request) => request.requestId,
-      ),
+      derivePendingUserInputs(previousThread.activities, previousThread.pendingInteractions, {
+        authoritativeHasPending: previousThread.hasPendingUserInput,
+        latestTurnId: previousThread.latestTurn?.turnId,
+      }).map((request) => request.requestId),
+    );
+    const previousApprovalActivityKeys = requestedActivityInstanceKeys(
+      previousThread.activities,
+      "approval.requested",
+    );
+    const previousUserInputActivityKeys = requestedActivityInstanceKeys(
+      previousThread.activities,
+      "user-input.requested",
     );
 
-    for (const approval of derivePendingApprovals(thread.activities, thread.pendingInteractions)) {
-      if (previousApprovalIds.has(approval.requestId)) {
+    for (const approval of derivePendingApprovals(thread.activities, thread.pendingInteractions, {
+      authoritativeHasPending: thread.hasPendingApprovals,
+      latestTurnId: thread.latestTurn?.turnId,
+    })) {
+      if (
+        previousApprovalIds.has(approval.requestId) ||
+        (thread.pendingInteractions === undefined &&
+          previousApprovalActivityKeys.has(
+            pendingRequestInstanceKey(approval.requestId, approval.lifecycleGeneration),
+          ))
+      ) {
         continue;
       }
       candidates.push({
@@ -673,8 +735,17 @@ export function collectThreadAttentionCandidates(
       });
     }
 
-    for (const request of derivePendingUserInputs(thread.activities, thread.pendingInteractions)) {
-      if (previousUserInputIds.has(request.requestId)) {
+    for (const request of derivePendingUserInputs(thread.activities, thread.pendingInteractions, {
+      authoritativeHasPending: thread.hasPendingUserInput,
+      latestTurnId: thread.latestTurn?.turnId,
+    })) {
+      if (
+        previousUserInputIds.has(request.requestId) ||
+        (thread.pendingInteractions === undefined &&
+          previousUserInputActivityKeys.has(
+            pendingRequestInstanceKey(request.requestId, request.lifecycleGeneration),
+          ))
+      ) {
         continue;
       }
       candidates.push({

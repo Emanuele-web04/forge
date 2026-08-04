@@ -338,7 +338,9 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
+const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
 const browserManager = new DesktopBrowserManager({
+  annotationPreloadPath: annotationGuestPreload,
   beforeInputEvent: (event, input) => {
     if (
       isKeyboardShortcutsHelpChord(
@@ -3913,7 +3915,6 @@ function createWindow(): BrowserWindow {
   attachRendererCrashRecovery(window);
   attachDesktopPhysicalZoomShortcuts(window);
 
-  const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     const partition = params.partition;
     if (

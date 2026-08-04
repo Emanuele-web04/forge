@@ -64,6 +64,10 @@ import {
   ThreadDeviceState,
 } from "./device";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import {
+  GitHubProjectProvisionInput,
+  GitHubProjectProvisionProgressEvent,
+} from "./githubProjectProvisioning";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
@@ -163,6 +167,8 @@ import {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectResolveOutOfRootFileReferenceInput,
+  ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
   ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
@@ -200,6 +206,8 @@ import {
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
   ServerUpsertKeybindingResult,
+  ServerVoicePrewarmInput,
+  ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "./server";
@@ -401,6 +409,15 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   error: WsRpcError,
 });
 
+export const WsProjectsResolveOutOfRootFileReferenceRpc = Rpc.make(
+  WS_METHODS.projectsResolveOutOfRootFileReference,
+  {
+    payload: ProjectResolveOutOfRootFileReferenceInput,
+    success: ProjectResolveOutOfRootFileReferenceResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsProjectsCreateLocalFilePreviewGrantRpc = Rpc.make(
   WS_METHODS.projectsCreateLocalFilePreviewGrant,
   {
@@ -443,6 +460,13 @@ export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
     stream: true,
   },
 );
+
+export const WsProjectsProvisionFromGitHubRpc = Rpc.make(WS_METHODS.projectsProvisionFromGitHub, {
+  payload: GitHubProjectProvisionInput,
+  success: GitHubProjectProvisionProgressEvent,
+  error: WsRpcError,
+  stream: true,
+});
 
 export const WsStudioListThreadOutputsRpc = Rpc.make(WS_METHODS.studioListThreadOutputs, {
   payload: StudioListThreadOutputsInput,
@@ -976,6 +1000,12 @@ export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostic
   error: WsRpcError,
 });
 
+export const WsServerPrewarmVoiceRpc = Rpc.make(WS_METHODS.serverPrewarmVoice, {
+  payload: ServerVoicePrewarmInput,
+  success: ServerVoicePrewarmResult,
+  error: WsRpcError,
+});
+
 export const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVoice, {
   payload: ServerVoiceTranscriptionInput,
   success: ServerVoiceTranscriptionResult,
@@ -1182,12 +1212,14 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsReadFileRpc,
+  WsProjectsResolveOutOfRootFileReferenceRpc,
   WsProjectsCreateLocalFilePreviewGrantRpc,
   WsProjectsWriteFileRpc,
   WsProjectsRunDevServerRpc,
   WsProjectsStopDevServerRpc,
   WsProjectsListDevServersRpc,
   WsSubscribeProjectDevServerEventsRpc,
+  WsProjectsProvisionFromGitHubRpc,
   WsStudioListThreadOutputsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
@@ -1248,6 +1280,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,
+  WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,
   WsServerGenerateAutomationIntentRpc,

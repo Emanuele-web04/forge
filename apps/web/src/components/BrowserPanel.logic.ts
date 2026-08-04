@@ -273,7 +273,15 @@ export function browserAnnotationTheme(
   return {
     mode,
     accent: resolvedBrowserAnnotationColor(root, "--color-text-accent", fallback.accent),
-    surface: resolvedBrowserAnnotationColor(root, "--composer-surface", fallback.surface),
+    // The overlay renders inside the guest page without the backdrop blur the
+    // composer sits on, so a translucent surface (--composer-surface is ~14%
+    // transparent in light mode) would let page content show through the cards.
+    // The opaque control token is the same fill without the glass assumption.
+    surface: resolvedBrowserAnnotationColor(
+      root,
+      "--color-background-control-opaque",
+      fallback.surface,
+    ),
     text: resolvedBrowserAnnotationColor(root, "--color-text-foreground", fallback.text),
     mutedText: resolvedBrowserAnnotationColor(
       root,

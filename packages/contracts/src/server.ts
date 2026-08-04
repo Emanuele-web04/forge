@@ -257,6 +257,18 @@ export const ServerDiagnosticsResult = Schema.Struct({
 });
 export type ServerDiagnosticsResult = typeof ServerDiagnosticsResult.Type;
 
+export const ServerVoicePrewarmInput = Schema.Struct({
+  provider: ProviderKind,
+  cwd: TrimmedNonEmptyString,
+  threadId: Schema.optional(ThreadId),
+});
+export type ServerVoicePrewarmInput = typeof ServerVoicePrewarmInput.Type;
+
+export const ServerVoicePrewarmResult = Schema.Struct({
+  ready: Schema.Boolean,
+});
+export type ServerVoicePrewarmResult = typeof ServerVoicePrewarmResult.Type;
+
 export const ServerVoiceTranscriptionInput = Schema.Struct({
   provider: ProviderKind,
   cwd: TrimmedNonEmptyString,

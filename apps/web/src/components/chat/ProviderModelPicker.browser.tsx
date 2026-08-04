@@ -5,6 +5,7 @@ import { render } from "vitest-browser-react";
 
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
+import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
   claudeAgent: [
@@ -89,6 +90,21 @@ const OPENCODE_FAVORITE_SORT_MODELS = [
     name: "GPT Favorite Sort",
     upstreamProviderId: "openai",
     upstreamProviderName: "OpenAI",
+  },
+] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const OPENCODE_DUPLICATE_NAME_MODELS = [
+  {
+    slug: "deepseek/deepseek-v4-flash" as ModelSlug,
+    name: "DeepSeek V4 Flash",
+    upstreamProviderId: "deepseek",
+    upstreamProviderName: "DeepSeek",
+  },
+  {
+    slug: "opencode-go/deepseek-v4-flash" as ModelSlug,
+    name: "DeepSeek V4 Flash",
+    upstreamProviderId: "opencode-go",
+    upstreamProviderName: "OpenCode Go",
   },
 ] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
@@ -254,6 +270,13 @@ describe("ProviderModelPicker", () => {
       expect(pricedRow?.textContent).toContain("0.4×");
       expect(pricedRow?.querySelector('[title="0.4x Factory token rate"]')).not.toBeNull();
       expect(byokRow?.textContent).not.toContain("×");
+      await expect
+        .element(
+          page.getByRole("menuitemradio", {
+            name: "GPT-5.6 Luna 0.4x Factory token rate",
+          }),
+        )
+        .toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
@@ -380,13 +403,61 @@ describe("ProviderModelPicker", () => {
         expect(text.indexOf("GPT Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
       });
       await expect
-        .element(page.getByRole("menuitemradio", { name: "GPT Favorite Sort" }))
+        .element(page.getByRole("menuitemradio", { name: "GPT Favorite Sort — OpenAI" }))
         .toBeInTheDocument();
       expect(
         Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
           element.textContent?.includes("GPT Favorite Sort"),
         ),
       ).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("distinguishes same-name favourite models by their upstream provider", async () => {
+    localStorage.setItem(
+      FAVORITE_MODEL_STORAGE_KEYS.opencode,
+      JSON.stringify(OPENCODE_DUPLICATE_NAME_MODELS.map((model) => model.slug)),
+    );
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: OPENCODE_DUPLICATE_NAME_MODELS[0]!.slug,
+      lockedProvider: "opencode",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        opencode: OPENCODE_DUPLICATE_NAME_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "DeepSeek V4 Flash — DeepSeek" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "DeepSeek V4 Flash — OpenCode Go" }))
+        .toBeInTheDocument();
+      await expect
+        .element(
+          page.getByRole("button", {
+            name: "Remove DeepSeek V4 Flash — DeepSeek from favourites",
+          }),
+        )
+        .toBeInTheDocument();
+      await expect
+        .element(
+          page.getByRole("button", {
+            name: "Remove DeepSeek V4 Flash — OpenCode Go from favourites",
+          }),
+        )
+        .toBeInTheDocument();
+      expect(
+        Array.from(document.querySelectorAll('[role="menuitemradio"]')).map(
+          (element) => element.textContent,
+        ),
+      ).toEqual(["DeepSeek V4 FlashDeepSeek", "DeepSeek V4 FlashOpenCode Go"]);
     } finally {
       await mounted.cleanup();
     }
@@ -454,7 +525,7 @@ describe("ProviderModelPicker", () => {
         expect(text.indexOf("GPT Cursor Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
       });
       await expect
-        .element(page.getByRole("menuitemradio", { name: "GPT Cursor Favorite Sort" }))
+        .element(page.getByRole("menuitemradio", { name: "GPT Cursor Favorite Sort — OpenAI" }))
         .toBeInTheDocument();
       expect(
         Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
@@ -494,7 +565,7 @@ describe("ProviderModelPicker", () => {
         expect(text.indexOf("GPT Pi Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
       });
       await expect
-        .element(page.getByRole("menuitemradio", { name: "GPT Pi Favorite Sort" }))
+        .element(page.getByRole("menuitemradio", { name: "GPT Pi Favorite Sort — OpenAI" }))
         .toBeInTheDocument();
       expect(
         Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>

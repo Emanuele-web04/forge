@@ -23,6 +23,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   use,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -40,6 +41,7 @@ import {
   isLocalPreviewGrantUsable,
   projectLocalPreviewGrantQueryOptions,
   projectReadFileQueryOptions,
+  projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
@@ -306,8 +308,30 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const contentsRef = useRef<HTMLDivElement>(null);
   const taskWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestTaskWriteVersionRef = useRef({ next: 0, byFile: new Map<string, number>() });
-  const { filePath, onAskWhyInChat, onCommentInChat, onReferenceInChat, workspaceRoot } = props;
+  const {
+    filePath: requestedFilePath,
+    onAskWhyInChat,
+    onCommentInChat,
+    onReferenceInChat,
+    workspaceRoot,
+  } = props;
   const queryClient = useQueryClient();
+  // A workspace-relative reference that fails to read may actually live under
+  // an ancestor of the workspace root (agents sometimes emit paths relative to
+  // a parent folder, e.g. `Claude/Outbox/note.md` for a thread rooted at
+  // `.../Claude/Skills`). When the read errors, the server locates the real
+  // file and the preview reopens it as an absolute path through the existing
+  // preview-grant flow. The relocation is held in state keyed by the requested
+  // reference so the swap cannot oscillate with the failed read it replaces.
+  const [relocation, setRelocation] = useState<{
+    requestedKey: string;
+    fullPath: string;
+  } | null>(null);
+  const relocationRequestKey = `${workspaceRoot ?? ""}\0${requestedFilePath ?? ""}`;
+  const relocatedFullPath =
+    relocation?.requestedKey === relocationRequestKey ? relocation.fullPath : null;
+  const [binaryPreviewErrorKey, setBinaryPreviewErrorKey] = useState<string | null>(null);
+  const filePath = relocatedFullPath ?? requestedFilePath;
   const markdownPreviewDefault = props.markdownPreviewDefault ?? false;
   const fileIsImage = filePath !== null && isSupportedLocalImagePath(filePath);
   const fileIsPdf = filePath !== null && isSupportedLocalPdfPath(filePath);
@@ -352,9 +376,60 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         filePath !== null &&
         !fileIsImage &&
         !fileIsPdf &&
-        (props.workspaceRoot !== null || localPreviewGrant !== null),
+        (fileNeedsLocalPreviewGrant ? localPreviewGrant !== null : props.workspaceRoot !== null),
     }),
   );
+
+  // Out-of-root relocation kicks in only after the workspace-relative text
+  // read or binary preview has actually failed. A reference the read RPC or
+  // local-preview route can still serve must always win over a same-named file
+  // outside the root. Keeping the resolver active after relocation lets normal
+  // workspace file invalidation restore that priority when the local file is
+  // created later.
+  const binaryPreviewFailed = binaryPreviewErrorKey === relocationRequestKey;
+  const outOfRootResolutionEnabled =
+    workspaceRoot !== null &&
+    requestedFilePath !== null &&
+    isWorkspaceRelativePathSafe(requestedFilePath) &&
+    (fileQuery.isError || binaryPreviewFailed || relocatedFullPath !== null);
+  const outOfRootResolutionQuery = useQuery(
+    projectResolveOutOfRootFileReferenceQueryOptions({
+      cwd: workspaceRoot,
+      relativePath: requestedFilePath,
+      enabled: outOfRootResolutionEnabled,
+    }),
+  );
+  const resolvedOutOfRootFullPath = outOfRootResolutionQuery.data?.fullPath ?? null;
+  const locatingOutOfRootFile =
+    outOfRootResolutionEnabled &&
+    (outOfRootResolutionQuery.isPending || outOfRootResolutionQuery.isFetching);
+  useEffect(() => {
+    if (!outOfRootResolutionEnabled || !outOfRootResolutionQuery.isSuccess) {
+      return;
+    }
+    if (resolvedOutOfRootFullPath !== null) {
+      setRelocation((current) =>
+        current?.requestedKey === relocationRequestKey &&
+        current.fullPath === resolvedOutOfRootFullPath
+          ? current
+          : { requestedKey: relocationRequestKey, fullPath: resolvedOutOfRootFullPath },
+      );
+      return;
+    }
+    setRelocation((current) => (current?.requestedKey === relocationRequestKey ? null : current));
+    setBinaryPreviewErrorKey((current) => (current === relocationRequestKey ? null : current));
+  }, [
+    outOfRootResolutionEnabled,
+    outOfRootResolutionQuery.isSuccess,
+    relocationRequestKey,
+    resolvedOutOfRootFullPath,
+  ]);
+  const handleBinaryPreviewReady = useCallback(() => {
+    setBinaryPreviewErrorKey((current) => (current === relocationRequestKey ? null : current));
+  }, [relocationRequestKey]);
+  const handleBinaryPreviewError = useCallback(() => {
+    setBinaryPreviewErrorKey(relocationRequestKey);
+  }, [relocationRequestKey]);
 
   const fileContents = fileQuery.data?.contents ?? "";
   const showMarkdownPreview = fileIsMarkdown && markdownPreviewEnabled;
@@ -510,6 +585,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     return <FilePreviewLoadingState />;
   }
 
+  if (fileIsPdf && locatingOutOfRootFile) {
+    return <FilePreviewLoadingState />;
+  }
+
   // PDFs own their full surface — toolbar (file name, page nav, zoom, Open) plus
   // the rendered page stack — so they skip the shared breadcrumb header here.
   if (fileIsPdf) {
@@ -524,6 +603,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         cwd={props.workspaceRoot}
         previewGrant={localPreviewGrant}
         openInTarget={openInTarget}
+        onPreviewReady={handleBinaryPreviewReady}
+        onPreviewError={handleBinaryPreviewError}
       />
     );
   }
@@ -543,7 +624,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onAskWhyInChat={onAskWhyInChat}
         truncated={fileQuery.data?.truncated ?? false}
       />
-      {fileIsImage ? (
+      {locatingOutOfRootFile ? (
+        <FilePreviewLoadingState />
+      ) : fileIsImage ? (
         <div
           className="editor-file-viewer min-h-0 flex-1 overflow-auto"
           onContextMenu={handleContentsContextMenu}
@@ -556,6 +639,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             alt={basenameOfPath(filePath)}
             className="min-h-full"
             imageClassName="max-h-[calc(100vh-13rem)]"
+            onPreviewReady={handleBinaryPreviewReady}
+            onPreviewError={handleBinaryPreviewError}
           />
         </div>
       ) : fileQuery.isLoading ? (

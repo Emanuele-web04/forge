@@ -95,6 +95,50 @@ describe("project shortcut targets", () => {
     ).toBe(LATEST_PROJECT_ID);
   });
 
+  it("falls back to the last project written in, not the last project created", () => {
+    // The freshly created project has the newer metadata timestamp; the other one is where the
+    // user actually sent the most recent message.
+    const written = {
+      ...makeProject(CURRENT_PROJECT_ID),
+      createdAt: "2026-07-10T09:00:00.000Z",
+      updatedAt: "2026-07-10T09:00:00.000Z",
+    };
+    const justCreated = {
+      ...makeProject(LATEST_PROJECT_ID),
+      createdAt: "2026-07-15T10:00:00.000Z",
+      updatedAt: "2026-07-15T10:00:00.000Z",
+    };
+
+    expect(
+      resolveLatestProjectTargetIdWithFallback(
+        [written, justCreated],
+        "project-from-another-space" as ProjectId,
+        new Map([[CURRENT_PROJECT_ID, "2026-07-15T11:00:00.000Z"]]),
+      ),
+    ).toBe(CURRENT_PROJECT_ID);
+  });
+
+  it("keeps a thread-less project ahead of an older conversation", () => {
+    const stale = {
+      ...makeProject(CURRENT_PROJECT_ID),
+      createdAt: "2026-07-10T09:00:00.000Z",
+      updatedAt: "2026-07-10T09:00:00.000Z",
+    };
+    const justCreated = {
+      ...makeProject(LATEST_PROJECT_ID),
+      createdAt: "2026-07-15T10:00:00.000Z",
+      updatedAt: "2026-07-15T10:00:00.000Z",
+    };
+
+    expect(
+      resolveLatestProjectTargetIdWithFallback(
+        [stale, justCreated],
+        null,
+        new Map([[CURRENT_PROJECT_ID, "2026-07-10T09:30:00.000Z"]]),
+      ),
+    ).toBe(LATEST_PROJECT_ID);
+  });
+
   it("returns no target when no projects exist", () => {
     expect(
       resolveNewThreadTarget({

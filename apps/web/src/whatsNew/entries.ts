@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.6.6",
+    date: "Aug 4",
+    features: [
+      {
+        id: "browser-annotation-rebuild",
+        title: "Point at exactly what should change",
+        description:
+          "The visible-browser annotation tool can now inspect page elements and keeps your markers stable while you navigate and refine a request.",
+        details:
+          "Element inspection captures clearer geometry and presentation context, markers survive hash navigation and compatible document-key changes, and collapsed or invalid targets are handled safely. The overlay, inspector radii, annotation action, and review labels were polished so selecting and sending precise page feedback feels more dependable.",
+      },
+      {
+        id: "faster-reliable-mic-mode",
+        title: "Mic mode starts faster and stops cleanly",
+        description:
+          "Voice capture now does less work on the main thread, warms the transcription path earlier, and behaves predictably when you stop or cancel.",
+        details:
+          "Recording uses a streamlined encoding path with measured performance coverage, safer startup and shutdown races, guarded authentication and upload admission, and a clearer send-style stop control. Cancel now discards the recording, while fallback transcription remains available when the preferred path cannot be used.",
+      },
+      {
+        id: "reliable-human-interactions",
+        title: "Approvals and questions settle once",
+        description:
+          "Permission prompts and other requests for your input are less likely to linger, reappear, or acknowledge the wrong task.",
+        details:
+          "Human interactions are now fenced to the owning provider request and turn across Claude and OpenCode. Resolved guards remain resolved, stale cross-turn requests are ignored, retryable interactions stay visible, and OpenCode permission replies wait for a real acknowledgement before Synara clears them.",
+      },
+      {
+        id: "provider-skills-and-models",
+        title: "Installed skills and favourite models stay discoverable",
+        description:
+          "Synara now finds installed Claude plugin skills and keeps similarly named favourite models tied to the correct provider.",
+        details:
+          "Claude plugin discovery respects install precedence and Windows path boundaries. Model metadata from Pi extensions is normalized without losing resolvable identities, favourite entries distinguish providers, and model-cost context remains accessible in the picker.",
+      },
+      {
+        id: "smoother-chat-arrivals",
+        title: "New messages arrive with less visual churn",
+        description:
+          "Opening a conversation is bounded even when deferred work stalls, and a sent message now glides to its reading anchor instead of teleporting.",
+        details:
+          "Deferred chat mounting has a tested maximum delay. Transcript anchoring uses one monotonic animation clock and a fixed ease-out path, preserves the common non-virtualized route, refreshes recent activity more reliably, and avoids measurement or sidebar updates turning into scroll feedback.",
+      },
+      {
+        id: "accurate-completion-signals",
+        title: "Completion alerts mean the task really completed",
+        description:
+          "Synara no longer treats interrupted or errored work as a successful completion or repeats an alert as timestamps change.",
+        details:
+          "Completion identity is now tied to the turn rather than mutable session fields, stale snapshots cannot settle the active turn, and notification deduplication remains stable as status projections converge.",
+      },
+    ],
+  },
+  {
     version: "0.6.5",
     date: "Aug 2",
     features: [

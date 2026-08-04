@@ -1896,6 +1896,143 @@ it.layer(
       ]);
     }),
   );
+
+  it.effect("settles pending interactions from reconciliation stale-request failures", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = ProjectId.makeUnsafe("project-stale-reconcile");
+      const threadId = ThreadId.makeUnsafe("thread-stale-reconcile");
+      const requestId = ApprovalRequestId.makeUnsafe("user-input-request-stale");
+      const createdAt = "2026-03-06T09:00:00.000Z";
+      const requestedAt = "2026-03-06T09:00:01.000Z";
+      const reconciledAt = "2026-03-06T09:00:02.000Z";
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-stale-reconcile-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-stale-reconcile-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stale-reconcile-project"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Stale Reconcile Project",
+          workspaceRoot: "/tmp/project-stale-reconcile",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-stale-reconcile-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-stale-reconcile-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stale-reconcile-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Stale Reconcile Thread",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-5",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.activity-appended",
+        eventId: EventId.makeUnsafe("evt-stale-reconcile-requested"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: requestedAt,
+        commandId: CommandId.makeUnsafe("cmd-stale-reconcile-requested"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stale-reconcile-requested"),
+        metadata: {},
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe("activity-stale-reconcile-requested"),
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "Need more info",
+            payload: {
+              requestId,
+              lifecycleGeneration: "generation-old",
+              questions: [],
+            },
+            turnId: null,
+            createdAt: requestedAt,
+          },
+        },
+      });
+
+      // Restart/session reconciliation reports the request as stale without a
+      // responseCommandId: nothing ever claimed the row, but the provider
+      // callback that could consume it is gone. The row must not stay pending.
+      yield* eventStore.append({
+        type: "thread.activity-appended",
+        eventId: EventId.makeUnsafe("evt-stale-reconcile-failed"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: reconciledAt,
+        commandId: CommandId.makeUnsafe("cmd-stale-reconcile-failed"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-stale-reconcile-failed"),
+        metadata: {},
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe("activity-stale-reconcile-failed"),
+            tone: "error",
+            kind: "provider.user-input.respond.failed",
+            summary: "Provider user input response failed",
+            payload: {
+              requestId,
+              detail: `Stale pending user-input request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`,
+            },
+            turnId: null,
+            createdAt: reconciledAt,
+          },
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const settledRows = yield* sql<{
+        readonly status: string;
+        readonly pendingUserInputCount: number;
+      }>`
+        SELECT
+          interactions.status,
+          threads.pending_user_input_count AS "pendingUserInputCount"
+        FROM projection_pending_interactions AS interactions
+        INNER JOIN projection_threads AS threads
+          ON threads.thread_id = interactions.thread_id
+        WHERE interactions.thread_id = ${threadId}
+          AND interactions.interaction_kind = 'userInput'
+          AND interactions.request_id = ${requestId}
+      `;
+      assert.deepEqual(settledRows, [{ status: "uncertain", pendingUserInputCount: 0 }]);
+    }),
+  );
 });
 
 it.layer(

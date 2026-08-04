@@ -83,6 +83,11 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  GitHubProjectProvisionInput,
+  GitHubProjectProvisionProgressEvent,
+  GitHubProjectProvisionResult,
+} from "./githubProjectProvisioning";
+import type {
   PullRequestActionInput,
   PullRequestActionResult,
   PullRequestCommentInput,
@@ -107,6 +112,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectResolveOutOfRootFileReferenceInput,
+  ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
   ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
@@ -176,6 +183,8 @@ import type {
   ServerUpdateSettingsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
+  ServerVoicePrewarmInput,
+  ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "./server";
@@ -300,6 +309,12 @@ export interface BrowserTabState {
   id: string;
   url: string;
   title: string;
+  /**
+   * Agent-owned tabs use a main-process WebContentsView so the exact page can
+   * stay alive while its chat route is not mounted. Older snapshots omit this
+   * field and are treated as renderer-owned by the web app.
+   */
+  runtimeSurface?: "native" | "renderer";
   status: "live" | "suspended";
   isLoading: boolean;
   canGoBack: boolean;
@@ -599,6 +614,9 @@ export interface NativeApi {
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    resolveOutOfRootFileReference: (
+      input: ProjectResolveOutOfRootFileReferenceInput,
+    ) => Promise<ProjectResolveOutOfRootFileReferenceResult>;
     createLocalFilePreviewGrant: (
       input: ProjectCreateLocalFilePreviewGrantInput,
     ) => Promise<ProjectCreateLocalFilePreviewGrantResult>;
@@ -607,6 +625,13 @@ export interface NativeApi {
     stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;
     listDevServers: () => Promise<ProjectListDevServersResult>;
     onDevServerEvent: (callback: (event: ProjectDevServerEvent) => void) => () => void;
+    provisionFromGitHub: (
+      input: GitHubProjectProvisionInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<GitHubProjectProvisionResult>;
+    onProvisionProgress: (
+      callback: (event: GitHubProjectProvisionProgressEvent) => void,
+    ) => () => void;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
@@ -723,6 +748,7 @@ export interface NativeApi {
     generateAutomationIntent: (
       input: ServerGenerateAutomationIntentInput,
     ) => Promise<ServerGenerateAutomationIntentResult>;
+    prewarmVoice?: (input: ServerVoicePrewarmInput) => Promise<ServerVoicePrewarmResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;

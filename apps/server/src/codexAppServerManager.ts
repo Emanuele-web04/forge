@@ -34,6 +34,7 @@ import {
   type ServerVoiceTranscriptionResult,
   type UserInputQuestion,
 } from "@synara/contracts";
+import { prewarmChatGptVoiceTranscriptionConnection } from "@synara/shared/chatGptVoiceTranscription";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
@@ -316,6 +317,7 @@ const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
+const CODEX_VOICE_AUTH_CACHE_TTL_MS = 60_000;
 const CODEX_PENDING_SETTLE_DEADLINE_MS = 2_000;
 
 // Bounds the best-effort answers written to parked server requests: a child that
@@ -419,7 +421,7 @@ const CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS = `
 
 ## Browser tool routing
 
-Prefer Synara's built-in visible browser for browser work. In code mode, call its MCP methods directly inside \`functions.exec\` with the exact \`tools.mcp__synara__browser_*\` prefix (for example, \`await tools.mcp__synara__browser_open({ url })\` and \`await tools.mcp__synara__browser_snapshot({})\`). The available suffixes are ${BROWSER_TOOL_NAMES.map((name) => `\`${name.slice("browser_".length)}\``).join(", ")}.
+Prefer Synara's built-in browser for browser work. It may continue in the background without changing the user's active chat. In code mode, call its MCP methods directly inside \`functions.exec\` with the exact \`tools.mcp__synara__browser_*\` prefix (for example, \`await tools.mcp__synara__browser_open({ url })\` and \`await tools.mcp__synara__browser_snapshot({})\`). The available suffixes are ${BROWSER_TOOL_NAMES.map((name) => `\`${name.slice("browser_".length)}\``).join(", ")}.
 
 For element actions, keep the \`snapshotId\` returned by the fresh snapshot and use the exact shapes \`browser_type({ target: { ref, snapshotId }, text })\`, \`browser_click({ target: { ref, snapshotId } })\`, and \`browser_press({ keys: ["Enter"] })\`. Wait for observable changes with \`browser_wait({ conditions: [{ kind: "url", glob: "*expected*" }] })\` or another published condition. Never pass a bare \`ref\` without its \`snapshotId\`.
 
@@ -889,7 +891,14 @@ function setRecentCacheEntry<K, V>(
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
+  private readonly discoverySessionStartups = new Map<string, Promise<CodexSessionContext>>();
   private readonly discoverySessionIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private voiceAuthCache:
+    | {
+        readonly loadedAt: number;
+        readonly promise: Promise<CodexVoiceTranscriptionAuthContext>;
+      }
+    | undefined;
   private readonly skillsCache = new Map<string, ProviderListSkillsResult>();
   private readonly pluginsCache = new Map<string, ProviderListPluginsResult>();
   private readonly pluginDetailCache = new Map<string, ProviderReadPluginResult>();
@@ -2260,9 +2269,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   async stopAll(): Promise<void> {
+    const discoveryKeys = new Set([
+      ...this.discoverySessions.keys(),
+      ...this.discoverySessionStartups.keys(),
+    ]);
     const results = await Promise.allSettled([
       ...Array.from(this.sessions.keys(), (threadId) => this.stopSession(threadId)),
-      ...Array.from(this.discoverySessions.keys(), (key) => this.stopDiscoverySession(key)),
+      ...Array.from(discoveryKeys, async (key) => {
+        const startup = this.discoverySessionStartups.get(key);
+        await startup?.catch(() => undefined);
+        await this.stopDiscoverySession(key);
+      }),
     ]);
     const failures = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
@@ -2417,6 +2434,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
+  async prewarmVoice(input: {
+    readonly cwd?: string;
+    readonly threadId?: string;
+  }): Promise<{ readonly ready: true }> {
+    void prewarmChatGptVoiceTranscriptionConnection().catch(() => undefined);
+    await this.resolveVoiceTranscriptionAuth({
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+      refreshToken: false,
+    });
+    return { ready: true };
+  }
+
   getComposerCapabilities(): ProviderComposerCapabilities {
     return {
       provider: "codex",
@@ -2461,6 +2491,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
   }
 
+  private isContextInitializedAndRoutable(context: CodexSessionContext): boolean {
+    return (
+      this.isContextRoutable(context) &&
+      (context.session.status === "ready" || context.session.status === "running")
+    );
+  }
+
   private async resolveContextForDiscovery(
     threadId?: string,
     cwd?: string,
@@ -2470,7 +2507,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
-        if (!normalizedCwd || session.session.cwd === normalizedCwd) {
+        if (
+          this.isContextInitializedAndRoutable(session) &&
+          (!normalizedCwd || session.session.cwd === normalizedCwd)
+        ) {
           return session;
         }
       } catch {
@@ -2481,14 +2521,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     if (normalizedCwd) {
       for (const activeSession of this.sessions.values()) {
-        if (this.isContextRoutable(activeSession) && activeSession.session.cwd === normalizedCwd) {
+        if (
+          this.isContextInitializedAndRoutable(activeSession) &&
+          activeSession.session.cwd === normalizedCwd
+        ) {
           return activeSession;
         }
       }
       return this.getOrCreateDiscoverySession(normalizedCwd);
     }
     const firstActive = Array.from(this.sessions.values()).find((context) =>
-      this.isContextRoutable(context),
+      this.isContextInitializedAndRoutable(context),
     );
     if (firstActive) {
       return firstActive;
@@ -2501,14 +2544,56 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly threadId?: string;
     readonly refreshToken: boolean;
   }): Promise<CodexVoiceTranscriptionAuthContext> {
-    // Voice transcription should always resolve auth from a fresh discovery context
-    // instead of reusing a possibly stale thread-bound session token.
-    const context = await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd());
+    const cached = this.voiceAuthCache;
+    if (
+      !input.refreshToken &&
+      cached &&
+      Date.now() - cached.loadedAt < CODEX_VOICE_AUTH_CACHE_TTL_MS
+    ) {
+      return cached.promise;
+    }
+
+    const promise = this.loadVoiceTranscriptionAuth(input);
+    this.voiceAuthCache = { loadedAt: Date.now(), promise };
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.voiceAuthCache?.promise === promise) {
+        this.voiceAuthCache = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async loadVoiceTranscriptionAuth(input: {
+    readonly cwd?: string;
+    readonly threadId?: string;
+    readonly refreshToken: boolean;
+  }): Promise<CodexVoiceTranscriptionAuthContext> {
+    // Auth is account-scoped, so a live thread session remains reusable even when
+    // a worktree project reports a different cwd from the provider session.
+    let context: CodexSessionContext | undefined;
+    const normalizedThreadId = input.threadId?.trim();
+    if (normalizedThreadId) {
+      try {
+        const candidate = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
+        if (this.isContextInitializedAndRoutable(candidate)) {
+          context = candidate;
+        }
+      } catch {
+        // A draft or closed thread can still use a cwd-scoped discovery session.
+      }
+    }
+    const authContext = context ?? (await this.resolveContextForDiscovery(undefined, input.cwd));
     const readAuthStatus = async (refreshToken: boolean) => {
-      const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
-        includeToken: true,
-        refreshToken,
-      });
+      const response = await this.sendRequest<Record<string, unknown>>(
+        authContext,
+        "getAuthStatus",
+        {
+          includeToken: true,
+          refreshToken,
+        },
+      );
       const authMethod = this.readString(response, "authMethod");
       return {
         authMethod,
@@ -2536,11 +2621,34 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
+    const startup = this.discoverySessionStartups.get(normalizedCwd);
+    if (startup) {
+      return startup;
+    }
     const existing = this.discoverySessions.get(normalizedCwd);
-    if (existing && !existing.stopping && !existing.child.killed) {
+    if (
+      existing &&
+      existing.session.status === "ready" &&
+      !existing.stopping &&
+      !existing.child.killed
+    ) {
       this.scheduleDiscoverySessionIdleStop(normalizedCwd);
       return existing;
     }
+
+    const nextStartup = this.createDiscoverySession(normalizedCwd);
+    this.discoverySessionStartups.set(normalizedCwd, nextStartup);
+    try {
+      return await nextStartup;
+    } finally {
+      if (this.discoverySessionStartups.get(normalizedCwd) === nextStartup) {
+        this.discoverySessionStartups.delete(normalizedCwd);
+      }
+    }
+  }
+
+  private async createDiscoverySession(normalizedCwd: string): Promise<CodexSessionContext> {
+    const existing = this.discoverySessions.get(normalizedCwd);
     if (existing) {
       await this.stopDiscoverySession(normalizedCwd);
     }

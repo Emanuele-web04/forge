@@ -15,7 +15,7 @@ import {
 import { type ThreadId } from "@synara/contracts";
 import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
 import { Terminal } from "@xterm/xterm";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -32,6 +32,7 @@ import {
 import { resolveThreadTerminalLayout } from "./terminal/TerminalLayout";
 import {
   resolveTerminalSelectionActionPosition,
+  resolveTerminalSelectionContextMenuItems,
   shouldHandleTerminalSelectionMouseUp,
   terminalSelectionActionDelayForClickCount,
 } from "./terminal/terminalSelectionActions";
@@ -122,7 +123,7 @@ interface TerminalViewportProps {
     terminalId: string,
     activity: { hasRunningSubprocess: boolean; agentState: TerminalActivityState | null },
   ) => void;
-  onAddTerminalContext: (selection: TerminalContextSelection) => void;
+  onAddTerminalContext?: ((selection: TerminalContextSelection) => void) | undefined;
   focusRequestId: number;
   autoFocus: boolean;
   isVisible: boolean;
@@ -209,7 +210,7 @@ function TerminalViewport({
   const runtimeConfigRef = useRef(runtimeConfig);
   const runtimeViewStateRef = useRef(runtimeViewState);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onAddTerminalContextRef.current = onAddTerminalContext;
   }, [onAddTerminalContext]);
 
@@ -355,6 +356,13 @@ function TerminalViewport({
     if (selectionActionOpenRef.current) {
       return;
     }
+    const contextMenuItems = resolveTerminalSelectionContextMenuItems(
+      onAddTerminalContextRef.current !== undefined,
+    );
+    if (contextMenuItems.length === 0) {
+      clearSelectionAction();
+      return;
+    }
     const nextAction = readSelectionAction();
     if (!nextAction) {
       clearSelectionAction();
@@ -367,12 +375,16 @@ function TerminalViewport({
     // Promise chain instead of async/try-finally: React Compiler does not yet
     // support try/finally, and it would skip optimizing this whole component.
     void api.contextMenu
-      .show([{ id: "add-to-chat", label: "Add to chat" }], nextAction.position)
+      .show(contextMenuItems, nextAction.position)
       .then((clicked) => {
         if (requestId !== selectionActionRequestIdRef.current || clicked !== "add-to-chat") {
           return;
         }
-        onAddTerminalContextRef.current(nextAction.selection);
+        const addTerminalContext = onAddTerminalContextRef.current;
+        if (!addTerminalContext) {
+          return;
+        }
+        addTerminalContext(nextAction.selection);
         terminalRef.current?.clearSelection();
         terminalRuntimeRegistry.focus(runtimeKey);
       })
@@ -487,7 +499,7 @@ interface ThreadTerminalDrawerProps {
     terminalId: string,
     activity: { hasRunningSubprocess: boolean; agentState: TerminalActivityState | null },
   ) => void;
-  onAddTerminalContext: (selection: TerminalContextSelection) => void;
+  onAddTerminalContext?: ((selection: TerminalContextSelection) => void) | undefined;
   onTogglePresentationMode?: (() => void) | undefined;
   onTogglePanel?: (() => void) | undefined;
   isPanelOpen?: boolean | undefined;

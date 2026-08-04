@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-function isContainedPath(realRoot: string, candidatePath: string): boolean {
+export function isContainedPath(realRoot: string, candidatePath: string): boolean {
   const relativePath = path.relative(realRoot, candidatePath);
   return (
     relativePath === "" ||

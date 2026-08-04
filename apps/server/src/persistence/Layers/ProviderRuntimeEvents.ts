@@ -312,6 +312,24 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const hasPendingEventsForThreads: ProviderRuntimeEventRepositoryShape["hasPendingEventsForThreads"] =
+    (input) => {
+      if (input.threadIds.length === 0) return Effect.succeed(false);
+      return Effect.gen(function* () {
+        const cursor = yield* getConsumerCursor(input.consumerName);
+        const rows = yield* sql<{ readonly present: number }>`
+          SELECT 1 AS present
+          FROM provider_runtime_events
+          WHERE sequence > ${cursor}
+            AND thread_id IN ${sql.in(input.threadIds)}
+          LIMIT 1
+        `.pipe(
+          Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.hasPendingEventsForThreads")),
+        );
+        return rows.length > 0;
+      });
+    };
+
   // Highest cursor position whose retention scan has already run. Process-local
   // on purpose: it is a "do not rescan yet" hint, never a durability record. A
   // restart resets it to 0, which makes the next cursor advance scan — the safe
@@ -468,6 +486,7 @@ const make = Effect.gen(function* () {
     readAcceptedOpenTurnEvents,
     pruneSettledOpenTurns,
     getConsumerCursor,
+    hasPendingEventsForThreads,
     advanceConsumerCursor,
   } satisfies ProviderRuntimeEventRepositoryShape;
 });

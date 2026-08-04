@@ -30,7 +30,7 @@ function trimTrailingPathSeparators(value: string): string {
   const trimmed =
     getAbsolutePathKind(value) === "unix"
       ? value.replace(/\/+$/g, "")
-      : value.replace(/[\\/]+$/g, "");
+      : value.replace(/[/\\]+$/g, "");
   if (trimmed.length === 0) {
     return value;
   }
@@ -48,6 +48,24 @@ function preferredPathSeparator(value: string): "/" | "\\" {
   }
 
   return value.includes("\\") ? "\\" : "/";
+}
+
+export function joinProjectPath(parent: string, child: string): string {
+  const trimmedParent = trimTrailingPathSeparators(parent.trim());
+  const trimmedChild = child.trim();
+  if (!trimmedParent || !trimmedChild) return trimmedParent;
+  if (hasTrailingPathSeparator(trimmedParent)) return `${trimmedParent}${trimmedChild}`;
+  return `${trimmedParent}${preferredPathSeparator(trimmedParent)}${trimmedChild}`;
+}
+
+export function expandProjectHomePath(value: string, homeDir: string | null): string {
+  const trimmed = value.trim();
+  if (!homeDir) return trimmed;
+  if (trimmed === "~") return homeDir;
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return joinProjectPath(homeDir, trimmed.slice(2));
+  }
+  return trimmed;
 }
 
 export function hasTrailingPathSeparator(value: string): boolean {

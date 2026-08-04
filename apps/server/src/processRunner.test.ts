@@ -21,6 +21,35 @@ describe("runProcess", () => {
     expect(result.stderrTruncated).toBe(false);
   });
 
+  it("reports live stdout and stderr chunks while retaining the final output", async () => {
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const result = await runProcess(
+      "node",
+      ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
+      {
+        onStdoutChunk: (chunk) => stdoutChunks.push(chunk),
+        onStderrChunk: (chunk) => stderrChunks.push(chunk),
+      },
+    );
+
+    expect(stdoutChunks.join("")).toBe("out");
+    expect(stderrChunks.join("")).toBe("err");
+    expect(result.stdout).toBe("out");
+    expect(result.stderr).toBe("err");
+  });
+
+  it("keeps output observers isolated from the child-process lifecycle", async () => {
+    const result = await runProcess("node", ["-e", "process.stdout.write('ok')"], {
+      onStdoutChunk: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    expect(result.stdout).toBe("ok");
+    expect(result.code).toBe(0);
+  });
+
   it("rejects without spawning when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();

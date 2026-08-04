@@ -12,6 +12,7 @@ import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import {
   aggregateProfileSkillUsageRows,
+  heatmapIntensity,
   ProfileStatsQuery,
   ProfileStatsQueryLive,
 } from "./profileStats";
@@ -31,6 +32,41 @@ function runProfileStatsTest<A, E>(
 ) {
   return effect.pipe(Effect.provide(testLayer), Effect.scoped, Effect.runPromise);
 }
+
+function sorted(counts: readonly number[]): number[] {
+  return counts.toSorted((left, right) => left - right);
+}
+
+describe("heatmapIntensity", () => {
+  it("returns level 0 for empty days and for an empty distribution", () => {
+    expect(heatmapIntensity(0, [1, 2, 3])).toBe(0);
+    expect(heatmapIntensity(500, [])).toBe(0);
+  });
+
+  it("spreads skewed token counts across all levels instead of collapsing to level 1", () => {
+    // One spike day plus many small days: percent-of-max bucketing would put every
+    // day except the spike at level 1.
+    const counts = [1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000, 4_000_000];
+    const levels = counts.map((count) => heatmapIntensity(count, sorted(counts)));
+    expect(levels).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
+  });
+
+  it("keeps the busiest day at the top level and ranks quartiles in order", () => {
+    const counts = Array.from({ length: 100 }, (_, index) => index + 1);
+    const active = sorted(counts);
+    expect(heatmapIntensity(1, active)).toBe(1);
+    expect(heatmapIntensity(25, active)).toBe(1);
+    expect(heatmapIntensity(26, active)).toBe(2);
+    expect(heatmapIntensity(75, active)).toBe(3);
+    expect(heatmapIntensity(76, active)).toBe(4);
+    expect(heatmapIntensity(100, active)).toBe(4);
+  });
+
+  it("gives tied days the same level and renders a uniform window at full intensity", () => {
+    const active = sorted([500, 500, 500, 500]);
+    expect(active.map((count) => heatmapIntensity(count, active))).toEqual([4, 4, 4, 4]);
+  });
+});
 
 describe("ProfileStatsQuery", () => {
   it("normalizes profile skill usage from structured refs plus slash and dollar prompt tokens", () => {

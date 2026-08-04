@@ -3,27 +3,28 @@ import {
   humanizeModelSlug,
   normalizeModelSlug,
 } from "@synara/shared/model";
-import type {
-  AntigravityModelOptions,
-  AntigravityModelSelection,
-  ClaudeModelOptions,
-  ClaudeModelSelection,
-  CodexModelOptions,
-  CodexModelSelection,
-  CursorModelOptions,
-  CursorModelSelection,
-  DroidModelOptions,
-  DroidModelSelection,
-  GrokModelOptions,
-  GrokModelSelection,
-  KiloModelSelection,
-  ModelSelection,
-  OpenCodeModelOptions,
-  OpenCodeModelSelection,
-  PiModelOptions,
-  PiModelSelection,
-  ProviderKind,
-  ProviderModelOptions,
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type AntigravityModelOptions,
+  type AntigravityModelSelection,
+  type ClaudeModelOptions,
+  type ClaudeModelSelection,
+  type CodexModelOptions,
+  type CodexModelSelection,
+  type CursorModelOptions,
+  type CursorModelSelection,
+  type DroidModelOptions,
+  type DroidModelSelection,
+  type GrokModelOptions,
+  type GrokModelSelection,
+  type KiloModelSelection,
+  type ModelSelection,
+  type OpenCodeModelOptions,
+  type OpenCodeModelSelection,
+  type PiModelOptions,
+  type PiModelSelection,
+  type ProviderKind,
+  type ProviderModelOptions,
 } from "@synara/contracts";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 
@@ -41,6 +42,32 @@ export interface ProviderModelOptionGroup {
   key: string;
   label: string | null;
   options: ProviderModelOption[];
+}
+
+/**
+ * Returns the provider provenance shown when a model is detached from its
+ * normal upstream-provider group (for example, inside Favourites).
+ */
+export function providerModelOptionProvenanceLabel(input: {
+  provider: ProviderKind;
+  option: ProviderModelOption;
+}): string {
+  const upstreamProviderName = input.option.upstreamProviderName?.trim();
+  if (upstreamProviderName) {
+    return upstreamProviderName;
+  }
+
+  const upstreamProviderId = input.option.upstreamProviderId?.trim();
+  if (upstreamProviderId) {
+    return humanizeModelSlug(upstreamProviderId);
+  }
+
+  const slugProvider = input.option.slug.split("/", 1)[0]?.trim();
+  if (input.option.slug.includes("/") && slugProvider) {
+    return humanizeModelSlug(slugProvider);
+  }
+
+  return PROVIDER_DISPLAY_NAMES[input.provider];
 }
 
 export function formatProviderModelOptionName(input: {

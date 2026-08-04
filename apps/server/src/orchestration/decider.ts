@@ -883,7 +883,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
+      // Provider-native threads mirror subagents the provider already runs;
+      // Synara never starts a session for them, so the Auto-mode capability
+      // check can only reject the projection (and durably poison the runtime
+      // journal replaying it), never prevent an unverified Auto session.
+      if (command.creationSource !== "provider_native") {
+        yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1215,7 +1221,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
-      if (command.modelSelection !== undefined) {
+      // Provider-native threads: see thread.create — the selection mirrors the
+      // provider's own subagent, so the Auto-mode capability check doesn't apply.
+      if (command.modelSelection !== undefined && thread.creationSource !== "provider_native") {
         yield* validateAutoRuntimeMode(command, command.modelSelection, thread.runtimeMode);
       }
       const occurredAt = nowIso();

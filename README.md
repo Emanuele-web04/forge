@@ -53,3 +53,7 @@ Focused issues and PRs are welcome, especially bug fixes, reliability fixes, and
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
 
 Need support? [Open a GitHub issue](https://github.com/Emanuele-web04/synara/issues).
+
+## Origins
+
+Synara began as a clone of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.

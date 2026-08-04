@@ -56,7 +56,7 @@ export interface OutboundHttpPolicy {
 export interface OutboundHttpRequest {
   readonly policy: OutboundHttpPolicy;
   readonly url: string | URL;
-  readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  readonly method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly headers?: ConstructorParameters<typeof Headers>[0];
   readonly body?: string | Uint8Array;
   readonly signal?: AbortSignal;

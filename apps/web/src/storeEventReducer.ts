@@ -14,6 +14,7 @@ import {
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
+import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
 import {
   addThreadMarker,
   removeThreadMarker,
@@ -112,7 +113,11 @@ function markInteractionResponding(
       interaction.interactionKind !== interactionKind ||
       interaction.requestId !== event.payload.requestId ||
       interaction.lifecycleGeneration !== lifecycleGeneration ||
-      (interaction.status !== "pending" && interaction.status !== "retryable")
+      !isPendingInteractionResponseClaimable({
+        status: interaction.status,
+        responseRequestedAt: interaction.responseRequestedAt,
+        requestedAt: event.payload.createdAt,
+      })
     ) {
       return interaction;
     }
@@ -348,10 +353,17 @@ function reconcileLatestTurnFromSession(
         : session.status === "ready"
           ? ("completed" as const)
           : null;
+  // A non-error session snapshot whose updatedAt predates the running turn's
+  // start reflects the state from before that turn existed; settling on it
+  // would close a just-started turn with a bogus fresh completedAt (and fire a
+  // phantom completion notification). Errors still settle regardless: an error
+  // snapshot is terminal whatever its ordering.
   if (
     settledState !== null &&
     thread.latestTurn?.state === "running" &&
-    (session.activeTurnId == null || settledState === "error")
+    (session.activeTurnId == null || settledState === "error") &&
+    (settledState === "error" ||
+      session.updatedAt >= (thread.latestTurn.startedAt ?? thread.latestTurn.requestedAt))
   ) {
     return buildLatestTurn({
       previous: thread.latestTurn,

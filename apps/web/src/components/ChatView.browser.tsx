@@ -990,6 +990,65 @@ function createSnapshotWithInlineToolOverflow(options: {
   };
 }
 
+function createSnapshotWithHistoricalToolHydrationDuringLiveTurn(options: {
+  hydrateHistoricalActivities: boolean;
+}): OrchestrationReadModel {
+  const snapshot = createSnapshotWithInlineToolOverflow({ active: false });
+  const liveTurnId = TurnId.makeUnsafe("turn-after-inline-tools");
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            latestTurn: {
+              turnId: liveTurnId,
+              state: "running",
+              requestedAt: isoAt(1_200),
+              startedAt: isoAt(1_201),
+              completedAt: null,
+              assistantMessageId: MessageId.makeUnsafe("msg-assistant-live-after-history"),
+            },
+            activities: options.hydrateHistoricalActivities ? thread.activities : [],
+            messages: [
+              ...thread.messages,
+              {
+                turnId: liveTurnId,
+                id: MessageId.makeUnsafe("msg-user-live-after-history"),
+                role: "user",
+                text: "Keep working while history hydrates.",
+                createdAt: isoAt(1_200),
+                updatedAt: isoAt(1_200),
+                streaming: false,
+                source: "native",
+              },
+              {
+                turnId: liveTurnId,
+                id: MessageId.makeUnsafe("msg-assistant-live-after-history"),
+                role: "assistant",
+                text: "Current turn is still running.",
+                createdAt: isoAt(1_202),
+                updatedAt: isoAt(1_202),
+                streaming: false,
+                source: "native",
+              },
+            ],
+            session: thread.session
+              ? {
+                  ...thread.session,
+                  status: "running",
+                  activeTurnId: liveTurnId,
+                  updatedAt: isoAt(1_202),
+                }
+              : null,
+            updatedAt: isoAt(1_202),
+          }
+        : thread,
+    ),
+  };
+}
+
 function recordProjectCreateCommand(command: unknown): boolean {
   if (
     !command ||
@@ -1337,6 +1396,60 @@ async function waitForLayout(): Promise<void> {
   await nextFrame();
   await nextFrame();
   await nextFrame();
+}
+
+/**
+ * Whether the virtualized transcript is actually painted. LegendList keeps its
+ * container wrapper at `opacity: 0` until its own initial scroll has finished,
+ * so scroll corrections taken before that are invisible and must not count as
+ * a visible scroll flight.
+ */
+function isTranscriptContentVisible(scrollContainer: HTMLElement): boolean {
+  const wrapper = scrollContainer.querySelector<HTMLElement>('div[style*="opacity"]');
+  if (!wrapper) {
+    return false;
+  }
+  return Number.parseFloat(wrapper.style.opacity || "1") > 0;
+}
+
+/**
+ * Samples the transcript's scroll position every frame while it is visible.
+ * `downwardTravelPx` is the distance the reader actually watches the transcript
+ * move; `maxDistanceFromBottomPx` is how far from the live edge it ever sat.
+ */
+async function recordTranscriptScrollTravel(durationMs: number): Promise<{
+  readonly downwardTravelPx: number;
+  readonly maxDistanceFromBottomPx: number;
+  readonly visibleFrames: number;
+}> {
+  const startedAt = performance.now();
+  let downwardTravelPx = 0;
+  let maxDistanceFromBottomPx = 0;
+  let visibleFrames = 0;
+  let previousScrollTop: number | null = null;
+
+  while (performance.now() - startedAt < durationMs) {
+    await nextFrame();
+    const container = document.querySelector<HTMLElement>("[data-chat-scroll-container='true']");
+    if (!container || !isTranscriptContentVisible(container)) {
+      previousScrollTop = null;
+      continue;
+    }
+    if (container.scrollHeight <= container.clientHeight) {
+      continue;
+    }
+    visibleFrames += 1;
+    maxDistanceFromBottomPx = Math.max(
+      maxDistanceFromBottomPx,
+      getScrollContainerDistanceFromBottom(container),
+    );
+    if (previousScrollTop !== null) {
+      downwardTravelPx += Math.max(0, container.scrollTop - previousScrollTop);
+    }
+    previousScrollTop = container.scrollTop;
+  }
+
+  return { downwardTravelPx, maxDistanceFromBottomPx, visibleFrames };
 }
 
 function installImmediateScrollToSpy(
@@ -2258,6 +2371,75 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  // Leaving a thread you just sent in and coming back must not replay the
+  // send-time anchor slide: the transcript is remounted with no scroll history,
+  // so replaying it means bootstrapping at the top of the conversation and then
+  // flying down through the whole history in view.
+  it("reopens a thread you sent in at its anchored end without replaying the slide", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID),
+    });
+
+    try {
+      const firstContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await vi.waitFor(
+        () => {
+          expect(firstContainer.scrollHeight).toBeGreaterThan(firstContainer.clientHeight);
+          expect(getScrollContainerDistanceFromBottom(firstContainer)).toBeLessThanOrEqual(
+            AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const prompt = "anchor me before the thread switch";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      // Let the send's anchor slide finish before leaving.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 600));
+
+      // Leave and come back: the thread's detail stays cached, so the whole
+      // transcript is present in the very first render of the remounted list.
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === `/${OTHER_THREAD_ID}`,
+        "Expected to navigate to the other thread.",
+      );
+      await waitForLayout();
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: THREAD_ID },
+      });
+
+      const travel = await recordTranscriptScrollTravel(1_500);
+      expect(travel.visibleFrames).toBeGreaterThan(10);
+      // Never painted far from the live edge, and never seen travelling there.
+      expect(travel.maxDistanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
+      expect(travel.downwardTravelPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
+    } finally {
+      restoreNativeApi();
+      await mounted.cleanup();
+    }
+  });
+
   it("settles the scroll-to-bottom arrow at the measured transcript end", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -2378,7 +2560,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("smoothly re-sticks to the bottom after sending an optimistic user message", async () => {
+  // How the transcript gets there — one motion, no bouncing — is covered by
+  // "moves a sent message to its anchor once…"; this guards the outcome: a send
+  // from far up the transcript ends pinned at the live edge with focus kept.
+  it("re-sticks to the bottom after sending an optimistic user message", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -2401,6 +2586,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
       );
 
+      // Installed so any native smooth scroll resolves immediately; the send
+      // path itself drives the container frame by frame, so this spy is here for
+      // determinism rather than to observe the motion.
       const scrollSpy = installImmediateScrollToSpy(scrollContainer);
       restoreScrollTo = scrollSpy.restore;
 
@@ -2415,13 +2603,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
         async () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.activeElement).toBe(await waitForComposerEditor());
-          expect(scrollSpy.calls.some((call) => call.behavior === "smooth")).toBe(true);
           const layout = await mounted.measureLayout();
           expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
         },
         { timeout: 8_000, interval: 16 },
       );
+      expect(scrollContainer.scrollTop, "transcript never left the top").toBeGreaterThan(0);
     } finally {
       restoreScrollTo();
       await mounted.cleanup();
@@ -2626,6 +2814,262 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  // Regression: the sent message must reach its anchored coordinate in one
+  // motion and then stay there for the rest of the turn. The failure this guards
+  // is the message visibly jumping up and down through send → Thinking →
+  // "Working for" → streaming, which is what a fixed-target scroll produces once
+  // the coordinate moves under it (reserve sizing, rows above being remeasured).
+  it("moves a sent message to its anchor once and holds it across the turn lifecycle", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    let currentSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-send-jitter" as MessageId,
+      targetText: "jitter target",
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: currentSnapshot,
+    });
+
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      currentSnapshot = {
+        ...currentSnapshot,
+        snapshotSequence: currentSnapshot.snapshotSequence + 1,
+        threads: currentSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+        updatedAt: isoAt(currentSnapshot.snapshotSequence + 1_200),
+      };
+      fixture = { ...fixture, snapshot: currentSnapshot };
+      useStore.getState().syncServerReadModel(currentSnapshot);
+    };
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const prompt = "measure the anchor motion for this send";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      const findSentRow = () => {
+        const rows = document.querySelectorAll<HTMLElement>(
+          "[data-message-id][data-message-role='user']",
+        );
+        for (const row of rows) {
+          if (row.textContent?.includes(prompt)) return row;
+        }
+        return null;
+      };
+      const topGapPx = Number.parseFloat(getComputedStyle(scrollContainer).paddingTop) || 0;
+
+      // Sampled every frame: the regression is a single-frame hop, so polling for
+      // the settled state would not see it.
+      const samples: Array<{ t: number; offset: number | null }> = [];
+      const startedAt = performance.now();
+      let sampling = true;
+      const sample = () => {
+        if (!sampling) return;
+        const row = findSentRow();
+        samples.push({
+          t: performance.now() - startedAt,
+          offset: row
+            ? row.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top
+            : null,
+        });
+        window.requestAnimationFrame(sample);
+      };
+      window.requestAnimationFrame(sample);
+
+      const at = (ms: number, action: () => void) => window.setTimeout(action, ms);
+      const activeTurnId = TurnId.makeUnsafe("turn-jitter");
+      const streamingId = MessageId.makeUnsafe("msg-assistant-jitter-stream");
+
+      // Server ack: durable user row + running turn (Thinking appears).
+      at(140, () => {
+        const sentMessageId = findSentRow()?.dataset.messageId;
+        if (!sentMessageId) return;
+        syncActiveThread((thread) => ({
+          ...thread,
+          messages: [
+            ...thread.messages,
+            {
+              id: MessageId.makeUnsafe(sentMessageId),
+              role: "user" as const,
+              text: prompt,
+              turnId: activeTurnId,
+              streaming: false,
+              source: "native" as const,
+              createdAt: isoAt(1_300),
+              updatedAt: isoAt(1_300),
+            },
+          ],
+          latestTurn: {
+            turnId: activeTurnId,
+            state: "running" as const,
+            requestedAt: isoAt(1_300),
+            startedAt: null,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: thread.session
+            ? {
+                ...thread.session,
+                status: "running" as const,
+                activeTurnId,
+                updatedAt: isoAt(1_301),
+              }
+            : null,
+          updatedAt: isoAt(1_301),
+        }));
+      });
+      // Turn actually starts: the "Working for" header replaces Thinking.
+      at(420, () => {
+        syncActiveThread((thread) => ({
+          ...thread,
+          latestTurn: thread.latestTurn
+            ? { ...thread.latestTurn, startedAt: isoAt(1_310) }
+            : thread.latestTurn,
+          updatedAt: isoAt(1_310),
+        }));
+      });
+      // Rows above the anchor settle to their real height mid-slide (late image
+      // loads, markdown remeasure, estimated virtualized rows mounting). Visible
+      // content preservation is off while an anchor is set, so this is exactly
+      // what shifts the anchored row under the in-flight slide.
+      const earlierMessageId = currentSnapshot.threads
+        .find((thread) => thread.id === THREAD_ID)!
+        .messages.at(-2)!.id;
+      for (const [index, delayMs] of [260, 340, 430].entries()) {
+        at(delayMs, () => {
+          syncActiveThread((thread) => ({
+            ...thread,
+            messages: thread.messages.map((message) =>
+              message.id === earlierMessageId
+                ? {
+                    ...message,
+                    text: `${message.text}\n\n${"Late-measured earlier content. ".repeat(6 * (index + 1))}`,
+                    updatedAt: isoAt(1_250 + index),
+                  }
+                : message,
+            ),
+            updatedAt: isoAt(1_250 + index),
+          }));
+        });
+      }
+      // Assistant text streams in below the anchor, chunk by chunk.
+      for (let chunk = 1; chunk <= 24; chunk += 1) {
+        at(560 + chunk * 33, () => {
+          syncActiveThread((thread) => ({
+            ...thread,
+            messages: [
+              ...thread.messages.filter((message) => message.id !== streamingId),
+              {
+                id: streamingId,
+                role: "assistant" as const,
+                text: "Streaming response paragraph.\n\n".repeat(chunk),
+                turnId: activeTurnId,
+                streaming: true,
+                source: "native" as const,
+                createdAt: isoAt(1_320),
+                updatedAt: isoAt(1_320 + chunk),
+              },
+            ],
+            updatedAt: isoAt(1_320 + chunk),
+          }));
+        });
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 1_600);
+      });
+      sampling = false;
+
+      const visible = samples.filter(
+        (entry): entry is { t: number; offset: number } => entry.offset !== null,
+      );
+      const firstArrivalIndex = visible.findIndex(
+        (entry) => Math.abs(entry.offset - topGapPx) <= 2,
+      );
+      const settled = firstArrivalIndex >= 0 ? visible.slice(firstArrivalIndex) : [];
+      let reversals = 0;
+      let travelAfterArrivalPx = 0;
+      let maxDownwardJumpPx = 0;
+      let previousDirection = 0;
+      for (let index = 1; index < settled.length; index += 1) {
+        const delta = settled[index]!.offset - settled[index - 1]!.offset;
+        travelAfterArrivalPx += Math.abs(delta);
+        maxDownwardJumpPx = Math.max(maxDownwardJumpPx, delta);
+        if (Math.abs(delta) <= 0.5) continue;
+        const direction = Math.sign(delta);
+        if (previousDirection !== 0 && direction !== previousDirection) reversals += 1;
+        previousDirection = direction;
+      }
+      const maxDriftAfterArrivalPx = settled.reduce(
+        (worst, entry) => Math.max(worst, Math.abs(entry.offset - topGapPx)),
+        0,
+      );
+      // The approach itself must not bounce: every frame moves the message
+      // toward the anchor, never back down and up again.
+      const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
+      let approachReversals = 0;
+      let approachDirection = 0;
+      for (let index = 1; index < approach.length; index += 1) {
+        const delta = approach[index]!.offset - approach[index - 1]!.offset;
+        // Chromium can report a one-pixel layout/compositor rounding shift before
+        // the anchor animation starts. Match the arrival tolerance so that noise
+        // does not count as an extra change of direction.
+        if (Math.abs(delta) <= 2) continue;
+        const direction = Math.sign(delta);
+        if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
+        approachDirection = direction;
+      }
+      // ...and it has to be a glide, not a teleport. A loaded browser runner
+      // can deliver animation frames far apart, so fixed frame counts and
+      // per-sample distance caps turn scheduler starvation into false failures.
+      // Requiring multiple observable positions between the endpoints still
+      // rejects a teleport while remaining independent of frame cadence.
+      const approachStartOffsetPx = approach[0]?.offset ?? topGapPx;
+      const intermediateApproachSamples = approach.filter(
+        (entry) => entry.offset < approachStartOffsetPx - 2 && entry.offset > topGapPx + 2,
+      );
+
+      const trace = () =>
+        visible.map((entry) => `${Math.round(entry.t)}:${Math.round(entry.offset)}`).join(" ");
+      expect(
+        firstArrivalIndex,
+        `sent message never reached its anchor: ${trace()}`,
+      ).toBeGreaterThan(-1);
+      expect(
+        visible[firstArrivalIndex]!.t - (visible[0]?.t ?? 0),
+        `anchor took too long to land: ${trace()}`,
+      ).toBeLessThan(900);
+      expect(approachReversals, `anchor bounced on its way up: ${trace()}`).toBeLessThanOrEqual(1);
+      expect(
+        intermediateApproachSamples.length,
+        `anchor jumped instead of gliding: ${trace()}`,
+      ).toBeGreaterThanOrEqual(2);
+      expect(reversals, `anchor moved back and forth after landing: ${trace()}`).toBe(0);
+      expect(maxDownwardJumpPx, `anchor slid back down after landing: ${trace()}`).toBeLessThan(2);
+      expect(travelAfterArrivalPx, `anchor kept moving after landing: ${trace()}`).toBeLessThan(8);
+      expect(maxDriftAfterArrivalPx, `anchor drifted off its coordinate: ${trace()}`).toBeLessThan(
+        4,
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
@@ -2778,13 +3222,32 @@ describe("ChatView timeline estimator parity (full app)", () => {
           message.id === liveAssistantMessage.id
             ? {
                 ...message,
-                streaming: false,
-                completedAt: isoAt(1_207),
+                text: `${message.text}\n\nA second streamed chunk that grows the live response.`,
                 updatedAt: isoAt(1_207),
               }
             : message,
         ),
         updatedAt: isoAt(1_207),
+      }));
+      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
+        timeout: 4_000,
+        interval: 16,
+      });
+
+      scrollSpy.calls.length = 0;
+      syncActiveThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === liveAssistantMessage.id
+            ? {
+                ...message,
+                streaming: false,
+                completedAt: isoAt(1_208),
+                updatedAt: isoAt(1_208),
+              }
+            : message,
+        ),
+        updatedAt: isoAt(1_208),
       }));
       await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
         timeout: 4_000,
@@ -6613,6 +7076,158 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  // Opening a thread whose turns finished long ago must present them already
+  // folded. Replaying the fold — mounting every tool row and easing it closed —
+  // is a pure cost on open: it rebuilds the whole turn's DOM twice and drags the
+  // transcript height (and the scroll offset with it) up and down before it
+  // settles on exactly the layout the first paint could have had.
+  it("opens a finished thread already folded, without replaying the collapse", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithInlineToolOverflow({ active: false }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Worked for");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Sample across the window the replayed close animation would occupy.
+      const startedAt = performance.now();
+      let transitionFrames = 0;
+      let toolRowFrames = 0;
+      while (performance.now() - startedAt < 800) {
+        await nextFrame();
+        if (document.querySelector("[data-settled-turn-collapse-transition='true']")) {
+          transitionFrames += 1;
+        }
+        if ((document.body.textContent ?? "").includes("tool-1")) {
+          toolRowFrames += 1;
+        }
+      }
+
+      expect({ transitionFrames, toolRowFrames }).toEqual({
+        transitionFrames: 0,
+        toolRowFrames: 0,
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  // Thread detail does not always land in one write: a thread can paint its
+  // transcript before the record that says its last turn already completed. Until
+  // that record lands the tail turn is treated as live, so every tool row renders
+  // expanded. The fold that follows is hydration catching up, not a turn ending
+  // under the reader's eyes, so it must not be animated.
+  it("does not replay the collapse when the completed turn record hydrates after the transcript", async () => {
+    const settledSnapshot = createSnapshotWithInlineToolOverflow({ active: false });
+    const messagesOnlySnapshot: OrchestrationReadModel = {
+      ...settledSnapshot,
+      threads: settledSnapshot.threads.map((thread) =>
+        thread.id === THREAD_ID ? { ...thread, latestTurn: null } : thread,
+      ),
+    };
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: messagesOnlySnapshot,
+    });
+
+    try {
+      // Baseline: with no turn record the tail turn reads as live, so its work
+      // sits inline instead of folded into the turn's "Worked for…" disclosure.
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Wrapped up the inline tool review.");
+          expect(document.body.textContent).toContain("Used 6 tools");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(document.body.textContent).not.toContain("Worked for");
+
+      useStore.getState().syncServerReadModel({
+        ...settledSnapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+      });
+
+      const startedAt = performance.now();
+      let transitionFrames = 0;
+      // Height churn is what the eye reads as "jumping up and down": each frame
+      // whose transcript height differs from the previous one is one visible step.
+      let heightChangeFrames = 0;
+      let previousScrollHeight: number | null = null;
+      while (performance.now() - startedAt < 800) {
+        await nextFrame();
+        if (document.querySelector("[data-settled-turn-collapse-transition='true']")) {
+          transitionFrames += 1;
+        }
+        const container = document.querySelector<HTMLElement>(
+          "[data-chat-scroll-container='true']",
+        );
+        if (!container) {
+          continue;
+        }
+        if (previousScrollHeight !== null && container.scrollHeight !== previousScrollHeight) {
+          heightChangeFrames += 1;
+        }
+        previousScrollHeight = container.scrollHeight;
+      }
+
+      // The turn must land folded, in one step, with no animated close replay.
+      expect(document.body.textContent).toContain("Worked for");
+      expect(transitionFrames).toBe(0);
+      // One settle step is the floor: the fold itself changes the height once.
+      expect(heightChangeFrames).toBeLessThanOrEqual(2);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not animate historical tool hydration while a newer turn is working", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithHistoricalToolHydrationDuringLiveTurn({
+        hydrateHistoricalActivities: false,
+      }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Wrapped up the inline tool review.");
+          expect(document.body.textContent).toContain("Current turn is still running.");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const hydratedSnapshot = createSnapshotWithHistoricalToolHydrationDuringLiveTurn({
+        hydrateHistoricalActivities: true,
+      });
+      useStore.getState().syncServerReadModel({
+        ...hydratedSnapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+      });
+
+      let transitionFrames = 0;
+      const startedAt = performance.now();
+      while (performance.now() - startedAt < 800) {
+        await nextFrame();
+        if (document.querySelector("[data-settled-turn-collapse-transition='true']")) {
+          transitionFrames += 1;
+        }
+      }
+
+      expect(document.body.textContent).toContain("Worked for");
+      expect(transitionFrames).toBe(0);
     } finally {
       await mounted.cleanup();
     }

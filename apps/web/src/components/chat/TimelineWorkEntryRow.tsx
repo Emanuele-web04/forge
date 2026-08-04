@@ -27,6 +27,7 @@ import {
   CircleQuestionIcon,
   EyeIcon,
   GitHubIcon,
+  GlobeIcon,
   HammerIcon,
   type LucideIcon,
   McpIcon,
@@ -67,6 +68,7 @@ import {
   deriveFriendlyCommandTarget,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
+  isSynaraBrowserToolCall,
   normalizeToolTextForComparison,
   resolveCommandVisualKind,
   sanitizeSynaraMcpToolPreview,
@@ -271,6 +273,7 @@ export function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactE
 // row, which borrows its first entry's icon.
 export function workEntryLeftIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (isGitHubMcpToolCall(workEntry)) return GitHubIcon;
+  if (isSynaraBrowserWorkEntry(workEntry)) return GlobeIcon;
   if (isSynaraToolCall(workEntry)) return SynaraToolIcon;
   if (workEntry.itemType === "mcp_tool_call") return McpIcon;
   return workEntryIcon(workEntry);
@@ -291,6 +294,15 @@ function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus 
   return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
     ? "running"
     : "completed";
+}
+
+function isSynaraBrowserWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return isSynaraBrowserToolCall({
+    toolName: workEntry.toolName,
+    title: workEntry.toolTitle,
+    fallbackLabel: workEntry.label,
+    status: toolWorkEntryStatus(workEntry),
+  });
 }
 
 function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
@@ -460,34 +472,36 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // Standard tool rows keep one discoverable left glyph. Codex status rows
   // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
-  const isSynaraToolRow = !isGitHubToolRow && isSynaraToolCall(workEntry);
+  const isSynaraBrowserToolRow = !isGitHubToolRow && isSynaraBrowserWorkEntry(workEntry);
+  const isSynaraToolRow =
+    !isGitHubToolRow && !isSynaraBrowserToolRow && isSynaraToolCall(workEntry);
   const isMcpToolRow =
-    workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
-  const LeftIcon = isGitHubToolRow
-    ? GitHubIcon
-    : isSynaraToolRow
-      ? SynaraToolIcon
-      : isMcpToolRow
-        ? McpIcon
-        : EntryIcon;
+    workEntry.itemType === "mcp_tool_call" &&
+    !isGitHubToolRow &&
+    !isSynaraBrowserToolRow &&
+    !isSynaraToolRow;
+  const LeftIcon = workEntryLeftIcon(workEntry);
   const leftIconKind = webFetchUrl
     ? "web-fetch"
     : isGitHubToolRow || EntryIcon === GitHubIcon
       ? "github"
-      : isSynaraToolRow
-        ? "synara"
-        : isMcpToolRow
-          ? "mcp"
-          : undefined;
+      : isSynaraBrowserToolRow
+        ? "browser"
+        : isSynaraToolRow
+          ? "synara"
+          : isMcpToolRow
+            ? "mcp"
+            : undefined;
   const heading = toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry);
-  const preview = isSynaraToolRow
-    ? sanitizeSynaraMcpToolPreview({
-        preview: rawPreview,
-        heading,
-        status: toolWorkEntryStatus(workEntry),
-      })
-    : rawPreview;
+  const preview =
+    isSynaraBrowserToolRow || isSynaraToolRow
+      ? sanitizeSynaraMcpToolPreview({
+          preview: rawPreview,
+          heading,
+          status: toolWorkEntryStatus(workEntry),
+        })
+      : rawPreview;
   // One sentence per row, live or settled: the tool's own verb plus what it acted
   // on ("Searched for foo in src"). Lifecycle state is never spelled out here —
   // the verb already carries the tense and `liveActivityMetaText` covers the rest.

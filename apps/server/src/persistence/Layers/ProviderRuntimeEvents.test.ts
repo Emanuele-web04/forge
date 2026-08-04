@@ -65,6 +65,18 @@ layer("ProviderRuntimeEventRepository", (it) => {
         oldestSequence: first.sequence,
         highWaterSequence: second.sequence,
       });
+      assert.isTrue(
+        yield* repository.hasPendingEventsForThreads({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          threadIds: ["thread-runtime-journal"],
+        }),
+      );
+      assert.isFalse(
+        yield* repository.hasPendingEventsForThreads({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          threadIds: ["thread-with-no-pending-events"],
+        }),
+      );
       assert.deepStrictEqual(
         (yield* repository.readThreadEvents({
           threadId: "thread-runtime-journal",
@@ -93,6 +105,12 @@ layer("ProviderRuntimeEventRepository", (it) => {
         yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
         first.sequence,
       );
+      assert.isTrue(
+        yield* repository.hasPendingEventsForThreads({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          threadIds: ["thread-runtime-journal"],
+        }),
+      );
       assert.deepStrictEqual(
         (yield* repository.readAcceptedOpenTurnEvents({
           consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -107,6 +125,12 @@ layer("ProviderRuntimeEventRepository", (it) => {
           consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
           eventSequence: second.sequence,
           updatedAt: "2026-07-14T00:00:02.000Z",
+        }),
+      );
+      assert.isFalse(
+        yield* repository.hasPendingEventsForThreads({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          threadIds: ["thread-runtime-journal"],
         }),
       );
       const terminal = yield* repository.append({

@@ -8,7 +8,11 @@ import {
 const characters = (...codes: number[]): string => String.fromCharCode(...codes);
 const shortName = characters(116, 51);
 const firstName = `${shortName}${characters(99, 111, 100, 101)}`;
+const firstDisplayName = characters(84, 51, 67, 111, 100, 101);
 const secondName = characters(100, 112, 99, 111, 100, 101);
+const companyDisplayName = `${characters(84, 51)} ${characters(84, 111, 111, 108, 115)}`;
+const legalNotice = `Copyright (c) 2026 ${companyDisplayName} Inc.`;
+const originsAttribution = `Synara began as a clone of [${firstDisplayName}](https://github.com/pingdotgg/${firstName}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
 
 describe("brand identity guard", () => {
   it("detects retired names in paths and text", () => {
@@ -27,17 +31,36 @@ describe("brand identity guard", () => {
     ).toEqual([]);
   });
 
-  it("rejects retired identity in legal notices", () => {
-    const notice = `Copyright (c) 2026 ${characters(84, 51)} ${characters(
-      84,
-      111,
-      111,
-      108,
-      115,
-    )} Inc.`;
-    expect(findBrandIdentityViolations([{ path: "LICENSE", contents: notice }])).toHaveLength(1);
+  it("allows the exact legal attribution once in LICENSE", () => {
+    expect(findBrandIdentityViolations([{ path: "LICENSE", contents: legalNotice }])).toEqual([]);
     expect(
-      findBrandIdentityViolations([{ path: "docs/license-copy.md", contents: notice }]),
+      findBrandIdentityViolations([{ path: "docs/license-copy.md", contents: legalNotice }]),
+    ).toHaveLength(1);
+    expect(
+      findBrandIdentityViolations([
+        { path: "LICENSE", contents: `${legalNotice}\n${legalNotice}` },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("allows the exact predecessor attribution only in the README Origins section", () => {
+    expect(
+      findBrandIdentityViolations([
+        { path: "README.md", contents: `## Origins\n\n${originsAttribution}` },
+      ]),
+    ).toEqual([]);
+    expect(
+      findBrandIdentityViolations([
+        { path: "README.md", contents: `## About\n\n${originsAttribution}` },
+      ]),
+    ).toHaveLength(1);
+    expect(
+      findBrandIdentityViolations([
+        {
+          path: "README.md",
+          contents: `## Origins\n\n${originsAttribution}\nLegacy ${firstName}`,
+        },
+      ]),
     ).toHaveLength(1);
   });
 

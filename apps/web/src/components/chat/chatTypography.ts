@@ -14,6 +14,27 @@ export const USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME = [
   USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME,
 ].join(" ");
 
+// Temporary chats disappear when focus leaves them, so their bubbles wear a dashed
+// primary outline: the transcript itself says "this conversation is throwaway".
+// Non-temporary bubbles keep a transparent border of the same width so switching
+// threads never shifts the bubble geometry by a pixel.
+const USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME = "border";
+const USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME = [
+  USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
+  "border-dashed",
+  "border-[color:color-mix(in_srgb,var(--color-primary)_60%,transparent)]",
+].join(" ");
+const USER_MESSAGE_BUBBLE_PLAIN_BORDER_CLASS_NAME = [
+  USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
+  "border-transparent",
+].join(" ");
+
+export function userMessageBubbleBorderClassName(isTemporaryThread: boolean): string {
+  return isTemporaryThread
+    ? USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME
+    : USER_MESSAGE_BUBBLE_PLAIN_BORDER_CLASS_NAME;
+}
+
 const CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO = 0.48;
 const CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO = 0.52;
 // Matches Tailwind `leading-relaxed` (1.625). Shared by the assistant transcript text,

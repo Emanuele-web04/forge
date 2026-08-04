@@ -3,6 +3,7 @@ import type {
   ProjectEntry,
   ProjectListDirectoriesResult,
   ProjectReadFileResult,
+  ProjectResolveOutOfRootFileReferenceResult,
   ProjectDiscoverScriptsResult,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesResult,
@@ -18,6 +19,8 @@ export const projectQueryKeys = {
   readFile: (cwd: string | null, relativePath: string | null) =>
     ["projects", "read-file", cwd, relativePath] as const,
   localPreviewGrant: (path: string | null) => ["projects", "local-preview-grant", path] as const,
+  resolveOutOfRootFileReference: (cwd: string | null, relativePath: string | null) =>
+    ["projects", "resolve-out-of-root-file-reference", cwd, relativePath] as const,
   discoverScripts: (cwd: string | null, depth: number) =>
     ["projects", "discover-scripts", cwd, depth] as const,
   searchEntries: (
@@ -41,6 +44,9 @@ export function invalidateProjectFileQueriesForCwds(
     uniqueCwds.flatMap((cwd) => [
       queryClient.invalidateQueries({ queryKey: ["projects", "list-directories", cwd] as const }),
       queryClient.invalidateQueries({ queryKey: ["projects", "read-file", cwd] as const }),
+      queryClient.invalidateQueries({
+        queryKey: ["projects", "resolve-out-of-root-file-reference", cwd] as const,
+      }),
       queryClient.invalidateQueries({ queryKey: ["projects", "search-entries", cwd] as const }),
     ]),
   );
@@ -156,6 +162,32 @@ export function projectReadFileQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && effectiveCwd !== null && input.relativePath !== null,
     staleTime: input.staleTime ?? DEFAULT_READ_FILE_STALE_TIME,
+  });
+}
+
+// Locates a workspace-relative reference that failed to read because it never
+// existed under the workspace root: the server retries it against ancestors of
+// the root (bounded to the home directory) and returns the real absolute path,
+// or null. The caller then reopens the file through the preview-grant flow.
+export function projectResolveOutOfRootFileReferenceQueryOptions(input: {
+  cwd: string | null;
+  relativePath: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions<ProjectResolveOutOfRootFileReferenceResult>({
+    queryKey: projectQueryKeys.resolveOutOfRootFileReference(input.cwd, input.relativePath),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.relativePath) {
+        throw new Error("Out-of-root file reference resolution is unavailable.");
+      }
+      return api.projects.resolveOutOfRootFileReference({
+        cwd: input.cwd,
+        relativePath: input.relativePath,
+      });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null && input.relativePath !== null,
+    staleTime: 30_000,
   });
 }
 

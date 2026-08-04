@@ -8,10 +8,10 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope } from "effect";
+import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope, Stream } from "effect";
 import { describe, expect, vi } from "vitest";
 
-import { GitCoreLive, makeGitCore } from "./GitCore.ts";
+import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { type ProcessRunResult, runProcess } from "../../processRunner.ts";
@@ -152,6 +152,22 @@ function commitWithDate(
 
 it.layer(TestLayer)("git integration", (it) => {
   describe("shell process execution", () => {
+    it.effect("truncates captured output without stopping progress consumption", () =>
+      Effect.gen(function* () {
+        const lines: string[] = [];
+        const output = yield* collectGitOutput(
+          { operation: "test output", cwd: process.cwd(), args: ["status"] },
+          Stream.fromIterable([new TextEncoder().encode("first\nsecond\nthird\n")]),
+          8,
+          (line) => Effect.sync(() => lines.push(line)),
+          "truncate",
+        );
+
+        expect(output).toBe("first\nse");
+        expect(lines).toEqual(["first", "second", "third"]);
+      }),
+    );
+
     it.effect("caps captured output when maxOutputBytes is exceeded", () =>
       Effect.gen(function* () {
         const result = yield* runTruncatedNodeCommand({

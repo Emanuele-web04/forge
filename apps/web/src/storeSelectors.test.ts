@@ -7,6 +7,7 @@ import {
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
+  createProjectLastActivityAtSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
   createThreadShellsSelector,
@@ -249,5 +250,59 @@ describe("thread shell route selectors", () => {
       worktreePath: null,
       workingDirectory: "/repo/two",
     });
+  });
+});
+
+describe("createProjectLastActivityAtSelector", () => {
+  const otherProjectId = "project-2" as ProjectId;
+
+  it("keeps the newest user message per project", () => {
+    const selectActivity = createProjectLastActivityAtSelector();
+    const activity = selectActivity(
+      makeState({
+        threadIds: [threadIdA, threadIdB],
+        sidebarThreadSummaryById: {
+          [threadIdA]: { ...summaryA, latestUserMessageAt: "2026-02-01T00:00:00.000Z" },
+          [threadIdB]: {
+            ...summaryA,
+            id: threadIdB,
+            latestUserMessageAt: "2026-03-01T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+
+    expect(activity.get(projectId)).toBe("2026-03-01T00:00:00.000Z");
+  });
+
+  it("falls back to the thread creation time when nothing was written yet", () => {
+    const selectActivity = createProjectLastActivityAtSelector();
+    const activity = selectActivity(
+      makeState({
+        threadIds: [threadIdA],
+        sidebarThreadSummaryById: { [threadIdA]: summaryA },
+      }),
+    );
+
+    expect(activity.get(projectId)).toBe("2026-01-01T00:00:00.000Z");
+    expect(activity.has(otherProjectId)).toBe(false);
+  });
+
+  it("keeps a stable identity when the summaries change without moving activity", () => {
+    const selectActivity = createProjectLastActivityAtSelector();
+    const before = selectActivity(
+      makeState({
+        threadIds: [threadIdA],
+        sidebarThreadSummaryById: { [threadIdA]: summaryA },
+      }),
+    );
+    const after = selectActivity(
+      makeState({
+        threadIds: [threadIdA],
+        sidebarThreadSummaryById: { [threadIdA]: { ...summaryA, title: "renamed" } },
+      }),
+    );
+
+    expect(after).toBe(before);
   });
 });

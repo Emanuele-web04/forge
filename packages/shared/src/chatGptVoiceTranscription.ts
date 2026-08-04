@@ -10,6 +10,34 @@ export const CHATGPT_VOICE_TRANSCRIPTION_URL = "https://chatgpt.com/backend-api/
 
 const MAX_MULTIPART_BYTES = SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES + 64 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const DEFAULT_VOICE_UPLOAD_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
+  "(KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+const VOICE_UPLOAD_USER_AGENT = resolveVoiceUploadUserAgent();
+
+function resolveVoiceUploadUserAgent(): string {
+  const override = process.env.SYNARA_VOICE_UPLOAD_USER_AGENT?.trim();
+  return override && !/[\r\n]/u.test(override) ? override : DEFAULT_VOICE_UPLOAD_USER_AGENT;
+}
+
+export async function prewarmChatGptVoiceTranscriptionConnection(): Promise<void> {
+  await outboundHttp.request({
+    policy: {
+      service: "chatgpt-voice-transcription",
+      allowedOrigins: [new URL(CHATGPT_VOICE_TRANSCRIPTION_URL).origin],
+      timeoutMs: 10_000,
+      maxRequestBytes: 1,
+      maxResponseBytes: 64 * 1024,
+      maxRedirects: 0,
+      maxConcurrent: 2,
+      maxQueued: 4,
+      requirePublicAddress: true,
+    },
+    url: new URL("/", CHATGPT_VOICE_TRANSCRIPTION_URL),
+    method: "HEAD",
+    headers: { "User-Agent": VOICE_UPLOAD_USER_AGENT },
+  });
+}
 
 export function requestChatGptVoiceTranscription(input: {
   readonly audio: Uint8Array;
@@ -47,6 +75,7 @@ export function requestChatGptVoiceTranscription(input: {
     headers: {
       Authorization: `Bearer ${input.token}`,
       "Content-Type": multipart.contentType,
+      "User-Agent": VOICE_UPLOAD_USER_AGENT,
     },
     body: multipart.body,
     ...(input.signal ? { signal: input.signal } : {}),

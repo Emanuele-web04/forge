@@ -1,13 +1,15 @@
 // FILE: voiceRecorder.ts
 // Purpose: Captures microphone audio in the browser and normalizes it to Remodex-style WAV clips.
 // Layer: Client utility hook
-// Exports: useVoiceRecorder, formatVoiceRecordingDuration
-// Depends on: browser media devices, Web Audio API, and FileReader for base64 encoding.
+// Exports: useVoiceRecorder, formatVoiceRecordingDuration, isVoiceRecordingCancelledError
+// Depends on: browser media devices, Web Audio API, the streaming WAV encoder, and FileReader.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { encodeVoiceRecordingWav } from "./voiceRecorderEncoding";
 
 const TARGET_SAMPLE_RATE = 24_000;
-const BUFFER_SIZE = 4_096;
+const BUFFER_SIZE = 2_048;
 
 export interface VoiceRecordingPayload {
   readonly audioBase64: string;
@@ -29,6 +31,14 @@ interface RecorderRuntime {
 
 const MAX_WAVEFORM_SAMPLES = 160;
 
+class VoiceRecordingCancelledError extends Error {
+  override readonly name = "VoiceRecordingCancelledError";
+}
+
+export function isVoiceRecordingCancelledError(error: unknown): boolean {
+  return error instanceof VoiceRecordingCancelledError;
+}
+
 export function formatVoiceRecordingDuration(durationMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(durationMs / 1_000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -38,6 +48,8 @@ export function formatVoiceRecordingDuration(durationMs: number): string {
 
 export function useVoiceRecorder() {
   const runtimeRef = useRef<RecorderRuntime | null>(null);
+  const startGenerationRef = useRef(0);
+  const isStartingRef = useRef(false);
   const timerRef = useRef<number | null>(null);
   const waveformLevelsRef = useRef<number[]>([]);
   const waveformLastEmitAtRef = useRef(0);
@@ -45,14 +57,16 @@ export function useVoiceRecorder() {
   const [durationMs, setDurationMs] = useState(0);
   const [waveformLevels, setWaveformLevels] = useState<number[]>([]);
 
-  const clearTimer = () => {
+  const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
-  };
+  }, []);
 
-  const teardownRuntime = async () => {
+  const teardownRuntime = useCallback(async () => {
+    startGenerationRef.current += 1;
+    isStartingRef.current = false;
     const runtime = runtimeRef.current;
     runtimeRef.current = null;
     clearTimer();
@@ -79,15 +93,24 @@ export function useVoiceRecorder() {
       sampleRateHz,
       durationMs: duration,
     };
-  };
+  }, [clearTimer]);
 
-  const startRecording = async () => {
-    if (runtimeRef.current) {
+  const startRecording = useCallback(async () => {
+    if (runtimeRef.current || isStartingRef.current) {
       throw new Error("Voice recording is already running.");
     }
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("Microphone recording is unavailable in this browser.");
     }
+
+    const startGeneration = startGenerationRef.current + 1;
+    startGenerationRef.current = startGeneration;
+    isStartingRef.current = true;
+    const assertStartIsCurrent = () => {
+      if (startGenerationRef.current !== startGeneration) {
+        throw new VoiceRecordingCancelledError("Voice recording was cancelled.");
+      }
+    };
 
     let stream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
@@ -101,13 +124,20 @@ export function useVoiceRecorder() {
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
+          sampleRate: { ideal: TARGET_SAMPLE_RATE },
         },
       });
-      audioContext = new AudioContext();
+      assertStartIsCurrent();
+      audioContext = createVoiceAudioContext();
       await audioContext.resume();
+      assertStartIsCurrent();
 
       sourceNode = audioContext.createMediaStreamSource(stream);
-      processorNode = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+      processorNode = audioContext.createScriptProcessor(
+        resolveVoiceProcessorBufferSize(audioContext.sampleRate),
+        1,
+        1,
+      );
       silentGainNode = audioContext.createGain();
       silentGainNode.gain.value = 0;
 
@@ -128,27 +158,35 @@ export function useVoiceRecorder() {
         const frameCount = inputBuffer.length;
         const monoSamples = new Float32Array(frameCount);
 
-        for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
-          const channelData = inputBuffer.getChannelData(channelIndex);
+        let sumOfSquares = 0;
+        if (channelCount === 1) {
+          const channelData = inputBuffer.getChannelData(0);
           for (let sampleIndex = 0; sampleIndex < frameCount; sampleIndex += 1) {
-            monoSamples[sampleIndex] =
-              (monoSamples[sampleIndex] ?? 0) + (channelData[sampleIndex] ?? 0);
+            const sample = channelData[sampleIndex] ?? 0;
+            monoSamples[sampleIndex] = sample;
+            sumOfSquares += sample * sample;
           }
-        }
-
-        const normalizer = channelCount > 0 ? channelCount : 1;
-        for (let sampleIndex = 0; sampleIndex < frameCount; sampleIndex += 1) {
-          monoSamples[sampleIndex] = (monoSamples[sampleIndex] ?? 0) / normalizer;
+        } else {
+          for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+            const channelData = inputBuffer.getChannelData(channelIndex);
+            for (let sampleIndex = 0; sampleIndex < frameCount; sampleIndex += 1) {
+              monoSamples[sampleIndex] =
+                (monoSamples[sampleIndex] ?? 0) + (channelData[sampleIndex] ?? 0);
+            }
+          }
+          const normalizer = channelCount > 0 ? channelCount : 1;
+          for (let sampleIndex = 0; sampleIndex < frameCount; sampleIndex += 1) {
+            const sample = (monoSamples[sampleIndex] ?? 0) / normalizer;
+            monoSamples[sampleIndex] = sample;
+            sumOfSquares += sample * sample;
+          }
         }
 
         runtime.chunks.push(monoSamples);
 
         const rmsLevel = Math.min(
           1,
-          Math.sqrt(
-            monoSamples.reduce((sum, sample) => sum + sample * sample, 0) /
-              Math.max(1, monoSamples.length),
-          ) * 3.2,
+          Math.sqrt(sumOfSquares / Math.max(1, monoSamples.length)) * 3.2,
         );
         const now = performance.now();
         if (now - waveformLastEmitAtRef.current >= 45) {
@@ -163,7 +201,11 @@ export function useVoiceRecorder() {
       processorNode.connect(silentGainNode);
       silentGainNode.connect(audioContext.destination);
 
+      // Publish the runtime only while this startup still owns the current
+      // generation. This keeps future async setup additions cancellation-safe.
+      assertStartIsCurrent();
       runtimeRef.current = runtime;
+      isStartingRef.current = false;
       waveformLevelsRef.current = [];
       waveformLastEmitAtRef.current = 0;
       setWaveformLevels([]);
@@ -182,51 +224,45 @@ export function useVoiceRecorder() {
       silentGainNode?.disconnect();
       stream?.getTracks().forEach((track) => track.stop());
       await audioContext?.close().catch(() => undefined);
+      if (startGenerationRef.current === startGeneration) {
+        isStartingRef.current = false;
+      }
       throw error;
     }
-  };
+  }, []);
 
-  const stopRecording = async (): Promise<VoiceRecordingPayload | null> => {
+  const stopRecording = useCallback(async (): Promise<VoiceRecordingPayload | null> => {
     const recorded = await teardownRuntime();
     if (!recorded) {
       return null;
     }
 
-    const mergedSamples = mergeFloat32Chunks(recorded.chunks);
-    if (mergedSamples.length === 0) {
-      return null;
-    }
-
-    const resampledSamples = resampleLinear(
-      mergedSamples,
+    const encoded = encodeVoiceRecordingWav(
+      recorded.chunks,
       recorded.sampleRateHz,
       TARGET_SAMPLE_RATE,
     );
-    if (resampledSamples.length === 0) {
+    if (!encoded) {
       return null;
     }
 
-    const wavBytes = encodeMono16BitWav(resampledSamples, TARGET_SAMPLE_RATE);
-    const audioBase64 = await blobToBase64(new Blob([wavBytes], { type: "audio/wav" }));
+    const audioBase64 = await blobToBase64(new Blob([encoded.bytes], { type: "audio/wav" }));
 
     const payload: VoiceRecordingPayload = {
       audioBase64,
       mimeType: "audio/wav",
       sampleRateHz: TARGET_SAMPLE_RATE,
-      durationMs: Math.max(
-        1,
-        Math.round((resampledSamples.length / TARGET_SAMPLE_RATE) * 1_000) || recorded.durationMs,
-      ),
+      durationMs: encoded.durationMs || recorded.durationMs,
     };
     return payload;
-  };
+  }, [teardownRuntime]);
 
-  const cancelRecording = async () => {
+  const cancelRecording = useCallback(async () => {
     await teardownRuntime();
     waveformLevelsRef.current = [];
     waveformLastEmitAtRef.current = 0;
     setWaveformLevels([]);
-  };
+  }, [teardownRuntime]);
 
   useEffect(
     () => () => {
@@ -245,81 +281,16 @@ export function useVoiceRecorder() {
   };
 }
 
-function mergeFloat32Chunks(chunks: readonly Float32Array[]): Float32Array {
-  let totalLength = 0;
-  for (const chunk of chunks) {
-    totalLength += chunk.length;
+function createVoiceAudioContext(): AudioContext {
+  try {
+    return new AudioContext({ latencyHint: "interactive", sampleRate: TARGET_SAMPLE_RATE });
+  } catch {
+    return new AudioContext({ latencyHint: "interactive" });
   }
-  const merged = new Float32Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return merged;
 }
 
-function resampleLinear(
-  samples: Float32Array,
-  inputSampleRateHz: number,
-  outputSampleRateHz: number,
-): Float32Array {
-  if (!Number.isFinite(inputSampleRateHz) || inputSampleRateHz <= 0) {
-    return new Float32Array(0);
-  }
-  if (inputSampleRateHz === outputSampleRateHz) {
-    return samples.slice();
-  }
-
-  const ratio = inputSampleRateHz / outputSampleRateHz;
-  const outputLength = Math.max(1, Math.round(samples.length / ratio));
-  const output = new Float32Array(outputLength);
-
-  for (let index = 0; index < outputLength; index += 1) {
-    const sourceIndex = index * ratio;
-    const leftIndex = Math.floor(sourceIndex);
-    const rightIndex = Math.min(samples.length - 1, leftIndex + 1);
-    const interpolationWeight = sourceIndex - leftIndex;
-    const leftValue = samples[leftIndex] ?? 0;
-    const rightValue = samples[rightIndex] ?? leftValue;
-    output[index] = leftValue + (rightValue - leftValue) * interpolationWeight;
-  }
-
-  return output;
-}
-
-function encodeMono16BitWav(samples: Float32Array, sampleRateHz: number): ArrayBuffer {
-  const dataView = new DataView(new ArrayBuffer(44 + samples.length * 2));
-
-  writeAscii(dataView, 0, "RIFF");
-  dataView.setUint32(4, 36 + samples.length * 2, true);
-  writeAscii(dataView, 8, "WAVE");
-  writeAscii(dataView, 12, "fmt ");
-  dataView.setUint32(16, 16, true);
-  dataView.setUint16(20, 1, true);
-  dataView.setUint16(22, 1, true);
-  dataView.setUint32(24, sampleRateHz, true);
-  dataView.setUint32(28, sampleRateHz * 2, true);
-  dataView.setUint16(32, 2, true);
-  dataView.setUint16(34, 16, true);
-  writeAscii(dataView, 36, "data");
-  dataView.setUint32(40, samples.length * 2, true);
-
-  let offset = 44;
-  for (const sample of samples) {
-    const clamped = Math.max(-1, Math.min(1, sample));
-    const pcm = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
-    dataView.setInt16(offset, Math.round(pcm), true);
-    offset += 2;
-  }
-
-  return dataView.buffer;
-}
-
-function writeAscii(view: DataView, offset: number, value: string): void {
-  for (let index = 0; index < value.length; index += 1) {
-    view.setUint8(offset + index, value.charCodeAt(index));
-  }
+function resolveVoiceProcessorBufferSize(sampleRateHz: number): number {
+  return sampleRateHz > TARGET_SAMPLE_RATE * 1.5 ? BUFFER_SIZE * 2 : BUFFER_SIZE;
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {

@@ -11,6 +11,7 @@ import {
   resolveModelGroupDefaultOpen,
   shouldUseCollapsibleModelGroups,
   providerModelCostMultiplierLabel,
+  providerModelOptionProvenanceLabel,
   type ProviderModelOption,
   type ProviderModelOptionGroup,
 } from "../../providerModelOptions";
@@ -43,6 +44,7 @@ function ProviderModelRadioItem(
     modelOption: ProviderModelOption;
     favoriteProvider: FavoriteModelProvider | null;
     isFavorite: boolean;
+    showProvenance: boolean;
     onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
     onAfterSelection?: () => void;
   }>,
@@ -52,6 +54,7 @@ function ProviderModelRadioItem(
     modelOption,
     favoriteProvider,
     isFavorite,
+    showProvenance,
     onToggleFavorite,
     onAfterSelection,
   } = props;
@@ -59,11 +62,18 @@ function ProviderModelRadioItem(
   const costMultiplierLabel =
     provider === "droid" ? providerModelCostMultiplierLabel(modelOption.description) : null;
   const preserveChildLayout = supportsFavorites || costMultiplierLabel !== null;
+  const provenanceLabel = showProvenance
+    ? providerModelOptionProvenanceLabel({ provider, option: modelOption })
+    : null;
+  const accessibleModelName = provenanceLabel
+    ? `${modelOption.name} — ${provenanceLabel}`
+    : modelOption.name;
 
   return (
     <MenuRadioItem
       key={`${provider}:${modelOption.slug}`}
       value={modelOption.slug}
+      {...(provenanceLabel ? { "aria-label": accessibleModelName } : {})}
       preserveChildLayout={preserveChildLayout}
       className={costMultiplierLabel ? "grid-cols-[minmax(0,1fr)_auto]" : undefined}
       trailing={
@@ -72,8 +82,8 @@ function ProviderModelRadioItem(
             type="button"
             aria-label={
               isFavorite
-                ? `Remove ${modelOption.name} from favourites`
-                : `Add ${modelOption.name} to favourites`
+                ? `Remove ${accessibleModelName} from favourites`
+                : `Add ${accessibleModelName} to favourites`
             }
             className={cn(
               "inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground/50 transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_5%,transparent)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
@@ -112,11 +122,19 @@ function ProviderModelRadioItem(
       {preserveChildLayout ? (
         <span
           className={cn(
-            "block min-w-0 truncate",
+            "flex min-w-0 flex-col",
             supportsFavorites && COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
           )}
         >
-          {modelOption.name}
+          <span className="block min-w-0 truncate">{modelOption.name}</span>
+          {provenanceLabel ? (
+            <span
+              aria-hidden="true"
+              className="block min-w-0 truncate text-[10px] leading-tight text-muted-foreground/60"
+            >
+              {provenanceLabel}
+            </span>
+          ) : null}
         </span>
       ) : (
         modelOption.name
@@ -171,6 +189,7 @@ export function ProviderModelOptionGroupList(props: ProviderModelOptionGroupList
             modelOption={modelOption}
             favoriteProvider={props.favoriteProvider}
             isFavorite={props.favoriteModelSlugSet?.has(modelOption.slug) ?? false}
+            showProvenance={group.key === "__favorites__"}
             onToggleFavorite={props.onToggleFavorite}
             {...(props.onAfterSelection ? { onAfterSelection: props.onAfterSelection } : {})}
           />

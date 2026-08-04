@@ -67,6 +67,10 @@ import {
   normalizeCorsOrigin,
   shouldRejectAuthMutationOrigin,
 } from "./trustedOrigins";
+import {
+  VOICE_UPLOAD_CAPACITY_ERROR_MESSAGE,
+  voiceUploadAdmissionGate,
+} from "./voiceUploadAdmission";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
@@ -962,25 +966,34 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
         { status: 400, headers: corsHeaders },
       );
     }
-    const bytes = yield* readEffectBinary(request, SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES);
-    const registry = yield* ProviderAdapterRegistry;
-    const adapter = yield* registry.getByProvider(provider as never);
-    if (!adapter.transcribeVoice) {
+    const releaseUpload = voiceUploadAdmissionGate.tryAcquire();
+    if (!releaseUpload) {
       return HttpServerResponse.jsonUnsafe(
-        { error: `Voice transcription is unavailable for provider '${provider}'.` },
-        { status: 400, headers: corsHeaders },
+        { error: VOICE_UPLOAD_CAPACITY_ERROR_MESSAGE },
+        { status: 429, headers: corsHeaders },
       );
     }
-    const result = yield* adapter.transcribeVoice({
-      provider: provider as never,
-      cwd,
-      ...(threadId ? { threadId: ThreadId.makeUnsafe(threadId) } : {}),
-      mimeType,
-      sampleRateHz,
-      durationMs,
-      audioBase64: Buffer.from(bytes).toString("base64"),
-    });
-    return HttpServerResponse.jsonUnsafe(result, { status: 200, headers: corsHeaders });
+    return yield* Effect.gen(function* () {
+      const bytes = yield* readEffectBinary(request, SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES);
+      const registry = yield* ProviderAdapterRegistry;
+      const adapter = yield* registry.getByProvider(provider as never);
+      if (!adapter.transcribeVoice) {
+        return HttpServerResponse.jsonUnsafe(
+          { error: `Voice transcription is unavailable for provider '${provider}'.` },
+          { status: 400, headers: corsHeaders },
+        );
+      }
+      const result = yield* adapter.transcribeVoice({
+        provider: provider as never,
+        cwd,
+        ...(threadId ? { threadId: ThreadId.makeUnsafe(threadId) } : {}),
+        mimeType,
+        sampleRateHz,
+        durationMs,
+        audioBase64: Buffer.from(bytes).toString("base64"),
+      });
+      return HttpServerResponse.jsonUnsafe(result, { status: 200, headers: corsHeaders });
+    }).pipe(Effect.ensuring(Effect.sync(releaseUpload)));
   }
 
   return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });

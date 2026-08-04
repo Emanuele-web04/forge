@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.6 - 2026-08-04
+
+### Added
+
+- Added visible-browser element inspection to the annotation workflow, with clearer geometry and presentation context for the exact page element a user wants changed.
+- Added a dedicated voice-processing benchmark and a streamlined recording-encoding path to keep Mic mode work off the main interaction path.
+- Added installed Claude plugin-skill discovery with deterministic install precedence and Windows-safe path containment.
+
+### Changed
+
+- Rebuilt browser annotations so markers survive hash navigation and compatible document-key transitions, collapsed targets are handled safely, invalid submissions are rejected, and overlay, inspector-radius, action-icon, and review-label presentation is more consistent.
+- Improved Mic mode with earlier transcription prewarming, safer startup and shutdown sequencing, guarded authentication and upload admission, clearer stop/send presentation, reliable fallback transcription, and cancel behavior that discards the recording.
+- Improved provider model discovery and selection by normalizing Pi extension metadata without losing resolvable identities, distinguishing favourite models by provider, and preserving accessible model-cost context.
+- Bounded deferred chat mounting and changed sent-message anchoring from a teleport or asymptotic chase into a tested fixed-duration glide using one monotonic clock.
+- Refreshed recent activity, browser-opening workflows, desktop chrome/zoom behavior, and sidebar state projection so application surfaces converge more predictably after delayed runtime updates.
+- Bumped Synara release package versions to `0.6.6` across the server, desktop, web, and contracts packages.
+
+### Fixed
+
+- Fixed Claude and OpenCode human-interaction requests lingering, reappearing, settling across the wrong turn, or clearing before the provider acknowledged a permission reply.
+- Fixed interrupted and errored turns being reported as successful completions, stale session snapshots settling active turns, and completion notifications duplicating when status or timestamps changed.
+- Fixed annotations losing markers during hash navigation, accepting collapsed selections, mishandling compatible legacy document keys, rendering elliptical corner radii incorrectly, or using an inconsistent overlay surface.
+- Fixed deferred conversations waiting indefinitely to mount and transcript anchor motion reversing, jumping, or completing without visible movement.
+- Fixed similarly named favourite models from different providers collapsing into one choice and malformed Pi extension metadata making discovered model identities unresolvable.
+- Fixed checkpoint capture using a stale index or replacing the preserved index timestamp during refresh.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,692 files.
+- `bun run lint` passed with 367 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only existing Effect Schema informational messages and Astro/Vite deprecation notices remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecation and plugin-timing notices remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 3m2.534s. Web passed 281 files / 3,489 tests; server/CLI passed 293 files / 3,221 tests with 2 skipped files / 7 skipped tests; desktop passed 57 files / 558 tests with 1 skipped file / 5 skipped tests; shared passed 49 files / 478 tests with 1 skipped test; contracts passed 17 files / 189 tests; scripts passed 13 files / 85 tests. No targeted reruns or flaky failures were needed.
+
 ## 0.6.5 - 2026-08-02
 
 ### Added

@@ -265,6 +265,19 @@ describe("MessagesTimeline tail anchor", () => {
       // `estimatedItemSize`, and sizing the reserve from that frame moves the
       // scroll max, which jerks the anchored message and springs it back.
       const container = getScrollContainer(handle());
+      // The baseline has to be taken once the slide has actually come to rest:
+      // the message eases into its coordinate, so a scroll position sampled
+      // while it is still arriving would charge the last pixels of the slide to
+      // the streaming phase below.
+      await expect
+        .poll(
+          () => {
+            const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
+            return offset !== null && Math.abs(offset - topGapPx) <= 1;
+          },
+          { timeout: 5_000 },
+        )
+        .toBe(true);
       const scrollTopBeforeStream = container.scrollTop;
       const reserveBeforeStream = reservePx();
 

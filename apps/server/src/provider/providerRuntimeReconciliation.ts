@@ -187,6 +187,11 @@ export function planProviderRuntimeReconciliation(input: {
   readonly bindings: ReadonlyArray<ProviderRuntimeBinding>;
   readonly liveSessions: ReadonlyArray<ProviderSession>;
   readonly pumpHealth: ReadonlyArray<ProviderRuntimeEventPumpHealth>;
+  // True when the runtime journal still holds rows for these candidate threads
+  // that ingestion has not applied. A starved projection is indistinguishable
+  // from a stale one, so settle plans hold off until those rows catch up
+  // (abandoned turns excepted).
+  readonly runtimeJournalLagging?: boolean;
   readonly nowMs: number;
   readonly staleAfterMs?: number;
   readonly maxTurnAgeMs?: number;
@@ -253,6 +258,11 @@ export function planProviderRuntimeReconciliation(input: {
     // abandoned clock remains the escape hatch for a pump that never recovers.
     const pumpHealth = healthByProvider.get(provider);
     if (pumpHealth !== undefined && pumpHealth.status !== "healthy" && !abandoned) continue;
+    // The same blindness applies one stage later: rows persisted to the
+    // runtime journal but not yet ingested mean the projection's staleness is
+    // manufactured, not evidence. A completed turn whose terminal events are
+    // still queued would otherwise be "recovered" as interrupted.
+    if (input.runtimeJournalLagging === true && !abandoned) continue;
 
     // Settling a projection is normally only safe when it names a concrete
     // in-flight turn; ProviderCommandReactor owns failures before a start

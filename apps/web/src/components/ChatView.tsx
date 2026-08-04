@@ -41,7 +41,10 @@ import {
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
-import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
+import {
+  resolveLatestTailUserMessageEditTarget,
+  resolveTailUserMessageEditTarget,
+} from "@synara/shared/conversationEdit";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import {
@@ -163,7 +166,7 @@ import {
 } from "../lib/automationDraft";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
-import { useComposerDropzone } from "../hooks/useComposerDropzone";
+import { splitComposerDropzoneFiles, useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useComposerImageIntake } from "../hooks/useComposerImageIntake";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
@@ -374,6 +377,7 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
+import { registerTerminalContextComposerTarget } from "../lib/terminalContextComposerRegistry";
 import {
   appendPastedTextsToPrompt,
   createPastedTextDraft,
@@ -2574,12 +2578,30 @@ export default function ChatView({
     return () => window.clearTimeout(settle);
   }, [agentActivityTimelineState.detailById, openAgentActivityId]);
   const pendingApprovals = useMemo(
-    () => derivePendingApprovals(threadActivities, activeThread?.pendingInteractions),
-    [activeThread?.pendingInteractions, threadActivities],
+    () =>
+      derivePendingApprovals(threadActivities, activeThread?.pendingInteractions, {
+        authoritativeHasPending: activeThread?.hasPendingApprovals,
+        latestTurnId: activeThread?.latestTurn?.turnId,
+      }),
+    [
+      activeThread?.hasPendingApprovals,
+      activeThread?.latestTurn?.turnId,
+      activeThread?.pendingInteractions,
+      threadActivities,
+    ],
   );
   const pendingUserInputs = useMemo(
-    () => derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions),
-    [activeThread?.pendingInteractions, threadActivities],
+    () =>
+      derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions, {
+        authoritativeHasPending: activeThread?.hasPendingUserInput,
+        latestTurnId: activeThread?.latestTurn?.turnId,
+      }),
+    [
+      activeThread?.hasPendingUserInput,
+      activeThread?.latestTurn?.turnId,
+      activeThread?.pendingInteractions,
+      threadActivities,
+    ],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingUserInputKey = activePendingUserInput
@@ -2846,6 +2868,24 @@ export default function ChatView({
   // progress, collapsing the newest answer into a closed "Worked for" disclosure.
   // The latest turn is the transcript's own notion of "current", so fall back to it.
   const activeTurnIdForTranscript = activeThread?.session?.activeTurnId ?? activeLatestTurnId;
+  // The edit affordance must mirror the exact policy the server decider applies:
+  // resolve the editable target from the raw sequence-ordered thread messages and
+  // the running-session turn id — never from the createdAt-sorted timeline rows,
+  // whose optimistic/filtered entries can surface the button on a message the
+  // validators then reject.
+  const editableUserMessageId = useMemo(() => {
+    if (!activeThread || !isServerThread) {
+      return null;
+    }
+    const editTarget = resolveLatestTailUserMessageEditTarget({
+      messages: activeThread.messages,
+      activeTurnId:
+        activeThread.session?.orchestrationStatus === "running"
+          ? (activeThread.session.activeTurnId ?? null)
+          : null,
+    });
+    return editTarget.editable ? (editTarget.messageId as MessageId) : null;
+  }, [activeThread, isServerThread]);
   // Defence in depth against a session stuck at "running" with no turn to
   // complete: nothing would ever drain the composer queue, so messages routed
   // into it would be swallowed. Server-side reconciliation settles these
@@ -4184,7 +4224,7 @@ export default function ChatView({
   });
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
-      if (!activeThread) {
+      if (!activeThreadId) {
         return;
       }
       discardPromptHistoryNavigationForComposerMutation();
@@ -4204,11 +4244,11 @@ export default function ChatView({
         insertion.cursor,
       );
       const inserted = insertComposerDraftTerminalContext(
-        activeThread.id,
+        activeThreadId,
         insertion.prompt,
         {
           id: randomUUID(),
-          threadId: activeThread.id,
+          threadId: activeThreadId,
           createdAt: new Date().toISOString(),
           ...selection,
         },
@@ -4225,13 +4265,31 @@ export default function ChatView({
       });
     },
     [
-      activeThread,
+      activeThreadId,
       composerCursor,
       composerTerminalContexts,
       discardPromptHistoryNavigationForComposerMutation,
       insertComposerDraftTerminalContext,
     ],
   );
+  // Terminal-only workspaces intentionally have no mounted composer. Do not
+  // publish a global-looking action with nowhere to insert the selection.
+  const canAddTerminalContextToChat = activeThread !== undefined && shouldRenderChatPaneContent;
+  // Keep the published capability stable while cursor and draft state change;
+  // dock terminals should not rerender for ordinary composer edits.
+  const addTerminalContextToDraftRef = useRef(addTerminalContextToDraft);
+  useLayoutEffect(() => {
+    addTerminalContextToDraftRef.current = addTerminalContextToDraft;
+  }, [addTerminalContextToDraft]);
+  const addRegisteredTerminalContextToDraft = useCallback((selection: TerminalContextSelection) => {
+    addTerminalContextToDraftRef.current(selection);
+  }, []);
+  useLayoutEffect(() => {
+    if (!canAddTerminalContextToChat) {
+      return;
+    }
+    return registerTerminalContextComposerTarget(paneScopeId, addRegisteredTerminalContextToDraft);
+  }, [addRegisteredTerminalContextToDraft, canAddTerminalContextToChat, paneScopeId]);
   // Collapse an oversized paste into an attachment card above the composer instead
   // of flooding the editor with raw text. The card holds the full content until the
   // user sends or clicks "Show in text field".
@@ -4380,7 +4438,7 @@ export default function ChatView({
         if (!activeThreadId) return;
         storeSetTerminalActivity(activeThreadId, terminalId, activity);
       },
-      onAddTerminalContext: addTerminalContextToDraft,
+      ...(canAddTerminalContextToChat ? { onAddTerminalContext: addTerminalContextToDraft } : {}),
     }),
     [
       activeProject?.cwd,
@@ -4420,6 +4478,7 @@ export default function ChatView({
       toggleRightDock,
       rightDockOpen,
       hasRightDockPanes,
+      canAddTerminalContextToChat,
     ],
   );
   const runProjectScript = useCallback(
@@ -4947,6 +5006,7 @@ export default function ChatView({
         latestTranscriptMessage.role,
         latestTranscriptMessage.streaming ? "streaming" : "settled",
         latestTranscriptMessage.text.length > 0 ? "content" : "empty",
+        latestTranscriptMessage.text.length,
         latestTranscriptMessage.completedAt ?? "",
       ].join(":")
     : "empty";
@@ -6369,6 +6429,19 @@ export default function ChatView({
       );
     },
     [activeThreadId, addComposerFilesToDraft, pendingUserInputs.length, setThreadError],
+  );
+
+  const addComposerAttachments = useCallback(
+    (files: readonly File[]) => {
+      const { imageFiles, genericFiles } = splitComposerDropzoneFiles(files);
+      if (imageFiles.length > 0) {
+        addComposerImages(imageFiles);
+      }
+      if (genericFiles.length > 0) {
+        addComposerFiles(genericFiles);
+      }
+    },
+    [addComposerFiles, addComposerImages],
   );
 
   const removeComposerFile = (fileId: string) => {
@@ -10496,7 +10569,7 @@ export default function ChatView({
         interactionMode={interactionMode}
         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
-        onAddPhotos={addComposerImages}
+        onAddAttachments={addComposerAttachments}
         onToggleFastMode={toggleFastMode}
         onSetPlanMode={setPlanMode}
       />
@@ -11098,14 +11171,8 @@ export default function ChatView({
                           isTranscribing={isVoiceTranscribing}
                           durationLabel={voiceRecordingDurationLabel}
                           waveformLevels={voiceWaveformLevels}
-                          onCancel={() => {
-                            if (isVoiceRecording) {
-                              void submitComposerVoiceRecording();
-                              return;
-                            }
-                            cancelComposerVoiceRecording();
-                          }}
-                          onSubmit={() => {
+                          onDiscard={cancelComposerVoiceRecording}
+                          onStop={() => {
                             void submitComposerVoiceRecording();
                           }}
                         />
@@ -11572,6 +11639,7 @@ export default function ChatView({
                     }
                     tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
                     crossTaskOrigin={crossTaskOrigin}
+                    isTemporaryThread={isThreadTemporary}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}
@@ -11581,6 +11649,7 @@ export default function ChatView({
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
+                    editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
                     followLiveOutput={hasStreamingAssistantText}

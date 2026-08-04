@@ -24,6 +24,7 @@ import {
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
+  type GitHubProjectProvisionProgressEvent,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
@@ -41,6 +42,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   type WsWelcomePayload,
+  type WsBootstrapNegotiateResult,
   type AutomationStreamEvent,
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
@@ -58,6 +60,27 @@ import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 export type { WsThreadStreamFailure } from "./wsTransport";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
+
+export function readWsServerCapabilities(): ReadonlyArray<string> | null {
+  return instance?.transport.getCompatibility()?.capabilities ?? null;
+}
+
+export function onWsServerCapabilitiesChange(
+  listener: (capabilities: ReadonlyArray<string> | null) => void,
+  options?: { readonly replayCurrent?: boolean },
+): () => void {
+  if (!instance) createWsNativeApi();
+  const transport = instance?.transport;
+  if (!transport) {
+    if (options?.replayCurrent) listener(null);
+    return () => undefined;
+  }
+  return transport.onCompatibilityChange(
+    (compatibility: WsBootstrapNegotiateResult | null) =>
+      listener(compatibility?.capabilities ?? null),
+    options,
+  );
+}
 
 function createListenerRegistry<T>() {
   const listeners = new Set<(payload: T) => void>();
@@ -109,6 +132,8 @@ const serverProviderStatusesUpdatedListeners =
 const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
+const projectProvisionProgressListeners =
+  createListenerRegistry<GitHubProjectProvisionProgressEvent>();
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
@@ -144,6 +169,7 @@ function clearWsNativeApiListeners(): void {
   serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
   gitActionProgressListeners.clear();
+  projectProvisionProgressListeners.clear();
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
   automationEventListeners.clear();
@@ -233,6 +259,9 @@ async function requestVoiceTranscriptionUpload(
     | ServerVoiceTranscriptionResult
     | { readonly error?: unknown }
     | null;
+  if (response.status === 404 || response.status === 405) {
+    throw new VoiceUploadRouteUnavailableError();
+  }
   if (!response.ok || !payload || !("text" in payload)) {
     const message =
       payload && "error" in payload && typeof payload.error === "string"
@@ -242,6 +271,8 @@ async function requestVoiceTranscriptionUpload(
   }
   return payload;
 }
+
+class VoiceUploadRouteUnavailableError extends Error {}
 
 function createFallbackTab(url = "about:blank") {
   return {
@@ -421,6 +452,9 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
   });
+  transport.subscribe(WS_CHANNELS.projectProvisionProgress, (message) => {
+    projectProvisionProgressListeners.emit(message.data);
+  });
   transport.subscribe(WS_CHANNELS.terminalEvent, (message) => {
     terminalEventListeners.emit(message.data);
   });
@@ -485,6 +519,8 @@ export function createWsNativeApi(): NativeApi {
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
       readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
+      resolveOutOfRootFileReference: (input) =>
+        transport.request(WS_METHODS.projectsResolveOutOfRootFileReference, input),
       createLocalFilePreviewGrant: (input) =>
         transport.request(WS_METHODS.projectsCreateLocalFilePreviewGrant, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
@@ -492,6 +528,12 @@ export function createWsNativeApi(): NativeApi {
       stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
       listDevServers: () => transport.request(WS_METHODS.projectsListDevServers),
       onDevServerEvent: projectDevServerEventListeners.subscribe,
+      provisionFromGitHub: (input, options) =>
+        transport.request(WS_METHODS.projectsProvisionFromGitHub, input, {
+          timeoutMs: null,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
+      onProvisionProgress: projectProvisionProgressListeners.subscribe,
     },
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
@@ -655,11 +697,16 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverGenerateAutomationIntent, input, {
           timeoutMs: null,
         }),
-      transcribeVoice: (input) => {
-        if (window.desktopBridge?.server?.transcribeVoice) {
-          return window.desktopBridge.server.transcribeVoice(input);
+      prewarmVoice: (input) => transport.request(WS_METHODS.serverPrewarmVoice, input),
+      transcribeVoice: async (input) => {
+        try {
+          return await requestVoiceTranscriptionUpload(input);
+        } catch (error) {
+          if (!(error instanceof VoiceUploadRouteUnavailableError)) {
+            throw error;
+          }
+          return transport.request(WS_METHODS.serverTranscribeVoice, input, { timeoutMs: null });
         }
-        return requestVoiceTranscriptionUpload(input);
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },

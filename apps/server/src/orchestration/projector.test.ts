@@ -474,7 +474,7 @@ describe("orchestration projector", () => {
     expect(thread?.session?.status).toBe("running");
   });
 
-  it("keeps latest turn running for interim and explicitly preserving diff events", async () => {
+  it("keeps latest turn running for checkpoint diff events", async () => {
     const createdAt = "2026-02-23T08:00:00.000Z";
     const startedAt = "2026-02-23T08:00:05.000Z";
     const placeholderAt = "2026-02-23T08:00:06.000Z";
@@ -567,11 +567,44 @@ describe("orchestration projector", () => {
       completedAt: null,
     });
 
-    const afterPreservedDiff = await Effect.runPromise(
+    const afterRealCheckpoint = await Effect.runPromise(
       projectEvent(
         afterPlaceholder,
         makeEvent({
           sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: placeholderAt,
+          commandId: "cmd-real-checkpoint",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/synara/checkpoints/thread-1/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: placeholderAt,
+          },
+        }),
+      ),
+    );
+
+    expect(afterRealCheckpoint.threads[0]?.checkpoints).toMatchObject([
+      { turnId: "turn-1", status: "ready", files: [] },
+    ]);
+    expect(afterRealCheckpoint.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "running",
+      completedAt: null,
+    });
+
+    const afterPreservedDiff = await Effect.runPromise(
+      projectEvent(
+        afterRealCheckpoint,
+        makeEvent({
+          sequence: 5,
           type: "thread.turn-diff-completed",
           aggregateKind: "thread",
           aggregateId: "thread-1",
@@ -835,7 +868,63 @@ describe("orchestration projector", () => {
     expect(afterRealCheckpoint.threads[0]?.latestTurn).toMatchObject({
       turnId: "turn-1",
       state: "completed",
-      completedAt: checkpointAt,
+      completedAt: settledAt,
+    });
+  });
+
+  it("does not let a successful checkpoint overwrite an interrupted turn", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const startedAt = "2026-02-23T08:00:05.000Z";
+    const interruptedAt = "2026-02-23T08:00:10.000Z";
+    const checkpointAt = "2026-02-23T08:00:11.000Z";
+    const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
+    const afterInterrupted = await Effect.runPromise(
+      projectEvent(
+        afterRunning,
+        makeSessionSetEvent({
+          sequence: 3,
+          commandId: "cmd-interrupted",
+          occurredAt: interruptedAt,
+          status: "interrupted",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: interruptedAt,
+        }),
+      ),
+    );
+
+    const afterCheckpoint = await Effect.runPromise(
+      projectEvent(
+        afterInterrupted,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: checkpointAt,
+          commandId: "cmd-checkpoint-after-interrupt",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/synara/checkpoints/thread-1/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: checkpointAt,
+          },
+        }),
+      ),
+    );
+
+    expect(afterCheckpoint.threads[0]?.checkpoints).toMatchObject([
+      { turnId: "turn-1", status: "ready", files: [], assistantMessageId: null },
+    ]);
+    expect(afterCheckpoint.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "interrupted",
+      completedAt: interruptedAt,
+      assistantMessageId: null,
     });
   });
 

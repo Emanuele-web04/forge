@@ -33,6 +33,8 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ServerVoicePrewarmInput,
+  ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
   ThreadId,
@@ -288,6 +290,13 @@ export interface ProviderAdapterShape<TError> {
   readonly listAgents?: (
     input: ProviderListAgentsInput,
   ) => Effect.Effect<ProviderListAgentsResult, TError>;
+
+  /**
+   * Warm provider state needed by voice transcription when supported.
+   */
+  readonly prewarmVoice?: (
+    input: ServerVoicePrewarmInput,
+  ) => Effect.Effect<ServerVoicePrewarmResult, TError>;
 
   /**
    * Transcribe one captured voice clip into plain text when supported.

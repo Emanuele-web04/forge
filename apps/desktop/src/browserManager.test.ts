@@ -184,7 +184,7 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
       tabs: [{ id: tabId, status: "suspended", isLoading: false }],
     });
     expect(() => manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId })).toThrow(
-      /has not attached yet/i,
+      /not ready yet/i,
     );
 
     // A duplicate terminal signal for the same physical guest must not publish

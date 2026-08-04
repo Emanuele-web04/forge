@@ -14,6 +14,7 @@ import {
   groupProviderModelOptionsWithFavorites,
   mergeDynamicModelOptions,
   providerModelCostMultiplierLabel,
+  providerModelOptionProvenanceLabel,
   resolveModelGroupDefaultOpen,
   shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
@@ -203,6 +204,40 @@ describe("providerModelCostMultiplierLabel", () => {
   it("ignores descriptions that do not begin with a multiplier", () => {
     expect(providerModelCostMultiplierLabel("Launch Pricing")).toBeNull();
     expect(providerModelCostMultiplierLabel()).toBeNull();
+  });
+});
+
+describe("providerModelOptionProvenanceLabel", () => {
+  it("prefers the discovered upstream provider name", () => {
+    expect(
+      providerModelOptionProvenanceLabel({
+        provider: "opencode",
+        option: {
+          slug: "opencode-go/deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          upstreamProviderId: "opencode-go",
+          upstreamProviderName: "OpenCode Go",
+        },
+      }),
+    ).toBe("OpenCode Go");
+  });
+
+  it("falls back to a humanized slug provider, then the Synara provider", () => {
+    expect(
+      providerModelOptionProvenanceLabel({
+        provider: "opencode",
+        option: {
+          slug: "local-runtime/deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+        },
+      }),
+    ).toBe("Local Runtime");
+    expect(
+      providerModelOptionProvenanceLabel({
+        provider: "cursor",
+        option: { slug: "auto", name: "Auto" },
+      }),
+    ).toBe("Cursor");
   });
 });
 

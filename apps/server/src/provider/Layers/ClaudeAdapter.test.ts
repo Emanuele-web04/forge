@@ -503,7 +503,10 @@ describe("ClaudeAdapterLive", () => {
         return assert.fail("Expected Claude preset system prompt.");
       }
       assert.include(systemPrompt.append ?? "", "Use the browser_* tools autonomously");
-      assert.include(systemPrompt.append ?? "", "exact Electron WebView the user sees");
+      assert.include(
+        systemPrompt.append ?? "",
+        "exact thread-scoped Electron page Synara surfaces to the user",
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -2481,6 +2484,125 @@ describe("ClaudeAdapterLive", () => {
         const detail = firstNotice.payload.detail as Record<string, unknown>;
         assert.equal(detail.subtype, "background_tasks_changed");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("still announces a task backgrounded via task_updated before the snapshot", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const warningsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "runtime.warning"),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      // The SDK can patch the individual task before the aggregate snapshot
+      // lands. The patch must not pre-seed the announce diff, or the snapshot
+      // would treat the task as already known and never emit the notice.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bg-race-1",
+        patch: { is_backgrounded: true },
+        session_id: "sdk-session-bg-race",
+        uuid: "bg-race-update-1",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "bg-race-1", task_type: "local_bash", description: "sleep 5" }],
+        session_id: "sdk-session-bg-race",
+        uuid: "bg-race-change-1",
+      } as unknown as SDKMessage);
+      // Sentinel unknown subtype closes the collection window; the notice must
+      // arrive before it.
+      harness.query.emit({
+        type: "system",
+        subtype: "totally_unknown_subtype",
+        session_id: "sdk-session-bg-race",
+        uuid: "bg-race-sentinel",
+      } as unknown as SDKMessage);
+
+      const warnings = Array.from(yield* Fiber.join(warningsFiber));
+      assert.deepEqual(
+        warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
+        ["sleep 5", "Unhandled Claude system message subtype 'totally_unknown_subtype'."],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("announces a task again after a foreground patch", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const warningsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "runtime.warning"),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const backgroundSnapshot = (uuid: string, description: string) =>
+        harness.query.emit({
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "bg-returning", task_type: "local_bash", description }],
+          session_id: "sdk-session-bg-returning",
+          uuid,
+        } as unknown as SDKMessage);
+
+      backgroundSnapshot("bg-returning-change-1", "first background run");
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bg-returning",
+        patch: { is_backgrounded: false },
+        session_id: "sdk-session-bg-returning",
+        uuid: "bg-returning-update-foreground",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bg-returning",
+        patch: { is_backgrounded: true },
+        session_id: "sdk-session-bg-returning",
+        uuid: "bg-returning-update-background",
+      } as unknown as SDKMessage);
+      backgroundSnapshot("bg-returning-change-2", "second background run");
+      harness.query.emit({
+        type: "system",
+        subtype: "totally_unknown_subtype",
+        session_id: "sdk-session-bg-returning",
+        uuid: "bg-returning-sentinel",
+      } as unknown as SDKMessage);
+
+      const warnings = Array.from(yield* Fiber.join(warningsFiber));
+      assert.deepEqual(
+        warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
+        [
+          "first background run",
+          "second background run",
+          "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
+        ],
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -9451,6 +9573,353 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         behavior: "deny",
         message: "User cancelled tool execution.",
       } satisfies PermissionResult);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("settles unanswered AskUserQuestion exactly once before terminal turn state", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "ask a question",
+        attachments: [],
+      });
+      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
+
+      const createInput = harness.getLastCreateQueryInput();
+      const canUseTool = createInput?.options.canUseTool;
+      if (!canUseTool) {
+        assert.fail("Expected canUseTool to be defined");
+        return;
+      }
+
+      const permissionPromise = canUseTool(
+        "AskUserQuestion",
+        {
+          questions: [
+            {
+              question: "Continue?",
+              header: "Continue",
+              options: [{ label: "Yes", description: "Proceed" }],
+              multiSelect: false,
+            },
+          ],
+        },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-ask-terminal",
+          agentID: "foreground-agent-terminal",
+          requestId: "request-tool-ask-terminal",
+        },
+      );
+
+      const requestedEvent = yield* Stream.runHead(adapter.streamEvents);
+      if (requestedEvent._tag !== "Some" || requestedEvent.value.type !== "user-input.requested") {
+        assert.fail("Expected user-input.requested event");
+        return;
+      }
+      const rawRequestId = requestedEvent.value.requestId;
+      if (!rawRequestId) {
+        assert.fail("Expected user-input request id");
+        return;
+      }
+      const requestId = ApprovalRequestId.makeUnsafe(rawRequestId);
+
+      const terminalLifecycleFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "user-input.resolved" || event.type === "turn.completed",
+      ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "foreground-agent-terminal",
+        patch: { status: "completed" },
+        session_id: "sdk-session-user-input-terminal",
+        uuid: "task-updated-user-input-terminal",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-user-input-terminal",
+        uuid: "result-user-input-terminal",
+      } as unknown as SDKMessage);
+
+      const terminalLifecycle = Array.from(yield* Fiber.join(terminalLifecycleFiber));
+      assert.deepEqual(
+        terminalLifecycle.map((event) => event.type),
+        ["user-input.resolved", "turn.completed"],
+      );
+      const resolvedEvent = terminalLifecycle[0];
+      if (resolvedEvent?.type !== "user-input.resolved") {
+        assert.fail("Expected user-input.resolved before turn.completed");
+        return;
+      }
+      assert.equal(resolvedEvent.requestId, rawRequestId);
+      assert.deepEqual(resolvedEvent.payload.answers, {});
+      assert.equal(resolvedEvent.turnId, terminalLifecycle[1]?.turnId);
+
+      const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.deepEqual(permissionResult, {
+        behavior: "deny",
+        message: "User cancelled tool execution.",
+      } satisfies PermissionResult);
+
+      const lateResponse = yield* Effect.exit(
+        adapter.respondToUserInput(session.threadId, requestId, {
+          Continue: "Yes",
+        }),
+      );
+      assert.equal(Exit.isFailure(lateResponse), true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "keeps background-agent questions actionable when the background marker arrives late",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "start a background task",
+          attachments: [],
+        });
+        yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
+
+        const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+        if (!canUseTool) {
+          assert.fail("Expected canUseTool to be defined");
+          return;
+        }
+
+        const permissionPromise = canUseTool(
+          "AskUserQuestion",
+          {
+            questions: [
+              {
+                question: "Which environment?",
+                header: "Environment",
+                options: [{ label: "Staging", description: "Use staging" }],
+                multiSelect: false,
+              },
+            ],
+          },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "tool-background-question",
+            agentID: "background-agent-1",
+            requestId: "request-background-question",
+          },
+        );
+
+        const requestedEvent = yield* Stream.runHead(adapter.streamEvents);
+        if (
+          requestedEvent._tag !== "Some" ||
+          requestedEvent.value.type !== "user-input.requested"
+        ) {
+          assert.fail("Expected user-input.requested event");
+          return;
+        }
+
+        const completedEventFiber = yield* Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "turn.completed",
+        ).pipe(Stream.runHead, Effect.forkChild);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-background-question",
+          uuid: "result-background-question",
+        } as unknown as SDKMessage);
+
+        const completedEvent = yield* Fiber.join(completedEventFiber);
+        assert.equal(completedEvent._tag, "Some");
+        assert.equal(completedEvent._tag === "Some" && completedEvent.value.type, "turn.completed");
+
+        harness.query.emit({
+          type: "system",
+          subtype: "task_updated",
+          task_id: "background-agent-1",
+          patch: { is_backgrounded: true },
+          session_id: "sdk-session-background-question",
+          uuid: "task-updated-background-question",
+        } as unknown as SDKMessage);
+        const backgroundedEvent = yield* Stream.runHead(adapter.streamEvents);
+        assert.equal(backgroundedEvent._tag, "Some");
+        assert.equal(
+          backgroundedEvent._tag === "Some" && backgroundedEvent.value.type,
+          "task.updated",
+        );
+
+        yield* adapter.respondToUserInput(
+          session.threadId,
+          ApprovalRequestId.makeUnsafe(requestedEvent.value.requestId!),
+          { Environment: "Staging" },
+        );
+        const resolvedEvent = yield* Stream.runHead(adapter.streamEvents);
+        assert.equal(resolvedEvent._tag, "Some");
+        assert.equal(
+          resolvedEvent._tag === "Some" && resolvedEvent.value.type,
+          "user-input.resolved",
+        );
+
+        const permissionResult = yield* Effect.promise(() => permissionPromise);
+        assert.equal((permissionResult as PermissionResult).behavior, "allow");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("accepts exactly one of two concurrent user-input responses", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      if (!canUseTool) {
+        assert.fail("Expected canUseTool to be defined");
+        return;
+      }
+      const permissionPromise = canUseTool(
+        "AskUserQuestion",
+        {
+          questions: [
+            {
+              question: "Choose a mode",
+              header: "Mode",
+              options: [
+                { label: "Safe", description: "Use safe mode" },
+                { label: "Fast", description: "Use fast mode" },
+              ],
+              multiSelect: false,
+            },
+          ],
+        },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-racing-question",
+          requestId: "request-racing-question",
+        },
+      );
+      const requestedEvent = yield* Stream.runHead(adapter.streamEvents);
+      if (requestedEvent._tag !== "Some" || requestedEvent.value.type !== "user-input.requested") {
+        assert.fail("Expected user-input.requested event");
+        return;
+      }
+      const requestId = ApprovalRequestId.makeUnsafe(requestedEvent.value.requestId!);
+
+      const responses = yield* Effect.all(
+        [
+          Effect.exit(adapter.respondToUserInput(session.threadId, requestId, { Mode: "Safe" })),
+          Effect.exit(adapter.respondToUserInput(session.threadId, requestId, { Mode: "Fast" })),
+        ],
+        { concurrency: "unbounded" },
+      );
+      assert.equal(responses.filter(Exit.isSuccess).length, 1);
+      assert.equal(responses.filter(Exit.isFailure).length, 1);
+
+      const resolvedEvent = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(resolvedEvent._tag, "Some");
+      assert.equal(
+        resolvedEvent._tag === "Some" && resolvedEvent.value.type,
+        "user-input.resolved",
+      );
+      const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.equal((permissionResult as PermissionResult).behavior, "allow");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("accepts exactly one of two concurrent approval decisions", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      if (!canUseTool) {
+        assert.fail("Expected canUseTool to be defined");
+        return;
+      }
+      const permissionPromise = canUseTool(
+        "Bash",
+        { command: "pwd" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-racing-approval",
+          requestId: "request-racing-approval",
+        },
+      );
+      const requestedEvent = yield* Stream.runHead(adapter.streamEvents);
+      if (requestedEvent._tag !== "Some" || requestedEvent.value.type !== "request.opened") {
+        assert.fail("Expected request.opened event");
+        return;
+      }
+      const requestId = ApprovalRequestId.makeUnsafe(requestedEvent.value.requestId!);
+
+      const responses = yield* Effect.all(
+        [
+          Effect.exit(adapter.respondToRequest(session.threadId, requestId, "accept")),
+          Effect.exit(adapter.respondToRequest(session.threadId, requestId, "decline")),
+        ],
+        { concurrency: "unbounded" },
+      );
+      assert.equal(responses.filter(Exit.isSuccess).length, 1);
+      assert.equal(responses.filter(Exit.isFailure).length, 1);
+
+      const resolvedEvent = yield* Stream.runHead(adapter.streamEvents);
+      if (resolvedEvent._tag !== "Some" || resolvedEvent.value.type !== "request.resolved") {
+        assert.fail("Expected request.resolved event");
+        return;
+      }
+      const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.equal(
+        (permissionResult as PermissionResult).behavior,
+        resolvedEvent.value.payload.decision === "accept" ? "allow" : "deny",
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

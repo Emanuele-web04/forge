@@ -19,6 +19,10 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { OrchestrationReactor } from "../../orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
+  PROVIDER_RUNTIME_INGESTION_CONSUMER,
+  ProviderRuntimeEventRepository,
+} from "../../persistence/Services/ProviderRuntimeEvents.ts";
+import {
   bindingActiveTurnId,
   DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS,
   planProviderRuntimeReconciliation,
@@ -60,6 +64,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
+    const runtimeEvents = yield* ProviderRuntimeEventRepository;
     const intervalMs = Math.max(
       250,
       Math.floor(options?.intervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS),
@@ -203,19 +208,23 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
 
     const reconcileNow = Effect.gen(function* () {
       const nowMs = Date.now();
-      const [candidateThreadIds, bindings, liveSessions, pumpHealth] = yield* Effect.all(
+      const candidateThreadIds = yield* projectionSnapshotQuery.listStaleInFlightThreadIds({
+        updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
+        limit: candidateLimit,
+      });
+      if (candidateThreadIds.length === 0) return;
+      const [bindings, liveSessions, pumpHealth, runtimeJournalLagging] = yield* Effect.all(
         [
-          projectionSnapshotQuery.listStaleInFlightThreadIds({
-            updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
-            limit: candidateLimit,
-          }),
           directory.listBindings(),
           providerService.listSessions(),
           providerService.getRuntimeEventPumpHealth?.() ?? Effect.succeed([]),
+          runtimeEvents.hasPendingEventsForThreads({
+            consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+            threadIds: candidateThreadIds,
+          }),
         ],
-        { concurrency: 5 },
+        { concurrency: 4 },
       );
-      if (candidateThreadIds.length === 0) return;
       const threads = (yield* Effect.forEach(
         candidateThreadIds,
         (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
@@ -228,6 +237,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         bindings,
         liveSessions,
         pumpHealth,
+        runtimeJournalLagging,
         nowMs,
         staleAfterMs,
       });

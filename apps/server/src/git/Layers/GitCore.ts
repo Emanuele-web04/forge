@@ -93,6 +93,7 @@ interface ExecuteGitOptions {
   env?: NodeJS.ProcessEnv | undefined;
   progress?: ExecuteGitProgress | undefined;
   maxOutputBytes?: number | undefined;
+  outputMode?: "error" | "truncate" | undefined;
 }
 
 type WorkingTreeStatSummary = ReturnType<typeof summarizeGitNumstatOutputs>;
@@ -497,11 +498,12 @@ const createTrace2Monitor = Effect.fn(function* (
   };
 });
 
-const collectOutput = Effect.fn(function* <E>(
+export const collectGitOutput = Effect.fn(function* <E>(
   input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
   stream: Stream.Stream<Uint8Array, E>,
   maxOutputBytes: number,
   onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
+  outputMode: "error" | "truncate",
 ): Effect.fn.Return<string, GitCommandError> {
   const decoder = new TextDecoder();
   let bytes = 0;
@@ -510,14 +512,16 @@ const collectOutput = Effect.fn(function* <E>(
 
   const emitCompleteLines = (flush: boolean) =>
     Effect.gen(function* () {
-      let newlineIndex = lineBuffer.indexOf("\n");
-      while (newlineIndex >= 0) {
-        const line = lineBuffer.slice(0, newlineIndex).replace(/\r$/, "");
-        lineBuffer = lineBuffer.slice(newlineIndex + 1);
+      let separatorIndex = lineBuffer.search(/[\r\n]/);
+      while (separatorIndex >= 0) {
+        const line = lineBuffer.slice(0, separatorIndex);
+        const separatorWidth =
+          lineBuffer[separatorIndex] === "\r" && lineBuffer[separatorIndex + 1] === "\n" ? 2 : 1;
+        lineBuffer = lineBuffer.slice(separatorIndex + separatorWidth);
         if (line.length > 0 && onLine) {
           yield* onLine(line);
         }
-        newlineIndex = lineBuffer.indexOf("\n");
+        separatorIndex = lineBuffer.search(/[\r\n]/);
       }
 
       if (flush) {
@@ -532,7 +536,7 @@ const collectOutput = Effect.fn(function* <E>(
   yield* Stream.runForEach(stream, (chunk) =>
     Effect.gen(function* () {
       bytes += chunk.byteLength;
-      if (bytes > maxOutputBytes) {
+      if (bytes > maxOutputBytes && outputMode === "error") {
         return yield* new GitCommandError({
           operation: input.operation,
           command: commandLabel(input.args),
@@ -541,14 +545,21 @@ const collectOutput = Effect.fn(function* <E>(
         });
       }
       const decoded = decoder.decode(chunk, { stream: true });
-      text += decoded;
+      if (text.length < maxOutputBytes) {
+        text += decoded.slice(0, maxOutputBytes - text.length);
+      }
       lineBuffer += decoded;
       yield* emitCompleteLines(false);
+      if (outputMode === "truncate" && lineBuffer.length > maxOutputBytes) {
+        lineBuffer = lineBuffer.slice(-maxOutputBytes);
+      }
     }),
   ).pipe(Effect.mapError(toGitCommandError(input, "output stream failed.")));
 
   const remainder = decoder.decode();
-  text += remainder;
+  if (text.length < maxOutputBytes) {
+    text += remainder.slice(0, maxOutputBytes - text.length);
+  }
   lineBuffer += remainder;
   yield* emitCompleteLines(true);
   return text;
@@ -597,6 +608,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         } as const;
         const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
         const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+        const outputMode = input.outputMode ?? "error";
 
         const commandEffect = Effect.gen(function* () {
           const trace2Monitor = yield* createTrace2Monitor(commandInput, input.progress).pipe(
@@ -616,20 +628,27 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               }),
             )
             .pipe(Effect.mapError(toGitCommandError(commandInput, "failed to spawn.")));
+          // Keep cancellation ownership explicit even though spawn is already
+          // Scope-bound: an RPC interruption closes this Scope and kills the child
+          // before execute settles. The spawner's own finalizer safely handles the
+          // second cleanup attempt.
+          yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
 
           const [stdout, stderr, exitCode] = yield* Effect.all(
             [
-              collectOutput(
+              collectGitOutput(
                 commandInput,
                 child.stdout,
                 maxOutputBytes,
                 input.progress?.onStdoutLine,
+                outputMode,
               ),
-              collectOutput(
+              collectGitOutput(
                 commandInput,
                 child.stderr,
                 maxOutputBytes,
                 input.progress?.onStderrLine,
+                outputMode,
               ),
               child.exitCode.pipe(
                 Effect.map((value) => Number(value)),
@@ -692,6 +711,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         ...(options.env ? { env: options.env } : {}),
         ...(options.progress ? { progress: options.progress } : {}),
         ...(options.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
+        ...(options.outputMode !== undefined ? { outputMode: options.outputMode } : {}),
       }).pipe(
         Effect.flatMap((result) => {
           if (options.allowNonZeroExit || result.code === 0) {

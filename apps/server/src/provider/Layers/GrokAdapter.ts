@@ -1988,6 +1988,12 @@ export function makeGrokAdapter(
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
+                // ACP PromptResponse.usage is cumulative session spend, not the
+                // live context-window occupancy. Preserve it on turn.completed
+                // below, but do not synthesize a context-window update from it:
+                // doing so makes the meter grow across turns and stay full after
+                // compaction. A real usage_update notification remains the only
+                // trustworthy source for Grok's context meter.
                 yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
