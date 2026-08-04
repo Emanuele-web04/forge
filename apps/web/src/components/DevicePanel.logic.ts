@@ -332,9 +332,14 @@ export interface DeviceShortcutEventLike {
  * browser/app rather than injected, since Cmd+W/Cmd+R on a focused canvas must
  * still reach Synara.
  *
- * Simulator.app's ⌘→ rotate chord is deliberately absent: rotation is a window
- * command with no HID usage and no simctl equivalent, so the backend cannot
- * honour it. Claiming the chord here would swallow the keystroke and then fail.
+ * Two of Simulator.app's chords are deliberately absent, for the same reason:
+ * claiming a chord swallows the keystroke, so a chord the backend cannot honour
+ * is worse than no chord at all.
+ *
+ * - ⌘→ rotate: a window command with no HID usage and no simctl equivalent.
+ * - ⌘↑/⌘↓ volume: injected and acked, but nothing in a headless guest acts on
+ *   them — SpringBoard only wires volume when Simulator.app owns the device.
+ *   The drawn volume nubs are omitted for the same reason (see NUB_ACTIONS).
  */
 export function resolveDeviceHardwareButtonShortcut(
   event: DeviceShortcutEventLike,
@@ -345,10 +350,7 @@ export function resolveDeviceHardwareButtonShortcut(
   if (event.shiftKey) {
     return key === "h" ? "home" : null;
   }
-  if (key === "l") return "lock";
-  if (event.key === "ArrowUp") return "volume-up";
-  if (event.key === "ArrowDown") return "volume-down";
-  return null;
+  return key === "l" ? "lock" : null;
 }
 
 export function deviceKeyModifiers(event: DeviceShortcutEventLike): DeviceKeyModifier[] {

@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { deviceKindFor, screenGeometry } from "./DeviceFrame";
+import { NUB_ACTIONS, deviceKindFor, screenGeometry } from "./DeviceFrame";
+
+describe("side button controls", () => {
+  it("only makes a drawn nub clickable when the press reaches the guest", () => {
+    // Lock is the one that lands headlessly: it blanks the screen, and the
+    // press shows up in SpringBoard's log. Volume and the action button are
+    // drawn but not offered — a button that reliably does nothing is worse
+    // than metal the user never tries to click.
+    expect(Object.keys(NUB_ACTIONS)).toEqual(["power"]);
+    expect(NUB_ACTIONS.power).toEqual({ label: "Lock", button: "lock" });
+  });
+});
 
 describe("deviceKindFor", () => {
   it("draws the chassis the device's own product family names", () => {

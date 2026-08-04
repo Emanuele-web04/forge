@@ -332,27 +332,27 @@ export const DeviceSilhouette = memo(function DeviceSilhouette({
   );
 });
 
-const NO_HUD_HINT = "Sent to the app; a headless simulator shows no volume HUD";
-
 /**
- * Which contract button each drawn nub presses, and how it names itself. The
- * action button (the ring/silent switch's replacement) maps to nothing the
- * helper can inject, so it stays decorative rather than shipping a control
- * that does nothing when pressed.
+ * Which contract button each drawn nub presses, and how it names itself.
  *
- * `hint` marks the buttons whose press is delivered but has no visible effect
- * on a headless boot. Volume is the case: the HID event reaches the guest and
- * an app listening for it responds, but SpringBoard paints no volume HUD
- * without a Simulator.app window, so the screen does not change. Saying so in
- * the tooltip is the difference between a quirk and an apparently dead button.
+ * Only lock is here, and the omissions are deliberate — every nub the frame
+ * draws is still drawn, but a nub with no entry is metal rather than a control:
+ *
+ * - The action button (the ring/silent switch's replacement) maps to nothing
+ *   the helper can inject.
+ * - Volume up and down are injected and acked, but nothing in the guest acts on
+ *   them. Probed on a booted iPhone 17 Pro: single press and a 1.5s hold both
+ *   left the framebuffer byte-identical, and streaming SpringBoard's and
+ *   backboardd's logs across a volume press and a home press showed 16 lines
+ *   for home and zero mention of volume. SpringBoard only wires its volume
+ *   handling when Simulator.app owns the device, so headlessly the press has
+ *   nowhere to land. A button that reliably does nothing is worse than metal
+ *   the user never tries to click, so it is not offered.
  */
-const NUB_ACTIONS: Record<
+export const NUB_ACTIONS: Record<
   string,
-  { readonly label: string; readonly button: DeviceHardwareButton; readonly hint?: string }
+  { readonly label: string; readonly button: DeviceHardwareButton }
 > = {
-  volumeUp: { label: "Volume up", button: "volume-up", hint: NO_HUD_HINT },
-  volumeDown: { label: "Volume down", button: "volume-down", hint: NO_HUD_HINT },
-  volumeRocker: { label: "Volume", button: "volume-up", hint: NO_HUD_HINT },
   power: { label: "Lock", button: "lock" },
 };
 
@@ -475,9 +475,9 @@ export const DeviceScreen = memo(function DeviceScreen({
           className="pointer-events-none absolute inset-0 h-full w-full select-none"
         />
         {/*
-          The frame draws the hardware; these are the controls. Simulator.app's
-          side buttons are clickable and so are these, which is why each carries
-          an accessible name and a focus ring even though its face is the SVG's.
+          The frame draws every nub; this lays a control over the ones that do
+          something (see NUB_ACTIONS). Each carries an accessible name and a
+          focus ring even though its face is the SVG's.
         */}
         {nubs.map(({ name, side, style }) => {
           const action = NUB_ACTIONS[name];
@@ -502,9 +502,7 @@ export const DeviceScreen = memo(function DeviceScreen({
                   />
                 }
               />
-              <TooltipPopup side={side === "top" ? "top" : side}>
-                {action.hint ? `${action.label} — ${action.hint}` : action.label}
-              </TooltipPopup>
+              <TooltipPopup side={side === "top" ? "top" : side}>{action.label}</TooltipPopup>
             </Tooltip>
           );
         })}

@@ -453,17 +453,24 @@ describe("pointer gestures", () => {
 describe("hardware button shortcuts", () => {
   const base = { metaKey: true, shiftKey: false, altKey: false, ctrlKey: false };
 
-  it("matches the Simulator.app chords", () => {
+  it("matches the Simulator.app chords the backend can honour", () => {
     expect(resolveDeviceHardwareButtonShortcut({ ...base, shiftKey: true, key: "H" })).toBe("home");
     expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "l" })).toBe("lock");
-    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowUp" })).toBe("volume-up");
-    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowDown" })).toBe("volume-down");
   });
 
   it("leaves Simulator.app's rotate chord unclaimed, since the backend cannot honour it", () => {
     // Rotation is a window command with no HID usage and no simctl equivalent.
     // Claiming ⌘→ would swallow the keystroke and then surface an error.
     expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowRight" })).toBeNull();
+  });
+
+  it("leaves the volume chords unclaimed, since nothing headless acts on them", () => {
+    // Injected and acked, but SpringBoard only wires volume when Simulator.app
+    // owns the device: probed on a booted iPhone 17 Pro, a press left the
+    // framebuffer byte-identical and produced no SpringBoard log line. Claiming
+    // the chord would swallow ⌘↑/⌘↓ to do nothing.
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowUp" })).toBeNull();
+    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowDown" })).toBeNull();
   });
 
   it("leaves unrelated chords to the app", () => {
