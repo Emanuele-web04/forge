@@ -798,8 +798,10 @@ describe("device orientation", () => {
     expect(nextDeviceOrientation("portrait")).toBe("landscape");
     expect(nextDeviceOrientation("landscape")).toBe("portrait");
     expect(deviceOrientationTransform("portrait")).toBeUndefined();
-    // Counter-clockwise: the guest cannot be rotated, so its portrait picture
-    // is turned the other way to sit upright inside a landscape chassis.
-    expect(deviceOrientationTransform("landscape")).toBe("rotate(-90deg)");
+    // Clockwise, the same way the chassis is drawn turning. The guest cannot be
+    // rotated, so neither direction makes its picture upright; clockwise is the
+    // one that lands its status bar and cutout on the edge where the shell
+    // draws the Dynamic Island, instead of on the opposite one.
+    expect(deviceOrientationTransform("landscape")).toBe("rotate(90deg)");
   });
 });

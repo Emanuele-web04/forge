@@ -749,11 +749,20 @@ export function nextDeviceOrientation(orientation: DeviceOrientation): DeviceOri
  * on the wrong side of the screen.
  */
 export function deviceOrientationTransform(orientation: DeviceOrientation): string | undefined {
-  // Counter-clockwise, so the guest's picture ends up upright in a turned
-  // chassis. CoreSimulator exposes no way to rotate the device itself, so the
-  // app inside keeps rendering portrait; turning its frame the other way is
-  // what makes the landscape view readable rather than a sideways slab.
-  return orientation === "landscape" ? "rotate(-90deg)" : undefined;
+  // Clockwise, matching the direction the chassis is drawn turning.
+  //
+  // Neither direction makes the guest's picture upright, and it is worth being
+  // precise about why: CoreSimulator exposes no way to rotate the device, so
+  // the app inside keeps composing a portrait frame — status bar along one long
+  // edge, home indicator on a short one. Rotating the canvas turns that picture
+  // bodily; it cannot reflow it. The only thing the direction decides is which
+  // long edge the guest's status bar ends up on.
+  //
+  // Clockwise puts it on the same edge as the Dynamic Island the shell draws.
+  // Counter-clockwise leaves the guest's own cutout and status bar on the left
+  // while the drawn cutout stays on the right, which reads as two phones
+  // overlaid.
+  return orientation === "landscape" ? "rotate(90deg)" : undefined;
 }
 
 export interface DeviceSetupAction {
