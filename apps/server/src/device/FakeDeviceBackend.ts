@@ -106,6 +106,7 @@ export class FakeDeviceBackend implements DeviceBackend {
   private readonly now: () => number;
   private readonly devices = new Map<string, DeviceDescriptor>();
   private readonly listeners = new Map<string, DeviceFrameListener>();
+  private nextStreamFailure: string | null = null;
   private readonly sequences = new Map<string, number>();
   private readonly installedBundles = new Map<string, string>();
   private readonly attachedGeometry = new Set<string>();
@@ -379,8 +380,21 @@ export class FakeDeviceBackend implements DeviceBackend {
     return this.attachedGeometry.has(udid) ? DEFAULT_FAKE_GEOMETRY : null;
   }
 
+  /**
+   * Fail exactly the next attach. Models the real early-boot window where a
+   * device reports booted before it publishes a display.
+   */
+  failNextStream(message: string): void {
+    this.nextStreamFailure = message;
+  }
+
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
     this.record({ kind: "attachStream", udid });
+    const failure = this.nextStreamFailure;
+    if (failure !== null) {
+      this.nextStreamFailure = null;
+      throw new DeviceBackendError(failure);
+    }
     this.requireBooted(udid);
     this.attachedGeometry.add(udid);
     this.listeners.set(udid, onFrame);

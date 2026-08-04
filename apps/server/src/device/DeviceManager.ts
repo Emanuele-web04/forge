@@ -582,10 +582,26 @@ export class DeviceManager {
     try {
       await this.backend.attachStream(udid, (frame) => this.transport.publish(udid, frame));
       this.nudgeScreen(udid);
+      // A stream that started supersedes whatever failed before it. Attaching
+      // to a device still publishing its display fails with "no framebuffer
+      // surface yet"; without this the pane kept that message under a picture
+      // that had been live for minutes.
+      void this.clearStreamErrors(udid);
     } catch (error) {
       this.streaming.delete(udid);
       throw error;
     }
+  }
+
+  /** Drop a stale attach failure from every thread now watching this device. */
+  private async clearStreamErrors(udid: string): Promise<void> {
+    const cleared: string[] = [];
+    for (const [threadId, attachment] of this.threads) {
+      if (attachment.attachedDeviceUdid !== udid || attachment.lastError === null) continue;
+      attachment.lastError = null;
+      cleared.push(threadId);
+    }
+    for (const threadId of cleared) await this.publish(threadId);
   }
 
   /**
