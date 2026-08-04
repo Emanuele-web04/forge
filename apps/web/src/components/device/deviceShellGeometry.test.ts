@@ -15,6 +15,14 @@ const IPHONE_17_PRO = { pointWidth: 402, pointHeight: 874 };
 const IPHONE_SE = { pointWidth: 375, pointHeight: 667 };
 const IPAD_PRO_11 = { pointWidth: 834, pointHeight: 1194 };
 
+/**
+ * The modern-phone bezel, mirrored from SHELL_PROFILES. Named rather than
+ * inlined because several tests resolve percentages back into points and would
+ * otherwise all need editing whenever the shell is recalibrated.
+ */
+const MODERN_BEZEL_RATIO = 0.0305;
+const MODERN_BEZEL_POINTS = 402 * MODERN_BEZEL_RATIO;
+
 describe("deviceShellClass", () => {
   it("separates the three hardware shapes by point size and aspect", () => {
     expect(deviceShellClass(402, 874)).toBe("modern-phone");
@@ -37,9 +45,27 @@ describe("resolveDeviceShellMetrics", () => {
     const metrics = resolveDeviceShellMetrics(IPHONE_17_PRO);
     expect(metrics.shellClass).toBe("modern-phone");
     expect(metrics.dynamicIsland).not.toBeNull();
-    // 126pt of a 402pt-wide screen.
     expect(metrics.dynamicIsland?.edge).toBe("top");
-    expect(metrics.dynamicIsland?.lengthPercent).toBeCloseTo(31.3, 1);
+    // 54.89 of the Eldora mockup's 171.98 screen. Apple's published 126/402
+    // gives 31.3, so the two sources agree to within half a percent — the
+    // check is deliberately loose enough to hold for either.
+    expect(metrics.dynamicIsland?.lengthPercent).toBeCloseTo(31.9, 1);
+    expect(metrics.dynamicIsland?.lengthPercent).toBeGreaterThan((126 / 402) * 100 - 1);
+  });
+
+  it("matches the MIT reference mockup's proportions", () => {
+    // Eldora UI's iPhone 17 Pro (MIT): screen 171.98x374.37, corner radius
+    // 24.62, body 5.25 off each side. Pinned so a future tweak to the shell has
+    // to be a deliberate departure from the reference rather than a drift.
+    const REFERENCE = { screenWidth: 171.98, radius: 24.62, sideBezel: 5.25 };
+    const metrics = resolveDeviceShellMetrics(IPHONE_17_PRO);
+
+    const screenRadiusPoints = (metrics.screenRadius.xPercent / 100) * 402;
+    expect(screenRadiusPoints / 402).toBeCloseTo(REFERENCE.radius / REFERENCE.screenWidth, 3);
+
+    const chassisWidth = 402 * (1 + MODERN_BEZEL_RATIO * 2);
+    const bezelPoints = (metrics.bezelInsetPercent.x / 100) * chassisWidth;
+    expect(bezelPoints / 402).toBeCloseTo(REFERENCE.sideBezel / REFERENCE.screenWidth, 3);
   });
 
   it("withholds the Dynamic Island from devices that have none", () => {
@@ -59,10 +85,10 @@ describe("resolveDeviceShellMetrics", () => {
     const metrics = resolveDeviceShellMetrics(IPHONE_17_PRO);
     // Compared in points rather than percent, since the two radii are expressed
     // against differently sized boxes.
-    const chassisWidth = 402 * (1 + 0.028 * 2);
+    const chassisWidth = 402 * (1 + MODERN_BEZEL_RATIO * 2);
     const chassisRadiusPoints = (metrics.chassisRadius.xPercent / 100) * chassisWidth;
     const screenRadiusPoints = (metrics.screenRadius.xPercent / 100) * 402;
-    expect(chassisRadiusPoints - screenRadiusPoints).toBeCloseTo(402 * 0.028, 4);
+    expect(chassisRadiusPoints - screenRadiusPoints).toBeCloseTo(MODERN_BEZEL_POINTS, 4);
   });
 
   it("keeps a percentage radius circular by expressing it on both axes", () => {
@@ -119,11 +145,11 @@ describe("resolveDeviceShellMetrics in landscape", () => {
   });
 
   it("keeps the chassis the same thickness on every edge as it was upright", () => {
-    // Resolved back into points, both bezels must come out at the same 11.3pt
-    // they were upright. Percentage padding is what broke this: `padding-block`
-    // resolves against width, so on a wide chassis the top and bottom bezels
-    // ballooned to a share of the long axis and ate the screen.
-    const bezelPoints = 402 * 0.028;
+    // Resolved back into points, both bezels must come out at the same
+    // thickness they were upright. Percentage padding is what broke this:
+    // `padding-block` resolves against width, so on a wide chassis the top and
+    // bottom bezels ballooned to a share of the long axis and ate the screen.
+    const bezelPoints = MODERN_BEZEL_POINTS;
     const chassisWidth = 402 + bezelPoints * 2;
     const chassisHeight = 874 + bezelPoints * 2;
 
@@ -137,10 +163,10 @@ describe("resolveDeviceShellMetrics in landscape", () => {
   it("draws concentric corners after the turn too", () => {
     // The turned chassis is as wide as the upright one was tall, and its screen
     // as wide as the screen was tall.
-    const chassisWidth = 874 + 402 * 0.028 * 2;
+    const chassisWidth = 874 + MODERN_BEZEL_POINTS * 2;
     const chassisRadiusPoints = (landscape.chassisRadius.xPercent / 100) * chassisWidth;
     const screenRadiusPoints = (landscape.screenRadius.xPercent / 100) * 874;
-    expect(chassisRadiusPoints - screenRadiusPoints).toBeCloseTo(402 * 0.028, 4);
+    expect(chassisRadiusPoints - screenRadiusPoints).toBeCloseTo(MODERN_BEZEL_POINTS, 4);
   });
 
   it("keeps the corner radius circular on the transposed box", () => {
