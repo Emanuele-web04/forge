@@ -8,6 +8,7 @@ import {
   CheckpointRef,
   EventId,
   MessageId,
+  DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   type OrchestrationReadModel,
   type ProjectId,
@@ -1346,7 +1347,12 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeTerminalEvents ||
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
-        method === WS_METHODS.subscribeAutomationEvents
+        method === WS_METHODS.subscribeAutomationEvents ||
+        // Left open like the rest: these are infinite subscriptions, and the
+        // default below answers with an Exit, which a stream RPC reads as the
+        // socket dying and answers with a full reconnect. That loops forever
+        // and starves the RPCs these tests are actually asserting on.
+        method === DEVICE_WS_METHODS.subscribeEvents
       ) {
         return;
       }

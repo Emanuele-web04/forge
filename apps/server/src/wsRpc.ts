@@ -1886,8 +1886,23 @@ const makeWsRpcHandlersLayer = () =>
             // Device pushes are lossy by design: thread state is a versioned
             // full snapshot, so a client that falls behind converges on the
             // next one rather than needing every intermediate state.
-            deviceService === undefined
-              ? Stream.empty
+            //
+            // `Stream.never`, not `Stream.empty`, where no device engine can
+            // run. This is an infinite subscription, and the client treats one
+            // that completes as a zombie socket: it forces a full reconnect to
+            // recover it, and an empty stream completes instantly, so the pair
+            // loops. That churn restarts every other subscription with it,
+            // which is how unrelated RPCs began missing their replies on Linux
+            // CI. Staying open and silent is what "no events will ever arrive"
+            // actually means.
+            //
+            // Gated on `supported`, not just on the service existing: the layer
+            // is provided on every platform so callers need not branch on null,
+            // and off darwin it resolves to a service whose backend reports
+            // unsupported-platform. `makeWsDeviceHandlers` already branches the
+            // same way.
+            deviceService?.supported !== true
+              ? Stream.never
               : bufferLiveUiStream(
                   Stream.callback<DeviceEvent>((queue) =>
                     Effect.gen(function* () {
