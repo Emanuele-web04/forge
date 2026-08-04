@@ -798,6 +798,8 @@ describe("device orientation", () => {
     expect(nextDeviceOrientation("portrait")).toBe("landscape");
     expect(nextDeviceOrientation("landscape")).toBe("portrait");
     expect(deviceOrientationTransform("portrait")).toBeUndefined();
-    expect(deviceOrientationTransform("landscape")).toBe("rotate(90deg)");
+    // Counter-clockwise: the guest cannot be rotated, so its portrait picture
+    // is turned the other way to sit upright inside a landscape chassis.
+    expect(deviceOrientationTransform("landscape")).toBe("rotate(-90deg)");
   });
 });

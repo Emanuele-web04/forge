@@ -325,11 +325,10 @@ export function deviceShellFitWidth(
   margin: number = DEVICE_SHELL_FIT_MARGIN,
 ): string {
   const percent = margin * 100;
-  // The height term is folded into its own coefficient rather than written as
-  // `Ncqh * ratio`. A length multiplied by a bare number is not a valid CSS
-  // calculation in `min()`, so that form was dropped whole and the chassis fell
-  // back to the width term alone — which is why a turned device sat in a third
-  // of the height it had while the portrait one filled the pane.
+  // The aspect is folded into the coefficient rather than left as a
+  // `Ncqh * ratio` product. Both forms are valid CSS and compute the same
+  // length; this one is preferred only because two directly comparable lengths
+  // are easier to read in devtools than a product nested inside min().
   const heightPercent = percent * chassisAspectRatio;
   return `min(${percent}cqw, ${heightPercent}cqh)`;
 }

@@ -749,7 +749,11 @@ export function nextDeviceOrientation(orientation: DeviceOrientation): DeviceOri
  * on the wrong side of the screen.
  */
 export function deviceOrientationTransform(orientation: DeviceOrientation): string | undefined {
-  return orientation === "landscape" ? "rotate(90deg)" : undefined;
+  // Counter-clockwise, so the guest's picture ends up upright in a turned
+  // chassis. CoreSimulator exposes no way to rotate the device itself, so the
+  // app inside keeps rendering portrait; turning its frame the other way is
+  // what makes the landscape view readable rather than a sideways slab.
+  return orientation === "landscape" ? "rotate(-90deg)" : undefined;
 }
 
 export interface DeviceSetupAction {

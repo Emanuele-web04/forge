@@ -4,6 +4,7 @@ import {
   DEVICE_SHELL_FALLBACK_POINT_SIZE,
   DEVICE_SHELL_FIT_MARGIN,
   deviceShellClass,
+  deviceShellFitWidth,
   deviceShellRadiusValue,
   fitDeviceShellSize,
   resolveDeviceShellMetrics,
@@ -276,6 +277,25 @@ describe("fitDeviceShellSize", () => {
 
     const veryWide = fitDeviceShellSize({ width: 4000, height: 766 }, LANDSCAPE_ASPECT);
     expect(veryWide.height / 766).toBeCloseTo(DEVICE_SHELL_FIT_MARGIN, 6);
+  });
+
+  it("emits the same fit as a CSS length the browser resolves itself", () => {
+    // The component uses the CSS form so a pane resize costs no JS, so the two
+    // must agree. `Ncqh * ratio` would be valid CSS and compute the same
+    // length; the bare pair is pinned because it makes the binding axis legible
+    // in devtools when a pane looks wrong.
+    const css = deviceShellFitWidth(LANDSCAPE_ASPECT);
+    expect(css).toMatch(/^min\(\d+(\.\d+)?cqw, \d+(\.\d+)?cqh\)$/u);
+
+    const [, widthTerm, heightTerm] = /^min\(([\d.]+)cqw, ([\d.]+)cqh\)$/u.exec(css)!;
+    const pane = { width: 455, height: 766 };
+    // Resolve the min() by hand against the same pane and check it lands where
+    // fitDeviceShellSize does.
+    const resolved = Math.min(
+      (Number(widthTerm) / 100) * pane.width,
+      (Number(heightTerm) / 100) * pane.height,
+    );
+    expect(resolved).toBeCloseTo(fitDeviceShellSize(pane, LANDSCAPE_ASPECT).width, 6);
   });
 
   it("returns nothing for a pane that has not been measured yet", () => {
