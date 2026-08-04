@@ -249,7 +249,10 @@ export function makeWsDeviceHandlers(
     [DEVICE_WS_METHODS.openUrl]: (input) =>
       attempt(() => manager.openUrl(input.udid, input.url), "Failed to open URL on device"),
     [DEVICE_WS_METHODS.screenshot]: (input) =>
-      attempt(() => manager.screenshot(input.udid), "Failed to capture device screenshot"),
+      attempt(
+        () => manager.screenshot(input.udid, { save: input.save ?? false }),
+        "Failed to capture device screenshot",
+      ),
     [DEVICE_WS_METHODS.startRecording]: (input) =>
       attempt(() => manager.startRecording(input.udid), "Failed to start device recording"),
     [DEVICE_WS_METHODS.stopRecording]: (input) =>

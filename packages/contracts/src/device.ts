@@ -452,7 +452,21 @@ export type DeviceOpenUrlInput = typeof DeviceOpenUrlInput.Type;
 
 // ── Read tools ───────────────────────────────────────────────────────
 
-export const DeviceScreenshotInput = DeviceTargetInput;
+export const DeviceScreenshotInput = Schema.Struct({
+  udid: DeviceUdid,
+  /**
+   * Write the PNG next to screen recordings and return its path instead of
+   * relying on the caller to save the bytes.
+   *
+   * The pane sets this. It used to hand the base64 to a browser download, which
+   * put the file wherever the browser felt like — or nowhere at all in a
+   * headless or download-blocked context — while recordings landed on the
+   * Desktop. Same button, same expectation, so the same destination.
+   *
+   * Agents leave it unset: they want the bytes, not a file on the user's disk.
+   */
+  save: Schema.optional(Schema.Boolean),
+});
 export type DeviceScreenshotInput = typeof DeviceScreenshotInput.Type;
 
 const DevicePixelDimension = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16_384 }));
@@ -470,6 +484,8 @@ export const DeviceScreenshotResult = Schema.Struct({
   sizeBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 * 1024 * 1024 })),
   bytesBase64: TrimmedNonEmptyString.check(Schema.isMaxLength(44 * 1024 * 1024)),
   capturedAt: IsoDateTime,
+  /** Where the PNG was written, when the caller asked for it to be saved. */
+  path: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(DEVICE_PATH_MAX_LENGTH))),
 });
 export type DeviceScreenshotResult = typeof DeviceScreenshotResult.Type;
 

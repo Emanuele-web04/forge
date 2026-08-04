@@ -1,6 +1,6 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { PassThrough } from "node:stream";
@@ -298,6 +298,68 @@ describe("png dimension reading", () => {
   it("returns null for bytes that are not a PNG", () => {
     expect(readPngDimensions(Buffer.alloc(64))).toBeNull();
     expect(readPngDimensions(Buffer.from("nope"))).toBeNull();
+  });
+});
+
+describe("saving a screenshot", () => {
+  const SCREENSHOT_PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  /** A backend whose `simctl io screenshot` writes a real PNG to the given path. */
+  async function makeScreenshotBackend() {
+    const directory = await mkdtemp(path.join(tmpdir(), "synara-screenshot-test-"));
+    const backend = new IosSimulatorBackend({
+      platform: "darwin",
+      recordingDirectory: directory,
+      now: () => Date.parse("2026-08-04T12:00:00.000Z"),
+      run: async (command, args) => {
+        if (command === "xcrun" && args[1] === "list") {
+          return successfulProcessResult(recordingDeviceList);
+        }
+        if (command === "xcrun" && args.includes("screenshot")) {
+          // `simctl io <udid> screenshot <path>`: the path is the last argument.
+          await writeFile(args.at(-1)!, SCREENSHOT_PNG);
+        }
+        return successfulProcessResult();
+      },
+    });
+    return { backend, directory };
+  }
+
+  it("writes the PNG beside the recordings and reports its path", async () => {
+    const { backend, directory } = await makeScreenshotBackend();
+
+    const shot = await backend.screenshot(RECORDING_DEVICE, { save: true });
+
+    // The pane's save button used to route through a browser download, which
+    // put the file wherever the browser chose — or nowhere at all. It has to
+    // land in the same directory the record button writes to.
+    expect(shot.path).toBe(
+      path.join(directory, "simulator-iphone-17-pro-2026-08-04T12-00-00-000Z.png"),
+    );
+    expect(await readFile(shot.path!)).toEqual(SCREENSHOT_PNG);
+  });
+
+  it("still returns the bytes so an agent can read the screen", async () => {
+    const { backend } = await makeScreenshotBackend();
+
+    const shot = await backend.screenshot(RECORDING_DEVICE, { save: true });
+
+    expect(Buffer.from(shot.bytesBase64, "base64")).toEqual(SCREENSHOT_PNG);
+    expect(shot.mimeType).toBe("image/png");
+  });
+
+  it("writes nothing when the caller only wants the bytes", async () => {
+    const { backend, directory } = await makeScreenshotBackend();
+
+    const shot = await backend.screenshot(RECORDING_DEVICE);
+
+    // The composer attachment and the agent's own tool take this path; neither
+    // should litter the user's Desktop.
+    expect(shot.path).toBeUndefined();
+    expect(await readdir(directory)).toEqual([]);
   });
 });
 

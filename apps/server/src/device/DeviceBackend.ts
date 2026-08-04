@@ -112,7 +112,8 @@ export interface DeviceBackend {
   keyEvent(udid: string, event: DeviceKeyEvent): Promise<void>;
   pressButton(udid: string, button: DeviceHardwareButton): Promise<void>;
 
-  screenshot(udid: string): Promise<DeviceScreenshotResult>;
+  /** `save` writes the PNG beside recordings and reports its path. */
+  screenshot(udid: string, options?: { readonly save?: boolean }): Promise<DeviceScreenshotResult>;
   startRecording(udid: string): Promise<DeviceStartRecordingResult>;
   stopRecording(udid: string): Promise<DeviceStopRecordingResult>;
   describeUi(udid: string): Promise<DeviceDescribeUiResult>;

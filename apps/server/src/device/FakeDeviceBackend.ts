@@ -281,10 +281,16 @@ export class FakeDeviceBackend implements DeviceBackend {
     this.requireBooted(udid);
   }
 
-  async screenshot(udid: string): Promise<DeviceScreenshotResult> {
+  async screenshot(
+    udid: string,
+    options: { readonly save?: boolean } = {},
+  ): Promise<DeviceScreenshotResult> {
     this.record({ kind: "screenshot", udid });
     const device = this.requireBooted(udid);
     return {
+      // Mirrors the real backend: a saved shot reports where it landed, and it
+      // lands beside the recordings rather than anywhere else.
+      ...(options.save === true ? { path: path.join(tmpdir(), `simulator-${udid}.png`) } : {}),
       udid,
       name: `${device.name}.png`,
       mimeType: "image/png",

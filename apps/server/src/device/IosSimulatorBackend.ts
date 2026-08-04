@@ -18,7 +18,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -433,7 +433,13 @@ export class IosSimulatorBackend implements DeviceBackend {
     if (result.code !== 0) throw this.simctlError("openurl", result);
   }
 
-  async screenshot(udid: string): Promise<DeviceScreenshotResult> {
+  async screenshot(
+    udid: string,
+    options: { readonly save?: boolean } = {},
+  ): Promise<DeviceScreenshotResult> {
+    // Captured to a temp file either way, because `simctl io screenshot` only
+    // writes to a path. When the caller wants it kept, it is moved next to the
+    // recordings afterwards rather than captured somewhere different.
     const directory = await mkdtemp(path.join(tmpdir(), "synara-device-"));
     const file = path.join(directory, "screenshot.png");
     try {
@@ -445,7 +451,9 @@ export class IosSimulatorBackend implements DeviceBackend {
       }
       const bytes = await readFile(file);
       const dimensions = readPngDimensions(bytes);
+      const savedPath = options.save === true ? await this.saveScreenshotFile(udid, bytes) : null;
       return {
+        ...(savedPath ? { path: savedPath } : {}),
         udid,
         name: `simulator-${udid}.png`,
         mimeType: "image/png",
@@ -457,6 +465,29 @@ export class IosSimulatorBackend implements DeviceBackend {
       };
     } finally {
       await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Keep a screenshot where the user will find it: the same Desktop/Downloads
+   * directory recordings go to, named the same way, so one button's output does
+   * not land somewhere different from the other's.
+   */
+  private async saveScreenshotFile(udid: string, bytes: Buffer): Promise<string> {
+    const devices = await this.listDevicesUnchecked();
+    const deviceName = devices.find((device) => device.udid === udid)?.name ?? udid;
+    const target = await this.nextCapturePath(
+      deviceName,
+      new Date(this.now()).toISOString(),
+      "png",
+    );
+    try {
+      await writeFile(target, bytes);
+      return target;
+    } finally {
+      // The reservation only guards against two captures in the same
+      // millisecond choosing one name; the file on disk owns it from here.
+      this.reservedRecordingPaths.delete(target);
     }
   }
 
@@ -661,7 +692,7 @@ export class IosSimulatorBackend implements DeviceBackend {
     const devices = await this.listDevicesUnchecked();
     const deviceName = devices.find((device) => device.udid === udid)?.name ?? udid;
     const requestedAt = new Date(this.now()).toISOString();
-    const outputPath = await this.nextRecordingPath(deviceName, requestedAt);
+    const outputPath = await this.nextCapturePath(deviceName, requestedAt, "mp4");
     if (this.disposed) {
       this.reservedRecordingPaths.delete(outputPath);
       throw new DeviceBackendError("The iOS simulator backend is disposed");
@@ -811,26 +842,34 @@ export class IosSimulatorBackend implements DeviceBackend {
     await this.stopRecording(udid).catch(() => undefined);
   }
 
-  private async nextRecordingPath(deviceName: string, startedAt: string): Promise<string> {
+  /** Unique path for a capture, shared by recordings (mp4) and screenshots (png). */
+  private async nextCapturePath(
+    deviceName: string,
+    startedAt: string,
+    extension: "mp4" | "png",
+  ): Promise<string> {
     const directory = await this.recordingDirectory();
     const slug = slugDeviceName(deviceName);
     const timestamp = startedAt.replace(/[:.]/gu, "-");
     const base = `simulator-${slug}-${timestamp}`;
     for (let suffix = 1; suffix < Number.MAX_SAFE_INTEGER; suffix += 1) {
-      const candidate = path.join(directory, `${base}${suffix === 1 ? "" : `-${suffix}`}.mp4`);
+      const candidate = path.join(
+        directory,
+        `${base}${suffix === 1 ? "" : `-${suffix}`}.${extension}`,
+      );
       if (this.reservedRecordingPaths.has(candidate)) continue;
       const exists = await stat(candidate).then(
         () => true,
         (cause: unknown) => {
           if (isMissingPathError(cause)) return false;
-          throw new DeviceBackendError(`Could not inspect recording path ${candidate}`, { cause });
+          throw new DeviceBackendError(`Could not inspect capture path ${candidate}`, { cause });
         },
       );
       if (exists) continue;
       this.reservedRecordingPaths.add(candidate);
       return candidate;
     }
-    throw new DeviceBackendError(`Could not choose a unique recording path in ${directory}`);
+    throw new DeviceBackendError(`Could not choose a unique capture path in ${directory}`);
   }
 
   private async recordingDirectory(): Promise<string> {

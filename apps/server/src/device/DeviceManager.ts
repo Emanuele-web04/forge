@@ -605,8 +605,11 @@ export class DeviceManager {
     await this.backend.openUrl(udid, url);
   }
 
-  async screenshot(udid: string): Promise<DeviceScreenshotResult> {
-    return await this.backend.screenshot(udid);
+  async screenshot(
+    udid: string,
+    options: { readonly save?: boolean } = {},
+  ): Promise<DeviceScreenshotResult> {
+    return await this.backend.screenshot(udid, options);
   }
 
   async startRecording(udid: string): Promise<DeviceStartRecordingResult> {

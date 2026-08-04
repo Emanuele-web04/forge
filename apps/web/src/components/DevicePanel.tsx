@@ -74,7 +74,10 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
-import { anchoredToastManager as toastManager } from "./ui/toast";
+// The plain manager, not the anchored one: anchored toasts are dropped unless
+// they carry `positionerProps.anchor`, so every notification this pane raised —
+// save confirmations and input errors alike — was silently discarded.
+import { toastManager } from "./ui/toast";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.length > 0 ? error.message : fallback;
@@ -339,6 +342,7 @@ export default function DevicePanel(props: {
           type: "success",
           title: "Recording saved",
           description: result.path,
+          data: { copyText: result.path },
         });
       })
       .catch((error: unknown) => {
@@ -354,18 +358,24 @@ export default function DevicePanel(props: {
   const saveScreenshot = useCallback(() => {
     if (!attachedDevice) return;
     void runDeviceAction(async () => {
-      const shot = await ensureNativeApi().device.screenshot({ udid: attachedDevice.udid });
-      const bytes = Uint8Array.from(atob(shot.bytesBase64), (character) => character.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: shot.mimeType }));
-      try {
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = shot.name;
-        link.click();
-      } finally {
-        // Revoke on the next task so the click's navigation has taken the URL.
-        window.setTimeout(() => URL.revokeObjectURL(url), 0);
-      }
+      // Saved by the server, beside the screen recordings. This used to hand
+      // the base64 to a browser download, which put the PNG wherever the
+      // browser chose — or nowhere at all where downloads are unavailable —
+      // while the record button wrote to the Desktop. Two capture buttons on
+      // one rail have to leave their output in the same place.
+      const shot = await ensureNativeApi().device.screenshot({
+        udid: attachedDevice.udid,
+        save: true,
+      });
+      // `copyText` both expands the toast past its compact form — which shows
+      // only the title — and puts the path on the clipboard, which is the one
+      // thing you want after saving a file somewhere.
+      toastManager.add({
+        type: "success",
+        title: "Screenshot saved",
+        description: shot.path ?? shot.name,
+        ...(shot.path ? { data: { copyText: shot.path } } : {}),
+      });
     }, "Could not save the screenshot");
   }, [attachedDevice, runDeviceAction]);
 
