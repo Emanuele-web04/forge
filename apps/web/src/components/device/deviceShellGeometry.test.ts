@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEVICE_SHELL_FALLBACK_POINT_SIZE,
+  DEVICE_SHELL_FIT_MARGIN,
   deviceShellClass,
   deviceShellRadiusValue,
   fitDeviceShellSize,
@@ -245,6 +246,36 @@ describe("fitDeviceShellSize", () => {
     const fit = fitDeviceShellSize({ width: 480, height: 900 }, LANDSCAPE_ASPECT);
     expect(fit.width).toBeLessThan(480);
     expect(fit.width).toBeGreaterThan(480 * 0.9);
+  });
+
+  it("gives both orientations the same rule: fill the box, less the same margin", () => {
+    // The dock pane is tall and narrow, so the two orientations are limited by
+    // opposite axes — and each reaches exactly the margin on the axis that
+    // binds it. A turned phone occupying little of the pane's *height* is not
+    // the fit falling short: it is what a 2.1:1 object looks like in a 0.6:1
+    // box, and the only way to draw it taller is to overflow the pane's width.
+    const pane = { width: 455, height: 766 };
+    const portraitFit = fitDeviceShellSize(pane, PORTRAIT_ASPECT);
+    const landscapeFit = fitDeviceShellSize(pane, LANDSCAPE_ASPECT);
+
+    expect(portraitFit.height / pane.height).toBeCloseTo(DEVICE_SHELL_FIT_MARGIN, 6);
+    expect(portraitFit.width / pane.width).toBeLessThan(DEVICE_SHELL_FIT_MARGIN);
+
+    expect(landscapeFit.width / pane.width).toBeCloseTo(DEVICE_SHELL_FIT_MARGIN, 6);
+    expect(landscapeFit.height / pane.height).toBeLessThan(DEVICE_SHELL_FIT_MARGIN);
+  });
+
+  it("grows the turned device as soon as the pane has width to give", () => {
+    // Proof the landscape case is bound by width and nothing else: widen the
+    // pane and the device widens with it, right up to the margin, until height
+    // becomes the tighter bound and takes over.
+    const narrow = fitDeviceShellSize({ width: 455, height: 766 }, LANDSCAPE_ASPECT);
+    const wider = fitDeviceShellSize({ width: 900, height: 766 }, LANDSCAPE_ASPECT);
+    expect(wider.width).toBeCloseTo(900 * DEVICE_SHELL_FIT_MARGIN, 6);
+    expect(wider.width).toBeGreaterThan(narrow.width * 1.9);
+
+    const veryWide = fitDeviceShellSize({ width: 4000, height: 766 }, LANDSCAPE_ASPECT);
+    expect(veryWide.height / 766).toBeCloseTo(DEVICE_SHELL_FIT_MARGIN, 6);
   });
 
   it("returns nothing for a pane that has not been measured yet", () => {

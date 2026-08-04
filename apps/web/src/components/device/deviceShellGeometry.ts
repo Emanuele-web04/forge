@@ -325,7 +325,13 @@ export function deviceShellFitWidth(
   margin: number = DEVICE_SHELL_FIT_MARGIN,
 ): string {
   const percent = margin * 100;
-  return `min(${percent}cqw, ${percent}cqh * ${chassisAspectRatio})`;
+  // The height term is folded into its own coefficient rather than written as
+  // `Ncqh * ratio`. A length multiplied by a bare number is not a valid CSS
+  // calculation in `min()`, so that form was dropped whole and the chassis fell
+  // back to the width term alone — which is why a turned device sat in a third
+  // of the height it had while the portrait one filled the pane.
+  const heightPercent = percent * chassisAspectRatio;
+  return `min(${percent}cqw, ${heightPercent}cqh)`;
 }
 
 /** CSS `border-radius` shorthand for a radius pair. */
