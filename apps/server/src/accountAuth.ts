@@ -275,6 +275,39 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   );
 }
 
+export interface RefreshHostRegistrationOptions {
+  readonly baseDir: string;
+  readonly client?: AccountClient;
+  readonly devUrl?: URL | undefined;
+  readonly appVersion?: string;
+}
+
+/**
+ * Re-advertises this machine's reachable endpoints and bumps `lastSeenAt`.
+ *
+ * Called once per server start, best effort: a host that ran `synara auth`
+ * before ever starting the server registered with no endpoints at all, and
+ * nothing else would ever fix that. Failure is silent by design — the account
+ * is an optional add-on and must never be able to hold up or fail a boot.
+ */
+export async function refreshHostRegistration(
+  options: RefreshHostRegistrationOptions,
+): Promise<void> {
+  const credentials = await readAccountCredentials(options.baseDir);
+  if (!credentials?.hostToken || !credentials.hostId) return;
+
+  const client = clientFor(credentials.accountUrl, options.client);
+  const endpoints = await resolveLanEndpoints(options.baseDir, options.devUrl);
+  try {
+    await client.updateHost(credentials.hostToken, credentials.hostId, {
+      endpoints,
+      appVersion: options.appVersion ?? serverPackageJson.version,
+    });
+  } catch {
+    // Intentionally silent: no retry, no log noise on every offline start.
+  }
+}
+
 export async function runAuthLogout(options: AccountFlowOptions): Promise<void> {
   const stdout = options.stdout ?? defaultStdout;
   const credentials = await readAccountCredentials(options.baseDir);

@@ -53,6 +53,7 @@ import {
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
 import {
   ACCOUNT_URL_ENV_NAME,
+  refreshHostRegistration,
   resolveAccountUrl,
   runAuthLogin,
   runAuthLogout,
@@ -383,6 +384,18 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
+    // Re-advertise this host's endpoints now that server-runtime.json reflects
+    // the live bind. A machine that ran `synara auth` before its first start
+    // registered with none, and this is the only thing that fixes that. One
+    // shot, no retry: it must never delay or fail a boot.
+    yield* Effect.forkChild(
+      Effect.tryPromise(() =>
+        refreshHostRegistration({
+          baseDir: config.baseDir,
+          ...(config.devUrl ? { devUrl: config.devUrl } : {}),
+        }),
+      ).pipe(Effect.ignore),
+    );
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with
     // SYNARA_CLAUDE_KEEPALIVE=1.

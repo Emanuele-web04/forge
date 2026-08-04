@@ -12,6 +12,7 @@ import { AccountApiError } from "@synara/shared/account";
 import {
   accountCredentialsPath,
   readAccountCredentials,
+  refreshHostRegistration,
   resolveAccountUrl,
   resolveEnvironmentId,
   runAuthLogin,
@@ -489,5 +490,126 @@ describe("runStatus", () => {
     expect(stdout.text()).toContain("could not reach the account");
     expect(stdout.text()).toContain("ECONNREFUSED");
     expect(stdout.text()).not.toContain("sign in again");
+  });
+});
+
+describe("refreshHostRegistration", () => {
+  function writeRuntimeState(baseDir: string, origin: string, host: string): void {
+    const stateDir = path.join(baseDir, "userdata");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(stateDir, "server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: 1,
+        host,
+        port: 3773,
+        origin,
+        startedAt: "2026-08-03T12:00:00.000Z",
+        externalMcpRuntimeSecret: "secret",
+      })}\n`,
+      "utf8",
+    );
+  }
+
+  it("sends the freshly derived endpoints for the registered host exactly once", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      deviceToken: "device-token",
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+
+    const calls: Array<{ hostToken: string; hostId: string; request: unknown }> = [];
+    await refreshHostRegistration({
+      baseDir,
+      appVersion: "0.6.4",
+      client: makeClient({
+        updateHost: (hostToken, hostId, request) => {
+          calls.push({ hostToken, hostId, request });
+          return Promise.resolve(host);
+        },
+      }),
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.hostToken).toBe("host-token");
+    expect(calls[0]?.hostId).toBe("host_1");
+    expect(calls[0]?.request).toEqual({
+      endpoints: [{ url: "http://192.168.1.42:3773", transport: "lan" }],
+      appVersion: "0.6.4",
+    });
+  });
+
+  it("resolves without throwing when the account rejects the refresh", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      deviceToken: "device-token",
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+
+    await expect(
+      refreshHostRegistration({
+        baseDir,
+        client: makeClient({
+          updateHost: () =>
+            Promise.reject(
+              new AccountApiError({
+                code: "token_revoked",
+                status: 403,
+                message: "Host token invalid",
+              }),
+            ),
+        }),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not call the account when no credentials are stored", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
+
+    await refreshHostRegistration({ baseDir, client: makeClient({}) });
+  });
+
+  it("does not call the account when credentials exist without a host token", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      deviceToken: "device-token",
+    });
+
+    await refreshHostRegistration({ baseDir, client: makeClient({}) });
+  });
+
+  it("clears stale endpoints when the server is only reachable on loopback", async () => {
+    const baseDir = makeBaseDir();
+    writeRuntimeState(baseDir, "http://127.0.0.1:3773", "127.0.0.1");
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      deviceToken: "device-token",
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+
+    const requests: unknown[] = [];
+    await refreshHostRegistration({
+      baseDir,
+      appVersion: "0.6.4",
+      client: makeClient({
+        updateHost: (_hostToken, _hostId, request) => {
+          requests.push(request);
+          return Promise.resolve(host);
+        },
+      }),
+    });
+
+    expect(requests).toEqual([{ endpoints: [], appVersion: "0.6.4" }]);
   });
 });
