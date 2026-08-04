@@ -149,6 +149,44 @@ describe("simctl device parsing", () => {
     );
   });
 
+  it("carries chassis and geometry from the device type catalogue", () => {
+    const devices = parseSimctlDevices(
+      JSON.stringify({
+        devices: {
+          "com.apple.CoreSimulator.SimRuntime.iOS-26-0": [
+            {
+              udid: "AAAA-1111",
+              name: "iPad (A16)",
+              state: "Shutdown",
+              isAvailable: true,
+              deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPad-A16",
+            },
+          ],
+        },
+      }),
+      new Map([
+        [
+          "com.apple.CoreSimulator.SimDeviceType.iPad-A16",
+          { family: "tablet" as const, geometry: { pointWidth: 820, pointHeight: 1180, scale: 2 } },
+        ],
+      ]),
+    );
+
+    // Known with the device shut down, which is what lets the pane draw an iPad
+    // the moment it is picked rather than an iPhone that resizes on first frame.
+    expect(devices[0]).toMatchObject({
+      family: "tablet",
+      geometry: { pointWidth: 820, pointHeight: 1180, scale: 2 },
+    });
+  });
+
+  it("omits geometry for a device type the catalogue does not cover", () => {
+    const [device] = parseSimctlDevices(SIMCTL_JSON);
+
+    expect(device?.family).toBeUndefined();
+    expect(device?.geometry).toBeUndefined();
+  });
+
   it("renders a readable runtime label", () => {
     expect(formatRuntimeIdentifier("com.apple.CoreSimulator.SimRuntime.iOS-26-0")).toBe("iOS 26.0");
     expect(formatRuntimeIdentifier("com.apple.CoreSimulator.SimRuntime.watchOS-11-2")).toBe(

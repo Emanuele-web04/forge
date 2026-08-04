@@ -107,6 +107,7 @@ export class FakeDeviceBackend implements DeviceBackend {
   private readonly devices = new Map<string, DeviceDescriptor>();
   private readonly listeners = new Map<string, DeviceFrameListener>();
   private nextStreamFailure: string | null = null;
+  private persistentStreamFailure: string | null = null;
   private readonly sequences = new Map<string, number>();
   private readonly installedBundles = new Map<string, string>();
   private readonly attachedGeometry = new Set<string>();
@@ -382,14 +383,31 @@ export class FakeDeviceBackend implements DeviceBackend {
 
   /**
    * Fail exactly the next attach. Models the real early-boot window where a
-   * device reports booted before it publishes a display.
+   * device reports booted before it publishes a display, and the retry that
+   * follows it succeeds.
    */
   failNextStream(message: string): void {
     this.nextStreamFailure = message;
   }
 
+  /**
+   * Fail every attach until cleared. Models a device that boots but never
+   * publishes a display, which is what the attach deadline exists for.
+   */
+  failEveryStream(message: string): void {
+    this.persistentStreamFailure = message;
+  }
+
+  clearStreamFailures(): void {
+    this.nextStreamFailure = null;
+    this.persistentStreamFailure = null;
+  }
+
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
     this.record({ kind: "attachStream", udid });
+    if (this.persistentStreamFailure !== null) {
+      throw new DeviceBackendError(this.persistentStreamFailure);
+    }
     const failure = this.nextStreamFailure;
     if (failure !== null) {
       this.nextStreamFailure = null;

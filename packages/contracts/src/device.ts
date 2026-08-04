@@ -68,6 +68,17 @@ export type DeviceRuntimeState = typeof DeviceRuntimeState.Type;
 export const DeviceBootSource = Schema.Literals(["synara", "user"]);
 export type DeviceBootSource = typeof DeviceBootSource.Type;
 
+/**
+ * Which chassis a device is drawn in.
+ *
+ * Comes from the simulator device type's product family rather than from the
+ * device's name, which only works for as long as every tablet Apple ships has
+ * "iPad" in it. Optional because a backend that cannot read the device type
+ * profile still lists devices; the pane falls back to the name there.
+ */
+export const DeviceFamily = Schema.Literals(["phone", "tablet"]);
+export type DeviceFamily = typeof DeviceFamily.Type;
+
 export const DeviceDescriptor = Schema.Struct({
   platform: DevicePlatform,
   udid: DeviceUdid,
@@ -76,6 +87,7 @@ export const DeviceDescriptor = Schema.Struct({
   runtime: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
   state: DeviceRuntimeState,
   bootSource: DeviceBootSource,
+  family: Schema.optional(DeviceFamily),
   /**
    * Screen size in device points, and the pixel-per-point scale.
    *
@@ -84,10 +96,14 @@ export const DeviceDescriptor = Schema.Struct({
    * coordinates several times too large (1206x2622 pixels against a 402x874
    * point screen). These fields are what let it convert.
    *
-   * Optional because the values come from the native helper's attachment: a
-   * device that has never been attached has no geometry to report, and
-   * requiring it would break every listing on a host where the helper is not
-   * built yet.
+   * Populated at discovery from the simulator's device type profile, and
+   * confirmed by the native helper's attachment once a device is streamed. The
+   * discovery value is what lets the pane draw the right chassis the moment a
+   * device is picked, instead of an iPhone-shaped placeholder that snaps to an
+   * iPad several seconds later.
+   *
+   * Optional because a backend that cannot read the profile (or a fake one)
+   * still lists devices, and requiring it would break those listings.
    */
   geometry: Schema.optional(
     Schema.Struct({
@@ -226,11 +242,37 @@ export const brokenDeviceCapabilities = (
 
 // ── Thread-scoped state ──────────────────────────────────────────────
 
+/**
+ * How far along a thread's attachment is.
+ *
+ * A cold boot takes the better part of a minute and then publishes its display
+ * a few seconds after reporting itself booted, so "attached" is not one instant
+ * but a sequence. The pane says which stage it is in rather than showing a bare
+ * spinner for a minute, and the phases are named for what the user is waiting
+ * on, not for the internal call that is in flight.
+ */
+export const DeviceAttachPhase = Schema.Literals([
+  /** The simulator is starting up. */
+  "booting",
+  /** Booted, but it has not published a screen to capture yet. */
+  "waiting-for-display",
+  /** The display exists; the video stream is being opened. */
+  "connecting",
+]);
+export type DeviceAttachPhase = typeof DeviceAttachPhase.Type;
+
 export const ThreadDeviceState = Schema.Struct({
   threadId: ThreadId,
   /** Monotonic per thread; lets the pane drop out-of-order pushes. */
   version: NonNegativeInt,
   attachedDeviceUdid: Schema.NullOr(DeviceUdid),
+  /**
+   * Set while the attachment is still coming up, null once it is streaming or
+   * has failed. Non-null with `attachedDeviceUdid` already set is the normal
+   * case: the thread's intent is recorded first so the pane can name the device
+   * it is waiting on.
+   */
+  attachPhase: Schema.optional(Schema.NullOr(DeviceAttachPhase)),
   /** Devices the pane may show: booted devices plus anything Synara is booting. */
   devices: Schema.Array(DeviceDescriptor).check(Schema.isMaxLength(64)),
   /** True while an agent tool is driving input, so the pane can show the badge. */

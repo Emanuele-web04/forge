@@ -767,6 +767,79 @@ export function attachedDeviceFromThreadState(
 }
 
 /**
+ * A device the user picked, before the server has confirmed it.
+ *
+ * `supersedes` is the attachment the pick was made against. It is what tells a
+ * selection still in flight from one the server has already answered: while the
+ * thread still reports that old attachment, nothing has happened yet and the
+ * pick stands; the moment it reports anything else, the server has spoken and
+ * its answer wins — whether that is the picked device, or a different one an
+ * agent claimed in the meantime.
+ */
+export interface PendingDeviceSelection {
+  readonly device: DeviceDescriptor;
+  readonly supersedes: DeviceUdid | null;
+}
+
+/**
+ * The device the pane should be showing right now: the one the user just
+ * picked, until the server's state catches up with that choice.
+ *
+ * Booting a cold simulator takes the better part of a minute, and until the
+ * attach resolved the thread state named no device at all — so the picker sat
+ * on "Choose a simulator" and the screen stayed blank while the machine was
+ * visibly working. Preferring the pending selection makes the pane reflect the
+ * intent immediately and reconcile when the real descriptor arrives.
+ */
+export function resolveDisplayedDevice(input: {
+  readonly threadState: ThreadDeviceState | undefined;
+  readonly pending: PendingDeviceSelection | null;
+}): DeviceDescriptor | null {
+  const attached = attachedDeviceFromThreadState(input.threadState);
+  const { pending } = input;
+  if (!pending) return attached;
+
+  const reported = input.threadState?.attachedDeviceUdid ?? null;
+  // The server has moved off the attachment this pick was made against, so its
+  // answer is the current truth even when it is not the device that was picked.
+  if (reported !== pending.supersedes) return attached;
+
+  // Still pending. Prefer the thread's own copy of the descriptor where it has
+  // one: it carries the live runtime state and the helper's measured geometry,
+  // both fresher than the listing the pick came from.
+  const known = input.threadState?.devices.find((device) => device.udid === pending.device.udid);
+  return known ?? pending.device;
+}
+
+/**
+ * What the phone's screen should say while an attachment comes up.
+ *
+ * Driven by the server's phase where there is one, because only the server
+ * knows whether it is waiting on the boot or on the display. `selecting` is the
+ * client-only stage before the first response, and every stage names the device
+ * so the pane never shows an anonymous spinner.
+ */
+export function deviceAttachStatusLabel(input: {
+  readonly phase: ThreadDeviceState["attachPhase"] | undefined;
+  readonly deviceState: DeviceDescriptor["state"];
+  readonly pendingSelection: boolean;
+}): string | null {
+  switch (input.phase) {
+    case "booting":
+      return "Starting up…";
+    case "waiting-for-display":
+      return "Waiting for the screen…";
+    case "connecting":
+      return "Connecting…";
+    default:
+      break;
+  }
+  if (input.deviceState === "booting") return "Starting up…";
+  if (input.deviceState === "shutdown") return input.pendingSelection ? "Starting up…" : null;
+  return input.pendingSelection ? "Connecting…" : null;
+}
+
+/**
  * The stream is only worth holding when the pane is live, a device is attached,
  * and that device is actually booted. Preview panes (restored but not yet
  * activated) and hidden tabs unsubscribe so a background thread never decodes

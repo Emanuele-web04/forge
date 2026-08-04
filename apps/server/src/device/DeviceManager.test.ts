@@ -13,11 +13,48 @@ const DEVICE_B = "FAKE-0002";
 const DEVICE_C = "FAKE-0003";
 const DEVICE_D = "FAKE-0004";
 
-function makeManager(backend = new FakeDeviceBackend()) {
+function makeManager(
+  backend = new FakeDeviceBackend(),
+  options: { readonly attachDeadlineMs?: number; readonly attachRetryMs?: number } = {},
+) {
   const events: DeviceEvent[] = [];
-  const manager = new DeviceManager({ backend });
+  const manager = new DeviceManager({
+    backend,
+    // Attach retries are the default for cold boots; a test that is not about
+    // the retry loop wants the first failure to be final.
+    attachDeadlineMs: options.attachDeadlineMs ?? 0,
+    attachRetryMs: options.attachRetryMs ?? 1,
+  });
   manager.onEvent((event) => events.push(event));
   return { backend, manager, events };
+}
+
+type ThreadDeviceSnapshot = Awaited<ReturnType<DeviceManager["getThreadState"]>>;
+
+/**
+ * Wait for a thread's published state to satisfy a predicate.
+ *
+ * `attach` resolves once the attachment is recorded and opens the stream in the
+ * background, so anything the stream determines — its error, its final phase —
+ * settles a few turns later. Polling the published state observes that without
+ * reaching into the manager's internals.
+ */
+async function waitForThreadState(
+  manager: DeviceManager,
+  threadId: string,
+  predicate: (state: ThreadDeviceSnapshot) => boolean,
+): Promise<ThreadDeviceSnapshot> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const state = await manager.getThreadState(threadId);
+    if (predicate(state)) return state;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error(`Thread ${threadId} never reached the expected device state`);
+}
+
+/** Settle whatever the background attach is doing before asserting on it. */
+async function settleAttach(manager: DeviceManager, threadId: string): Promise<void> {
+  await waitForThreadState(manager, threadId, (state) => state.attachPhase == null);
 }
 
 describe("DeviceManager attachment", () => {
@@ -33,21 +70,18 @@ describe("DeviceManager attachment", () => {
     expect(events.at(-1)).toMatchObject({ type: "device.thread-state" });
   });
 
-  it("nudges a still screen so a fresh viewer is not left on Connecting", async () => {
+  it("injects nothing into the guest just to start streaming it", async () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);
 
     await manager.attach(THREAD_A, DEVICE_A);
-    // The nudge is fire-and-forget so the attach is not held up by it.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settleAttach(manager, THREAD_A);
 
-    // Capture is damage-driven: without a repaint an idle device emits nothing
-    // after the first keyframe and the pane never shows a picture.
-    expect(backend.calls).toContainEqual({
-      kind: "pressButton",
-      udid: DEVICE_A,
-      button: "volume-up",
-    });
+    // Attaching used to press volume-up to force a repaint. On a headless boot
+    // that press reaches the app but paints no HUD, so it woke nothing up and
+    // only risked a stray button press landing in whatever was running; the
+    // helper primes the stream with the current framebuffer instead.
+    expect(backend.callsOfKind("pressButton")).toHaveLength(0);
   });
 
   it("versions thread snapshots monotonically so panes can drop stale pushes", async () => {
@@ -92,9 +126,13 @@ describe("DeviceManager attachment", () => {
     backend.failNext("attachStream", new DeviceBackendError("helper is not built"));
 
     const state = await manager.attach(THREAD_A, DEVICE_A);
-
     expect(state.attachedDeviceUdid).toBe(DEVICE_A);
-    expect(state.lastError).toBe("helper is not built");
+
+    // A permanent refusal is reported without waiting out the retry deadline:
+    // a missing helper will not build itself in the next sixty seconds.
+    const settled = await waitForThreadState(manager, THREAD_A, (next) => next.lastError !== null);
+    expect(settled.lastError).toBe("helper is not built");
+    expect(settled.attachedDeviceUdid).toBe(DEVICE_A);
   });
 
   it("detaches and forgets a thread that gets archived", async () => {
@@ -355,6 +393,64 @@ describe("DeviceManager idle shutdown", () => {
   });
 });
 
+describe("DeviceManager device switching", () => {
+  it("frees the old slot immediately when a thread switches devices", async () => {
+    const { backend, manager } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await manager.attach(THREAD_A, DEVICE_A);
+
+    await manager.attach(THREAD_A, DEVICE_B);
+
+    // Not after the idle window: the cap is three, and filling every slot with
+    // simulators nobody is watching is what made the fourth pick prompt.
+    expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_A]);
+  });
+
+  it("leaves a user-booted device running when a thread switches away from it", async () => {
+    const { backend, manager } = makeManager();
+    backend.bootExternally(DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await manager.attach(THREAD_A, DEVICE_A);
+
+    await manager.attach(THREAD_A, DEVICE_B);
+
+    // The user started this one; it outlives the session either way.
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+  });
+
+  it("keeps a device another thread is still watching", async () => {
+    const { backend, manager } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await manager.attach(THREAD_A, DEVICE_A);
+    await manager.attach(THREAD_B, DEVICE_A);
+
+    await manager.attach(THREAD_A, DEVICE_B);
+
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+    expect(backend.hasStream(DEVICE_A)).toBe(true);
+  });
+
+  it("frees the slot for the next boot rather than refusing it", async () => {
+    const { backend, manager } = makeManager();
+    // At the cap, with every slot held by this one thread's history.
+    await manager.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await manager.attach(THREAD_A, DEVICE_B);
+    await manager.boot(DEVICE_C);
+    await manager.attach(THREAD_A, DEVICE_C);
+
+    const fourth = await manager.boot(DEVICE_D);
+
+    // Two slots were released by the switches, so trying a fourth simulator in
+    // a row just works instead of prompting for a shutdown.
+    expect(fourth.kind).toBe("booted");
+    expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_A, DEVICE_B]);
+  });
+});
+
 describe("DeviceManager lifecycle and agent activity", () => {
   it("shuts down only synara-booted devices on dispose", async () => {
     const { backend, manager } = makeManager();
@@ -547,7 +643,9 @@ describe("DeviceManager agent auto-attach", () => {
     await manager.surfaceDeviceForAgent(THREAD_A, DEVICE_A, "agent-tool");
 
     expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_A);
-    expect(events.at(-1)).toEqual({
+    // Matched rather than taken from the end: the attachment's stream comes up
+    // in the background and publishes its own state event after this one.
+    expect(events).toContainEqual({
       type: "device.open-pane-requested",
       threadId: THREAD_A,
       udid: DEVICE_A,

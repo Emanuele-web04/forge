@@ -23,6 +23,7 @@
 import {
   DEVICE_SYNARA_BOOT_LIMIT,
   ThreadId,
+  type DeviceAttachPhase,
   type DeviceAvailability,
   type DeviceBootResult,
   type DeviceDescribeUiResult,
@@ -60,6 +61,46 @@ import {
 /** How long a Synara-booted device stays up with no thread attached. */
 export const DEVICE_IDLE_SHUTDOWN_MS = 10 * 60 * 1000;
 
+/**
+ * How long to keep retrying a stream attach that keeps failing transiently.
+ *
+ * A simulator reports itself booted before CoreSimulator publishes its display,
+ * so the first attach after a cold boot reliably fails with "no framebuffer
+ * surface yet". On a warm machine the window is a second or two; on a cold one,
+ * with the first launch of a new runtime, it has been seen past twenty. Sixty
+ * seconds covers the bad case and still fails while the user is watching rather
+ * than leaving them staring at a spinner forever.
+ */
+export const DEVICE_ATTACH_DEADLINE_MS = 60_000;
+
+/** Gap between attach retries. Short enough to feel immediate once ready. */
+export const DEVICE_ATTACH_RETRY_MS = 750;
+
+/**
+ * What to tell the user when the display never appeared.
+ *
+ * Names the one action that actually fixes it. Retrying the attach is what just
+ * failed for a minute, so the message does not suggest it.
+ */
+const DISPLAY_TIMEOUT_MESSAGE =
+  "The simulator booted but never published a screen to capture. Shut it down and start it again; " +
+  "if that keeps happening, the runtime may need reinstalling from Xcode's Platforms settings.";
+
+/**
+ * Failures worth waiting out rather than latching.
+ *
+ * All of these mean "not ready yet" rather than "will never work": the display
+ * has not been published, the device is mid-boot, or the helper's descriptor
+ * belongs to a boot that is being replaced. A refusal that is not one of these
+ * (no such device, a broken capability, a helper that will not compile) is
+ * reported immediately, because retrying it for a minute only delays the truth.
+ */
+export function isTransientAttachFailure(error: unknown): boolean {
+  if (error instanceof DeviceBackendError && error.retryable) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /framebuffer surface|display has no|is not booted|not attached|no display/iu.test(message);
+}
+
 /** Enough to cross a long Settings list; short enough to fail fast on a typo. */
 export const DEVICE_DEFAULT_MAX_SCROLLS = 8;
 
@@ -70,8 +111,11 @@ export interface DeviceManagerOptions {
   readonly transport?: DeviceFrameTransport;
   readonly idleShutdownMs?: number;
   readonly bootLimit?: number;
+  readonly attachDeadlineMs?: number;
+  readonly attachRetryMs?: number;
   readonly setTimeout?: (handler: () => void, ms: number) => NodeJS.Timeout;
   readonly clearTimeout?: (handle: NodeJS.Timeout) => void;
+  readonly now?: () => number;
 }
 
 interface ThreadAttachment {
@@ -79,6 +123,14 @@ interface ThreadAttachment {
   attachedDeviceUdid: string | null;
   agentActiveCount: number;
   lastError: string | null;
+  /** Non-null while the attachment is still coming up. */
+  attachPhase: DeviceAttachPhase | null;
+  /**
+   * Identifies the attach attempt currently in flight. A retry loop that finds
+   * a different token has been superseded — the user picked another device, or
+   * detached — and stops without touching the newer attempt's state.
+   */
+  attachToken: number;
   /**
    * Device this thread has already asked the pane to open for. An agent driving
    * a device calls a tool every few seconds, so the second and later requests
@@ -92,8 +144,11 @@ export class DeviceManager {
   private readonly transport: DeviceFrameTransport;
   private readonly idleShutdownMs: number;
   private readonly bootLimit: number;
+  private readonly attachDeadlineMs: number;
+  private readonly attachRetryMs: number;
   private readonly schedule: (handler: () => void, ms: number) => NodeJS.Timeout;
   private readonly cancel: (handle: NodeJS.Timeout) => void;
+  private readonly now: () => number;
 
   private readonly threads = new Map<string, ThreadAttachment>();
   /** Devices this manager booted, and therefore may shut down again. */
@@ -109,8 +164,19 @@ export class DeviceManager {
     this.transport = options.transport ?? new DeviceFrameTransport();
     this.idleShutdownMs = options.idleShutdownMs ?? DEVICE_IDLE_SHUTDOWN_MS;
     this.bootLimit = options.bootLimit ?? DEVICE_SYNARA_BOOT_LIMIT;
+    this.attachDeadlineMs = options.attachDeadlineMs ?? DEVICE_ATTACH_DEADLINE_MS;
+    this.attachRetryMs = options.attachRetryMs ?? DEVICE_ATTACH_RETRY_MS;
     this.schedule = options.setTimeout ?? ((handler, ms) => setTimeout(handler, ms));
     this.cancel = options.clearTimeout ?? ((handle) => clearTimeout(handle));
+    this.now = options.now ?? Date.now;
+  }
+
+  /** Waits without holding the process open, and shares the injected scheduler. */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = this.schedule(() => resolve(), ms);
+      timer.unref?.();
+    });
   }
 
   // ── Events ─────────────────────────────────────────────────────────
@@ -205,6 +271,10 @@ export class DeviceManager {
     for (const [threadId, attachment] of this.threads) {
       if (attachment.attachedDeviceUdid !== udid) continue;
       attachment.attachedDeviceUdid = null;
+      attachment.attachPhase = null;
+      // Stops a retry loop still waiting on this device's display: it is not
+      // coming, and the loop would otherwise time out into a misleading error.
+      attachment.attachToken += 1;
       await this.publish(threadId);
     }
     await this.publishAllThreads();
@@ -212,21 +282,94 @@ export class DeviceManager {
 
   // ── Attachment ─────────────────────────────────────────────────────
 
+  /**
+   * Point a thread at a device and bring its stream up.
+   *
+   * Resolves as soon as the attachment is recorded, not when the picture
+   * arrives: a cold boot publishes its display seconds after reporting itself
+   * booted, and holding the RPC open for that left the picker on "Choose a
+   * simulator" and the screen blank for the whole wait. The stream comes up in
+   * the background, pushing a phase per stage, and the pane renders the device
+   * it was told to show from the first frame of the interaction.
+   */
   async attach(threadId: string, udid: string): Promise<ThreadDeviceState> {
     const attachment = this.threadState(threadId);
     const previous = attachment.attachedDeviceUdid;
     // Cleared before releasing: `releaseDevice` asks whether anyone still holds
     // the device, and this thread must no longer count as a holder.
     attachment.attachedDeviceUdid = udid;
-    if (previous !== null && previous !== udid) await this.releaseDevice(previous);
     attachment.lastError = null;
+    attachment.attachPhase = "connecting";
+    const token = (attachment.attachToken += 1);
+    if (previous !== null && previous !== udid) await this.releaseDevice(previous, "switched");
     this.clearIdleTimer(udid);
-    await this.startStream(udid).catch((error: unknown) => {
-      // A stream failure must not cost the attachment: control RPCs and MCP
-      // tools still work, and the pane shows the error next to a static screen.
-      attachment.lastError = errorMessage(error);
-    });
-    return await this.publish(threadId);
+
+    // Already streaming (another thread is watching the same device): there is
+    // nothing to wait for, so the phase clears without a round trip.
+    if (this.streaming.has(udid)) {
+      attachment.attachPhase = null;
+      return await this.publish(threadId);
+    }
+
+    const state = await this.publish(threadId);
+    void this.bringStreamUp(threadId, udid, token);
+    return state;
+  }
+
+  /**
+   * Open the stream, waiting out the failures that only mean "not ready yet".
+   *
+   * The retry is the whole point: attaching to a device that has not published
+   * its display fails every time, and a single attempt therefore turned every
+   * cold boot into a dead pane with an error under it. Bounded by
+   * `DEVICE_ATTACH_DEADLINE_MS` so a device that genuinely never comes up ends
+   * in a message naming what to do instead of an endless spinner.
+   */
+  private async bringStreamUp(threadId: string, udid: string, token: number): Promise<void> {
+    const deadline = this.now() + this.attachDeadlineMs;
+    let sawTransientFailure = false;
+
+    while (!this.disposed) {
+      const attachment = this.threads.get(threadId);
+      // Superseded or gone: another attach owns this thread's state now.
+      if (!attachment || attachment.attachToken !== token) return;
+
+      try {
+        await this.startStream(udid);
+        attachment.attachPhase = null;
+        attachment.lastError = null;
+        await this.publish(threadId);
+        return;
+      } catch (error) {
+        if (!isTransientAttachFailure(error)) {
+          attachment.attachPhase = null;
+          attachment.lastError = errorMessage(error);
+          await this.publish(threadId);
+          return;
+        }
+        // The device is up but has no screen yet, which is a different wait
+        // from booting and worth saying so.
+        const phase: DeviceAttachPhase = /is not booted/iu.test(errorMessage(error))
+          ? "booting"
+          : "waiting-for-display";
+        if (attachment.attachPhase !== phase) {
+          attachment.attachPhase = phase;
+          await this.publish(threadId);
+        }
+        sawTransientFailure = true;
+      }
+
+      if (this.now() >= deadline) break;
+      await this.delay(this.attachRetryMs);
+    }
+
+    const attachment = this.threads.get(threadId);
+    if (!attachment || attachment.attachToken !== token) return;
+    attachment.attachPhase = null;
+    // Only the display-wait deadline gets the tailored message; a disposal or a
+    // shutdown mid-wait is not the user's problem to act on.
+    if (sawTransientFailure && !this.disposed) attachment.lastError = DISPLAY_TIMEOUT_MESSAGE;
+    await this.publish(threadId);
   }
 
   /**
@@ -255,6 +398,10 @@ export class DeviceManager {
     const attachment = this.threadState(threadId);
     const udid = attachment.attachedDeviceUdid;
     attachment.attachedDeviceUdid = null;
+    attachment.attachPhase = null;
+    // Abandons any attach still retrying in the background, so it cannot
+    // resurrect a phase or an error on a thread that is no longer watching.
+    attachment.attachToken += 1;
     if (udid !== null) await this.releaseDevice(udid);
     return await this.publish(threadId);
   }
@@ -550,6 +697,8 @@ export class DeviceManager {
         attachedDeviceUdid: null,
         agentActiveCount: 0,
         lastError: null,
+        attachPhase: null,
+        attachToken: 0,
         paneSurfacedUdid: null,
       };
       this.threads.set(threadId, attachment);
@@ -580,8 +729,13 @@ export class DeviceManager {
     if (this.streaming.has(udid) || this.disposed) return;
     this.streaming.add(udid);
     try {
+      // No input nudge is needed to get a first picture: the helper primes the
+      // stream by encoding the current framebuffer as its opening frame, so an
+      // idle screen paints without anything touching the guest. This used to
+      // press volume-up for that, which on a headless boot is delivered to the
+      // app but paints no system HUD — so it repainted nothing and only risked
+      // sending a stray button press into whatever was running.
       await this.backend.attachStream(udid, (frame) => this.transport.publish(udid, frame));
-      this.nudgeScreen(udid);
       // A stream that started supersedes whatever failed before it. Attaching
       // to a device still publishing its display fails with "no framebuffer
       // surface yet"; without this the pane kept that message under a picture
@@ -602,25 +756,6 @@ export class DeviceManager {
       cleared.push(threadId);
     }
     for (const threadId of cleared) await this.publish(threadId);
-  }
-
-  /**
-   * Make a still screen paint once so a fresh viewer sees it.
-   *
-   * Capture is damage-driven: the helper emits frames when the guest redraws,
-   * so attaching to an idle screen — an app sitting on its home view, a device
-   * nobody has touched — produces nothing after the initial keyframe and the
-   * pane sits on "Connecting…" until something moves. Asking for a keyframe is
-   * not enough; the encoder needs a damage event to have something to encode.
-   *
-   * A volume-up press is the cheapest guest-visible no-op: it repaints the
-   * screen through the volume HUD, changes no app state, and needs no
-   * accessibility read first. Failures are ignored — this is a nicety, and a
-   * device whose HID is unavailable still streams the moment the user or the
-   * agent touches it.
-   */
-  private nudgeScreen(udid: string): void {
-    void this.backend.pressButton(udid, "volume-up").catch(() => undefined);
   }
 
   /**
@@ -647,16 +782,36 @@ export class DeviceManager {
   }
 
   /**
-   * Nobody is watching this device any more. Stop the stream, and start the
-   * idle countdown if Synara booted it.
+   * Nobody is watching this device any more. Stop the stream, and either shut
+   * the device down or start the idle countdown if Synara booted it.
+   *
+   * A switch shuts down immediately rather than waiting out the idle window.
+   * The cap is three Synara-booted devices, and each one costs a couple of GB
+   * of RAM, so trying three simulators in a row filled every slot with devices
+   * nobody was looking at and made the fourth pick prompt for a shutdown the
+   * user had effectively already asked for. A plain detach still uses the idle
+   * timer, because coming back to a device you just closed is common and
+   * re-booting it costs a minute.
+   *
+   * User-booted devices are never touched by either path.
    */
-  private async releaseDevice(udid: string): Promise<void> {
+  private async releaseDevice(
+    udid: string,
+    reason: "detached" | "switched" = "detached",
+  ): Promise<void> {
     await this.stopRecordingIfActive(udid).catch(() => undefined);
     if (this.isAttachedAnywhere(udid)) return;
     if (this.transport.deviceSubscriberCount(udid) === 0) {
       await this.stopStream(udid).catch(() => undefined);
     }
     if (!this.synaraBooted.has(udid)) return;
+    if (reason === "switched") {
+      this.clearIdleTimer(udid);
+      // Failure here is not the switch's problem: the new device is already
+      // attached, and the idle sweep at quit still cleans this one up.
+      await this.shutdown(udid).catch(() => undefined);
+      return;
+    }
     this.clearIdleTimer(udid);
     const timer = this.schedule(() => {
       this.idleTimers.delete(udid);
@@ -699,6 +854,7 @@ export class DeviceManager {
       agentActive: attachment.agentActiveCount > 0,
       availability,
       lastError: attachment.lastError,
+      attachPhase: attachment.attachPhase,
     };
   }
 

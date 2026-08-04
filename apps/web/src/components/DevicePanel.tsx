@@ -21,16 +21,18 @@ import { cn } from "~/lib/utils";
 
 import { selectThreadDeviceState, useDeviceStateStore } from "../deviceStateStore";
 import {
-  attachedDeviceFromThreadState,
   buildDevicePickerEntries,
   canvasPointToDevicePoint,
   createDeviceRecordingState,
+  deviceAttachStatusLabel,
   deviceHidUsageForKey,
   deviceKeyModifiers,
   deviceRecordingClickIntent,
   deviceSetupCheckingLabel,
   isDeviceRecordingActive,
   resolveDeviceAvailabilityView,
+  resolveDisplayedDevice,
+  type PendingDeviceSelection,
   resolveDeviceHardwareButtonShortcut,
   resolveDevicePointerGesture,
   resolveDevicePointSize,
@@ -98,12 +100,27 @@ export default function DevicePanel(props: {
     readonly candidates: readonly DeviceDescriptor[];
     /** Retried automatically once the user frees a slot. */
     readonly pendingUdid: DeviceUdid;
+    /** Named in the dialog, so the trade being offered is concrete. */
+    readonly pendingName: string;
   } | null>(null);
 
-  const attachedDevice = attachedDeviceFromThreadState(threadState);
+  // The device the user just picked, shown until the server's thread state
+  // names it. Without this the picker read "Choose a simulator" and the screen
+  // stayed blank for the whole of a cold boot, so the click looked ignored.
+  const [pendingDevice, setPendingDevice] = useState<PendingDeviceSelection | null>(null);
+  const attachedDevice = resolveDisplayedDevice({ threadState, pending: pendingDevice });
   const availabilityView = resolveDeviceAvailabilityView(
     threadState?.availability ?? { kind: "available" },
   );
+
+  // The server has answered — with this device or another — so the optimistic
+  // one has done its job and the thread state takes over from here.
+  const reportedUdid = threadState?.attachedDeviceUdid ?? null;
+  useEffect(() => {
+    setPendingDevice((current) =>
+      current && reportedUdid !== current.supersedes ? null : current,
+    );
+  }, [reportedUdid]);
 
   // The pane is the only reader of this thread's device state, so it seeds the
   // store on mount; every later change arrives on the device.event push.
@@ -122,6 +139,17 @@ export default function DevicePanel(props: {
       cancelled = true;
     };
   }, [threadId, upsertThreadState]);
+
+  // Non-null while the attachment is still coming up, and names which stage: a
+  // cold boot spends most of a minute here, and "Starting up…" versus "Waiting
+  // for the screen…" is the difference between progress and a hang.
+  const attachStatusLabel = attachedDevice
+    ? deviceAttachStatusLabel({
+        phase: threadState?.attachPhase,
+        deviceState: attachedDevice.state,
+        pendingSelection: pendingDevice !== null,
+      })
+    : null;
 
   const streamEnabled = shouldSubscribeToDeviceStream({
     runtimeMode,
@@ -173,51 +201,70 @@ export default function DevicePanel(props: {
   const selectDevice = useCallback(
     (entry: (typeof pickerEntries)[number]) => {
       const udid = entry.device.udid;
+      if (entry.action.kind === "wait") return;
+      // Set before the first await: the whole point is that the picker and the
+      // screen change on the click, not when a minute-long boot resolves.
+      setPendingDevice({ device: entry.device, supersedes: reportedUdid });
       void runDeviceAction(async () => {
-        if (entry.action.kind === "wait") return;
-        if (entry.action.kind === "boot-then-attach") {
-          const result = await ensureNativeApi().device.boot({ udid });
-          if (result.kind === "boot-limit-reached") {
-            // A refusal, not a failure: hand the user the devices they can free
-            // instead of a dead end.
-            setBootLimit({
-              limit: result.limit,
-              candidates: result.synaraBooted,
-              pendingUdid: udid,
-            });
-            return;
+        try {
+          if (entry.action.kind === "boot-then-attach") {
+            const result = await ensureNativeApi().device.boot({ udid });
+            if (result.kind === "boot-limit-reached") {
+              // A refusal, not a failure: hand the user the devices they can
+              // free instead of a dead end.
+              setPendingDevice(null);
+              setBootLimit({
+                limit: result.limit,
+                candidates: result.synaraBooted,
+                pendingUdid: udid,
+                pendingName: entry.device.name,
+              });
+              return;
+            }
           }
+          await attachDevice(udid);
+        } catch (error) {
+          // The optimistic device would otherwise outlive the failure and leave
+          // the pane naming a simulator it never opened.
+          setPendingDevice(null);
+          throw error;
         }
-        await attachDevice(udid);
       }, "Could not open that simulator");
     },
-    [attachDevice, runDeviceAction],
+    [attachDevice, reportedUdid, runDeviceAction],
   );
 
   const shutdownForBootLimit = useCallback(
     (candidate: DeviceDescriptor) => {
-      const pending = bootLimit?.pendingUdid;
+      const pending = bootLimit;
       setBootLimit(null);
       if (!pending) return;
+      const requested = threadState?.devices.find((device) => device.udid === pending.pendingUdid);
+      // Freeing a slot is the second half of a selection, so the pane commits
+      // to the device here too rather than going blank until the boot lands.
+      if (requested) setPendingDevice({ device: requested, supersedes: reportedUdid });
       void runDeviceAction(async () => {
-        const api = ensureNativeApi();
-        await api.device.shutdown({ udid: candidate.udid });
-        const result = await api.device.boot({ udid: pending });
-        if (result.kind === "boot-limit-reached") {
-          setBootLimit({
-            limit: result.limit,
-            candidates: result.synaraBooted,
-            pendingUdid: pending,
-          });
-          return;
+        try {
+          const api = ensureNativeApi();
+          await api.device.shutdown({ udid: candidate.udid });
+          const result = await api.device.boot({ udid: pending.pendingUdid });
+          if (result.kind === "boot-limit-reached") {
+            setPendingDevice(null);
+            setBootLimit({ ...pending, limit: result.limit, candidates: result.synaraBooted });
+            return;
+          }
+          await attachDevice(pending.pendingUdid);
+        } catch (error) {
+          setPendingDevice(null);
+          throw error;
         }
-        await attachDevice(pending);
       }, "Could not free a simulator slot");
     },
-    [attachDevice, bootLimit?.pendingUdid, runDeviceAction],
+    [attachDevice, bootLimit, reportedUdid, runDeviceAction, threadState?.devices],
   );
 
   const detachDevice = useCallback(() => {
+    setPendingDevice(null);
     void runDeviceAction(async () => {
       upsertThreadState(await ensureNativeApi().device.detach({ threadId }));
     }, "Could not detach the simulator");
@@ -623,8 +670,11 @@ export default function DevicePanel(props: {
       return <DeviceEmptyScreen message="Choose a simulator to start streaming it here." />;
     }
 
-    if (videoStatus.kind !== "streaming" && attachedDevice.state === "booting") {
-      return <DeviceBootingScreen deviceName={attachedDevice.name} label="Starting up…" />;
+    // Anything that is not yet a picture belongs on the boot screen, which
+    // names the device: the canvas has nothing to paint, and a blank rectangle
+    // for the length of a cold boot is what made the pane look broken.
+    if (videoStatus.kind !== "streaming" && attachStatusLabel) {
+      return <DeviceBootingScreen deviceName={attachedDevice.name} label={attachStatusLabel} />;
     }
 
     return (
@@ -652,7 +702,7 @@ export default function DevicePanel(props: {
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-[12%]">
             <DeviceVideoOverlay
               status={videoStatus}
-              deviceState={attachedDevice.state}
+              label={attachStatusLabel ?? "Connecting…"}
               runtimeMode={runtimeMode}
               {...(props.onRequestLive ? { onRequestLive: props.onRequestLive } : {})}
             />
@@ -695,12 +745,18 @@ export default function DevicePanel(props: {
         >
           {screen}
         </DeviceScreen>
-        <DeviceControlRail
-          disabled={deviceControlsDisabled}
-          recording={isDeviceRecordingActive(recording)}
-          landscape={landscape}
-          onAction={runRailAction}
-        />
+        {/*
+          Above the device's shadow rather than beside it: the shadow bleeds
+          past the frame, and a rail in normal flow cut a hard line across it.
+        */}
+        <div className="relative z-10">
+          <DeviceControlRail
+            disabled={deviceControlsDisabled}
+            recording={isDeviceRecordingActive(recording)}
+            landscape={landscape}
+            onAction={runRailAction}
+          />
+        </div>
       </div>
 
       {/*
@@ -727,6 +783,7 @@ export default function DevicePanel(props: {
 
       <DeviceBootLimitDialog
         state={bootLimit}
+        deviceName={bootLimit?.pendingName ?? "that simulator"}
         onDismiss={() => setBootLimit(null)}
         onShutdown={shutdownForBootLimit}
       />
@@ -769,7 +826,8 @@ export default function DevicePanel(props: {
 
 function DeviceVideoOverlay(props: {
   status: ReturnType<typeof useDeviceVideoStream>["status"];
-  deviceState: DeviceDescriptor["state"];
+  /** What the pane is waiting on, from the server's attach phase. */
+  label: string;
   runtimeMode: DockPaneRuntimeMode;
   onRequestLive?: () => void;
 }) {
@@ -807,7 +865,7 @@ function DeviceVideoOverlay(props: {
   return (
     <span className="flex items-center gap-1.5 text-[10px] text-white/45">
       <LoaderCircleIcon className="size-3 animate-spin motion-reduce:animate-none" />
-      {props.deviceState === "booting" ? "Starting up…" : "Connecting…"}
+      {props.label}
     </span>
   );
 }
@@ -817,6 +875,8 @@ function DeviceBootLimitDialog(props: {
     readonly limit: number;
     readonly candidates: readonly DeviceDescriptor[];
   } | null;
+  /** The simulator the user asked for, named so the trade is concrete. */
+  deviceName: string;
   onDismiss: () => void;
   onShutdown: (candidate: DeviceDescriptor) => void;
 }) {
@@ -826,10 +886,17 @@ function DeviceBootLimitDialog(props: {
     <Dialog open={state !== null} onOpenChange={(open) => (open ? undefined : props.onDismiss())}>
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Too many simulators are running</DialogTitle>
+          <DialogTitle>Shut down a simulator to start {props.deviceName}</DialogTitle>
+          {/*
+            The cap is about memory, and saying so is what makes it read as a
+            guardrail rather than an arbitrary refusal. The consequence of the
+            click is spelled out too: these are the user's running simulators,
+            and one of them is about to lose whatever is on it.
+          */}
           <DialogDescription>
-            Synara keeps at most {state?.limit ?? 0} simulators booted at once. Shut one down to
-            start the one you picked.
+            Synara keeps at most {state?.limit ?? 0} simulators running at once, because each one
+            holds a few gigabytes of memory. Pick one to shut down — anything running on it closes —
+            and {props.deviceName} starts in its place.
           </DialogDescription>
         </DialogHeader>
         <ul className="space-y-1">
@@ -841,7 +908,7 @@ function DeviceBootLimitDialog(props: {
                 className="w-full justify-between"
                 onClick={() => props.onShutdown(candidate)}
               >
-                <span className="truncate">{candidate.name}</span>
+                <span className="truncate">Shut down {candidate.name}</span>
                 <span className="shrink-0 text-muted-foreground text-xs">{candidate.runtime}</span>
               </Button>
             </li>
@@ -849,7 +916,7 @@ function DeviceBootLimitDialog(props: {
         </ul>
         <DialogFooter>
           <Button variant="ghost" size="sm" onClick={props.onDismiss}>
-            Cancel
+            Keep them all running
           </Button>
         </DialogFooter>
       </DialogPopup>

@@ -55,6 +55,7 @@ import {
   type DeviceListOptions,
   type DeviceSwipeGesture,
 } from "./DeviceBackend.ts";
+import { readDeviceTypeCatalogue, type DeviceTypeCatalogue } from "./deviceTypeCatalogue.ts";
 import {
   availabilityFromProbe,
   capabilityUnavailableMessage,
@@ -108,6 +109,7 @@ interface SimctlDevice {
   readonly name?: unknown;
   readonly state?: unknown;
   readonly isAvailable?: unknown;
+  readonly deviceTypeIdentifier?: unknown;
 }
 
 function mapSimctlState(raw: unknown): DeviceDescriptor["state"] {
@@ -136,7 +138,10 @@ export function formatRuntimeIdentifier(identifier: string): string {
  * profile missing) are dropped: showing them in the picker only produces boots
  * that fail.
  */
-export function parseSimctlDevices(json: string): readonly DeviceDescriptor[] {
+export function parseSimctlDevices(
+  json: string,
+  catalogue: DeviceTypeCatalogue = new Map(),
+): readonly DeviceDescriptor[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -157,6 +162,10 @@ export function parseSimctlDevices(json: string): readonly DeviceDescriptor[] {
       const udid = typeof raw.udid === "string" ? raw.udid : null;
       const name = typeof raw.name === "string" ? raw.name : null;
       if (!udid || !name) continue;
+      const deviceType =
+        typeof raw.deviceTypeIdentifier === "string"
+          ? catalogue.get(raw.deviceTypeIdentifier)
+          : undefined;
       devices.push({
         platform: "ios-simulator",
         udid,
@@ -166,6 +175,9 @@ export function parseSimctlDevices(json: string): readonly DeviceDescriptor[] {
         // Discovery cannot attribute a boot; DeviceManager overrides the ones
         // it booted itself.
         bootSource: "user",
+        // Known from the device type profile, so the pane can draw the right
+        // chassis the moment a device is picked rather than after it streams.
+        ...(deviceType ? { family: deviceType.family, geometry: deviceType.geometry } : {}),
       });
     }
   }
@@ -212,6 +224,13 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   /** Geometry learned from helper attachments, keyed by udid. */
   private readonly deviceGeometry = new Map<string, DeviceGeometry>();
+  /**
+   * Screen geometry and product family per device type, read from the installed
+   * simulator profiles. Cached for the process lifetime and shared by concurrent
+   * callers: it only changes when a runtime is installed, and rebuilding it on
+   * every listing would spawn a hundred processes per picker open.
+   */
+  private deviceTypes: Promise<DeviceTypeCatalogue> | null = null;
   private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
@@ -828,13 +847,27 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   private async listDevicesUnchecked(): Promise<readonly DeviceDescriptor[]> {
     if (this.osPlatform !== "darwin") return [];
-    const result = await this.simctl(["list", "devices", "--json"]).catch(() => null);
+    const [result, catalogue] = await Promise.all([
+      this.simctl(["list", "devices", "--json"]).catch(() => null),
+      this.deviceTypeCatalogue(),
+    ]);
     if (!result || result.code !== 0) return [];
     try {
-      return parseSimctlDevices(result.stdout);
+      return parseSimctlDevices(result.stdout, catalogue);
     } catch {
       return [];
     }
+  }
+
+  private async deviceTypeCatalogue(): Promise<DeviceTypeCatalogue> {
+    if (this.osPlatform !== "darwin") return new Map();
+    this.deviceTypes ??= readDeviceTypeCatalogue({
+      run: this.run,
+      env: await this.toolchainEnv(),
+      // A failed read means no pre-boot geometry, not a broken pane, so it is
+      // not remembered as a failure the way a helper build is.
+    }).catch(() => new Map<string, never>());
+    return await this.deviceTypes;
   }
 
   /**

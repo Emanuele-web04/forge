@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   attachedDeviceFromThreadState,
+  deviceAttachStatusLabel,
+  resolveDisplayedDevice,
   buildDevicePickerEntries,
   canvasPointToDevicePoint,
   createDeviceFrameGateState,
@@ -731,6 +733,119 @@ describe("thread state helpers", () => {
         lastError: null,
       } as never),
     ).toBeNull();
+  });
+});
+
+describe("optimistic device selection", () => {
+  const threadState = (overrides: Record<string, unknown> = {}) =>
+    ({
+      threadId: "t",
+      version: 1,
+      attachedDeviceUdid: null,
+      devices: [],
+      agentActive: false,
+      availability: { kind: "available" },
+      lastError: null,
+      ...overrides,
+    }) as never;
+
+  it("shows the device the user just picked before the server confirms it", () => {
+    const picked = device({ udid: OTHER_UDID, name: "iPad Pro 13-inch", state: "shutdown" });
+
+    // A cold boot takes most of a minute; until this, the picker read "Choose a
+    // simulator" and the screen stayed blank for the whole of it.
+    expect(
+      resolveDisplayedDevice({
+        threadState: threadState(),
+        pending: { device: picked, supersedes: null },
+      })?.name,
+    ).toBe("iPad Pro 13-inch");
+  });
+
+  it("keeps showing the new device while a switch is still in flight", () => {
+    const picked = device({ udid: OTHER_UDID, name: "iPhone SE" });
+    const old = device({ name: "iPad Air 13-inch" });
+
+    // The thread still names the device being switched away from, so nothing
+    // has happened yet. Preferring it here is what made a switch show the old
+    // simulator's name and chassis for the length of the new one's boot.
+    expect(
+      resolveDisplayedDevice({
+        threadState: threadState({ attachedDeviceUdid: UDID, devices: [old] }),
+        pending: { device: picked, supersedes: UDID },
+      })?.name,
+    ).toBe("iPhone SE");
+  });
+
+  it("prefers the thread's own descriptor for the same device", () => {
+    const picked = device({ state: "shutdown" });
+    const live = device({
+      state: "booted",
+      geometry: { pointWidth: 402, pointHeight: 874, scale: 3 },
+    });
+
+    const shown = resolveDisplayedDevice({
+      threadState: threadState({ attachedDeviceUdid: null, devices: [live] }),
+      pending: { device: picked, supersedes: null },
+    });
+
+    // The server's copy carries the live runtime state and the helper's
+    // measured geometry, both fresher than the listing the pick came from.
+    expect(shown?.state).toBe("booted");
+    expect(shown?.geometry).toEqual({ pointWidth: 402, pointHeight: 874, scale: 3 });
+  });
+
+  it("gives way once the server answers with a different device", () => {
+    const picked = device({ udid: OTHER_UDID, name: "iPad Pro 13-inch" });
+    const attached = device({ name: "iPhone 16 Pro" });
+
+    // An agent claimed the thread while the pick was in flight: the server has
+    // spoken, so its answer wins over the optimistic one.
+    expect(
+      resolveDisplayedDevice({
+        threadState: threadState({ attachedDeviceUdid: UDID, devices: [attached] }),
+        pending: { device: picked, supersedes: null },
+      })?.name,
+    ).toBe("iPhone 16 Pro");
+  });
+
+  it("falls back to the thread state when nothing is pending", () => {
+    expect(resolveDisplayedDevice({ threadState: threadState(), pending: null })).toBeNull();
+  });
+});
+
+describe("attach status label", () => {
+  it("names the stage the server says it is waiting on", () => {
+    const label = (phase: "booting" | "waiting-for-display" | "connecting") =>
+      deviceAttachStatusLabel({ phase, deviceState: "booted", pendingSelection: false });
+
+    expect(label("booting")).toBe("Starting up…");
+    // The distinction that matters on a cold boot: the device is up, the screen
+    // is not, and a bare spinner for that whole window reads as a hang.
+    expect(label("waiting-for-display")).toBe("Waiting for the screen…");
+    expect(label("connecting")).toBe("Connecting…");
+  });
+
+  it("covers the window before the first response, from the click alone", () => {
+    expect(
+      deviceAttachStatusLabel({
+        phase: undefined,
+        deviceState: "shutdown",
+        pendingSelection: true,
+      }),
+    ).toBe("Starting up…");
+  });
+
+  it("says nothing once the device is simply booted and attached", () => {
+    expect(
+      deviceAttachStatusLabel({ phase: null, deviceState: "booted", pendingSelection: false }),
+    ).toBeNull();
+  });
+
+  it("still reports a booting device with no phase from the server", () => {
+    expect(
+      deviceAttachStatusLabel({ phase: null, deviceState: "booting", pendingSelection: false }),
+    ).toBe("Starting up…");
   });
 });
 

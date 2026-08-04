@@ -16,10 +16,11 @@
 // screen, so the pane reads as one object instead of a rectangle with chrome
 // stacked above and below it.
 
-import type { DeviceHardwareButton } from "@synara/contracts";
+import type { DeviceFamily, DeviceHardwareButton } from "@synara/contracts";
 import { memo, useId, useMemo, type CSSProperties, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export type DeviceKind = "iPhone" | "androidPhone" | "iPad";
 
@@ -100,8 +101,21 @@ export const RESOLUTION_SCALE: Record<DeviceKind, number> = {
   iPad: 2,
 };
 
-export function deviceKindFor(device: { platform: string; name: string }): DeviceKind {
+/**
+ * Which chassis to draw a device in.
+ *
+ * `family` comes from the simulator's device type profile and is authoritative
+ * wherever it exists. The name is the fallback for a backend that could not
+ * read the profile, and it only holds for as long as every Apple tablet has
+ * "iPad" in its name.
+ */
+export function deviceKindFor(device: {
+  platform: string;
+  name: string;
+  family?: DeviceFamily | undefined;
+}): DeviceKind {
   if (device.platform.startsWith("android")) return "androidPhone";
+  if (device.family) return device.family === "tablet" ? "iPad" : "iPhone";
   return device.name.toLowerCase().includes("ipad") ? "iPad" : "iPhone";
 }
 
@@ -318,19 +332,27 @@ export const DeviceSilhouette = memo(function DeviceSilhouette({
   );
 });
 
+const NO_HUD_HINT = "Sent to the app; a headless simulator shows no volume HUD";
+
 /**
  * Which contract button each drawn nub presses, and how it names itself. The
  * action button (the ring/silent switch's replacement) maps to nothing the
  * helper can inject, so it stays decorative rather than shipping a control
  * that does nothing when pressed.
+ *
+ * `hint` marks the buttons whose press is delivered but has no visible effect
+ * on a headless boot. Volume is the case: the HID event reaches the guest and
+ * an app listening for it responds, but SpringBoard paints no volume HUD
+ * without a Simulator.app window, so the screen does not change. Saying so in
+ * the tooltip is the difference between a quirk and an apparently dead button.
  */
 const NUB_ACTIONS: Record<
   string,
-  { readonly label: string; readonly button: DeviceHardwareButton }
+  { readonly label: string; readonly button: DeviceHardwareButton; readonly hint?: string }
 > = {
-  volumeUp: { label: "Volume up", button: "volume-up" },
-  volumeDown: { label: "Volume down", button: "volume-down" },
-  volumeRocker: { label: "Volume", button: "volume-up" },
+  volumeUp: { label: "Volume up", button: "volume-up", hint: NO_HUD_HINT },
+  volumeDown: { label: "Volume down", button: "volume-down", hint: NO_HUD_HINT },
+  volumeRocker: { label: "Volume", button: "volume-up", hint: NO_HUD_HINT },
   power: { label: "Lock", button: "lock" },
 };
 
@@ -415,7 +437,11 @@ export const DeviceScreen = memo(function DeviceScreen({
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 items-center justify-center overflow-hidden p-6 [container-type:size]",
+        // No overflow clip: the chassis shadow reaches ~32px past the device,
+        // and clipping it left a hard horizontal cut where the control rail
+        // began. Padding keeps the device off the pane edges, and the sizing
+        // below already stops the frame itself from escaping the box.
+        "flex h-full min-h-0 items-center justify-center p-6 [container-type:size]",
         className,
       )}
     >
@@ -457,21 +483,29 @@ export const DeviceScreen = memo(function DeviceScreen({
           const action = NUB_ACTIONS[name];
           if (!action || !onPressButton) return null;
           return (
-            <button
-              key={name}
-              type="button"
-              aria-label={action.label}
-              disabled={buttonsDisabled}
-              onClick={() => onPressButton(action.button)}
-              className={cn(
-                "absolute cursor-pointer rounded-full outline-none",
-                "transition-transform duration-220 motion-reduce:transition-none",
-                NUB_PRESS_IN[side],
-                "focus-visible:ring-2 focus-visible:ring-ring/80",
-                "disabled:pointer-events-none",
-              )}
-              style={style}
-            />
+            <Tooltip key={name}>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={action.label}
+                    disabled={buttonsDisabled}
+                    onClick={() => onPressButton(action.button)}
+                    className={cn(
+                      "absolute cursor-pointer rounded-full outline-none",
+                      "transition-transform duration-220 motion-reduce:transition-none",
+                      NUB_PRESS_IN[side],
+                      "focus-visible:ring-2 focus-visible:ring-ring/80",
+                      "disabled:pointer-events-none",
+                    )}
+                    style={style}
+                  />
+                }
+              />
+              <TooltipPopup side={side === "top" ? "top" : side}>
+                {action.hint ? `${action.label} — ${action.hint}` : action.label}
+              </TooltipPopup>
+            </Tooltip>
           );
         })}
       </div>
