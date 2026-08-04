@@ -66,6 +66,17 @@ describe.skipIf(!TEST_DATABASE_URL)("createAuth", () => {
     expect(allowed.user.email).toBe(allowedEmail);
   });
 
+  it("matches allowlist entries case-insensitively", async () => {
+    const { db } = createDb(databaseUrl);
+    const local = randomUUID();
+    const auth = createAuth({ ...baseConfig, allowedSignupEmails: [`Ada.${local}@X.com`] }, db);
+
+    const allowed = await auth.api.signUpEmail({
+      body: { email: `ada.${local}@x.com`, password: "hunter2hunter2", name: "Ada" },
+    });
+    expect(allowed.user.email).toBe(`ada.${local}@x.com`);
+  });
+
   it("completes the device authorization flow end to end", async () => {
     const { db } = createDb(databaseUrl);
     const auth = createAuth(baseConfig, db);

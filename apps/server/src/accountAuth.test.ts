@@ -316,7 +316,6 @@ describe("runAuthLogout", () => {
     const deleted: Array<[string, string]> = [];
 
     await runAuthLogout({
-      accountUrl: "https://accounts.example.com",
       baseDir,
       stdout: stdout.write,
       client: makeClient({
@@ -357,7 +356,6 @@ describe("runAuthLogout", () => {
     const stdout = makeStdout();
 
     await runAuthLogout({
-      accountUrl: "https://accounts.example.com",
       baseDir,
       stdout: stdout.write,
       client: makeClient({
@@ -371,10 +369,27 @@ describe("runAuthLogout", () => {
     expect(stdout.text()).toContain("Signed out");
   });
 
+  it("signs out against the stored account URL with no ambient one configured", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://stored.example.com",
+      deviceToken: "device-token",
+    });
+    const stdout = makeStdout();
+
+    await runAuthLogout({
+      baseDir,
+      stdout: stdout.write,
+      client: makeClient({ listSessions: () => Promise.resolve({ sessions: [] }) }),
+    });
+
+    expect(stdout.text()).toContain("Signed out of https://stored.example.com");
+    expect(await readAccountCredentials(baseDir)).toBeUndefined();
+  });
+
   it("reports when there is nothing to sign out of", async () => {
     const stdout = makeStdout();
     await runAuthLogout({
-      accountUrl: "https://accounts.example.com",
       baseDir: makeBaseDir(),
       stdout: stdout.write,
       client: makeClient({}),

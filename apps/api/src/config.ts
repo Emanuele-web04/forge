@@ -16,7 +16,6 @@ export type ApiConfig = {
   };
   email?: {
     resendApiKey?: string;
-    smtpUrl?: string;
     from?: string;
   };
   allowedSignupEmails?: string[];
@@ -64,7 +63,6 @@ export function loadApiConfig(env: Env): ApiConfig {
 
   const email: ApiConfig["email"] = {};
   if (env.RESEND_API_KEY) email.resendApiKey = env.RESEND_API_KEY;
-  if (env.SMTP_URL) email.smtpUrl = env.SMTP_URL;
   if (env.EMAIL_FROM) email.from = env.EMAIL_FROM;
 
   const allowedSignupEmails = env.ACCOUNT_ALLOWED_SIGNUP_EMAILS
@@ -86,6 +84,20 @@ export function loadApiConfig(env: Env): ApiConfig {
   };
 }
 
+/**
+ * Signup allowlist check — the single place email comparison happens. Email
+ * local parts are case-sensitive per RFC 5321 but no real mailbox relies on
+ * that, and an operator writing `Ada@X.com` means the same person who signs up
+ * as `ada@x.com`, so both sides are lowercased here rather than at parse time
+ * (config keeps the operator's spelling for anything that surfaces it).
+ */
+export function isSignupAllowed(config: ApiConfig, email: string): boolean {
+  const allowlist = config.allowedSignupEmails;
+  if (!allowlist || allowlist.length === 0) return true;
+  const normalized = email.trim().toLowerCase();
+  return allowlist.some((allowed) => allowed.trim().toLowerCase() === normalized);
+}
+
 export function enabledAuthMethods(config: ApiConfig): {
   emailPassword: true;
   social: SocialProvider[];
@@ -93,7 +105,7 @@ export function enabledAuthMethods(config: ApiConfig): {
   signupRestricted: boolean;
 } {
   const social = SOCIAL_PROVIDERS.filter((provider) => Boolean(config.providers[provider]));
-  const emailDelivery = Boolean(config.email?.resendApiKey || config.email?.smtpUrl);
+  const emailDelivery = Boolean(config.email?.resendApiKey);
   const signupRestricted = Boolean(
     config.allowedSignupEmails && config.allowedSignupEmails.length > 0,
   );

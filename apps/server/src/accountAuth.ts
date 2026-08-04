@@ -308,7 +308,18 @@ export async function refreshHostRegistration(
   }
 }
 
-export async function runAuthLogout(options: AccountFlowOptions): Promise<void> {
+/**
+ * Sign-out talks to the account the credentials were minted against, never an
+ * ambient one: unsetting `SYNARA_ACCOUNT_URL` after signing in must not strand
+ * a user with credentials they cannot revoke.
+ */
+export interface LogoutOptions {
+  readonly baseDir: string;
+  readonly client?: AccountClient;
+  readonly stdout?: Stdout;
+}
+
+export async function runAuthLogout(options: LogoutOptions): Promise<void> {
   const stdout = options.stdout ?? defaultStdout;
   const credentials = await readAccountCredentials(options.baseDir);
   if (!credentials) {

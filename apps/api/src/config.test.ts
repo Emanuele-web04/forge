@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiConfigError, enabledAuthMethods, loadApiConfig } from "./config";
+import { ApiConfigError, enabledAuthMethods, isSignupAllowed, loadApiConfig } from "./config";
 
 const base = {
   DATABASE_URL: "postgres://u:p@localhost:5432/db",
@@ -28,6 +28,18 @@ describe("loadApiConfig", () => {
   });
 });
 
+describe("isSignupAllowed", () => {
+  it("admits anyone when no allowlist is configured", () => {
+    expect(isSignupAllowed(loadApiConfig(base), "anyone@x.com")).toBe(true);
+  });
+  it("compares case-insensitively in both directions", () => {
+    const config = loadApiConfig({ ...base, ACCOUNT_ALLOWED_SIGNUP_EMAILS: "Ada@X.com" });
+    expect(isSignupAllowed(config, "ada@x.com")).toBe(true);
+    expect(isSignupAllowed(config, "ADA@X.COM")).toBe(true);
+    expect(isSignupAllowed(config, "grace@x.com")).toBe(false);
+  });
+});
+
 describe("enabledAuthMethods", () => {
   it("reports enabled socials, email delivery, and restriction", () => {
     const config = loadApiConfig({
@@ -44,5 +56,9 @@ describe("enabledAuthMethods", () => {
       emailDelivery: true,
       signupRestricted: true,
     });
+  });
+  it("reports no email delivery without a Resend key", () => {
+    const config = loadApiConfig({ ...base, EMAIL_FROM: "noreply@example.com" });
+    expect(enabledAuthMethods(config).emailDelivery).toBe(false);
   });
 });

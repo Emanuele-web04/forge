@@ -54,8 +54,7 @@ SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts 
 | `GOOGLE_CLIENT_ID` / `_SECRET`    | no       | —       | Enables Google sign-in when both are set.                                             |
 | `APPLE_CLIENT_ID` / `_SECRET`     | no       | —       | Enables Sign in with Apple when both are set. See the Apple note below.               |
 | `MICROSOFT_CLIENT_ID` / `_SECRET` | no       | —       | Enables Microsoft (Entra ID) sign-in when both are set.                               |
-| `RESEND_API_KEY`                  | no       | —       | Sends verification/reset email via Resend.                                            |
-| `SMTP_URL`                        | no       | —       | SMTP fallback, used when Resend is not configured.                                    |
+| `RESEND_API_KEY`                  | no       | —       | Sends verification/reset email via Resend, the only supported transport.              |
 | `EMAIL_FROM`                      | no       | —       | From address for outgoing account email.                                              |
 | `ACCOUNT_ALLOWED_SIGNUP_EMAILS`   | no       | —       | Comma-separated allowlist. Unset means anyone may sign up.                            |
 | `TEST_DATABASE_URL`               | tests    | —       | Database the Vitest suites use. Without it they skip.                                 |
@@ -66,6 +65,11 @@ A missing required variable fails the boot with an explicit
 Email/password sign-in is always on. Each social provider activates only when
 both halves of its pair are present, and `GET /api/v1/instance` reports the
 resulting method set so the ceremony UI renders exactly the buttons that work.
+
+Email delivery needs `RESEND_API_KEY`; there is no SMTP transport. Without it,
+password-reset and verification emails are logged instead of sent, and
+`/api/v1/instance` reports `emailDelivery: false` so the UI stops offering
+flows that would go nowhere.
 
 **Run an allowlist on any instance you do not want strangers on.** Without
 `ACCOUNT_ALLOWED_SIGNUP_EMAILS`, a reachable instance accepts open signups.

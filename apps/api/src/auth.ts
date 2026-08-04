@@ -3,7 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { bearer, deviceAuthorization, jwt } from "better-auth/plugins";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type { ApiConfig, OAuthPair } from "./config";
+import { type ApiConfig, isSignupAllowed, type OAuthPair } from "./config";
 import type * as schema from "./db/schema";
 
 const SOCIAL_PROVIDER_KEYS = ["github", "google", "apple", "microsoft"] as const;
@@ -171,10 +171,8 @@ export function createAuth(config: ApiConfig, db: NodePgDatabase<typeof schema>)
       user: {
         create: {
           before: async (user) => {
-            if (config.allowedSignupEmails && config.allowedSignupEmails.length > 0) {
-              if (!config.allowedSignupEmails.includes(user.email)) {
-                throw new APIError("FORBIDDEN", { message: "signup_restricted" });
-              }
+            if (!isSignupAllowed(config, user.email)) {
+              throw new APIError("FORBIDDEN", { message: "signup_restricted" });
             }
           },
         },

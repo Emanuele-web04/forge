@@ -625,11 +625,11 @@ const baseAuthCommand = Command.make("auth", { accountUrl: accountUrlFlag }).pip
 const authLogoutCommand = Command.make("logout", {}, () =>
   Effect.gen(function* () {
     const root = yield* baseServerCommand;
-    const auth = yield* baseAuthCommand;
     const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
-    const resolved = yield* requireAccountUrl(auth.accountUrl);
+    // No `--account-url` gate: logout uses the URL stored at login, so it must
+    // keep working after the ambient env var is unset.
     yield* Effect.tryPromise({
-      try: () => runAuthLogout({ accountUrl: resolved, baseDir }),
+      try: () => runAuthLogout({ baseDir }),
       catch: (cause) => new StartupError({ message: "Sign-out failed.", cause }),
     });
   }),
