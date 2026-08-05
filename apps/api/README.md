@@ -74,6 +74,62 @@ SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts 
 SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts status
 ```
 
+## Developing without a WorkOS account
+
+`scripts/fake-workos.ts` runs the same in-process double the test suite uses as
+a standalone server, so the full `synara auth` flow works with no WorkOS
+tenancy and no network. It auto-approves device authorizations on a timer,
+standing in for a human clicking through the hosted page — which is what makes
+the flow headless.
+
+```sh
+bun run --cwd apps/api scripts/fake-workos.ts        # :8790, approves after 5s
+```
+
+It prints the environment to point the API at:
+
+```sh
+export WORKOS_API_URL=http://127.0.0.1:8790
+export WORKOS_JWKS_URL=http://127.0.0.1:8790/sso/jwks/client_01FAKE
+export WORKOS_API_KEY=fake
+export WORKOS_CLIENT_ID=client_01FAKE
+```
+
+Start the API with those set, then run `synara auth` as usual: the CLI prints a
+code, the stub approves it a few seconds later, and you end up with a real
+credentials file and a registered host.
+
+| Flag                 | Default         | Purpose                                                                             |
+| -------------------- | --------------- | ----------------------------------------------------------------------------------- |
+| `--port`             | `8790`          | Listen port.                                                                        |
+| `--approve-after`    | `5`             | Seconds before a device authorization self-approves; `0` approves immediately.      |
+| `--client-id`        | `client_01FAKE` | Client id to serve.                                                                 |
+| `--access-token-ttl` | `5m`            | Access-token lifetime. Set something like `30s` to exercise the CLI's refresh path. |
+
+The stub mints **single-use refresh tokens**, exactly as WorkOS does, so a
+client that fails to persist a rotation is locked out here the same way it would
+be in production. It is dev tooling only — nothing in `src/` imports it, and it
+is never reachable from a deployed instance.
+
+### Manual checklist against a real WorkOS tenancy
+
+The stub verifies the shape of the flow, not WorkOS's behaviour. Before
+trusting an instance against real WorkOS, confirm by hand:
+
+1. **CLI Auth is enabled** in the dashboard (Authentication → CLI Auth) —
+   `POST /api/v1/auth/device` errors until it is.
+2. `synara auth` prints a WorkOS URL, and approving in a browser completes the
+   CLI poll.
+3. `synara status` resolves your real name and email through `GET /me`.
+4. A command run more than ~5 minutes after signing in still works — that is the
+   refresh path, and the credentials file should hold a changed token pair
+   afterwards.
+5. Signing out of all sessions in the WorkOS dashboard makes the next refresh
+   fail with a 4xx, and the CLI reports the session as expired rather than
+   hanging or looping.
+6. If you configured a custom auth domain, `WORKOS_ISSUER` matches it —
+   otherwise every token is rejected.
+
 ## Environment variables
 
 | Variable            | Required | Default                          | Purpose                                                  |
@@ -137,8 +193,9 @@ which builds to `dist/index.mjs`, this app deliberately has none.
 
 `bun run test` requires Postgres and a `TEST_DATABASE_URL`; without it the
 database-backed suites skip. WorkOS is never called: `src/testing/fakeWorkos.ts`
-serves a JWKS from a freshly generated key pair and mints access tokens signed
-by it, so the auth path is exercised end to end with no network.
+serves a JWKS from a freshly generated key pair, mints access tokens signed by
+it, and answers the device and refresh grants, so the auth path is exercised end
+to end with no network. The same module backs the dev stub above.
 
 ```sh
 docker compose -f docker-compose.yml up -d

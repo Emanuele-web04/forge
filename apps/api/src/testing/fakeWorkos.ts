@@ -1,9 +1,9 @@
 // FILE: testing/fakeWorkos.ts
 // Purpose: An in-process stand-in for the WorkOS API — serves a JWKS backed by
 // a freshly generated key pair, mints access tokens signed by it, and answers
-// the user-lookup and device-authorization endpoints. Lets the auth path be
-// exercised end to end with no network and no shared fixtures.
-// Layer: API test support
+// the user-lookup, device-authorization, and authenticate endpoints. Lets the
+// auth path be exercised end to end with no network and no shared fixtures.
+// Layer: API test support (also drives `scripts/fake-workos.ts`, the dev stub)
 // Depends on: jose, hono, @hono/node-server.
 
 import { randomUUID } from "node:crypto";
@@ -48,6 +48,17 @@ export type FakeWorkos = {
     expiresIn?: string;
     issuer?: string;
   }): Promise<string>;
+  /**
+   * Approves a pending device authorization, as a human clicking through the
+   * hosted page would. Until this is called `authenticate` answers
+   * `authorization_pending`, which is what makes the CLI's poll loop real.
+   * Registers `user` if it is not already known, so a caller can drive the
+   * whole flow with one call.
+   */
+  approveDevice(
+    deviceCode: string,
+    user?: Partial<FakeWorkosUser> & { id?: string },
+  ): FakeWorkosUser;
   /** Every request the server has seen, oldest first. */
   requests: FakeWorkosRequest[];
   close(): Promise<void>;
@@ -62,17 +73,108 @@ export const FAKE_DEVICE_AUTHORIZATION = {
   interval: 5,
 } as const;
 
-export async function startFakeWorkos(
-  options: { apiKey?: string; clientId?: string } = {},
-): Promise<FakeWorkos> {
+export type StartFakeWorkosOptions = {
+  apiKey?: string;
+  clientId?: string;
+  /**
+   * Lifetime of minted access tokens, as a jose span. Short values are how the
+   * dev stub forces the CLI down its refresh path within one session.
+   */
+  accessTokenTtl?: string;
+  /**
+   * Fixed port to listen on. Defaults to 0 (ephemeral) so parallel test files
+   * never collide; the dev stub pins one so its URLs can be printed up front.
+   */
+  port?: number;
+  /**
+   * Called whenever a device authorization is issued. The seam the dev stub
+   * uses to stand in for a human approving the hosted page; approval stays an
+   * action performed on this double from the outside, never something it does
+   * to itself.
+   */
+  onDeviceAuthorization?: (deviceCode: string) => void;
+};
+
+export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Promise<FakeWorkos> {
   const apiKey = options.apiKey ?? "sk_test_fake";
   const clientId = options.clientId ?? "client_01FAKE";
+  const accessTokenTtl = options.accessTokenTtl ?? "5m";
 
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const publicJwk = { ...(await exportJWK(publicKey)), kid: KID, alg: "RS256", use: "sig" };
 
   const users = new Map<string, FakeWorkosUser>();
   const requests: FakeWorkosRequest[] = [];
+  /** Device codes handed out but not yet approved, and who approved them. */
+  const deviceGrants = new Map<string, { approvedBy?: string }>();
+  /** Live refresh tokens → the user they belong to. Single-use, as WorkOS's are. */
+  const refreshTokens = new Map<string, string>();
+
+  // Declared up front rather than only on the returned object: the
+  // `authenticate` route below needs to mint tokens and register users too.
+  let origin = "";
+
+  function addUser(user: Partial<FakeWorkosUser> & { id?: string }): FakeWorkosUser {
+    // Random, not sequential: host rows are keyed by WorkOS user id and the
+    // test database outlives a run, so a counter would make the second run
+    // against the same database inherit the first run's hosts.
+    const id = user.id ?? `user_fake_${randomUUID()}`;
+    // Explicitly-undefined keys are dropped before the spread: `{id: undefined}`
+    // would otherwise overwrite the id resolved just above.
+    const provided = Object.fromEntries(
+      Object.entries(user).filter(([, value]) => value !== undefined),
+    );
+    const record: FakeWorkosUser = {
+      id,
+      email: `${id}@example.com`,
+      ...provided,
+    };
+    users.set(record.id, record);
+    return record;
+  }
+
+  function signAccessToken({
+    sub,
+    sid,
+    expiresIn = accessTokenTtl,
+    issuer,
+  }: {
+    sub: string;
+    sid?: string;
+    expiresIn?: string;
+    issuer?: string;
+  }): Promise<string> {
+    const claims: Record<string, unknown> = { sub };
+    if (sid !== undefined) claims.sid = sid;
+    return new SignJWT(claims)
+      .setProtectedHeader({ alg: "RS256", kid: KID })
+      .setIssuer(issuer ?? `${origin}/`)
+      .setIssuedAt()
+      .setExpirationTime(expiresIn)
+      .sign(privateKey);
+  }
+
+  /**
+   * Mints the pair WorkOS returns from `authenticate`. The refresh token is
+   * single-use here as it is there: redeeming one deletes it and issues a
+   * replacement, so a client that fails to persist the rotation is locked out
+   * exactly the way it would be in production.
+   */
+  async function issueTokenPair(userId: string) {
+    const user = users.get(userId) ?? addUser({ id: userId });
+    const refreshToken = `rt_fake_${randomUUID()}`;
+    refreshTokens.set(refreshToken, user.id);
+    return {
+      access_token: await signAccessToken({ sub: user.id, sid: `session_${randomUUID()}` }),
+      refresh_token: refreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        first_name: user.first_name ?? null,
+        last_name: user.last_name ?? null,
+      },
+    };
+  }
 
   const app = new Hono();
   app.use("*", async (c, next) => {
@@ -87,7 +189,65 @@ export async function startFakeWorkos(
 
   app.get(`/sso/jwks/${clientId}`, (c) => c.json({ keys: [publicJwk] }));
 
-  app.post("/user_management/authorize/device", (c) => c.json(FAKE_DEVICE_AUTHORIZATION));
+  app.post("/user_management/authorize/device", (c) => {
+    // Same fixed code every time, so tests can assert against the exported
+    // constant; re-issuing simply resets it to unapproved.
+    deviceGrants.set(FAKE_DEVICE_AUTHORIZATION.device_code, {});
+    options.onDeviceAuthorization?.(FAKE_DEVICE_AUTHORIZATION.device_code);
+    return c.json(FAKE_DEVICE_AUTHORIZATION);
+  });
+
+  /**
+   * The token endpoint, covering the two grants Synara uses: the device grant
+   * the CLI polls after `synara auth`, and the refresh grant it falls back to
+   * when an access token expires mid-command. Error bodies use the OAuth
+   * `error`/`error_description` shape the client decodes.
+   */
+  app.post("/user_management/authenticate", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const grantType = typeof body?.grant_type === "string" ? body.grant_type : "";
+
+    if (grantType === "urn:ietf:params:oauth:grant-type:device_code") {
+      const deviceCode = typeof body?.device_code === "string" ? body.device_code : "";
+      const grant = deviceGrants.get(deviceCode);
+      if (!grant) {
+        return c.json(
+          { error: "invalid_grant", error_description: "Unknown or expired device code" },
+          400,
+        );
+      }
+      if (!grant.approvedBy) {
+        return c.json(
+          {
+            error: "authorization_pending",
+            error_description: "The user has not yet approved this device",
+          },
+          400,
+        );
+      }
+      // Consumed on success: a device code is redeemable exactly once.
+      deviceGrants.delete(deviceCode);
+      return c.json(await issueTokenPair(grant.approvedBy));
+    }
+
+    if (grantType === "refresh_token") {
+      const refreshToken = typeof body?.refresh_token === "string" ? body.refresh_token : "";
+      const userId = refreshTokens.get(refreshToken);
+      if (!userId) {
+        return c.json(
+          { error: "invalid_grant", error_description: "Refresh token is invalid or spent" },
+          400,
+        );
+      }
+      refreshTokens.delete(refreshToken);
+      return c.json(await issueTokenPair(userId));
+    }
+
+    return c.json(
+      { error: "unsupported_grant_type", error_description: `Unsupported grant: ${grantType}` },
+      400,
+    );
+  });
 
   app.get("/user_management/users/:id", (c) => {
     const user = users.get(c.req.param("id"));
@@ -95,18 +255,20 @@ export async function startFakeWorkos(
     return c.json(user);
   });
 
-  const server = serve({ fetch: app.fetch, port: 0 });
+  const server = serve({ fetch: app.fetch, port: options.port ?? 0 });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("fake WorkOS server failed to bind a port");
   }
-  const origin = `http://127.0.0.1:${address.port}`;
+  origin = `http://127.0.0.1:${address.port}`;
 
   return {
     origin,
     clientId,
     apiKey,
     requests,
+    addUser,
+    signAccessToken,
 
     config(overrides = {}) {
       return {
@@ -123,34 +285,10 @@ export async function startFakeWorkos(
       };
     },
 
-    addUser(user) {
-      // Random, not sequential: host rows are keyed by WorkOS user id and the
-      // test database outlives a run, so a counter would make the second run
-      // against the same database inherit the first run's hosts.
-      const id = user.id ?? `user_fake_${randomUUID()}`;
-      // Explicitly-undefined keys are dropped before the spread: `{id: undefined}`
-      // would otherwise overwrite the id resolved just above.
-      const provided = Object.fromEntries(
-        Object.entries(user).filter(([, value]) => value !== undefined),
-      );
-      const record: FakeWorkosUser = {
-        id,
-        email: `${id}@example.com`,
-        ...provided,
-      };
-      users.set(record.id, record);
+    approveDevice(deviceCode, user = {}) {
+      const record = user.id ? (users.get(user.id) ?? addUser(user)) : addUser(user);
+      deviceGrants.set(deviceCode, { approvedBy: record.id });
       return record;
-    },
-
-    signAccessToken({ sub, sid, expiresIn = "5m", issuer = `${origin}/` }) {
-      const claims: Record<string, unknown> = { sub };
-      if (sid !== undefined) claims.sid = sid;
-      return new SignJWT(claims)
-        .setProtectedHeader({ alg: "RS256", kid: KID })
-        .setIssuer(issuer)
-        .setIssuedAt()
-        .setExpirationTime(expiresIn)
-        .sign(privateKey);
     },
 
     close() {
