@@ -1248,8 +1248,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
               ...(failed
                 ? {
-                    errorMessage:
-                      stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
               raw: raw("process-exit", { code, signal, stdout, stderr }),
