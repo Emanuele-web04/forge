@@ -5,6 +5,8 @@ import {
   AccountHost,
   type AccountMe,
   AccountMe as AccountMeSchema,
+  type DeviceAuthorizationResponse,
+  DeviceAuthorizationResponse as DeviceAuthorizationResponseSchema,
   type InstanceInfo,
   InstanceInfo as InstanceInfoSchema,
   type ListHostsResponse,
@@ -16,7 +18,6 @@ import {
 } from "@synara/contracts";
 import { Option, Schema } from "effect";
 
-const DEVICE_CLIENT_ID = "synara-cli";
 const DEFAULT_DEVICE_POLL_INTERVAL_SECONDS = 5;
 // RFC 8628 section 3.5: on `slow_down`, the client must increase its polling
 // interval by at least 5 seconds for each subsequent request.
@@ -44,20 +45,27 @@ export class AccountApiError extends Error {
   }
 }
 
-export interface DeviceCodeResponse {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  verificationUriComplete: string;
-  expiresIn: number;
-  interval: number;
+/** The identity of the WorkOS client the CLI authenticates as, from `/instance`. */
+export interface WorkosClientOptions {
+  clientId: string;
+  workosApiUrl: string;
 }
 
 export interface DeviceTokenSuccess {
   accessToken: string;
-  tokenType: string;
-  expiresIn: number;
-  scope: string;
+  refreshToken: string;
+  user: { id: string; email: string; name?: string };
+}
+
+interface WorkosAuthenticateSuccess {
+  access_token: string;
+  refresh_token: string;
+  user: {
+    id: string;
+    email: string;
+    first_name?: string | null;
+    last_name?: string | null;
+  };
 }
 
 interface DeviceErrorBody {
@@ -75,12 +83,11 @@ function isDeviceErrorBody(value: unknown): value is DeviceErrorBody {
 }
 
 /**
- * Maps a device-flow error response (device/code or device/token) to an
- * `AccountApiError`. Device error codes (`invalid_request`, `expired_token`,
- * `access_denied`, ...) aren't part of the `AccountErrorCode` contract, so
- * they always surface as `internal_error` — callers that need to
- * distinguish cases should match on `message`, which carries the raw
- * `error_description`.
+ * Maps a WorkOS OAuth error response to an `AccountApiError`. OAuth error
+ * codes (`invalid_grant`, `expired_token`, `access_denied`, ...) aren't part
+ * of the `AccountErrorCode` contract, so they always surface as
+ * `internal_error` — callers that need to distinguish cases should match on
+ * `message`, which carries the raw `error_description`.
  */
 function toDeviceApiError(response: Response, raw: unknown): AccountApiError {
   const description = isDeviceErrorBody(raw) ? raw.error_description : undefined;
@@ -89,6 +96,26 @@ function toDeviceApiError(response: Response, raw: unknown): AccountApiError {
     status: response.status,
     message: description ?? `Request failed with status ${response.status}`,
   });
+}
+
+/**
+ * WorkOS returns the user's name split in two, either half of which can be
+ * absent. Recombining here keeps every caller from re-deciding what to do with
+ * a half-populated name.
+ */
+function toDeviceTokenSuccess(body: WorkosAuthenticateSuccess): DeviceTokenSuccess {
+  const name = [body.user.first_name, body.user.last_name]
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .join(" ");
+  return {
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token,
+    user: {
+      id: body.user.id,
+      email: body.user.email,
+      ...(name.length > 0 ? { name } : {}),
+    },
+  };
 }
 
 async function defaultSleep(milliseconds: number): Promise<void> {
@@ -103,7 +130,15 @@ export interface CreateAccountClientOptions {
   baseUrl: string;
   fetch?: FetchLike;
   sleep?: SleepFn;
-  clientId?: string;
+}
+
+export interface PollDeviceTokenOptions extends WorkosClientOptions {
+  interval?: number;
+  expiresIn?: number;
+}
+
+export interface RefreshAccessTokenOptions extends WorkosClientOptions {
+  refreshToken: string;
 }
 
 export interface AccountClient {
@@ -113,18 +148,31 @@ export interface AccountClient {
   registerHost(token: string, request: RegisterHostRequest): Promise<RegisterHostResponse>;
   updateHost(hostToken: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
   deleteHost(token: string, hostId: string): Promise<void>;
-  requestDeviceCode(): Promise<DeviceCodeResponse>;
-  pollDeviceToken(
-    deviceCode: string,
-    options?: { interval?: number; expiresIn?: number },
-  ): Promise<DeviceTokenSuccess>;
+  requestDeviceCode(): Promise<DeviceAuthorizationResponse>;
+  pollDeviceToken(deviceCode: string, options: PollDeviceTokenOptions): Promise<DeviceTokenSuccess>;
+  refreshAccessToken(options: RefreshAccessTokenOptions): Promise<DeviceTokenSuccess>;
 }
 
 export function createAccountClient(options: CreateAccountClientOptions): AccountClient {
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
   const fetchFn = options.fetch ?? fetch;
   const sleep = options.sleep ?? defaultSleep;
-  const clientId = options.clientId ?? DEVICE_CLIENT_ID;
+
+  /**
+   * The device-grant poll and the refresh grant both go straight to WorkOS
+   * rather than through this instance: only the initial authorization request
+   * needs the API key the service holds.
+   */
+  function workosAuthenticate(
+    workosApiUrl: string,
+    body: Record<string, string>,
+  ): Promise<Response> {
+    return fetchFn(`${workosApiUrl.replace(/\/+$/, "")}/user_management/authenticate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
 
   async function toAccountApiError(response: Response): Promise<AccountApiError> {
     const raw: unknown = await response.json().catch(() => null);
@@ -238,36 +286,16 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
     },
 
     async requestDeviceCode() {
-      const response = await fetchFn(`${baseUrl}/api/auth/device/code`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ client_id: clientId }),
-      });
-      const raw: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw toDeviceApiError(response, raw);
-      }
-      const body = raw as {
-        device_code: string;
-        user_code: string;
-        verification_uri: string;
-        verification_uri_complete: string;
-        expires_in: number;
-        interval: number;
-      };
-      return {
-        deviceCode: body.device_code,
-        userCode: body.user_code,
-        verificationUri: body.verification_uri,
-        verificationUriComplete: body.verification_uri_complete,
-        expiresIn: body.expires_in,
-        interval: body.interval,
-      };
+      return requestJson(
+        "/api/v1/auth/device",
+        { method: "POST" },
+        DeviceAuthorizationResponseSchema,
+      );
     },
 
     async pollDeviceToken(deviceCode, pollOptions) {
-      let interval = pollOptions?.interval ?? DEFAULT_DEVICE_POLL_INTERVAL_SECONDS;
-      const deadlineMs = (pollOptions?.expiresIn ?? DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS) * 1000;
+      let interval = pollOptions.interval ?? DEFAULT_DEVICE_POLL_INTERVAL_SECONDS;
+      const deadlineMs = (pollOptions.expiresIn ?? DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS) * 1000;
       let elapsedMs = 0;
 
       for (;;) {
@@ -285,29 +313,14 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           });
         }
 
-        const response = await fetchFn(`${baseUrl}/api/auth/device/token`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-            device_code: deviceCode,
-            client_id: clientId,
-          }),
+        const response = await workosAuthenticate(pollOptions.workosApiUrl, {
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+          device_code: deviceCode,
+          client_id: pollOptions.clientId,
         });
 
         if (response.ok) {
-          const body = (await response.json()) as {
-            access_token: string;
-            token_type: string;
-            expires_in: number;
-            scope: string;
-          };
-          return {
-            accessToken: body.access_token,
-            tokenType: body.token_type,
-            expiresIn: body.expires_in,
-            scope: body.scope,
-          };
+          return toDeviceTokenSuccess((await response.json()) as WorkosAuthenticateSuccess);
         }
 
         const raw: unknown = await response.json().catch(() => null);
@@ -323,6 +336,19 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
 
         throw toDeviceApiError(response, raw);
       }
+    },
+
+    async refreshAccessToken(refreshOptions) {
+      const response = await workosAuthenticate(refreshOptions.workosApiUrl, {
+        grant_type: "refresh_token",
+        refresh_token: refreshOptions.refreshToken,
+        client_id: refreshOptions.clientId,
+      });
+      const raw: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw toDeviceApiError(response, raw);
+      }
+      return toDeviceTokenSuccess(raw as WorkosAuthenticateSuccess);
     },
   };
 }

@@ -6,6 +6,9 @@ import { AccountApiError, createAccountClient } from "./account";
 const ENVIRONMENT_ID = "env-1" as EnvironmentId;
 
 const BASE_URL = "https://account.example.com";
+const WORKOS_API_URL = "https://api.workos.example";
+const CLIENT_ID = "client_01ABC";
+const WORKOS = { clientId: CLIENT_ID, workosApiUrl: WORKOS_API_URL };
 
 function jsonResponse(body: unknown, init?: { status?: number }): Response {
   return new Response(JSON.stringify(body), {
@@ -16,6 +19,26 @@ function jsonResponse(body: unknown, init?: { status?: number }): Response {
 
 function emptyResponse(status: number): Response {
   return new Response(null, { status });
+}
+
+function workosSuccessBody() {
+  return {
+    access_token: "access-1",
+    refresh_token: "refresh-1",
+    user: {
+      id: "user_1",
+      email: "ada@example.com",
+      first_name: "Ada",
+      last_name: "Lovelace",
+    },
+  };
+}
+
+function pendingResponse(): Response {
+  return jsonResponse(
+    { error: "authorization_pending", error_description: "still waiting" },
+    { status: 400 },
+  );
 }
 
 describe("createAccountClient", () => {
@@ -276,14 +299,14 @@ describe("createAccountClient", () => {
   });
 
   describe("requestDeviceCode", () => {
-    it("posts to the device code endpoint and returns the typed response", async () => {
+    it("posts to the instance device endpoint and decodes the contract response", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
         jsonResponse({
-          device_code: "dc1",
-          user_code: "ABCD-EFGH",
-          verification_uri: "https://account.example.com/device",
-          verification_uri_complete: "https://account.example.com/device?user_code=ABCD-EFGH",
-          expires_in: 900,
+          deviceCode: "dc1",
+          userCode: "ABCD-EFGH",
+          verificationUri: "https://workos.example/device",
+          verificationUriComplete: "https://workos.example/device?user_code=ABCD-EFGH",
+          expiresIn: 900,
           interval: 5,
         }),
       );
@@ -294,58 +317,78 @@ describe("createAccountClient", () => {
       expect(result).toEqual({
         deviceCode: "dc1",
         userCode: "ABCD-EFGH",
-        verificationUri: "https://account.example.com/device",
-        verificationUriComplete: "https://account.example.com/device?user_code=ABCD-EFGH",
+        verificationUri: "https://workos.example/device",
+        verificationUriComplete: "https://workos.example/device?user_code=ABCD-EFGH",
         expiresIn: 900,
         interval: 5,
       });
       const call = fetchMock.mock.calls[0];
       if (call === undefined) throw new Error("expected fetch to have been called");
-      expect(call[0]).toBe(`${BASE_URL}/api/auth/device/code`);
-      expect(JSON.parse(call[1].body as string)).toEqual({ client_id: "synara-cli" });
+      expect(call[0]).toBe(`${BASE_URL}/api/v1/auth/device`);
+      expect(call[1]).toMatchObject({ method: "POST" });
+    });
+
+    it("throws AccountApiError when the instance is rate limiting", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ error: "rate_limited", message: "Too many requests" }, { status: 429 }),
+        );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.requestDeviceCode()).rejects.toMatchObject({
+        code: "rate_limited",
+        status: 429,
+        message: "Too many requests",
+      });
     });
   });
 
   describe("pollDeviceToken", () => {
-    it("polls through authorization_pending and resolves on success without honoring backoff timing in tests", async () => {
+    it("polls WorkOS through authorization_pending and maps the success body", async () => {
       const sleep = vi.fn().mockResolvedValue(undefined);
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce(
-          jsonResponse(
-            { error: "authorization_pending", error_description: "still waiting" },
-            { status: 400 },
-          ),
-        )
-        .mockResolvedValueOnce(
-          jsonResponse(
-            { error: "authorization_pending", error_description: "still waiting" },
-            { status: 400 },
-          ),
-        )
-        .mockResolvedValueOnce(
-          jsonResponse({
-            access_token: "session-token",
-            token_type: "Bearer",
-            expires_in: 3600,
-            scope: "",
-          }),
-        );
+        .mockResolvedValueOnce(pendingResponse())
+        .mockResolvedValueOnce(pendingResponse())
+        .mockResolvedValueOnce(jsonResponse(workosSuccessBody()));
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
 
-      const result = await client.pollDeviceToken("dc1", { interval: 5 });
+      const result = await client.pollDeviceToken("dc1", { interval: 5, ...WORKOS });
 
       expect(result).toEqual({
-        accessToken: "session-token",
-        tokenType: "Bearer",
-        expiresIn: 3600,
-        scope: "",
+        accessToken: "access-1",
+        refreshToken: "refresh-1",
+        user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
       });
       expect(fetchMock).toHaveBeenCalledTimes(3);
+      const call = fetchMock.mock.calls[0];
+      if (call === undefined) throw new Error("expected fetch to have been called");
+      expect(call[0]).toBe(`${WORKOS_API_URL}/user_management/authenticate`);
+      expect(JSON.parse(call[1].body as string)).toEqual({
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        device_code: "dc1",
+        client_id: CLIENT_ID,
+      });
       expect(sleep).toHaveBeenCalledTimes(3);
       expect(sleep).toHaveBeenNthCalledWith(1, 5000);
-      expect(sleep).toHaveBeenNthCalledWith(2, 5000);
       expect(sleep).toHaveBeenNthCalledWith(3, 5000);
+    });
+
+    it("omits the name when WorkOS knows neither half of it", async () => {
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          access_token: "access-1",
+          refresh_token: "refresh-1",
+          user: { id: "user_1", email: "ada@example.com", first_name: null, last_name: null },
+        }),
+      );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
+
+      const result = await client.pollDeviceToken("dc1", { interval: 5, ...WORKOS });
+
+      expect(result.user).toEqual({ id: "user_1", email: "ada@example.com" });
     });
 
     it("increases the interval on slow_down and keeps polling", async () => {
@@ -355,19 +398,12 @@ describe("createAccountClient", () => {
         .mockResolvedValueOnce(
           jsonResponse({ error: "slow_down", error_description: "too fast" }, { status: 400 }),
         )
-        .mockResolvedValueOnce(
-          jsonResponse({
-            access_token: "session-token",
-            token_type: "Bearer",
-            expires_in: 3600,
-            scope: "",
-          }),
-        );
+        .mockResolvedValueOnce(jsonResponse(workosSuccessBody()));
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
 
-      const result = await client.pollDeviceToken("dc1", { interval: 5 });
+      const result = await client.pollDeviceToken("dc1", { interval: 5, ...WORKOS });
 
-      expect(result.accessToken).toBe("session-token");
+      expect(result.accessToken).toBe("access-1");
       expect(sleep).toHaveBeenNthCalledWith(1, 5000);
       expect(sleep).toHaveBeenNthCalledWith(2, 10000);
     });
@@ -384,11 +420,13 @@ describe("createAccountClient", () => {
         );
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
 
-      await expect(client.pollDeviceToken("dc1", { interval: 5 })).rejects.toMatchObject({
-        code: "internal_error",
-        status: 400,
-        message: "The device code has expired",
-      });
+      await expect(client.pollDeviceToken("dc1", { interval: 5, ...WORKOS })).rejects.toMatchObject(
+        {
+          code: "internal_error",
+          status: 400,
+          message: "The device code has expired",
+        },
+      );
     });
 
     it("throws AccountApiError on access_denied", async () => {
@@ -403,32 +441,25 @@ describe("createAccountClient", () => {
         );
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
 
-      await expect(client.pollDeviceToken("dc1", { interval: 5 })).rejects.toMatchObject({
-        code: "internal_error",
-        status: 400,
-        message: "The user denied the request",
-      });
+      await expect(client.pollDeviceToken("dc1", { interval: 5, ...WORKOS })).rejects.toMatchObject(
+        {
+          code: "internal_error",
+          status: 400,
+          message: "The user denied the request",
+        },
+      );
     });
 
-    it("stops polling and throws a timeout once the deadline elapses, even if the server keeps saying pending", async () => {
+    it("stops polling and throws a timeout once the deadline elapses, even if WorkOS keeps saying pending", async () => {
       const sleep = vi.fn().mockResolvedValue(undefined);
       // A fresh Response per call: a Response body can only be read once, so
       // reusing a single instance across polls (mockResolvedValue) would
       // break the second `response.json()` read.
-      const fetchMock = vi
-        .fn()
-        .mockImplementation(() =>
-          Promise.resolve(
-            jsonResponse(
-              { error: "authorization_pending", error_description: "still waiting" },
-              { status: 400 },
-            ),
-          ),
-        );
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(pendingResponse()));
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
 
       await expect(
-        client.pollDeviceToken("dc1", { interval: 5, expiresIn: 12 }),
+        client.pollDeviceToken("dc1", { interval: 5, expiresIn: 12, ...WORKOS }),
       ).rejects.toMatchObject({
         code: "internal_error",
         status: 408,
@@ -443,25 +474,69 @@ describe("createAccountClient", () => {
 
     it("defaults to a bounded deadline when none is given", async () => {
       const sleep = vi.fn().mockResolvedValue(undefined);
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          jsonResponse(
-            { error: "authorization_pending", error_description: "still waiting" },
-            { status: 400 },
-          ),
-        );
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(pendingResponse()));
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
 
       // A huge interval blows past the default 30-minute deadline on the
       // very first tick, proving the loop is bounded even without an
       // explicit `expiresIn`.
-      await expect(client.pollDeviceToken("dc1", { interval: 60 * 60 })).rejects.toMatchObject({
+      await expect(
+        client.pollDeviceToken("dc1", { interval: 60 * 60, ...WORKOS }),
+      ).rejects.toMatchObject({
         code: "internal_error",
         status: 408,
         message: "Device authorization timed out",
       });
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("refreshAccessToken", () => {
+    it("posts the refresh grant to WorkOS and returns the rotated pair", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          access_token: "access-2",
+          refresh_token: "refresh-2",
+          user: { id: "user_1", email: "ada@example.com", first_name: "Ada" },
+        }),
+      );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      const result = await client.refreshAccessToken({ refreshToken: "refresh-1", ...WORKOS });
+
+      expect(result).toEqual({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+        user: { id: "user_1", email: "ada@example.com", name: "Ada" },
+      });
+      const call = fetchMock.mock.calls[0];
+      if (call === undefined) throw new Error("expected fetch to have been called");
+      expect(call[0]).toBe(`${WORKOS_API_URL}/user_management/authenticate`);
+      expect(JSON.parse(call[1].body as string)).toEqual({
+        grant_type: "refresh_token",
+        refresh_token: "refresh-1",
+        client_id: CLIENT_ID,
+      });
+    });
+
+    it("throws AccountApiError with the error_description when the refresh token is spent", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { error: "invalid_grant", error_description: "Refresh token is invalid" },
+            { status: 400 },
+          ),
+        );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(
+        client.refreshAccessToken({ refreshToken: "burned", ...WORKOS }),
+      ).rejects.toMatchObject({
+        code: "internal_error",
+        status: 400,
+        message: "Refresh token is invalid",
+      });
     });
   });
 });

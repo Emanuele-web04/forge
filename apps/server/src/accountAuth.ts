@@ -30,11 +30,30 @@ import serverPackageJson from "../package.json" with { type: "json" };
 export const ACCOUNT_URL_ENV_NAME = "SYNARA_ACCOUNT_URL";
 const CREDENTIALS_FILE_NAME = "account-credentials.json";
 
-export interface AccountCredentials {
+/** What the user sees when a rotated refresh token can no longer be redeemed. */
+export const SESSION_EXPIRED_MESSAGE = "Session expired — run `synara auth` to sign in again.";
+
+/**
+ * The stored account file. The user session (`accessToken`/`refreshToken`) and
+ * the host registration (`hostToken`/`hostId`) have independent lifetimes: a
+ * WorkOS refresh token can be spent or revoked while the host token this
+ * machine registered with stays valid, so the two halves are optional
+ * separately and an expired session leaves the host fields in place.
+ */
+export interface StoredAccountFile {
   readonly accountUrl: string;
-  readonly deviceToken: string;
+  readonly workosClientId: string;
+  readonly workosApiUrl: string;
+  readonly accessToken?: string;
+  readonly refreshToken?: string;
   readonly hostToken?: string;
   readonly hostId?: string;
+}
+
+/** A {@link StoredAccountFile} that carries a usable user session. */
+export interface AccountCredentials extends StoredAccountFile {
+  readonly accessToken: string;
+  readonly refreshToken: string;
 }
 
 type Stdout = (text: string) => void;
@@ -52,13 +71,15 @@ export function accountCredentialsPath(baseDir: string): string {
 }
 
 /**
- * Reads stored credentials. A missing, unreadable, or malformed file is
- * reported as "not signed in" rather than an error: the CLI must always be
- * able to recover by running `synara auth` again.
+ * Reads the stored account file. A missing, unreadable, or malformed file is
+ * reported as absent rather than an error: the CLI must always be able to
+ * recover by running `synara auth` again.
+ *
+ * A pre-WorkOS file (identified by its `deviceToken`) is also treated as
+ * absent. Those tokens were minted by an endpoint that no longer exists, so
+ * there is nothing to migrate — re-authenticating is the only path forward.
  */
-export async function readAccountCredentials(
-  baseDir: string,
-): Promise<AccountCredentials | undefined> {
+export async function readAccountFile(baseDir: string): Promise<StoredAccountFile | undefined> {
   let raw: string;
   try {
     raw = await fs.readFile(accountCredentialsPath(baseDir), "utf8");
@@ -69,12 +90,20 @@ export async function readAccountCredentials(
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return undefined;
     const record = parsed as Record<string, unknown>;
-    if (typeof record.accountUrl !== "string" || typeof record.deviceToken !== "string") {
+    if (typeof record.deviceToken === "string") return undefined;
+    if (
+      typeof record.accountUrl !== "string" ||
+      typeof record.workosClientId !== "string" ||
+      typeof record.workosApiUrl !== "string"
+    ) {
       return undefined;
     }
     return {
       accountUrl: record.accountUrl,
-      deviceToken: record.deviceToken,
+      workosClientId: record.workosClientId,
+      workosApiUrl: record.workosApiUrl,
+      ...(typeof record.accessToken === "string" ? { accessToken: record.accessToken } : {}),
+      ...(typeof record.refreshToken === "string" ? { refreshToken: record.refreshToken } : {}),
       ...(typeof record.hostToken === "string" ? { hostToken: record.hostToken } : {}),
       ...(typeof record.hostId === "string" ? { hostId: record.hostId } : {}),
     };
@@ -83,9 +112,18 @@ export async function readAccountCredentials(
   }
 }
 
+/** The stored file, but only when it carries a redeemable user session. */
+export async function readAccountCredentials(
+  baseDir: string,
+): Promise<AccountCredentials | undefined> {
+  const stored = await readAccountFile(baseDir);
+  if (!stored?.accessToken || !stored.refreshToken) return undefined;
+  return { ...stored, accessToken: stored.accessToken, refreshToken: stored.refreshToken };
+}
+
 export async function writeAccountCredentials(
   baseDir: string,
-  credentials: AccountCredentials,
+  credentials: StoredAccountFile,
 ): Promise<void> {
   await Effect.runPromise(
     writeFileStringAtomically({
@@ -190,6 +228,78 @@ function clientFor(accountUrl: string, injected: AccountClient | undefined): Acc
   return injected ?? createAccountClient({ baseUrl: accountUrl });
 }
 
+/**
+ * Thrown when the stored session can no longer be renewed. Distinct from a
+ * transient failure: the only cure is signing in again.
+ */
+export class SessionExpiredError extends Error {
+  constructor() {
+    super(SESSION_EXPIRED_MESSAGE);
+    this.name = "SessionExpiredError";
+  }
+}
+
+function isUnauthorized(error: unknown): boolean {
+  return error instanceof AccountApiError && (error.status === 401 || error.status === 403);
+}
+
+export interface WithFreshAccessTokenOptions {
+  readonly baseDir: string;
+  readonly client: AccountClient;
+}
+
+/**
+ * Runs `fn` with the stored access token, renewing it once if the account
+ * rejects it. WorkOS access tokens live about five minutes, so any CLI command
+ * run more than a few minutes after `synara auth` needs this.
+ *
+ * Credentials are re-read per call rather than captured by the caller: a
+ * rotation performed for one call must be visible to the next one, and the
+ * spent refresh token must never be presented twice.
+ *
+ * The rotated pair is persisted *before* the retry, not after. WorkOS refresh
+ * tokens are single-use: if the process died between redeeming one and writing
+ * the replacement, the stored token would already be spent and the user would
+ * be silently signed out with no way to tell why.
+ */
+export async function withFreshAccessToken<A>(
+  options: WithFreshAccessTokenOptions,
+  fn: (accessToken: string) => Promise<A>,
+): Promise<A> {
+  const { baseDir, client } = options;
+  const credentials = await readAccountCredentials(baseDir);
+  if (!credentials) throw new SessionExpiredError();
+  try {
+    return await fn(credentials.accessToken);
+  } catch (error) {
+    if (!isUnauthorized(error)) throw error;
+
+    let refreshed;
+    try {
+      refreshed = await client.refreshAccessToken({
+        refreshToken: credentials.refreshToken,
+        clientId: credentials.workosClientId,
+        workosApiUrl: credentials.workosApiUrl,
+      });
+    } catch {
+      // The refresh token is spent or revoked. Drop only the session half of
+      // the file: the host registration is still real, and keeping it lets a
+      // later `synara auth` re-link this machine instead of stranding a
+      // phantom host on the account.
+      const { accessToken: _accessToken, refreshToken: _refreshToken, ...rest } = credentials;
+      await writeAccountCredentials(baseDir, rest);
+      throw new SessionExpiredError();
+    }
+
+    await writeAccountCredentials(baseDir, {
+      ...credentials,
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+    });
+    return await fn(refreshed.accessToken);
+  }
+}
+
 export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   const stdout = options.stdout ?? defaultStdout;
   const existing = await readAccountCredentials(options.baseDir);
@@ -201,6 +311,7 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   }
 
   const client = clientFor(options.accountUrl, options.client);
+  const instance = await client.instance();
   const device = await client.requestDeviceCode();
 
   stdout(
@@ -219,12 +330,24 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   const token = await client.pollDeviceToken(device.deviceCode, {
     interval: device.interval,
     expiresIn: device.expiresIn,
+    clientId: instance.clientId,
+    workosApiUrl: instance.workosApiUrl,
   });
 
-  await writeAccountCredentials(options.baseDir, {
+  // A file left behind by an expired session still holds this machine's host
+  // registration; carrying it forward keeps the re-link intact if registering
+  // again fails.
+  const previous = await readAccountFile(options.baseDir);
+  const session = {
     accountUrl: options.accountUrl,
-    deviceToken: token.accessToken,
-  });
+    workosClientId: instance.clientId,
+    workosApiUrl: instance.workosApiUrl,
+    accessToken: token.accessToken,
+    refreshToken: token.refreshToken,
+    ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
+    ...(previous?.hostId ? { hostId: previous.hostId } : {}),
+  } satisfies StoredAccountFile;
+  await writeAccountCredentials(options.baseDir, session);
 
   const platform = toAccountHostPlatform(options.platform ?? process.platform);
   if (!platform) {
@@ -257,8 +380,7 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   }
 
   await writeAccountCredentials(options.baseDir, {
-    accountUrl: options.accountUrl,
-    deviceToken: token.accessToken,
+    ...session,
     hostToken: registered.hostToken,
     hostId: registered.host.id,
   });
@@ -293,7 +415,9 @@ export interface RefreshHostRegistrationOptions {
 export async function refreshHostRegistration(
   options: RefreshHostRegistrationOptions,
 ): Promise<void> {
-  const credentials = await readAccountCredentials(options.baseDir);
+  // The host token authenticates this call, not the user session, so an
+  // expired session must not stop a running server from advertising itself.
+  const credentials = await readAccountFile(options.baseDir);
   if (!credentials?.hostToken || !credentials.hostId) return;
 
   const client = clientFor(credentials.accountUrl, options.client);
@@ -321,7 +445,9 @@ export interface LogoutOptions {
 
 export async function runAuthLogout(options: LogoutOptions): Promise<void> {
   const stdout = options.stdout ?? defaultStdout;
-  const credentials = await readAccountCredentials(options.baseDir);
+  // Deliberately the raw file, not a live session: a user whose session
+  // expired still has a host registration to tear down and a file to delete.
+  const credentials = await readAccountFile(options.baseDir);
   if (!credentials) {
     stdout("Not signed in — nothing to do.\n");
     return;
@@ -345,7 +471,9 @@ export async function runAuthLogout(options: LogoutOptions): Promise<void> {
   // WorkOS owns sessions, and the access token is short-lived. Dropping the
   // local credentials is what sign-out means here.
   await deleteAccountCredentials(options.baseDir);
-  stdout(`Signed out of ${credentials.accountUrl}. Local credentials deleted.\n`);
+  stdout(
+    `Signed out of ${credentials.accountUrl}. Local credentials deleted.\nThe browser session at the identity provider expires on its own.\n`,
+  );
 }
 
 export interface StatusOptions {
@@ -399,11 +527,17 @@ export async function runStatus(options: StatusOptions): Promise<void> {
   }
 
   const client = clientFor(credentials.accountUrl, options.client);
+  const withToken = <A>(fn: (accessToken: string) => Promise<A>) =>
+    withFreshAccessToken({ baseDir: options.baseDir, client }, fn);
 
   let me;
   try {
-    me = await client.me(credentials.deviceToken);
+    me = await withToken((accessToken) => client.me(accessToken));
   } catch (error) {
+    if (error instanceof SessionExpiredError) {
+      stdout(`${SESSION_EXPIRED_MESSAGE}\n`);
+      return;
+    }
     // Only a rejected token is worth telling the user to sign in again for;
     // an unreachable server would make that advice actively wrong.
     const rejected =
@@ -420,7 +554,7 @@ export async function runStatus(options: StatusOptions): Promise<void> {
 
   let hosts: readonly AccountHost[];
   try {
-    hosts = (await client.listHosts(credentials.deviceToken)).hosts;
+    hosts = (await withToken((accessToken) => client.listHosts(accessToken))).hosts;
   } catch (error) {
     stdout(`Could not list hosts: ${describeError(error)}\n`);
     return;

@@ -12,12 +12,15 @@ import { AccountApiError } from "@synara/shared/account";
 import {
   accountCredentialsPath,
   readAccountCredentials,
+  readAccountFile,
   refreshHostRegistration,
   resolveAccountUrl,
   resolveEnvironmentId,
   runAuthLogin,
   runAuthLogout,
   runStatus,
+  SessionExpiredError,
+  withFreshAccessToken,
   writeAccountCredentials,
 } from "./accountAuth.ts";
 
@@ -61,6 +64,21 @@ function unimplemented(name: string) {
   return () => Promise.reject(new Error(`${name} should not be called`));
 }
 
+const CLIENT_ID = "client_01ABC";
+const WORKOS_API_URL = "https://api.workos.example";
+
+/** A credentials file with a live session, as `synara auth` leaves it. */
+function credentials(overrides: Record<string, unknown> = {}) {
+  return {
+    accountUrl: "https://accounts.example.com",
+    workosClientId: CLIENT_ID,
+    workosApiUrl: WORKOS_API_URL,
+    accessToken: "access-1",
+    refreshToken: "refresh-1",
+    ...overrides,
+  };
+}
+
 function makeClient(overrides: Partial<AccountClient>): AccountClient {
   return {
     instance: unimplemented("instance"),
@@ -71,8 +89,42 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     deleteHost: unimplemented("deleteHost"),
     requestDeviceCode: unimplemented("requestDeviceCode"),
     pollDeviceToken: unimplemented("pollDeviceToken"),
+    refreshAccessToken: unimplemented("refreshAccessToken"),
     ...overrides,
   } as AccountClient;
+}
+
+function unauthorized(): AccountApiError {
+  return new AccountApiError({ code: "unauthorized", status: 401, message: "Unauthorized" });
+}
+
+/** What `synara auth`'s device flow returns once the user approves. */
+function deviceFlowClient(overrides: Partial<AccountClient> = {}): AccountClient {
+  return makeClient({
+    instance: () =>
+      Promise.resolve({
+        version: "0.6.4",
+        authMode: "workos" as const,
+        clientId: CLIENT_ID,
+        workosApiUrl: WORKOS_API_URL,
+      }),
+    requestDeviceCode: () =>
+      Promise.resolve({
+        deviceCode: "device-code",
+        userCode: "WDJB-MJHT",
+        verificationUri: "https://accounts.example.com/device",
+        verificationUriComplete: "https://accounts.example.com/device?user_code=WDJB-MJHT",
+        expiresIn: 900,
+        interval: 5,
+      }),
+    pollDeviceToken: () =>
+      Promise.resolve({
+        accessToken: "access-1",
+        refreshToken: "refresh-1",
+        user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
+      }),
+    ...overrides,
+  });
 }
 
 describe("account credential store", () => {
@@ -80,19 +132,10 @@ describe("account credential store", () => {
     const baseDir = makeBaseDir();
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
 
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    const stored = credentials({ hostToken: "host-token", hostId: "host_1" });
+    await writeAccountCredentials(baseDir, stored);
 
-    expect(await readAccountCredentials(baseDir)).toEqual({
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    expect(await readAccountCredentials(baseDir)).toEqual(stored);
 
     if (process.platform !== "win32") {
       const stat = await fsp.stat(accountCredentialsPath(baseDir));
@@ -104,6 +147,177 @@ describe("account credential store", () => {
     const baseDir = makeBaseDir();
     await fsp.writeFile(accountCredentialsPath(baseDir), "{not json", "utf8");
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
+  });
+
+  it("treats a pre-WorkOS credentials file as not signed in", async () => {
+    const baseDir = makeBaseDir();
+    await fsp.writeFile(
+      accountCredentialsPath(baseDir),
+      JSON.stringify({
+        accountUrl: "https://accounts.example.com",
+        deviceToken: "legacy-device-token",
+        hostToken: "host-token",
+        hostId: "host_1",
+      }),
+      "utf8",
+    );
+
+    expect(await readAccountFile(baseDir)).toBeUndefined();
+    expect(await readAccountCredentials(baseDir)).toBeUndefined();
+  });
+
+  it("reads a file whose session was cleared but keeps its host fields", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+    expect(await readAccountCredentials(baseDir)).toBeUndefined();
+  });
+});
+
+describe("withFreshAccessToken", () => {
+  it("passes the stored access token straight through when it is accepted", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    const seen: string[] = [];
+    const result = await withFreshAccessToken(
+      { baseDir, client: makeClient({}) },
+      (accessToken) => {
+        seen.push(accessToken);
+        return Promise.resolve("ok");
+      },
+    );
+
+    expect(result).toBe("ok");
+    expect(seen).toEqual(["access-1"]);
+  });
+
+  it("persists the rotated pair before retrying, so a crash mid-retry cannot lose it", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+
+    // Read back inside the retry, not after it: a helper that wrote the new
+    // pair only once `fn` resolved would still pass an after-the-fact
+    // assertion while leaving a window where the spent token is all that is
+    // on disk.
+    let onDiskDuringRetry: unknown;
+    const attempts: string[] = [];
+    const result = await withFreshAccessToken(
+      {
+        baseDir,
+        client: makeClient({
+          refreshAccessToken: (options) => {
+            expect(options).toEqual({
+              refreshToken: "refresh-1",
+              clientId: CLIENT_ID,
+              workosApiUrl: WORKOS_API_URL,
+            });
+            return Promise.resolve({
+              accessToken: "access-2",
+              refreshToken: "refresh-2",
+              user: { id: "user_1", email: "ada@example.com" },
+            });
+          },
+        }),
+      },
+      async (accessToken) => {
+        attempts.push(accessToken);
+        if (attempts.length === 1) throw unauthorized();
+        onDiskDuringRetry = await readAccountCredentials(baseDir);
+        return "ok";
+      },
+    );
+
+    expect(result).toBe("ok");
+    expect(attempts).toEqual(["access-1", "access-2"]);
+    expect(onDiskDuringRetry).toEqual(
+      credentials({ accessToken: "access-2", refreshToken: "refresh-2", hostToken: "host-token" }),
+    );
+  });
+
+  it("retries only once, surfacing a second rejection to the caller", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    let attempts = 0;
+    await expect(
+      withFreshAccessToken(
+        {
+          baseDir,
+          client: makeClient({
+            refreshAccessToken: () =>
+              Promise.resolve({
+                accessToken: "access-2",
+                refreshToken: "refresh-2",
+                user: { id: "user_1", email: "ada@example.com" },
+              }),
+          }),
+        },
+        () => {
+          attempts += 1;
+          return Promise.reject(unauthorized());
+        },
+      ),
+    ).rejects.toBeInstanceOf(AccountApiError);
+    expect(attempts).toBe(2);
+  });
+
+  it("does not refresh on a non-auth failure", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    await expect(
+      withFreshAccessToken({ baseDir, client: makeClient({}) }, () =>
+        Promise.reject(new Error("ECONNREFUSED")),
+      ),
+    ).rejects.toThrow("ECONNREFUSED");
+    expect(await readAccountCredentials(baseDir)).toEqual(credentials());
+  });
+
+  it("signs the session out but keeps the host fields when the refresh token is spent", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
+
+    await expect(
+      withFreshAccessToken(
+        {
+          baseDir,
+          client: makeClient({
+            refreshAccessToken: () =>
+              Promise.reject(
+                new AccountApiError({
+                  code: "internal_error",
+                  status: 400,
+                  message: "Refresh token is invalid",
+                }),
+              ),
+          }),
+        },
+        () => Promise.reject(unauthorized()),
+      ),
+    ).rejects.toBeInstanceOf(SessionExpiredError);
+
+    expect(await readAccountCredentials(baseDir)).toBeUndefined();
+    expect(await readAccountFile(baseDir)).toEqual({
+      accountUrl: "https://accounts.example.com",
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
   });
 });
 
@@ -151,23 +365,16 @@ describe("runAuthLogin", () => {
     const stdout = makeStdout();
 
     const registered: Array<{ token: string; request: unknown }> = [];
-    const client = makeClient({
-      requestDeviceCode: () =>
-        Promise.resolve({
-          deviceCode: "device-code",
-          userCode: "WDJB-MJHT",
-          verificationUri: "https://accounts.example.com/device",
-          verificationUriComplete: "https://accounts.example.com/device?user_code=WDJB-MJHT",
-          expiresIn: 900,
-          interval: 5,
-        }),
-      pollDeviceToken: () =>
-        Promise.resolve({
-          accessToken: "device-token",
-          tokenType: "Bearer",
-          expiresIn: 3600,
-          scope: "",
-        }),
+    const polls: unknown[] = [];
+    const client = deviceFlowClient({
+      pollDeviceToken: (_deviceCode, pollOptions) => {
+        polls.push(pollOptions);
+        return Promise.resolve({
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+          user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
+        });
+      },
       registerHost: (token, request) => {
         registered.push({ token, request });
         return Promise.resolve({ host, hostToken: "host-token" });
@@ -187,8 +394,14 @@ describe("runAuthLogin", () => {
     expect(stdout.text()).toContain("https://accounts.example.com/device?user_code=WDJB-MJHT");
     expect(stdout.text()).toContain("WDJB-MJHT");
 
+    // The client id and WorkOS origin must come from /instance: the poll goes
+    // straight to WorkOS, so a hardcoded pair would break every self-hoster.
+    expect(polls).toEqual([
+      { interval: 5, expiresIn: 900, clientId: CLIENT_ID, workosApiUrl: WORKOS_API_URL },
+    ]);
+
     expect(registered).toHaveLength(1);
-    expect(registered[0]?.token).toBe("device-token");
+    expect(registered[0]?.token).toBe("access-1");
     expect(registered[0]?.request).toMatchObject({
       environmentId: "persisted-env-id",
       name: "workstation",
@@ -197,12 +410,9 @@ describe("runAuthLogin", () => {
       appVersion: "0.6.4",
     });
 
-    expect(await readAccountCredentials(baseDir)).toEqual({
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
   });
 
   it("maps win32 to the windows platform literal", async () => {
@@ -216,23 +426,7 @@ describe("runAuthLogin", () => {
       stdout: stdout.write,
       platform: "win32",
       hostname: "pc",
-      client: makeClient({
-        requestDeviceCode: () =>
-          Promise.resolve({
-            deviceCode: "device-code",
-            userCode: "AAAA-BBBB",
-            verificationUri: "https://accounts.example.com/device",
-            verificationUriComplete: "https://accounts.example.com/device?user_code=AAAA-BBBB",
-            expiresIn: 900,
-            interval: 5,
-          }),
-        pollDeviceToken: () =>
-          Promise.resolve({
-            accessToken: "device-token",
-            tokenType: "Bearer",
-            expiresIn: 3600,
-            scope: "",
-          }),
+      client: deviceFlowClient({
         registerHost: (_token, request) => {
           requests.push({ platform: request.platform });
           return Promise.resolve({
@@ -246,7 +440,7 @@ describe("runAuthLogin", () => {
     expect(requests[0]?.platform).toBe("windows");
   });
 
-  it("keeps the device token and explains when the platform is unsupported", async () => {
+  it("keeps the session and explains when the platform is unsupported", async () => {
     const baseDir = makeBaseDir();
     const stdout = makeStdout();
 
@@ -256,38 +450,47 @@ describe("runAuthLogin", () => {
       stdout: stdout.write,
       platform: "freebsd",
       hostname: "bsd",
-      client: makeClient({
-        requestDeviceCode: () =>
-          Promise.resolve({
-            deviceCode: "device-code",
-            userCode: "AAAA-BBBB",
-            verificationUri: "https://accounts.example.com/device",
-            verificationUriComplete: "https://accounts.example.com/device?user_code=AAAA-BBBB",
-            expiresIn: 900,
-            interval: 5,
-          }),
-        pollDeviceToken: () =>
-          Promise.resolve({
-            accessToken: "device-token",
-            tokenType: "Bearer",
-            expiresIn: 3600,
-            scope: "",
-          }),
-      }),
+      client: deviceFlowClient(),
     });
 
     expect(stdout.text()).toContain("freebsd");
-    const credentials = await readAccountCredentials(baseDir);
-    expect(credentials?.deviceToken).toBe("device-token");
-    expect(credentials?.hostId).toBeUndefined();
+    const stored = await readAccountCredentials(baseDir);
+    expect(stored?.accessToken).toBe("access-1");
+    expect(stored?.refreshToken).toBe("refresh-1");
+    expect(stored?.hostId).toBeUndefined();
+  });
+
+  it("re-links an existing host registration after a session expiry", async () => {
+    const baseDir = makeBaseDir();
+    // What `withFreshAccessToken` leaves behind when the refresh token dies:
+    // no session, but a host this machine is still registered as.
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "old-host-token",
+      hostId: "host_1",
+    });
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      stdout: makeStdout().write,
+      platform: "freebsd",
+      hostname: "bsd",
+      client: deviceFlowClient(),
+    });
+
+    // Registration is skipped on this platform, so the pre-existing host
+    // fields are the only ones there are — losing them would strand the host.
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({ hostToken: "old-host-token", hostId: "host_1" }),
+    );
   });
 
   it("refuses to re-login when credentials already exist", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-    });
+    await writeAccountCredentials(baseDir, credentials());
     const stdout = makeStdout();
 
     await runAuthLogin({
@@ -304,12 +507,10 @@ describe("runAuthLogin", () => {
 describe("runAuthLogout", () => {
   it("removes the host, then removes the credentials file", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
     const stdout = makeStdout();
     const deleted: Array<[string, string]> = [];
 
@@ -327,16 +528,44 @@ describe("runAuthLogout", () => {
     expect(deleted).toEqual([["host-token", "host_1"]]);
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
     expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
+    expect(stdout.text()).toContain("expires on its own");
+  });
+
+  it("signs out a file whose session already expired", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+    const stdout = makeStdout();
+    const deleted: Array<[string, string]> = [];
+
+    await runAuthLogout({
+      baseDir,
+      stdout: stdout.write,
+      client: makeClient({
+        deleteHost: (token, hostId) => {
+          deleted.push([token, hostId]);
+          return Promise.resolve();
+        },
+      }),
+    });
+
+    // The host token is independent of the user session, so an expired
+    // session must not leave a phantom host on the account.
+    expect(deleted).toEqual([["host-token", "host_1"]]);
+    expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
   });
 
   it("still removes local credentials when the network calls fail", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
     const stdout = makeStdout();
 
     await runAuthLogout({
@@ -354,10 +583,10 @@ describe("runAuthLogout", () => {
 
   it("signs out against the stored account URL with no ambient one configured", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://stored.example.com",
-      deviceToken: "device-token",
-    });
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ accountUrl: "https://stored.example.com" }),
+    );
     const stdout = makeStdout();
 
     await runAuthLogout({
@@ -406,12 +635,10 @@ describe("runStatus", () => {
     const stateDir = path.join(baseDir, "userdata");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(stateDir, "environment-id"), "env-uuid\n", "utf8");
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
     const stdout = makeStdout();
 
     await runStatus({
@@ -447,12 +674,47 @@ describe("runStatus", () => {
     expect(text).toContain("linux");
   });
 
-  it("explains that a revoked token needs a fresh sign-in", async () => {
+  it("refreshes a rejected access token and reports the identity without bothering the user", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
+    await writeAccountCredentials(baseDir, credentials());
+    const stdout = makeStdout();
+
+    const tokensSeen: string[] = [];
+    await runStatus({
       accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
+      baseDir,
+      stdout: stdout.write,
+      client: makeClient({
+        me: (token) => {
+          tokensSeen.push(token);
+          if (token === "access-1") return Promise.reject(unauthorized());
+          return Promise.resolve({ id: "user_1", name: "Ada Lovelace", email: "ada@example.com" });
+        },
+        listHosts: (token) => {
+          tokensSeen.push(token);
+          return Promise.resolve({ hosts: [] });
+        },
+        refreshAccessToken: () =>
+          Promise.resolve({
+            accessToken: "access-2",
+            refreshToken: "refresh-2",
+            user: { id: "user_1", email: "ada@example.com" },
+          }),
+      }),
     });
+
+    expect(stdout.text()).toContain("Ada Lovelace");
+    // The listHosts call that follows must use the rotated token, not the one
+    // the account just rejected.
+    expect(tokensSeen).toEqual(["access-1", "access-2", "access-2"]);
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({ accessToken: "access-2", refreshToken: "refresh-2" }),
+    );
+  });
+
+  it("explains that an unrenewable session needs a fresh sign-in", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
     const stdout = makeStdout();
 
     await runStatus({
@@ -460,22 +722,25 @@ describe("runStatus", () => {
       baseDir,
       stdout: stdout.write,
       client: makeClient({
-        me: () =>
+        me: () => Promise.reject(unauthorized()),
+        refreshAccessToken: () =>
           Promise.reject(
-            new AccountApiError({ code: "unauthorized", status: 401, message: "Unauthorized" }),
+            new AccountApiError({
+              code: "internal_error",
+              status: 400,
+              message: "Refresh token is invalid",
+            }),
           ),
       }),
     });
 
+    expect(stdout.text()).toContain("Session expired");
     expect(stdout.text()).toContain("synara auth");
   });
 
   it("does not advise re-authenticating when the account is merely unreachable", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-    });
+    await writeAccountCredentials(baseDir, credentials());
     const stdout = makeStdout();
 
     await runStatus({
@@ -541,12 +806,10 @@ describe("refreshHostRegistration", () => {
   it("sends the freshly derived endpoints for the registered host exactly once", async () => {
     const baseDir = makeBaseDir();
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
 
     const calls: Array<{ hostToken: string; hostId: string; request: unknown }> = [];
     await refreshHostRegistration({
@@ -572,12 +835,10 @@ describe("refreshHostRegistration", () => {
   it("resolves without throwing when the account rejects the refresh", async () => {
     const baseDir = makeBaseDir();
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
 
     let attempted = false;
     await expect(
@@ -616,10 +877,7 @@ describe("refreshHostRegistration", () => {
   it("does not call the account when credentials exist without a host token", async () => {
     const baseDir = makeBaseDir();
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-    });
+    await writeAccountCredentials(baseDir, credentials());
 
     const { client, reached } = makeRecordingClient();
     await refreshHostRegistration({ baseDir, client });
@@ -630,11 +888,7 @@ describe("refreshHostRegistration", () => {
   it("does not call the account when credentials carry a host token but no host id", async () => {
     const baseDir = makeBaseDir();
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-    });
+    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
 
     const { client, reached } = makeRecordingClient();
     await refreshHostRegistration({ baseDir, client });
@@ -645,12 +899,10 @@ describe("refreshHostRegistration", () => {
   it("clears stale endpoints when the server is only reachable on loopback", async () => {
     const baseDir = makeBaseDir();
     writeRuntimeState(baseDir, "http://127.0.0.1:3773", "127.0.0.1");
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      deviceToken: "device-token",
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
 
     const requests: unknown[] = [];
     await refreshHostRegistration({
