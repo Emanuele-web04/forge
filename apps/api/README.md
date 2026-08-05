@@ -1,7 +1,7 @@
 # @synara/api
 
-The Synara account service: BetterAuth at `/api/auth/*`, account/host routes under
-`/api/v1`, and the auth ceremony UI on every other path.
+The Synara account service: WorkOS AuthKit for identity, plus account/host
+routes under `/api/v1`.
 
 It is a **self-hosting-first, opt-in** component. Synara works fully without it;
 nothing in this app runs unless you deploy an instance and point a server at it.
@@ -20,12 +20,40 @@ nothing in this app runs unless you deploy an instance and point a server at it.
   the operator's machine under `<synara home>/account-credentials.json` at mode
   `0600`, never in the repository.
 
+## Identity: WorkOS AuthKit
+
+This service does not store users, passwords, sessions, or signing keys.
+WorkOS owns all of that; the database here holds only the host registry
+(`hosts`, `host_tokens`), and `hosts.user_id` is an opaque WorkOS user id with
+no foreign key behind it.
+
+What that means in practice:
+
+- **Sign-in methods are dashboard toggles, not env vars.** Email/password,
+  Google, GitHub, Microsoft and the rest are enabled per-application in the
+  WorkOS dashboard. There are no OAuth client ids or secrets to register here,
+  and no provider pairs in the environment.
+- **Email delivery is WorkOS's.** Verification and password-reset mail is sent
+  by WorkOS, so there is no SMTP or Resend configuration.
+- **The JWKS is WorkOS's, served by WorkOS.** This service only reads it, at
+  `https://api.workos.com/sso/jwks/{WORKOS_CLIENT_ID}`. Nothing is generated or
+  stored locally, so there is no key material to rotate or lose.
+
+### Dashboard setup
+
+1. Create an AuthKit application at <https://dashboard.workos.com>.
+2. Under **Authentication**, enable the sign-in methods you want.
+3. Under **Authentication → CLI Auth**, **enable CLI Auth**. The `synara auth`
+   device flow uses the device authorization grant, and the endpoint returns an
+   error until this is switched on.
+4. Add `${ACCOUNT_BASE_URL}` to the allowed redirect URIs.
+5. Copy the API key and client id into `WORKOS_API_KEY` / `WORKOS_CLIENT_ID`.
+
 ## Quick start (local)
 
 ```sh
 docker compose -f apps/api/docker-compose.yml up -d          # Postgres 18 on :5432
-cp apps/api/.env.example apps/api/.env                       # then fill in the blanks
-openssl rand -base64 32                                      # → BETTER_AUTH_SECRET
+cp apps/api/.env.example apps/api/.env                       # then fill in the WorkOS keys
 bun install
 bun run --cwd apps/api dev                                   # http://localhost:8788
 ```
@@ -44,80 +72,29 @@ SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts 
 
 ## Environment variables
 
-| Variable                          | Required | Default | Purpose                                                                               |
-| --------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                    | yes      | —       | Postgres connection string for Drizzle and BetterAuth.                                |
-| `BETTER_AUTH_SECRET`              | yes      | —       | Signs sessions and encrypts the stored JWKS. Generate with `openssl rand -base64 32`. |
-| `ACCOUNT_BASE_URL`                | yes      | —       | Public origin of this instance. OAuth callback URLs are derived from it.              |
-| `PORT`                            | no       | `8788`  | HTTP listen port.                                                                     |
-| `GITHUB_CLIENT_ID` / `_SECRET`    | no       | —       | Enables GitHub sign-in when **both** are set.                                         |
-| `GOOGLE_CLIENT_ID` / `_SECRET`    | no       | —       | Enables Google sign-in when both are set.                                             |
-| `APPLE_CLIENT_ID` / `_SECRET`     | no       | —       | Enables Sign in with Apple when both are set. See the Apple note below.               |
-| `MICROSOFT_CLIENT_ID` / `_SECRET` | no       | —       | Enables Microsoft (Entra ID) sign-in when both are set.                               |
-| `RESEND_API_KEY`                  | no       | —       | Sends verification/reset email via Resend, the only supported transport.              |
-| `EMAIL_FROM`                      | no       | —       | From address for outgoing account email.                                              |
-| `ACCOUNT_ALLOWED_SIGNUP_EMAILS`   | no       | —       | Comma-separated allowlist. Unset means anyone may sign up.                            |
-| `TEST_DATABASE_URL`               | tests    | —       | Database the Vitest suites use. Without it they skip.                                 |
+| Variable            | Required | Default                          | Purpose                                                  |
+| ------------------- | -------- | -------------------------------- | -------------------------------------------------------- |
+| `DATABASE_URL`      | yes      | —                                | Postgres connection string for the host registry.        |
+| `WORKOS_API_KEY`    | yes      | —                                | WorkOS secret key (`sk_…`). Server-side only.            |
+| `WORKOS_CLIENT_ID`  | yes      | —                                | WorkOS AuthKit client id (`client_…`).                   |
+| `ACCOUNT_BASE_URL`  | yes      | —                                | Public origin of this instance.                          |
+| `PORT`              | no       | `8788`                           | HTTP listen port.                                        |
+| `WORKOS_API_URL`    | no       | `https://api.workos.com`         | WorkOS API origin. Override only to point at a stand-in. |
+| `WORKOS_JWKS_URL`   | no       | `{API_URL}/sso/jwks/{CLIENT_ID}` | Full JWKS URL. Override only to point at a stand-in.     |
+| `TEST_DATABASE_URL` | tests    | —                                | Database the Vitest suites use. Without it they skip.    |
 
 A missing required variable fails the boot with an explicit
 `Missing required environment variables: …` rather than starting half-configured.
 
-Email/password sign-in is always on. Each social provider activates only when
-both halves of its pair are present, and `GET /api/v1/instance` reports the
-resulting method set so the ceremony UI renders exactly the buttons that work.
-
-Email delivery needs `RESEND_API_KEY`; there is no SMTP transport. Without it,
-password-reset and verification emails are logged instead of sent, and
-`/api/v1/instance` reports `emailDelivery: false` so the UI stops offering
-flows that would go nowhere.
-
-**Run an allowlist on any instance you do not want strangers on.** Without
-`ACCOUNT_ALLOWED_SIGNUP_EMAILS`, a reachable instance accepts open signups.
-
-## Registering OAuth apps
-
-For every provider, the redirect URI is
-`${ACCOUNT_BASE_URL}/api/auth/callback/<provider>` — for example
-`https://accounts.example.com/api/auth/callback/github`. Register the exact
-origin you deploy to; a mismatch is the usual cause of a provider bouncing the
-login back with an error.
-
-- **GitHub** — Settings → Developer settings → OAuth Apps → New OAuth App.
-  Authorization callback URL: `${ACCOUNT_BASE_URL}/api/auth/callback/github`.
-  <https://docs.github.com/apps/oauth-apps/building-oauth-apps>
-- **Google** — Google Cloud console → APIs & Services → Credentials → OAuth
-  client ID (Web application). Authorized redirect URI:
-  `${ACCOUNT_BASE_URL}/api/auth/callback/google`. Configure the OAuth consent
-  screen first, or the client will only work for your own account.
-  <https://developers.google.com/identity/protocols/oauth2/web-server>
-- **Microsoft** — Entra ID → App registrations → New registration, platform
-  "Web", redirect `${ACCOUNT_BASE_URL}/api/auth/callback/microsoft`. Use a client
-  secret (not a certificate); note the expiry, since Entra secrets expire.
-  <https://learn.microsoft.com/entra/identity-platform/quickstart-register-app>
-- **Apple** — Sign in with Apple requires a **paid Apple Developer Program
-  membership** ($99/year); there is no free tier for it. In the developer
-  portal, create an App ID with "Sign in with Apple" enabled, then a Services ID
-  (that Services ID is your `APPLE_CLIENT_ID`), then a Sign in with Apple key.
-  `APPLE_CLIENT_SECRET` is not a static string: it is a JWT you generate from
-  that key and must regenerate before it expires (Apple caps the lifetime at six
-  months). Return URL: `${ACCOUNT_BASE_URL}/api/auth/callback/apple`.
-  <https://developer.apple.com/documentation/sign_in_with_apple>
-
-  **App Store policy note:** if a Synara iOS app is ever shipped and offers any
-  third-party sign-in (Google, GitHub, Microsoft), App Review requires Sign in
-  with Apple to be offered alongside it. That is the reason Apple is wired up at
-  all — for a web-only or self-hosted deployment, leaving `APPLE_*` unset is
-  perfectly fine and the button simply does not render.
-
 ## Deploying to Railway
 
-The service runs TypeScript directly under Bun; only the ceremony UI is built.
+The service runs TypeScript directly under Bun, with no build step at all.
 
-- **Build command:** `bun install && bun run build`
+- **Build command:** `bun install`
 - **Start command:** `bun run start`
 - **Root directory:** `apps/api` (or run the commands with `--cwd apps/api` from
   the monorepo root, since this is a workspace package).
-- **Variables:** set `DATABASE_URL`, `BETTER_AUTH_SECRET`, and
+- **Variables:** set `DATABASE_URL`, `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, and
   `ACCOUNT_BASE_URL` (to the Railway public domain) at minimum. Leave `PORT` to
   Railway — it injects one, and `loadApiConfig` honours it.
 
@@ -138,37 +115,30 @@ state — everything lives in Postgres.
 
 ## Build and run
 
-The server has **no bundle step**. It runs TypeScript directly under Bun, in both
-development and production, so `build` exists solely to produce the ceremony UI:
+The server has **no bundle step**. It runs TypeScript directly under Bun, in
+both development and production.
 
-| Script     | What it does                                                              |
-| ---------- | ------------------------------------------------------------------------- |
-| `build`    | Alias for `build:ui`. The server needs no build; this is the whole build. |
-| `build:ui` | `vite build` → `ui/dist`, the assets `src/staticUi.ts` serves.            |
-| `start`    | Runs the server from `src/index.ts`. There is no `dist/index.mjs`.        |
-| `dev`      | Same, with `--hot`.                                                       |
-| `dev:ui`   | Vite dev server on :5788, proxying `/api` → :8788.                        |
+| Script  | What it does                                                       |
+| ------- | ------------------------------------------------------------------ |
+| `build` | Prints `no build step`. Kept so generic `bun run build` CI passes. |
+| `start` | Runs the server from `src/index.ts`. There is no `dist/index.mjs`. |
+| `dev`   | Same, with `--hot`.                                                |
 
-**For packaging:** ship `src/`, `drizzle/`, `ui/dist/`, and `node_modules`, then run
+**For packaging:** ship `src/`, `drizzle/`, and `node_modules`, then run
 `start`. Do not look for a compiled server entrypoint — unlike `@synara/server`,
-which builds to `dist/index.mjs`, this app deliberately has none. If a bundled
-server is ever wanted, add a `build:server` script and make `build` run both.
-
-Serving `ui/dist` is optional at runtime: without it the API still starts and
-answers non-`/api` paths with a placeholder, so a server-only deploy works.
+which builds to `dist/index.mjs`, this app deliberately has none.
 
 ## Tests
 
-`bun run test` requires Postgres and a `TEST_DATABASE_URL`; without it the suites
-skip. It also builds the UI on demand, because the static-serving tests assert
-against a real bundle.
+`bun run test` requires Postgres and a `TEST_DATABASE_URL`; without it the
+database-backed suites skip. WorkOS is never called: `src/testing/fakeWorkos.ts`
+serves a JWKS from a freshly generated key pair and mints access tokens signed
+by it, so the auth path is exercised end to end with no network.
 
 ```sh
 docker compose -f docker-compose.yml up -d
 TEST_DATABASE_URL=postgres://synara:synara@localhost:5432/synara_accounts bun run test
 ```
 
-**Known trap:** the dev `.env` and the tests use different `BETTER_AUTH_SECRET`
-values. Pointed at the same database, whichever runs second cannot decrypt the
-stored JWKS row and every session-backed route returns 500. Clear it with
-`delete from jwks;` or give the tests their own database.
+Pointing the tests at the same database as dev is safe — there is no shared key
+material for the two to fight over.

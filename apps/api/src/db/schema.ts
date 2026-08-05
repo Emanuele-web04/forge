@@ -1,7 +1,4 @@
 import { jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { user } from "./auth-schema";
-
-export * from "./auth-schema";
 
 export type HostEndpoint = { url: string; transport: "lan" | "tailscale" | "public" };
 
@@ -9,9 +6,9 @@ export const hosts = pgTable(
   "hosts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
+    // WorkOS user id. Identity lives in WorkOS, so there is no local user table
+    // to reference — orphan cleanup happens through WorkOS webhooks, not an FK.
+    userId: text("user_id").notNull(),
     environmentId: text("environment_id").notNull(),
     name: text("name").notNull(),
     platform: text("platform", { enum: ["darwin", "linux", "windows"] }).notNull(),

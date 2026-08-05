@@ -5,11 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
-    "dev:ui": "vite --config ui/vite.config.ts",
     "start": "bun run src/index.ts",
-    "build": "bun run build:ui",
-    "build:ui": "vite build --config ui/vite.config.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p ui/tsconfig.json",
+    "build": "echo 'no build step'",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/db/migrate.ts"
@@ -17,27 +15,18 @@
   "dependencies": {
     "@hono/node-server": "^1.14.0",
     "@synara/contracts": "workspace:*",
-    "better-auth": "^1.6.25",
     "drizzle-orm": "^0.45.2",
     "effect": "catalog:",
     "hono": "^4.7.0",
-    "pg": "^8.16.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-router-dom": "^7.9.0"
+    "jose": "^6.1.0",
+    "pg": "^8.16.0"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.0.0",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "^8.15.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^6.0.0",
     "drizzle-kit": "^0.31.10",
-    "tailwindcss": "^4.0.0",
     "typescript": "catalog:",
-    "vite": "^8.1.4",
     "vitest": "catalog:"
   }
 }

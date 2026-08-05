@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createDb } from "./index";
 import { runMigrations } from "./migrate";
-import { hosts, user } from "./schema";
+import { hosts } from "./schema";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -12,19 +12,9 @@ describe.skipIf(!url)("schema", () => {
 
   it("enforces unique (userId, environmentId)", async () => {
     const { db, pool } = createDb(url!);
-    const [u] = await db
-      .insert(user)
-      .values({
-        id: crypto.randomUUID(),
-        name: "t",
-        email: `${crypto.randomUUID()}@x.com`,
-        emailVerified: false,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .returning();
     const row = {
-      userId: u!.id,
+      // WorkOS user ids are opaque strings with no local row behind them.
+      userId: `user_${crypto.randomUUID()}`,
       environmentId: "env-1",
       name: "MacBook",
       platform: "darwin" as const,

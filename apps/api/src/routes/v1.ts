@@ -3,11 +3,9 @@ import {
   type AccountErrorCode,
   type AccountHost,
   type AccountMe,
-  type AccountSessionSummary,
   type EnvironmentId,
   type InstanceInfo,
   type ListHostsResponse,
-  type ListSessionsResponse,
   type RegisterHostResponse,
   RegisterHostRequest,
   UpdateHostRequest,
@@ -18,13 +16,13 @@ import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import type { Auth } from "../auth";
-import { enabledAuthMethods, type ApiConfig } from "../config";
+import type { ApiConfig } from "../config";
 import * as schema from "../db/schema";
 import { hosts, hostTokens } from "../db/schema";
 import { mintHostToken } from "../hostTokens";
+import type { WorkosAuth } from "../workos";
 import packageJson from "../../package.json" with { type: "json" };
-import { authenticateHostToken, isHostTokenHeader } from "./hostAuth";
+import { authenticateHostToken, extractBearerToken, isHostTokenHeader } from "./hostAuth";
 
 const API_VERSION: string = packageJson.version;
 
@@ -54,50 +52,46 @@ function toAccountHost(row: HostRow): AccountHost {
   };
 }
 
-function toAccountSessionSummary(
-  s: { id: string; createdAt: Date; updatedAt: Date; userAgent?: string | null | undefined },
-  currentSessionId: string,
-): AccountSessionSummary {
-  return {
-    id: s.id,
-    createdAt: s.createdAt.toISOString(),
-    lastActiveAt: s.updatedAt.toISOString(),
-    ...(s.userAgent ? { userAgent: s.userAgent } : {}),
-    current: s.id === currentSessionId,
-  };
-}
-
 function isUniqueViolation(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "23505");
 }
 
 export function createV1Routes(deps: {
-  auth: Auth;
+  auth: WorkosAuth;
   db: NodePgDatabase<typeof schema>;
   config: ApiConfig;
 }): Hono {
   const { auth, db, config } = deps;
   const v1 = new Hono();
 
-  // Cookie-cache disabled: a revoked device session must 401 immediately,
-  // not after the cache's TTL expires.
-  function getDeviceSession(c: Context) {
-    return auth.api.getSession({
-      headers: c.req.raw.headers,
-      query: { disableCookieCache: true },
-    });
+  /**
+   * Resolves the caller from a WorkOS access token. Verification is stateless
+   * (JWKS signature + expiry), so a revoked session stays valid until its short
+   * token lifetime runs out; the client refreshes against WorkOS, which is
+   * where revocation takes effect.
+   */
+  async function getDeviceSession(
+    c: Context,
+  ): Promise<{ userId: string; sessionId: string } | null> {
+    const token = extractBearerToken(c.req.header("authorization"));
+    if (!token) return null;
+    try {
+      return await auth.verifyAccessToken(token);
+    } catch {
+      return null;
+    }
   }
 
   v1.get("/me", async (c) => {
     const session = await getDeviceSession(c);
     if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
 
-    const { user } = session;
+    const user = await auth.getUser(session.userId);
     const me: AccountMe = {
       id: user.id,
-      name: user.name,
+      name: user.name ?? user.email,
       email: user.email,
-      ...(user.image ? { image: user.image } : {}),
+      ...(user.avatarUrl ? { image: user.avatarUrl } : {}),
     };
     return c.json(me);
   });
@@ -106,7 +100,7 @@ export function createV1Routes(deps: {
     const session = await getDeviceSession(c);
     if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
 
-    const rows = await db.select().from(hosts).where(eq(hosts.userId, session.user.id));
+    const rows = await db.select().from(hosts).where(eq(hosts.userId, session.userId));
     const body: ListHostsResponse = { hosts: rows.map(toAccountHost) };
     return c.json(body);
   });
@@ -134,9 +128,7 @@ export function createV1Routes(deps: {
       const [existing] = await db
         .select()
         .from(hosts)
-        .where(
-          and(eq(hosts.userId, session.user.id), eq(hosts.environmentId, parsed.environmentId)),
-        )
+        .where(and(eq(hosts.userId, session.userId), eq(hosts.environmentId, parsed.environmentId)))
         .limit(1);
 
       let hostRow: HostRow;
@@ -164,7 +156,7 @@ export function createV1Routes(deps: {
         const [inserted] = await db
           .insert(hosts)
           .values({
-            userId: session.user.id,
+            userId: session.userId,
             environmentId: parsed.environmentId,
             name: parsed.name,
             platform: parsed.platform,
@@ -257,48 +249,26 @@ export function createV1Routes(deps: {
 
     const deleted = await db
       .delete(hosts)
-      .where(and(eq(hosts.id, id), eq(hosts.userId, session.user.id)))
+      .where(and(eq(hosts.id, id), eq(hosts.userId, session.userId)))
       .returning();
     if (deleted.length === 0) return errorResponse(c, 404, "host_not_found", "Host not found");
 
     return c.body(null, 204);
   });
 
-  v1.get("/sessions", async (c) => {
-    const session = await getDeviceSession(c);
-    if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
-
-    const sessions = await auth.api.listSessions({ headers: c.req.raw.headers });
-    const currentSessionId = session.session.id;
-    const body: ListSessionsResponse = {
-      sessions: sessions.map((s) => toAccountSessionSummary(s, currentSessionId)),
-    };
-    return c.json(body);
-  });
-
-  v1.delete("/sessions/:id", async (c) => {
-    const session = await getDeviceSession(c);
-    if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
-
-    const id = c.req.param("id");
-    const sessions = await auth.api.listSessions({ headers: c.req.raw.headers });
-    const target = sessions.find((s) => s.id === id);
-    if (target) {
-      await auth.api.revokeSession({
-        body: { token: target.token },
-        headers: c.req.raw.headers,
-      });
-    }
-    return c.body(null, 204);
-  });
+  // TASK2: GET /sessions and DELETE /sessions/:id were BetterAuth session-table
+  // reads. WorkOS owns sessions now, so they have to be rebuilt on the WorkOS
+  // sessions API (and the InstanceInfo contract below reworked with them).
 
   v1.get("/instance", (c) => {
-    const methods = enabledAuthMethods(config);
+    // TASK2: InstanceInfo still describes BetterAuth's capability flags. Sign-in
+    // methods are WorkOS dashboard toggles this service cannot enumerate, so
+    // these are placeholders until the contract changes.
     const body: InstanceInfo = {
       version: API_VERSION,
-      authMethods: { emailPassword: methods.emailPassword, social: methods.social },
-      emailDelivery: methods.emailDelivery,
-      signupRestricted: methods.signupRestricted,
+      authMethods: { emailPassword: true, social: [] },
+      emailDelivery: false,
+      signupRestricted: false,
     };
     return c.json(body);
   });

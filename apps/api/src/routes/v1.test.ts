@@ -1,45 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createAuth } from "../auth";
 import type { ApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
+import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
+import { createWorkosAuth } from "../workos";
 import { createV1Routes } from "./v1";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-
-function uniqueEmail(): string {
-  return `${randomUUID()}@x.com`;
-}
-
-// BetterAuth's built-in rate limiter buckets by client IP; the test harness
-// has no real IP, so each sign-up/sign-in round trip gets a distinct
-// `x-forwarded-for` to avoid cross-test 429s on a shared bucket.
-let nextFakeIpSuffix = 1;
-function uniqueIp(): string {
-  const n = nextFakeIpSuffix++;
-  return `10.${(n >> 16) & 0xff}.${(n >> 8) & 0xff}.${n & 0xff}`;
-}
-
-async function signUpAndGetToken(
-  app: Hono,
-  email: string,
-): Promise<{ token: string; userId: string }> {
-  const ip = uniqueIp();
-  await app.request("/api/auth/sign-up/email", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": ip },
-    body: JSON.stringify({ email, password: "hunter2hunter2", name: "Test User" }),
-  });
-  const signInRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": ip },
-    body: JSON.stringify({ email, password: "hunter2hunter2" }),
-  });
-  const signInBody = (await signInRes.json()) as { token: string; user: { id: string } };
-  return { token: signInBody.token, userId: signInBody.user.id };
-}
 
 function authHeaders(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}`, "content-type": "application/json" };
@@ -59,36 +28,38 @@ function registerHostBody(environmentId: string, overrides: Record<string, unkno
 describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   const databaseUrl = TEST_DATABASE_URL as string;
   let pool: Awaited<ReturnType<typeof createDb>>["pool"];
+  let workos: FakeWorkos;
+  let config: ApiConfig;
 
-  const baseConfig: ApiConfig = {
-    databaseUrl,
-    baseUrl: "http://localhost:8788",
-    authSecret: "s".repeat(32),
-    port: 8788,
-    providers: {},
-  };
+  /** A signed-in user: a WorkOS user record plus an access token naming it. */
+  async function signIn(): Promise<{ token: string; userId: string }> {
+    const user = workos.addUser({ first_name: "Test", last_name: "User" });
+    const token = await workos.signAccessToken({ sub: user.id, sid: `session_${randomUUID()}` });
+    return { token, userId: user.id };
+  }
 
-  async function buildApp() {
+  function buildApp() {
     const { db } = createDb(databaseUrl);
-    const auth = createAuth(baseConfig, db);
+    const auth = createWorkosAuth(config);
     const app = new Hono();
-    app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
-    app.route("/api/v1", createV1Routes({ auth, db, config: baseConfig }));
-    return { app, auth, db };
+    app.route("/api/v1", createV1Routes({ auth, db, config }));
+    return { app, db };
   }
 
   beforeAll(async () => {
     await runMigrations(databaseUrl);
-    const created = createDb(databaseUrl);
-    pool = created.pool;
+    workos = await startFakeWorkos();
+    config = workos.config({ databaseUrl });
+    pool = createDb(databaseUrl).pool;
   });
 
   afterAll(async () => {
     await pool.end();
+    await workos.close();
   });
 
   it("rejects unauthenticated requests to /me and /hosts", async () => {
-    const { app } = await buildApp();
+    const { app } = buildApp();
 
     const meRes = await app.request("/api/v1/me");
     expect(meRes.status).toBe(401);
@@ -98,10 +69,42 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     expect(hostsRes.status).toBe(401);
   });
 
+  it("rejects an expired access token", async () => {
+    const { app } = buildApp();
+    const user = workos.addUser({});
+    const token = await workos.signAccessToken({
+      sub: user.id,
+      sid: `session_${randomUUID()}`,
+      expiresIn: "-1s",
+    });
+
+    const res = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
+    expect(res.status).toBe(401);
+  });
+
+  it("returns the WorkOS profile from /me", async () => {
+    const { app } = buildApp();
+    const user = workos.addUser({
+      email: "ada@example.com",
+      first_name: "Ada",
+      last_name: "Lovelace",
+      profile_picture_url: "https://cdn.example.com/ada.png",
+    });
+    const token = await workos.signAccessToken({ sub: user.id, sid: `session_${randomUUID()}` });
+
+    const res = await app.request("/api/v1/me", { headers: authHeaders(token) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      id: user.id,
+      name: "Ada Lovelace",
+      email: "ada@example.com",
+      image: "https://cdn.example.com/ada.png",
+    });
+  });
+
   it("registers a host and lists it back", async () => {
-    const { app } = await buildApp();
-    const email = uniqueEmail();
-    const { token } = await signUpAndGetToken(app, email);
+    const { app } = buildApp();
+    const { token } = await signIn();
     const environmentId = randomUUID();
 
     const registerRes = await app.request("/api/v1/hosts", {
@@ -125,9 +128,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   });
 
   it("rotates the host token when the same environment re-registers", async () => {
-    const { app } = await buildApp();
-    const email = uniqueEmail();
-    const { token } = await signUpAndGetToken(app, email);
+    const { app } = buildApp();
+    const { token } = await signIn();
     const environmentId = randomUUID();
 
     const firstRes = await app.request("/api/v1/hosts", {
@@ -172,9 +174,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   });
 
   it("updates endpoints and bumps lastSeenAt via PATCH with the host token", async () => {
-    const { app } = await buildApp();
-    const email = uniqueEmail();
-    const { token } = await signUpAndGetToken(app, email);
+    const { app } = buildApp();
+    const { token } = await signIn();
     const environmentId = randomUUID();
 
     const registerRes = await app.request("/api/v1/hosts", {
@@ -206,9 +207,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   });
 
   it("rejects PATCH with another host's token", async () => {
-    const { app } = await buildApp();
-    const email = uniqueEmail();
-    const { token } = await signUpAndGetToken(app, email);
+    const { app } = buildApp();
+    const { token } = await signIn();
 
     const hostARes = await app.request("/api/v1/hosts", {
       method: "POST",
@@ -234,9 +234,9 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   });
 
   it("isolates hosts across users: list is empty and delete 404s", async () => {
-    const { app } = await buildApp();
-    const ownerToken = (await signUpAndGetToken(app, uniqueEmail())).token;
-    const otherToken = (await signUpAndGetToken(app, uniqueEmail())).token;
+    const { app } = buildApp();
+    const ownerToken = (await signIn()).token;
+    const otherToken = (await signIn()).token;
 
     const registerRes = await app.request("/api/v1/hosts", {
       method: "POST",
@@ -258,8 +258,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   });
 
   it("deletes a host and its token with the device token", async () => {
-    const { app } = await buildApp();
-    const { token } = await signUpAndGetToken(app, uniqueEmail());
+    const { app } = buildApp();
+    const { token } = await signIn();
 
     const registerRes = await app.request("/api/v1/hosts", {
       method: "POST",
@@ -291,8 +291,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   });
 
   it("allows a host to delete itself with its own host token", async () => {
-    const { app } = await buildApp();
-    const { token } = await signUpAndGetToken(app, uniqueEmail());
+    const { app } = buildApp();
+    const { token } = await signIn();
 
     const registerRes = await app.request("/api/v1/hosts", {
       method: "POST",
@@ -311,73 +311,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     expect(deleteRes.status).toBe(204);
   });
 
-  it("lists and revokes device sessions", async () => {
-    const { app } = await buildApp();
-    const email = uniqueEmail();
-    // Signing up auto-creates a session, so this account already has one
-    // before the explicit sign-in below.
-    const { token: firstToken } = await signUpAndGetToken(app, email);
-
-    const secondSignIn = await app.request("/api/auth/sign-in/email", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-forwarded-for": uniqueIp() },
-      body: JSON.stringify({ email, password: "hunter2hunter2" }),
-    });
-    const secondSignInBody = (await secondSignIn.json()) as { token: string };
-
-    const listRes = await app.request("/api/v1/sessions", { headers: authHeaders(firstToken) });
-    expect(listRes.status).toBe(200);
-    const listBody = (await listRes.json()) as {
-      sessions: Array<{ id: string; current: boolean }>;
-    };
-    expect(listBody.sessions.length).toBeGreaterThanOrEqual(3);
-    expect(listBody.sessions.some((s) => s.current)).toBe(true);
-
-    const nonCurrent = listBody.sessions.filter((s) => !s.current);
-    expect(nonCurrent.length).toBeGreaterThanOrEqual(2);
-
-    for (const s of nonCurrent) {
-      const revokeRes = await app.request(`/api/v1/sessions/${s.id}`, {
-        method: "DELETE",
-        headers: authHeaders(firstToken),
-      });
-      expect(revokeRes.status).toBe(204);
-    }
-
-    const listAfterRevoke = await app.request("/api/v1/sessions", {
-      headers: authHeaders(firstToken),
-    });
-    const listAfterRevokeBody = (await listAfterRevoke.json()) as {
-      sessions: Array<{ id: string }>;
-    };
-    expect(listAfterRevokeBody.sessions).toHaveLength(1);
-
-    // secondSignIn's session was among those revoked; it must stop authenticating.
-    const secondMeAfter = await app.request("/api/v1/me", {
-      headers: authHeaders(secondSignInBody.token),
-    });
-    expect(secondMeAfter.status).toBe(401);
-
-    // The current (firstToken) session is untouched.
-    const meAfterRevoke = await app.request("/api/v1/me", { headers: authHeaders(firstToken) });
-    expect(meAfterRevoke.status).toBe(200);
-  });
-
   it("reports instance info without authentication", async () => {
-    const { app } = await buildApp();
+    const { app } = buildApp();
 
     const res = await app.request("/api/v1/instance");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      version: string;
-      authMethods: { emailPassword: boolean; social: string[] };
-      emailDelivery: boolean;
-      signupRestricted: boolean;
-    };
+    const body = (await res.json()) as { version: string };
     expect(body.version).toBeTruthy();
-    expect(body.authMethods.emailPassword).toBe(true);
-    expect(body.authMethods.social).toEqual([]);
-    expect(body.emailDelivery).toBe(false);
-    expect(body.signupRestricted).toBe(false);
   });
 });
