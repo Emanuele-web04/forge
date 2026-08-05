@@ -322,9 +322,11 @@ export function EnvironmentPullRequestSection({
           icon={<DiffIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
             <span className="flex min-w-0 items-center gap-1.5">
-              {/* Muted like every other pull request diff stat, not the green/red used by
-                  working-tree diffs — PR change counts read as ambient metadata. */}
-              <PullRequestDiffStat additions={diffStat.additions} deletions={diffStat.deletions} />
+              <PullRequestDiffStat
+                additions={diffStat.additions}
+                deletions={diffStat.deletions}
+                tone="diff"
+              />
               {diffStat.filesLabel ? (
                 <span className="truncate text-muted-foreground">{diffStat.filesLabel}</span>
               ) : null}

@@ -138,7 +138,11 @@ export const PullRequestRow = function PullRequestRow({
           )}
         >
           <span>{formatRelativeTime(entry.updatedAt)}</span>
-          <PullRequestDiffStat additions={entry.additions} deletions={entry.deletions} />
+          <PullRequestDiffStat
+            additions={entry.additions}
+            deletions={entry.deletions}
+            tone="diff"
+          />
         </span>
       </button>
       <Tooltip>
