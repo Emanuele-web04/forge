@@ -17,6 +17,7 @@ import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { clientIp } from "../clientIp";
 import type { ApiConfig } from "../config";
 import * as schema from "../db/schema";
 import { hosts, hostTokens } from "../db/schema";
@@ -32,18 +33,6 @@ const API_VERSION: string = packageJson.version;
 export const DEVICE_RATE_LIMIT_PER_MINUTE = 10;
 
 type HostRow = typeof hosts.$inferSelect;
-
-/**
- * Best-effort caller identity for rate limiting. The first `x-forwarded-for`
- * hop is the client as the nearest proxy saw it; a caller can forge it, so this
- * bounds honest traffic and casual abuse rather than a determined attacker.
- * Everything unattributable shares the "unknown" bucket.
- */
-function clientIp(c: Context): string {
-  const forwarded = c.req.header("x-forwarded-for");
-  const first = forwarded?.split(",")[0]?.trim();
-  return first && first.length > 0 ? first : "unknown";
-}
 
 function errorResponse(
   c: Context,
@@ -122,6 +111,10 @@ export function createV1Routes(deps: {
       if (error instanceof WorkosApiError && error.status === 404) {
         return errorResponse(c, 401, "unauthorized", "This account no longer exists");
       }
+      // Logged because the response deliberately says nothing: a rejected API
+      // key, a WorkOS outage, and a mapping bug are one opaque 502 to the
+      // caller and would otherwise be indistinguishable in production too.
+      console.error("[api] user lookup failed:", error);
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
     }
 
@@ -320,10 +313,12 @@ export function createV1Routes(deps: {
     try {
       const body: DeviceAuthorizationResponse = await auth.requestDeviceAuthorization();
       return c.json(body);
-    } catch {
+    } catch (error) {
       // Every failure here is upstream — a rejected API key, a WorkOS outage, a
       // transport error. None is the caller's fault and none may leak the
-      // upstream message, which can quote the credentials we sent.
+      // upstream message, which can quote the credentials we sent; the operator
+      // still needs to be able to tell them apart, hence the log.
+      console.error("[api] device authorization proxy failed:", error);
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
     }
   });

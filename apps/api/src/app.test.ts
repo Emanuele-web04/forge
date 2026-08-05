@@ -73,6 +73,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
     expect(res.headers.get("content-type")).toContain("text/plain");
     const body = await res.text();
     expect(body).toContain("WorkOS AuthKit");
-    expect(body).toContain("https://github.com/aristotl-dylan/synara");
+    expect(body).toContain("https://github.com/Emanuele-web04/synara");
   });
 });

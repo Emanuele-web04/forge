@@ -42,7 +42,7 @@ export function createApp(config: ApiConfig): { app: Hono; auth: WorkosAuth; poo
       return c.json(body, 404);
     }
     return c.text(
-      "Synara account API. Sign-in is handled by WorkOS AuthKit. See https://github.com/aristotl-dylan/synara",
+      "Synara account API. Sign-in is handled by WorkOS AuthKit. See https://github.com/Emanuele-web04/synara",
       200,
     );
   });

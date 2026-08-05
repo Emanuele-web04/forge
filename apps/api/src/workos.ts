@@ -4,6 +4,7 @@
 // Layer: API identity
 // Depends on: jose (JWKS + JWT verification), WorkOS User Management REST API.
 
+import type { DeviceAuthorizationResponse } from "@synara/contracts";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { ApiConfig } from "./config";
 
@@ -15,15 +16,6 @@ export type WorkosUser = {
   avatarUrl?: string;
 };
 
-export type DeviceAuthorization = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  verificationUriComplete: string;
-  expiresIn: number;
-  interval: number;
-};
-
 export type VerifiedAccessToken = {
   userId: string;
   sessionId: string;
@@ -33,7 +25,7 @@ export type WorkosAuth = {
   /** Rejects on any invalid, expired, or unverifiable token; callers answer 401. */
   verifyAccessToken(token: string): Promise<VerifiedAccessToken>;
   getUser(userId: string): Promise<WorkosUser>;
-  requestDeviceAuthorization(): Promise<DeviceAuthorization>;
+  requestDeviceAuthorization(): Promise<DeviceAuthorizationResponse>;
 };
 
 export class WorkosApiError extends Error {
@@ -54,7 +46,7 @@ type WorkosUserResponse = {
   profile_picture_url?: string | null;
 };
 
-type DeviceAuthorizationResponse = {
+type WorkosDeviceAuthorizationWire = {
   device_code: string;
   user_code: string;
   verification_uri: string;
@@ -124,7 +116,7 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ client_id: config.workosClientId }).toString(),
-      })) as DeviceAuthorizationResponse;
+      })) as WorkosDeviceAuthorizationWire;
 
       return {
         deviceCode: response.device_code,

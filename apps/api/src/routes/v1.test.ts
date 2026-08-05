@@ -6,7 +6,7 @@ import {
 } from "@synara/contracts";
 import { Schema } from "effect";
 import { Hono } from "hono";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
@@ -126,7 +126,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     expect(typeof body.message).toBe("string");
   });
 
-  it("returns 502 in the error contract when the identity provider fails", async () => {
+  // The 502 body says nothing on purpose, so the log is the only place an
+  // operator can tell a rejected API key from an outage. Asserted so it cannot
+  // be dropped silently later.
+  it("returns 502 in the error contract and logs when the identity provider fails", async () => {
     const { db } = buildApp();
     // Point at a closed port so the user lookup fails as a transport error
     // rather than a 404 — the upstream-fault branch, not the deleted-user one.
@@ -143,10 +146,16 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       sid: `session_${randomUUID()}`,
     });
 
-    const res = await app.request("/api/v1/me", { headers: authHeaders(token) });
-    expect(res.status).toBe(502);
-    expect(res.headers.get("content-type")).toContain("application/json");
-    expect(await res.json()).toMatchObject({ error: "internal_error" });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(res.status).toBe(502);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toMatchObject({ error: "internal_error" });
+      expect(logged).toHaveBeenCalledWith("[api] user lookup failed:", expect.anything());
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("registers a host and lists it back", async () => {
@@ -392,7 +401,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(raw).not.toContain(workos.apiKey);
     });
 
-    it("answers 502 in the error contract when WorkOS is unreachable", async () => {
+    it("answers 502 in the error contract and logs when WorkOS is unreachable", async () => {
       const { db } = buildApp();
       const brokenConfig: ApiConfig = { ...config, workosApiUrl: "http://127.0.0.1:1" };
       const app = new Hono();
@@ -401,9 +410,18 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         createV1Routes({ auth: createWorkosAuth(brokenConfig), db, config: brokenConfig }),
       );
 
-      const res = await app.request("/api/v1/auth/device", { method: "POST" });
-      expect(res.status).toBe(502);
-      expect(await res.json()).toMatchObject({ error: "internal_error" });
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const res = await app.request("/api/v1/auth/device", { method: "POST" });
+        expect(res.status).toBe(502);
+        expect(await res.json()).toMatchObject({ error: "internal_error" });
+        expect(logged).toHaveBeenCalledWith(
+          "[api] device authorization proxy failed:",
+          expect.anything(),
+        );
+      } finally {
+        logged.mockRestore();
+      }
     });
 
     it("rate limits a single client and leaves other clients alone", async () => {

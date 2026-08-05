@@ -9,6 +9,11 @@ export type RateLimiter = {
   tryConsume(key: string): boolean;
 };
 
+function liveHits(timestamps: number[] | undefined, cutoff: number): number[] {
+  if (!timestamps) return [];
+  return timestamps.filter((at) => at > cutoff);
+}
+
 /**
  * Sliding window over per-key hit timestamps. Deliberately process-local: it
  * exists to keep a single instance from being turned into a free amplifier
@@ -19,11 +24,6 @@ export type RateLimiter = {
  * one-shot keys that are never seen again, in a sweep once the map grows past
  * `pruneThreshold`. No timer, so nothing keeps the process (or a test) alive.
  */
-function liveHits(timestamps: number[] | undefined, cutoff: number): number[] {
-  if (!timestamps) return [];
-  return timestamps.filter((at) => at > cutoff);
-}
-
 export function createRateLimiter(options: {
   limit: number;
   windowMs: number;
