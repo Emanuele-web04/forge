@@ -3,6 +3,7 @@ import {
   type AccountErrorCode,
   type AccountHost,
   type AccountMe,
+  type DeviceAuthorizationResponse,
   type EnvironmentId,
   type InstanceInfo,
   type ListHostsResponse,
@@ -20,13 +21,29 @@ import type { ApiConfig } from "../config";
 import * as schema from "../db/schema";
 import { hosts, hostTokens } from "../db/schema";
 import { mintHostToken } from "../hostTokens";
+import { createRateLimiter } from "../rateLimit";
 import { WorkosApiError, type WorkosAuth, type WorkosUser } from "../workos";
 import packageJson from "../../package.json" with { type: "json" };
 import { authenticateHostToken, extractBearerToken, isHostTokenHeader } from "./hostAuth";
 
 const API_VERSION: string = packageJson.version;
 
+/** Device authorizations allowed per client per minute. */
+export const DEVICE_RATE_LIMIT_PER_MINUTE = 10;
+
 type HostRow = typeof hosts.$inferSelect;
+
+/**
+ * Best-effort caller identity for rate limiting. The first `x-forwarded-for`
+ * hop is the client as the nearest proxy saw it; a caller can forge it, so this
+ * bounds honest traffic and casual abuse rather than a determined attacker.
+ * Everything unattributable shares the "unknown" bucket.
+ */
+function clientIp(c: Context): string {
+  const forwarded = c.req.header("x-forwarded-for");
+  const first = forwarded?.split(",")[0]?.trim();
+  return first && first.length > 0 ? first : "unknown";
+}
 
 function errorResponse(
   c: Context,
@@ -61,10 +78,15 @@ export function createV1Routes(deps: {
   db: NodePgDatabase<typeof schema>;
   config: ApiConfig;
 }): Hono {
-  // TASK2: `config` is unused since /instance stopped reading it. Kept in the
-  // deps because the AuthKit callback and device routes will need it.
-  const { auth, db } = deps;
+  const { auth, db, config } = deps;
   const v1 = new Hono();
+
+  // Per router instance, not module-global: two routers in one process (tests,
+  // or a future multi-tenant mount) must not share a budget.
+  const deviceRateLimiter = createRateLimiter({
+    limit: DEVICE_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
 
   /**
    * Resolves the caller from a WorkOS access token. Verification is stateless
@@ -272,21 +294,38 @@ export function createV1Routes(deps: {
     return c.body(null, 204);
   });
 
-  // TASK2: GET /sessions and DELETE /sessions/:id were BetterAuth session-table
-  // reads. WorkOS owns sessions now, so they have to be rebuilt on the WorkOS
-  // sessions API (and the InstanceInfo contract below reworked with them).
-
   v1.get("/instance", (c) => {
-    // TASK2: InstanceInfo still describes BetterAuth's capability flags. Sign-in
-    // methods are WorkOS dashboard toggles this service cannot enumerate, so
-    // these are placeholders until the contract changes.
     const body: InstanceInfo = {
       version: API_VERSION,
-      authMethods: { emailPassword: true, social: [] },
-      emailDelivery: false,
-      signupRestricted: false,
+      authMode: "workos",
+      clientId: config.workosClientId,
+      workosApiUrl: config.workosApiUrl,
     };
     return c.json(body);
+  });
+
+  /**
+   * Starts the CLI device flow. Unauthenticated by nature — the caller has no
+   * credentials yet — and it is the only reason this service holds the WorkOS
+   * API key: the request WorkOS requires is authenticated with a secret a
+   * public client cannot be trusted with. Everything after this (polling for
+   * the token) goes straight to WorkOS, which is why /instance publishes the
+   * client id and API origin.
+   */
+  v1.post("/auth/device", async (c) => {
+    if (!deviceRateLimiter.tryConsume(clientIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many device authorization requests");
+    }
+
+    try {
+      const body: DeviceAuthorizationResponse = await auth.requestDeviceAuthorization();
+      return c.json(body);
+    } catch {
+      // Every failure here is upstream — a rejected API key, a WorkOS outage, a
+      // transport error. None is the caller's fault and none may leak the
+      // upstream message, which can quote the credentials we sent.
+      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+    }
   });
 
   return v1;

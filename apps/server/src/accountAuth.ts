@@ -341,17 +341,9 @@ export async function runAuthLogout(options: LogoutOptions): Promise<void> {
     }
   }
 
-  try {
-    const { sessions } = await client.listSessions(credentials.deviceToken);
-    const current = sessions.find((session) => session.current);
-    if (current) {
-      await client.deleteSession(credentials.deviceToken, current.id);
-      stdout("Revoked this device's session.\n");
-    }
-  } catch (error) {
-    stdout(`Could not revoke this device's session: ${describeError(error)}\n`);
-  }
-
+  // The account service no longer brokers session listing or revocation —
+  // WorkOS owns sessions, and the access token is short-lived. Dropping the
+  // local credentials is what sign-out means here.
   await deleteAccountCredentials(options.baseDir);
   stdout(`Signed out of ${credentials.accountUrl}. Local credentials deleted.\n`);
 }

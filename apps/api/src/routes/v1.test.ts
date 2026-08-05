@@ -1,13 +1,18 @@
 import { randomUUID } from "node:crypto";
-import type { AccountErrorBody } from "@synara/contracts";
+import {
+  type AccountErrorBody,
+  DeviceAuthorizationResponse,
+  InstanceInfo,
+} from "@synara/contracts";
+import { Schema } from "effect";
 import { Hono } from "hono";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
-import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
+import { FAKE_DEVICE_AUTHORIZATION, startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import { createWorkosAuth } from "../workos";
-import { createV1Routes } from "./v1";
+import { createV1Routes, DEVICE_RATE_LIMIT_PER_MINUTE } from "./v1";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
@@ -358,7 +363,88 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
     const res = await app.request("/api/v1/instance");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { version: string };
-    expect(body.version).toBeTruthy();
+    const body = Schema.decodeUnknownSync(InstanceInfo)(await res.json());
+    expect(body).toEqual({
+      version: expect.any(String),
+      authMode: "workos",
+      clientId: workos.clientId,
+      workosApiUrl: workos.origin,
+    });
+  });
+
+  describe("POST /auth/device", () => {
+    it("passes the WorkOS device authorization through without the API key", async () => {
+      const { app } = buildApp();
+
+      const res = await app.request("/api/v1/auth/device", { method: "POST" });
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      const body = Schema.decodeUnknownSync(DeviceAuthorizationResponse)(JSON.parse(raw));
+      expect(body).toEqual({
+        deviceCode: FAKE_DEVICE_AUTHORIZATION.device_code,
+        userCode: FAKE_DEVICE_AUTHORIZATION.user_code,
+        verificationUri: FAKE_DEVICE_AUTHORIZATION.verification_uri,
+        verificationUriComplete: FAKE_DEVICE_AUTHORIZATION.verification_uri_complete,
+        expiresIn: FAKE_DEVICE_AUTHORIZATION.expires_in,
+        interval: FAKE_DEVICE_AUTHORIZATION.interval,
+      });
+      // The whole point of proxying: the secret stays server-side.
+      expect(raw).not.toContain(workos.apiKey);
+    });
+
+    it("answers 502 in the error contract when WorkOS is unreachable", async () => {
+      const { db } = buildApp();
+      const brokenConfig: ApiConfig = { ...config, workosApiUrl: "http://127.0.0.1:1" };
+      const app = new Hono();
+      app.route(
+        "/api/v1",
+        createV1Routes({ auth: createWorkosAuth(brokenConfig), db, config: brokenConfig }),
+      );
+
+      const res = await app.request("/api/v1/auth/device", { method: "POST" });
+      expect(res.status).toBe(502);
+      expect(await res.json()).toMatchObject({ error: "internal_error" });
+    });
+
+    it("rate limits a single client and leaves other clients alone", async () => {
+      const { app } = buildApp();
+      const ip = `203.0.113.${Math.floor(Math.random() * 250) + 1}`;
+      const request = (forwardedFor: string) =>
+        app.request("/api/v1/auth/device", {
+          method: "POST",
+          headers: { "x-forwarded-for": forwardedFor },
+        });
+
+      for (let attempt = 0; attempt < DEVICE_RATE_LIMIT_PER_MINUTE; attempt += 1) {
+        expect((await request(ip)).status).toBe(200);
+      }
+
+      const limited = await request(ip);
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
+
+      const otherIp = await request("198.51.100.7");
+      expect(otherIp.status).toBe(200);
+    });
+
+    it("keys the limit on the first hop of a forwarded chain", async () => {
+      const { app } = buildApp();
+      const client = `192.0.2.${Math.floor(Math.random() * 250) + 1}`;
+
+      for (let attempt = 0; attempt < DEVICE_RATE_LIMIT_PER_MINUTE; attempt += 1) {
+        const res = await app.request("/api/v1/auth/device", {
+          method: "POST",
+          headers: { "x-forwarded-for": `${client}, 10.0.0.${attempt}` },
+        });
+        expect(res.status).toBe(200);
+      }
+
+      // Same client, a different proxy hop: still the same bucket.
+      const limited = await app.request("/api/v1/auth/device", {
+        method: "POST",
+        headers: { "x-forwarded-for": `${client}, 10.0.99.1` },
+      });
+      expect(limited.status).toBe(429);
+    });
   });
 });

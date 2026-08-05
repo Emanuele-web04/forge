@@ -64,14 +64,15 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
     expect(typeof body.message).toBe("string");
   });
 
-  // TASK2: the AuthKit callback and device pages land here; for now a non-API
-  // path only has to stay up rather than 404 into the API error shape.
-  it("answers non-API paths without the API error body", async () => {
+  it("points non-API paths at the repo instead of returning the API error body", async () => {
     const built = createApp(baseConfig);
     pool = built.pool;
 
     const res = await built.app.request("/");
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).not.toContain("application/json");
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    const body = await res.text();
+    expect(body).toContain("WorkOS AuthKit");
+    expect(body).toContain("https://github.com/aristotl-dylan/synara");
   });
 });

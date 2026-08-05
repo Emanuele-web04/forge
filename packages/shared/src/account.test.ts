@@ -24,9 +24,9 @@ describe("createAccountClient", () => {
       const fetchMock = vi.fn().mockResolvedValue(
         jsonResponse({
           version: "1.2.3",
-          authMethods: { emailPassword: true, social: ["github"] },
-          emailDelivery: true,
-          signupRestricted: false,
+          authMode: "workos",
+          clientId: "client_01ABC",
+          workosApiUrl: "https://api.workos.com",
         }),
       );
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
@@ -35,9 +35,9 @@ describe("createAccountClient", () => {
 
       expect(result).toEqual({
         version: "1.2.3",
-        authMethods: { emailPassword: true, social: ["github"] },
-        emailDelivery: true,
-        signupRestricted: false,
+        authMode: "workos",
+        clientId: "client_01ABC",
+        workosApiUrl: "https://api.workos.com",
       });
       expect(fetchMock).toHaveBeenCalledWith(
         `${BASE_URL}/api/v1/instance`,

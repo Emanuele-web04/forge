@@ -30,15 +30,21 @@ export function createApp(config: ApiConfig): { app: Hono; auth: WorkosAuth; poo
     return c.json(body, 500);
   });
 
-  // TASK2: the AuthKit callback and device-flow endpoints mount here. Until
-  // then non-API paths answer with a plain placeholder — the ceremony UI this
-  // service used to serve is gone and WorkOS hosts the sign-in pages.
+  /**
+   * This service is an API and nothing else — WorkOS AuthKit hosts every
+   * sign-in page, so there is no UI to serve. A human who reaches the root
+   * (or any other non-API path) gets a sentence telling them where they are
+   * rather than a 404 that reads like an outage.
+   */
   app.notFound((c) => {
     if (c.req.path.startsWith("/api/")) {
       const body: AccountErrorBody = { error: "validation_failed", message: "Unknown API route" };
       return c.json(body, 404);
     }
-    return c.text("Synara accounts", 200);
+    return c.text(
+      "Synara account API. Sign-in is handled by WorkOS AuthKit. See https://github.com/aristotl-dylan/synara",
+      200,
+    );
   });
 
   return { app, auth, pool };

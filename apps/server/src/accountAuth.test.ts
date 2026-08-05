@@ -69,8 +69,6 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     registerHost: unimplemented("registerHost"),
     updateHost: unimplemented("updateHost"),
     deleteHost: unimplemented("deleteHost"),
-    listSessions: unimplemented("listSessions"),
-    deleteSession: unimplemented("deleteSession"),
     requestDeviceCode: unimplemented("requestDeviceCode"),
     pollDeviceToken: unimplemented("pollDeviceToken"),
     ...overrides,
@@ -304,7 +302,7 @@ describe("runAuthLogin", () => {
 });
 
 describe("runAuthLogout", () => {
-  it("revokes the host and session, then removes the credentials file", async () => {
+  it("removes the host, then removes the credentials file", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, {
       accountUrl: "https://accounts.example.com",
@@ -323,24 +321,10 @@ describe("runAuthLogout", () => {
           deleted.push([token, hostId]);
           return Promise.resolve();
         },
-        listSessions: () =>
-          Promise.resolve({
-            sessions: [
-              { id: "session_1", createdAt: "2026-08-01T00:00:00.000Z", current: true },
-              { id: "session_2", createdAt: "2026-08-01T00:00:00.000Z", current: false },
-            ],
-          }),
-        deleteSession: (token, sessionId) => {
-          deleted.push([token, sessionId]);
-          return Promise.resolve();
-        },
       }),
     });
 
-    expect(deleted).toEqual([
-      ["host-token", "host_1"],
-      ["device-token", "session_1"],
-    ]);
+    expect(deleted).toEqual([["host-token", "host_1"]]);
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
     expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
   });
@@ -360,7 +344,6 @@ describe("runAuthLogout", () => {
       stdout: stdout.write,
       client: makeClient({
         deleteHost: () => Promise.reject(new Error("network down")),
-        listSessions: () => Promise.reject(new Error("network down")),
       }),
     });
 
@@ -380,7 +363,7 @@ describe("runAuthLogout", () => {
     await runAuthLogout({
       baseDir,
       stdout: stdout.write,
-      client: makeClient({ listSessions: () => Promise.resolve({ sessions: [] }) }),
+      client: makeClient({}),
     });
 
     expect(stdout.text()).toContain("Signed out of https://stored.example.com");
@@ -531,8 +514,6 @@ describe("refreshHostRegistration", () => {
       registerHost: record("registerHost"),
       updateHost: record("updateHost"),
       deleteHost: record("deleteHost"),
-      listSessions: record("listSessions"),
-      deleteSession: record("deleteSession"),
       requestDeviceCode: record("requestDeviceCode"),
       pollDeviceToken: record("pollDeviceToken"),
     } as unknown as AccountClient;

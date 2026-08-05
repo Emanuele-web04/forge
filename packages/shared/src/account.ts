@@ -9,8 +9,6 @@ import {
   InstanceInfo as InstanceInfoSchema,
   type ListHostsResponse,
   ListHostsResponse as ListHostsResponseSchema,
-  type ListSessionsResponse,
-  ListSessionsResponse as ListSessionsResponseSchema,
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
@@ -115,8 +113,6 @@ export interface AccountClient {
   registerHost(token: string, request: RegisterHostRequest): Promise<RegisterHostResponse>;
   updateHost(hostToken: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
   deleteHost(token: string, hostId: string): Promise<void>;
-  listSessions(token: string): Promise<ListSessionsResponse>;
-  deleteSession(token: string, sessionId: string): Promise<void>;
   requestDeviceCode(): Promise<DeviceCodeResponse>;
   pollDeviceToken(
     deviceCode: string,
@@ -236,21 +232,6 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
 
     async deleteHost(token, hostId) {
       await requestEmpty(`/api/v1/hosts/${encodeURIComponent(hostId)}`, {
-        method: "DELETE",
-        headers: authHeaders(token),
-      });
-    },
-
-    async listSessions(token) {
-      return requestJson(
-        "/api/v1/sessions",
-        { method: "GET", headers: authHeaders(token) },
-        ListSessionsResponseSchema,
-      );
-    },
-
-    async deleteSession(token, sessionId) {
-      await requestEmpty(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
         method: "DELETE",
         headers: authHeaders(token),
       });

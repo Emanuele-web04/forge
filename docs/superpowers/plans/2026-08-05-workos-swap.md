@@ -7,6 +7,7 @@
 **Architecture:** WorkOS owns identity (hosted AuthKit pages, CLI Auth device flow, their JWKS). `apps/api` becomes a UI-less registry service that (a) proxies the one API-key-requiring device-authorization call, and (b) verifies WorkOS access-token JWTs. `hosts.userId` holds WorkOS user ids (plain text, no FK). CLI stores access+refresh tokens and refreshes on expiry.
 
 **Verified WorkOS facts (2026-08):**
+
 - `POST https://api.workos.com/user_management/authorize/device` — requires API key (secret) + `client_id`. Returns `{device_code, user_code, verification_uri, verification_uri_complete, expires_in (300), interval (5)}`.
 - `POST https://api.workos.com/user_management/authenticate` — public (`client_id` only). Device grant: `grant_type: "urn:ietf:params:oauth:grant-type:device_code"` + `device_code`. Errors 400: `authorization_pending`, `slow_down`, `access_denied`, `expired_token`, `invalid_grant`, ... Success: `{user, organization_id?, access_token, refresh_token, authentication_method, ...}`.
 - Refresh: same authenticate endpoint, `grant_type: "refresh_token"` + `refresh_token` + `client_id` (public).
@@ -27,6 +28,7 @@
 ### Task 1: apps/api — WorkOS auth core, config, schema migration, delete BetterAuth + UI
 
 **Files:**
+
 - Rewrite: `apps/api/src/config.ts` (+ test) — required: `DATABASE_URL`, `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, `ACCOUNT_BASE_URL`; optional `PORT`, `workosApiUrl`/`workosJwksUrl` overrides (env `WORKOS_API_URL`, `WORKOS_JWKS_URL`). DELETE: BETTER_AUTH_SECRET, all provider pairs, email config, allowlist, `enabledAuthMethods` (instance reports differently now).
 - Create: `apps/api/src/workos.ts` (+ test) — `createWorkosAuth(config)` returning `{ verifyAccessToken(token): Promise<{userId, sessionId}> }` using `jose` `createRemoteJWKSet(config.workosJwksUrl ?? https://api.workos.com/sso/jwks/{clientId})` + `jwtVerify`; `getUser(userId)` via WorkOS API (API key) for /me; `requestDeviceAuthorization()` proxying `POST {workosApiUrl}/user_management/authorize/device` with API key. Add `jose` dep; REMOVE `better-auth` dep.
 - Delete: `apps/api/src/auth.ts`, `apps/api/src/auth.test.ts`, `apps/api/src/db/auth-schema.ts`, entire `apps/api/ui/`, `apps/api/src/staticUi.ts`; strip ui build from package.json (build script: no-op or drop; `test` no longer builds UI).
@@ -40,6 +42,7 @@
 ### Task 2: apps/api — routes on WorkOS, app assembly, integration tests
 
 **Files:**
+
 - Modify: `apps/api/src/routes/v1.ts` (+ `v1.test.ts`) — deps become `{ workos, db, config }`. Device-token auth → `workos.verifyAccessToken(bearer)` (401 on failure). DELETE `/sessions` routes (WorkOS owns sessions; desktop phase revisits). `GET /me` → JWT `sub` + `workos.getUser`. `GET /instance` → `{ version, authMode: "workos", clientId }` (clients need clientId to poll WorkOS directly). NEW `POST /auth/device` (no auth) → `workos.requestDeviceAuthorization()` passthrough (this is the API-key proxy; rate-limit lightly — simple in-memory token bucket, ~10/min/IP). Host-token auth (`hostAuth.ts`) unchanged.
 - Modify: `apps/api/src/app.ts` (+ test), `src/index.ts` — no auth handler mount, no static UI; non-/api paths → minimal 200 text page pointing at the repo; assemble `createWorkosAuth`.
 - Contracts (`packages/contracts/src/account.ts` + test): `InstanceInfo` → `{ version, authMode: Literal("workos"), clientId }` (replace authMethods/emailDelivery/signupRestricted); add `DeviceAuthorizationResponse` schema (snake→camel as before); remove `ListSessionsResponse`/`AccountSessionSummary`; keep everything else.
@@ -52,6 +55,7 @@
 ### Task 3: shared client + CLI on WorkOS device flow with refresh
 
 **Files:**
+
 - Modify: `packages/shared/src/account.ts` (+ test) — `requestDeviceCode()` now calls `{baseUrl}/api/v1/auth/device`; `pollDeviceToken(deviceCode, opts)` posts to `{workosApiUrl}/user_management/authenticate` with device grant + `clientId` (client gains `workosApiUrl`+`clientId` options, sourced from `/instance`); handles `authorization_pending`/`slow_down`/deadline as today; returns `{accessToken, refreshToken, user}`. NEW `refreshAccessToken(refreshToken)` (public, rotates). `me/listHosts/...` unchanged (bearer = WorkOS access token).
 - Modify: `apps/server/src/accountAuth.ts` (+ test) — credentials shape v2: `{ accountUrl, workosClientId, accessToken, refreshToken, hostToken?, hostId? }` (0600 as before; old shape → treat as signed out). `runAuthLogin`: fetch `/instance` → device flow → save → register host (unchanged). NEW `withFreshAccessToken` helper: on 401 or expired `exp`, call refresh, persist rotated pair, retry once; used by `runStatus`, `refreshHostRegistration`, logout. `runAuthLogout`: revoke host (host token) + delete file (no session-revoke endpoint anymore — WorkOS sessions expire; note in output).
 - Startup refresh in `main.ts`: unchanged call path; goes through `withFreshAccessToken`.
@@ -72,6 +76,7 @@ Commit(s): `docs: spec update for workos identity`, `feat(api): fake workos dev 
 ---
 
 ## Notes for implementers
+
 - The old plan file `2026-08-03-account-api.md` stays as history; do not follow it.
 - Real-WorkOS verification (with Dylan's actual WorkOS account) is deliberately out of scope — stub-verified; a manual checklist goes in the README.
 - If `authorize/device` turns out to accept public `client_id` without API key in practice, KEEP the proxy anyway (it future-proofs rate limiting and hides tenancy), but note it.

@@ -66,30 +66,30 @@ export const ListHostsResponse = Schema.Struct({
 });
 export type ListHostsResponse = typeof ListHostsResponse.Type;
 
-export const AccountSessionSummary = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  createdAt: TrimmedNonEmptyString,
-  lastActiveAt: Schema.optional(TrimmedNonEmptyString),
-  userAgent: Schema.optional(TrimmedNonEmptyString),
-  current: Schema.Boolean,
-});
-export type AccountSessionSummary = typeof AccountSessionSummary.Type;
-
-export const ListSessionsResponse = Schema.Struct({
-  sessions: Schema.Array(AccountSessionSummary),
-});
-export type ListSessionsResponse = typeof ListSessionsResponse.Type;
-
+/**
+ * What a client needs to talk to the identity provider this instance is wired
+ * to. `workosApiUrl` travels alongside `clientId` because the device-flow poll
+ * goes straight to WorkOS rather than through this service — a self-hoster
+ * pointing at a stand-in origin would otherwise have no way to say so.
+ */
 export const InstanceInfo = Schema.Struct({
   version: TrimmedNonEmptyString,
-  authMethods: Schema.Struct({
-    emailPassword: Schema.Boolean,
-    social: Schema.Array(Schema.Literals(["github", "google", "apple", "microsoft"])),
-  }),
-  emailDelivery: Schema.Boolean,
-  signupRestricted: Schema.Boolean,
+  authMode: Schema.Literal("workos"),
+  clientId: TrimmedNonEmptyString,
+  workosApiUrl: TrimmedNonEmptyString,
 });
 export type InstanceInfo = typeof InstanceInfo.Type;
+
+/** RFC 8628 device authorization response, camelCased. */
+export const DeviceAuthorizationResponse = Schema.Struct({
+  deviceCode: TrimmedNonEmptyString,
+  userCode: TrimmedNonEmptyString,
+  verificationUri: TrimmedNonEmptyString,
+  verificationUriComplete: TrimmedNonEmptyString,
+  expiresIn: Schema.Number,
+  interval: Schema.Number,
+});
+export type DeviceAuthorizationResponse = typeof DeviceAuthorizationResponse.Type;
 
 export const AccountErrorCode = Schema.Literals([
   "unauthorized",
