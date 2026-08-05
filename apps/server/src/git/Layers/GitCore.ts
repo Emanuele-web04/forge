@@ -48,9 +48,25 @@ import { ServerConfig } from "../../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+// Successful upstream refreshes stay warm for 15s. Failures used to use
+// Duration.zero, which re-ran `git fetch` on every git.status and created a
+// permanent fetch storm for unreachable remotes (#515). Cache failures too,
+// with a longer TTL so a dead remote settles into occasional retries.
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
-const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
+const STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL = Duration.seconds(30);
+// 5s was below realistic authenticated-fetch cost on Windows (credential helper
+// latency). Align with the success refresh interval.
+const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
+
+/** Pure policy for status-upstream refresh cache TTL (#515). Exported for tests. */
+export function statusUpstreamRefreshCacheTimeToLive(
+  exit: Exit.Exit<unknown, unknown>,
+): Duration.Duration {
+  return Exit.isSuccess(exit)
+    ? STATUS_UPSTREAM_REFRESH_INTERVAL
+    : STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL;
+}
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
@@ -1007,9 +1023,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           });
           return true as const;
         }),
-      // Keep successful refreshes warm; drop failures immediately so next request can retry.
-      timeToLive: (exit) =>
-        Exit.isSuccess(exit) ? STATUS_UPSTREAM_REFRESH_INTERVAL : Duration.zero,
+      // Keep successful refreshes warm; also cache failures so unreachable
+      // remotes do not re-fetch on every git.status (#515).
+      timeToLive: statusUpstreamRefreshCacheTimeToLive,
     });
 
     const refreshStatusUpstreamIfStale = (cwd: string): Effect.Effect<void, GitCommandError> =>
