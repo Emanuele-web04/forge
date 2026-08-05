@@ -430,6 +430,17 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     const iconPngPath = path.join(stageResourcesDir, "icon.png");
     const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
     const dockIconPngPath = path.join(stageResourcesDir, "dock-icon.png");
+    // Bundle ICNS must stay in the pre-rounded/legacy family: when the app is
+    // closed, Finder / Launchpad / pinned Dock tiles read icon.icns only
+    // (applyInitialMacDockIcon only affects the live dock while running). Using
+    // the modern full-bleed solid here regressed closed-state icons on
+    // Darwin < 25 / macOS 15 and earlier (#156 review).
+    //
+    // Flatten alpha via JPEG so the ICNS has no transparent corners: those
+    // trigger Icon Composer / Liquid Glass reinterpretation on Tahoe while
+    // still giving pre-Tahoe a solid legacy mark the OS can mask.
+    const legacyIcnsSourcePng = path.join(tmpRoot, "legacy-icns-solid.png");
+    const legacyIcnsJpeg = path.join(tmpRoot, "legacy-icns-solid.jpg");
 
     yield* runCommand(
       ChildProcess.make({
@@ -437,16 +448,25 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    // Solid opaque ICNS is the closed-state / bundle icon (macOS applies its own
-    // squircle). Legacy PNG with baked corners stays as dock-icon.png for
-    // applyLegacyMacDockIcon on Darwin < 25.
+    // Soft-edged runtime dock override for Darwin < 25 (applyInitialMacDockIcon).
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
       })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
     );
 
-    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    yield* runCommand(
+      ChildProcess.make({
+        ...commandOutputOptions(verbose),
+      })`sips -z 1024 1024 ${legacyIconSource} -s format jpeg --out ${legacyIcnsJpeg}`,
+    );
+    yield* runCommand(
+      ChildProcess.make({
+        ...commandOutputOptions(verbose),
+      })`sips -s format png ${legacyIcnsJpeg} --out ${legacyIcnsSourcePng}`,
+    );
+
+    yield* generateMacIconSet(legacyIcnsSourcePng, iconIcnsPath, tmpRoot, path, verbose);
   });
 }
 
