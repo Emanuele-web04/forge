@@ -297,6 +297,22 @@ export function useChatTerminalController({
       terminalState.terminalTitleOverridesById,
     ],
   );
+  const handleTerminalSessionExited = useCallback(
+    (terminalId: string) => {
+      if (!activeThreadId) return;
+      const isFinalTerminal = terminalState.terminalIds.length <= 1;
+      disposeAndCloseTerminalSession({
+        api: readNativeApi(),
+        threadId: activeThreadId,
+        terminalId,
+        clearHistoryBeforeClose: isFinalTerminal,
+        processAlreadyExited: true,
+      });
+      closeTerminalInStore(activeThreadId, terminalId);
+      requestTerminalFocus();
+    },
+    [activeThreadId, closeTerminalInStore, requestTerminalFocus, terminalState.terminalIds.length],
+  );
   const closeActiveWorkspaceView = useCallback(() => {
     if (!activeThreadId || !terminalWorkspaceOpen) return;
     if (terminalState.workspaceLayout === "both" && terminalState.workspaceActiveTab === "chat") {
@@ -355,6 +371,7 @@ export function useChatTerminalController({
     openNewFullWidthTerminal,
     activateTerminal,
     closeTerminal,
+    handleTerminalSessionExited,
     closeActiveWorkspaceView,
   };
 }

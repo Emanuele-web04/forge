@@ -16,6 +16,7 @@ import {
   WsRpcError,
   PullRequestsUnavailableError,
   type GitActionProgressEvent,
+  type GitHubProjectProvisionProgressEvent,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
@@ -46,6 +47,7 @@ import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuer
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
+import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { listStudioThreadOutputs } from "./studioOutputs";
 import {
   ensureStudioWorkspaceInstructionsFiles,
@@ -53,6 +55,7 @@ import {
 } from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { GitCore } from "./git/Services/GitCore";
+import { GitHubCli } from "./git/Services/GitHubCli";
 import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
@@ -82,6 +85,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
+import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
@@ -97,6 +101,7 @@ import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
+import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import {
@@ -130,6 +135,10 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
+import {
+  GitHubProjectProvisioningError,
+  makeGitHubProjectProvisioner,
+} from "./project/githubProjectProvisioning";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
@@ -310,6 +319,7 @@ const makeWsRpcHandlersLayer = () =>
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
       const git = yield* GitCore;
+      const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
@@ -333,6 +343,13 @@ const makeWsRpcHandlersLayer = () =>
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      const githubProjectProvisioner = yield* makeGitHubProjectProvisioner({
+        homeDir: config.homeDir,
+        fileSystem,
+        path,
+        git,
+        github,
+      });
       const streamAdmission = yield* makeWsStreamAdmission({
         recordRejection: (incident) =>
           threadDiagnostics
@@ -745,6 +762,30 @@ const makeWsRpcHandlersLayer = () =>
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
+      const toProjectProvisionRpcError = (cause: unknown) =>
+        cause instanceof GitHubProjectProvisioningError
+          ? new WsRpcError({
+              message: cause.message,
+              code: cause.code,
+              retryable: cause.retryable,
+            })
+          : toWsRpcError(cause, "Failed to clone and add the GitHub project");
+
+      const findRegisteredProjectId = (workspaceRoot: string) =>
+        orchestrationEngine
+          .getReadModel()
+          .pipe(
+            Effect.map(
+              (readModel) =>
+                readModel.projects.find(
+                  (project) =>
+                    project.kind === "project" &&
+                    project.deletedAt === null &&
+                    workspaceRootsEqual(project.workspaceRoot, workspaceRoot),
+                )?.id ?? null,
+            ),
+          );
+
       const requireOwner = Effect.gen(function* () {
         if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
           return yield* Effect.fail(
@@ -914,14 +955,15 @@ const makeWsRpcHandlersLayer = () =>
               // head stays above the cursor, so the gap check alone would
               // accept the resume and stream nothing. Falling through to the
               // snapshot path surfaces THREAD_SNAPSHOT_NOT_FOUND instead.
-              resumeSubjectExists: projectionReadModelQuery
-                .getThreadDetailSnapshotById(input.threadId)
-                .pipe(
-                  Effect.map(Option.isSome),
-                  Effect.mapError((cause) =>
-                    toWsRpcError(cause, "Failed to verify thread before cursor resume"),
-                  ),
+              // The shell read shares the detail loader's active-thread
+              // predicate but skips hydrating and validating the transcript,
+              // which the resume path would discard for a boolean anyway.
+              resumeSubjectExists: projectionReadModelQuery.getThreadShellById(input.threadId).pipe(
+                Effect.map(Option.isSome),
+                Effect.mapError((cause) =>
+                  toWsRpcError(cause, "Failed to verify thread before cursor resume"),
                 ),
+              ),
               onResnapshotRequired: (report) =>
                 recordThreadResnapshotRequired(input.threadId, report),
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
@@ -1015,6 +1057,17 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+        [WS_METHODS.projectsResolveOutOfRootFileReference]: (input) =>
+          rpcEffect(
+            Effect.promise(async () => ({
+              fullPath: await resolveOutOfRootFileReference({
+                workspaceRoot: input.cwd,
+                relativePath: input.relativePath,
+                homeDir: config.homeDir,
+              }),
+            })),
+            "Failed to resolve file reference outside the workspace",
+          ),
         [WS_METHODS.projectsCreateLocalFilePreviewGrant]: (input) =>
           rpcEffect(
             Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),
@@ -1048,6 +1101,107 @@ const makeWsRpcHandlersLayer = () =>
                 onDroppedEvents: failLiveUiStreamForSnapshotResync,
               }),
             ),
+          ),
+        [WS_METHODS.projectsProvisionFromGitHub]: (input) =>
+          bufferLiveUiStream(
+            Stream.callback<GitHubProjectProvisionProgressEvent, WsRpcError>((queue) =>
+              Effect.gen(function* () {
+                const checkout = yield* githubProjectProvisioner.provisionCheckout(input, {
+                  publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                });
+                let registrationCommitted = false;
+                const registerCheckout = Effect.gen(function* () {
+                  yield* Queue.offer(queue, {
+                    operationId: input.operationId,
+                    kind: "phase",
+                    phase: "registering",
+                    message: "Adding project to Synara",
+                  });
+
+                  const { command: normalizedCommand, prepareWorkspaceRoot } =
+                    yield* normalizeDispatchCommand({
+                      command: {
+                        type: "project.create",
+                        commandId: input.commandId,
+                        projectId: input.projectId,
+                        kind: "project",
+                        title: path.basename(checkout.workspaceRoot),
+                        workspaceRoot: checkout.workspaceRoot,
+                        createWorkspaceRootIfMissing: false,
+                        defaultModelSelection: input.defaultModelSelection,
+                        spaceId: input.newProjectSpaceId,
+                        createdAt: input.createdAt,
+                      },
+                    });
+                  if (normalizedCommand.type !== "project.create") {
+                    return yield* Effect.die(
+                      new Error("GitHub project provisioning normalized an unexpected command"),
+                    );
+                  }
+
+                  const existingProjectId = yield* findRegisteredProjectId(
+                    normalizedCommand.workspaceRoot,
+                  );
+                  // Re-adding an existing checkout opens the existing project as-is. In
+                  // particular, it must not silently move that project between Spaces;
+                  // newProjectSpaceId applies only when project.create runs below.
+                  const registration = existingProjectId
+                    ? { projectId: existingProjectId, created: false }
+                    : yield* dispatchOrchestrationCommand(normalizedCommand).pipe(
+                        Effect.map(() => ({ projectId: input.projectId, created: true })),
+                        Effect.catch((cause) =>
+                          findRegisteredProjectId(normalizedCommand.workspaceRoot).pipe(
+                            Effect.flatMap((racedProjectId) =>
+                              racedProjectId
+                                ? Effect.succeed({ projectId: racedProjectId, created: false })
+                                : Effect.fail(cause),
+                            ),
+                          ),
+                        ),
+                      );
+                  // This assignment is synchronous, so a pending interruption cannot run
+                  // recovery between a successful dispatch and recording that fact.
+                  registrationCommitted = true;
+                  if (registration.created && prepareWorkspaceRoot) {
+                    yield* prepareWorkspaceRoot;
+                  }
+
+                  return {
+                    operationId: input.operationId,
+                    repository: checkout.repository,
+                    workspaceRoot: normalizedCommand.workspaceRoot,
+                    projectId: registration.projectId,
+                    checkout: checkout.checkout,
+                  } as const;
+                }).pipe(
+                  Effect.onError(() =>
+                    recoverUnregisteredGitHubCheckout({
+                      checkout,
+                      registrationCommitted,
+                      moveWorkspaceRoot: (workspaceRoot, recoveryPath) =>
+                        fileSystem.rename(workspaceRoot, recoveryPath),
+                    }),
+                  ),
+                  // Promotion and registration form one critical section. If the client cancels
+                  // after cloning, finish registration first so its workspace is never moved out
+                  // from under a committed project. Recovery must share the same guarantee.
+                  Effect.uninterruptible,
+                );
+
+                const result = yield* registerCheckout;
+                yield* Queue.offer(queue, {
+                  operationId: input.operationId,
+                  kind: "completed",
+                  result,
+                });
+                yield* Queue.end(queue);
+              }).pipe(
+                Effect.catch((cause) =>
+                  Queue.fail(queue, toProjectProvisionRpcError(cause)).pipe(Effect.asVoid),
+                ),
+              ),
+            ),
+            { label: "projects.github-provision" },
           ),
         [WS_METHODS.studioListThreadOutputs]: (input) =>
           rpcEffect(

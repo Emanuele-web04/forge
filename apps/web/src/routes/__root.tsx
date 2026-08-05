@@ -18,7 +18,7 @@ import {
   useParams,
   useRouterState,
 } from "@tanstack/react-router";
-import { useMemo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
@@ -103,14 +103,20 @@ import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
-import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
+import {
+  PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
+  useProviderAuthRefreshOnFocus,
+} from "../hooks/useProviderAuthRefreshOnFocus";
 import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { useRightDockStore } from "../rightDockStore";
+import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
+import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 import { useAppSettings } from "../appSettings";
 import {
-  getVisibleProviderUpdateStatuses,
+  getNotifiableProviderUpdateStatuses,
   isProviderUpdateActive,
   providerUpdateNotificationKey,
   PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
@@ -254,7 +260,6 @@ function RootRouteView() {
           <TaskCompletionNotifications />
           <AppSnapWelcomeDialog />
           <AppSnapCoordinator />
-          <ProviderUpdateNotifications />
           <DesktopProjectBootstrap />
           <Outlet />
         </AnchoredToastProvider>
@@ -316,19 +321,58 @@ function GitProgressToastPreviewDev() {
 function ProviderStatusRefreshCoordinator() {
   const { settings } = useAppSettings();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
+  const [transportOpen, setTransportOpen] = useState(false);
+  const [liveVersionCheckCompleted, setLiveVersionCheckCompleted] = useState(false);
   const providerUpdateChecksEnabled =
     serverSettingsQuery.data !== undefined && settings.enableProviderUpdateChecks;
+  const providerUpdateRefreshEnabled = providerUpdateChecksEnabled && transportOpen;
+  const markLiveVersionCheckCompleted = useCallback(() => {
+    setLiveVersionCheckCompleted(true);
+  }, []);
 
-  useProviderAuthRefreshOnFocus();
+  // The update coordinator includes the same focus/visibility refresh. Keep the
+  // auth-only loop for the setting-off case so enabling update checks never
+  // launches duplicate provider probes on focus.
+  useProviderAuthRefreshOnFocus({ enabled: !providerUpdateChecksEnabled });
+  useEffect(
+    () =>
+      addWsTransportStateListener(
+        (state) => {
+          const open = state === "open";
+          setTransportOpen(open);
+          if (!open) {
+            setLiveVersionCheckCompleted(false);
+          }
+        },
+        { replayCurrent: true },
+      ),
+    [],
+  );
+
+  useEffect(() => {
+    if (!providerUpdateChecksEnabled) {
+      setLiveVersionCheckCompleted(false);
+    }
+  }, [providerUpdateChecksEnabled]);
+
   // Provider latest-version checks are slow/network-backed, so keep this cadence
   // coarse while still honoring the automatic update-check setting.
   useProviderStatusRefresh({
-    enabled: providerUpdateChecksEnabled,
+    enabled: providerUpdateRefreshEnabled,
     initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
     intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+    minIntervalMs: PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
+    refreshOnFocus: true,
+    onRefreshSuccess: markLiveVersionCheckCompleted,
   });
 
-  return null;
+  // Keep the notifier mounted while the transport is interrupted. Dropping the
+  // gate makes it close any active prompt before a reconnect can reuse cached data.
+  return (
+    <ProviderUpdateNotifications
+      liveVersionCheckCompleted={providerUpdateRefreshEnabled && liveVersionCheckCompleted}
+    />
+  );
 }
 
 // Extracted to module scope so its run-always cleanup can stay a try/finally: the
@@ -492,7 +536,11 @@ async function runProviderUpdateAll(params: {
   });
 }
 
-function ProviderUpdateNotifications() {
+function ProviderUpdateNotifications({
+  liveVersionCheckCompleted,
+}: {
+  readonly liveVersionCheckCompleted: boolean;
+}) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
@@ -508,11 +556,11 @@ function ProviderUpdateNotifications() {
   const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
   const isUpdatingAllRef = useRef(false);
   const progressToastDismissedRef = useRef(false);
-  const outdatedProviders = getVisibleProviderUpdateStatuses({
+  const outdatedProviders = getNotifiableProviderUpdateStatuses({
     providers: serverConfigQuery.data?.providers ?? [],
     hiddenProviders: settings.hiddenProviders,
     serverSettings: providerUpdateServerSettings,
-    oneClickOnly: true,
+    liveVersionCheckCompleted,
   });
   const oneClickProviders = outdatedProviders.filter(
     (provider) => !isProviderUpdateActive(provider),
@@ -971,18 +1019,47 @@ function EventRouter() {
   const activeSplitView = useSplitViewStore(
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
-  const visibleThreadIds = activeSplitView
-    ? resolveSplitViewThreadIds(activeSplitView)
-    : routeThreadId
-      ? [routeThreadId]
-      : [];
+  const hostThreadIds = useMemo(
+    () =>
+      activeSplitView
+        ? resolveSplitViewThreadIds(activeSplitView)
+        : routeThreadId
+          ? [routeThreadId]
+          : [],
+    [activeSplitView, routeThreadId],
+  );
+  // Right-dock sidechat panes render a full ChatView for their embedded thread,
+  // so they need a detail lease exactly like split-view panes: without one the
+  // sidechat's snapshot never syncs and its transcript stays on the loading state.
+  const dockStateByThreadId = useRightDockStore((store) => store.dockStateByThreadId);
+  const visibleThreadIds = useMemo(
+    () => [
+      ...hostThreadIds,
+      ...resolveVisibleDockSidechatThreadIds({
+        dockRendered: routeSearch.view !== "editor",
+        dockStateByThreadId,
+        hostThreadIds,
+      }),
+    ],
+    [dockStateByThreadId, hostThreadIds, routeSearch.view],
+  );
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIds = new Set(serverThreads.map((thread) => thread.id));
-  const subscribedThreadIds = resolveThreadDetailSubscriptionLeaseIds({
+  // Stabilize the lease array by content: `serverThreads` re-emits on every
+  // streaming update, and an identity-changing lease list would enqueue a no-op
+  // subscription reconcile per render onto the serialized subscribe chain.
+  const nextSubscribedThreadIds = resolveThreadDetailSubscriptionLeaseIds({
     visibleThreadIds,
     retainedThreadIds,
     serverThreadIds,
   });
+  const subscribedThreadIdsRef = useRef(nextSubscribedThreadIds);
+  const subscribedThreadIds = arraysShallowEqual(
+    subscribedThreadIdsRef.current,
+    nextSubscribedThreadIds,
+  )
+    ? subscribedThreadIdsRef.current
+    : nextSubscribedThreadIds;
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
@@ -997,6 +1074,7 @@ function EventRouter() {
   useEffect(() => {
     pathnameRef.current = pathname;
     visibleThreadIdsRef.current = subscribedThreadIds;
+    subscribedThreadIdsRef.current = subscribedThreadIds;
     // Retention must know what is on screen: an evicted visible thread keeps its
     // shell row and renders as an empty conversation until a snapshot lands.
     setVisibleThreadDetailIds(visibleThreadIds);

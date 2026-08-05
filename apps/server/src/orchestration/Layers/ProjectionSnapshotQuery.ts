@@ -2672,7 +2672,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         );
 
   // Hydrate a full thread detail projection without opening its own transaction.
-  const loadThreadDetail = (
+  // Returns the raw projected thread without the final OrchestrationThread
+  // validation so callers can run that CPU-bound decode outside the SQL
+  // transaction (the single shared connection stays blocked for its duration).
+  const loadThreadDetailRaw = (
     threadId: ThreadId,
     options: { readonly messageLimit: number | null; readonly tracePrefix: string } = {
       messageLimit: MAX_THREAD_MESSAGES,
@@ -2695,7 +2698,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ),
       );
       if (Option.isNone(threadRow)) {
-        return Option.none<OrchestrationThread>();
+        return Option.none<ReturnType<typeof toProjectedThread>>();
       }
 
       const [
@@ -2782,11 +2785,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       });
 
-      return yield* decodeThreadDetail(thread).pipe(
-        Effect.map((decodedThread) => Option.some(decodedThread)),
-        Effect.mapError(toPersistenceDecodeError(`${options.tracePrefix}:decodeThread`)),
-      );
+      return Option.some(thread);
     });
+
+  const loadThreadDetail = (
+    threadId: ThreadId,
+    options: { readonly messageLimit: number | null; readonly tracePrefix: string } = {
+      messageLimit: MAX_THREAD_MESSAGES,
+      tracePrefix: "ProjectionSnapshotQuery.getThreadDetailById",
+    },
+  ) =>
+    loadThreadDetailRaw(threadId, options).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(Option.none<OrchestrationThread>()),
+          onSome: (thread) =>
+            decodeThreadDetail(thread).pipe(
+              Effect.map((decodedThread) => Option.some(decodedThread)),
+              Effect.mapError(toPersistenceDecodeError(`${options.tracePrefix}:decodeThread`)),
+            ),
+        }),
+      ),
+    );
 
   const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
     sql.withTransaction(loadThreadDetail(threadId)).pipe(
@@ -2820,28 +2840,34 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   // Capture the projection cursor and thread detail in one transaction so the
   // snapshot fence cannot advance past the detail payload the client receives.
+  // Schema validation runs once, after the transaction commits: the decode of a
+  // full transcript is CPU-bound and must not hold the shared SQL connection.
   const getThreadDetailSnapshotById: ProjectionSnapshotQueryShape["getThreadDetailSnapshotById"] = (
     threadId,
   ) =>
     sql
       .withTransaction(
-        Effect.gen(function* () {
-          const [threadDetail, stateRows] = yield* Effect.all([
-            loadThreadDetail(threadId),
-            listProjectionStateRows(undefined).pipe(
-              Effect.mapError(
-                toPersistenceSqlOrDecodeError(
-                  "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listProjectionState:query",
-                  "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listProjectionState:decodeRows",
-                ),
+        Effect.all([
+          loadThreadDetailRaw(threadId, {
+            messageLimit: MAX_THREAD_MESSAGES,
+            tracePrefix: "ProjectionSnapshotQuery.getThreadDetailSnapshotById",
+          }),
+          listProjectionStateRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listProjectionState:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listProjectionState:decodeRows",
               ),
             ),
-          ]);
+          ),
+        ]),
+      )
+      .pipe(
+        Effect.flatMap(([threadDetail, stateRows]) => {
           if (Option.isNone(threadDetail)) {
-            return Option.none<OrchestrationThreadDetailSnapshot>();
+            return Effect.succeed(Option.none<OrchestrationThreadDetailSnapshot>());
           }
-
-          return yield* decodeThreadDetailSnapshot({
+          return decodeThreadDetailSnapshot({
             snapshotSequence: computeSnapshotSequence(stateRows),
             thread: threadDetail.value,
           }).pipe(
@@ -2853,8 +2879,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           );
         }),
-      )
-      .pipe(
         Effect.mapError((error) => {
           if (isPersistenceError(error)) {
             return error;

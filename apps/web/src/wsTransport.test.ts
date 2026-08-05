@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ORCHESTRATION_WS_METHODS,
   WS_CHANNELS,
+  WS_METHODS,
   WS_COMPATIBILITY_QUERY,
   WS_NEGOTIATE_QUERY,
   WS_PROTOCOL_EPOCH,
@@ -255,6 +256,51 @@ afterEach(() => {
 });
 
 describe("WsTransport", () => {
+  it("returns the completed GitHub provisioning result and emits each progress event", async () => {
+    const phase = {
+      operationId: "operation-1",
+      kind: "phase" as const,
+      phase: "cloning" as const,
+      message: "Cloning openai/codex",
+    };
+    const completed = {
+      operationId: "operation-1",
+      kind: "completed" as const,
+      result: {
+        operationId: "operation-1",
+        repository: "openai/codex",
+        workspaceRoot: "/projects/codex",
+        projectId: "project-1",
+        checkout: "created" as const,
+      },
+    };
+    const emit = vi.fn();
+    const transport = Object.create(WsTransport.prototype) as WsTransport;
+    Object.assign(transport, {
+      emit,
+      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+    });
+    const runProjectProvisionStream = (
+      transport as unknown as {
+        runProjectProvisionStream: (
+          client: Record<string, () => Stream.Stream<typeof phase | typeof completed>>,
+          params: unknown,
+        ) => Promise<typeof completed.result>;
+      }
+    ).runProjectProvisionStream.bind(transport);
+
+    await expect(
+      runProjectProvisionStream(
+        {
+          [WS_METHODS.projectsProvisionFromGitHub]: () => Stream.make(phase, completed),
+        },
+        { repository: "openai/codex" },
+      ),
+    ).resolves.toEqual(completed.result);
+    expect(emit).toHaveBeenNthCalledWith(1, WS_CHANNELS.projectProvisionProgress, phase);
+    expect(emit).toHaveBeenNthCalledWith(2, WS_CHANNELS.projectProvisionProgress, completed);
+  });
+
   it("does not reconnect the socket for typed stream-admission failures", () => {
     expect(
       shouldReconnectAfterStreamFailure(

@@ -10,7 +10,6 @@ import {
   type ThreadMarker,
   type TurnId,
 } from "@synara/contracts";
-import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
@@ -410,6 +409,14 @@ interface MessagesTimelineProps {
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
+  /**
+   * The user message the edit affordance may target, resolved by the owner from
+   * the raw thread messages (the same list the server-side edit policy
+   * validates). The timeline must not re-derive this from its own rows: they are
+   * createdAt-sorted and include optimistic/filtered entries, so a row-derived
+   * target can point at a message the server rejects.
+   */
+  editableUserMessageId?: MessageId | null;
   activeTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -470,6 +477,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
+  editableUserMessageId,
   activeTurnId,
   isRevertingCheckpoint,
   onImageExpand,
@@ -926,14 +934,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, [clearTailExpansionScrollTimers, resolvedListRef]);
   useEffect(() => clearTailExpansionScrollTimers, [clearTailExpansionScrollTimers]);
   const ignoreTimelineImageLoad = useCallback(() => {}, []);
-  const latestEditableUserMessageId = useMemo(() => {
-    const messages = rows.flatMap((row) => (row.kind === "message" ? [row.message] : []));
-    const editTarget = resolveLatestTailUserMessageEditTarget({
-      messages,
-      activeTurnId,
-    });
-    return editTarget.editable ? (editTarget.messageId as MessageId) : null;
-  }, [activeTurnId, rows]);
+  const latestEditableUserMessageId = editableUserMessageId ?? null;
   const previousRowCountRef = useRef(rows.length);
   useEffect(() => {
     const previousRowCount = previousRowCountRef.current;

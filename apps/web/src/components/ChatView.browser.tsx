@@ -3025,7 +3025,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
       let approachDirection = 0;
       for (let index = 1; index < approach.length; index += 1) {
         const delta = approach[index]!.offset - approach[index - 1]!.offset;
-        if (Math.abs(delta) <= 0.5) continue;
+        // Chromium can report a one-pixel layout/compositor rounding shift before
+        // the anchor animation starts. Match the arrival tolerance so that noise
+        // does not count as an extra change of direction.
+        if (Math.abs(delta) <= 2) continue;
         const direction = Math.sign(delta);
         if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
         approachDirection = direction;

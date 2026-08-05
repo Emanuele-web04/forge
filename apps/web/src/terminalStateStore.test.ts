@@ -419,6 +419,42 @@ describe("terminalStateStore actions", () => {
     expect(terminalState.terminalIds).toEqual(["default"]);
   });
 
+  it("replaces the final dock terminal with a fresh terminal id", () => {
+    const store = useTerminalStateStore.getState();
+    store.openTerminalThreadPage(THREAD_ID, { terminalOnly: true });
+    store.closeTerminalAndEnsureReplacement(THREAD_ID, "default", "terminal-replacement");
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.entryPoint).toBe("terminal");
+    expect(terminalState.terminalOpen).toBe(true);
+    expect(terminalState.terminalIds).toEqual(["terminal-replacement"]);
+    expect(terminalState.activeTerminalId).toBe("terminal-replacement");
+    expect(summarizeTerminalGroups(terminalState.terminalGroups)).toEqual([
+      {
+        id: "group-terminal-replacement",
+        activeTerminalId: "terminal-replacement",
+        terminalIds: ["terminal-replacement"],
+      },
+    ]);
+  });
+
+  it("does not add a replacement while another dock terminal remains", () => {
+    const store = useTerminalStateStore.getState();
+    store.openTerminalThreadPage(THREAD_ID, { terminalOnly: true });
+    store.newTerminal(THREAD_ID, "terminal-2");
+    store.closeTerminalAndEnsureReplacement(THREAD_ID, "terminal-2", "unused-replacement");
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.terminalIds).toEqual(["default"]);
+    expect(terminalState.terminalIds).not.toContain("unused-replacement");
+  });
+
   it("keeps a valid active terminal after closing an active split terminal", () => {
     const store = useTerminalStateStore.getState();
     store.splitTerminal(THREAD_ID, "terminal-2");

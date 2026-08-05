@@ -1730,6 +1730,106 @@ describe("store event reducer", () => {
     expect(threadsOf(confirmed)[0]?.hasPendingUserInput).toBe(false);
   });
 
+  it.each([
+    {
+      label: "uncertain",
+      status: "uncertain" as const,
+      responseRequestedAt: "2026-07-14T12:20:00.000Z",
+    },
+    {
+      label: "orphaned responding",
+      status: "responding" as const,
+      responseRequestedAt: "2026-07-14T12:30:00.000Z",
+    },
+  ])("tracks a reclaimed $label interaction through a retryable failure", (initialClaim) => {
+    const requestId = ApprovalRequestId.makeUnsafe(`request-reclaimed-${initialClaim.status}`);
+    const lifecycleGeneration = "generation-reclaimed";
+    const requestedActivity = makeActivity({
+      id: `activity-requested-${initialClaim.status}`,
+      createdAt: "2026-07-14T12:19:00.000Z",
+      kind: "user-input.requested",
+      summary: "Need more input",
+      payload: {
+        requestId,
+        lifecycleGeneration,
+        questions: [
+          {
+            id: "q1",
+            header: "Continue",
+            question: "Continue?",
+            options: [{ label: "Yes", description: "Continue the task" }],
+          },
+        ],
+      },
+      sequence: 1,
+    });
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          hasPendingUserInput: false,
+          pendingInteractions: [
+            {
+              interactionKind: "userInput",
+              requestId,
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              turnId: null,
+              lifecycleGeneration,
+              status: initialClaim.status,
+              decision: null,
+              responseCommandId: CommandId.makeUnsafe("command-response-old"),
+              responseRequestedAt: initialClaim.responseRequestedAt,
+              createdAt: "2026-07-14T12:19:00.000Z",
+              resolvedAt: null,
+            },
+          ],
+          activities: [requestedActivity],
+        }),
+      ),
+    );
+
+    const responding = applyOrchestrationEvents(initialState, [
+      makeDomainEvent(
+        "thread.user-input-response-requested",
+        {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          requestId,
+          answers: { q1: "yes" },
+          lifecycleGeneration,
+          createdAt: "2026-07-14T12:31:00.000Z",
+        },
+        { commandId: CommandId.makeUnsafe("command-response-reclaimed") },
+      ),
+    ]);
+
+    expect(threadsOf(responding)[0]?.pendingInteractions?.[0]).toMatchObject({
+      status: "responding",
+      responseCommandId: "command-response-reclaimed",
+      responseRequestedAt: "2026-07-14T12:31:00.000Z",
+    });
+
+    const retryable = applyOrchestrationEvents(responding, [
+      makeDomainEvent("thread.activity-appended", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: makeActivity({
+          id: `activity-failed-${initialClaim.status}`,
+          createdAt: "2026-07-14T12:31:01.000Z",
+          kind: "provider.user-input.respond.failed",
+          payload: {
+            requestId,
+            lifecycleGeneration,
+            responseCommandId: "command-response-reclaimed",
+            settlementStatus: "retryable",
+          },
+          sequence: 3,
+        }),
+      }),
+    ]);
+
+    expect(threadsOf(retryable)[0]?.pendingInteractions?.[0]?.status).toBe("retryable");
+    expect(threadsOf(retryable)[0]?.hasPendingUserInput).toBe(true);
+  });
+
   it("clears pending approval summary state when an approval response is requested", () => {
     const initialState = syncServerReadModel(
       makeState(

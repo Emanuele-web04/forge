@@ -25,6 +25,11 @@ we may close it without merging it, or never review it.
      If the change involves motion or interaction, include a short video.
      Delete this section if not applicable. -->
 
+## Verification
+
+<!-- List the checks you ran. For focused web tests from the repository root:
+     bun run test:web:focused src/path/to/example.test.ts -->
+
 ## Checklist
 
 - [ ] This PR is small and focused

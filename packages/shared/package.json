@@ -124,9 +124,17 @@
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
     },
+    "./pendingInteractions": {
+      "types": "./src/pendingInteractions.ts",
+      "import": "./src/pendingInteractions.ts"
+    },
     "./projectContainers": {
       "types": "./src/projectContainers.ts",
       "import": "./src/projectContainers.ts"
+    },
+    "./projectDirectoryName": {
+      "types": "./src/projectDirectoryName.ts",
+      "import": "./src/projectDirectoryName.ts"
     },
     "./pinnedMessages": {
       "types": "./src/pinnedMessages.ts",

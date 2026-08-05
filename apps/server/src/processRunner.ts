@@ -10,6 +10,8 @@ export interface ProcessRunOptions {
   allowNonZeroExit?: boolean | undefined;
   maxBufferBytes?: number | undefined;
   outputMode?: "error" | "truncate" | undefined;
+  onStdoutChunk?: ((chunk: string) => void) | undefined;
+  onStderrChunk?: ((chunk: string) => void) | undefined;
 }
 
 export interface ProcessRunResult {
@@ -250,7 +252,20 @@ export async function runProcess(
       return null;
     };
 
+    const notifyOutputObserver = (
+      observer: ((chunk: string) => void) | undefined,
+      chunk: Buffer | string,
+    ): void => {
+      if (!observer) return;
+      try {
+        observer(chunk.toString());
+      } catch {
+        // Live-output observers are best effort and must never crash the child-process lifecycle.
+      }
+    };
+
     child.stdout.on("data", (chunk: Buffer | string) => {
+      notifyOutputObserver(options.onStdoutChunk, chunk);
       const error = appendOutput("stdout", chunk);
       if (error) {
         fail(error);
@@ -258,6 +273,7 @@ export async function runProcess(
     });
 
     child.stderr.on("data", (chunk: Buffer | string) => {
+      notifyOutputObserver(options.onStderrChunk, chunk);
       const error = appendOutput("stderr", chunk);
       if (error) {
         fail(error);

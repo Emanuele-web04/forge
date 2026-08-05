@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.7 - 2026-08-05
+
+### Added
+
+- Added GitHub project import to the create-project dialog so a repository URL or `owner/repo` name can be cloned and registered through the user's GitHub CLI access, with validated destination names, progress reporting, compatible-checkout reuse, cancellation, and interruption-safe recovery.
+- Added scoped terminal-to-composer registration so Add to chat actions from the terminal drawer or right dock deliver selected output to the adjacent conversation instead of whichever composer was most recently active.
+- Added safe relocation for image, PDF, and workspace-file references that resolve outside the current project after a workspace or checkout path changes.
+
+### Changed
+
+- Consolidated side-chat creation into one tested workflow with prompt deduplication, snapshot retention, activation recovery, simpler dock navigation, and a clearer side-chat tab experience.
+- Hardened provider runtime ingestion, command reconciliation, pending-interaction projection, and session recovery so delayed or replayed lifecycle events converge on durable turn state.
+- Reduced background transcript work by narrowing thread-detail subscriptions and snapshot queries to the conversations that need live detail while retaining visible and docked task state through refresh races.
+- Improved terminal lifecycle handling so a natural shell exit clears activity and closes only the exited tab without a destructive-close confirmation, placeholder cleanup, or duplicate fallback exit command.
+- Gave temporary-thread user messages a distinct dashed outline while preserving the final message-bubble geometry.
+- Bumped Synara release package versions to `0.6.7` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed unreplayable runtime commands being reconsidered after restart; terminal or otherwise non-replayable work is now quarantined and reconciled explicitly.
+- Fixed side-chat creation races that could duplicate the seed prompt, lose retained detail, activate the wrong route, or leave dock state out of sync with the created task.
+- Fixed terminal Add to chat actions routing to the wrong composer and naturally exited terminals retaining activity, showing destructive-close prompts, or issuing a second exit command.
+- Fixed foreground completion notifications appearing while Synara or its native browser pane already had the user's attention, and aligned toast visibility with side-chat split and dock routes.
+- Fixed stale provider update notices by retrying refreshes on focus, strengthening refresh scheduling, and preserving verified provider availability while checks overlap.
+- Fixed delayed runtime and pending-interaction events settling the wrong request, overwriting newer lifecycle state, or leaving task projections inconsistent after recovery.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,714 files.
+- `bun run lint` passed with 372 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only existing Effect Schema informational messages and Astro/Vite deprecation notices remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecation and plugin-timing notices remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 3m0.871s. Web passed 285 files / 3,541 tests; server/CLI passed 296 files / 3,271 tests with 2 skipped files / 7 skipped tests. No targeted reruns or flaky failures were needed.
+
 ## 0.6.6 - 2026-08-04
 
 ### Added

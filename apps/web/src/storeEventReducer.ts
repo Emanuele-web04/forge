@@ -14,6 +14,7 @@ import {
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
+import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
 import {
   addThreadMarker,
   removeThreadMarker,
@@ -112,7 +113,11 @@ function markInteractionResponding(
       interaction.interactionKind !== interactionKind ||
       interaction.requestId !== event.payload.requestId ||
       interaction.lifecycleGeneration !== lifecycleGeneration ||
-      (interaction.status !== "pending" && interaction.status !== "retryable")
+      !isPendingInteractionResponseClaimable({
+        status: interaction.status,
+        responseRequestedAt: interaction.responseRequestedAt,
+        requestedAt: event.payload.createdAt,
+      })
     ) {
       return interaction;
     }

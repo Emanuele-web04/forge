@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.6.7",
+    date: "Aug 5",
+    features: [
+      {
+        id: "github-project-import",
+        title: "Start directly from a GitHub repository",
+        description:
+          "Create a project from a GitHub URL or repository name and let Synara prepare the local checkout for you.",
+        details:
+          "The new GitHub source in the project dialog validates repository and folder names, uses your GitHub CLI access, reports clone progress, reuses compatible checkouts, and recovers safely from cancellation or a failed registration without leaving an ambiguous project behind.",
+      },
+      {
+        id: "stable-side-chats",
+        title: "Side chats stay focused and dependable",
+        description:
+          "Opening a side chat is more reliable, and moving between its tab, dock, and source task keeps the right conversation in view.",
+        details:
+          "Side-chat creation now has one shared path with prompt deduplication, safer snapshot retention, and clearer recovery when activation races the new task. Dock navigation and tab presentation were simplified, while temporary user messages keep a distinct dashed treatment until the task becomes permanent.",
+      },
+      {
+        id: "runtime-recovery",
+        title: "Interrupted work settles more cleanly",
+        description:
+          "Tasks are less likely to remain stuck or replay the wrong command after a provider restart, delayed event, or partial failure.",
+        details:
+          "Unreplayable runtime commands are quarantined instead of being dispatched again, terminal provider events reconcile against durable turn state, pending interactions settle against the owning request, and stale lifecycle updates are fenced before they can overwrite newer task state.",
+      },
+      {
+        id: "terminal-routing-and-exit",
+        title: "Terminal context goes to the right chat",
+        description:
+          "Add to chat now targets the composer beside the terminal you used, and a normal shell exit closes only that finished tab.",
+        details:
+          "Terminal selection actions use a scoped composer registry across the drawer and right dock. Naturally exited sessions clear their activity without a destructive-close prompt, placeholder cleanup, or a duplicate fallback exit command, while live tabs remain untouched.",
+      },
+      {
+        id: "durable-previews-and-subscriptions",
+        title: "Open work stays visible with less background churn",
+        description:
+          "File previews and task details now survive more project-path changes while inactive conversations consume less subscription work.",
+        details:
+          "Image, PDF, and workspace previews can relocate safe out-of-root references back into the active project, visible transcript state is retained through overlapping refreshes, and thread-detail subscriptions are narrowed to the conversations that actually need live detail.",
+      },
+      {
+        id: "attention-aware-notifications",
+        title: "Notifications respect where your attention is",
+        description:
+          "Completion alerts stay quiet while Synara is in front of you, and provider update notices refresh more reliably when you return.",
+        details:
+          "Foreground detection now includes the native browser pane, toast visibility follows side-chat dock and split routes, and provider update checks retry on focus with fresher scheduling so stale availability does not linger in the sidebar.",
+      },
+    ],
+  },
+  {
     version: "0.6.6",
     date: "Aug 4",
     features: [

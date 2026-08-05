@@ -166,6 +166,10 @@ function isClaudeNativeCommandPath(commandPath: string): boolean {
   );
 }
 
+function isClaudeLatestHomebrewCommandPath(commandPath: string): boolean {
+  return normalizeCommandPath(commandPath).includes("/caskroom/claude-code@latest/");
+}
+
 function isOpenCodeNativeCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
   return (
@@ -197,12 +201,25 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
     provider: CLAUDE_AGENT_PROVIDER,
     binaryName: "claude",
     npmPackageName: "@anthropic-ai/claude-code",
-    homebrew: { name: "claude-code", kind: "cask" },
+    homebrew: {
+      name: "claude-code",
+      kind: "cask",
+      variants: [
+        {
+          name: "claude-code@latest",
+          kind: "cask",
+          isCommandPath: isClaudeLatestHomebrewCommandPath,
+        },
+      ],
+    },
     nativeUpdate: {
       executable: "claude",
       args: () => ["update"],
       lockKey: "claude-native",
       strategy: "matching-path",
+      // Native Claude owns stable/latest channel selection. npm's latest tag cannot
+      // tell whether the installed CLI is current for the user's configured channel.
+      latestVersionSource: null,
       isCommandPath: isClaudeNativeCommandPath,
     },
   },
@@ -1980,11 +1997,16 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
     }
 
     // A single slow CLI probe should not make an already usable provider look broken.
-    return {
+    // The previous update advisory is network-backed evidence, though, so it must
+    // not survive a probe that could not confirm the installed version.
+    const stabilizedStatus = {
       ...previous,
       checkedAt: status.checkedAt,
       ...(status.updateState !== undefined ? { updateState: status.updateState } : {}),
     };
+    return previous.versionAdvisory
+      ? suppressProviderVersionAdvisory(stabilizedStatus)
+      : stabilizedStatus;
   });
 }
 

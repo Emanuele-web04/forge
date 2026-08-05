@@ -39,6 +39,7 @@ export interface ExecuteGitInput {
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
+  readonly outputMode?: "error" | "truncate";
   readonly progress?: ExecuteGitProgress;
 }
 

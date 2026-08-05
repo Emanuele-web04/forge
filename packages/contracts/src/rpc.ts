@@ -31,6 +31,10 @@ import {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import {
+  GitHubProjectProvisionInput,
+  GitHubProjectProvisionProgressEvent,
+} from "./githubProjectProvisioning";
 import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
@@ -130,6 +134,8 @@ import {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectResolveOutOfRootFileReferenceInput,
+  ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
   ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
@@ -370,6 +376,15 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   error: WsRpcError,
 });
 
+export const WsProjectsResolveOutOfRootFileReferenceRpc = Rpc.make(
+  WS_METHODS.projectsResolveOutOfRootFileReference,
+  {
+    payload: ProjectResolveOutOfRootFileReferenceInput,
+    success: ProjectResolveOutOfRootFileReferenceResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsProjectsCreateLocalFilePreviewGrantRpc = Rpc.make(
   WS_METHODS.projectsCreateLocalFilePreviewGrant,
   {
@@ -412,6 +427,13 @@ export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
     stream: true,
   },
 );
+
+export const WsProjectsProvisionFromGitHubRpc = Rpc.make(WS_METHODS.projectsProvisionFromGitHub, {
+  payload: GitHubProjectProvisionInput,
+  success: GitHubProjectProvisionProgressEvent,
+  error: WsRpcError,
+  stream: true,
+});
 
 export const WsStudioListThreadOutputsRpc = Rpc.make(WS_METHODS.studioListThreadOutputs, {
   payload: StudioListThreadOutputsInput,
@@ -1009,12 +1031,14 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsReadFileRpc,
+  WsProjectsResolveOutOfRootFileReferenceRpc,
   WsProjectsCreateLocalFilePreviewGrantRpc,
   WsProjectsWriteFileRpc,
   WsProjectsRunDevServerRpc,
   WsProjectsStopDevServerRpc,
   WsProjectsListDevServersRpc,
   WsSubscribeProjectDevServerEventsRpc,
+  WsProjectsProvisionFromGitHubRpc,
   WsStudioListThreadOutputsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,

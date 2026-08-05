@@ -153,6 +153,25 @@ export const ProjectReadFileResult = Schema.Struct({
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 
+// Locates a chat file reference that failed to read inside the workspace root:
+// the server retries the workspace-relative path against ancestor directories
+// of the root (bounded to the user's home directory) and returns the absolute
+// path of the real file, or null when no candidate exists. Reading the located
+// file still goes through the preview-grant flow — this method never returns
+// file contents.
+export const ProjectResolveOutOfRootFileReferenceInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectResolveOutOfRootFileReferenceInput =
+  typeof ProjectResolveOutOfRootFileReferenceInput.Type;
+
+export const ProjectResolveOutOfRootFileReferenceResult = Schema.Struct({
+  fullPath: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProjectResolveOutOfRootFileReferenceResult =
+  typeof ProjectResolveOutOfRootFileReferenceResult.Type;
+
 export const ProjectCreateLocalFilePreviewGrantInput = Schema.Struct({
   path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
 });

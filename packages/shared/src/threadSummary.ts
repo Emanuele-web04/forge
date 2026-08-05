@@ -72,7 +72,7 @@ export function approvalRequestKindFromRequestType(
   }
 }
 
-function isStalePendingRequestFailureDetail(detail: string | undefined): boolean {
+export function isStalePendingRequestFailureDetail(detail: string | undefined): boolean {
   if (!detail) {
     return false;
   }

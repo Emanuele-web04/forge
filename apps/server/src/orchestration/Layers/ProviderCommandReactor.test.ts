@@ -8124,6 +8124,114 @@ describe("ProviderCommandReactor", () => {
         (activity.payload as Record<string, unknown>).requestId === "user-input-request-1",
     );
     expect(resolvedActivity).toBeUndefined();
+
+    // An `uncertain` settlement must not lock the interaction out forever: a
+    // later response command re-claims the row and is forwarded again.
+    harness.respondToUserInput.mockImplementation(() => Effect.void);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-retry"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-1"),
+        answers: {
+          sandbox_mode: "workspace-write",
+        },
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await waitFor(() => harness.respondToUserInput.mock.calls.length === 2);
+    const reclaimedUserInput = await Effect.runPromise(
+      harness.pendingInteractionRepository.getByIdentity({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionKind: "userInput",
+        requestId: asApprovalRequestId("user-input-request-1"),
+      }),
+    );
+    expect(Option.getOrUndefined(reclaimedUserInput)).toMatchObject({
+      status: "responding",
+      responseCommandId: "cmd-user-input-respond-retry",
+    });
+  });
+
+  it("surfaces unclaimable user-input responses instead of dropping them silently", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-for-unclaimable"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested-unclaimable"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-user-input-requested-unclaimable"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-unclaimable",
+            lifecycleGeneration: "generation-current",
+            questions: [],
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    // A response carrying a lifecycle generation the durable row does not have
+    // can never claim it. This used to be dropped with no activity and no
+    // resolution, leaving the prompt permanently stuck.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-unclaimable"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-unclaimable"),
+        lifecycleGeneration: "generation-stale",
+        answers: { input: "continue" },
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.user-input.respond.failed",
+        ) === true,
+    );
+    expect(harness.respondToUserInput).not.toHaveBeenCalled();
+
+    const failureActivity = (await readHarnessThread(harness))?.activities.find(
+      (activity) => activity.kind === "provider.user-input.respond.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      requestId: "user-input-request-unclaimable",
+      responseCommandId: "cmd-user-input-respond-unclaimable",
+      settlementStatus: "uncertain",
+      detail: expect.stringContaining(
+        "Stale pending user-input request: user-input-request-unclaimable",
+      ),
+    });
   });
 
   it("reacts to thread.session.stop by stopping provider session and clearing thread session state", async () => {

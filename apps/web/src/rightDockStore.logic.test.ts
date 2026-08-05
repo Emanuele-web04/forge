@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { ThreadId } from "@synara/contracts";
 
 import {
   RIGHT_DOCK_PANE_KINDS,
   SINGLETON_PANE_KINDS,
   closePaneInState,
   createDefaultRightDockState,
+  findMissingSidechatPaneIds,
   isRightDockPaneKind,
   openPaneInState,
+  resolveVisibleDockSidechatThreadIds,
   sanitizeRightDockStateByThreadId,
   sanitizeRightDockThreadState,
   setDockOpenInState,
@@ -29,7 +32,7 @@ describe("RIGHT_DOCK_PANE_KINDS (single source of truth)", () => {
 
   it("derives singletons as every kind except the multi-instance ones", () => {
     for (const kind of RIGHT_DOCK_PANE_KINDS) {
-      expect(SINGLETON_PANE_KINDS.has(kind)).toBe(kind !== "sidechat" && kind !== "file");
+      expect(SINGLETON_PANE_KINDS.has(kind)).toBe(kind !== "file");
     }
   });
 });
@@ -154,6 +157,151 @@ describe("sanitizeRightDockThreadState", () => {
       panes: [],
       activePaneId: null,
     });
+  });
+
+  it("migrates multiple persisted sidechat tabs into one active destination", () => {
+    const state = sanitizeRightDockThreadState({
+      open: true,
+      activePaneId: "side-b",
+      panes: [
+        { id: "side-a", kind: "sidechat", threadId: "thread-a" },
+        { id: "side-b", kind: "sidechat", threadId: "thread-b" },
+      ],
+    });
+
+    expect(state.panes).toHaveLength(1);
+    expect(state.panes[0]?.id).toBe("side-b");
+    expect(state.panes[0]?.threadId).toBe("thread-b");
+    expect(state.activePaneId).toBe("side-b");
+  });
+});
+
+describe("sidechat pane", () => {
+  it("reuses the singleton destination and switches its embedded thread", () => {
+    const first = openPaneInState(createDefaultRightDockState(), {
+      paneId: "side-pane",
+      kind: "sidechat",
+      threadId: ThreadId.makeUnsafe("thread-a"),
+    });
+    const switched = openPaneInState(first, {
+      paneId: "ignored",
+      kind: "sidechat",
+      threadId: ThreadId.makeUnsafe("thread-b"),
+    });
+
+    expect(switched.panes).toHaveLength(1);
+    expect(switched.activePaneId).toBe("side-pane");
+    expect(switched.panes[0]?.threadId).toBe("thread-b");
+  });
+
+  it("finds sidechat panes whose backing thread no longer exists", () => {
+    const state = openPaneInState(createDefaultRightDockState(), {
+      paneId: "side-pane",
+      kind: "sidechat",
+      threadId: ThreadId.makeUnsafe("missing-thread"),
+    });
+
+    expect(findMissingSidechatPaneIds(state, new Set())).toEqual(["side-pane"]);
+    expect(
+      findMissingSidechatPaneIds(state, new Set([ThreadId.makeUnsafe("missing-thread")])),
+    ).toEqual([]);
+  });
+});
+
+describe("resolveVisibleDockSidechatThreadIds", () => {
+  const hostThreadId = ThreadId.makeUnsafe("host-thread");
+  const sidechatThreadId = ThreadId.makeUnsafe("sidechat-thread");
+
+  function dockWithSidechat(open: boolean) {
+    const state = openPaneInState(createDefaultRightDockState(), {
+      paneId: "side-pane",
+      kind: "sidechat",
+      threadId: sidechatThreadId,
+    });
+    return setDockOpenInState(state, open);
+  }
+
+  it("exposes the embedded sidechat thread of an open host dock", () => {
+    expect(
+      resolveVisibleDockSidechatThreadIds({
+        dockRendered: true,
+        dockStateByThreadId: { [hostThreadId]: dockWithSidechat(true) },
+        hostThreadIds: [hostThreadId],
+      }),
+    ).toEqual([sidechatThreadId]);
+  });
+
+  it("ignores hidden docks, inactive sidechat panes, other hosts, and non-sidechat panes", () => {
+    expect(
+      resolveVisibleDockSidechatThreadIds({
+        dockRendered: false,
+        dockStateByThreadId: { [hostThreadId]: dockWithSidechat(true) },
+        hostThreadIds: [hostThreadId],
+      }),
+    ).toEqual([]);
+    expect(
+      resolveVisibleDockSidechatThreadIds({
+        dockRendered: true,
+        dockStateByThreadId: { [hostThreadId]: dockWithSidechat(false) },
+        hostThreadIds: [hostThreadId],
+      }),
+    ).toEqual([]);
+    expect(
+      resolveVisibleDockSidechatThreadIds({
+        dockRendered: true,
+        dockStateByThreadId: { [hostThreadId]: dockWithSidechat(true) },
+        hostThreadIds: [ThreadId.makeUnsafe("other-host")],
+      }),
+    ).toEqual([]);
+    const explorerOnly = openPaneInState(createDefaultRightDockState(), {
+      paneId: "explorer-pane",
+      kind: "explorer",
+    });
+    expect(
+      resolveVisibleDockSidechatThreadIds({
+        dockRendered: true,
+        dockStateByThreadId: { [hostThreadId]: explorerOnly },
+        hostThreadIds: [hostThreadId],
+      }),
+    ).toEqual([]);
+    const inactiveSidechat = openPaneInState(dockWithSidechat(true), {
+      paneId: "explorer-pane",
+      kind: "explorer",
+    });
+    expect(
+      resolveVisibleDockSidechatThreadIds({
+        dockRendered: true,
+        dockStateByThreadId: { [hostThreadId]: inactiveSidechat },
+        hostThreadIds: [hostThreadId],
+      }),
+    ).toEqual([]);
+  });
+
+  it("deduplicates against host threads and across hosts", () => {
+    const selfEmbedding = openPaneInState(createDefaultRightDockState(), {
+      paneId: "side-pane",
+      kind: "sidechat",
+      threadId: hostThreadId,
+    });
+    expect(
+      resolveVisibleDockSidechatThreadIds({
+        dockRendered: true,
+        dockStateByThreadId: { [hostThreadId]: selfEmbedding },
+        hostThreadIds: [hostThreadId],
+      }),
+    ).toEqual([]);
+
+    const otherHostThreadId = ThreadId.makeUnsafe("other-host");
+    expect(
+      resolveVisibleDockSidechatThreadIds({
+        dockRendered: true,
+        dockStateByThreadId: {
+          [hostThreadId]: dockWithSidechat(true),
+          [otherHostThreadId]: dockWithSidechat(true),
+        },
+        hostThreadIds: [hostThreadId, otherHostThreadId],
+      }),
+    ).toEqual([sidechatThreadId]);
   });
 });
 

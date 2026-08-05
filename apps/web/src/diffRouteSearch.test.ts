@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDiffRouteSearch } from "./diffRouteSearch";
+import { diffRouteSearchEquals, parseDiffRouteSearch } from "./diffRouteSearch";
+
+describe("diffRouteSearchEquals", () => {
+  it("detects editor route and selected file changes", () => {
+    expect(diffRouteSearchEquals({}, { view: "editor" })).toBe(false);
+    expect(
+      diffRouteSearchEquals(
+        { view: "editor", editorFilePath: "src/first.ts" },
+        { view: "editor", editorFilePath: "src/second.ts" },
+      ),
+    ).toBe(false);
+    expect(
+      diffRouteSearchEquals(
+        { view: "editor", editorFilePath: "src/first.ts" },
+        { view: "editor", editorFilePath: "src/first.ts" },
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("parseDiffRouteSearch", () => {
   it("parses valid diff search values", () => {

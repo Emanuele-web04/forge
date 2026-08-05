@@ -979,6 +979,72 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
+  it("settles orphaned pending interactions when a provider session (re)starts", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    // A user-input request left behind by a previous runtime: its in-memory
+    // callback cannot survive the restart, so no response can ever consume it.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested-orphaned"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: asEventId("activity-user-input-requested-orphaned"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-orphaned",
+            lifecycleGeneration: "generation-before-restart",
+            questions: [],
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.emit({
+      type: "session.started",
+      eventId: asEventId("evt-session-restarted-orphaned"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    const failureActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.user-input.respond.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      requestId: "user-input-request-orphaned",
+      lifecycleGeneration: "generation-before-restart",
+      detail: expect.stringContaining(
+        "Stale pending user-input request: user-input-request-orphaned",
+      ),
+    });
+
+    // Re-ingesting another session start must not duplicate the settlement.
+    harness.emit({
+      type: "session.started",
+      eventId: asEventId("evt-session-restarted-orphaned-again"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+    });
+    await harness.drain();
+    const readModelAfter = await Effect.runPromise(harness.engine.getReadModel());
+    const failuresAfter = readModelAfter.threads
+      .find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))
+      ?.activities.filter((activity) => activity.kind === "provider.user-input.respond.failed");
+    expect(failuresAfter).toHaveLength(1);
+  });
+
   it("clears running turn state when a stop emits turn.aborted without a turn id", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

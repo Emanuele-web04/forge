@@ -22,6 +22,7 @@ import { Cache, Cause, Deferred, Duration, Effect, Layer, Option, Ref, Stream } 
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
+import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
@@ -43,6 +44,8 @@ import {
 } from "../../provider/terminalTurnApplicability.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
+import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/ProviderRuntimeEvents.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
@@ -547,6 +550,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const runtimeEvents = yield* ProviderRuntimeEventRepository;
   const commandReceipts = yield* OrchestrationCommandReceiptRepository;
   const outstandingTurnIdsByThreadRef = yield* Ref.make<ReadonlyMap<ThreadId, ReadonlySet<TurnId>>>(
@@ -1656,6 +1660,55 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * A `session.started` event marks a freshly (re)started provider runtime
+   * whose in-memory approval/user-input callbacks are empty, so any durable
+   * pending interaction recorded before it can never be answered. Requests
+   * from the new runtime are ingested strictly after this event, so every
+   * unsettled row seen here is provably orphaned. Settle them as stale —
+   * leaving them open kept the prompt on screen while every response was
+   * silently dropped, wedging the thread until the user abandoned it.
+   */
+  const settleUnanswerablePendingInteractions = (
+    threadId: ThreadId,
+    event: ProviderRuntimeEvent,
+    now: string,
+  ) =>
+    Effect.gen(function* () {
+      const rows = yield* pendingInteractions.listByThreadId({ threadId });
+      for (const row of rows) {
+        // `uncertain` rows were already reported as unanswerable; re-reporting
+        // on every session start would duplicate the failure activity.
+        if (row.status === "confirmed" || row.status === "uncertain") continue;
+        const isApproval = row.interactionKind === "approval";
+        const requestKind = isApproval ? ("approval" as const) : ("user-input" as const);
+        const commandId = providerCommandId(event, `stale-pending-${requestKind}`, row.requestId);
+        yield* orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId,
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe(commandId),
+            tone: "error",
+            kind: isApproval
+              ? "provider.approval.respond.failed"
+              : "provider.user-input.respond.failed",
+            summary: isApproval
+              ? "Provider approval response failed"
+              : "Provider user input response failed",
+            payload: {
+              detail: buildStalePendingRequestFailureDetail(requestKind, row.requestId),
+              requestId: row.requestId,
+              ...(row.lifecycleGeneration ? { lifecycleGeneration: row.lifecycleGeneration } : {}),
+            },
+            turnId: null,
+            createdAt: now,
+          },
+          createdAt: now,
+        });
+      }
+    });
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       const now = event.createdAt;
@@ -1936,6 +1989,10 @@ const make = Effect.gen(function* () {
         event.type === "turn.started" && shouldApplyThreadLifecycle
           ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
           : null;
+
+      if (event.type === "session.started") {
+        yield* settleUnanswerablePendingInteractions(thread.id, event, now);
+      }
 
       if (
         event.type === "session.started" ||
@@ -2916,6 +2973,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
   Layer.provide(
     Layer.mergeAll(
       ProjectionTurnRepositoryLive,
+      ProjectionPendingInteractionRepositoryLive,
       ProviderRuntimeEventRepositoryLive,
       OrchestrationCommandReceiptRepositoryLive,
     ),

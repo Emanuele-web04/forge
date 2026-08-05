@@ -2730,10 +2730,47 @@ const make = Effect.gen(function* () {
         pending.value.status !== "responding" ||
         pending.value.responseCommandId !== event.commandId)
     ) {
+      const pendingRow = Option.getOrUndefined(pending);
+      if (pendingRow?.status === "responding" || pendingRow?.status === "confirmed") {
+        // Another response command owns the claim (double-click dedup) or the
+        // interaction already settled; dropping the duplicate is the intended
+        // outcome and needs no user-visible settlement.
+        return null;
+      }
+      // No durable row, or a row this command can never claim (e.g. a lifecycle
+      // generation mismatch). Silence here permanently stranded the prompt: the
+      // client saw neither a resolution nor a failure, so every retry was
+      // swallowed again. Fail loudly so the stale prompt gets cleared.
+      yield* Effect.logWarning("provider.interaction.response.unclaimable", {
+        threadId: event.payload.threadId,
+        interactionKind: input.interactionKind,
+        requestId: event.payload.requestId,
+        commandId: event.commandId,
+        rowStatus: pendingRow?.status ?? "missing",
+        rowLifecycleGeneration: pendingRow?.lifecycleGeneration ?? null,
+        commandLifecycleGeneration: event.payload.lifecycleGeneration ?? null,
+      });
+      yield* appendInteractionResponseFailure(event, {
+        interactionKind: input.interactionKind,
+        detail: buildStalePendingRequestFailureDetail(
+          input.interactionKind === "approval" ? "approval" : "user-input",
+          event.payload.requestId,
+        ),
+        settlementStatus: "uncertain",
+      });
       return null;
     }
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
-    if (!providerThread) return null;
+    if (!providerThread) {
+      // The claim above already marked the row `responding`; bailing without a
+      // settlement would orphan it and silently swallow every future response.
+      yield* appendInteractionResponseFailure(event, {
+        interactionKind: input.interactionKind,
+        detail: "No provider session thread is bound to this thread.",
+        settlementStatus: "retryable",
+      });
+      return null;
+    }
     if (providerThread.session?.status !== "stopped") return providerThread.id;
     yield* appendInteractionResponseFailure(event, {
       interactionKind: input.interactionKind,

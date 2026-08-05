@@ -763,6 +763,54 @@ describe("wsNativeApi", () => {
     );
   });
 
+  it("forwards cancellable GitHub project provisioning and its progress events", async () => {
+    const input = {
+      operationId: "operation-1",
+      repository: "openai/codex",
+      destinationParent: "/projects",
+      directoryName: "codex",
+      commandId: CommandId.makeUnsafe("command-1"),
+      projectId: ProjectId.makeUnsafe("project-1"),
+      newProjectSpaceId: null,
+      defaultModelSelection: { provider: "codex" as const, model: "gpt-5" },
+      createdAt: "2026-08-04T00:00:00.000Z",
+    };
+    const result = {
+      operationId: input.operationId,
+      repository: input.repository,
+      workspaceRoot: "/projects/codex",
+      projectId: input.projectId,
+      checkout: "created" as const,
+    };
+    requestMock.mockResolvedValue(result);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const progressListener = vi.fn();
+    api.projects.onProvisionProgress(progressListener);
+    const controller = new AbortController();
+
+    await expect(
+      api.projects.provisionFromGitHub(input, { signal: controller.signal }),
+    ).resolves.toEqual(result);
+    emitPush(WS_CHANNELS.projectProvisionProgress, {
+      operationId: input.operationId,
+      kind: "phase",
+      phase: "cloning",
+      message: "Cloning openai/codex",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsProvisionFromGitHub, input, {
+      timeoutMs: null,
+      signal: controller.signal,
+    });
+    expect(progressListener).toHaveBeenCalledWith({
+      operationId: input.operationId,
+      kind: "phase",
+      phase: "cloning",
+      message: "Cloning openai/codex",
+    });
+  });
+
   it("forwards full-thread diff requests to the orchestration websocket method", async () => {
     requestMock.mockResolvedValue({ diff: "patch" });
     const { createWsNativeApi } = await import("./wsNativeApi");

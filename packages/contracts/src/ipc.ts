@@ -83,6 +83,11 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  GitHubProjectProvisionInput,
+  GitHubProjectProvisionProgressEvent,
+  GitHubProjectProvisionResult,
+} from "./githubProjectProvisioning";
+import type {
   PullRequestActionInput,
   PullRequestActionResult,
   PullRequestCommentInput,
@@ -107,6 +112,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectResolveOutOfRootFileReferenceInput,
+  ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
   ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
@@ -454,6 +461,7 @@ export interface DesktopNotificationInput {
   title: string;
   body?: string;
   silent?: boolean;
+  suppressWhenForeground?: boolean;
   threadId?: ThreadId;
 }
 
@@ -575,6 +583,9 @@ export interface NativeApi {
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    resolveOutOfRootFileReference: (
+      input: ProjectResolveOutOfRootFileReferenceInput,
+    ) => Promise<ProjectResolveOutOfRootFileReferenceResult>;
     createLocalFilePreviewGrant: (
       input: ProjectCreateLocalFilePreviewGrantInput,
     ) => Promise<ProjectCreateLocalFilePreviewGrantResult>;
@@ -583,6 +594,13 @@ export interface NativeApi {
     stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;
     listDevServers: () => Promise<ProjectListDevServersResult>;
     onDevServerEvent: (callback: (event: ProjectDevServerEvent) => void) => () => void;
+    provisionFromGitHub: (
+      input: GitHubProjectProvisionInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<GitHubProjectProvisionResult>;
+    onProvisionProgress: (
+      callback: (event: GitHubProjectProvisionProgressEvent) => void,
+    ) => () => void;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;

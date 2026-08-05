@@ -11,6 +11,7 @@ import {
   setThreadMarkerDone,
   setThreadMarkerLabel,
 } from "@synara/shared/threadMarkers";
+import { isStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -1666,35 +1667,55 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             activity.kind === "provider.approval.respond.failed" ||
             activity.kind === "provider.user-input.respond.failed"
           ) {
-            if (Option.isNone(existingRow) || existingRow.value.status !== "responding") {
-              return;
-            }
-            if (
-              lifecycleGeneration !== null &&
-              existingRow.value.lifecycleGeneration !== lifecycleGeneration
-            ) {
+            if (Option.isNone(existingRow)) {
               return;
             }
             const responseCommandIdValue = payloadNonEmptyString(
               activity.payload,
               "responseCommandId",
             );
-            const responseCommandId = responseCommandIdValue
-              ? CommandId.makeUnsafe(responseCommandIdValue)
-              : null;
-            if (
-              responseCommandId === null ||
-              existingRow.value.responseCommandId !== responseCommandId
-            ) {
-              return;
+            if (responseCommandIdValue === null) {
+              // Reconciliation (server restart, provider session restart)
+              // reports stale requests without a claiming response command: no
+              // response was in flight, but the provider callback that could
+              // consume the interaction is gone. Settle the row anyway —
+              // leaving it `pending` kept threads answerable-looking forever
+              // while every actual response hit a dead provider.
+              if (
+                existingRow.value.status === "confirmed" ||
+                !isStalePendingRequestFailureDetail(
+                  payloadNonEmptyString(activity.payload, "detail") ?? undefined,
+                )
+              ) {
+                return;
+              }
+              nextRow = {
+                ...existingRow.value,
+                status: "uncertain",
+                resolvedAt: null,
+              };
+            } else {
+              if (existingRow.value.status !== "responding") {
+                return;
+              }
+              if (
+                lifecycleGeneration !== null &&
+                existingRow.value.lifecycleGeneration !== lifecycleGeneration
+              ) {
+                return;
+              }
+              const responseCommandId = CommandId.makeUnsafe(responseCommandIdValue);
+              if (existingRow.value.responseCommandId !== responseCommandId) {
+                return;
+              }
+              const nextStatus =
+                extractApprovalFailureSettlementStatus(activity.payload) ?? "uncertain";
+              nextRow = {
+                ...existingRow.value,
+                status: nextStatus,
+                resolvedAt: null,
+              };
             }
-            const nextStatus =
-              extractApprovalFailureSettlementStatus(activity.payload) ?? "uncertain";
-            nextRow = {
-              ...existingRow.value,
-              status: nextStatus,
-              resolvedAt: null,
-            };
           } else {
             if (
               activity.kind !== "approval.requested" &&

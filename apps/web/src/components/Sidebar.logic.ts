@@ -677,6 +677,39 @@ export function findDeepestWorkspaceRootMatch<T>(
   return best;
 }
 
+export async function runExclusiveProjectAddition<T>(
+  lock: { current: boolean },
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (lock.current) {
+    throw new Error("Another project is already being added.");
+  }
+
+  lock.current = true;
+  try {
+    return await operation();
+  } finally {
+    lock.current = false;
+  }
+}
+
+export async function runProjectProvisionWithCancellationRecovery<T>(input: {
+  readonly signal: AbortSignal;
+  readonly provision: () => Promise<T>;
+  readonly recoverCommittedProject: () => Promise<boolean>;
+}): Promise<
+  { readonly status: "completed"; readonly result: T } | { readonly status: "recovered" }
+> {
+  try {
+    return { status: "completed", result: await input.provision() };
+  } catch (error) {
+    if (!input.signal.aborted || !(await input.recoverCommittedProject())) {
+      throw error;
+    }
+    return { status: "recovered" };
+  }
+}
+
 // Rechecks an existing local project against the server before the add flow decides to reuse it.
 export async function recoverExistingAddProjectTarget(input: {
   readonly existingProjectId: ProjectId | null | undefined;
