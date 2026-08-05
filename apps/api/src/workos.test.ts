@@ -44,6 +44,26 @@ describe("verifyAccessToken", () => {
     await expect(auth.verifyAccessToken(token)).rejects.toThrow();
   });
 
+  // Guards against a token minted by some other WorkOS tenant/environment that
+  // happens to be signature-valid against a JWKS we trust.
+  it("rejects a token from an unexpected issuer", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const token = await workos.signAccessToken({
+      sub: "user_123",
+      sid: "session_456",
+      issuer: "https://evil.example.com/",
+    });
+    await expect(auth.verifyAccessToken(token)).rejects.toThrow();
+  });
+
+  // WorkOS mints `iss` with a trailing slash; a config that drops it must not
+  // silently accept.
+  it("is strict about the issuer's trailing slash", async () => {
+    const auth = createWorkosAuth(workos.config({ workosIssuer: workos.origin }));
+    const token = await workos.signAccessToken({ sub: "user_123", sid: "session_456" });
+    await expect(auth.verifyAccessToken(token)).rejects.toThrow();
+  });
+
   it("rejects a malformed token", async () => {
     const auth = createWorkosAuth(workos.config());
     await expect(auth.verifyAccessToken("not-a-jwt")).rejects.toThrow();

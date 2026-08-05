@@ -38,6 +38,10 @@ What that means in practice:
 - **The JWKS is WorkOS's, served by WorkOS.** This service only reads it, at
   `https://api.workos.com/sso/jwks/{WORKOS_CLIENT_ID}`. Nothing is generated or
   stored locally, so there is no key material to rotate or lose.
+- **Access tokens are checked against an expected issuer.** WorkOS mints `iss`
+  as `https://api.workos.com/` — with the trailing slash. If you configure a
+  custom auth domain in the dashboard, WorkOS issues under that domain instead
+  and you must set `WORKOS_ISSUER` to match, or every token is rejected.
 
 ### Dashboard setup
 
@@ -81,6 +85,7 @@ SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts 
 | `PORT`              | no       | `8788`                           | HTTP listen port.                                        |
 | `WORKOS_API_URL`    | no       | `https://api.workos.com`         | WorkOS API origin. Override only to point at a stand-in. |
 | `WORKOS_JWKS_URL`   | no       | `{API_URL}/sso/jwks/{CLIENT_ID}` | Full JWKS URL. Override only to point at a stand-in.     |
+| `WORKOS_ISSUER`     | no       | `{API_URL}/`                     | Expected `iss` claim. Set only for a custom auth domain. |
 | `TEST_DATABASE_URL` | tests    | —                                | Database the Vitest suites use. Without it they skip.    |
 
 A missing required variable fails the boot with an explicit

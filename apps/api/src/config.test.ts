@@ -47,6 +47,24 @@ describe("loadApiConfig", () => {
     expect(config.workosJwksUrl).toBe("http://127.0.0.1:4011/keys.json");
   });
 
+  // WorkOS mints `iss` with a trailing slash. Dropping it would reject every
+  // real token, so the default carries it deliberately.
+  it("defaults the issuer to the WorkOS API url with a trailing slash", () => {
+    expect(loadApiConfig(base).workosIssuer).toBe("https://api.workos.com/");
+  });
+
+  it("derives the issuer from an overridden API url", () => {
+    const config = loadApiConfig({ ...base, WORKOS_API_URL: "http://127.0.0.1:4010" });
+    expect(config.workosIssuer).toBe("http://127.0.0.1:4010/");
+  });
+
+  // A custom auth domain changes `iss` to that domain, so it must be settable
+  // independently of the API url.
+  it("accepts an explicit issuer override for a custom auth domain", () => {
+    const config = loadApiConfig({ ...base, WORKOS_ISSUER: "https://auth.example.com" });
+    expect(config.workosIssuer).toBe("https://auth.example.com");
+  });
+
   it("ignores a trailing slash on the API url so derived paths stay single-slashed", () => {
     const config = loadApiConfig({ ...base, WORKOS_API_URL: "https://api.workos.com/" });
     expect(config.workosApiUrl).toBe("https://api.workos.com");

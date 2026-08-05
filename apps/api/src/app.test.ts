@@ -46,6 +46,24 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
     expect(typeof body.message).toBe("string");
   });
 
+  // The net under every /api/ route: whatever throws, the client still gets the
+  // documented JSON shape instead of Hono's plain-text "Internal Server Error".
+  it("maps an unhandled throw under /api/ onto the error contract", async () => {
+    const built = createApp(baseConfig);
+    pool = built.pool;
+
+    built.app.get("/api/v1/boom", () => {
+      throw new Error("simulated downstream failure");
+    });
+
+    const res = await built.app.request("/api/v1/boom");
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = (await res.json()) as AccountErrorBody;
+    expect(body.error).toBe("internal_error");
+    expect(typeof body.message).toBe("string");
+  });
+
   // TASK2: the AuthKit callback and device pages land here; for now a non-API
   // path only has to stay up rather than 404 into the API error shape.
   it("answers non-API paths without the API error body", async () => {

@@ -7,7 +7,8 @@ export const hosts = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     // WorkOS user id. Identity lives in WorkOS, so there is no local user table
-    // to reference — orphan cleanup happens through WorkOS webhooks, not an FK.
+    // to reference; orphaned rows are tolerated until WorkOS webhook cleanup is
+    // built (future work).
     userId: text("user_id").notNull(),
     environmentId: text("environment_id").notNull(),
     name: text("name").notNull(),

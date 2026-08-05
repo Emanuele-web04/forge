@@ -95,7 +95,7 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
 
   return {
     async verifyAccessToken(token) {
-      const { payload } = await jwtVerify(token, jwks);
+      const { payload } = await jwtVerify(token, jwks, { issuer: config.workosIssuer });
       const { sub, sid } = payload;
       // A WorkOS access token always carries both; anything else is not one,
       // and treating it as authenticated would lose the session identity that

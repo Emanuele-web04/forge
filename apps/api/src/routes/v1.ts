@@ -20,7 +20,7 @@ import type { ApiConfig } from "../config";
 import * as schema from "../db/schema";
 import { hosts, hostTokens } from "../db/schema";
 import { mintHostToken } from "../hostTokens";
-import type { WorkosAuth } from "../workos";
+import { WorkosApiError, type WorkosAuth, type WorkosUser } from "../workos";
 import packageJson from "../../package.json" with { type: "json" };
 import { authenticateHostToken, extractBearerToken, isHostTokenHeader } from "./hostAuth";
 
@@ -61,7 +61,9 @@ export function createV1Routes(deps: {
   db: NodePgDatabase<typeof schema>;
   config: ApiConfig;
 }): Hono {
-  const { auth, db, config } = deps;
+  // TASK2: `config` is unused since /instance stopped reading it. Kept in the
+  // deps because the AuthKit callback and device routes will need it.
+  const { auth, db } = deps;
   const v1 = new Hono();
 
   /**
@@ -86,7 +88,21 @@ export function createV1Routes(deps: {
     const session = await getDeviceSession(c);
     if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
 
-    const user = await auth.getUser(session.userId);
+    let user: WorkosUser;
+    try {
+      user = await auth.getUser(session.userId);
+    } catch (error) {
+      // The token verified, so the caller held a valid session — but WorkOS
+      // will not describe the user. A 404 means the account was deleted while
+      // the token was still live, which is an authentication failure from the
+      // client's point of view; anything else is an upstream fault and must not
+      // be reported as the caller's error.
+      if (error instanceof WorkosApiError && error.status === 404) {
+        return errorResponse(c, 401, "unauthorized", "This account no longer exists");
+      }
+      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+    }
+
     const me: AccountMe = {
       id: user.id,
       name: user.name ?? user.email,

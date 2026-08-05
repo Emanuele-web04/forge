@@ -14,6 +14,22 @@ export function createApp(config: ApiConfig): { app: Hono; auth: WorkosAuth; poo
 
   app.route("/api/v1", createV1Routes({ auth, db, config }));
 
+  /**
+   * Safety net: any unhandled throw under /api/ still answers with an
+   * AccountErrorBody. Without this Hono emits plain-text "Internal Server
+   * Error", so a client parsing the documented JSON shape fails on exactly the
+   * responses it most needs to read. Non-API paths keep the default handler.
+   */
+  app.onError((error, c) => {
+    if (!c.req.path.startsWith("/api/")) throw error;
+    console.error(`[api] unhandled error on ${c.req.method} ${c.req.path}`, error);
+    const body: AccountErrorBody = {
+      error: "internal_error",
+      message: "Something went wrong handling this request",
+    };
+    return c.json(body, 500);
+  });
+
   // TASK2: the AuthKit callback and device-flow endpoints mount here. Until
   // then non-API paths answer with a plain placeholder — the ceremony UI this
   // service used to serve is gone and WorkOS hosts the sign-in pages.

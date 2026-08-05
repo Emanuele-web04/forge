@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AccountErrorBody } from "@synara/contracts";
 import { Hono } from "hono";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ApiConfig } from "../config";
@@ -100,6 +101,47 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       email: "ada@example.com",
       image: "https://cdn.example.com/ada.png",
     });
+  });
+
+  // A live token whose user WorkOS will not describe must still answer inside
+  // the error contract, not escape as a plain-text 500.
+  it("returns 401 in the error contract when the account no longer exists", async () => {
+    const { app } = buildApp();
+    // Never registered with the fake, so the lookup 404s.
+    const token = await workos.signAccessToken({
+      sub: "user_deleted_mid_session",
+      sid: `session_${randomUUID()}`,
+    });
+
+    const res = await app.request("/api/v1/me", { headers: authHeaders(token) });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = (await res.json()) as AccountErrorBody;
+    expect(body.error).toBe("unauthorized");
+    expect(typeof body.message).toBe("string");
+  });
+
+  it("returns 502 in the error contract when the identity provider fails", async () => {
+    const { db } = buildApp();
+    // Point at a closed port so the user lookup fails as a transport error
+    // rather than a 404 — the upstream-fault branch, not the deleted-user one.
+    const brokenConfig: ApiConfig = { ...config, workosApiUrl: "http://127.0.0.1:1" };
+    const app = new Hono();
+    app.route(
+      "/api/v1",
+      createV1Routes({ auth: createWorkosAuth(brokenConfig), db, config: brokenConfig }),
+    );
+
+    const user = workos.addUser({});
+    const token = await workos.signAccessToken({
+      sub: user.id,
+      sid: `session_${randomUUID()}`,
+    });
+
+    const res = await app.request("/api/v1/me", { headers: authHeaders(token) });
+    expect(res.status).toBe(502);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toMatchObject({ error: "internal_error" });
   });
 
   it("registers a host and lists it back", async () => {

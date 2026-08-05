@@ -37,8 +37,17 @@ export type FakeWorkos = {
   config(overrides?: Partial<ApiConfig>): ApiConfig;
   /** Registers a user that `getUser` will return, and returns its id. */
   addUser(user: Partial<FakeWorkosUser> & { id?: string }): FakeWorkosUser;
-  /** Mints an access token with the given claims; `expiresIn` accepts jose spans. */
-  signAccessToken(claims: { sub: string; sid?: string; expiresIn?: string }): Promise<string>;
+  /**
+   * Mints an access token with the given claims; `expiresIn` accepts jose spans.
+   * `issuer` defaults to the value this server's config expects — pass a
+   * different one to exercise the issuer check.
+   */
+  signAccessToken(claims: {
+    sub: string;
+    sid?: string;
+    expiresIn?: string;
+    issuer?: string;
+  }): Promise<string>;
   /** Every request the server has seen, oldest first. */
   requests: FakeWorkosRequest[];
   close(): Promise<void>;
@@ -108,6 +117,8 @@ export async function startFakeWorkos(
         workosClientId: clientId,
         workosApiUrl: origin,
         workosJwksUrl: `${origin}/sso/jwks/${clientId}`,
+        // Mirrors WorkOS: the API origin with a trailing slash.
+        workosIssuer: `${origin}/`,
         ...overrides,
       };
     },
@@ -117,20 +128,26 @@ export async function startFakeWorkos(
       // test database outlives a run, so a counter would make the second run
       // against the same database inherit the first run's hosts.
       const id = user.id ?? `user_fake_${randomUUID()}`;
+      // Explicitly-undefined keys are dropped before the spread: `{id: undefined}`
+      // would otherwise overwrite the id resolved just above.
+      const provided = Object.fromEntries(
+        Object.entries(user).filter(([, value]) => value !== undefined),
+      );
       const record: FakeWorkosUser = {
         id,
-        email: user.email ?? `${id}@example.com`,
-        ...user,
+        email: `${id}@example.com`,
+        ...provided,
       };
-      users.set(id, record);
+      users.set(record.id, record);
       return record;
     },
 
-    signAccessToken({ sub, sid, expiresIn = "5m" }) {
+    signAccessToken({ sub, sid, expiresIn = "5m", issuer = `${origin}/` }) {
       const claims: Record<string, unknown> = { sub };
       if (sid !== undefined) claims.sid = sid;
       return new SignJWT(claims)
         .setProtectedHeader({ alg: "RS256", kid: KID })
+        .setIssuer(issuer)
         .setIssuedAt()
         .setExpirationTime(expiresIn)
         .sign(privateKey);

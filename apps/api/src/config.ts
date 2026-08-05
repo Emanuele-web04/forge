@@ -8,6 +8,12 @@ export type ApiConfig = {
   workosApiUrl: string;
   /** Full JWKS URL. Derived from the client id unless WORKOS_JWKS_URL overrides it. */
   workosJwksUrl: string;
+  /**
+   * Expected `iss` claim on access tokens. WorkOS mints the API origin *with* a
+   * trailing slash, and swaps in a custom auth domain when one is configured —
+   * hence the override rather than a constant.
+   */
+  workosIssuer: string;
 };
 
 export class ApiConfigError extends Error {}
@@ -33,6 +39,7 @@ export function loadApiConfig(env: Env): ApiConfig {
   const workosClientId = env.WORKOS_CLIENT_ID as string;
   const workosApiUrl = (env.WORKOS_API_URL ?? DEFAULT_WORKOS_API_URL).replace(/\/+$/, "");
   const workosJwksUrl = env.WORKOS_JWKS_URL ?? `${workosApiUrl}/sso/jwks/${workosClientId}`;
+  const workosIssuer = env.WORKOS_ISSUER ?? `${workosApiUrl}/`;
 
   return {
     databaseUrl: env.DATABASE_URL as string,
@@ -42,5 +49,6 @@ export function loadApiConfig(env: Env): ApiConfig {
     workosClientId,
     workosApiUrl,
     workosJwksUrl,
+    workosIssuer,
   };
 }
