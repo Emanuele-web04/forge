@@ -595,4 +595,100 @@ describe("Antigravity CLI integration helpers", () => {
       }),
     ).rejects.toThrow("Antigravity helper timed out after 50ms");
   });
+
+  // #465: an active Stop hook must not emit a non-standard decision that can
+  // hang the print process after the assistant reply is already visible.
+  it("answers stop hooks with a neutral allow-exit payload", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stop-hook-"));
+    const scriptPath = path.join(directory, "capture.cjs");
+    const eventPath = path.join(directory, "events.ndjson");
+    try {
+      await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
+      const result = spawnSync(process.execPath, [scriptPath, "stop"], {
+        env: { ...process.env, SYNARA_ANTIGRAVITY_EVENTS: eventPath },
+        input: JSON.stringify({ stop: true }),
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("{}");
+      expect(result.stdout).not.toContain('"decision":"stop"');
+      expect(await fs.readFile(eventPath, "utf8")).toContain("stop\t");
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Antigravity turn settle on cancel (#465)", () => {
+  it("unlocks a running turn when Cancel cannot prove process exit", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-interrupt-hung-"));
+    // Fake pid that does not exist so supervised teardown cannot prove exit.
+    // Cancel must still force-settle the turn (#465).
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      _options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      const child = new EventEmitter() as ChildProcess;
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      Object.assign(child, {
+        pid: 42_002,
+        stdout,
+        stderr,
+        killed: false,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        kill: () => true,
+      });
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-interrupt-hung");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "stuck working",
+            attachments: [],
+          });
+          const before = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
+          expect(before?.status).toBe("running");
+          expect(before?.activeTurnId).toBe(turn.turnId);
+
+          yield* adapter.interruptTurn(threadId, turn.turnId);
+
+          const after = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
+          expect(after?.status).toBe("ready");
+          expect(after?.activeTurnId).toBeUndefined();
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-interrupt-hung-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

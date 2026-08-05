@@ -120,6 +120,8 @@ type AntigravitySessionContext = {
   sawAssistant: boolean;
   interrupted: boolean;
   stopped: boolean;
+  /** Guards against double turn.completed (process close + interrupt/stop). */
+  turnTerminalEmitted: boolean;
 };
 
 function messageFromCause(cause: unknown, fallback: string): string {
@@ -167,6 +169,12 @@ function shellQuote(value: string, platform: NodeJS.Platform = process.platform)
  * "ask" preserves the permission flow the user would have without the hook.
  * `{}` stays correct for the other hook points, including Stop, where an
  * inactive hook must not force a decision over Antigravity's default.
+ *
+ * Active Stop hooks must also stay neutral (`{}`). Returning
+ * `{"decision":"stop"}` is not a valid Antigravity/Claude stop decision
+ * (only `"block"` is recognized to prevent exit) and can leave the print
+ * process hung after the assistant has already finished, so the UI stays
+ * "Working" and Cancel has nothing left to kill (#465).
  */
 function inactiveHookOutput(event: string): string {
   return event === "pre-tool" ? '{"decision":"ask"}' : "{}";
@@ -204,9 +212,10 @@ process.stdin.on("end", () => {
   if (event === "pre-tool") {
     const decision = process.env.SYNARA_ANTIGRAVITY_HOOK_DECISION === "allow" ? "allow" : "ask";
     process.stdout.write(JSON.stringify({ decision }) + "\\n");
-  } else if (event === "stop") {
-    process.stdout.write('{"decision":"stop"}\\n');
   } else {
+    // Stop and other non-tool hooks: empty object allows the agent to exit.
+    // Do not emit decision:"stop" — it is not a recognized stop decision and
+    // can hang the print process after the reply is already visible (#465).
     process.stdout.write("{}\\n");
   }
 });
@@ -653,6 +662,58 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }).pipe(Effect.asVoid);
     };
 
+    /**
+     * Emit a single terminal turn.completed for the active turn and mark the
+     * session idle. Idempotent so process-close, interrupt, and stop-hook
+     * paths can all call it without double-settling (#465).
+     */
+    const settleActiveTurn = (
+      context: AntigravitySessionContext,
+      input: {
+        readonly state: "completed" | "interrupted" | "failed";
+        readonly stopReason: "model_stop" | "interrupted" | "error";
+        readonly errorMessage?: string;
+        readonly raw?: ReturnType<typeof raw>;
+      },
+    ): boolean => {
+      if (context.turnTerminalEmitted || context.activeTurnId === undefined) {
+        return false;
+      }
+      const completionBase = base(context);
+      context.turnTerminalEmitted = true;
+      delete context.activeProcess;
+      delete context.activeTurnId;
+      const {
+        activeTurnId: _activeTurnId,
+        lastError: _lastError,
+        ...inactiveSession
+      } = context.session;
+      const failed = input.state === "failed";
+      context.session = {
+        ...inactiveSession,
+        status: failed ? "error" : "ready",
+        ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+        updatedAt: new Date().toISOString(),
+        ...(failed && input.errorMessage ? { lastError: input.errorMessage } : {}),
+      };
+      offer({
+        ...completionBase,
+        type: "turn.completed",
+        payload:
+          input.state === "interrupted"
+            ? { state: "interrupted", stopReason: "interrupted" }
+            : input.state === "failed"
+              ? {
+                  state: "failed",
+                  stopReason: "error",
+                  errorMessage: input.errorMessage ?? "Antigravity turn failed.",
+                }
+              : { state: "completed", stopReason: "model_stop" },
+        ...(input.raw ? { raw: input.raw } : {}),
+      } satisfies ProviderRuntimeEvent);
+      return true;
+    };
+
     const currentTurn = (context: AntigravitySessionContext): StoredTurn | undefined =>
       context.activeTurnId
         ? context.turns.find((turn) => turn.id === context.activeTurnId)
@@ -857,6 +918,18 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             raw: raw(eventName, payload),
           } satisfies ProviderRuntimeEvent);
         }
+        // Agent finished: if the print process lingers, tear it down so the
+        // close handler (or interrupt fallback) can settle the turn (#465).
+        if (eventName === "stop" && context.activeProcess && !context.turnTerminalEmitted) {
+          const child = context.activeProcess;
+          void teardownChildProcessTree(child).catch(() => {
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              // Process may already be gone.
+            }
+          });
+        }
       }
       await readTranscript(context);
     };
@@ -929,6 +1002,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           sawAssistant: false,
           interrupted: false,
           stopped: false,
+          turnTerminalEmitted: false,
         };
         sessions.set(input.threadId, context);
         offer({
@@ -1046,6 +1120,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.pendingTools = [];
         context.sawAssistant = false;
         context.interrupted = false;
+        context.turnTerminalEmitted = false;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
           ...context.session,
@@ -1126,12 +1201,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         child.once("close", (code, signal) => {
           clearInterval(timer);
           void (async () => {
-            if (sessions.get(input.threadId) !== context || context.activeProcess !== child) {
+            if (sessions.get(input.threadId) !== context) {
               releaseTurnGatewayLease(context, gatewaySessionLease);
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            const completionBase = base(context);
+            // Another path may already have settled (interrupt / stop-hook kill).
+            // Still drain hooks/stdout before deciding, but never double-complete.
             const completedTurnId = context.activeTurnId;
             await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, completedTurnId));
             // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
@@ -1152,6 +1228,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 "assistant_text",
               );
             }
+            if (context.turnTerminalEmitted) {
+              if (context.activeProcess === child) delete context.activeProcess;
+              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+              return;
+            }
             const interrupted = context.interrupted || signal !== null;
             const failed = !interrupted && (code ?? 1) !== 0;
             if (failed && stderr.trim()) {
@@ -1162,37 +1243,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 raw: raw("stderr", { code, stderr }),
               } satisfies ProviderRuntimeEvent);
             }
-            delete context.activeProcess;
-            delete context.activeTurnId;
-            const {
-              activeTurnId: _activeTurnId,
-              lastError: _lastError,
-              ...inactiveSession
-            } = context.session;
-            context.session = {
-              ...inactiveSession,
-              status: failed ? "error" : "ready",
-              ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
-              updatedAt: new Date().toISOString(),
+            settleActiveTurn(context, {
+              state: interrupted ? "interrupted" : failed ? "failed" : "completed",
+              stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
               ...(failed
-                ? { lastError: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` }
+                ? {
+                    errorMessage:
+                      stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                  }
                 : {}),
-            };
-            offer({
-              ...completionBase,
-              type: "turn.completed",
-              payload: interrupted
-                ? { state: "interrupted", stopReason: "interrupted" }
-                : failed
-                  ? {
-                      state: "failed",
-                      stopReason: "error",
-                      errorMessage:
-                        stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
-                    }
-                  : { state: "completed", stopReason: "model_stop" },
               raw: raw("process-exit", { code, signal, stdout, stderr }),
-            } satisfies ProviderRuntimeEvent);
+            });
             await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
           })();
         });
@@ -1220,7 +1281,41 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           activeTurnId,
           Effect.gen(function* () {
             context.interrupted = true;
-            yield* teardownActiveProcess(context, "turn/interrupt");
+            const hadProcess = context.activeProcess !== undefined;
+            if (hadProcess) {
+              // Prefer process close for settlement so stdout/hooks still drain.
+              // If teardown cannot prove exit, force-settle so Cancel never no-ops (#465).
+              yield* teardownActiveProcess(context, "turn/interrupt").pipe(
+                Effect.catch((error) =>
+                  Effect.gen(function* () {
+                    const detail =
+                      error instanceof ProviderAdapterRequestError
+                        ? error.detail
+                        : messageFromCause(error, "interrupt teardown failed");
+                    yield* Effect.logWarning("antigravity.interrupt_teardown_failed", {
+                      threadId,
+                      detail,
+                    });
+                    settleActiveTurn(context, {
+                      state: "interrupted",
+                      stopReason: "interrupted",
+                      raw: raw("interrupt-teardown-failed", { detail }),
+                    });
+                  }),
+                ),
+              );
+            }
+            // Process already gone (or never attached) but turn still open — Cancel
+            // must still unlock the composer.
+            if (!context.turnTerminalEmitted && context.activeTurnId !== undefined) {
+              settleActiveTurn(context, {
+                state: "interrupted",
+                stopReason: "interrupted",
+                raw: raw("interrupt-without-process", {
+                  hadProcess,
+                }),
+              });
+            }
           }),
         );
       });
