@@ -138,6 +138,16 @@ export async function deleteAccountCredentials(baseDir: string): Promise<void> {
   await fs.rm(accountCredentialsPath(baseDir), { force: true });
 }
 
+/** Deletes the credentials file, reporting whether there was one to delete. */
+async function deleteAccountCredentialsIfPresent(baseDir: string): Promise<boolean> {
+  try {
+    await fs.rm(accountCredentialsPath(baseDir));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveAccountUrl(input: {
   readonly flag?: string | undefined;
   readonly env?: NodeJS.ProcessEnv;
@@ -243,6 +253,15 @@ function isUnauthorized(error: unknown): boolean {
   return error instanceof AccountApiError && (error.status === 401 || error.status === 403);
 }
 
+/**
+ * Whether the identity provider actually refused the grant, as opposed to
+ * failing to answer. Only a 4xx means the stored refresh token is genuinely
+ * spent; a 5xx, a timeout, or a DNS failure says nothing about it.
+ */
+function isGrantRejected(error: unknown): boolean {
+  return error instanceof AccountApiError && error.status >= 400 && error.status < 500;
+}
+
 export interface WithFreshAccessTokenOptions {
   readonly baseDir: string;
   readonly client: AccountClient;
@@ -261,6 +280,10 @@ export interface WithFreshAccessTokenOptions {
  * tokens are single-use: if the process died between redeeming one and writing
  * the replacement, the stored token would already be spent and the user would
  * be silently signed out with no way to tell why.
+ *
+ * Renewal is driven purely by a rejected call, not by reading `exp` off the
+ * JWT first. The deliberate trade is one wasted round trip per expiry against
+ * having to parse and trust token internals here.
  */
 export async function withFreshAccessToken<A>(
   options: WithFreshAccessTokenOptions,
@@ -281,11 +304,16 @@ export async function withFreshAccessToken<A>(
         clientId: credentials.workosClientId,
         workosApiUrl: credentials.workosApiUrl,
       });
-    } catch {
-      // The refresh token is spent or revoked. Drop only the session half of
-      // the file: the host registration is still real, and keeping it lets a
-      // later `synara auth` re-link this machine instead of stranding a
-      // phantom host on the account.
+    } catch (refreshError) {
+      // Only a refusal proves the token is dead. On an outage or a network
+      // failure the stored token is probably still good, and keeping a
+      // possibly-spent token costs one failed command, where discarding a
+      // possibly-valid one costs a full re-authentication.
+      if (!isGrantRejected(refreshError)) throw refreshError;
+
+      // Drop only the session half of the file: the host registration is
+      // still real, and keeping it lets a later `synara auth` re-link this
+      // machine instead of stranding a phantom host on the account.
       const { accessToken: _accessToken, refreshToken: _refreshToken, ...rest } = credentials;
       await writeAccountCredentials(baseDir, rest);
       throw new SessionExpiredError();
@@ -449,7 +477,16 @@ export async function runAuthLogout(options: LogoutOptions): Promise<void> {
   // expired still has a host registration to tear down and a file to delete.
   const credentials = await readAccountFile(options.baseDir);
   if (!credentials) {
-    stdout("Not signed in — nothing to do.\n");
+    // A file that exists but does not parse as v2 is a leftover from a
+    // previous version or a corrupt write. Deleting it is the whole point of
+    // logout, and leaving it behind would also keep `synara auth` from ever
+    // reporting a clean "Not signed in".
+    const stale = await deleteAccountCredentialsIfPresent(options.baseDir);
+    stdout(
+      stale
+        ? "Removed stale credentials from a previous version. The host record may need manual removal.\n"
+        : "Not signed in — nothing to do.\n",
+    );
     return;
   }
 

@@ -284,6 +284,56 @@ describe("withFreshAccessToken", () => {
     expect(await readAccountCredentials(baseDir)).toEqual(credentials());
   });
 
+  it("keeps the stored refresh token when the identity provider is merely unreachable", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    // A network blip says nothing about whether the refresh token is still
+    // good. Discarding it here would force a full re-auth over an outage.
+    await expect(
+      withFreshAccessToken(
+        {
+          baseDir,
+          client: makeClient({
+            refreshAccessToken: () => Promise.reject(new Error("ECONNREFUSED")),
+          }),
+        },
+        () => Promise.reject(unauthorized()),
+      ),
+    ).rejects.toThrow("ECONNREFUSED");
+
+    expect(await readAccountCredentials(baseDir)).toEqual(credentials());
+  });
+
+  it("keeps the stored refresh token when the identity provider returns a 5xx", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    const caught = await withFreshAccessToken(
+      {
+        baseDir,
+        client: makeClient({
+          refreshAccessToken: () =>
+            Promise.reject(
+              new AccountApiError({
+                code: "internal_error",
+                status: 503,
+                message: "Identity provider is unavailable",
+              }),
+            ),
+        }),
+      },
+      () => Promise.reject(unauthorized()),
+    ).catch((error: unknown) => error);
+
+    // The upstream failure must reach the caller unchanged: reporting it as an
+    // expired session would send the user to re-authenticate over an outage.
+    expect(caught).toBeInstanceOf(AccountApiError);
+    expect(caught).not.toBeInstanceOf(SessionExpiredError);
+    expect(caught).toMatchObject({ status: 503 });
+    expect(await readAccountCredentials(baseDir)).toEqual(credentials());
+  });
+
   it("signs the session out but keeps the host fields when the refresh token is spent", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(
@@ -597,6 +647,29 @@ describe("runAuthLogout", () => {
 
     expect(stdout.text()).toContain("Signed out of https://stored.example.com");
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
+  });
+
+  it("deletes a pre-WorkOS credentials file instead of silently no-opping", async () => {
+    const baseDir = makeBaseDir();
+    await fsp.writeFile(
+      accountCredentialsPath(baseDir),
+      JSON.stringify({
+        accountUrl: "https://accounts.example.com",
+        deviceToken: "legacy-device-token",
+        hostToken: "host-token",
+        hostId: "host_1",
+      }),
+      "utf8",
+    );
+    const stdout = makeStdout();
+
+    await runAuthLogout({ baseDir, stdout: stdout.write, client: makeClient({}) });
+
+    // The legacy host token cannot authenticate against the new API, so the
+    // host record is the user's to clean up — but the file must still go.
+    expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
+    expect(stdout.text()).toContain("stale credentials");
+    expect(stdout.text()).toContain("manual removal");
   });
 
   it("reports when there is nothing to sign out of", async () => {

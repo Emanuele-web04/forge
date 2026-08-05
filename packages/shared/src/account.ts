@@ -57,16 +57,22 @@ export interface DeviceTokenSuccess {
   user: { id: string; email: string; name?: string };
 }
 
-interface WorkosAuthenticateSuccess {
-  access_token: string;
-  refresh_token: string;
-  user: {
-    id: string;
-    email: string;
-    first_name?: string | null;
-    last_name?: string | null;
-  };
-}
+/**
+ * The subset of WorkOS's authenticate response this client depends on, decoded
+ * rather than cast: an unannounced shape change must fail loudly here instead
+ * of persisting `undefined` as someone's access token.
+ */
+const WorkosAuthenticateSuccess = Schema.Struct({
+  access_token: Schema.String,
+  refresh_token: Schema.String,
+  user: Schema.Struct({
+    id: Schema.String,
+    email: Schema.String,
+    first_name: Schema.optional(Schema.NullOr(Schema.String)),
+    last_name: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
+});
+type WorkosAuthenticateSuccess = typeof WorkosAuthenticateSuccess.Type;
 
 interface DeviceErrorBody {
   error: string;
@@ -103,7 +109,8 @@ function toDeviceApiError(response: Response, raw: unknown): AccountApiError {
  * absent. Recombining here keeps every caller from re-deciding what to do with
  * a half-populated name.
  */
-function toDeviceTokenSuccess(body: WorkosAuthenticateSuccess): DeviceTokenSuccess {
+function toDeviceTokenSuccess(raw: unknown): DeviceTokenSuccess {
+  const body: WorkosAuthenticateSuccess = Schema.decodeUnknownSync(WorkosAuthenticateSuccess)(raw);
   const name = [body.user.first_name, body.user.last_name]
     .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
     .join(" ");
@@ -320,7 +327,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
         });
 
         if (response.ok) {
-          return toDeviceTokenSuccess((await response.json()) as WorkosAuthenticateSuccess);
+          return toDeviceTokenSuccess(await response.json());
         }
 
         const raw: unknown = await response.json().catch(() => null);
@@ -348,7 +355,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       if (!response.ok) {
         throw toDeviceApiError(response, raw);
       }
-      return toDeviceTokenSuccess(raw as WorkosAuthenticateSuccess);
+      return toDeviceTokenSuccess(raw);
     },
   };
 }

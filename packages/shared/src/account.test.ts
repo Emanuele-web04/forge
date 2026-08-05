@@ -519,6 +519,22 @@ describe("createAccountClient", () => {
       });
     });
 
+    it("throws instead of returning undefined tokens when the success body loses a field", async () => {
+      // Persisting `undefined` as an access token would look like a signed-in
+      // session that fails on every later call, with nothing pointing here.
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          access_token: "access-2",
+          user: { id: "user_1", email: "ada@example.com" },
+        }),
+      );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(
+        client.refreshAccessToken({ refreshToken: "refresh-1", ...WORKOS }),
+      ).rejects.toThrow();
+    });
+
     it("throws AccountApiError with the error_description when the refresh token is spent", async () => {
       const fetchMock = vi
         .fn()
