@@ -7,6 +7,8 @@ import {
   type EnvironmentId,
   type InstanceInfo,
   type ListHostsResponse,
+  type OrganizationRequiredBody,
+  type OrganizationSummary,
   type RegisterHostResponse,
   RegisterHostRequest,
   UpdateHostRequest,
@@ -22,8 +24,9 @@ import type { ApiConfig } from "../config";
 import * as schema from "../db/schema";
 import { hosts, hostTokens } from "../db/schema";
 import { mintHostToken } from "../hostTokens";
+import { ensurePersonalOrg } from "../orgProvisioning";
 import { createRateLimiter } from "../rateLimit";
-import { WorkosApiError, type WorkosAuth, type WorkosUser } from "../workos";
+import { WorkosApiError, type WorkosAuth, type WorkosOrganization, type WorkosUser } from "../workos";
 import packageJson from "../../package.json" with { type: "json" };
 import { authenticateHostToken, extractBearerToken, isHostTokenHeader } from "./hostAuth";
 
@@ -53,9 +56,14 @@ function toAccountHost(row: HostRow): AccountHost {
     kind: row.kind,
     endpoints: row.endpoints,
     ...(row.appVersion ? { appVersion: row.appVersion } : {}),
+    registeredByUserId: row.registeredByUserId,
     createdAt: row.createdAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
   };
+}
+
+function toOrganizationSummary(organization: WorkosOrganization): OrganizationSummary {
+  return { id: organization.orgId, name: organization.orgName };
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -85,7 +93,7 @@ export function createV1Routes(deps: {
    */
   async function getDeviceSession(
     c: Context,
-  ): Promise<{ userId: string; sessionId: string } | null> {
+  ): Promise<{ userId: string; sessionId: string; orgId?: string } | null> {
     const token = extractBearerToken(c.req.header("authorization"));
     if (!token) return null;
     try {
@@ -95,9 +103,90 @@ export function createV1Routes(deps: {
     }
   }
 
-  v1.get("/me", async (c) => {
+  /**
+   * An authenticated caller acting inside an organization. `orgId` is the only
+   * key the host routes authorize on; `userId` is carried for audit stamping
+   * and must never be used to decide access.
+   */
+  type OrgSession = {
+    userId: string;
+    orgId: string;
+    organization: OrganizationSummary;
+  };
+
+  function organizationRequired(
+    c: Context,
+    message: string,
+    organizations: readonly WorkosOrganization[],
+  ) {
+    const body: OrganizationRequiredBody = {
+      error: "organization_required",
+      message,
+      organizations: organizations.map(toOrganizationSummary),
+    };
+    return c.json(body, 403);
+  }
+
+  /**
+   * The authorization gate for every device-token route: turns a verified
+   * token into the organization it may act inside, or the 403 that tells the
+   * client how to obtain one.
+   *
+   * A device-grant token has no `org_id` at all — WorkOS only mints that claim
+   * when the client authenticates *into* an organization — so the first call
+   * after `synara auth` always lands here, provisions the user's personal
+   * workspace if they have none, and answers 403 with the list to pick from.
+   * The client re-runs the refresh grant with `organization_id` and retries.
+   * A token naming an organization the caller has since left takes the same
+   * path, which is what makes a revoked membership stop granting access
+   * without waiting for anything to be purged.
+   *
+   * Returns the session, or a Response that the caller must return as-is.
+   */
+  async function requireOrgSession(c: Context): Promise<OrgSession | Response> {
     const session = await getDeviceSession(c);
     if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
+
+    let user: WorkosUser;
+    let memberships: WorkosOrganization[];
+    try {
+      user = await auth.getUser(session.userId);
+      memberships = await ensurePersonalOrg(auth, session.userId, user.email);
+    } catch (error) {
+      if (error instanceof WorkosApiError && error.status === 404) {
+        return errorResponse(c, 401, "unauthorized", "This account no longer exists");
+      }
+      console.error("[api] organization resolution failed:", error);
+      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+    }
+
+    if (!session.orgId) {
+      return organizationRequired(
+        c,
+        "This token is not scoped to a workspace. Refresh it with an organization_id and retry.",
+        memberships,
+      );
+    }
+
+    const active = memberships.find((membership) => membership.orgId === session.orgId);
+    if (!active) {
+      return organizationRequired(
+        c,
+        "You are not a member of the workspace this token names. Refresh it with one of these and retry.",
+        memberships,
+      );
+    }
+
+    return {
+      userId: session.userId,
+      orgId: active.orgId,
+      organization: toOrganizationSummary(active),
+    };
+  }
+
+  v1.get("/me", async (c) => {
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
 
     let user: WorkosUser;
     try {
@@ -123,22 +212,23 @@ export function createV1Routes(deps: {
       name: user.name ?? user.email,
       email: user.email,
       ...(user.avatarUrl ? { image: user.avatarUrl } : {}),
+      organization: session.organization,
     };
     return c.json(me);
   });
 
   v1.get("/hosts", async (c) => {
-    const session = await getDeviceSession(c);
-    if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
 
-    const rows = await db.select().from(hosts).where(eq(hosts.userId, session.userId));
+    const rows = await db.select().from(hosts).where(eq(hosts.ownerOrgId, session.orgId));
     const body: ListHostsResponse = { hosts: rows.map(toAccountHost) };
     return c.json(body);
   });
 
   v1.post("/hosts", async (c) => {
-    const session = await getDeviceSession(c);
-    if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
 
     const json = await c.req.json().catch(() => null);
     if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
@@ -159,7 +249,7 @@ export function createV1Routes(deps: {
       const [existing] = await db
         .select()
         .from(hosts)
-        .where(and(eq(hosts.userId, session.userId), eq(hosts.environmentId, parsed.environmentId)))
+        .where(and(eq(hosts.ownerOrgId, session.orgId), eq(hosts.environmentId, parsed.environmentId)))
         .limit(1);
 
       let hostRow: HostRow;
@@ -187,7 +277,10 @@ export function createV1Routes(deps: {
         const [inserted] = await db
           .insert(hosts)
           .values({
-            userId: session.userId,
+            ownerOrgId: session.orgId,
+            // Audit only. Ownership is the organization's, so this is never
+            // consulted when deciding who may reach the host.
+            registeredByUserId: session.userId,
             environmentId: parsed.environmentId,
             name: parsed.name,
             platform: parsed.platform,
@@ -275,12 +368,12 @@ export function createV1Routes(deps: {
       return c.body(null, 204);
     }
 
-    const session = await getDeviceSession(c);
-    if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
 
     const deleted = await db
       .delete(hosts)
-      .where(and(eq(hosts.id, id), eq(hosts.userId, session.userId)))
+      .where(and(eq(hosts.id, id), eq(hosts.ownerOrgId, session.orgId)))
       .returning();
     if (deleted.length === 0) return errorResponse(c, 404, "host_not_found", "Host not found");
 

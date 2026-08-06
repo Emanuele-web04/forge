@@ -41,6 +41,11 @@ export type FakeWorkosUser = {
   profile_picture_url?: string | null;
 };
 
+export type FakeWorkosOrganization = {
+  id: string;
+  name: string;
+};
+
 export type FakeWorkos = {
   origin: string;
   clientId: string;
@@ -51,16 +56,24 @@ export type FakeWorkos = {
   config(overrides?: Partial<ApiConfig>): ApiConfig;
   /** Registers a user that `getUser` will return, and returns its id. */
   addUser(user: Partial<FakeWorkosUser> & { id?: string }): FakeWorkosUser;
+  /** Registers an organization, as the Organizations API would create it. */
+  addOrganization(organization?: { id?: string; name?: string }): FakeWorkosOrganization;
+  /** Makes `userId` a member of `orgId`, so membership listing returns it. */
+  addMembership(orgId: string, userId: string): void;
+  /** Drops a membership, standing in for a user being removed from a team. */
+  removeMembership(orgId: string, userId: string): void;
   /**
    * Mints an access token with the given claims; `expiresIn` accepts jose spans.
    * `issuer` defaults to the value this server's config expects — pass a
-   * different one to exercise the issuer check.
+   * different one to exercise the issuer check. `orgId` mints the `org_id`
+   * claim the refresh grant produces; leave it off for a device-grant token.
    */
   signAccessToken(claims: {
     sub: string;
     sid?: string;
     expiresIn?: string;
     issuer?: string;
+    orgId?: string;
   }): Promise<string>;
   /**
    * Approves a pending device authorization, as a human clicking through the
@@ -118,11 +131,24 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   const publicJwk = { ...(await exportJWK(publicKey)), kid: KID, alg: "RS256", use: "sig" };
 
   const users = new Map<string, FakeWorkosUser>();
+  const organizations = new Map<string, FakeWorkosOrganization>();
+  /**
+   * Membership edges, held as records rather than joined strings: WorkOS ids
+   * are opaque, so any separator is a guess about what they cannot contain.
+   */
+  const memberships: Array<{ orgId: string; userId: string }> = [];
   const requests: FakeWorkosRequest[] = [];
   /** Device codes handed out but not yet approved, and who approved them. */
   const deviceGrants = new Map<string, { approvedBy?: string }>();
   /** Live refresh tokens → the user they belong to. Single-use, as WorkOS's are. */
   const refreshTokens = new Map<string, string>();
+
+  const hasMembership = (orgId: string, userId: string): boolean =>
+    memberships.some((entry) => entry.orgId === orgId && entry.userId === userId);
+
+  function addMembership(orgId: string, userId: string): void {
+    if (!hasMembership(orgId, userId)) memberships.push({ orgId, userId });
+  }
 
   // Declared up front rather than only on the returned object: the
   // `authenticate` route below needs to mint tokens and register users too.
@@ -148,19 +174,31 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     return record;
   }
 
+  function addOrganization(
+    organization: { id?: string; name?: string } = {},
+  ): FakeWorkosOrganization {
+    const id = organization.id ?? `org_fake_${randomUUID()}`;
+    const record: FakeWorkosOrganization = { id, name: organization.name ?? `Organization ${id}` };
+    organizations.set(id, record);
+    return record;
+  }
+
   function signAccessToken({
     sub,
     sid,
     expiresIn = accessTokenTtl,
     issuer: issuerOverride,
+    orgId,
   }: {
     sub: string;
     sid?: string;
     expiresIn?: string;
     issuer?: string;
+    orgId?: string;
   }): Promise<string> {
     const claims: Record<string, unknown> = { sub };
     if (sid !== undefined) claims.sid = sid;
+    if (orgId !== undefined) claims.org_id = orgId;
     return new SignJWT(claims)
       .setProtectedHeader({ alg: "RS256", kid: KID })
       .setIssuer(issuerOverride ?? issuer)
@@ -175,12 +213,16 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
    * replacement, so a client that fails to persist the rotation is locked out
    * exactly the way it would be in production.
    */
-  async function issueTokenPair(userId: string) {
+  async function issueTokenPair(userId: string, orgId?: string) {
     const user = users.get(userId) ?? addUser({ id: userId });
     const refreshToken = `rt_fake_${randomUUID()}`;
     refreshTokens.set(refreshToken, user.id);
     return {
-      access_token: await signAccessToken({ sub: user.id, sid: `session_${randomUUID()}` }),
+      access_token: await signAccessToken({
+        sub: user.id,
+        sid: `session_${randomUUID()}`,
+        ...(orgId !== undefined ? { orgId } : {}),
+      }),
       refresh_token: refreshToken,
       user: {
         id: user.id,
@@ -266,7 +308,20 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
         );
       }
       refreshTokens.delete(refreshToken);
-      return c.json(await issueTokenPair(userId));
+      const orgId = typeof body?.organization_id === "string" ? body.organization_id : undefined;
+      // Authenticating into an organization the user does not belong to is
+      // refused, as real WorkOS refuses it — otherwise a stale stored org id
+      // would keep minting usable tokens forever.
+      if (orgId !== undefined && !hasMembership(orgId, userId)) {
+        return c.json(
+          {
+            error: "invalid_grant",
+            error_description: "User is not a member of the requested organization",
+          },
+          400,
+        );
+      }
+      return c.json(await issueTokenPair(userId, orgId));
     }
 
     return c.json(
@@ -279,6 +334,60 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     const user = users.get(c.req.param("id"));
     if (!user) return c.json({ message: "User not found" }, 404);
     return c.json(user);
+  });
+
+  // Memberships carry `organization_name` inline, as the real listing does —
+  // a caller that had to fan out over the Organizations API for names would
+  // pass against a double that omitted it and fail against WorkOS.
+  app.get("/user_management/organization_memberships", (c) => {
+    const userId = c.req.query("user_id");
+    const data = memberships
+      .filter((entry) => entry.userId === userId)
+      .map((entry) => ({
+        object: "organization_membership",
+        id: `om_fake_${entry.orgId}_${entry.userId}`,
+        user_id: entry.userId,
+        organization_id: entry.orgId,
+        organization_name: organizations.get(entry.orgId)?.name ?? null,
+        status: "active",
+      }));
+    return c.json({ object: "list", data, list_metadata: { before: null, after: null } });
+  });
+
+  // The Organizations API, deliberately not under /user_management: a caller
+  // that guessed the user-management path would 404 here as it would there.
+  app.post("/organizations", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const name = typeof body?.name === "string" ? body.name : "";
+    if (!name) return c.json({ message: "name is required" }, 422);
+    const organization = addOrganization({ name });
+    return c.json({ object: "organization", ...organization }, 201);
+  });
+
+  app.post("/user_management/organization_memberships", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const orgId = typeof body?.organization_id === "string" ? body.organization_id : "";
+    const userId = typeof body?.user_id === "string" ? body.user_id : "";
+    if (!orgId || !userId) {
+      return c.json({ message: "organization_id and user_id are required" }, 422);
+    }
+    // WorkOS rejects a duplicate membership rather than making it idempotent,
+    // which is precisely the conflict the provisioning race has to survive.
+    if (hasMembership(orgId, userId)) {
+      return c.json({ code: "entity_already_exists", message: "Membership already exists" }, 409);
+    }
+    addMembership(orgId, userId);
+    return c.json(
+      {
+        object: "organization_membership",
+        id: `om_fake_${orgId}_${userId}`,
+        user_id: userId,
+        organization_id: orgId,
+        organization_name: organizations.get(orgId)?.name ?? null,
+        status: "active",
+      },
+      201,
+    );
   });
 
   const server = serve({ fetch: app.fetch, port: options.port ?? 0 });
@@ -296,7 +405,16 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     issuer,
     requests,
     addUser,
+    addOrganization,
+    addMembership,
     signAccessToken,
+
+    removeMembership(orgId, userId) {
+      const index = memberships.findIndex(
+        (entry) => entry.orgId === orgId && entry.userId === userId,
+      );
+      if (index >= 0) memberships.splice(index, 1);
+    },
 
     // No issuer or JWKS url by default: the service discovers both from the
     // metadata document above, which is the path production takes.

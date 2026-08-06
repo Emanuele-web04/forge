@@ -80,6 +80,31 @@ describe("verifyAccessToken", () => {
     await expect(auth.verifyAccessToken(token)).resolves.toMatchObject({ userId: "user_123" });
   });
 
+  // The device grant mints org-less tokens, so "no org_id" is the ordinary
+  // case and must verify — the route layer, not this one, decides what to do.
+  it("omits orgId for a token minted without the claim", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const token = await workos.signAccessToken({ sub: "user_123", sid: "session_456" });
+    await expect(auth.verifyAccessToken(token)).resolves.toEqual({
+      userId: "user_123",
+      sessionId: "session_456",
+    });
+  });
+
+  it("returns the org_id claim when the token carries one", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const token = await workos.signAccessToken({
+      sub: "user_123",
+      sid: "session_456",
+      orgId: "org_789",
+    });
+    await expect(auth.verifyAccessToken(token)).resolves.toEqual({
+      userId: "user_123",
+      sessionId: "session_456",
+      orgId: "org_789",
+    });
+  });
+
   it("rejects a malformed token", async () => {
     const auth = createWorkosAuth(workos.config());
     await expect(auth.verifyAccessToken("not-a-jwt")).rejects.toThrow();
@@ -197,6 +222,88 @@ describe("requestDeviceAuthorization", () => {
     expect(call?.path).toBe("/user_management/authorize/device");
     expect(call?.authorization).toBe(`Bearer ${workos.apiKey}`);
     expect(call?.body).toContain(workos.clientId);
+  });
+});
+
+describe("organizations", () => {
+  it("lists a user's memberships with the organization names served inline", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const user = workos.addUser({});
+    const acme = workos.addOrganization({ name: "Acme Corp" });
+    const other = workos.addOrganization({ name: "Side Project" });
+    workos.addMembership(acme.id, user.id);
+    workos.addMembership(other.id, user.id);
+    const before = workos.requests.length;
+
+    const memberships = await auth.listUserOrganizationMemberships(user.id);
+
+    expect(memberships).toEqual(
+      expect.arrayContaining([
+        { orgId: acme.id, orgName: "Acme Corp" },
+        { orgId: other.id, orgName: "Side Project" },
+      ]),
+    );
+    expect(memberships).toHaveLength(2);
+    // One request, not one per organization: the name comes back inline.
+    expect(workos.requests.slice(before)).toHaveLength(1);
+    expect(workos.requests[before]?.authorization).toBe(`Bearer ${workos.apiKey}`);
+    expect(workos.requests[before]?.path).toBe("/user_management/organization_memberships");
+  });
+
+  it("returns an empty list for a user in no organizations", async () => {
+    const auth = createWorkosAuth(workos.config());
+    await expect(auth.listUserOrganizationMemberships(workos.addUser({}).id)).resolves.toEqual([]);
+  });
+
+  // Isolation is decided on the org id, so a listing that leaked another
+  // user's membership would hand them someone else's hosts.
+  it("does not return another user's memberships", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const owner = workos.addUser({});
+    const stranger = workos.addUser({});
+    const org = workos.addOrganization({ name: "Owner Only" });
+    workos.addMembership(org.id, owner.id);
+
+    await expect(auth.listUserOrganizationMemberships(stranger.id)).resolves.toEqual([]);
+  });
+
+  it("creates an organization through the Organizations API and returns its id", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const before = workos.requests.length;
+
+    const created = await auth.createOrganization("Personal — ada@example.com");
+
+    expect(created.orgName).toBe("Personal — ada@example.com");
+    expect(created.orgId).toMatch(/^org_/);
+    // Not /user_management/organizations: organizations are a top-level API.
+    expect(workos.requests[before]?.path).toBe("/organizations");
+    expect(workos.requests[before]?.authorization).toBe(`Bearer ${workos.apiKey}`);
+  });
+
+  it("creates a membership that the listing then returns", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const user = workos.addUser({});
+    const org = await auth.createOrganization("Fresh Workspace");
+
+    await auth.createOrganizationMembership(org.orgId, user.id);
+
+    await expect(auth.listUserOrganizationMemberships(user.id)).resolves.toEqual([
+      { orgId: org.orgId, orgName: "Fresh Workspace" },
+    ]);
+  });
+
+  // The conflict the provisioning race hinges on: WorkOS refuses a duplicate
+  // rather than absorbing it, so the caller must be able to see the refusal.
+  it("throws a WorkosApiError when the membership already exists", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const user = workos.addUser({});
+    const org = await auth.createOrganization("Duplicate Test");
+    await auth.createOrganizationMembership(org.orgId, user.id);
+
+    await expect(auth.createOrganizationMembership(org.orgId, user.id)).rejects.toMatchObject({
+      name: "WorkosApiError",
+      status: 409,
+    });
   });
 });
 

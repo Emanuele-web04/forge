@@ -15,6 +15,13 @@
       "when": 1785961465202,
       "tag": "0001_workos_swap",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786014657226,
+      "tag": "0002_org_ownership",
+      "breakpoints": true
     }
   ]
 }

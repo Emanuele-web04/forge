@@ -3,13 +3,15 @@ import {
   type AccountErrorBody,
   DeviceAuthorizationResponse,
   InstanceInfo,
+  OrganizationRequiredBody,
 } from "@synara/contracts";
 import { Schema } from "effect";
 import { Hono } from "hono";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
+import { clearOrgCache } from "../orgProvisioning";
 import { FAKE_DEVICE_AUTHORIZATION, startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import { createWorkosAuth } from "../workos";
 import { createV1Routes, DEVICE_RATE_LIMIT_PER_MINUTE } from "./v1";
@@ -37,9 +39,33 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   let workos: FakeWorkos;
   let config: ApiConfig;
 
-  /** A signed-in user: a WorkOS user record plus an access token naming it. */
-  async function signIn(): Promise<{ token: string; userId: string }> {
+  /**
+   * A signed-in user acting inside their own organization — the state the CLI
+   * reaches after the 403/refresh dance, and what every host route requires.
+   */
+  async function signIn(): Promise<{
+    token: string;
+    userId: string;
+    orgId: string;
+    orgName: string;
+  }> {
     const user = workos.addUser({ first_name: "Test", last_name: "User" });
+    const organization = workos.addOrganization({ name: `Workspace ${user.id}` });
+    workos.addMembership(organization.id, user.id);
+    const token = await workos.signAccessToken({
+      sub: user.id,
+      sid: `session_${randomUUID()}`,
+      orgId: organization.id,
+    });
+    return { token, userId: user.id, orgId: organization.id, orgName: organization.name };
+  }
+
+  /**
+   * A user with a token that names no organization — exactly what the WorkOS
+   * device grant hands back, before the client refreshes into a workspace.
+   */
+  async function signInWithoutOrg(): Promise<{ token: string; userId: string }> {
+    const user = workos.addUser({ first_name: "Orgless", last_name: "User" });
     const token = await workos.signAccessToken({ sub: user.id, sid: `session_${randomUUID()}` });
     return { token, userId: user.id };
   }
@@ -62,6 +88,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   afterAll(async () => {
     await pool.end();
     await workos.close();
+  });
+
+  // The membership cache is process-global and outlives a single request, so a
+  // test that changes someone's memberships would otherwise leak into the next.
+  beforeEach(() => {
+    clearOrgCache();
   });
 
   it("rejects unauthenticated requests to /me and /hosts", async () => {
@@ -88,7 +120,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns the WorkOS profile from /me", async () => {
+  it("returns the WorkOS profile and active organization from /me", async () => {
     const { app } = buildApp();
     const user = workos.addUser({
       email: "ada@example.com",
@@ -96,7 +128,13 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       last_name: "Lovelace",
       profile_picture_url: "https://cdn.example.com/ada.png",
     });
-    const token = await workos.signAccessToken({ sub: user.id, sid: `session_${randomUUID()}` });
+    const organization = workos.addOrganization({ name: "Analytical Engines" });
+    workos.addMembership(organization.id, user.id);
+    const token = await workos.signAccessToken({
+      sub: user.id,
+      sid: `session_${randomUUID()}`,
+      orgId: organization.id,
+    });
 
     const res = await app.request("/api/v1/me", { headers: authHeaders(token) });
     expect(res.status).toBe(200);
@@ -105,6 +143,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       name: "Ada Lovelace",
       email: "ada@example.com",
       image: "https://cdn.example.com/ada.png",
+      organization: { id: organization.id, name: "Analytical Engines" },
     });
   });
 
@@ -159,7 +198,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(res.status).toBe(502);
       expect(res.headers.get("content-type")).toContain("application/json");
       expect(await res.json()).toMatchObject({ error: "internal_error" });
-      expect(logged).toHaveBeenCalledWith("[api] user lookup failed:", expect.anything());
+      expect(logged).toHaveBeenCalledWith(
+        "[api] organization resolution failed:",
+        expect.anything(),
+      );
     } finally {
       logged.mockRestore();
     }
@@ -296,7 +338,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     expect(await crossPatch.json()).toMatchObject({ error: "unauthorized" });
   });
 
-  it("isolates hosts across users: list is empty and delete 404s", async () => {
+  it("isolates hosts across organizations: list is empty and delete 404s", async () => {
     const { app } = buildApp();
     const ownerToken = (await signIn()).token;
     const otherToken = (await signIn()).token;
@@ -318,6 +360,91 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     });
     expect(otherDelete.status).toBe(404);
     expect(await otherDelete.json()).toMatchObject({ error: "host_not_found" });
+
+    // The owner still has it: the delete was refused, not silently applied.
+    const ownerList = await app.request("/api/v1/hosts", { headers: authHeaders(ownerToken) });
+    expect(((await ownerList.json()) as { hosts: unknown[] }).hosts).toHaveLength(1);
+  });
+
+  // Two members of one organization share its hosts. This is the whole point
+  // of keying on the org: adding a teammate is a membership, not a migration.
+  it("shares hosts between two members of the same organization", async () => {
+    const { app } = buildApp();
+    const owner = await signIn();
+    const teammate = workos.addUser({ first_name: "Team", last_name: "Mate" });
+    workos.addMembership(owner.orgId, teammate.id);
+    const teammateToken = await workos.signAccessToken({
+      sub: teammate.id,
+      sid: `session_${randomUUID()}`,
+      orgId: owner.orgId,
+    });
+
+    const registerRes = await app.request("/api/v1/hosts", {
+      method: "POST",
+      headers: authHeaders(owner.token),
+      body: JSON.stringify(registerHostBody(randomUUID())),
+    });
+    const registered = (await registerRes.json()) as { host: { id: string } };
+
+    const teammateList = await app.request("/api/v1/hosts", {
+      headers: authHeaders(teammateToken),
+    });
+    const listBody = (await teammateList.json()) as { hosts: Array<{ id: string }> };
+    expect(listBody.hosts.map((h) => h.id)).toContain(registered.host.id);
+  });
+
+  // The unique index moved from (user, environment) to (org, environment).
+  // One machine linked from two workspaces is now an ordinary thing to do.
+  it("lets two organizations register the same environment id", async () => {
+    const { app } = buildApp();
+    const first = await signIn();
+    const second = await signIn();
+    const environmentId = randomUUID();
+
+    const firstRes = await app.request("/api/v1/hosts", {
+      method: "POST",
+      headers: authHeaders(first.token),
+      body: JSON.stringify(registerHostBody(environmentId)),
+    });
+    expect(firstRes.status).toBe(201);
+
+    const secondRes = await app.request("/api/v1/hosts", {
+      method: "POST",
+      headers: authHeaders(second.token),
+      body: JSON.stringify(registerHostBody(environmentId)),
+    });
+    expect(secondRes.status).toBe(201);
+
+    const firstBody = (await firstRes.json()) as { host: { id: string } };
+    const secondBody = (await secondRes.json()) as { host: { id: string } };
+    expect(secondBody.host.id).not.toBe(firstBody.host.id);
+  });
+
+  it("stamps the registering user on the host without granting them access", async () => {
+    const { app } = buildApp();
+    const owner = await signIn();
+
+    const registerRes = await app.request("/api/v1/hosts", {
+      method: "POST",
+      headers: authHeaders(owner.token),
+      body: JSON.stringify(registerHostBody(randomUUID())),
+    });
+    const body = (await registerRes.json()) as { host: { registeredByUserId: string } };
+    expect(body.host.registeredByUserId).toBe(owner.userId);
+
+    // Same user, a different organization: the audit stamp is not a key, so
+    // the host they registered is out of reach from anywhere else.
+    const elsewhere = workos.addOrganization({ name: "Elsewhere" });
+    workos.addMembership(elsewhere.id, owner.userId);
+    clearOrgCache();
+    const elsewhereToken = await workos.signAccessToken({
+      sub: owner.userId,
+      sid: `session_${randomUUID()}`,
+      orgId: elsewhere.id,
+    });
+
+    const list = await app.request("/api/v1/hosts", { headers: authHeaders(elsewhereToken) });
+    expect(((await list.json()) as { hosts: unknown[] }).hosts).toHaveLength(0);
   });
 
   it("deletes a host and its token with the device token", async () => {
@@ -372,6 +499,134 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       headers: authHeaders(registerBody.hostToken),
     });
     expect(deleteRes.status).toBe(204);
+  });
+
+  describe("organization gate", () => {
+    /**
+     * The first call after `synara auth`: the device grant mints an org-less
+     * token, so the caller is authenticated but has nowhere to act. Answering
+     * 403 with the list is what lets the client refresh into a workspace
+     * rather than dead-end.
+     */
+    it("answers 403 organization_required for a token with no org, provisioning one lazily", async () => {
+      const { app } = buildApp();
+      const { token, userId } = await signInWithoutOrg();
+
+      const res = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
+
+      expect(res.status).toBe(403);
+      const body = Schema.decodeUnknownSync(OrganizationRequiredBody)(await res.json());
+      expect(body.error).toBe("organization_required");
+      // Lazily provisioned: this user was in no organization a moment ago.
+      expect(body.organizations).toHaveLength(1);
+      expect(body.organizations[0]?.name).toContain("@example.com");
+
+      // And it is a real WorkOS organization the user is now a member of, not
+      // a value invented for the response.
+      const auth = createWorkosAuth(config);
+      await expect(auth.listUserOrganizationMemberships(userId)).resolves.toEqual([
+        { orgId: body.organizations[0]?.id, orgName: body.organizations[0]?.name },
+      ]);
+    });
+
+    it("provisions only once across repeated org-less calls", async () => {
+      const { app } = buildApp();
+      const { token, userId } = await signInWithoutOrg();
+
+      const first = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
+      const firstBody = (await first.json()) as { organizations: Array<{ id: string }> };
+      clearOrgCache();
+      const second = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
+      const secondBody = (await second.json()) as { organizations: Array<{ id: string }> };
+
+      expect(secondBody.organizations).toEqual(firstBody.organizations);
+      const auth = createWorkosAuth(config);
+      await expect(auth.listUserOrganizationMemberships(userId)).resolves.toHaveLength(1);
+    });
+
+    // Revoked membership. Verification is stateless, so the old token still
+    // has a valid signature and a real org_id — only the membership check
+    // stops it, which is what makes removal take effect at all.
+    it("answers 403 for a token naming an organization the caller has left", async () => {
+      const { app } = buildApp();
+      const owner = await signIn();
+
+      const beforeRemoval = await app.request("/api/v1/hosts", {
+        headers: authHeaders(owner.token),
+      });
+      expect(beforeRemoval.status).toBe(200);
+
+      workos.removeMembership(owner.orgId, owner.userId);
+      workos.addMembership(workos.addOrganization({ name: "Somewhere Else" }).id, owner.userId);
+      clearOrgCache();
+
+      const res = await app.request("/api/v1/hosts", { headers: authHeaders(owner.token) });
+      expect(res.status).toBe(403);
+      const body = Schema.decodeUnknownSync(OrganizationRequiredBody)(await res.json());
+      // The list is the caller's *current* memberships, not the dead one.
+      expect(body.organizations.map((org) => org.id)).toEqual([
+        expect.not.stringMatching(owner.orgId),
+      ]);
+      expect(body.organizations.map((org) => org.name)).toEqual(["Somewhere Else"]);
+    });
+
+    // A stale org id must not reach data, not merely be reported on. Asserted
+    // separately because the 403 above says nothing about the query.
+    it("does not expose another organization's hosts to a stale token", async () => {
+      const { app } = buildApp();
+      const owner = await signIn();
+      await app.request("/api/v1/hosts", {
+        method: "POST",
+        headers: authHeaders(owner.token),
+        body: JSON.stringify(registerHostBody(randomUUID())),
+      });
+
+      const intruder = workos.addUser({});
+      // Never a member, but names the org anyway — a forged or leaked claim.
+      workos.addMembership(workos.addOrganization({ name: "Intruder Co" }).id, intruder.id);
+      clearOrgCache();
+      const intruderToken = await workos.signAccessToken({
+        sub: intruder.id,
+        sid: `session_${randomUUID()}`,
+        orgId: owner.orgId,
+      });
+
+      const res = await app.request("/api/v1/hosts", { headers: authHeaders(intruderToken) });
+      expect(res.status).toBe(403);
+      expect(JSON.stringify(await res.json())).not.toContain(owner.orgId);
+    });
+
+    it("gates every device-token route, not just listing", async () => {
+      const { app } = buildApp();
+      const { token } = await signInWithoutOrg();
+
+      const me = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(me.status).toBe(403);
+
+      const register = await app.request("/api/v1/hosts", {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify(registerHostBody(randomUUID())),
+      });
+      expect(register.status).toBe(403);
+
+      const remove = await app.request(`/api/v1/hosts/${randomUUID()}`, {
+        method: "DELETE",
+        headers: authHeaders(token),
+      });
+      expect(remove.status).toBe(403);
+    });
+
+    // An unauthenticated caller has no organizations to be told about; the
+    // 403 path must not become a way to skip the 401.
+    it("still answers 401 before any organization work when the token is absent or bad", async () => {
+      const { app } = buildApp();
+
+      expect((await app.request("/api/v1/hosts")).status).toBe(401);
+      expect(
+        (await app.request("/api/v1/hosts", { headers: authHeaders("not-a-jwt") })).status,
+      ).toBe(401);
+    });
   });
 
   it("reports instance info without authentication", async () => {

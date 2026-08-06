@@ -6,10 +6,16 @@ export const hosts = pgTable(
   "hosts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    // WorkOS user id. Identity lives in WorkOS, so there is no local user table
-    // to reference; orphaned rows are tolerated until WorkOS webhook cleanup is
+    // WorkOS organization id, and the only key authorization is decided on: a
+    // caller reaches a host exactly when their token is scoped to this org.
+    // Identity and membership live in WorkOS, so there is no local table to
+    // reference; orphaned rows are tolerated until WorkOS webhook cleanup is
     // built (future work).
-    userId: text("user_id").notNull(),
+    ownerOrgId: text("owner_org_id").notNull(),
+    // WorkOS user id of whoever ran the registration. Audit only — it must
+    // never be read as an access check, or a user who left the organization
+    // would keep reaching the hosts they happened to register.
+    registeredByUserId: text("registered_by_user_id").notNull(),
     environmentId: text("environment_id").notNull(),
     name: text("name").notNull(),
     platform: text("platform", { enum: ["darwin", "linux", "windows"] }).notNull(),
@@ -19,7 +25,9 @@ export const hosts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex("hosts_user_environment_unique").on(table.userId, table.environmentId)],
+  (table) => [
+    uniqueIndex("hosts_owner_org_environment_unique").on(table.ownerOrgId, table.environmentId),
+  ],
 );
 
 export const hostTokens = pgTable("host_tokens", {

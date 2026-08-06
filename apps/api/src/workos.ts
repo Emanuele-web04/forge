@@ -19,6 +19,19 @@ export type WorkosUser = {
 export type VerifiedAccessToken = {
   userId: string;
   sessionId: string;
+  /**
+   * The organization the token is scoped to, when it has one. Absent on every
+   * token the device grant mints — WorkOS only puts `org_id` in a token
+   * obtained by authenticating *into* an organization, which for this service
+   * means the refresh grant carrying an `organization_id`.
+   */
+  orgId?: string;
+};
+
+/** A WorkOS organization the caller belongs to. */
+export type WorkosOrganization = {
+  orgId: string;
+  orgName: string;
 };
 
 export type WorkosAuth = {
@@ -26,6 +39,10 @@ export type WorkosAuth = {
   verifyAccessToken(token: string): Promise<VerifiedAccessToken>;
   getUser(userId: string): Promise<WorkosUser>;
   requestDeviceAuthorization(): Promise<DeviceAuthorizationResponse>;
+  /** Every organization the user is a member of, oldest page first. */
+  listUserOrganizationMemberships(userId: string): Promise<WorkosOrganization[]>;
+  createOrganization(name: string): Promise<WorkosOrganization>;
+  createOrganizationMembership(orgId: string, userId: string): Promise<void>;
 };
 
 export class WorkosApiError extends Error {
@@ -74,6 +91,33 @@ type VerificationKeys = {
   jwks: JWTVerifyGetKey;
 };
 
+/**
+ * A membership as the User Management API returns it. `organization_name` is
+ * served alongside the id, which is the only reason listing memberships is one
+ * request rather than one plus a fan-out over the Organizations API.
+ */
+type WorkosMembershipWire = {
+  organization_id?: unknown;
+  organization_name?: unknown;
+};
+
+type WorkosMembershipListWire = {
+  data?: unknown;
+};
+
+type WorkosOrganizationWire = {
+  id?: unknown;
+  name?: unknown;
+};
+
+/**
+ * How many memberships one listing request asks for. WorkOS caps the page at
+ * 100 and this service does not paginate: a user in more than 100
+ * organizations would see the rest omitted, which is a limit worth raising
+ * only once teams exist at all.
+ */
+const MEMBERSHIP_PAGE_LIMIT = 100;
+
 type WorkosDeviceAuthorizationWire = {
   device_code: string;
   user_code: string;
@@ -82,6 +126,23 @@ type WorkosDeviceAuthorizationWire = {
   expires_in: number;
   interval: number;
 };
+
+/**
+ * Reads one membership off the wire, skipping anything unusable. A membership
+ * with no organization id is not something to authorize against, and throwing
+ * on it would take down the whole listing over one malformed row.
+ */
+function toOrganization(entry: unknown): WorkosOrganization | undefined {
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const { organization_id: orgId, organization_name: orgName } = entry as WorkosMembershipWire;
+  if (typeof orgId !== "string" || orgId.length === 0) return undefined;
+  return {
+    orgId,
+    // Falls back to the id so the field is always displayable. An unnamed
+    // organization is not a reason to hide it from the workspace picker.
+    orgName: typeof orgName === "string" && orgName.trim().length > 0 ? orgName : orgId,
+  };
+}
 
 function fullName(user: WorkosUserResponse): string | undefined {
   const parts = [user.first_name, user.last_name].filter(
@@ -174,14 +235,16 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     async verifyAccessToken(token) {
       const { issuer, jwks } = await resolveVerificationKeys();
       const { payload } = await jwtVerify(token, jwks, { issuer });
-      const { sub, sid } = payload;
+      const { sub, sid, org_id: orgId } = payload;
       // A WorkOS access token always carries both; anything else is not one,
       // and treating it as authenticated would lose the session identity that
       // logout and session listing depend on.
       if (typeof sub !== "string" || typeof sid !== "string") {
         throw new Error("Access token is missing the sub or sid claim");
       }
-      return { userId: sub, sessionId: sid };
+      // `org_id` is genuinely optional — a device-grant token has none — so its
+      // absence is a routing fact for the caller, not a verification failure.
+      return { userId: sub, sessionId: sid, ...(typeof orgId === "string" ? { orgId } : {}) };
     },
 
     async getUser(userId) {
@@ -195,6 +258,41 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         ...(name ? { name } : {}),
         ...(user.profile_picture_url ? { avatarUrl: user.profile_picture_url } : {}),
       };
+    },
+
+    async listUserOrganizationMemberships(userId) {
+      const response = (await workosFetch(
+        `/user_management/organization_memberships?user_id=${encodeURIComponent(userId)}&limit=${MEMBERSHIP_PAGE_LIMIT}`,
+      )) as WorkosMembershipListWire;
+      if (!Array.isArray(response.data)) return [];
+      return response.data
+        .map(toOrganization)
+        .filter((org): org is WorkosOrganization => org !== undefined);
+    },
+
+    // Organizations live on the top-level Organizations API, not under
+    // /user_management — the one endpoint here that breaks that pattern.
+    async createOrganization(name) {
+      const response = (await workosFetch("/organizations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      })) as WorkosOrganizationWire;
+      if (typeof response.id !== "string" || response.id.length === 0) {
+        throw new Error("WorkOS organization creation returned no id");
+      }
+      return {
+        orgId: response.id,
+        orgName: typeof response.name === "string" && response.name ? response.name : name,
+      };
+    },
+
+    async createOrganizationMembership(orgId, userId) {
+      await workosFetch("/user_management/organization_memberships", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ organization_id: orgId, user_id: userId }),
+      });
     },
 
     async requestDeviceAuthorization() {

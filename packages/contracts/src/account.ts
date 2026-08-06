@@ -17,6 +17,17 @@ export type AccountHostPlatform = typeof AccountHostPlatform.Type;
 export const AccountHostKind = Schema.Literals(["local", "ssh-managed"]);
 export type AccountHostKind = typeof AccountHostKind.Type;
 
+/**
+ * A WorkOS organization as this API surfaces it. Organizations are the unit of
+ * host ownership: every user has at least a personal one, and a team is the
+ * same thing with more members.
+ */
+export const OrganizationSummary = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+});
+export type OrganizationSummary = typeof OrganizationSummary.Type;
+
 export const AccountHost = Schema.Struct({
   id: TrimmedNonEmptyString,
   environmentId: EnvironmentId,
@@ -25,6 +36,9 @@ export const AccountHost = Schema.Struct({
   kind: AccountHostKind,
   endpoints: Schema.Array(AccountHostEndpoint),
   appVersion: Schema.optional(TrimmedNonEmptyString),
+  /** WorkOS user id of whoever ran the registration. Audit only — the
+   * organization owns the host, so this grants no access of its own. */
+  registeredByUserId: TrimmedNonEmptyString,
   createdAt: TrimmedNonEmptyString,
   lastSeenAt: TrimmedNonEmptyString,
 });
@@ -35,6 +49,8 @@ export const AccountMe = Schema.Struct({
   name: TrimmedNonEmptyString,
   email: TrimmedNonEmptyString,
   image: Schema.optional(TrimmedNonEmptyString),
+  /** The organization the caller's token is scoped to; hosts belong to it. */
+  organization: OrganizationSummary,
 });
 export type AccountMe = typeof AccountMe.Type;
 
@@ -96,6 +112,7 @@ export const AccountErrorCode = Schema.Literals([
   "host_not_found",
   "token_revoked",
   "signup_restricted",
+  "organization_required",
   "environment_already_linked",
   "validation_failed",
   "rate_limited",
@@ -108,3 +125,19 @@ export const AccountErrorBody = Schema.Struct({
   message: TrimmedNonEmptyString,
 });
 export type AccountErrorBody = typeof AccountErrorBody.Type;
+
+/**
+ * The 403 a device token gets when it is not scoped to an organization the
+ * caller belongs to — either it carries no `org_id` at all (every device-grant
+ * token, since WorkOS mints those org-less) or it names one the caller has
+ * since left. It is not a dead end: `organizations` lists what the caller can
+ * refresh into, so the client re-runs the refresh grant with one of them and
+ * retries. Distinct from {@link AccountErrorBody} by that list alone, which is
+ * why the client must try this shape first.
+ */
+export const OrganizationRequiredBody = Schema.Struct({
+  error: Schema.Literal("organization_required"),
+  message: TrimmedNonEmptyString,
+  organizations: Schema.Array(OrganizationSummary),
+});
+export type OrganizationRequiredBody = typeof OrganizationRequiredBody.Type;
