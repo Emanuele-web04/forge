@@ -28,5 +28,6 @@ COPY packages/contracts packages/contracts
 COPY packages/shared packages/shared
 COPY apps/api apps/api
 
+USER bun
 EXPOSE 8788
 CMD ["bun", "run", "--cwd", "apps/api", "start"]
