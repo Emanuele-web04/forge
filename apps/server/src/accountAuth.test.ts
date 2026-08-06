@@ -538,9 +538,12 @@ describe("runAuthLogin", () => {
     );
   });
 
-  it("refuses to re-login when credentials already exist", async () => {
+  it("refuses to re-login when a fully registered session already exists", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials());
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
     const stdout = makeStdout();
 
     await runAuthLogin({
@@ -551,6 +554,81 @@ describe("runAuthLogin", () => {
     });
 
     expect(stdout.text()).toContain("synara auth logout");
+  });
+
+  // The state a failed registration leaves: a good session, no host. Sending
+  // the user back through the device flow would be busywork, and refusing
+  // outright leaves them with no way to finish at all.
+  it("completes host registration for a session that never got one, without a device flow", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+    const stdout = makeStdout();
+
+    const registered: Array<{ token: string }> = [];
+    const client = makeClient({
+      registerHost: (token) => {
+        registered.push({ token });
+        return Promise.resolve({ host, hostToken: "host-token" });
+      },
+    });
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      stdout: stdout.write,
+      platform: "darwin",
+      hostname: "workstation",
+      client,
+    });
+
+    // `requestDeviceCode` and `pollDeviceToken` are unimplemented on this
+    // client, so reaching either would have rejected the call.
+    expect(registered).toEqual([{ token: "access-1" }]);
+    expect(stdout.text()).toContain("completing host registration");
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
+  });
+
+  it("renews an expired access token while completing an interrupted registration", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    const tokens: string[] = [];
+    const client = makeClient({
+      refreshAccessToken: () =>
+        Promise.resolve({
+          accessToken: "access-2",
+          refreshToken: "refresh-2",
+          user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
+        }),
+      registerHost: (token) => {
+        tokens.push(token);
+        if (token === "access-1") return Promise.reject(unauthorized());
+        return Promise.resolve({ host, hostToken: "host-token" });
+      },
+    });
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      stdout: makeStdout().write,
+      platform: "darwin",
+      hostname: "workstation",
+      client,
+    });
+
+    expect(tokens).toEqual(["access-1", "access-2"]);
+    // The rotated pair must survive: writing the host fields back over a
+    // captured pre-refresh copy would spend the session for nothing.
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+        hostToken: "host-token",
+        hostId: "host_1",
+      }),
+    );
   });
 });
 

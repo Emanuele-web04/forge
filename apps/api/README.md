@@ -35,13 +35,23 @@ What that means in practice:
   and no provider pairs in the environment.
 - **Email delivery is WorkOS's.** Verification and password-reset mail is sent
   by WorkOS, so there is no SMTP or Resend configuration.
-- **The JWKS is WorkOS's, served by WorkOS.** This service only reads it, at
-  `https://api.workos.com/sso/jwks/{WORKOS_CLIENT_ID}`. Nothing is generated or
-  stored locally, so there is no key material to rotate or lose.
-- **Access tokens are checked against an expected issuer.** WorkOS mints `iss`
-  as `https://api.workos.com/` — with the trailing slash. If you configure a
-  custom auth domain in the dashboard, WorkOS issues under that domain instead
-  and you must set `WORKOS_ISSUER` to match, or every token is rejected.
+- **The JWKS is WorkOS's, served by WorkOS.** This service only reads it.
+  Nothing is generated or stored locally, so there is no key material to rotate
+  or lose.
+- **The issuer and JWKS URL are discovered, not guessed.** On its first token
+  verification the service fetches WorkOS's OIDC metadata document at
+  `{WORKOS_API_URL}/user_management/{WORKOS_CLIENT_ID}/.well-known/openid-configuration`
+  and caches the `issuer` and `jwks_uri` it returns for the process lifetime.
+  This matters: WorkOS scopes `iss` to the **environment's** client id
+  (`https://api.workos.com/user_management/client_…`), which is _not_
+  `WORKOS_CLIENT_ID` whenever your AuthKit application is not the environment
+  default. Any locally derived issuer would reject every real token.
+- **Discovery failure is fatal, by design.** Without a trusted issuer a token
+  minted for some other tenancy could pass, so verification errors out naming
+  the metadata URL rather than relaxing the check.
+- **`WORKOS_ISSUER` / `WORKOS_JWKS_URL` are overrides.** Set them only for a
+  custom auth domain or a stand-in that serves no metadata document; an
+  explicit value always wins over discovery.
 
 ### Dashboard setup
 
@@ -90,10 +100,14 @@ It prints the environment to point the API at:
 
 ```sh
 export WORKOS_API_URL=http://127.0.0.1:8790
-export WORKOS_JWKS_URL=http://127.0.0.1:8790/sso/jwks/client_01FAKE
 export WORKOS_API_KEY=fake
 export WORKOS_CLIENT_ID=client_01FAKE
 ```
+
+The stub serves the same OIDC metadata document real WorkOS does — including an
+environment-scoped issuer that differs from the client id — so the discovery
+path is exactly the one production takes, and neither `WORKOS_ISSUER` nor
+`WORKOS_JWKS_URL` needs setting.
 
 Start the API with those set, then run `synara auth` as usual: the CLI prints a
 code, the stub approves it a few seconds later, and you end up with a real
@@ -128,21 +142,23 @@ trusting an instance against real WorkOS, confirm by hand:
    fail with a 4xx, and the CLI reports the session as expired rather than
    hanging or looping.
 6. If you configured a custom auth domain, `WORKOS_ISSUER` matches it —
-   otherwise every token is rejected.
+   otherwise every token is rejected. With no custom domain, leave it unset:
+   discovery resolves the environment-scoped issuer, and a hand-written guess
+   is the one thing that reliably breaks this.
 
 ## Environment variables
 
-| Variable            | Required | Default                          | Purpose                                                  |
-| ------------------- | -------- | -------------------------------- | -------------------------------------------------------- |
-| `DATABASE_URL`      | yes      | —                                | Postgres connection string for the host registry.        |
-| `WORKOS_API_KEY`    | yes      | —                                | WorkOS secret key (`sk_…`). Server-side only.            |
-| `WORKOS_CLIENT_ID`  | yes      | —                                | WorkOS AuthKit client id (`client_…`).                   |
-| `ACCOUNT_BASE_URL`  | yes      | —                                | Public origin of this instance.                          |
-| `PORT`              | no       | `8788`                           | HTTP listen port.                                        |
-| `WORKOS_API_URL`    | no       | `https://api.workos.com`         | WorkOS API origin. Override only to point at a stand-in. |
-| `WORKOS_JWKS_URL`   | no       | `{API_URL}/sso/jwks/{CLIENT_ID}` | Full JWKS URL. Override only to point at a stand-in.     |
-| `WORKOS_ISSUER`     | no       | `{API_URL}/`                     | Expected `iss` claim. Set only for a custom auth domain. |
-| `TEST_DATABASE_URL` | tests    | —                                | Database the Vitest suites use. Without it they skip.    |
+| Variable            | Required | Default                  | Purpose                                                  |
+| ------------------- | -------- | ------------------------ | -------------------------------------------------------- |
+| `DATABASE_URL`      | yes      | —                        | Postgres connection string for the host registry.        |
+| `WORKOS_API_KEY`    | yes      | —                        | WorkOS secret key (`sk_…`). Server-side only.            |
+| `WORKOS_CLIENT_ID`  | yes      | —                        | WorkOS AuthKit client id (`client_…`).                   |
+| `ACCOUNT_BASE_URL`  | yes      | —                        | Public origin of this instance.                          |
+| `PORT`              | no       | `8788`                   | HTTP listen port.                                        |
+| `WORKOS_API_URL`    | no       | `https://api.workos.com` | WorkOS API origin. Override only to point at a stand-in. |
+| `WORKOS_JWKS_URL`   | no       | discovered (`jwks_uri`)  | Full JWKS URL. Override only to point at a stand-in.     |
+| `WORKOS_ISSUER`     | no       | discovered (`issuer`)    | Expected `iss` claim. Set only for a custom auth domain. |
+| `TEST_DATABASE_URL` | tests    | —                        | Database the Vitest suites use. Without it they skip.    |
 
 A missing required variable fails the boot with an explicit
 `Missing required environment variables: …` rather than starting half-configured.

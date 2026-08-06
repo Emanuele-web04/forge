@@ -13,6 +13,11 @@ afterAll(async () => {
   await workos.close();
 });
 
+/** The metadata document the service fetches on its first verification. */
+function discoveryPath(clientId: string): string {
+  return `/user_management/${clientId}/.well-known/openid-configuration`;
+}
+
 describe("verifyAccessToken", () => {
   it("returns the user and session ids from a valid token", async () => {
     const auth = createWorkosAuth(workos.config());
@@ -56,12 +61,23 @@ describe("verifyAccessToken", () => {
     await expect(auth.verifyAccessToken(token)).rejects.toThrow();
   });
 
-  // WorkOS mints `iss` with a trailing slash; a config that drops it must not
-  // silently accept.
-  it("is strict about the issuer's trailing slash", async () => {
-    const auth = createWorkosAuth(workos.config({ workosIssuer: workos.origin }));
+  // The bug this discovery path exists to fix: `iss` is scoped to the
+  // environment's client id, so the old `${apiUrl}/` guess rejected every real
+  // token. Pinning that guess must still be rejected.
+  it("rejects a token when a wrong issuer is pinned", async () => {
+    const auth = createWorkosAuth(workos.config({ workosIssuer: `${workos.origin}/` }));
     const token = await workos.signAccessToken({ sub: "user_123", sid: "session_456" });
     await expect(auth.verifyAccessToken(token)).rejects.toThrow();
+  });
+
+  it("accepts a token whose issuer matches an explicit override", async () => {
+    const auth = createWorkosAuth(workos.config({ workosIssuer: "https://auth.example.com" }));
+    const token = await workos.signAccessToken({
+      sub: "user_123",
+      sid: "session_456",
+      issuer: "https://auth.example.com",
+    });
+    await expect(auth.verifyAccessToken(token)).resolves.toMatchObject({ userId: "user_123" });
   });
 
   it("rejects a malformed token", async () => {
@@ -75,6 +91,61 @@ describe("verifyAccessToken", () => {
     const auth = createWorkosAuth(workos.config());
     const token = await workos.signAccessToken({ sub: "user_123" });
     await expect(auth.verifyAccessToken(token)).rejects.toThrow();
+  });
+});
+
+describe("issuer discovery", () => {
+  it("verifies against the environment-scoped issuer the metadata advertises", async () => {
+    // Load-bearing: the fake mints `iss` under an environment client id that
+    // is not the app's, so only a discovered issuer can match.
+    expect(workos.issuer.endsWith(`/${workos.clientId}`)).toBe(false);
+    const auth = createWorkosAuth(workos.config());
+    const token = await workos.signAccessToken({ sub: "user_disco", sid: "session_disco" });
+    await expect(auth.verifyAccessToken(token)).resolves.toEqual({
+      userId: "user_disco",
+      sessionId: "session_disco",
+    });
+  });
+
+  it("fetches the metadata document exactly once across concurrent verifications", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const before = workos.requests.length;
+    const tokens = await Promise.all(
+      [1, 2, 3, 4, 5].map((n) => workos.signAccessToken({ sub: `user_${n}`, sid: `session_${n}` })),
+    );
+
+    await Promise.all(tokens.map((token) => auth.verifyAccessToken(token)));
+
+    const discoveries = workos.requests
+      .slice(before)
+      .filter((request) => request.path === discoveryPath(workos.clientId));
+    expect(discoveries).toHaveLength(1);
+  });
+
+  it("throws naming the discovery URL when the metadata cannot be loaded", async () => {
+    // An unroutable origin: without a trusted issuer there is nothing safe to
+    // fall back to, so verification must fail loudly rather than relax.
+    const auth = createWorkosAuth(workos.config({ workosApiUrl: "http://127.0.0.1:1" }));
+    const token = await workos.signAccessToken({ sub: "user_123", sid: "session_456" });
+    await expect(auth.verifyAccessToken(token)).rejects.toThrow(
+      `http://127.0.0.1:1/user_management/${workos.clientId}/.well-known/openid-configuration`,
+    );
+  });
+
+  it("skips discovery entirely when both the issuer and JWKS url are pinned", async () => {
+    const auth = createWorkosAuth(
+      workos.config({
+        workosIssuer: workos.issuer,
+        workosJwksUrl: `${workos.origin}/sso/jwks/${workos.clientId}`,
+      }),
+    );
+    const before = workos.requests.length;
+    const token = await workos.signAccessToken({ sub: "user_pinned", sid: "session_pinned" });
+
+    await expect(auth.verifyAccessToken(token)).resolves.toMatchObject({ userId: "user_pinned" });
+    expect(
+      workos.requests.slice(before).filter((r) => r.path === discoveryPath(workos.clientId)),
+    ).toHaveLength(0);
   });
 });
 

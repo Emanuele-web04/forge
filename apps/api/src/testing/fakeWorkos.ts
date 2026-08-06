@@ -14,6 +14,15 @@ import type { ApiConfig } from "../config";
 
 const KID = "fake-workos-key";
 
+/**
+ * Deliberately not the app client id. Real WorkOS scopes `iss` to the
+ * *environment's* client id, which differs from the AuthKit application's
+ * whenever the app is not the environment default — so a double that reused
+ * the app id would let a hand-derived issuer pass and hide the bug that
+ * discovery exists to fix.
+ */
+const ENVIRONMENT_CLIENT_ID = "client_01FAKE_ENV";
+
 export type FakeWorkosRequest = {
   method: string;
   path: string;
@@ -33,6 +42,8 @@ export type FakeWorkos = {
   origin: string;
   clientId: string;
   apiKey: string;
+  /** The `iss` this server mints and advertises through OIDC discovery. */
+  issuer: string;
   /** Config pointed at this server; spread overrides on top as needed. */
   config(overrides?: Partial<ApiConfig>): ApiConfig;
   /** Registers a user that `getUser` will return, and returns its id. */
@@ -113,6 +124,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   // Declared up front rather than only on the returned object: the
   // `authenticate` route below needs to mint tokens and register users too.
   let origin = "";
+  let issuer = "";
 
   function addUser(user: Partial<FakeWorkosUser> & { id?: string }): FakeWorkosUser {
     // Random, not sequential: host rows are keyed by WorkOS user id and the
@@ -137,7 +149,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     sub,
     sid,
     expiresIn = accessTokenTtl,
-    issuer,
+    issuer: issuerOverride,
   }: {
     sub: string;
     sid?: string;
@@ -148,7 +160,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     if (sid !== undefined) claims.sid = sid;
     return new SignJWT(claims)
       .setProtectedHeader({ alg: "RS256", kid: KID })
-      .setIssuer(issuer ?? `${origin}/`)
+      .setIssuer(issuerOverride ?? issuer)
       .setIssuedAt()
       .setExpirationTime(expiresIn)
       .sign(privateKey);
@@ -188,6 +200,17 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   });
 
   app.get(`/sso/jwks/${clientId}`, (c) => c.json({ keys: [publicJwk] }));
+
+  // The OIDC metadata document, queried by the *app* client id but answering
+  // with the environment-scoped issuer — exactly how real WorkOS behaves, and
+  // the only way a caller can learn the issuer it must expect.
+  app.get(`/user_management/${clientId}/.well-known/openid-configuration`, (c) =>
+    c.json({
+      issuer,
+      jwks_uri: `${origin}/sso/jwks/${clientId}`,
+      token_endpoint: `${origin}/user_management/authenticate`,
+    }),
+  );
 
   app.post("/user_management/authorize/device", (c) => {
     // Same fixed code every time, so tests can assert against the exported
@@ -261,15 +284,19 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     throw new Error("fake WorkOS server failed to bind a port");
   }
   origin = `http://127.0.0.1:${address.port}`;
+  issuer = `${origin}/user_management/${ENVIRONMENT_CLIENT_ID}`;
 
   return {
     origin,
     clientId,
     apiKey,
+    issuer,
     requests,
     addUser,
     signAccessToken,
 
+    // No issuer or JWKS url by default: the service discovers both from the
+    // metadata document above, which is the path production takes.
     config(overrides = {}) {
       return {
         databaseUrl: "postgres://unused",
@@ -278,9 +305,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
         workosApiKey: apiKey,
         workosClientId: clientId,
         workosApiUrl: origin,
-        workosJwksUrl: `${origin}/sso/jwks/${clientId}`,
-        // Mirrors WorkOS: the API origin with a trailing slash.
-        workosIssuer: `${origin}/`,
         ...overrides,
       };
     },

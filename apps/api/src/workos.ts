@@ -5,7 +5,7 @@
 // Depends on: jose (JWKS + JWT verification), WorkOS User Management REST API.
 
 import type { DeviceAuthorizationResponse } from "@synara/contracts";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 import type { ApiConfig } from "./config";
 
 /** The subset of a WorkOS user this service surfaces (see /me). */
@@ -46,6 +46,26 @@ type WorkosUserResponse = {
   profile_picture_url?: string | null;
 };
 
+/**
+ * The two fields of the OIDC metadata document this service reads. WorkOS
+ * serves it per client id, and it is the only authority on both values: `iss`
+ * is scoped to the *environment's* client id, which differs from the app's
+ * whenever the AuthKit application is not the environment default.
+ */
+type OidcMetadata = {
+  issuer?: unknown;
+  jwks_uri?: unknown;
+};
+
+function discoveryUrl(config: ApiConfig): string {
+  return `${config.workosApiUrl}/user_management/${encodeURIComponent(config.workosClientId)}/.well-known/openid-configuration`;
+}
+
+type VerificationKeys = {
+  issuer: string;
+  jwks: JWTVerifyGetKey;
+};
+
 type WorkosDeviceAuthorizationWire = {
   device_code: string;
   user_code: string;
@@ -63,9 +83,64 @@ function fullName(user: WorkosUserResponse): string | undefined {
 }
 
 export function createWorkosAuth(config: ApiConfig): WorkosAuth {
-  // Built once so the key set is cached across requests rather than refetched
-  // per verification; jose refreshes it on an unknown `kid`.
-  const jwks = createRemoteJWKSet(new URL(config.workosJwksUrl));
+  /**
+   * Resolved on first verification and kept for the process lifetime. The
+   * promise itself is what is cached, so concurrent first requests share one
+   * discovery fetch instead of racing N of them; a failed attempt is dropped
+   * so a transient outage does not poison the process forever.
+   */
+  let verificationKeys: Promise<VerificationKeys> | undefined;
+
+  async function discoverVerificationKeys(): Promise<VerificationKeys> {
+    // Nothing to discover when the operator pinned both — a stand-in or a
+    // custom auth domain never has to be reachable at the metadata path.
+    if (config.workosIssuer && config.workosJwksUrl) {
+      return {
+        issuer: config.workosIssuer,
+        jwks: createRemoteJWKSet(new URL(config.workosJwksUrl)),
+      };
+    }
+
+    const url = discoveryUrl(config);
+    let metadata: OidcMetadata;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`responded ${response.status}`);
+      }
+      metadata = (await response.json()) as OidcMetadata;
+    } catch (cause) {
+      throw new Error(
+        `Could not load WorkOS OIDC metadata from ${url}: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause },
+      );
+    }
+
+    const issuer = config.workosIssuer ?? metadata.issuer;
+    const jwksUrl = config.workosJwksUrl ?? metadata.jwks_uri;
+    // Verification without a trusted issuer would accept tokens minted for any
+    // other tenancy that shares a JWKS, so an unusable document is fatal
+    // rather than a reason to relax the check.
+    if (typeof issuer !== "string" || typeof jwksUrl !== "string") {
+      throw new Error(
+        `WorkOS OIDC metadata from ${url} is missing issuer or jwks_uri; set WORKOS_ISSUER and WORKOS_JWKS_URL to override`,
+      );
+    }
+    // Built once so the key set is cached across requests rather than
+    // refetched per verification; jose refreshes it on an unknown `kid`.
+    return { issuer, jwks: createRemoteJWKSet(new URL(jwksUrl)) };
+  }
+
+  function resolveVerificationKeys(): Promise<VerificationKeys> {
+    if (!verificationKeys) {
+      const pending = discoverVerificationKeys();
+      verificationKeys = pending;
+      pending.catch(() => {
+        if (verificationKeys === pending) verificationKeys = undefined;
+      });
+    }
+    return verificationKeys;
+  }
 
   async function workosFetch(path: string, init?: RequestInit): Promise<unknown> {
     const response = await fetch(`${config.workosApiUrl}${path}`, {
@@ -87,7 +162,8 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
 
   return {
     async verifyAccessToken(token) {
-      const { payload } = await jwtVerify(token, jwks, { issuer: config.workosIssuer });
+      const { issuer, jwks } = await resolveVerificationKeys();
+      const { payload } = await jwtVerify(token, jwks, { issuer });
       const { sub, sid } = payload;
       // A WorkOS access token always carries both; anything else is not one,
       // and treating it as authenticated would lose the session identity that

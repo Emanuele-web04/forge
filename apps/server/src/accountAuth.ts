@@ -328,10 +328,77 @@ export async function withFreshAccessToken<A>(
   }
 }
 
+/**
+ * Registers this machine against the stored session and records the host
+ * fields, leaving the session half of the file exactly as it found it.
+ *
+ * The credentials are re-read from disk after the call rather than merged into
+ * a captured copy: `withFreshAccessToken` may have rotated and persisted a new
+ * token pair on the way through, and writing a stale pair back over it would
+ * spend the user's session for nothing.
+ */
+async function registerThisHost(
+  options: AccountFlowOptions,
+  client: AccountClient,
+  stdout: Stdout,
+): Promise<void> {
+  const platform = toAccountHostPlatform(options.platform ?? process.platform);
+  if (!platform) {
+    stdout(
+      `Signed in, but this host was not registered: platform "${String(options.platform ?? process.platform)}" is not supported for remote hosts (darwin, linux, windows).\n`,
+    );
+    return;
+  }
+
+  const environmentId = await resolveEnvironmentId(options.baseDir, options.devUrl);
+  const name = options.hostname ?? OS.hostname();
+  const endpoints = await resolveLanEndpoints(options.baseDir, options.devUrl);
+  const appVersion = options.appVersion ?? serverPackageJson.version;
+
+  let registered;
+  try {
+    registered = await withFreshAccessToken({ baseDir: options.baseDir, client }, (accessToken) =>
+      client.registerHost(accessToken, {
+        environmentId: EnvironmentId.makeUnsafe(environmentId),
+        name,
+        platform,
+        kind: "local",
+        endpoints,
+        appVersion,
+      }),
+    );
+  } catch (error) {
+    stdout(
+      `Signed in, but registering this host failed: ${describeError(error)}\nRun \`synara auth logout\` and try again, or register the host from the Synara UI.\n`,
+    );
+    return;
+  }
+
+  const current = await readAccountFile(options.baseDir);
+  if (current) {
+    await writeAccountCredentials(options.baseDir, {
+      ...current,
+      hostToken: registered.hostToken,
+      hostId: registered.host.id,
+    });
+  }
+
+  stdout(
+    [
+      `Signed in to ${options.accountUrl}.`,
+      `Registered this host as "${registered.host.name}" (${registered.host.platform}, ${registered.host.id}).`,
+      endpoints.length === 0
+        ? "No reachable endpoint was advertised — start the server on a LAN address to make this host reachable."
+        : `Advertising ${endpoints.map((endpoint) => endpoint.url).join(", ")}.`,
+      "",
+    ].join("\n"),
+  );
+}
+
 export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   const stdout = options.stdout ?? defaultStdout;
   const existing = await readAccountCredentials(options.baseDir);
-  if (existing) {
+  if (existing?.hostToken && existing.hostId) {
     stdout(
       `Already signed in to ${existing.accountUrl}.\nRun \`synara auth logout\` first to sign in as someone else.\n`,
     );
@@ -339,6 +406,17 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   }
 
   const client = clientFor(options.accountUrl, options.client);
+
+  // A session with no host fields is the half-finished state a failed
+  // registration leaves behind. Refusing it would strand the user: the sign-in
+  // they already completed is fine, only the registration is missing, so
+  // finish that rather than sending them through the device flow again.
+  if (existing) {
+    stdout("Already signed in — completing host registration.\n");
+    await registerThisHost(options, client, stdout);
+    return;
+  }
+
   const instance = await client.instance();
   const device = await client.requestDeviceCode();
 
@@ -377,52 +455,7 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   } satisfies StoredAccountFile;
   await writeAccountCredentials(options.baseDir, session);
 
-  const platform = toAccountHostPlatform(options.platform ?? process.platform);
-  if (!platform) {
-    stdout(
-      `Signed in, but this host was not registered: platform "${String(options.platform ?? process.platform)}" is not supported for remote hosts (darwin, linux, windows).\n`,
-    );
-    return;
-  }
-
-  const environmentId = await resolveEnvironmentId(options.baseDir, options.devUrl);
-  const name = options.hostname ?? OS.hostname();
-  const endpoints = await resolveLanEndpoints(options.baseDir, options.devUrl);
-  const appVersion = options.appVersion ?? serverPackageJson.version;
-
-  let registered;
-  try {
-    registered = await client.registerHost(token.accessToken, {
-      environmentId: EnvironmentId.makeUnsafe(environmentId),
-      name,
-      platform,
-      kind: "local",
-      endpoints,
-      appVersion,
-    });
-  } catch (error) {
-    stdout(
-      `Signed in, but registering this host failed: ${describeError(error)}\nRun \`synara auth logout\` and try again, or register the host from the Synara UI.\n`,
-    );
-    return;
-  }
-
-  await writeAccountCredentials(options.baseDir, {
-    ...session,
-    hostToken: registered.hostToken,
-    hostId: registered.host.id,
-  });
-
-  stdout(
-    [
-      `Signed in to ${options.accountUrl}.`,
-      `Registered this host as "${registered.host.name}" (${registered.host.platform}, ${registered.host.id}).`,
-      endpoints.length === 0
-        ? "No reachable endpoint was advertised — start the server on a LAN address to make this host reachable."
-        : `Advertising ${endpoints.map((endpoint) => endpoint.url).join(", ")}.`,
-      "",
-    ].join("\n"),
-  );
+  await registerThisHost(options, client, stdout);
 }
 
 export interface RefreshHostRegistrationOptions {

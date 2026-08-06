@@ -133,7 +133,14 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     const { db } = buildApp();
     // Point at a closed port so the user lookup fails as a transport error
     // rather than a 404 — the upstream-fault branch, not the deleted-user one.
-    const brokenConfig: ApiConfig = { ...config, workosApiUrl: "http://127.0.0.1:1" };
+    // Issuer and JWKS stay pinned at the live fake so token verification still
+    // succeeds; otherwise discovery would fail first and answer 401.
+    const brokenConfig: ApiConfig = {
+      ...config,
+      workosApiUrl: "http://127.0.0.1:1",
+      workosIssuer: workos.issuer,
+      workosJwksUrl: `${workos.origin}/sso/jwks/${workos.clientId}`,
+    };
     const app = new Hono();
     app.route(
       "/api/v1",
