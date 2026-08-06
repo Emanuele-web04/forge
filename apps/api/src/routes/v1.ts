@@ -26,7 +26,12 @@ import { hosts, hostTokens } from "../db/schema";
 import { mintHostToken } from "../hostTokens";
 import { ensurePersonalOrg } from "../orgProvisioning";
 import { createRateLimiter } from "../rateLimit";
-import { WorkosApiError, type WorkosAuth, type WorkosOrganization, type WorkosUser } from "../workos";
+import {
+  WorkosApiError,
+  type WorkosAuth,
+  type WorkosOrganization,
+  type WorkosUser,
+} from "../workos";
 import packageJson from "../../package.json" with { type: "json" };
 import { authenticateHostToken, extractBearerToken, isHostTokenHeader } from "./hostAuth";
 
@@ -249,7 +254,9 @@ export function createV1Routes(deps: {
       const [existing] = await db
         .select()
         .from(hosts)
-        .where(and(eq(hosts.ownerOrgId, session.orgId), eq(hosts.environmentId, parsed.environmentId)))
+        .where(
+          and(eq(hosts.ownerOrgId, session.orgId), eq(hosts.environmentId, parsed.environmentId)),
+        )
         .limit(1);
 
       let hostRow: HostRow;

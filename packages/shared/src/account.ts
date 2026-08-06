@@ -11,6 +11,8 @@ import {
   InstanceInfo as InstanceInfoSchema,
   type ListHostsResponse,
   ListHostsResponse as ListHostsResponseSchema,
+  OrganizationRequiredBody,
+  type OrganizationSummary,
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
@@ -42,6 +44,23 @@ export class AccountApiError extends Error {
     this.name = "AccountApiError";
     this.code = params.code;
     this.status = params.status;
+  }
+}
+
+/**
+ * Thrown when the account refuses a call because the token is not scoped to a
+ * workspace the caller belongs to. Recoverable, unlike a plain
+ * {@link AccountApiError}: `organizations` is what the caller may refresh
+ * into, so the cure is a refresh carrying `organizationId` and a retry — never
+ * a fresh sign-in.
+ */
+export class OrganizationRequiredError extends Error {
+  readonly organizations: readonly OrganizationSummary[];
+
+  constructor(params: { message: string; organizations: readonly OrganizationSummary[] }) {
+    super(params.message);
+    this.name = "OrganizationRequiredError";
+    this.organizations = params.organizations;
   }
 }
 
@@ -146,6 +165,12 @@ export interface PollDeviceTokenOptions extends WorkosClientOptions {
 
 export interface RefreshAccessTokenOptions extends WorkosClientOptions {
   refreshToken: string;
+  /**
+   * Which workspace to authenticate into. WorkOS puts the resulting `org_id`
+   * claim in the access token, and the account authorizes on that claim alone
+   * — so a refresh without this yields a token the host routes will refuse.
+   */
+  organizationId?: string;
 }
 
 export interface AccountClient {
@@ -181,8 +206,24 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
     });
   }
 
-  async function toAccountApiError(response: Response): Promise<AccountApiError> {
+  /**
+   * The error a failed response represents. Tried in order of specificity:
+   * `organization_required` also decodes as the generic error body (it is a
+   * real error code), so checking it second would collapse a recoverable
+   * workspace prompt into an opaque 403.
+   */
+  async function toRequestError(
+    response: Response,
+  ): Promise<AccountApiError | OrganizationRequiredError> {
     const raw: unknown = await response.json().catch(() => null);
+
+    const organizationRequired = Schema.decodeUnknownOption(OrganizationRequiredBody)(raw);
+    if (Option.isSome(organizationRequired)) {
+      return new OrganizationRequiredError({
+        message: organizationRequired.value.message,
+        organizations: organizationRequired.value.organizations,
+      });
+    }
 
     const decoded = Schema.decodeUnknownOption(AccountErrorBody)(raw);
     if (Option.isSome(decoded)) {
@@ -226,7 +267,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
   ): Promise<S["Type"]> {
     const response = await fetchFn(`${baseUrl}${path}`, init);
     if (!response.ok) {
-      throw await toAccountApiError(response);
+      throw await toRequestError(response);
     }
     const json: unknown = await response.json();
     return Schema.decodeUnknownSync(schema)(json);
@@ -235,7 +276,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
   async function requestEmpty(path: string, init: RequestInit): Promise<void> {
     const response = await fetchFn(`${baseUrl}${path}`, init);
     if (!response.ok) {
-      throw await toAccountApiError(response);
+      throw await toRequestError(response);
     }
   }
 
@@ -350,6 +391,9 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
         grant_type: "refresh_token",
         refresh_token: refreshOptions.refreshToken,
         client_id: refreshOptions.clientId,
+        ...(refreshOptions.organizationId
+          ? { organization_id: refreshOptions.organizationId }
+          : {}),
       });
       const raw: unknown = await response.json().catch(() => null);
       if (!response.ok) {

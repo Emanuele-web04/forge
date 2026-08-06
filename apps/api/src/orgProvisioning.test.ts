@@ -75,9 +75,7 @@ describe("ensurePersonalOrg", () => {
 
     const memberships = await ensurePersonalOrg(deps, "user_1", "ada@example.com");
 
-    expect(memberships).toEqual([
-      { orgId: "org_1", orgName: personalOrgName("ada@example.com") },
-    ]);
+    expect(memberships).toEqual([{ orgId: "org_1", orgName: personalOrgName("ada@example.com") }]);
     // Create, then join, then re-read: the membership list is authoritative,
     // so the result must come from WorkOS rather than be assembled locally.
     expect(deps.calls).toEqual([

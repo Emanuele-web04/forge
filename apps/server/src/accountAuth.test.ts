@@ -6,8 +6,10 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { type AccountHost, EnvironmentId } from "@synara/contracts";
+import { Readable } from "node:stream";
+
 import type { AccountClient } from "@synara/shared/account";
-import { AccountApiError } from "@synara/shared/account";
+import { AccountApiError, OrganizationRequiredError } from "@synara/shared/account";
 
 import {
   accountCredentialsPath,
@@ -19,8 +21,11 @@ import {
   runAuthLogin,
   runAuthLogout,
   runStatus,
+  selectOrganization,
   SessionExpiredError,
   withFreshAccessToken,
+  WORKSPACE_CHANGED_MESSAGE,
+  WorkspaceAccessChangedError,
   writeAccountCredentials,
 } from "./accountAuth.ts";
 
@@ -56,9 +61,34 @@ const host: AccountHost = {
   kind: "local",
   endpoints: [{ url: "http://192.168.1.10:3773", transport: "lan" }],
   appVersion: "0.6.4",
+  registeredByUserId: "user_1",
   createdAt: "2026-08-01T00:00:00.000Z",
   lastSeenAt: "2026-08-03T12:00:00.000Z",
 };
+
+const ORGANIZATION = { id: "org_1", name: "Personal — ada@example.com" };
+
+/** What `/me` returns for a caller acting inside {@link ORGANIZATION}. */
+function meResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "user_1",
+    name: "Ada Lovelace",
+    email: "ada@example.com",
+    organization: ORGANIZATION,
+    ...overrides,
+  };
+}
+
+function organizationRequired(
+  organizations: ReadonlyArray<{ id: string; name: string }> = [ORGANIZATION],
+): OrganizationRequiredError {
+  return new OrganizationRequiredError({ message: "Pick a workspace", organizations });
+}
+
+/** A readable stdin that yields the given lines, for the workspace picker. */
+function stdinOf(...lines: string[]): NodeJS.ReadableStream {
+  return Readable.from([`${lines.join("\n")}\n`]) as unknown as NodeJS.ReadableStream;
+}
 
 function unimplemented(name: string) {
   return () => Promise.reject(new Error(`${name} should not be called`));
@@ -73,6 +103,7 @@ function credentials(overrides: Record<string, unknown> = {}) {
     accountUrl: "https://accounts.example.com",
     workosClientId: CLIENT_ID,
     workosApiUrl: WORKOS_API_URL,
+    organizationId: ORGANIZATION.id,
     accessToken: "access-1",
     refreshToken: "refresh-1",
     ...overrides,
@@ -98,7 +129,16 @@ function unauthorized(): AccountApiError {
   return new AccountApiError({ code: "unauthorized", status: 401, message: "Unauthorized" });
 }
 
-/** What `synara auth`'s device flow returns once the user approves. */
+/**
+ * What `synara auth`'s device flow returns once the user approves.
+ *
+ * The device grant hands back an org-less token — WorkOS never scopes one —
+ * so `me` refuses it and the flow refreshes into a workspace. That rotation is
+ * why the persisted pair is `access-1`/`refresh-1` while the poll returned
+ * `access-0`/`refresh-0`: modelling it any other way would let a client that
+ * forgot to scope the token pass every test here and fail against a real
+ * account.
+ */
 function deviceFlowClient(overrides: Partial<AccountClient> = {}): AccountClient {
   return makeClient({
     instance: () =>
@@ -118,6 +158,14 @@ function deviceFlowClient(overrides: Partial<AccountClient> = {}): AccountClient
         interval: 5,
       }),
     pollDeviceToken: () =>
+      Promise.resolve({
+        accessToken: "access-0",
+        refreshToken: "refresh-0",
+        user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
+      }),
+    me: (token) =>
+      token === "access-0" ? Promise.reject(organizationRequired()) : Promise.resolve(meResponse()),
+    refreshAccessToken: () =>
       Promise.resolve({
         accessToken: "access-1",
         refreshToken: "refresh-1",
@@ -164,6 +212,37 @@ describe("account credential store", () => {
 
     expect(await readAccountFile(baseDir)).toBeUndefined();
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
+  });
+
+  /**
+   * A v2 file predates organizations. Its refresh token is still live, but
+   * every token minted from it would be org-less and refused by the account,
+   * so it is treated as signed out — the same as a v1 file, and for the same
+   * reason: re-authenticating is the only thing that fixes it.
+   */
+  it("treats a v2 credentials file with no organizationId as not signed in", async () => {
+    const baseDir = makeBaseDir();
+    await fsp.writeFile(
+      accountCredentialsPath(baseDir),
+      JSON.stringify({
+        accountUrl: "https://accounts.example.com",
+        workosClientId: CLIENT_ID,
+        workosApiUrl: WORKOS_API_URL,
+        accessToken: "access-1",
+        refreshToken: "refresh-1",
+        hostToken: "host-token",
+        hostId: "host_1",
+      }),
+      "utf8",
+    );
+
+    expect(await readAccountCredentials(baseDir)).toBeUndefined();
+    // The host half is still readable, so `synara auth` can re-link rather
+    // than stranding the machine's registration.
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
   });
 
   it("reads a file whose session was cleared but keeps its host fields", async () => {
@@ -217,10 +296,13 @@ describe("withFreshAccessToken", () => {
         baseDir,
         client: makeClient({
           refreshAccessToken: (options) => {
+            // The organization must ride along on every renewal: without it
+            // WorkOS mints an org-less token and the very next call 403s.
             expect(options).toEqual({
               refreshToken: "refresh-1",
               clientId: CLIENT_ID,
               workosApiUrl: WORKOS_API_URL,
+              organizationId: ORGANIZATION.id,
             });
             return Promise.resolve({
               accessToken: "access-2",
@@ -371,6 +453,140 @@ describe("withFreshAccessToken", () => {
   });
 });
 
+describe("selectOrganization", () => {
+  // One workspace is not a decision. Prompting anyway would put a question in
+  // front of every single-workspace user on every sign-in.
+  it("returns the only workspace without prompting", async () => {
+    const stdout = makeStdout();
+    const selected = await selectOrganization([ORGANIZATION], {
+      stdout: stdout.write,
+      // Reaching stdin at all would hang: this stream never yields a line.
+      stdin: Readable.from([]) as unknown as NodeJS.ReadableStream,
+    });
+
+    expect(selected).toEqual(ORGANIZATION);
+    expect(stdout.text()).toBe("");
+  });
+
+  it("prompts for a numbered choice when there is more than one", async () => {
+    const stdout = makeStdout();
+    const organizations = [ORGANIZATION, { id: "org_2", name: "Acme" }];
+
+    const selected = await selectOrganization(organizations, {
+      stdout: stdout.write,
+      stdin: stdinOf("2"),
+    });
+
+    expect(selected).toEqual({ id: "org_2", name: "Acme" });
+    expect(stdout.text()).toContain("1. Personal — ada@example.com");
+    expect(stdout.text()).toContain("2. Acme");
+  });
+
+  it("re-asks on an out-of-range or non-numeric answer", async () => {
+    const stdout = makeStdout();
+    const organizations = [ORGANIZATION, { id: "org_2", name: "Acme" }];
+
+    const selected = await selectOrganization(organizations, {
+      stdout: stdout.write,
+      stdin: stdinOf("9", "banana", "1"),
+    });
+
+    expect(selected).toEqual(ORGANIZATION);
+    expect(stdout.text()).toContain('"9" is not one of the options');
+    expect(stdout.text()).toContain('"banana" is not one of the options');
+  });
+
+  // A closed stdin cannot answer. Looping on end-of-input would hang the CLI
+  // with no prompt visible and no way to interrupt it.
+  it("fails rather than looping when stdin ends without an answer", async () => {
+    await expect(
+      selectOrganization([ORGANIZATION, { id: "org_2", name: "Acme" }], {
+        stdout: makeStdout().write,
+        stdin: Readable.from([]) as unknown as NodeJS.ReadableStream,
+      }),
+    ).rejects.toThrow("No workspace was selected");
+  });
+
+  it("explains rather than crashing when the account offers no workspace at all", async () => {
+    await expect(selectOrganization([], { stdout: makeStdout().write })).rejects.toThrow(
+      "no workspace",
+    );
+  });
+});
+
+describe("withFreshAccessToken and workspace access", () => {
+  /**
+   * Membership revoked mid-session. Renewing would mint another token for the
+   * same dead organization, so the refresh is skipped entirely — a retry here
+   * would be a guaranteed second failure and a spent refresh token.
+   */
+  it("clears the session without refreshing when the workspace is no longer the caller's", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
+
+    let attempts = 0;
+    await expect(
+      withFreshAccessToken(
+        {
+          baseDir,
+          client: makeClient({
+            refreshAccessToken: () => Promise.reject(new Error("must not refresh")),
+          }),
+        },
+        () => {
+          attempts += 1;
+          return Promise.reject(organizationRequired([]));
+        },
+      ),
+    ).rejects.toBeInstanceOf(WorkspaceAccessChangedError);
+
+    expect(attempts).toBe(1);
+    expect(await readAccountCredentials(baseDir)).toBeUndefined();
+    // The host registration survives, and so does everything but the session
+    // — including the now-meaningless organization choice.
+    expect(await readAccountFile(baseDir)).toEqual({
+      accountUrl: "https://accounts.example.com",
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+  });
+
+  it("keeps the organization across a token rotation", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    const attempts: string[] = [];
+    await withFreshAccessToken(
+      {
+        baseDir,
+        client: makeClient({
+          refreshAccessToken: () =>
+            Promise.resolve({
+              accessToken: "access-2",
+              refreshToken: "refresh-2",
+              user: { id: "user_1", email: "ada@example.com" },
+            }),
+        }),
+      },
+      (accessToken) => {
+        attempts.push(accessToken);
+        return attempts.length === 1 ? Promise.reject(unauthorized()) : Promise.resolve("ok");
+      },
+    );
+
+    // Losing it here would leave the next command unable to refresh into the
+    // workspace this machine's hosts actually belong to.
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({ accessToken: "access-2", refreshToken: "refresh-2" }),
+    );
+  });
+});
+
 describe("resolveEnvironmentId", () => {
   it("reuses the id the server persisted", async () => {
     const baseDir = makeBaseDir();
@@ -462,6 +678,126 @@ describe("runAuthLogin", () => {
 
     expect(await readAccountCredentials(baseDir)).toEqual(
       credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
+  });
+
+  /**
+   * The whole loop the org model adds: the device grant's token is refused,
+   * the sole workspace is auto-selected, the token is refreshed into it, and
+   * registration then simply works. Asserted as one sequence because the
+   * ordering is the contract — refreshing before selecting, or registering
+   * with the unscoped token, both fail only at the account.
+   */
+  it("scopes the device token to a workspace and persists the rotated pair", async () => {
+    const baseDir = makeBaseDir();
+    const stdout = makeStdout();
+
+    const refreshCalls: unknown[] = [];
+    const registerTokens: string[] = [];
+    const client = deviceFlowClient({
+      refreshAccessToken: (options) => {
+        refreshCalls.push(options);
+        return Promise.resolve({
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+          user: { id: "user_1", email: "ada@example.com" },
+        });
+      },
+      registerHost: (token) => {
+        registerTokens.push(token);
+        return Promise.resolve({ host, hostToken: "host-token" });
+      },
+    });
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      client,
+      stdout: stdout.write,
+      platform: "darwin",
+      hostname: "workstation",
+    });
+
+    expect(refreshCalls).toEqual([
+      {
+        refreshToken: "refresh-0",
+        clientId: CLIENT_ID,
+        workosApiUrl: WORKOS_API_URL,
+        organizationId: ORGANIZATION.id,
+      },
+    ]);
+    // Registration uses the scoped token, never the one /me refused.
+    expect(registerTokens).toEqual(["access-1"]);
+    expect(stdout.text()).toContain(`Workspace: ${ORGANIZATION.name}`);
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
+  });
+
+  it("asks which workspace to use when the account offers several", async () => {
+    const baseDir = makeBaseDir();
+    const stdout = makeStdout();
+    const acme = { id: "org_2", name: "Acme" };
+
+    const refreshCalls: Array<{ organizationId?: string }> = [];
+    const client = deviceFlowClient({
+      me: (token) =>
+        token === "access-0"
+          ? Promise.reject(organizationRequired([ORGANIZATION, acme]))
+          : Promise.resolve(meResponse({ organization: acme })),
+      refreshAccessToken: (options) => {
+        refreshCalls.push(options);
+        return Promise.resolve({
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+          user: { id: "user_1", email: "ada@example.com" },
+        });
+      },
+      registerHost: () => Promise.resolve({ host, hostToken: "host-token" }),
+    });
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      client,
+      stdout: stdout.write,
+      platform: "darwin",
+      hostname: "workstation",
+      stdin: stdinOf("2"),
+    });
+
+    expect(stdout.text()).toContain("Which workspace");
+    expect(refreshCalls[0]?.organizationId).toBe(acme.id);
+    expect((await readAccountCredentials(baseDir))?.organizationId).toBe(acme.id);
+  });
+
+  // A self-hoster whose WorkOS already scopes the device grant never sees the
+  // 403, and must not be dragged through a refresh they do not need.
+  it("skips the workspace dance when the device token already names one", async () => {
+    const baseDir = makeBaseDir();
+
+    const client = deviceFlowClient({
+      me: () => Promise.resolve(meResponse()),
+      refreshAccessToken: () => Promise.reject(new Error("must not refresh")),
+      registerHost: () => Promise.resolve({ host, hostToken: "host-token" }),
+    });
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      client,
+      stdout: makeStdout().write,
+      platform: "darwin",
+      hostname: "workstation",
+    });
+
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({
+        accessToken: "access-0",
+        refreshToken: "refresh-0",
+        hostToken: "host-token",
+        hostId: "host_1",
+      }),
     );
   });
 
@@ -797,7 +1133,7 @@ describe("runStatus", () => {
       baseDir,
       stdout: stdout.write,
       client: makeClient({
-        me: () => Promise.resolve({ id: "user_1", name: "Ada Lovelace", email: "ada@example.com" }),
+        me: () => Promise.resolve(meResponse()),
         listHosts: () =>
           Promise.resolve({
             hosts: [
@@ -818,6 +1154,7 @@ describe("runStatus", () => {
     const text = stdout.text();
     expect(text).toContain("Ada Lovelace");
     expect(text).toContain("ada@example.com");
+    expect(text).toContain(`Workspace: ${ORGANIZATION.name}`);
     expect(text).toContain("This host");
     expect(text).toContain("workstation");
     expect(text).toContain("http://192.168.1.10:3773");
@@ -839,7 +1176,7 @@ describe("runStatus", () => {
         me: (token) => {
           tokensSeen.push(token);
           if (token === "access-1") return Promise.reject(unauthorized());
-          return Promise.resolve({ id: "user_1", name: "Ada Lovelace", email: "ada@example.com" });
+          return Promise.resolve(meResponse());
         },
         listHosts: (token) => {
           tokensSeen.push(token);
@@ -887,6 +1224,26 @@ describe("runStatus", () => {
 
     expect(stdout.text()).toContain("Session expired");
     expect(stdout.text()).toContain("synara auth");
+  });
+
+  // Distinct advice from an expired session: the refresh token may be fine,
+  // and telling the user their session expired would not explain why signing
+  // in again is nonetheless the fix.
+  it("reports a changed workspace distinctly from an expired session", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+    const stdout = makeStdout();
+
+    await runStatus({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      stdout: stdout.write,
+      client: makeClient({ me: () => Promise.reject(organizationRequired([])) }),
+    });
+
+    expect(stdout.text()).toContain(WORKSPACE_CHANGED_MESSAGE);
+    expect(stdout.text()).not.toContain("Session expired");
+    expect(await readAccountCredentials(baseDir)).toBeUndefined();
   });
 
   it("does not advise re-authenticating when the account is merely unreachable", async () => {

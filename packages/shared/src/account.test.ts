@@ -1,7 +1,7 @@
 import type { EnvironmentId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { AccountApiError, createAccountClient } from "./account";
+import { AccountApiError, createAccountClient, OrganizationRequiredError } from "./account";
 
 const ENVIRONMENT_ID = "env-1" as EnvironmentId;
 
@@ -109,20 +109,125 @@ describe("createAccountClient", () => {
 
   describe("me", () => {
     it("sends the device token as a bearer header and decodes the response", async () => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(jsonResponse({ id: "u1", name: "Ada", email: "ada@example.com" }));
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          id: "u1",
+          name: "Ada",
+          email: "ada@example.com",
+          organization: { id: "org_1", name: "Personal" },
+        }),
+      );
       const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
 
       const result = await client.me("device-token-1");
 
-      expect(result).toEqual({ id: "u1", name: "Ada", email: "ada@example.com" });
+      expect(result).toEqual({
+        id: "u1",
+        name: "Ada",
+        email: "ada@example.com",
+        organization: { id: "org_1", name: "Personal" },
+      });
       expect(fetchMock).toHaveBeenCalledWith(
         `${BASE_URL}/api/v1/me`,
         expect.objectContaining({
           headers: expect.objectContaining({ authorization: "Bearer device-token-1" }),
         }),
       );
+    });
+
+    // The organization is what the caller acts inside; a response missing it
+    // means the server did not resolve one, which is not a usable session.
+    it("rejects a response with no organization", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ id: "u1", name: "Ada", email: "ada@example.com" }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.me("device-token-1")).rejects.toThrow();
+    });
+
+    it("throws OrganizationRequiredError with the choices on a 403", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            error: "organization_required",
+            message: "Pick a workspace",
+            organizations: [
+              { id: "org_1", name: "Personal" },
+              { id: "org_2", name: "Acme" },
+            ],
+          },
+          { status: 403 },
+        ),
+      );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      const error = await client.me("orgless-token").catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(OrganizationRequiredError);
+      // Not an AccountApiError: the caller recovers by refreshing into one of
+      // these, and the generic branch would have hidden the list entirely.
+      expect(error).not.toBeInstanceOf(AccountApiError);
+      expect((error as OrganizationRequiredError).organizations).toEqual([
+        { id: "org_1", name: "Personal" },
+        { id: "org_2", name: "Acme" },
+      ]);
+      expect((error as Error).message).toBe("Pick a workspace");
+    });
+
+    it("throws OrganizationRequiredError even when the choice list is empty", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { error: "organization_required", message: "No workspace", organizations: [] },
+            { status: 403 },
+          ),
+        );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.me("orgless-token")).rejects.toBeInstanceOf(OrganizationRequiredError);
+    });
+
+    // A 403 that is not about organizations must stay an AccountApiError, or
+    // the CLI would prompt for a workspace over an unrelated refusal.
+    it("keeps an ordinary 403 as an AccountApiError", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ error: "token_revoked", message: "Revoked" }, { status: 403 }),
+        );
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      const error = await client.me("revoked").catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(AccountApiError);
+      expect(error).not.toBeInstanceOf(OrganizationRequiredError);
+    });
+
+    it("raises the organization prompt from every route, not just /me", async () => {
+      const body = {
+        error: "organization_required",
+        message: "Pick a workspace",
+        organizations: [{ id: "org_1", name: "Personal" }],
+      };
+      // A fresh Response per call: a body can only be read once, so a shared
+      // one would make the second assertion fail for the wrong reason.
+      const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(body, { status: 403 })));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.listHosts("t")).rejects.toBeInstanceOf(OrganizationRequiredError);
+      await expect(client.deleteHost("t", "host_1")).rejects.toBeInstanceOf(
+        OrganizationRequiredError,
+      );
+      await expect(
+        client.registerHost("t", {
+          environmentId: ENVIRONMENT_ID,
+          name: "Mac",
+          platform: "darwin",
+          kind: "local",
+          endpoints: [],
+        }),
+      ).rejects.toBeInstanceOf(OrganizationRequiredError);
     });
 
     it("throws AccountApiError with code unauthorized on 401", async () => {
@@ -150,6 +255,7 @@ describe("createAccountClient", () => {
         platform: "darwin",
         kind: "local",
         endpoints: [{ url: "http://localhost:1234", transport: "lan" }],
+        registeredByUserId: "user_1",
         createdAt: "2026-01-01T00:00:00.000Z",
         lastSeenAt: "2026-01-01T00:00:00.000Z",
       };
@@ -171,6 +277,7 @@ describe("createAccountClient", () => {
         platform: "darwin",
         kind: "local",
         endpoints: [{ url: "http://localhost:1234", transport: "lan" }],
+        registeredByUserId: "user_1",
         createdAt: "2026-01-01T00:00:00.000Z",
         lastSeenAt: "2026-01-01T00:00:00.000Z",
       };
@@ -234,6 +341,7 @@ describe("createAccountClient", () => {
         platform: "darwin",
         kind: "local",
         endpoints: [],
+        registeredByUserId: "user_1",
         createdAt: "2026-01-01T00:00:00.000Z",
         lastSeenAt: "2026-01-01T00:00:00.000Z",
       };
@@ -517,6 +625,46 @@ describe("createAccountClient", () => {
         refresh_token: "refresh-1",
         client_id: CLIENT_ID,
       });
+    });
+
+    // The account authorizes on the org_id claim alone, and WorkOS only mints
+    // it when the grant names an organization. Dropping this field is how a
+    // refresh silently produces a token every host route then refuses.
+    it("sends organization_id when a workspace is named", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(workosSuccessBody()));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await client.refreshAccessToken({
+        refreshToken: "refresh-1",
+        organizationId: "org_42",
+        ...WORKOS,
+      });
+
+      const call = fetchMock.mock.calls[0];
+      if (call === undefined) throw new Error("expected fetch to have been called");
+      expect(JSON.parse(call[1].body as string)).toEqual({
+        grant_type: "refresh_token",
+        refresh_token: "refresh-1",
+        client_id: CLIENT_ID,
+        organization_id: "org_42",
+      });
+    });
+
+    // Omitted rather than sent empty: WorkOS rejects a blank organization_id,
+    // where an absent one is the ordinary org-less refresh.
+    it("omits organization_id entirely when none is given", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(workosSuccessBody()));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await client.refreshAccessToken({
+        refreshToken: "refresh-1",
+        organizationId: "",
+        ...WORKOS,
+      });
+
+      const call = fetchMock.mock.calls[0];
+      if (call === undefined) throw new Error("expected fetch to have been called");
+      expect(JSON.parse(call[1].body as string)).not.toHaveProperty("organization_id");
     });
 
     it("throws instead of returning undefined tokens when the success body loses a field", async () => {

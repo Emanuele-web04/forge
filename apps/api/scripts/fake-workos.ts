@@ -18,6 +18,7 @@ type Options = {
   approveAfterSeconds: number;
   clientId: string;
   accessTokenTtl: string;
+  preCreateOrganizations: readonly string[];
 };
 
 const USAGE = `Usage: bun run scripts/fake-workos.ts [options]
@@ -28,15 +29,21 @@ const USAGE = `Usage: bun run scripts/fake-workos.ts [options]
   --client-id <id>       WorkOS client id to serve (default ${DEFAULT_CLIENT_ID})
   --access-token-ttl <s> Access-token lifetime as a jose span, e.g. 30s
                          (default ${DEFAULT_ACCESS_TOKEN_TTL}; short values force the refresh path)
+  --organization <name>  Pre-create an organization the approved user joins.
+                         Repeatable; pass it twice to exercise the workspace
+                         picker. Omitted (the default), the API provisions a
+                         personal organization lazily on first use.
   --help                 Print this message
 `;
 
 function parseArgs(argv: readonly string[]): Options {
+  const preCreateOrganizations: string[] = [];
   const options: Options = {
     port: DEFAULT_PORT,
     approveAfterSeconds: DEFAULT_APPROVE_AFTER_SECONDS,
     clientId: DEFAULT_CLIENT_ID,
     accessTokenTtl: DEFAULT_ACCESS_TOKEN_TTL,
+    preCreateOrganizations,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -61,6 +68,9 @@ function parseArgs(argv: readonly string[]): Options {
         break;
       case "--access-token-ttl":
         options.accessTokenTtl = value;
+        break;
+      case "--organization":
+        preCreateOrganizations.push(value);
         break;
       default:
         throw new Error(`Unknown option: ${flag}\n\n${USAGE}`);
@@ -90,6 +100,14 @@ async function main(): Promise<void> {
       setTimeout(() => {
         const user = workos.approveDevice(deviceCode, { first_name: "Dev", last_name: "User" });
         process.stdout.write(`  ✓ approved as ${user.email}\n`);
+        // Joined only after approval, since there is no user to add before
+        // then. With none configured the user belongs to nothing, which is
+        // what makes the API's lazy provisioning the default path exercised.
+        for (const name of options.preCreateOrganizations) {
+          const organization = workos.addOrganization({ name });
+          workos.addMembership(organization.id, user.id);
+          process.stdout.write(`  ✓ joined ${organization.name}\n`);
+        }
       }, options.approveAfterSeconds * 1000);
     },
   });

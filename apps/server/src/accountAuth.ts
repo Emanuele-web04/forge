@@ -11,14 +11,21 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import OS from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 
 import {
   type AccountHost,
   type AccountHostEndpoint,
   type AccountHostPlatform,
   EnvironmentId,
+  type OrganizationSummary,
 } from "@synara/contracts";
-import { AccountApiError, createAccountClient, type AccountClient } from "@synara/shared/account";
+import {
+  AccountApiError,
+  createAccountClient,
+  OrganizationRequiredError,
+  type AccountClient,
+} from "@synara/shared/account";
 import { Effect, Path } from "effect";
 
 import { writeFileStringAtomically } from "./atomicWrite";
@@ -33,17 +40,27 @@ const CREDENTIALS_FILE_NAME = "account-credentials.json";
 /** What the user sees when a rotated refresh token can no longer be redeemed. */
 export const SESSION_EXPIRED_MESSAGE = "Session expired — run `synara auth` to sign in again.";
 
+/** What the user sees when the workspace they signed in to is no longer theirs. */
+export const WORKSPACE_CHANGED_MESSAGE =
+  "Your workspace access changed — run `synara auth` to choose a workspace again.";
+
 /**
- * The stored account file. The user session (`accessToken`/`refreshToken`) and
- * the host registration (`hostToken`/`hostId`) have independent lifetimes: a
- * WorkOS refresh token can be spent or revoked while the host token this
- * machine registered with stays valid, so the two halves are optional
- * separately and an expired session leaves the host fields in place.
+ * The stored account file (v3). The user session (`accessToken`/
+ * `refreshToken`/`organizationId`) and the host registration (`hostToken`/
+ * `hostId`) have independent lifetimes: a WorkOS refresh token can be spent or
+ * revoked while the host token this machine registered with stays valid, so
+ * the two halves are optional separately and an expired session leaves the
+ * host fields in place.
+ *
+ * `organizationId` is part of the session, not an extra: hosts belong to
+ * organizations, and every refresh must name the same one or the renewed token
+ * comes back unable to reach anything.
  */
 export interface StoredAccountFile {
   readonly accountUrl: string;
   readonly workosClientId: string;
   readonly workosApiUrl: string;
+  readonly organizationId?: string;
   readonly accessToken?: string;
   readonly refreshToken?: string;
   readonly hostToken?: string;
@@ -54,6 +71,7 @@ export interface StoredAccountFile {
 export interface AccountCredentials extends StoredAccountFile {
   readonly accessToken: string;
   readonly refreshToken: string;
+  readonly organizationId: string;
 }
 
 type Stdout = (text: string) => void;
@@ -102,6 +120,9 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
       accountUrl: record.accountUrl,
       workosClientId: record.workosClientId,
       workosApiUrl: record.workosApiUrl,
+      ...(typeof record.organizationId === "string"
+        ? { organizationId: record.organizationId }
+        : {}),
       ...(typeof record.accessToken === "string" ? { accessToken: record.accessToken } : {}),
       ...(typeof record.refreshToken === "string" ? { refreshToken: record.refreshToken } : {}),
       ...(typeof record.hostToken === "string" ? { hostToken: record.hostToken } : {}),
@@ -112,13 +133,27 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
   }
 }
 
-/** The stored file, but only when it carries a redeemable user session. */
+/**
+ * The stored file, but only when it carries a redeemable user session.
+ *
+ * A v2 file — tokens but no `organizationId` — is deliberately not one. Its
+ * refresh token is still live, but every renewal from it would produce an
+ * org-less token the account refuses, so the user would see failures with no
+ * hint that the file is the problem. Treating it as signed out sends them
+ * through `synara auth`, which is the only thing that fixes it. The host
+ * fields survive, exactly as they do after an ordinary session expiry.
+ */
 export async function readAccountCredentials(
   baseDir: string,
 ): Promise<AccountCredentials | undefined> {
   const stored = await readAccountFile(baseDir);
-  if (!stored?.accessToken || !stored.refreshToken) return undefined;
-  return { ...stored, accessToken: stored.accessToken, refreshToken: stored.refreshToken };
+  if (!stored?.accessToken || !stored.refreshToken || !stored.organizationId) return undefined;
+  return {
+    ...stored,
+    accessToken: stored.accessToken,
+    refreshToken: stored.refreshToken,
+    organizationId: stored.organizationId,
+  };
 }
 
 export async function writeAccountCredentials(
@@ -232,6 +267,8 @@ export interface AccountFlowOptions {
   readonly platform?: NodeJS.Platform | string;
   readonly hostname?: string;
   readonly appVersion?: string;
+  /** Where the workspace picker reads its answer from; defaults to stdin. */
+  readonly stdin?: NodeJS.ReadableStream | undefined;
 }
 
 function clientFor(accountUrl: string, injected: AccountClient | undefined): AccountClient {
@@ -246,6 +283,20 @@ export class SessionExpiredError extends Error {
   constructor() {
     super(SESSION_EXPIRED_MESSAGE);
     this.name = "SessionExpiredError";
+  }
+}
+
+/**
+ * Thrown when the account stops accepting the workspace this machine signed in
+ * to — the membership was revoked, or the organization was removed. The stored
+ * refresh token may well still be good, so this is not an expiry; what is
+ * stale is the organization choice, and only a fresh `synara auth` can make a
+ * new one.
+ */
+export class WorkspaceAccessChangedError extends Error {
+  constructor() {
+    super(WORKSPACE_CHANGED_MESSAGE);
+    this.name = "WorkspaceAccessChangedError";
   }
 }
 
@@ -265,6 +316,25 @@ function isGrantRejected(error: unknown): boolean {
 export interface WithFreshAccessTokenOptions {
   readonly baseDir: string;
   readonly client: AccountClient;
+}
+
+/**
+ * Drops the session half of the stored file, keeping the host registration.
+ * The registration is still real, and keeping it lets a later `synara auth`
+ * re-link this machine instead of stranding a phantom host on the account.
+ *
+ * The organization goes with the session: it was chosen for that sign-in, and
+ * carrying it into the next one would silently re-pick a workspace the user
+ * may no longer have.
+ */
+async function clearStoredSession(baseDir: string, credentials: StoredAccountFile): Promise<void> {
+  const {
+    accessToken: _accessToken,
+    refreshToken: _refreshToken,
+    organizationId: _organizationId,
+    ...rest
+  } = credentials;
+  await writeAccountCredentials(baseDir, rest);
 }
 
 /**
@@ -295,6 +365,13 @@ export async function withFreshAccessToken<A>(
   try {
     return await fn(credentials.accessToken);
   } catch (error) {
+    // The workspace, not the token, is what the account rejected. Renewing
+    // would mint another token for the same dead organization, so the retry
+    // is skipped and the session dropped in favour of a fresh sign-in.
+    if (error instanceof OrganizationRequiredError) {
+      await clearStoredSession(baseDir, credentials);
+      throw new WorkspaceAccessChangedError();
+    }
     if (!isUnauthorized(error)) throw error;
 
     let refreshed;
@@ -303,6 +380,7 @@ export async function withFreshAccessToken<A>(
         refreshToken: credentials.refreshToken,
         clientId: credentials.workosClientId,
         workosApiUrl: credentials.workosApiUrl,
+        organizationId: credentials.organizationId,
       });
     } catch (refreshError) {
       // Only a refusal proves the token is dead. On an outage or a network
@@ -311,11 +389,7 @@ export async function withFreshAccessToken<A>(
       // possibly-valid one costs a full re-authentication.
       if (!isGrantRejected(refreshError)) throw refreshError;
 
-      // Drop only the session half of the file: the host registration is
-      // still real, and keeping it lets a later `synara auth` re-link this
-      // machine instead of stranding a phantom host on the account.
-      const { accessToken: _accessToken, refreshToken: _refreshToken, ...rest } = credentials;
-      await writeAccountCredentials(baseDir, rest);
+      await clearStoredSession(baseDir, credentials);
       throw new SessionExpiredError();
     }
 
@@ -326,6 +400,116 @@ export async function withFreshAccessToken<A>(
     });
     return await fn(refreshed.accessToken);
   }
+}
+
+/** The stdin half of the picker, narrowed to what reading one line needs. */
+export type SelectOrganizationIo = {
+  readonly stdin?: NodeJS.ReadableStream | undefined;
+  readonly stdout?: Stdout | undefined;
+};
+
+/**
+ * Asks which workspace to use, and returns it.
+ *
+ * One organization answers itself: a user with a single personal workspace has
+ * no decision to make, and a prompt with one option is noise on every sign-in.
+ * Several means asking, because guessing would silently register the machine
+ * somewhere the user's teammates can see.
+ *
+ * Both streams are injectable so the prompt is testable without a terminal.
+ */
+export async function selectOrganization(
+  organizations: readonly OrganizationSummary[],
+  io: SelectOrganizationIo = {},
+): Promise<OrganizationSummary> {
+  const first = organizations[0];
+  if (!first) {
+    throw new Error(
+      "The account offered no workspace to sign in to. Create one in the WorkOS dashboard, then run `synara auth` again.",
+    );
+  }
+  if (organizations.length === 1) return first;
+
+  const stdout = io.stdout ?? defaultStdout;
+  stdout(
+    [
+      "",
+      "  Which workspace should this host belong to?",
+      "",
+      ...organizations.map((org, index) => `    ${index + 1}. ${org.name}`),
+      "",
+    ].join("\n"),
+  );
+
+  const lines = lineReader(io.stdin ?? process.stdin);
+  try {
+    for (;;) {
+      stdout(`  Enter a number [1-${organizations.length}]: `);
+      const line = await lines.next();
+      // End of input — a piped or closed stdin cannot answer, and looping on
+      // it forever would hang the CLI with no way out.
+      if (line === undefined) {
+        throw new Error("No workspace was selected.");
+      }
+      const choice = Number.parseInt(line.trim(), 10);
+      const selected = Number.isInteger(choice) ? organizations[choice - 1] : undefined;
+      if (selected) {
+        stdout("\n");
+        return selected;
+      }
+      stdout(`  "${line.trim()}" is not one of the options.\n`);
+    }
+  } finally {
+    lines.close();
+  }
+}
+
+/**
+ * Reads lines one at a time from a stream.
+ *
+ * Lines are buffered as they arrive rather than awaited one listener at a
+ * time: readline emits a whole chunk's worth synchronously, so a consumer that
+ * attaches a fresh listener per read drops every line but the first and then
+ * waits forever for input that has already been delivered.
+ */
+function lineReader(input: NodeJS.ReadableStream): {
+  next(): Promise<string | undefined>;
+  close(): void;
+} {
+  const iface = readline.createInterface({ input });
+  const buffered: string[] = [];
+  /** Set while a read is outstanding with nothing buffered to satisfy it. */
+  let waiting: ((line: string | undefined) => void) | undefined;
+  let ended = false;
+
+  iface.on("line", (line: string) => {
+    if (waiting) {
+      const resolve = waiting;
+      waiting = undefined;
+      resolve(line);
+      return;
+    }
+    buffered.push(line);
+  });
+  iface.on("close", () => {
+    ended = true;
+    waiting?.(undefined);
+    waiting = undefined;
+  });
+
+  return {
+    next() {
+      const ready = buffered.shift();
+      if (ready !== undefined) return Promise.resolve(ready);
+      if (ended) return Promise.resolve(undefined);
+      return new Promise((resolve) => {
+        waiting = resolve;
+      });
+    },
+    close() {
+      iface.close();
+    },
+  };
 }
 
 /**
@@ -448,6 +632,13 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
     workosApiUrl: instance.workosApiUrl,
   });
 
+  const scoped = await scopeTokenToWorkspace(token, {
+    client,
+    instance,
+    stdout,
+    stdin: options.stdin,
+  });
+
   // A file left behind by an expired session still holds this machine's host
   // registration; carrying it forward keeps the re-link intact if registering
   // again fails.
@@ -456,14 +647,65 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
     accountUrl: options.accountUrl,
     workosClientId: instance.clientId,
     workosApiUrl: instance.workosApiUrl,
-    accessToken: token.accessToken,
-    refreshToken: token.refreshToken,
+    organizationId: scoped.organizationId,
+    accessToken: scoped.accessToken,
+    refreshToken: scoped.refreshToken,
     ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
     ...(previous?.hostId ? { hostId: previous.hostId } : {}),
   } satisfies StoredAccountFile;
   await writeAccountCredentials(options.baseDir, session);
 
   await registerThisHost(options, client, stdout);
+}
+
+/**
+ * Turns the org-less token the device grant returns into one scoped to a
+ * workspace.
+ *
+ * The probe is a real `/me` call rather than an assumption: WorkOS mints
+ * device-grant tokens without `org_id`, so the account answers 403 with the
+ * memberships to choose from — and, on a first-ever sign-in, provisions the
+ * personal workspace as a side effect of being asked. A token that already
+ * carries a workspace (a self-hoster whose WorkOS is configured to scope the
+ * device grant) skips the whole dance.
+ */
+async function scopeTokenToWorkspace(
+  token: { accessToken: string; refreshToken: string },
+  context: {
+    client: AccountClient;
+    instance: { clientId: string; workosApiUrl: string };
+    stdout: Stdout;
+    stdin?: NodeJS.ReadableStream | undefined;
+  },
+): Promise<{ accessToken: string; refreshToken: string; organizationId: string }> {
+  const { client, instance, stdout, stdin } = context;
+
+  let organizations: readonly OrganizationSummary[];
+  try {
+    const me = await client.me(token.accessToken);
+    return { ...token, organizationId: me.organization.id };
+  } catch (error) {
+    if (!(error instanceof OrganizationRequiredError)) throw error;
+    organizations = error.organizations;
+  }
+
+  const organization = await selectOrganization(organizations, { stdin, stdout });
+  // Redeeming the refresh token here spends it, so the rotated pair this
+  // returns is the only usable one — the caller must persist it, not the
+  // device-grant pair it started with.
+  const refreshed = await client.refreshAccessToken({
+    refreshToken: token.refreshToken,
+    clientId: instance.clientId,
+    workosApiUrl: instance.workosApiUrl,
+    organizationId: organization.id,
+  });
+
+  stdout(`Workspace: ${organization.name}\n`);
+  return {
+    accessToken: refreshed.accessToken,
+    refreshToken: refreshed.refreshToken,
+    organizationId: organization.id,
+  };
 }
 
 export interface RefreshHostRegistrationOptions {
@@ -616,6 +858,10 @@ export async function runStatus(options: StatusOptions): Promise<void> {
       stdout(`${SESSION_EXPIRED_MESSAGE}\n`);
       return;
     }
+    if (error instanceof WorkspaceAccessChangedError) {
+      stdout(`${WORKSPACE_CHANGED_MESSAGE}\n`);
+      return;
+    }
     // Only a rejected token is worth telling the user to sign in again for;
     // an unreachable server would make that advice actively wrong.
     const rejected =
@@ -628,7 +874,9 @@ export async function runStatus(options: StatusOptions): Promise<void> {
     return;
   }
 
-  stdout(`Account:  ${credentials.accountUrl}\nSigned in: ${me.name} <${me.email}>\n`);
+  stdout(
+    `Account:  ${credentials.accountUrl}\nSigned in: ${me.name} <${me.email}>\nWorkspace: ${me.organization.name}\n`,
+  );
 
   let hosts: readonly AccountHost[];
   try {
