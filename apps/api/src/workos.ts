@@ -57,6 +57,14 @@ type OidcMetadata = {
   jwks_uri?: unknown;
 };
 
+/**
+ * How long the metadata fetch may take before it is abandoned. Without this a
+ * connection that is accepted and then stalls leaves the memoized promise
+ * pending forever, and every verification queues behind it — the cache is only
+ * evicted on rejection, so a hang would never resolve itself.
+ */
+const DISCOVERY_TIMEOUT_MS = 10_000;
+
 function discoveryUrl(config: ApiConfig): string {
   return `${config.workosApiUrl}/user_management/${encodeURIComponent(config.workosClientId)}/.well-known/openid-configuration`;
 }
@@ -104,7 +112,9 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     const url = discoveryUrl(config);
     let metadata: OidcMetadata;
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+      });
       if (!response.ok) {
         throw new Error(`responded ${response.status}`);
       }

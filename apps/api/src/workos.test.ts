@@ -1,5 +1,5 @@
 import { generateKeyPair, SignJWT } from "jose";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startFakeWorkos, type FakeWorkos } from "./testing/fakeWorkos";
 import { createWorkosAuth } from "./workos";
 
@@ -130,6 +130,35 @@ describe("issuer discovery", () => {
     await expect(auth.verifyAccessToken(token)).rejects.toThrow(
       `http://127.0.0.1:1/user_management/${workos.clientId}/.well-known/openid-configuration`,
     );
+  });
+
+  // A stalled connection would otherwise wedge every verification behind a
+  // memoized promise that never settles — eviction only runs on rejection.
+  // Asserting the signal rather than simulating a real hang, which is
+  // expensive to stage and slow to run.
+  it("bounds the discovery fetch with an abort signal", async () => {
+    const realFetch = globalThis.fetch;
+    const signals: Array<AbortSignal | null | undefined> = [];
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(((
+      ...args: Parameters<typeof fetch>
+    ) => {
+      const [input, init] = args;
+      if (String(input).includes(".well-known/openid-configuration")) {
+        signals.push(init?.signal);
+      }
+      return realFetch(...args);
+    }) as typeof fetch);
+
+    try {
+      const auth = createWorkosAuth(workos.config());
+      const token = await workos.signAccessToken({ sub: "user_abort", sid: "session_abort" });
+      await expect(auth.verifyAccessToken(token)).resolves.toMatchObject({ userId: "user_abort" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
   });
 
   it("skips discovery entirely when both the issuer and JWKS url are pinned", async () => {

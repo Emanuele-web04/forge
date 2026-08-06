@@ -15,13 +15,16 @@ import type { ApiConfig } from "../config";
 const KID = "fake-workos-key";
 
 /**
- * Deliberately not the app client id. Real WorkOS scopes `iss` to the
+ * The environment-scoped client id this server issues under, derived from the
+ * app's so it can never accidentally equal it. Real WorkOS scopes `iss` to the
  * *environment's* client id, which differs from the AuthKit application's
- * whenever the app is not the environment default — so a double that reused
- * the app id would let a hand-derived issuer pass and hide the bug that
- * discovery exists to fix.
+ * whenever the app is not the environment default — a double that reused the
+ * app id would let a hand-derived issuer pass and hide the bug discovery
+ * exists to fix, so the difference must survive any caller's `clientId`.
  */
-const ENVIRONMENT_CLIENT_ID = "client_01FAKE_ENV";
+function environmentClientId(clientId: string): string {
+  return `${clientId}_env`;
+}
 
 export type FakeWorkosRequest = {
   method: string;
@@ -284,7 +287,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     throw new Error("fake WorkOS server failed to bind a port");
   }
   origin = `http://127.0.0.1:${address.port}`;
-  issuer = `${origin}/user_management/${ENVIRONMENT_CLIENT_ID}`;
+  issuer = `${origin}/user_management/${environmentClientId(clientId)}`;
 
   return {
     origin,

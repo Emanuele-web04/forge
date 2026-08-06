@@ -374,14 +374,22 @@ async function registerThisHost(
     return;
   }
 
+  // The file can be gone if something removed it mid-flight (a concurrent
+  // `synara auth logout`, say). The account now has a host this machine has no
+  // token for, so saying "registered" would be a lie the user acts on.
   const current = await readAccountFile(options.baseDir);
-  if (current) {
-    await writeAccountCredentials(options.baseDir, {
-      ...current,
-      hostToken: registered.hostToken,
-      hostId: registered.host.id,
-    });
+  if (!current) {
+    stdout(
+      `Registered this host as "${registered.host.name}" (${registered.host.id}), but the local credentials file disappeared before the host token could be saved.\nRun \`synara auth\` again; remove the stale host from the Synara UI if it lingers.\n`,
+    );
+    return;
   }
+
+  await writeAccountCredentials(options.baseDir, {
+    ...current,
+    hostToken: registered.hostToken,
+    hostId: registered.host.id,
+  });
 
   stdout(
     [
