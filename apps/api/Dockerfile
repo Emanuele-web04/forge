@@ -23,6 +23,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY --from=deps /app/node_modules node_modules
+# Bun installs workspace-scoped dependencies into per-package node_modules;
+# the root copy alone leaves runtime imports (e.g. @hono/node-server) unresolved.
+COPY --from=deps /app/apps/api/node_modules apps/api/node_modules
+COPY --from=deps /app/packages/contracts/node_modules packages/contracts/node_modules
+COPY --from=deps /app/packages/shared/node_modules packages/shared/node_modules
 COPY package.json bun.lock ./
 COPY packages/contracts packages/contracts
 COPY packages/shared packages/shared
