@@ -24,10 +24,38 @@ nothing in this app runs unless you deploy an instance and point a server at it.
 
 This service does not store users, passwords, sessions, or signing keys.
 WorkOS owns all of that; the database here holds only the host registry
-(`hosts`, `host_tokens`), and `hosts.user_id` is an opaque WorkOS user id with
-no foreign key behind it.
+(`hosts`, `host_tokens`), and every WorkOS id in it is opaque with no foreign
+key behind it.
 
-What that means in practice:
+## Hosts belong to organizations
+
+Ownership is keyed on the **WorkOS organization**, never the user. Every user
+gets a personal organization the first time they use the service — provisioned
+lazily, named `Personal — <email>` — so there is no "personal account" concept
+separate from a workspace. Teams later are the same organization with more
+members: an invite, not a migration.
+
+- `hosts.owner_org_id` is the authorization key. A caller reaches a host
+  exactly when their access token's `org_id` claim names that organization and
+  they are still a member of it.
+- `hosts.registered_by_user_id` records who ran the registration. It is an
+  audit trail only and is never consulted for access — otherwise someone who
+  left an organization would keep reaching the hosts they happened to register.
+- The unique index is `(owner_org_id, environment_id)`, so one machine can be
+  linked from two different workspaces.
+
+WorkOS mints device-grant tokens **without** an `org_id` claim, so the first
+call after `synara auth` is always refused with `403 organization_required`.
+That response carries the caller's organizations, and the CLI refreshes with
+`organization_id` to obtain a scoped token before retrying. The same 403
+answers a token naming an organization the caller has since left, which is what
+makes a revoked membership take effect without anything being purged.
+
+Membership lists are cached per process for 60 seconds, so a burst of requests
+costs one round trip while an added or removed member still takes effect on its
+own.
+
+## What WorkOS owning identity means in practice
 
 - **Sign-in methods are dashboard toggles, not env vars.** Email/password,
   Google, GitHub, Microsoft and the rest are enabled per-application in the
@@ -113,12 +141,19 @@ Start the API with those set, then run `synara auth` as usual: the CLI prints a
 code, the stub approves it a few seconds later, and you end up with a real
 credentials file and a registered host.
 
-| Flag                 | Default         | Purpose                                                                             |
-| -------------------- | --------------- | ----------------------------------------------------------------------------------- |
-| `--port`             | `8790`          | Listen port.                                                                        |
-| `--approve-after`    | `5`             | Seconds before a device authorization self-approves; `0` approves immediately.      |
-| `--client-id`        | `client_01FAKE` | Client id to serve.                                                                 |
-| `--access-token-ttl` | `5m`            | Access-token lifetime. Set something like `30s` to exercise the CLI's refresh path. |
+| Flag                 | Default         | Purpose                                                                                                          |
+| -------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--port`             | `8790`          | Listen port.                                                                                                     |
+| `--approve-after`    | `5`             | Seconds before a device authorization self-approves; `0` approves immediately.                                   |
+| `--client-id`        | `client_01FAKE` | Client id to serve.                                                                                              |
+| `--access-token-ttl` | `5m`            | Access-token lifetime. Set something like `30s` to exercise the CLI's refresh path.                              |
+| `--organization`     | none            | Pre-create an organization the approved user joins. Repeatable — pass it twice to exercise the workspace picker. |
+
+With no `--organization`, the approved user belongs to nothing and the API
+provisions their personal organization lazily, which is the path a real
+first-time sign-in takes. The stub mints device-grant tokens without an
+`org_id` claim and honours `organization_id` on the refresh grant, exactly as
+WorkOS does, so the 403-then-refresh dance is real here too.
 
 The stub mints **single-use refresh tokens**, exactly as WorkOS does, so a
 client that fails to persist a rotation is locked out here the same way it would
@@ -145,6 +180,19 @@ trusting an instance against real WorkOS, confirm by hand:
    otherwise every token is rejected. With no custom domain, leave it unset:
    discovery resolves the environment-scoped issuer, and a hand-written guess
    is the one thing that reliably breaks this.
+7. **A refresh carrying `organization_id` yields a token with an `org_id`
+   claim.** Everything about host access depends on it. Decode the access token
+   the CLI stores after signing in and confirm the claim is there and matches
+   the workspace you chose; without it every host route answers
+   `organization_required` forever.
+8. **The membership listing has the shape this service reads.**
+   `GET /user_management/organization_memberships?user_id=…` must return
+   `data[].organization_id` **and** `data[].organization_name`. The name is
+   read inline rather than fetched per organization, so if a real tenancy omits
+   it the workspace picker falls back to showing raw `org_…` ids.
+9. Signing in as a brand-new user with no organizations provisions one, and the
+   WorkOS dashboard shows both the organization and the membership afterwards.
+   Two users must not end up sharing a personal organization.
 
 ## Environment variables
 
