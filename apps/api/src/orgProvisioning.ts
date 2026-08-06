@@ -41,9 +41,25 @@ type CacheEntry = {
  */
 const cache = new Map<string, CacheEntry>();
 
+/**
+ * Provisioning runs in flight per user, so concurrent org-less requests from
+ * one user share a single attempt rather than each creating an organization.
+ * WorkOS only refuses a duplicate *membership*, never a duplicate
+ * organization, so without this the loser of the race leaves a stray empty
+ * workspace behind and the user sees two.
+ *
+ * Known accepted limitation, alongside the cache being per process: this
+ * closes the window within one instance only. Two instances can still both
+ * create, and the conflict recovery below is what keeps that merely untidy
+ * rather than broken. V1 runs single-instance; a durable claim (a unique row
+ * keyed by user id) is what a multi-instance deployment would need.
+ */
+const provisioningInFlight = new Map<string, Promise<WorkosOrganization[]>>();
+
 /** Drops every cached membership list. Exported for tests. */
 export function clearOrgCache(): void {
   cache.clear();
+  provisioningInFlight.clear();
 }
 
 /** What a user's own workspace is called when this service creates it. */
@@ -68,16 +84,52 @@ async function readMemberships(
 }
 
 /**
+ * Creates the personal organization and joins the user to it. Only ever called
+ * through the single-flight below, which is what makes the re-read at the top
+ * meaningful: by the time a queued caller runs, the winner has already
+ * provisioned, and this returns that result instead of creating a second one.
+ */
+async function provisionPersonalOrg(
+  deps: OrgProvisioningDeps,
+  userId: string,
+  email: string,
+  clock: () => number,
+): Promise<WorkosOrganization[]> {
+  // Read again on the way in, not just before entering the single-flight: it
+  // costs one request and it shrinks the cross-process window to the gap
+  // between this read and the create.
+  const existing = await readMemberships(deps, userId, clock);
+  if (existing.length > 0) return existing;
+
+  const organization = await deps.createOrganization(personalOrgName(email));
+  try {
+    await deps.createOrganizationMembership(organization.orgId, userId);
+  } catch (error) {
+    if (!isConflict(error)) throw error;
+    // Another instance got there first — believe the list, not this error.
+    const afterRace = await readMemberships(deps, userId, clock);
+    if (afterRace.length === 0) throw error;
+    return afterRace;
+  }
+
+  // Re-read rather than returning the organization just created: WorkOS is the
+  // authority on membership, and a create that somehow did not take must not
+  // be reported as one that did.
+  return readMemberships(deps, userId, clock);
+}
+
+/**
  * The organizations `userId` belongs to, creating a personal one if they
  * belong to none. Every user therefore has a workspace from their first
  * sign-in, and a team later is the same organization with more members — no
  * migration, and no separate "personal account" concept to unpick.
  *
- * Provisioning is racy by nature: two requests from one user can both observe
- * an empty list. WorkOS refuses the loser's membership with a conflict, which
- * is treated as success-by-someone-else — the list is re-read and whatever is
- * actually there is returned. The cost of the race is a stray empty
- * organization, not a failed request.
+ * Concurrent org-less requests from one user share a single provisioning
+ * attempt, so they cannot each create an organization. Across instances the
+ * race is still possible; WorkOS refuses the loser's membership with a
+ * conflict, which is treated as success-by-someone-else — the list is re-read
+ * and whatever is actually there is returned. The cost of that race is a stray
+ * empty organization, not a failed request.
  */
 export async function ensurePersonalOrg(
   deps: OrgProvisioningDeps,
@@ -91,22 +143,22 @@ export async function ensurePersonalOrg(
     return cached.memberships;
   }
 
-  const existing = await readMemberships(deps, userId, clock);
-  if (existing.length > 0) return existing;
+  const inFlight = provisioningInFlight.get(userId);
+  if (inFlight) return inFlight;
 
-  const organization = await deps.createOrganization(personalOrgName(email));
+  const pending = provisionPersonalOrg(deps, userId, email, clock);
+  provisioningInFlight.set(userId, pending);
   try {
-    await deps.createOrganizationMembership(organization.orgId, userId);
+    return await pending;
   } catch (error) {
-    if (!isConflict(error)) throw error;
-    // Someone else got there first — believe the list, not this error.
-    const afterRace = await readMemberships(deps, userId, clock);
-    if (afterRace.length === 0) throw error;
-    return afterRace;
+    // The read that preceded the failure cached "no organizations". Keeping it
+    // would serve that answer for the rest of the TTL and suppress the retry
+    // that would have provisioned properly.
+    cache.delete(userId);
+    throw error;
+  } finally {
+    // Evicted on failure as well as success: a single failed attempt must not
+    // become the permanent answer for this user.
+    if (provisioningInFlight.get(userId) === pending) provisioningInFlight.delete(userId);
   }
-
-  // Re-read rather than returning the organization just created: WorkOS is the
-  // authority on membership, and a create that somehow did not take must not
-  // be reported as one that did.
-  return readMemberships(deps, userId, clock);
 }

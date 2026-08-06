@@ -128,6 +128,65 @@ describe("ensurePersonalOrg", () => {
     });
   });
 
+  /**
+   * The conflict recovery above is the cross-process safety net; within one
+   * process the race must not happen at all. WorkOS only refuses a duplicate
+   * *membership*, so two concurrent creates would leave a stray empty
+   * organization behind and hand the loser a workspace nobody asked for.
+   */
+  it("creates one organization when two requests for the same user race", async () => {
+    const created: WorkosOrganization[] = [];
+    let release!: () => void;
+    const listGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let listCount = 0;
+
+    const deps = makeDeps({
+      // The first read is held open until both callers have arrived, which is
+      // the window a per-user single-flight has to close.
+      listUserOrganizationMemberships: async () => {
+        listCount += 1;
+        if (listCount === 1) await listGate;
+        return [...created];
+      },
+      createOrganization: (name: string) => {
+        const organization = { orgId: `org_${created.length + 1}`, orgName: name };
+        created.push(organization);
+        return Promise.resolve(organization);
+      },
+    });
+
+    const first = ensurePersonalOrg(deps, "user_1", "ada@example.com");
+    const second = ensurePersonalOrg(deps, "user_1", "ada@example.com");
+    release();
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(deps.calls.filter((call) => call.startsWith("create:"))).toHaveLength(1);
+    expect(a).toEqual(b);
+  });
+
+  // The single-flight entry must be evicted on rejection too, or one failed
+  // provisioning would keep answering every later request with the same error.
+  it("retries provisioning after a failed attempt settles", async () => {
+    let attempt = 0;
+    const deps = makeDeps({
+      listUserOrganizationMemberships: () => Promise.resolve([]),
+      createOrganization: (name: string) => {
+        attempt += 1;
+        if (attempt === 1) return Promise.reject(new WorkosApiError(500, "WorkOS is down"));
+        return Promise.resolve({ orgId: "org_second", orgName: name });
+      },
+    });
+
+    await expect(ensurePersonalOrg(deps, "user_1", "ada@example.com")).rejects.toMatchObject({
+      status: 500,
+    });
+    await ensurePersonalOrg(deps, "user_1", "ada@example.com");
+
+    expect(attempt).toBe(2);
+  });
+
   it("propagates a failure to create the organization", async () => {
     const deps = makeDeps({
       createOrganization: () => Promise.reject(new WorkosApiError(500, "WorkOS is down")),

@@ -105,6 +105,44 @@ describe("verifyAccessToken", () => {
     });
   });
 
+  /**
+   * One WorkOS environment serves one issuer across every AuthKit application
+   * in it, and they all share a JWKS. Signature, expiry and issuer therefore
+   * all pass for a token minted for a *sibling* application — `client_id` is
+   * the only claim that says the token was meant for us.
+   */
+  it("rejects a token minted for a different application in the same environment", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const token = await workos.signAccessToken({
+      sub: "user_123",
+      sid: "session_456",
+      clientId: "client_01SIBLING",
+    });
+    await expect(auth.verifyAccessToken(token)).rejects.toThrow();
+  });
+
+  // Strict by default: a token with no `client_id` at all cannot be shown to
+  // belong to this application, so it is refused rather than waved through.
+  it("rejects a token carrying no client_id claim", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const token = await workos.signAccessToken({
+      sub: "user_123",
+      sid: "session_456",
+      clientId: null,
+    });
+    await expect(auth.verifyAccessToken(token)).rejects.toThrow();
+  });
+
+  it("accepts a token whose client_id is this application's", async () => {
+    const auth = createWorkosAuth(workos.config());
+    const token = await workos.signAccessToken({
+      sub: "user_123",
+      sid: "session_456",
+      clientId: workos.clientId,
+    });
+    await expect(auth.verifyAccessToken(token)).resolves.toMatchObject({ userId: "user_123" });
+  });
+
   it("rejects a malformed token", async () => {
     const auth = createWorkosAuth(workos.config());
     await expect(auth.verifyAccessToken("not-a-jwt")).rejects.toThrow();
@@ -265,6 +303,45 @@ describe("organizations", () => {
     workos.addMembership(org.id, owner.id);
 
     await expect(auth.listUserOrganizationMemberships(stranger.id)).resolves.toEqual([]);
+  });
+
+  /**
+   * A membership list is an authorization input: it decides which hosts the
+   * caller can see, and an empty one triggers personal-org provisioning. A 200
+   * whose body is not the documented shape must therefore fail the request
+   * rather than be read as "this user belongs to nothing".
+   */
+  describe("malformed listing responses", () => {
+    const malformed: Array<[string, unknown]> = [
+      ["a body with no data array", { object: "list" }],
+      ["a data field that is not an array", { object: "list", data: { organization_id: "org_a" } }],
+      ["an entry that is not an object", { object: "list", data: ["org_a"] }],
+      ["an entry with no organization id", { object: "list", data: [{ status: "active" }] }],
+      [
+        "an entry whose organization id is blank",
+        { object: "list", data: [{ organization_id: "" }] },
+      ],
+    ];
+
+    it.each(malformed)("throws on %s", async (_label, body) => {
+      const auth = createWorkosAuth(
+        workos.config({
+          workosIssuer: workos.issuer,
+          workosJwksUrl: `${workos.origin}/sso/jwks/${workos.clientId}`,
+        }),
+      );
+      const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      try {
+        await expect(auth.listUserOrganizationMemberships("user_1")).rejects.toThrow();
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 
   it("creates an organization through the Organizations API and returns its id", async () => {

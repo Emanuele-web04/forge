@@ -683,6 +683,72 @@ describe("createAccountClient", () => {
       ).rejects.toThrow();
     });
 
+    // A blank or whitespace token decodes as a string but is not a credential.
+    // Storing one produces a session that looks live and fails every call.
+    it.each([
+      ["access_token", { access_token: "   " }],
+      ["refresh_token", { refresh_token: "" }],
+    ])("throws when %s is present but blank", async (_field, override) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ ...workosSuccessBody(), ...override }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(
+        client.refreshAccessToken({ refreshToken: "refresh-1", ...WORKOS }),
+      ).rejects.toThrow();
+    });
+
+    /**
+     * The whole point of naming an organization is the `org_id` claim the
+     * resulting token carries. If WorkOS answers with a different organization
+     * than the one asked for, persisting the pair would silently put this
+     * machine in the wrong workspace — with the caller believing otherwise.
+     */
+    it("throws rather than returning a token for a different organization", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ ...workosSuccessBody(), organization_id: "org_other" }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(
+        client.refreshAccessToken({
+          refreshToken: "refresh-1",
+          organizationId: "org_42",
+          ...WORKOS,
+        }),
+      ).rejects.toThrow(/organization/i);
+    });
+
+    it("accepts a response echoing the organization that was requested", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ ...workosSuccessBody(), organization_id: "org_42" }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(
+        client.refreshAccessToken({
+          refreshToken: "refresh-1",
+          organizationId: "org_42",
+          ...WORKOS,
+        }),
+      ).resolves.toMatchObject({ accessToken: expect.any(String) });
+    });
+
+    // WorkOS does not always echo the field; its absence is not a mismatch.
+    it("accepts a response that omits organization_id", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(workosSuccessBody()));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(
+        client.refreshAccessToken({
+          refreshToken: "refresh-1",
+          organizationId: "org_42",
+          ...WORKOS,
+        }),
+      ).resolves.toMatchObject({ accessToken: expect.any(String) });
+    });
+
     it("throws AccountApiError with the error_description when the refresh token is spent", async () => {
       const fetchMock = vi
         .fn()

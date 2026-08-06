@@ -16,6 +16,7 @@ import {
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
+  TrimmedNonEmptyString,
   type UpdateHostRequest,
 } from "@synara/contracts";
 import { Option, Schema } from "effect";
@@ -82,8 +83,17 @@ export interface DeviceTokenSuccess {
  * of persisting `undefined` as someone's access token.
  */
 const WorkosAuthenticateSuccess = Schema.Struct({
-  access_token: Schema.String,
-  refresh_token: Schema.String,
+  // Trimmed-nonempty, not merely a string: a present-but-blank token decodes
+  // fine and would be persisted as a live-looking session that fails on every
+  // later call, with nothing pointing back here.
+  access_token: TrimmedNonEmptyString,
+  refresh_token: TrimmedNonEmptyString,
+  /**
+   * Echoed by WorkOS when the grant named an organization. Optional because it
+   * is absent from an org-less refresh and from the device grant; when it *is*
+   * present the caller checks it against what was asked for.
+   */
+  organization_id: Schema.optional(Schema.NullOr(Schema.String)),
   user: Schema.Struct({
     id: Schema.String,
     email: Schema.String,
@@ -128,8 +138,22 @@ function toDeviceApiError(response: Response, raw: unknown): AccountApiError {
  * absent. Recombining here keeps every caller from re-deciding what to do with
  * a half-populated name.
  */
-function toDeviceTokenSuccess(raw: unknown): DeviceTokenSuccess {
+function toDeviceTokenSuccess(raw: unknown, expectedOrganizationId?: string): DeviceTokenSuccess {
   const body: WorkosAuthenticateSuccess = Schema.decodeUnknownSync(WorkosAuthenticateSuccess)(raw);
+  // Only meaningful when WorkOS echoed the field; it omits it for an org-less
+  // grant, and an absent value is not evidence of a mismatch.
+  if (
+    expectedOrganizationId !== undefined &&
+    expectedOrganizationId.length > 0 &&
+    typeof body.organization_id === "string" &&
+    body.organization_id !== expectedOrganizationId
+  ) {
+    throw new AccountApiError({
+      code: "internal_error",
+      status: 502,
+      message: `Refresh returned a token for organization ${body.organization_id}, not the requested ${expectedOrganizationId}`,
+    });
+  }
   const name = [body.user.first_name, body.user.last_name]
     .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
     .join(" ");
@@ -399,7 +423,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       if (!response.ok) {
         throw toDeviceApiError(response, raw);
       }
-      return toDeviceTokenSuccess(raw);
+      return toDeviceTokenSuccess(raw, refreshOptions.organizationId);
     },
   };
 }

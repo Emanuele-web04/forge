@@ -416,6 +416,36 @@ describe("withFreshAccessToken", () => {
     expect(await readAccountCredentials(baseDir)).toEqual(credentials());
   });
 
+  // 408 and 429 are 4xx by status but transient by meaning: WorkOS is telling
+  // us to come back, not that the grant is dead. Burning the session on either
+  // turns a momentary rate limit into a forced re-authentication.
+  it.each([
+    [408, "Request timeout"],
+    [429, "Too many requests"],
+  ])(
+    "keeps the stored refresh token when the identity provider answers %i",
+    async (status, message) => {
+      const baseDir = makeBaseDir();
+      await writeAccountCredentials(baseDir, credentials());
+
+      const caught = await withFreshAccessToken(
+        {
+          baseDir,
+          client: makeClient({
+            refreshAccessToken: () =>
+              Promise.reject(new AccountApiError({ code: "internal_error", status, message })),
+          }),
+        },
+        () => Promise.reject(unauthorized()),
+      ).catch((error: unknown) => error);
+
+      expect(caught).toBeInstanceOf(AccountApiError);
+      expect(caught).not.toBeInstanceOf(SessionExpiredError);
+      expect(caught).toMatchObject({ status });
+      expect(await readAccountCredentials(baseDir)).toEqual(credentials());
+    },
+  );
+
   it("signs the session out but keeps the host fields when the refresh token is spent", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(

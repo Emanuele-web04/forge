@@ -128,14 +128,21 @@ type WorkosDeviceAuthorizationWire = {
 };
 
 /**
- * Reads one membership off the wire, skipping anything unusable. A membership
- * with no organization id is not something to authorize against, and throwing
- * on it would take down the whole listing over one malformed row.
+ * Reads one membership off the wire, refusing anything unusable. Skipping a
+ * malformed row would be the tempting choice, but a membership list is an
+ * authorization input: a partial list silently narrows what the caller can
+ * see, and an empty one makes the service provision a duplicate personal
+ * organization. Failing the request is the recoverable outcome; quietly
+ * dropping a row is not.
  */
-function toOrganization(entry: unknown): WorkosOrganization | undefined {
-  if (typeof entry !== "object" || entry === null) return undefined;
+function toOrganization(entry: unknown): WorkosOrganization {
+  if (typeof entry !== "object" || entry === null) {
+    throw new WorkosApiError(502, "WorkOS returned a membership entry that is not an object");
+  }
   const { organization_id: orgId, organization_name: orgName } = entry as WorkosMembershipWire;
-  if (typeof orgId !== "string" || orgId.length === 0) return undefined;
+  if (typeof orgId !== "string" || orgId.length === 0) {
+    throw new WorkosApiError(502, "WorkOS returned a membership with no organization id");
+  }
   return {
     orgId,
     // Falls back to the id so the field is always displayable. An unnamed
@@ -235,7 +242,16 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     async verifyAccessToken(token) {
       const { issuer, jwks } = await resolveVerificationKeys();
       const { payload } = await jwtVerify(token, jwks, { issuer });
-      const { sub, sid, org_id: orgId } = payload;
+      const { sub, sid, org_id: orgId, client_id: clientId } = payload;
+      // One WorkOS environment serves one issuer across every AuthKit
+      // application in it, all sharing a JWKS — so signature, expiry and
+      // issuer all pass for a token minted for a *sibling* application.
+      // `client_id` is the only claim that says the token was meant for us.
+      // Absence is refused as firmly as a mismatch: a token that cannot be
+      // shown to belong to this application is not one to authorize against.
+      if (clientId !== config.workosClientId) {
+        throw new Error("Access token was not issued for this application");
+      }
       // A WorkOS access token always carries both; anything else is not one,
       // and treating it as authenticated would lose the session identity that
       // logout and session listing depend on.
@@ -264,10 +280,14 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
       const response = (await workosFetch(
         `/user_management/organization_memberships?user_id=${encodeURIComponent(userId)}&limit=${MEMBERSHIP_PAGE_LIMIT}`,
       )) as WorkosMembershipListWire;
-      if (!Array.isArray(response.data)) return [];
-      return response.data
-        .map(toOrganization)
-        .filter((org): org is WorkosOrganization => org !== undefined);
+      // A 200 without a `data` array is not an empty membership list, it is an
+      // answer this service does not understand — and reading it as "no
+      // organizations" would both hide the caller's hosts and provision them a
+      // second personal workspace.
+      if (!Array.isArray(response.data)) {
+        throw new WorkosApiError(502, "WorkOS membership listing returned no data array");
+      }
+      return response.data.map(toOrganization);
     },
 
     // Organizations live on the top-level Organizations API, not under

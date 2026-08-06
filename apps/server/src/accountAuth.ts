@@ -305,12 +305,26 @@ function isUnauthorized(error: unknown): boolean {
 }
 
 /**
+ * Statuses that are 4xx by number but transient by meaning. WorkOS answers 408
+ * when it gave up waiting and 429 when it wants the caller to slow down —
+ * neither says anything about whether the refresh token is still redeemable, so
+ * treating them as a refusal would sign a user out over a rate limit.
+ */
+const TRANSIENT_GRANT_STATUSES: ReadonlySet<number> = new Set([408, 429]);
+
+/**
  * Whether the identity provider actually refused the grant, as opposed to
- * failing to answer. Only a 4xx means the stored refresh token is genuinely
- * spent; a 5xx, a timeout, or a DNS failure says nothing about it.
+ * failing to answer. Only a terminal 4xx means the stored refresh token is
+ * genuinely spent; a 5xx, a timeout, a rate limit, or a DNS failure says
+ * nothing about it.
  */
 function isGrantRejected(error: unknown): boolean {
-  return error instanceof AccountApiError && error.status >= 400 && error.status < 500;
+  return (
+    error instanceof AccountApiError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    !TRANSIENT_GRANT_STATUSES.has(error.status)
+  );
 }
 
 export interface WithFreshAccessTokenOptions {

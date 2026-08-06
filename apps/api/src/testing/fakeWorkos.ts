@@ -74,6 +74,13 @@ export type FakeWorkos = {
     expiresIn?: string;
     issuer?: string;
     orgId?: string;
+    /**
+     * The `client_id` claim, which real WorkOS puts in every access token and
+     * which binds it to one AuthKit application. Defaults to this server's, so
+     * ordinary tokens verify; pass another id to mint a sibling application's
+     * token, or `null` to omit the claim entirely.
+     */
+    clientId?: string | null;
   }): Promise<string>;
   /**
    * Approves a pending device authorization, as a human clicking through the
@@ -189,16 +196,22 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     expiresIn = accessTokenTtl,
     issuer: issuerOverride,
     orgId,
+    clientId: clientIdClaim,
   }: {
     sub: string;
     sid?: string;
     expiresIn?: string;
     issuer?: string;
     orgId?: string;
+    clientId?: string | null;
   }): Promise<string> {
     const claims: Record<string, unknown> = { sub };
     if (sid !== undefined) claims.sid = sid;
     if (orgId !== undefined) claims.org_id = orgId;
+    // Present on every real access token, so present by default here too:
+    // a double that omitted it would let a service skip the application
+    // binding and still pass its whole suite.
+    if (clientIdClaim !== null) claims.client_id = clientIdClaim ?? clientId;
     return new SignJWT(claims)
       .setProtectedHeader({ alg: "RS256", kid: KID })
       .setIssuer(issuerOverride ?? issuer)

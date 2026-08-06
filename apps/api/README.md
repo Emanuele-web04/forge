@@ -193,6 +193,15 @@ trusting an instance against real WorkOS, confirm by hand:
 9. Signing in as a brand-new user with no organizations provisions one, and the
    WorkOS dashboard shows both the organization and the membership afterwards.
    Two users must not end up sharing a personal organization.
+10. **Real access tokens carry a `client_id` claim equal to `WORKOS_CLIENT_ID`.**
+    Verification refuses any token whose `client_id` does not match, and refuses
+    one that omits the claim — that check is what stops a token minted for a
+    sibling AuthKit application in the same environment from being accepted, as
+    one issuer and one JWKS are shared across all of them. Decode a real access
+    token (jwt.io, or `synara status` plus the credentials file) and confirm the
+    claim is present with the expected value. If a tenancy is configured with
+    Resource Indicators the audience may arrive as `aud` instead, in which case
+    this check needs widening before that tenancy can sign in at all.
 
 ## Environment variables
 
