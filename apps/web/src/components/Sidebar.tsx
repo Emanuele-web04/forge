@@ -4135,8 +4135,9 @@ export default function Sidebar() {
     for (let index = 0; index < threadGitStatusCwds.length; index += 1) {
       const cwd = threadGitStatusCwds[index];
       if (!cwd) continue;
-      const statusQuery = threadGitStatusQueries[index];
-      const status = statusQuery?.isSuccess ? statusQuery.data : undefined;
+      // Keep the last successful snapshot during a failed background refetch. React Query
+      // retains that data, and it is still a better branch authority than stale thread metadata.
+      const status = threadGitStatusQueries[index]?.data;
       if (status) {
         statusByCwd.set(cwd, status);
       }
