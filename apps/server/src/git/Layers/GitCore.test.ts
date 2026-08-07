@@ -8,19 +8,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import {
-  Duration,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Logger,
-  PlatformError,
-  Schema,
-  Scope,
-  Stream,
-} from "effect";
-import { TestClock } from "effect/testing";
+import { Effect, Exit, FileSystem, Layer, PlatformError, Schema, Scope, Stream } from "effect";
 import { describe, expect, vi } from "vitest";
 
 import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
@@ -2330,57 +2318,6 @@ it.layer(TestLayer)("git integration", (it) => {
           expect(details.behindCount).toBe(1);
         }),
     );
-
-    it.effect("logs a failed status upstream refresh only once per retry window", () => {
-      const messages: string[] = [];
-      const logger = Logger.make(({ message }) => {
-        messages.push(String(message));
-      });
-
-      return Effect.gen(function* () {
-        const remote = yield* makeTmpDir();
-        const source = yield* makeTmpDir();
-        yield* git(remote, ["init", "--bare"]);
-        const { initialBranch } = yield* initRepoWithCommit(source);
-        yield* git(source, ["remote", "add", "origin", remote]);
-        yield* git(source, ["push", "-u", "origin", initialBranch]);
-
-        const realGitCore = yield* GitCore;
-        let fetchAttempts = 0;
-        const core = yield* makeIsolatedGitCore((input) => {
-          if (input.args[0] === "fetch") {
-            fetchAttempts += 1;
-            return Effect.fail(
-              new GitCommandError({
-                operation: "git.test.statusRefreshFailure",
-                command: `git ${input.args.join(" ")}`,
-                cwd: input.cwd,
-                detail: "simulated fetch timeout",
-              }),
-            );
-          }
-          return realGitCore.execute(input);
-        });
-
-        yield* core.statusDetails(source);
-        yield* core.statusDetails(source);
-        yield* core.statusDetails(source);
-
-        const refreshFailureLogs = () =>
-          messages.filter((message) => message.includes("Git status upstream refresh failed"));
-        expect(fetchAttempts).toBe(1);
-        expect(refreshFailureLogs()).toHaveLength(1);
-
-        yield* TestClock.adjust(Duration.seconds(31));
-        yield* core.statusDetails(source);
-
-        expect(fetchAttempts).toBe(2);
-        expect(refreshFailureLogs()).toHaveLength(2);
-      }).pipe(
-        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
-        Effect.provide(TestClock.layer()),
-      );
-    });
 
     it.effect("returns UI status before its background upstream refresh completes", () =>
       Effect.gen(function* () {

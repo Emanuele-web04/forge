@@ -1007,7 +1007,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         cwd,
         ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec],
         {
-          allowNonZeroExit: true,
           timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
         },
       ).pipe(Effect.asVoid);
