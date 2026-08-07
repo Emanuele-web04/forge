@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
@@ -43,6 +43,25 @@ function runCaptureCommand(command: string, input: string, env: NodeJS.ProcessEn
     encoding: "utf8",
     timeout: 5_000,
   });
+}
+
+type ControllableAntigravityChild = ChildProcess & {
+  readonly stdout: PassThrough;
+  readonly stderr: PassThrough;
+};
+
+function makeControllableAntigravityChild(pid: number): ControllableAntigravityChild {
+  const child = new EventEmitter() as ControllableAntigravityChild;
+  Object.assign(child, {
+    pid,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    killed: false,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    kill: () => true,
+  });
+  return child;
 }
 
 describe("Antigravity CLI model translation", () => {
@@ -631,19 +650,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
       _args: readonly string[],
       _options: { readonly env?: NodeJS.ProcessEnv },
     ) => {
-      const child = new EventEmitter() as ChildProcess;
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      Object.assign(child, {
-        pid: 42_002,
-        stdout,
-        stderr,
-        killed: false,
-        exitCode: null as number | null,
-        signalCode: null as NodeJS.Signals | null,
-        kill: () => true,
-      });
-      return child;
+      return makeControllableAntigravityChild(42_002);
     }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
 
     try {
@@ -681,6 +688,111 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-interrupt-hung-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a stale child contaminate or settle the follow-up turn", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stale-child-"));
+    const children: ControllableAntigravityChild[] = [];
+    const eventFiles: string[] = [];
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      const child = makeControllableAntigravityChild(43_000 + children.length);
+      children.push(child);
+      eventFiles.push(options.env?.SYNARA_ANTIGRAVITY_EVENTS ?? "");
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const runtimeEventsFiber = yield* Stream.runCollect(
+            Stream.take(adapter.streamEvents, 9),
+          ).pipe(Effect.forkChild);
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-stale-child");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+
+          const firstTurn = yield* adapter.sendTurn({
+            threadId,
+            input: "first turn",
+            attachments: [],
+          });
+          yield* adapter.interruptTurn(threadId, firstTurn.turnId);
+
+          const secondTurn = yield* adapter.sendTurn({
+            threadId,
+            input: "follow-up turn",
+            attachments: [],
+          });
+          const firstChild = children[0]!;
+          const secondChild = children[1]!;
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFiles[0]!,
+              `pre-invocation\t${JSON.stringify({ conversationId: "stale-conversation" })}\n`,
+            ),
+          );
+          firstChild.stdout.write("stale first-turn output\n");
+          firstChild.emit("close", 0, null);
+          yield* Effect.sleep(100);
+
+          const afterStaleClose = (yield* adapter.listSessions()).find(
+            (session) => session.threadId === threadId,
+          );
+          expect(afterStaleClose?.status).toBe("running");
+          expect(afterStaleClose?.activeTurnId).toBe(secondTurn.turnId);
+
+          secondChild.stdout.end("fresh follow-up output\n");
+          secondChild.stderr.end();
+          secondChild.emit("close", 0, null);
+
+          const runtimeEvents = Array.from(
+            yield* Fiber.join(runtimeEventsFiber).pipe(Effect.timeout("5 seconds")),
+          );
+          const completed = runtimeEvents.filter((event) => event.type === "turn.completed");
+          expect(
+            completed.map((event) => ({ turnId: event.turnId, state: event.payload.state })),
+          ).toEqual([
+            { turnId: firstTurn.turnId, state: "interrupted" },
+            { turnId: secondTurn.turnId, state: "completed" },
+          ]);
+          expect(
+            runtimeEvents
+              .filter((event) => event.type === "content.delta")
+              .map((event) => event.payload.delta),
+          ).toEqual(["fresh follow-up output"]);
+          expect(
+            runtimeEvents.some(
+              (event) => event.providerRefs?.providerThreadId === "stale-conversation",
+            ),
+          ).toBe(false);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-stale-child-" }),
               ),
               Layer.provideMerge(NodeServices.layer),
             ),
