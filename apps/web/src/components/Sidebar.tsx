@@ -4135,7 +4135,8 @@ export default function Sidebar() {
     for (let index = 0; index < threadGitStatusCwds.length; index += 1) {
       const cwd = threadGitStatusCwds[index];
       if (!cwd) continue;
-      const status = threadGitStatusQueries[index]?.data;
+      const statusQuery = threadGitStatusQueries[index];
+      const status = statusQuery?.isSuccess ? statusQuery.data : undefined;
       if (status) {
         statusByCwd.set(cwd, status);
       }
