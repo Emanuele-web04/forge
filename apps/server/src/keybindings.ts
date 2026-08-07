@@ -115,6 +115,24 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "alt+]", command: "model.next", when: "!terminalFocus" },
   { key: "alt+[", command: "model.previous", when: "!terminalFocus" },
   { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
+  // Approval chords only act while an approval is actually pending; otherwise the
+  // event falls through untouched, so Mod+Enter/Mod+Backspace keep their normal
+  // meaning in the composer. Same `|| isMac` escape hatch as the creation chords.
+  { key: "mod+enter", command: "thread.approval.accept", when: "!terminalFocus || isMac" },
+  {
+    key: "mod+shift+enter",
+    command: "thread.approval.acceptForSession",
+    when: "!terminalFocus || isMac",
+  },
+  { key: "mod+backspace", command: "thread.approval.decline", when: "!terminalFocus || isMac" },
+  { key: "mod+shift+p", command: "thread.planMode.toggle", when: "!terminalFocus || isMac" },
+  { key: "mod+shift+f", command: "thread.fastMode.toggle", when: "!terminalFocus || isMac" },
+  // Alt chords reach the PTY as escape sequences, so these stay strictly guarded.
+  { key: "alt+shift+]", command: "thread.effort.next", when: "!terminalFocus" },
+  { key: "alt+shift+[", command: "thread.effort.previous", when: "!terminalFocus" },
+  { key: "mod+shift+d", command: "composer.dictation.toggle", when: "!terminalFocus || isMac" },
+  // `composer.send` and `thread.fork` ship without default chords (macro pads and
+  // power users bind them via keybindings.json).
   { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
   // New thread (chat.new) is the primary create action; it falls back to the most
   // recent project when no project is active.
@@ -149,6 +167,17 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
   { key: "mod+o", command: "editor.openFavorite" },
+  // App history navigation, promoted from hard-coded Electron-only chords so it is
+  // remappable like everything else. `isElectron` keeps the browser's own native
+  // Cmd+[ / Alt+Arrow history behavior untouched outside the installed app.
+  { key: "cmd+[", command: "history.back", when: "isElectron" },
+  { key: "cmd+]", command: "history.forward", when: "isElectron" },
+  { key: "alt+arrowleft", command: "history.back", when: "isElectron && !isMac && !terminalFocus" },
+  {
+    key: "alt+arrowright",
+    command: "history.forward",
+    when: "isElectron && !isMac && !terminalFocus",
+  },
 ];
 
 function normalizeKeyToken(token: string): string {

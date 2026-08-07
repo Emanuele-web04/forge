@@ -10,6 +10,7 @@ import {
   type ThreadJumpKeybindingCommand,
 } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
+import { isElectron } from "./env";
 import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
@@ -81,6 +82,13 @@ const whenThreadJumpAvailable = whenAnd(
 // the terminal on macOS while still yielding the chord to the shell on Linux/Windows,
 // where `mod` is Ctrl and keys like Ctrl+N are real shell input that must pass through.
 const whenCreationAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
+// Thread-action chords (approvals, plan/fast mode, dictation) are mod-based too and
+// reuse `whenCreationAllowed` for the same PTY reasoning.
+const whenIsElectron = whenIdentifier("isElectron");
+const whenNonMacHistoryNavAllowed = whenAnd(
+  whenIsElectron,
+  whenAnd(whenNot(whenIdentifier("isMac")), whenNotTerminalFocus),
+);
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
@@ -171,6 +179,46 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     command: "traitsPicker.toggle",
     shortcut: commandShortcut("e", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "thread.approval.accept",
+    shortcut: commandShortcut("enter"),
+    whenAst: whenCreationAllowed,
+  },
+  {
+    command: "thread.approval.acceptForSession",
+    shortcut: commandShortcut("enter", { shiftKey: true }),
+    whenAst: whenCreationAllowed,
+  },
+  {
+    command: "thread.approval.decline",
+    shortcut: commandShortcut("backspace"),
+    whenAst: whenCreationAllowed,
+  },
+  {
+    command: "thread.planMode.toggle",
+    shortcut: commandShortcut("p", { shiftKey: true }),
+    whenAst: whenCreationAllowed,
+  },
+  {
+    command: "thread.fastMode.toggle",
+    shortcut: commandShortcut("f", { shiftKey: true }),
+    whenAst: whenCreationAllowed,
+  },
+  {
+    command: "thread.effort.next",
+    shortcut: commandShortcut("]", { altKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "thread.effort.previous",
+    shortcut: commandShortcut("[", { altKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "composer.dictation.toggle",
+    shortcut: commandShortcut("d", { shiftKey: true }),
+    whenAst: whenCreationAllowed,
   },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   {
@@ -268,6 +316,28 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("2"),
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
   },
+  // App history navigation is installed-app only by default: in a normal browser tab
+  // these chords are the browser's own native history navigation and stay untouched.
+  {
+    command: "history.back",
+    shortcut: commandShortcut("[", { metaKey: true, modKey: false }),
+    whenAst: whenIsElectron,
+  },
+  {
+    command: "history.forward",
+    shortcut: commandShortcut("]", { metaKey: true, modKey: false }),
+    whenAst: whenIsElectron,
+  },
+  {
+    command: "history.back",
+    shortcut: commandShortcut("arrowleft", { altKey: true, modKey: false }),
+    whenAst: whenNonMacHistoryNavAllowed,
+  },
+  {
+    command: "history.forward",
+    shortcut: commandShortcut("arrowright", { altKey: true, modKey: false }),
+    whenAst: whenNonMacHistoryNavAllowed,
+  },
 ];
 
 const TERMINAL_WORD_BACKWARD = "\u001bb";
@@ -364,13 +434,15 @@ function resolvePlatform(options: ShortcutMatchOptions | undefined): string {
 }
 
 function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatchContext {
-  // `isMac` is derived from the resolved platform so `when` clauses can gate on it
-  // (e.g. `whenCreationAllowed`) without every dispatch site having to thread the flag
-  // through `context`. An explicit `context.isMac` still wins via the spread below.
+  // `isMac` is derived from the resolved platform and `isElectron` from the preload
+  // bridge so `when` clauses can gate on them (e.g. `whenCreationAllowed`, the
+  // history-navigation defaults) without every dispatch site having to thread the
+  // flags through `context`. Explicit context values still win via the spread below.
   return {
     terminalFocus: false,
     terminalOpen: false,
     isMac: isMacPlatform(resolvePlatform(options)),
+    isElectron,
     ...options?.context,
   };
 }

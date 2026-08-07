@@ -12,7 +12,6 @@ import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
-import { isElectron } from "../env";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useTemporaryThreadLifecycle } from "../hooks/useTemporaryThreadLifecycle";
@@ -162,38 +161,6 @@ function ThreadRetentionMaintenanceToast() {
       });
     });
   }, []);
-
-  return null;
-}
-
-function resolveBrowserNavigationShortcut(
-  event: KeyboardEvent,
-  platform: string,
-): "back" | "forward" | null {
-  const isMac = /Mac|iPhone|iPad|iPod/i.test(platform);
-  const key = event.key.toLowerCase();
-
-  if (
-    isMac &&
-    event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    (key === "[" || key === "]")
-  ) {
-    return key === "[" ? "back" : "forward";
-  }
-
-  if (
-    !isMac &&
-    event.altKey &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    (event.key === "ArrowLeft" || event.key === "ArrowRight")
-  ) {
-    return event.key === "ArrowLeft" ? "back" : "forward";
-  }
 
   return null;
 }
@@ -355,22 +322,6 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      const appNavigationShortcut = isElectron
-        ? resolveBrowserNavigationShortcut(event, platform)
-        : null;
-      if (appNavigationShortcut) {
-        event.preventDefault();
-        event.stopPropagation();
-        const navigationState = resolveAppNavigationState();
-        if (appNavigationShortcut === "back" && navigationState.canGoBack) {
-          goBackInAppHistory();
-        }
-        if (appNavigationShortcut === "forward" && navigationState.canGoForward) {
-          goForwardInAppHistory();
-        }
-        return;
-      }
-
       if (event.key === "Escape" && selectedThreadIdsSize > 0) {
         event.preventDefault();
         clearSelection();
@@ -393,6 +344,19 @@ function ChatRouteGlobalShortcuts() {
         // Ignore auto-repeat: holding Ctrl+Tab should not race-advance the selection.
         if (event.repeat) return;
         openOrAdvanceRecentSwitcher(command === "view.recent.next" ? "next" : "previous");
+        return;
+      }
+
+      if (command === "history.back" || command === "history.forward") {
+        event.preventDefault();
+        event.stopPropagation();
+        const navigationState = resolveAppNavigationState();
+        if (command === "history.back" && navigationState.canGoBack) {
+          goBackInAppHistory();
+        }
+        if (command === "history.forward" && navigationState.canGoForward) {
+          goForwardInAppHistory();
+        }
         return;
       }
 
@@ -496,7 +460,6 @@ function ChatRouteGlobalShortcuts() {
     keybindings,
     latestUsableProjectId,
     openOrAdvanceRecentSwitcher,
-    platform,
     providerStatuses,
     refreshProviderStatuses,
     recentSwitcherState,

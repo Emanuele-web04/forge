@@ -221,6 +221,25 @@ export function showsComposerFastModeBadge(
   return supportsComposerFastModeControl(selection) && selection.fastModeEnabled;
 }
 
+// Resolves which provider option id an effort-level change commits to. Kept beside
+// `getComposerTraitSelection` so the traits picker and keyboard effort cycling agree
+// on the per-provider fallbacks when no primary select descriptor is available.
+export function resolveEffortCommitOptionId(
+  provider: ProviderKind,
+  primarySelectDescriptorId: string | undefined,
+): string {
+  return (
+    primarySelectDescriptorId ??
+    (provider === "kilo" || provider === "opencode"
+      ? "variant"
+      : provider === "pi"
+        ? "thinkingLevel"
+        : provider === "claudeAgent"
+          ? "effort"
+          : "reasoningEffort")
+  );
+}
+
 export function hasVisibleComposerTraitControls(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,

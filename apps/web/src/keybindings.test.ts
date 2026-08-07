@@ -299,6 +299,46 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("enter"),
+    command: "thread.approval.accept",
+    whenAst: whenCreationAllowed,
+  },
+  {
+    shortcut: modShortcut("enter", { shiftKey: true }),
+    command: "thread.approval.acceptForSession",
+    whenAst: whenCreationAllowed,
+  },
+  {
+    shortcut: modShortcut("backspace"),
+    command: "thread.approval.decline",
+    whenAst: whenCreationAllowed,
+  },
+  {
+    shortcut: modShortcut("p", { shiftKey: true }),
+    command: "thread.planMode.toggle",
+    whenAst: whenCreationAllowed,
+  },
+  {
+    shortcut: modShortcut("f", { shiftKey: true }),
+    command: "thread.fastMode.toggle",
+    whenAst: whenCreationAllowed,
+  },
+  {
+    shortcut: modShortcut("]", { altKey: true, shiftKey: true, modKey: false }),
+    command: "thread.effort.next",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("[", { altKey: true, shiftKey: true, modKey: false }),
+    command: "thread.effort.previous",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("d", { shiftKey: true }),
+    command: "composer.dictation.toggle",
+    whenAst: whenCreationAllowed,
+  },
+  {
     shortcut: modShortcut("l", { metaKey: true, modKey: false }),
     command: "composer.focus.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -449,6 +489,32 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
+  {
+    shortcut: modShortcut("[", { metaKey: true, modKey: false }),
+    command: "history.back",
+    whenAst: whenIdentifier("isElectron"),
+  },
+  {
+    shortcut: modShortcut("]", { metaKey: true, modKey: false }),
+    command: "history.forward",
+    whenAst: whenIdentifier("isElectron"),
+  },
+  {
+    shortcut: modShortcut("arrowleft", { altKey: true, modKey: false }),
+    command: "history.back",
+    whenAst: whenAnd(
+      whenIdentifier("isElectron"),
+      whenAnd(whenNot(whenIdentifier("isMac")), whenNot(whenIdentifier("terminalFocus"))),
+    ),
+  },
+  {
+    shortcut: modShortcut("arrowright", { altKey: true, modKey: false }),
+    command: "history.forward",
+    whenAst: whenAnd(
+      whenIdentifier("isElectron"),
+      whenAnd(whenNot(whenIdentifier("isMac")), whenNot(whenIdentifier("terminalFocus"))),
+    ),
+  },
 ]);
 
 describe("isTerminalToggleShortcut", () => {
@@ -1692,6 +1758,244 @@ describe("resolveShortcutCommand", () => {
         },
       ),
       "chat.newCursor",
+    );
+  });
+
+  it("resolves thread action commands with the macOS terminal-focus escape hatch", () => {
+    const macChat = { platform: "MacIntel", context: { terminalFocus: false } } as const;
+    const macTerminal = { platform: "MacIntel", context: { terminalFocus: true } } as const;
+    const linuxTerminal = { platform: "Linux", context: { terminalFocus: true } } as const;
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "enter", metaKey: true }), DEFAULT_BINDINGS, macChat),
+      "thread.approval.accept",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "enter", metaKey: true }), DEFAULT_BINDINGS, macTerminal),
+      "thread.approval.accept",
+    );
+    assert.isNull(
+      resolveShortcutCommand(
+        event({ key: "enter", ctrlKey: true }),
+        DEFAULT_BINDINGS,
+        linuxTerminal,
+      ),
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "enter", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        macChat,
+      ),
+      "thread.approval.acceptForSession",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "backspace", metaKey: true }), DEFAULT_BINDINGS, macChat),
+      "thread.approval.decline",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "p", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        macChat,
+      ),
+      "thread.planMode.toggle",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "f", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        macChat,
+      ),
+      "thread.fastMode.toggle",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "d", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        macChat,
+      ),
+      "composer.dictation.toggle",
+    );
+  });
+
+  it("resolves effort cycling outside terminal focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "]", altKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "thread.effort.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "[", altKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "thread.effort.previous",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "’", code: "BracketRight", altKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        { platform: "MacIntel", context: { terminalFocus: false } },
+      ),
+      "thread.effort.next",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "]", altKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+
+  it("falls back to thread action defaults when runtime config is missing them", () => {
+    const legacyBindings = DEFAULT_BINDINGS.filter(
+      (binding) =>
+        binding.command !== "thread.approval.accept" &&
+        binding.command !== "thread.approval.acceptForSession" &&
+        binding.command !== "thread.approval.decline" &&
+        binding.command !== "thread.planMode.toggle" &&
+        binding.command !== "thread.fastMode.toggle" &&
+        binding.command !== "thread.effort.next" &&
+        binding.command !== "thread.effort.previous" &&
+        binding.command !== "composer.dictation.toggle",
+    );
+    const macChat = { platform: "MacIntel", context: { terminalFocus: false } } as const;
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "enter", metaKey: true }), legacyBindings, macChat),
+      "thread.approval.accept",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "enter", metaKey: true, shiftKey: true }),
+        legacyBindings,
+        macChat,
+      ),
+      "thread.approval.acceptForSession",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "backspace", metaKey: true }), legacyBindings, macChat),
+      "thread.approval.decline",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "p", metaKey: true, shiftKey: true }),
+        legacyBindings,
+        macChat,
+      ),
+      "thread.planMode.toggle",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "f", metaKey: true, shiftKey: true }),
+        legacyBindings,
+        macChat,
+      ),
+      "thread.fastMode.toggle",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "]", altKey: true, shiftKey: true }),
+        legacyBindings,
+        macChat,
+      ),
+      "thread.effort.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "[", altKey: true, shiftKey: true }),
+        legacyBindings,
+        macChat,
+      ),
+      "thread.effort.previous",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "d", metaKey: true, shiftKey: true }),
+        legacyBindings,
+        macChat,
+      ),
+      "composer.dictation.toggle",
+    );
+  });
+
+  it("resolves history navigation only inside the desktop app", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "[", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, isElectron: true },
+      }),
+      "history.back",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "]", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, isElectron: true },
+      }),
+      "history.forward",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "[", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, isElectron: false },
+      }),
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "arrowleft", altKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false, isElectron: true },
+      }),
+      "history.back",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "arrowright", altKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false, isElectron: true },
+      }),
+      "history.forward",
+    );
+    // Alt+Arrow stays free on macOS (word navigation) and in browser tabs.
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "arrowleft", altKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, isElectron: true },
+      }),
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "arrowleft", altKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false, isElectron: false },
+      }),
+    );
+  });
+
+  it("falls back to history navigation defaults when runtime config is missing them", () => {
+    const legacyBindings = DEFAULT_BINDINGS.filter(
+      (binding) => binding.command !== "history.back" && binding.command !== "history.forward",
+    );
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "[", metaKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, isElectron: true },
+      }),
+      "history.back",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "arrowright", altKey: true }), legacyBindings, {
+        platform: "Linux",
+        context: { terminalFocus: false, isElectron: true },
+      }),
+      "history.forward",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "[", metaKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, isElectron: false },
+      }),
     );
   });
 });

@@ -36,6 +36,7 @@ import {
   getComposerTraitSelection,
   hasVisibleComposerTraitControls,
   resolveComposerTraitStatusLabel,
+  resolveEffortCommitOptionId,
   showsComposerFastModeBadge,
   supportsComposerFastModeControl,
 } from "./composerTraits";
@@ -356,15 +357,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       onSelectionComplete?.();
       return;
     }
-    const optionId =
-      primarySelectDescriptorId ??
-      (provider === "kilo" || provider === "opencode"
-        ? "variant"
-        : provider === "pi"
-          ? "thinkingLevel"
-          : provider === "claudeAgent"
-            ? "effort"
-            : "reasoningEffort");
+    const optionId = resolveEffortCommitOptionId(provider, primarySelectDescriptorId);
     commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value));
   };
 

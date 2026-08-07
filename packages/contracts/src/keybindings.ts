@@ -43,6 +43,16 @@ const STATIC_KEYBINDING_COMMANDS = [
   "model.next",
   "model.previous",
   "traitsPicker.toggle",
+  "thread.approval.accept",
+  "thread.approval.acceptForSession",
+  "thread.approval.decline",
+  "thread.planMode.toggle",
+  "thread.fastMode.toggle",
+  "thread.effort.next",
+  "thread.effort.previous",
+  "thread.fork",
+  "composer.send",
+  "composer.dictation.toggle",
   "settings.usage",
   "chat.new",
   "chat.newLatestProject",
@@ -68,6 +78,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "chat.visible.previous",
   "editor.openFavorite",
   "git.commitAndPush",
+  "history.back",
+  "history.forward",
 ] as const;
 
 // Shared list of numbered thread-jump commands used by the web shortcut UI.

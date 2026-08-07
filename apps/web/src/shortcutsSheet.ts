@@ -167,6 +167,56 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Focus or blur the chat prompt composer.",
   },
   {
+    command: "thread.approval.accept",
+    label: "Approve request",
+    description: "Accept the pending approval request in the active thread.",
+  },
+  {
+    command: "thread.approval.acceptForSession",
+    label: "Approve for session",
+    description: "Accept the pending approval request for the rest of the session.",
+  },
+  {
+    command: "thread.approval.decline",
+    label: "Decline request",
+    description: "Decline the pending approval request in the active thread.",
+  },
+  {
+    command: "thread.planMode.toggle",
+    label: "Toggle plan mode",
+    description: "Switch the composer between plan mode and the default interaction mode.",
+  },
+  {
+    command: "thread.fastMode.toggle",
+    label: "Toggle fast mode",
+    description: "Enable or disable fast mode when the selected model supports it.",
+  },
+  {
+    command: "thread.effort.next",
+    label: "Next reasoning effort",
+    description: "Cycle to the next reasoning effort level for the selected model.",
+  },
+  {
+    command: "thread.effort.previous",
+    label: "Previous reasoning effort",
+    description: "Cycle to the previous reasoning effort level for the selected model.",
+  },
+  {
+    command: "composer.send",
+    label: "Send message",
+    description: "Send the composer contents to the active thread.",
+  },
+  {
+    command: "composer.dictation.toggle",
+    label: "Toggle dictation",
+    description: "Start or stop voice dictation in the composer.",
+  },
+  {
+    command: "thread.fork",
+    label: "Fork thread",
+    description: "Create a fork of the current thread from its latest state.",
+  },
+  {
     command: "terminal.toggle",
     label: "Toggle terminal",
     description: "Show or hide the terminal surface for the active thread.",
@@ -200,6 +250,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "git.commitAndPush",
     label: "Commit and push",
     description: "Commit pending changes and push the active thread's repo.",
+  },
+  {
+    command: "history.back",
+    label: "Go back",
+    description: "Navigate back through the in-app view history.",
+  },
+  {
+    command: "history.forward",
+    label: "Go forward",
+    description: "Navigate forward through the in-app view history.",
   },
 ] as const;
 
