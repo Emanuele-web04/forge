@@ -67,6 +67,7 @@ const PROVIDER = "antigravity" as const;
 const DEFAULT_MODEL = "Gemini 3.5 Flash";
 const PRINT_TIMEOUT = "30m";
 const POLL_INTERVAL_MS = 75;
+const CLOSE_DRAIN_TIMEOUT_MS = 1_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const PLUGIN_INSTALL_TIMEOUT_MS = 30_000;
 const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
@@ -107,6 +108,11 @@ type AntigravitySessionContext = {
   activeTurnId?: TurnId | undefined;
   activeProcess?: ChildProcess | undefined;
   activePollTimer?: NodeJS.Timeout | undefined;
+  activeCloseDrain?: {
+    readonly turnId: TurnId;
+    readonly child: ChildProcess;
+    readonly promise: Promise<void>;
+  };
   activePrompt?: string | undefined;
   eventFile?: string | undefined;
   transcriptPath?: string | undefined;
@@ -119,6 +125,7 @@ type AntigravitySessionContext = {
   processedSteps: Set<number>;
   pendingTools: PendingTool[];
   sawAssistant: boolean;
+  modelStopObserved: boolean;
   interrupted: boolean;
   stopped: boolean;
   /** Guards against double turn.completed (process close + interrupt/stop). */
@@ -127,6 +134,23 @@ type AntigravitySessionContext = {
 
 function messageFromCause(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message.trim() ? cause.message : fallback;
+}
+
+function waitForCloseDrain(closeDrain: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (drained: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(drained);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    closeDrain.then(
+      () => finish(true),
+      () => finish(true),
+    );
+  });
 }
 
 function trim(value: string | null | undefined): string | undefined {
@@ -569,6 +593,8 @@ type AntigravityChildProcess = ChildProcess & {
 
 export interface AntigravityAdapterDependencies {
   readonly ensurePlugin?: typeof ensureCapturePlugin;
+  readonly teardownProcessTree?: typeof teardownChildProcessTree;
+  readonly closeDrainTimeoutMs?: number;
   readonly spawnProcess?: (
     command: string,
     args: readonly string[],
@@ -587,6 +613,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     );
     const sessions = new Map<ThreadId, AntigravitySessionContext>();
     const defaultEffortByModel = new Map(Object.entries(DEFAULT_EFFORT_BY_MODEL));
+    const teardownProcessTree = dependencies.teardownProcessTree ?? teardownChildProcessTree;
+    const closeDrainTimeoutMs = dependencies.closeDrainTimeoutMs ?? CLOSE_DRAIN_TIMEOUT_MS;
 
     const eventIngress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
       (event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
@@ -662,7 +690,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       const child = context.activeProcess;
       if (!child) return Effect.void;
       return Effect.tryPromise({
-        try: () => teardownChildProcessTree(child),
+        try: () => teardownProcessTree(child),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -700,6 +728,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       context.turnTerminalEmitted = true;
       if (context.activePollTimer) clearInterval(context.activePollTimer);
       delete context.activePollTimer;
+      delete context.activeCloseDrain;
       delete context.activeProcess;
       delete context.activeTurnId;
       const {
@@ -946,15 +975,40 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }
         // Agent finished: if the print process lingers, tear it down so the
         // close handler (or interrupt fallback) can settle the turn (#465).
-        if (eventName === "stop" && context.activeProcess && !context.turnTerminalEmitted) {
+        if (eventName === "stop") context.modelStopObserved = true;
+        if (
+          eventName === "stop" &&
+          context.activeTurnId &&
+          context.activeProcess &&
+          !context.turnTerminalEmitted
+        ) {
+          const turnId = context.activeTurnId;
           const child = context.activeProcess;
-          void teardownChildProcessTree(child).catch(() => {
-            try {
-              child.kill("SIGKILL");
-            } catch {
-              // Process may already be gone.
-            }
-          });
+          const closeDrain = context.activeCloseDrain;
+          if (child.exitCode === null && child.signalCode === null) {
+            void teardownProcessTree(child)
+              .then(async () => {
+                if (!closeDrain || closeDrain.turnId !== turnId || closeDrain.child !== child)
+                  return;
+                const drained = await waitForCloseDrain(closeDrain.promise, closeDrainTimeoutMs);
+                if (!drained) {
+                  settleActiveTurn(context, {
+                    turnId,
+                    child,
+                    state: "completed",
+                    stopReason: "model_stop",
+                    raw: raw("stop-close-drain-timeout", { timeoutMs: closeDrainTimeoutMs }),
+                  });
+                }
+              })
+              .catch(() => {
+                try {
+                  child.kill("SIGKILL");
+                } catch {
+                  // Process may already be gone. Keep tracking it until close proves exit.
+                }
+              });
+          }
         }
       }
       await readTranscript(context, isCurrentTurnProcess);
@@ -1026,6 +1080,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           processedSteps: new Set(),
           pendingTools: [],
           sawAssistant: false,
+          modelStopObserved: false,
           interrupted: false,
           stopped: false,
           turnTerminalEmitted: false,
@@ -1145,6 +1200,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
         context.pendingTools = [];
         context.sawAssistant = false;
+        context.modelStopObserved = false;
         context.interrupted = false;
         context.turnTerminalEmitted = false;
         context.turns.push({ id: turnId, items: [] });
@@ -1205,6 +1261,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }
         context.activeProcess = child;
         const isCurrentTurnProcess = () => ownsTurnProcess(input.threadId, context, turnId, child);
+        let resolveCloseDrain!: () => void;
+        const closeDrain = new Promise<void>((resolve) => {
+          resolveCloseDrain = resolve;
+        });
+        context.activeCloseDrain = { turnId, child, promise: closeDrain };
         let stdout = "";
         let stderr = "";
         child.stdout.setEncoding("utf8");
@@ -1234,56 +1295,57 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           clearInterval(timer);
           if (context.activePollTimer === timer) delete context.activePollTimer;
           void (async () => {
-            await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, turnId));
-            // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
-            // soon as that process exits, even when this callback is stale.
-            releaseTurnGatewayLease(context, gatewaySessionLease);
-            if (!isCurrentTurnProcess()) {
+            try {
+              await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, turnId));
+              // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
+              // soon as that process exits, even when this callback is stale.
+              releaseTurnGatewayLease(context, gatewaySessionLease);
+              if (!isCurrentTurnProcess()) return;
+              // Drain only this process generation. A forced interrupt may already
+              // have made a successor turn active while this close was pending.
+              await pollHookFile(context, isCurrentTurnProcess).catch(() => undefined);
+              if (!isCurrentTurnProcess()) return;
+              if (!context.sawAssistant && stdout.trim()) {
+                emitTextItem(
+                  context,
+                  {
+                    step_index: Number.MAX_SAFE_INTEGER,
+                    type: "PRINT_OUTPUT",
+                    content: stdout.trim(),
+                  },
+                  "assistant_message",
+                  "assistant_text",
+                );
+              }
+              const interrupted =
+                !context.modelStopObserved && (context.interrupted || signal !== null);
+              const failed = !context.modelStopObserved && !interrupted && (code ?? 1) !== 0;
+              if (failed && stderr.trim()) {
+                offer({
+                  ...base(context, { includeTurn: false }),
+                  type: "runtime.error",
+                  payload: { message: stderr.trim(), class: "provider_error" },
+                  raw: raw("stderr", { code, stderr }),
+                } satisfies ProviderRuntimeEvent);
+              }
+              settleActiveTurn(context, {
+                turnId,
+                child,
+                state: interrupted ? "interrupted" : failed ? "failed" : "completed",
+                stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
+                ...(failed
+                  ? {
+                      errorMessage:
+                        stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                    }
+                  : {}),
+                raw: raw("process-exit", { code, signal, stdout, stderr }),
+              });
+            } finally {
+              if (context.activeCloseDrain?.child === child) delete context.activeCloseDrain;
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-              return;
+              resolveCloseDrain();
             }
-            // Drain only this process generation. A forced interrupt may already
-            // have made a successor turn active while this close was pending.
-            await pollHookFile(context, isCurrentTurnProcess).catch(() => undefined);
-            if (!isCurrentTurnProcess()) {
-              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
-              return;
-            }
-            if (!context.sawAssistant && stdout.trim()) {
-              emitTextItem(
-                context,
-                {
-                  step_index: Number.MAX_SAFE_INTEGER,
-                  type: "PRINT_OUTPUT",
-                  content: stdout.trim(),
-                },
-                "assistant_message",
-                "assistant_text",
-              );
-            }
-            const interrupted = context.interrupted || signal !== null;
-            const failed = !interrupted && (code ?? 1) !== 0;
-            if (failed && stderr.trim()) {
-              offer({
-                ...base(context, { includeTurn: false }),
-                type: "runtime.error",
-                payload: { message: stderr.trim(), class: "provider_error" },
-                raw: raw("stderr", { code, stderr }),
-              } satisfies ProviderRuntimeEvent);
-            }
-            settleActiveTurn(context, {
-              turnId,
-              child,
-              state: interrupted ? "interrupted" : failed ? "failed" : "completed",
-              stopReason: interrupted ? "interrupted" : failed ? "error" : "model_stop",
-              ...(failed
-                ? {
-                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
-                  }
-                : {}),
-              raw: raw("process-exit", { code, signal, stdout, stderr }),
-            });
-            await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
           })();
         });
         return {
@@ -1307,50 +1369,52 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         const activeTurnId = turnId ?? context.activeTurnId;
         if (activeTurnId === undefined) return;
         const activeProcess = context.activeProcess;
+        const activeCloseDrain = context.activeCloseDrain;
         yield* withAgentGatewayTurnCancellation(
           context.gatewaySessionLease,
           activeTurnId,
           Effect.gen(function* () {
             context.interrupted = true;
-            const hadProcess = context.activeProcess !== undefined;
-            if (hadProcess) {
-              // Prefer process close for settlement so stdout/hooks still drain.
-              // If teardown cannot prove exit, force-settle so Cancel never no-ops (#465).
-              yield* teardownActiveProcess(context, "turn/interrupt").pipe(
-                Effect.catch((error) =>
-                  Effect.gen(function* () {
-                    const detail =
-                      error instanceof ProviderAdapterRequestError
-                        ? error.detail
-                        : messageFromCause(error, "interrupt teardown failed");
-                    yield* Effect.logWarning("antigravity.interrupt_teardown_failed", {
-                      threadId,
-                      detail,
-                    });
-                    settleActiveTurn(context, {
-                      turnId: activeTurnId,
-                      ...(activeProcess ? { child: activeProcess } : {}),
-                      state: "interrupted",
-                      stopReason: "interrupted",
-                      raw: raw("interrupt-teardown-failed", { detail }),
-                    });
-                  }),
-                ),
-              );
-            }
-            // Process already gone (or never attached) but turn still open — Cancel
-            // must still unlock the composer.
-            if (!context.turnTerminalEmitted) {
+            if (!activeProcess) {
               settleActiveTurn(context, {
                 turnId: activeTurnId,
-                ...(activeProcess ? { child: activeProcess } : {}),
                 state: "interrupted",
                 stopReason: "interrupted",
-                raw: raw("interrupt-without-process", {
-                  hadProcess,
-                }),
+                raw: raw("interrupt-without-process", {}),
               });
+              return;
             }
+            const teardownSucceeded = yield* teardownActiveProcess(context, "turn/interrupt").pipe(
+              Effect.as(true),
+              Effect.catch((error) => {
+                const detail =
+                  error instanceof ProviderAdapterRequestError
+                    ? error.detail
+                    : messageFromCause(error, "interrupt teardown failed");
+                return Effect.logWarning("antigravity.interrupt_teardown_failed", {
+                  threadId,
+                  detail,
+                }).pipe(Effect.as(false));
+              }),
+            );
+            // A failed teardown is not exit proof. Retain the child handle and
+            // active turn so no successor can overlap a potentially live process.
+            if (!teardownSucceeded) return;
+            const drained =
+              activeCloseDrain?.turnId === activeTurnId && activeCloseDrain.child === activeProcess
+                ? yield* Effect.promise(() =>
+                    waitForCloseDrain(activeCloseDrain.promise, closeDrainTimeoutMs),
+                  )
+                : false;
+            if (drained) return;
+            const modelStopped = context.modelStopObserved;
+            settleActiveTurn(context, {
+              turnId: activeTurnId,
+              child: activeProcess,
+              state: modelStopped ? "completed" : "interrupted",
+              stopReason: modelStopped ? "model_stop" : "interrupted",
+              raw: raw("interrupt-close-drain-timeout", { timeoutMs: closeDrainTimeoutMs }),
+            });
           }),
         );
       });
