@@ -58,12 +58,13 @@ const STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL = Duration.seconds(30);
 // latency). Align with the success refresh interval.
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
+type StatusUpstreamRefreshResult = "refreshed" | "failed";
 
 /** Pure policy for status-upstream refresh cache TTL (#515). Exported for tests. */
 export function statusUpstreamRefreshCacheTimeToLive(
-  exit: Exit.Exit<unknown, unknown>,
+  exit: Exit.Exit<StatusUpstreamRefreshResult, unknown>,
 ): Duration.Duration {
-  return Exit.isSuccess(exit)
+  return Exit.isSuccess(exit) && exit.value === "refreshed"
     ? STATUS_UPSTREAM_REFRESH_INTERVAL
     : STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL;
 }
@@ -1015,16 +1016,23 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const statusUpstreamRefreshCache = yield* Cache.makeWith({
       capacity: STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY,
       lookup: (cacheKey: StatusUpstreamRefreshCacheKey) =>
-        Effect.gen(function* () {
-          yield* fetchUpstreamRefForStatus(cacheKey.cwd, {
-            upstreamRef: cacheKey.upstreamRef,
-            remoteName: cacheKey.remoteName,
-            upstreamBranch: cacheKey.upstreamBranch,
-          });
-          return true as const;
-        }),
+        fetchUpstreamRefForStatus(cacheKey.cwd, {
+          upstreamRef: cacheKey.upstreamRef,
+          remoteName: cacheKey.remoteName,
+          upstreamBranch: cacheKey.upstreamBranch,
+        }).pipe(
+          Effect.as("refreshed" as const),
+          Effect.catch((cause) =>
+            Effect.logWarning("Git status upstream refresh failed; retry is temporarily paused", {
+              cause,
+              cwd: cacheKey.cwd,
+              remoteName: cacheKey.remoteName,
+              upstreamBranch: cacheKey.upstreamBranch,
+            }).pipe(Effect.as("failed" as const)),
+          ),
+        ),
       // Keep successful refreshes warm; also cache failures so unreachable
-      // remotes do not re-fetch on every git.status (#515).
+      // remotes neither re-fetch nor re-log on every git.status (#515).
       timeToLive: statusUpstreamRefreshCacheTimeToLive,
     });
 
