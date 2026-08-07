@@ -123,6 +123,10 @@ const make = Effect.gen(function* () {
     if (explicitKey) {
       const context = activeContextByTurnKey.get(explicitKey);
       if (context) return { context, activeKey: explicitKey };
+      const fallbackContext = yield* resolveWorkspaceContext(event.threadId);
+      return fallbackContext?.hasDedicatedWorktree
+        ? { context: fallbackContext, activeKey: null }
+        : null;
     }
 
     const threadKeys = activeKeysForThread(event.threadId);
@@ -286,6 +290,10 @@ const make = Effect.gen(function* () {
   });
 
   const processProviderEvent = (event: ProviderRuntimeEvent) => {
+    // Native subagent lifecycle events carry the parent Synara thread id and the child identity
+    // in providerRefs. Treating them as parent turns would make shared-root ownership ambiguous
+    // and suppress reconciliation when the actual parent turn completes.
+    if (event.providerRefs?.providerParentThreadId !== undefined) return Effect.void;
     if (event.type === "turn.started") return trackTurnStart(event);
     if (
       event.type === "turn.completed" ||

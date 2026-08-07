@@ -272,6 +272,48 @@ describe("ThreadGitMetadataReactor", () => {
     });
   });
 
+  it("ignores native subagent lifecycle events while attributing the shared parent turn", async () => {
+    const threadId = ThreadId.makeUnsafe("local-parent-thread");
+    const parentTurnId = TurnId.makeUnsafe("local-parent-turn");
+    const childTurnId = TurnId.makeUnsafe("local-child-turn");
+    const childProviderRefs = {
+      providerThreadId: "child-provider-thread",
+      providerParentThreadId: "parent-provider-thread",
+    } as const;
+    const harness = await createHarness({
+      threads: [
+        {
+          id: threadId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          envMode: "local",
+          worktreePath: null,
+          branch: "synara/stale-branch",
+          lastKnownPr: null,
+        },
+      ],
+      branchByCwd: { "/repo": pullRequest.headBranch },
+    });
+
+    await harness.publish(startedEvent(threadId, parentTurnId));
+    await harness.publish({
+      ...startedEvent(threadId, childTurnId),
+      providerRefs: childProviderRefs,
+    });
+    await harness.publish({
+      ...completedEvent(threadId, childTurnId),
+      providerRefs: childProviderRefs,
+    });
+    await harness.publish(completedEvent(threadId, parentTurnId));
+    await waitFor(() => harness.commands.length === 1);
+
+    expect(harness.commands[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId,
+      branch: pullRequest.headBranch,
+      lastKnownPr: pullRequest,
+    });
+  });
+
   it("does not claim a shared local checkout without an observed owning turn", async () => {
     const localThreadId = ThreadId.makeUnsafe("unowned-local-thread");
     const worktreeThreadId = ThreadId.makeUnsafe("worktree-flush-thread");
@@ -307,6 +349,59 @@ describe("ThreadGitMetadataReactor", () => {
     expect(harness.commands[0]).toMatchObject({
       type: "thread.meta.update",
       threadId: worktreeThreadId,
+    });
+  });
+
+  it("does not let a stale explicit terminal event consume the active shared turn", async () => {
+    const localThreadId = ThreadId.makeUnsafe("active-local-thread");
+    const sentinelThreadId = ThreadId.makeUnsafe("sentinel-worktree-thread");
+    const activeTurnId = TurnId.makeUnsafe("active-local-turn");
+    const sentinelCwd = "/repo/.worktrees/sentinel";
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const harness = await createHarness({
+      threads: [
+        {
+          id: localThreadId,
+          projectId,
+          envMode: "local",
+          worktreePath: null,
+          branch: "synara/stale-branch",
+          lastKnownPr: null,
+        },
+        {
+          id: sentinelThreadId,
+          projectId,
+          envMode: "worktree",
+          worktreePath: sentinelCwd,
+          branch: "synara/stale-sentinel",
+          lastKnownPr: null,
+        },
+      ],
+      branchByCwd: {
+        "/repo": pullRequest.headBranch,
+        [sentinelCwd]: pullRequest.headBranch,
+      },
+    });
+
+    await harness.publish(startedEvent(localThreadId, activeTurnId));
+    await harness.publish(completedEvent(localThreadId, TurnId.makeUnsafe("stale-local-turn")));
+    await harness.publish(
+      completedEvent(sentinelThreadId, TurnId.makeUnsafe("sentinel-worktree-turn")),
+    );
+    await waitFor(() => harness.commands.length === 1);
+
+    expect(harness.commands[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId: sentinelThreadId,
+    });
+    expect(harness.statusCwds).toEqual([sentinelCwd]);
+
+    await harness.publish(completedEvent(localThreadId, activeTurnId));
+    await waitFor(() => harness.commands.length === 2);
+    expect(harness.commands[1]).toMatchObject({
+      type: "thread.meta.update",
+      threadId: localThreadId,
+      branch: pullRequest.headBranch,
     });
   });
 
