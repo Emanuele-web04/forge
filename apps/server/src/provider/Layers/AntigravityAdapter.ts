@@ -1204,8 +1204,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           });
         }
         context.activeProcess = child;
-        const isCurrentTurnProcess = () =>
-          ownsTurnProcess(input.threadId, context, turnId, child);
+        const isCurrentTurnProcess = () => ownsTurnProcess(input.threadId, context, turnId, child);
         let stdout = "";
         let stderr = "";
         child.stdout.setEncoding("utf8");
