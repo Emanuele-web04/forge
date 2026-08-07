@@ -57,9 +57,7 @@ function encodeWorkspaceText(
       : normalizedContents.replaceAll("\n", lineEnding === "crlf" ? "\r\n" : "\r"),
     "utf8",
   );
-  return encoding === "utf8-bom"
-    ? Buffer.concat([UTF8_BOM, encodedContents])
-    : encodedContents;
+  return encoding === "utf8-bom" ? Buffer.concat([UTF8_BOM, encodedContents]) : encodedContents;
 }
 
 function isBinaryLike(bytes: Uint8Array): boolean {

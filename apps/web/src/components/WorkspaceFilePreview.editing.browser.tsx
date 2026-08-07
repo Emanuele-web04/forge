@@ -48,7 +48,7 @@ function loadedFile(overrides: Partial<ProjectReadFileResult> = {}): ProjectRead
   };
 }
 
-function pressKeyboardSave(element: HTMLElement): void {
+function pressKeyboardSave(element: Element): void {
   element.dispatchEvent(
     new KeyboardEvent("keydown", {
       key: "s",
@@ -134,7 +134,7 @@ it("keeps the buffer dirty and shows guarded write failures", async () => {
 it("keeps markdown task previews and guarded versions in sync after an editor save", async () => {
   const markdownPath = "README.md";
   const taskVersion = `sha256:${"3".repeat(64)}`;
-  let completeTaskWrite: ((result: { relativePath: string; version: string }) => void) | null = null;
+  let completeTaskWrite!: (result: { relativePath: string; version: string }) => void;
   const pendingTaskWrite = new Promise<{ relativePath: string; version: string }>((resolve) => {
     completeTaskWrite = resolve;
   });
@@ -178,7 +178,7 @@ it("keeps markdown task previews and guarded versions in sync after an editor sa
         lineEnding: "lf",
       }),
     );
-    completeTaskWrite?.({ relativePath: markdownPath, version: taskVersion });
+    completeTaskWrite({ relativePath: markdownPath, version: taskVersion });
   } finally {
     restoreNativeApi();
   }
@@ -207,11 +207,7 @@ it("keeps oversized and mixed-line-ending files read-only", async () => {
 
     await screen.rerender(
       <QueryClientProvider client={queryClient}>
-        <WorkspaceFilePreview
-          workspaceRoot={WORKSPACE_ROOT}
-          filePath="src/mixed.ts"
-          editable
-        />
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="src/mixed.ts" editable />
       </QueryClientProvider>,
     );
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));

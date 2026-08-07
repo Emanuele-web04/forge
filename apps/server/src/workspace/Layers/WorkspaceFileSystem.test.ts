@@ -356,9 +356,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
 
         expect(error._tag).toBe("WorkspaceFileConflictError");
         expect(error.message).toContain("changed on disk");
-        expect(yield* Effect.promise(() => NodeFs.readFile(absolutePath, "utf8"))).toBe(
-          "agent!\n",
-        );
+        expect(yield* Effect.promise(() => NodeFs.readFile(absolutePath, "utf8"))).toBe("agent!\n");
       }),
     );
 
