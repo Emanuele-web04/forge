@@ -6,7 +6,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@synara/contracts";
+import { type ProviderRuntimeEvent, ThreadId } from "@synara/contracts";
 import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -974,6 +974,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               spawnProcess,
               teardownProcessTree,
               closeDrainTimeoutMs: 100,
+              stopNaturalExitGraceMs: 10,
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-model-stop-" }),
@@ -1068,6 +1069,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               spawnProcess,
               teardownProcessTree,
               closeDrainTimeoutMs: 100,
+              stopNaturalExitGraceMs: 10,
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-stop-unproven-" }),
@@ -1123,6 +1125,8 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             attachments: [],
           });
           yield* Effect.promise(() => fs.appendFile(eventFile, "stop\t{}\n"));
+          yield* Effect.sleep(20);
+          expect(teardownCalls).toBe(0);
           child.stdout.end("short response\n");
           child.stderr.end();
           closeControllableAntigravityChild(child, 0, null);
@@ -1144,6 +1148,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               ensurePlugin: async () => undefined,
               spawnProcess,
               teardownProcessTree,
+              stopNaturalExitGraceMs: 100,
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-short-close-" }),
@@ -1222,10 +1227,90 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               spawnProcess,
               teardownProcessTree,
               closeDrainTimeoutMs: 25,
+              stopNaturalExitGraceMs: 10,
             }).pipe(
               Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-stop-timeout-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not settle a detached Stop timeout after session removal", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stop-session-"));
+    const child = makeControllableAntigravityChild();
+    let eventFile = "";
+    let teardownCalls = 0;
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS ?? "";
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const teardownProcessTree: NonNullable<
+      AntigravityAdapterDependencies["teardownProcessTree"]
+    > = async () => {
+      teardownCalls += 1;
+      return { escalated: false, signalErrors: [] };
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const runtimeEvents: ProviderRuntimeEvent[] = [];
+          const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+            Effect.sync(() => runtimeEvents.push(event)),
+          ).pipe(Effect.forkChild);
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-stop-session");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "stop session during timeout",
+            attachments: [],
+          });
+          yield* Effect.promise(() => fs.appendFile(eventFile, "stop\t{}\n"));
+          for (let attempt = 0; attempt < 30 && teardownCalls === 0; attempt += 1) {
+            yield* Effect.sleep(10);
+          }
+          expect(teardownCalls).toBe(1);
+          yield* adapter.stopSession(threadId);
+          yield* Effect.sleep(150);
+          yield* Fiber.interrupt(runtimeEventsFiber);
+
+          expect(runtimeEvents.map((event) => event.type)).toEqual([
+            "session.started",
+            "thread.started",
+            "turn.started",
+            "session.exited",
+          ]);
+          expect(runtimeEvents.some((event) => event.type === "turn.completed")).toBe(false);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree,
+              closeDrainTimeoutMs: 100,
+              stopNaturalExitGraceMs: 10,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-stop-session-" }),
               ),
               Layer.provideMerge(NodeServices.layer),
             ),

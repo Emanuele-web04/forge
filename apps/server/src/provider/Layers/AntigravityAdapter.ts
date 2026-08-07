@@ -68,6 +68,7 @@ const DEFAULT_MODEL = "Gemini 3.5 Flash";
 const PRINT_TIMEOUT = "30m";
 const POLL_INTERVAL_MS = 75;
 const CLOSE_DRAIN_TIMEOUT_MS = 1_000;
+const STOP_NATURAL_EXIT_GRACE_MS = 150;
 const MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const PLUGIN_INSTALL_TIMEOUT_MS = 30_000;
 const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
@@ -610,6 +611,7 @@ export interface AntigravityAdapterDependencies {
   readonly ensurePlugin?: typeof ensureCapturePlugin;
   readonly teardownProcessTree?: typeof teardownChildProcessTree;
   readonly closeDrainTimeoutMs?: number;
+  readonly stopNaturalExitGraceMs?: number;
   readonly spawnProcess?: (
     command: string,
     args: readonly string[],
@@ -630,6 +632,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const defaultEffortByModel = new Map(Object.entries(DEFAULT_EFFORT_BY_MODEL));
     const teardownProcessTree = dependencies.teardownProcessTree ?? teardownChildProcessTree;
     const closeDrainTimeoutMs = dependencies.closeDrainTimeoutMs ?? CLOSE_DRAIN_TIMEOUT_MS;
+    const stopNaturalExitGraceMs =
+      dependencies.stopNaturalExitGraceMs ?? STOP_NATURAL_EXIT_GRACE_MS;
 
     const eventIngress = yield* makeBoundedCallbackIngress<ProviderRuntimeEvent, never, never>(
       (event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
@@ -696,6 +700,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     ): void => {
       lease?.release();
       if (context.gatewaySessionLease === lease) delete context.gatewaySessionLease;
+    };
+
+    const stopActivePoll = (context: AntigravitySessionContext): void => {
+      if (context.activePollTimer) clearInterval(context.activePollTimer);
+      delete context.activePollTimer;
     };
 
     const startTreeExitProof = (
@@ -810,6 +819,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       },
     ): boolean => {
       if (
+        context.stopped ||
+        sessions.get(context.session.threadId) !== context ||
         context.turnTerminalEmitted ||
         context.activeTurnId !== input.turnId ||
         (input.child !== undefined && context.activeProcess !== input.child)
@@ -818,8 +829,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
       const completionBase = base(context);
       context.turnTerminalEmitted = true;
-      if (context.activePollTimer) clearInterval(context.activePollTimer);
-      delete context.activePollTimer;
+      stopActivePoll(context);
       delete context.activeCloseDrain;
       delete context.activeTreeExitProof;
       delete context.activeProcess;
@@ -1082,13 +1092,31 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           // already be reparented. Never start a new signal/capture pass then;
           // only a proof begun while the owned root was live can gate settlement.
           if (child.exitCode !== null || child.signalCode !== null) continue;
-          const treeExitProof = startTreeExitProof(context, turnId, child);
-          void treeExitProof.promise.then(async (result) => {
-            if (!result.proven) return;
+          void (async () => {
+            if (closeDrain) {
+              const closedNaturally = await waitForCloseDrain(
+                closeDrain.promise,
+                stopNaturalExitGraceMs,
+              );
+              if (closedNaturally) return;
+            }
+            if (
+              !isCurrentTurnProcess() ||
+              context.stopped ||
+              child.exitCode !== null ||
+              child.signalCode !== null
+            ) {
+              return;
+            }
+            const treeExitProof = startTreeExitProof(context, turnId, child);
+            const result = await treeExitProof.promise;
+            if (!result.proven || !isCurrentTurnProcess() || context.stopped) return;
             if (!closeDrain || closeDrain.turnId !== turnId || closeDrain.child !== child) return;
             const drained = await waitForCloseDrain(closeDrain.promise, closeDrainTimeoutMs);
             if (!drained) {
+              if (!isCurrentTurnProcess() || context.stopped) return;
               await closeDrain.cleanup();
+              if (!isCurrentTurnProcess() || context.stopped) return;
               settleActiveTurn(context, {
                 turnId,
                 child,
@@ -1097,7 +1125,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 raw: raw("stop-close-drain-timeout", { timeoutMs: closeDrainTimeoutMs }),
               });
             }
-          });
+          })();
         }
       }
       await readTranscript(context, isCurrentTurnProcess);
@@ -1130,11 +1158,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         });
         const existing = sessions.get(input.threadId);
         if (existing) {
+          const activeResources = existing.activeCloseDrain;
           existing.stopped = true;
           existing.interrupted = true;
+          stopActivePoll(existing);
           yield* cancelAgentGatewayTurn(existing.gatewaySessionLease, existing.activeTurnId);
           yield* teardownActiveProcess(existing, "session/restart");
-          releaseTurnGatewayLease(existing);
+          if (activeResources) {
+            yield* Effect.promise(() => activeResources.cleanup());
+          } else {
+            releaseTurnGatewayLease(existing);
+          }
         }
         const now = new Date().toISOString();
         const conversationId = resumeConversationId(input.resumeCursor);
@@ -1349,7 +1383,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           });
         }
         context.activeProcess = child;
-        const isCurrentTurnProcess = () => ownsTurnProcess(input.threadId, context, turnId, child);
+        const isCurrentTurnProcess = () =>
+          !context.stopped && ownsTurnProcess(input.threadId, context, turnId, child);
         let resolveCloseDrain!: () => void;
         const closeDrain = new Promise<void>((resolve) => {
           resolveCloseDrain = resolve;
@@ -1456,7 +1491,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 raw: raw("process-exit", { code, signal, stdout, stderr }),
               });
             } finally {
-              if (context.activeCloseDrain?.child === child) delete context.activeCloseDrain;
+              if (
+                context.activeCloseDrain?.turnId === turnId &&
+                context.activeCloseDrain.child === child
+              ) {
+                delete context.activeCloseDrain;
+              }
               await cleanupRunDir();
               resolveCloseDrain();
             }
@@ -1516,8 +1556,20 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   )
                 : false;
             if (drained) return;
+            if (
+              context.stopped ||
+              !ownsTurnProcess(threadId, context, activeTurnId, activeProcess)
+            ) {
+              return;
+            }
             if (activeCloseDrain) {
               yield* Effect.promise(() => activeCloseDrain.cleanup());
+            }
+            if (
+              context.stopped ||
+              !ownsTurnProcess(threadId, context, activeTurnId, activeProcess)
+            ) {
+              return;
             }
             const modelStopped = context.modelStopObserved;
             settleActiveTurn(context, {
@@ -1544,11 +1596,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       Effect.gen(function* () {
         const context = sessions.get(threadId);
         if (!context) return;
+        const activeResources = context.activeCloseDrain;
         context.stopped = true;
         context.interrupted = true;
+        stopActivePoll(context);
         yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
         yield* teardownActiveProcess(context, "session/stop");
-        releaseTurnGatewayLease(context);
+        if (activeResources) {
+          yield* Effect.promise(() => activeResources.cleanup());
+        } else {
+          releaseTurnGatewayLease(context);
+        }
         sessions.delete(threadId);
         offer({
           ...base(context, { includeTurn: false }),
