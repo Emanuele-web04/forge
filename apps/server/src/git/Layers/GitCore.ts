@@ -62,7 +62,7 @@ type StatusUpstreamRefreshResult = "refreshed" | "failed";
 
 /** Pure policy for status-upstream refresh cache TTL (#515). Exported for tests. */
 export function statusUpstreamRefreshCacheTimeToLive(
-  exit: Exit.Exit<StatusUpstreamRefreshResult, unknown>,
+  exit: Exit.Exit<StatusUpstreamRefreshResult, never>,
 ): Duration.Duration {
   return Exit.isSuccess(exit) && exit.value === "refreshed"
     ? STATUS_UPSTREAM_REFRESH_INTERVAL
