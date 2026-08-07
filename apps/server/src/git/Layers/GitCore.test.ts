@@ -1793,6 +1793,38 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("reads branch identity without requiring full status details", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+        const nonRepo = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+        yield* git(tmp, ["checkout", "-b", "feature/branch-context"]);
+        yield* git(tmp, ["push", "-u", "origin", "feature/branch-context"]);
+        const core = yield* GitCore;
+
+        expect(yield* core.readBranchContext(tmp)).toEqual({
+          isRepo: true,
+          branch: "feature/branch-context",
+          upstreamRef: "origin/feature/branch-context",
+        });
+
+        yield* git(tmp, ["checkout", "--detach"]);
+        expect(yield* core.readBranchContext(tmp)).toEqual({
+          isRepo: true,
+          branch: null,
+          upstreamRef: null,
+        });
+        expect(yield* core.readBranchContext(nonRepo)).toEqual({
+          isRepo: false,
+          branch: null,
+          upstreamRef: null,
+        });
+      }),
+    );
+
     it.effect("preserves adversarial filenames in status details", () =>
       Effect.gen(function* () {
         if (process.platform === "win32") return;

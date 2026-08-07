@@ -1362,19 +1362,26 @@ export const makeGitManager = Effect.gen(function* () {
       };
     });
 
+  const pullRequestForBranch: GitManagerShape["pullRequestForBranch"] = Effect.fnUntraced(
+    function* (input) {
+      const latest = yield* findLatestPr(input.cwd, {
+        branch: input.branch,
+        upstreamRef: input.upstreamRef,
+      });
+      return latest ? toResolvedPullRequest(latest) : null;
+    },
+  );
+
   const status: GitManagerShape["status"] = Effect.fnUntraced(function* (input) {
     const details = yield* gitCore.statusDetails(input.cwd);
 
     const pr =
       details.branch !== null
-        ? yield* findLatestPr(input.cwd, {
+        ? yield* pullRequestForBranch({
+            cwd: input.cwd,
             branch: details.branch,
             upstreamRef: details.upstreamRef,
-          }).pipe(
-            // Status and PR-resolution surfaces share one mapper so their shapes cannot drift.
-            Effect.map((latest) => (latest ? toResolvedPullRequest(latest) : null)),
-            Effect.catch(() => Effect.succeed(null)),
-          )
+          }).pipe(Effect.catch(() => Effect.succeed(null)))
         : null;
 
     return {
@@ -2748,6 +2755,7 @@ The local stash entry was kept for recovery.`,
 
   return {
     status,
+    pullRequestForBranch,
     readWorkingTreeDiff,
     readWorkingTreeDiffStats,
     summarizeDiff,

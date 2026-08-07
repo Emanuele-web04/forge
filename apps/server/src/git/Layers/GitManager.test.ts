@@ -426,6 +426,46 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("resolves a captured branch PR after the checkout has moved elsewhere", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/captured-pr"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/captured-pr"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListByHeadSelector: {
+            "feature/captured-pr": JSON.stringify([
+              {
+                number: 574,
+                title: "Captured branch PR",
+                url: "https://github.com/example-org/sample-repo/pull/574",
+                baseRefName: "main",
+                headRefName: "feature/captured-pr",
+                state: "OPEN",
+              },
+            ]),
+          },
+        },
+      });
+
+      const resolved = yield* manager.pullRequestForBranch({
+        cwd: repoDir,
+        branch: "feature/captured-pr",
+        upstreamRef: "origin/feature/captured-pr",
+      });
+
+      expect(resolved).toMatchObject({ number: 574, headBranch: "feature/captured-pr" });
+      expect(ghCalls.some((call) => call.includes("pr list --head feature/captured-pr"))).toBe(
+        true,
+      );
+    }),
+  );
+
   it.effect(
     "status detects cross-repo PRs from the upstream remote URL owner",
     () =>

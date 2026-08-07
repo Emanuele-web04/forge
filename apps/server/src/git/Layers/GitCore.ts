@@ -1486,6 +1486,46 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const statusDetails: GitCoreShape["statusDetails"] = (cwd) => readStatusDetails(cwd, true);
 
+    const readBranchContext: GitCoreShape["readBranchContext"] = (cwd) =>
+      Effect.gen(function* () {
+        const branchOperation = "GitCore.readBranchContext.branch";
+        const branchArgs = ["symbolic-ref", "--quiet", "--short", "HEAD"] as const;
+        const branchResult = yield* executeGit(branchOperation, cwd, branchArgs, {
+          allowNonZeroExit: true,
+          timeoutMs: 5_000,
+          maxOutputBytes: 4_096,
+        }).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
+        if (branchResult === null || branchResult.code === 128) {
+          return { isRepo: false, branch: null, upstreamRef: null };
+        }
+        if (branchResult.code !== 0 && branchResult.code !== 1) {
+          return yield* createGitCommandError(
+            branchOperation,
+            cwd,
+            branchArgs,
+            branchResult.stderr.trim() ||
+              `${commandLabel(branchArgs)} failed: code=${branchResult.code}`,
+          );
+        }
+
+        const branch = branchResult.code === 0 ? branchResult.stdout.trim() || null : null;
+        if (branch === null) {
+          return { isRepo: true, branch: null, upstreamRef: null };
+        }
+
+        const upstreamResult = yield* executeGit(
+          "GitCore.readBranchContext.upstream",
+          cwd,
+          ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+          { allowNonZeroExit: true, timeoutMs: 5_000, maxOutputBytes: 4_096 },
+        );
+        return {
+          isRepo: true,
+          branch,
+          upstreamRef: upstreamResult.code === 0 ? upstreamResult.stdout.trim() || null : null,
+        };
+      });
+
     const status: GitCoreShape["status"] = (input) =>
       Effect.gen(function* () {
         const details = yield* readStatusDetails(input.cwd, false);
@@ -3227,6 +3267,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       execute,
       status,
       statusDetails,
+      readBranchContext,
       readWorkingTreePatch,
       readUnstagedPatch,
       readStagedPatch,

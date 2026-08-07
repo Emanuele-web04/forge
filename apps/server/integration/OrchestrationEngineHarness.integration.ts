@@ -61,6 +61,7 @@ import {
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ThreadGitMetadataReactor } from "../src/orchestration/Services/ThreadGitMetadataReactor.ts";
 import {
   RuntimeReceiptBus,
   type OrchestrationRuntimeReceipt,
@@ -326,11 +327,16 @@ export const makeOrchestrationIntegrationHarness = (
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
     );
+    const threadGitMetadataReactorLayer = Layer.succeed(ThreadGitMetadataReactor, {
+      start: Effect.void,
+      drain: Effect.void,
+    });
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
       Layer.provideMerge(studioOutputReactorLayer),
+      Layer.provideMerge(threadGitMetadataReactorLayer),
     );
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),

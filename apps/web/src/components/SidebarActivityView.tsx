@@ -43,6 +43,7 @@ import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
   resolveSidebarThreadListPaging,
+  resolveThreadDisplayBranch,
   resolveThreadProjectLabel,
   resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
@@ -131,7 +132,7 @@ function ActivityThreadRow({
   renderHoverCard: (anchorId: string) => ReactNode;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
-  const branch = thread.associatedWorktreeBranch?.trim() || thread.branch?.trim() || null;
+  const branch = resolveThreadDisplayBranch(thread);
   const isWorktree =
     resolveThreadEnvironmentMode({
       envMode: thread.envMode,

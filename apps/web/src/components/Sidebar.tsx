@@ -305,6 +305,7 @@ import {
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
+  resolveSidebarThreadPullRequest,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
@@ -4081,6 +4082,7 @@ export default function Sidebar() {
         threadId: thread.id,
         branch: thread.branch,
         lastKnownPr: thread.lastKnownPr ?? null,
+        hasDedicatedWorktree: thread.worktreePath !== null,
         cwd: resolveThreadWorkspaceCwd({
           projectCwd: projectCwdById.get(thread.projectId) ?? null,
           envMode: thread.envMode,
@@ -4093,7 +4095,7 @@ export default function Sidebar() {
     () => [
       ...new Set(
         threadGitTargets
-          .filter((target) => target.branch !== null)
+          .filter((target) => target.branch !== null || target.hasDedicatedWorktree)
           .map((target) => target.cwd)
           .filter((cwd): cwd is string => cwd !== null),
       ),
@@ -4156,10 +4158,20 @@ export default function Sidebar() {
     const map = new Map<ThreadId, ThreadPr>();
     for (const target of threadGitTargets) {
       const status = target.cwd ? statusByCwd.get(target.cwd) : undefined;
-      const branchMatches =
-        target.branch !== null && status?.branch !== null && status?.branch === target.branch;
-      const livePr = branchMatches ? (status?.pr ?? null) : null;
-      map.set(target.threadId, livePr ?? storedPrByThreadId.get(target.threadId) ?? null);
+      const persistedPr =
+        storedPrByThreadId.get(target.threadId) ??
+        (target.lastKnownPr ? toThreadPr(target.lastKnownPr) : null);
+      map.set(
+        target.threadId,
+        resolveSidebarThreadPullRequest({
+          threadBranch: target.branch,
+          liveBranch: status?.branch ?? null,
+          hasLiveStatus: status !== undefined,
+          hasDedicatedWorktree: target.hasDedicatedWorktree,
+          livePullRequest: status?.pr ?? null,
+          persistedPullRequest: persistedPr,
+        }),
+      );
     }
     return map;
   }, [

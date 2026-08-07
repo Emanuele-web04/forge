@@ -53,6 +53,8 @@ function makeTestLayer(state: {
         state.statusCalls += 1;
         return state.currentStatus;
       }),
+    pullRequestForBranch: () =>
+      Effect.die("pullRequestForBranch should not be called in this test"),
     readWorkingTreeDiff: () => Effect.die("readWorkingTreeDiff should not be called in this test"),
     readWorkingTreeDiffStats: () =>
       Effect.die("readWorkingTreeDiffStats should not be called in this test"),
