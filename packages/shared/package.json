@@ -120,6 +120,10 @@
       "types": "./src/threadEnvironment.ts",
       "import": "./src/threadEnvironment.ts"
     },
+    "./threadDetailEvents": {
+      "types": "./src/threadDetailEvents.ts",
+      "import": "./src/threadDetailEvents.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"

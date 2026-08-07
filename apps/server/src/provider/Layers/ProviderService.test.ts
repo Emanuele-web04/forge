@@ -441,7 +441,7 @@ const rotationRetry = makeProviderServiceLayer({
       if (eventId === ROTATION_RETRY_FAILURE_EVENT_ID && attempts === 1) {
         return Effect.fail(new Error("injected transient runtime persistence failure"));
       }
-      return Effect.void;
+      return Effect.succeed({ sequence: attempts, event });
     }),
   runtimeEventRetryBaseDelayMs: 1,
   runtimeEventRetryMaxDelayMs: 1,
@@ -4664,6 +4664,64 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
       assert.equal(runtimePayload.activeTurnId, null);
+    }),
+  );
+});
+
+let persistedFanoutSequence = 0;
+const persistedFanout = makeProviderServiceLayer({
+  persistRuntimeEvent: (event) =>
+    Effect.sync(() => ({
+      sequence: ++persistedFanoutSequence,
+      event,
+    })),
+});
+persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
+  it.effect("reuses the durable journal result without changing the canonical event stream", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-persisted-fanout");
+      const session = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.notEqual(provider.streamPersistedEvents, undefined);
+
+      const canonicalEvents = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
+      const persistedEvents = yield* Ref.make<
+        Array<{ readonly sequence: number; readonly event: ProviderRuntimeEvent }>
+      >([]);
+      const canonicalEventFiber = yield* Stream.runForEach(provider.streamEvents, (event) =>
+        Ref.update(canonicalEvents, (current) => [...current, event]),
+      ).pipe(Effect.forkChild);
+      const persistedEventFiber = yield* Stream.runForEach(
+        provider.streamPersistedEvents!,
+        (event) => Ref.update(persistedEvents, (current) => [...current, event]),
+      ).pipe(Effect.forkChild);
+      yield* sleep(50);
+
+      const completedEvent: LegacyProviderRuntimeEvent = {
+        type: "turn.completed",
+        eventId: asEventId("evt-persisted-fanout"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: session.threadId,
+        turnId: asTurnId("turn-persisted-fanout"),
+        status: "completed",
+      };
+      persistedFanout.codex.emit(completedEvent);
+      yield* sleep(100);
+
+      const canonicalEvent = (yield* Ref.get(canonicalEvents))[0];
+      const persistedEvent = (yield* Ref.get(persistedEvents))[0];
+      yield* Fiber.interrupt(canonicalEventFiber);
+      yield* Fiber.interrupt(persistedEventFiber);
+      assert.notEqual(canonicalEvent, undefined);
+      assert.notEqual(persistedEvent, undefined);
+      assert.equal(canonicalEvent.eventId, completedEvent.eventId);
+      assert.equal(persistedEvent.event.eventId, completedEvent.eventId);
+      assert.equal(persistedEvent.sequence > 0, true);
     }),
   );
 });

@@ -350,6 +350,8 @@ const orchestrationEngine = {
   }),
   readEvents: () => Stream.empty,
   readEventsThrough: () => Stream.empty,
+  readThreadEvents: () => Stream.empty,
+  readThreadEventsThrough: () => Stream.empty,
   getEventHighWaterSequence: Effect.succeed(0),
   subscribeDomainEvents: Effect.succeed(Stream.empty),
   getReadModel: () =>

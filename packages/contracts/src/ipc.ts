@@ -757,7 +757,10 @@ export interface NativeApi {
     getFullThreadDiff: (
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
-    replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
+    replayEvents: (
+      fromSequenceExclusive: number,
+      threadId?: ThreadId,
+    ) => Promise<OrchestrationEvent[]>;
     listProviderDeliveryBlockers: (
       input?: OrchestrationListProviderDeliveryBlockersInput,
     ) => Promise<OrchestrationListProviderDeliveryBlockersResult>;

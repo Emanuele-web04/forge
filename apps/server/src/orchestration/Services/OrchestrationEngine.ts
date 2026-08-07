@@ -68,6 +68,21 @@ export interface OrchestrationEngineShape {
     throughSequenceInclusive: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
+  /** Replay one thread's persisted events from an exclusive global cursor. */
+  readonly readThreadEvents: (
+    threadId: string,
+    fromSequenceExclusive: number,
+    eventTypes?: ReadonlyArray<string>,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Read one thread's inclusive high-water-fenced event range. */
+  readonly readThreadEventsThrough: (
+    threadId: string,
+    fromSequenceExclusive: number,
+    throughSequenceInclusive: number,
+    eventTypes?: ReadonlyArray<string>,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
   /** Capture the durable orchestration event-log high-water sequence. */
   readonly getEventHighWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
 

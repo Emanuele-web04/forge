@@ -495,6 +495,24 @@ function makeHarnessLayer(
           .toSorted((left, right) => right.sequence - left.sequence)
           .slice(0, input.limit),
       ),
+    readThreadEventsFromSequence: (
+      threadId: string,
+      sequenceExclusive: number,
+      limit = 1_000,
+      throughSequenceInclusive = Number.MAX_SAFE_INTEGER,
+      eventTypes?: ReadonlyArray<string>,
+    ) =>
+      Stream.fromIterable(
+        (options.diagnosticEvents ?? [])
+          .filter(
+            (event) =>
+              event.aggregateId === threadId &&
+              event.sequence > sequenceExclusive &&
+              event.sequence <= throughSequenceInclusive &&
+              (eventTypes === undefined || eventTypes.includes(event.type)),
+          )
+          .slice(0, limit),
+      ),
     readFromSequence: () => Stream.empty,
     readAll: () => Stream.empty,
   });

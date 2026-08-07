@@ -48,6 +48,10 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import {
+  isThreadDetailEventFor,
+  THREAD_DETAIL_EVENT_TYPES,
+} from "@synara/shared/threadDetailEvents";
 import { listStudioThreadOutputs } from "./studioOutputs";
 import {
   ensureStudioWorkspaceInstructionsFiles,
@@ -288,31 +292,6 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
     event.type === "project.deleted" ||
     event.type === "thread.deleted" ||
     (event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event))
-  );
-}
-
-function isThreadDetailEventFor(threadId: ThreadId, event: OrchestrationEvent): boolean {
-  return (
-    event.aggregateKind === "thread" &&
-    event.aggregateId === threadId &&
-    (event.type === "thread.message-sent" ||
-      event.type === "thread.proposed-plan-upserted" ||
-      event.type === "thread.activity-appended" ||
-      event.type === "thread.turn-diff-completed" ||
-      event.type === "thread.reverted" ||
-      event.type === "thread.conversation-rolled-back" ||
-      event.type === "thread.session-set" ||
-      event.type === "thread.meta-updated" ||
-      event.type === "thread.pinned-message-added" ||
-      event.type === "thread.pinned-message-removed" ||
-      event.type === "thread.pinned-message-done-set" ||
-      event.type === "thread.pinned-message-label-set" ||
-      event.type === "thread.marker-added" ||
-      event.type === "thread.marker-removed" ||
-      event.type === "thread.marker-done-set" ||
-      event.type === "thread.marker-label-set" ||
-      event.type === "thread.archived" ||
-      event.type === "thread.unarchived")
   );
 }
 
@@ -875,18 +854,24 @@ const makeWsRpcHandlersLayer = () =>
             checkpointDiffQuery.getFullThreadDiff(input),
             "Failed to load full thread diff",
           ),
-        [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
-          rpcEffect(
-            Stream.runCollect(
-              orchestrationEngine.readEvents(
-                clamp(input.fromSequenceExclusive, {
-                  maximum: Number.MAX_SAFE_INTEGER,
-                  minimum: 0,
-                }),
-              ),
-            ).pipe(Effect.map((events) => Array.from(events))),
+        [ORCHESTRATION_WS_METHODS.replayEvents]: (input) => {
+          const fromSequenceExclusive = clamp(input.fromSequenceExclusive, {
+            maximum: Number.MAX_SAFE_INTEGER,
+            minimum: 0,
+          });
+          const replay =
+            input.threadId === undefined
+              ? orchestrationEngine.readEvents(fromSequenceExclusive)
+              : orchestrationEngine.readThreadEvents(
+                  input.threadId,
+                  fromSequenceExclusive,
+                  THREAD_DETAIL_EVENT_TYPES,
+                );
+          return rpcEffect(
+            Stream.runCollect(replay).pipe(Effect.map((events) => Array.from(events))),
             "Failed to replay orchestration events",
-          ),
+          );
+        },
         [ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers]: (input) =>
           rpcEffect(
             providerCommandReactor.listBlockingDeliveries({
@@ -996,7 +981,7 @@ const makeWsRpcHandlersLayer = () =>
                 Effect.map((stream) =>
                   bufferLiveUiStream(
                     stream.pipe(
-                      Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+                      Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
                     ),
                     {
                       label: "orchestration.thread-detail",
@@ -1028,9 +1013,14 @@ const makeWsRpcHandlersLayer = () =>
               getHighWaterSequence: getOrchestrationHighWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
                 orchestrationEngine
-                  .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
+                  .readThreadEventsThrough(
+                    input.threadId,
+                    fromSequenceExclusive,
+                    throughSequenceInclusive,
+                    THREAD_DETAIL_EVENT_TYPES,
+                  )
                   .pipe(
-                    Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+                    Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
                     Stream.mapError((cause) =>
                       toWsRpcError(cause, "Failed to replay thread events"),
                     ),

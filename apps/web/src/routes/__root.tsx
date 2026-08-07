@@ -10,6 +10,7 @@ import {
   type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
+import { isThreadDetailEventFor } from "@synara/shared/threadDetailEvents";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -926,29 +927,7 @@ function shouldFlushDomainEventImmediately(
 }
 
 function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: ThreadId): boolean {
-  if (event.aggregateKind !== "thread" || event.aggregateId !== threadId) {
-    return false;
-  }
-  return (
-    event.type === "thread.message-sent" ||
-    event.type === "thread.proposed-plan-upserted" ||
-    event.type === "thread.activity-appended" ||
-    event.type === "thread.turn-diff-completed" ||
-    event.type === "thread.reverted" ||
-    event.type === "thread.conversation-rolled-back" ||
-    event.type === "thread.session-set" ||
-    event.type === "thread.meta-updated" ||
-    event.type === "thread.pinned-message-added" ||
-    event.type === "thread.pinned-message-removed" ||
-    event.type === "thread.pinned-message-done-set" ||
-    event.type === "thread.pinned-message-label-set" ||
-    event.type === "thread.marker-added" ||
-    event.type === "thread.marker-removed" ||
-    event.type === "thread.marker-done-set" ||
-    event.type === "thread.marker-label-set" ||
-    event.type === "thread.archived" ||
-    event.type === "thread.unarchived"
-  );
+  return isThreadDetailEventFor(event, threadId);
 }
 
 // Both catch-up predicates also honor the composer's pending-dispatch signal:
@@ -1523,7 +1502,7 @@ function EventRouter() {
       // Promise chain keeps the run-always cleanup (finally) and lets a replay
       // rejection propagate to callers exactly as the try/finally did.
       await api.orchestration
-        .replayEvents(fromSequence)
+        .replayEvents(fromSequence, threadId)
         .then((replayedEvents) => {
           for (const event of replayedEvents
             .filter((candidate) => isThreadDetailEventForThread(candidate, threadId))

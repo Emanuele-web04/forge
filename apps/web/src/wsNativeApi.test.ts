@@ -827,6 +827,19 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("scopes orchestration replay requests to the visible thread when provided", async () => {
+    requestMock.mockResolvedValue([]);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.orchestration.replayEvents(41, ThreadId.makeUnsafe("thread-1"));
+
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.replayEvents, {
+      fromSequenceExclusive: 41,
+      threadId: "thread-1",
+    });
+  });
+
   it("forwards provider delivery inspection and reconciliation", async () => {
     requestMock.mockResolvedValue([]);
     const { createWsNativeApi } = await import("./wsNativeApi");
