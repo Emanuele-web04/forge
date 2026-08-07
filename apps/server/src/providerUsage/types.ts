@@ -23,6 +23,12 @@ export interface ProviderUsageContext {
 
 export interface ProviderUsageFetcher {
   readonly provider: ProviderKind;
+  /**
+   * Resolve a non-secret identity for the currently selected credentials. A changed identity
+   * invalidates the orchestration cache before its TTL expires. Null disables caching for the
+   * request when credential identity cannot be read safely.
+   */
+  readonly cacheKey?: (ctx: ProviderUsageContext) => Promise<string | null>;
   /** Resolve credentials and fetch live usage. Never throws. */
   fetch(ctx: ProviderUsageContext): Promise<ServerProviderUsageSnapshot>;
 }

@@ -17,6 +17,7 @@ import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/
 
 import { createLogger } from "../../logger";
 import {
+  credentialFingerprint,
   decodeJwtExpMs,
   decodeKeychainJson,
   readJsonFile,
@@ -154,6 +155,17 @@ async function resolveCodexAuth(ctx: ProviderUsageContext): Promise<CodexAuth | 
   }
 
   return sawApiKeyOnly ? { kind: "api-key" } : null;
+}
+
+function codexAuthCacheKey(ctx: ProviderUsageContext, auth: CodexAuth | null): string {
+  if (!auth) {
+    return `${ctx.homeDir}:none`;
+  }
+  if (auth.kind === "api-key") {
+    return `${ctx.homeDir}:api-key`;
+  }
+  const stableIdentity = auth.accountId ?? auth.refreshToken ?? auth.accessToken;
+  return `${ctx.homeDir}:${credentialFingerprint(stableIdentity)}`;
 }
 
 /** Prefer the access token's own JWT `exp`; fall back to `last_refresh` wall-clock age only when
@@ -394,6 +406,9 @@ function fetchCodexUsage(state: CodexOAuthState) {
 
 export const codexUsageFetcher: ProviderUsageFetcher = {
   provider: "codex",
+  async cacheKey(ctx) {
+    return codexAuthCacheKey(ctx, await resolveCodexAuth(ctx));
+  },
   async fetch(ctx) {
     const auth = await resolveCodexAuth(ctx);
     if (!auth) {

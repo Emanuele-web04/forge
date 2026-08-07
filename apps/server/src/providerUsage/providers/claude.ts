@@ -11,7 +11,6 @@
 // invalidate the on-disk/keychain login and force the user to re-authenticate.
 
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 
@@ -24,7 +23,12 @@ import type {
 import { createLogger } from "../../logger";
 import { acquireClaudeAuthStatusLock } from "../../provider/claudeAuthStatusLock";
 import { buildClaudeProcessEnv } from "../../provider/claudeProcessEnv";
-import { decodeKeychainJson, readJsonFile, readKeychainPassword } from "../credentials";
+import {
+  credentialFingerprint,
+  decodeKeychainJson,
+  readJsonFile,
+  readKeychainPassword,
+} from "../credentials";
 import { fetchJson, isAuthFailureStatus, isRateLimitStatus, parseRetryAfterMs } from "../http";
 import {
   asFiniteNumber,
@@ -163,8 +167,17 @@ function claudePlanName(creds: ClaudeCreds): string | undefined {
 // Builds a non-secret cooldown key tied to the credential currently resolved from disk/keychain.
 function claudeCredentialCacheKey(ctx: ProviderUsageContext, creds: ClaudeCreds): string {
   const stableSecret = creds.refreshToken ?? creds.accessToken;
-  const digest = createHash("sha256").update(stableSecret).digest("base64url").slice(0, 18);
-  return `${ctx.homeDir}:${digest}`;
+  return `${ctx.homeDir}:${credentialFingerprint(stableSecret)}`;
+}
+
+function claudeCredentialsCacheKey(
+  ctx: ProviderUsageContext,
+  credentials: ReadonlyArray<ClaudeCreds>,
+): string {
+  if (credentials.length === 0) {
+    return `${ctx.homeDir}:none`;
+  }
+  return credentials.map((creds) => claudeCredentialCacheKey(ctx, creds)).join("|");
 }
 
 // --- CLI-delegated token refresh ------------------------------------------------------------------
@@ -310,6 +323,9 @@ export function __resetClaudeUsageRateLimitState(): void {
 
 export const claudeUsageFetcher: ProviderUsageFetcher = {
   provider: "claudeAgent",
+  async cacheKey(ctx) {
+    return claudeCredentialsCacheKey(ctx, await resolveClaudeCredCandidates(ctx));
+  },
   async fetch(ctx) {
     const candidates = await resolveClaudeCredCandidates(ctx);
     if (candidates.length === 0) {
@@ -409,7 +425,11 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
           nowMs: ctx.nowMs,
           ...(planName ? { planName } : {}),
         });
-        claudeRateLimit.rememberLastGood(claudeCredentialCacheKey(ctx, activeCreds), snapshot);
+        claudeRateLimit.rememberLastGood(
+          claudeCredentialCacheKey(ctx, activeCreds),
+          snapshot,
+          ctx.nowMs,
+        );
         return snapshot;
       } catch (cause) {
         log.warn("claude usage endpoint unreachable", {

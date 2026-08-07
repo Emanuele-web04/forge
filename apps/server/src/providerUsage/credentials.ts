@@ -6,6 +6,7 @@
 // rotation (a rotated refresh token that wasn't persisted invalidates the CLI's login).
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { promisify } from "node:util";
@@ -16,6 +17,11 @@ const execFileAsync = promisify(execFile);
 
 const KEYCHAIN_TIMEOUT_MS = 5_000;
 const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 15_000;
+
+/** Build a short, non-secret identity for cache partitioning without retaining credentials. */
+export function credentialFingerprint(secret: string): string {
+  return createHash("sha256").update(secret).digest("base64url").slice(0, 18);
+}
 
 export type OAuthRefreshResult =
   | {
