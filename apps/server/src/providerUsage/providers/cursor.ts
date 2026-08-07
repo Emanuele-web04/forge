@@ -2,13 +2,13 @@
 // Purpose: Live Cursor usage fetcher. Reads the Cursor access token from its VS Code-style
 // state.vscdb (key cursorAuth/accessToken) or the macOS keychain ("cursor-access-token")
 // read-only, then calls the Cursor DashboardService (Connect RPC) for the current billing
-// period usage + credit grants. Reference: openusage plugins/cursor/plugin.js.
+// period usage + credit grants.
 
 import nodePath from "node:path";
 
 import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/contracts";
 
-import { decodeJwtExpMs, readKeychainPassword } from "../credentials";
+import { credentialFingerprint, decodeJwtExpMs, readKeychainPassword } from "../credentials";
 import { fetchJson, isAuthFailureStatus } from "../http";
 import {
   asFiniteNumber,
@@ -75,6 +75,10 @@ function cursorHeaders(accessToken: string): Record<string, string> {
   };
 }
 
+function cursorAuthCacheKey(ctx: ProviderUsageContext, auth: CursorAuth | null): string {
+  return auth ? `${ctx.homeDir}:${credentialFingerprint(auth.accessToken)}` : `${ctx.homeDir}:none`;
+}
+
 export function parseCursorUsage(input: {
   usage: unknown;
   credits?: unknown;
@@ -139,6 +143,9 @@ export function parseCursorUsage(input: {
 
 export const cursorUsageFetcher: ProviderUsageFetcher = {
   provider: "cursor",
+  async cacheKey(ctx) {
+    return cursorAuthCacheKey(ctx, await resolveCursorAuth(ctx));
+  },
   async fetch(ctx) {
     const auth = await resolveCursorAuth(ctx);
     if (!auth) {

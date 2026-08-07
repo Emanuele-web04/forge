@@ -1187,6 +1187,13 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 /** Fail-open bound for the post-ack "awaiting turn start" Thinking bridge. */
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
+export function resolveWorkingLabel(input: {
+  isSendBusy: boolean;
+  turnTakenOver: boolean;
+}): "Loading" | "Thinking" {
+  return input.isSendBusy && !input.turnTakenOver ? "Loading" : "Thinking";
+}
+
 /**
  * True once a locally dispatched turn is observably live, finished, or blocked
  * on user interaction. Echo of the user message and a mere

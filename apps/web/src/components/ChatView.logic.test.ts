@@ -31,6 +31,7 @@ import {
   promptStillMatchesActiveHistoryBrowse,
   resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
+  resolveWorkingLabel,
   deriveComposerSendState,
   deriveComposerVoiceState,
   describeVoiceRecordingStartError,
@@ -2227,6 +2228,14 @@ describe("hasLiveTurnTakenOver", () => {
         now,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveWorkingLabel", () => {
+  it("shows Loading only while an unacknowledged send is still local", () => {
+    expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
+    expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");
+    expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false })).toBe("Thinking");
   });
 });
 

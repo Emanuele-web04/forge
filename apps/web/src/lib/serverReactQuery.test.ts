@@ -194,12 +194,10 @@ describe("serverAllProviderUsageQueryOptions", () => {
     expect(options.enabled).toBe(false);
   });
 
-  it("keys provider-scoped usage separately from the all-provider batch", () => {
-    const scoped = serverAllProviderUsageQueryOptions({ provider: "claudeAgent" });
-    const all = serverAllProviderUsageQueryOptions();
+  it("shares one batch query key across every usage surface", () => {
+    const options = serverAllProviderUsageQueryOptions();
 
-    expect(scoped.queryKey).toEqual(serverQueryKeys.allProviderUsage("claudeAgent"));
-    expect(all.queryKey).toEqual(serverQueryKeys.allProviderUsage(null));
+    expect(options.queryKey).toEqual(serverQueryKeys.allProviderUsage());
   });
 });
 

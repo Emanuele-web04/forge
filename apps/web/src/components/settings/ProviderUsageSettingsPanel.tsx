@@ -224,8 +224,8 @@ export function ProviderUsageSettingsPanel() {
 
       <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
         Usage is read locally from each provider CLI&apos;s stored credentials and fetched directly
-        from the provider. OAuth providers may refresh short-lived tokens through their official
-        token endpoint; if a provider shows “Not signed in”, re-authenticate with its CLI.
+        from the provider. Short-lived tokens are refreshed through the provider&apos;s own CLI or
+        official token endpoint; if a provider shows “Not signed in”, re-authenticate with its CLI.
       </p>
     </SettingsSectionShell>
   );
