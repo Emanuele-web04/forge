@@ -101,10 +101,13 @@ type StoredTurn = {
 type AntigravityTreeExitProof = {
   readonly turnId: TurnId;
   readonly child: ChildProcess;
-  readonly promise: Promise<
-    { readonly proven: true } | { readonly proven: false; readonly cause: unknown }
-  >;
+  result?: AntigravityTreeExitResult;
+  readonly promise: Promise<AntigravityTreeExitResult>;
 };
+
+type AntigravityTreeExitResult =
+  | { readonly proven: true }
+  | { readonly proven: false; readonly cause: unknown };
 
 type AntigravitySessionContext = {
   session: ProviderSession;
@@ -120,6 +123,9 @@ type AntigravitySessionContext = {
     readonly turnId: TurnId;
     readonly child: ChildProcess;
     readonly promise: Promise<void>;
+    readonly releaseGateway: () => Promise<void>;
+    readonly cleanupRunDir: () => Promise<void>;
+    readonly cleanup: () => Promise<void>;
   };
   activeTreeExitProof?: AntigravityTreeExitProof;
   activePrompt?: string | undefined;
@@ -698,14 +704,34 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       child: ChildProcess,
     ): AntigravityTreeExitProof => {
       const existing = context.activeTreeExitProof;
-      if (existing?.turnId === turnId && existing.child === child) return existing;
+      if (
+        existing?.turnId === turnId &&
+        existing.child === child &&
+        (existing.result?.proven !== false || child.exitCode !== null || child.signalCode !== null)
+      ) {
+        return existing;
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        const result = {
+          proven: false,
+          cause: new Error("Cannot establish process-tree exit proof after the root has closed."),
+        } as const;
+        const proof = { turnId, child, result, promise: Promise.resolve(result) };
+        context.activeTreeExitProof = proof;
+        return proof;
+      }
+      let proof!: AntigravityTreeExitProof;
       const promise = Promise.resolve()
         .then(() => teardownProcessTree(child))
         .then(
           () => ({ proven: true }) as const,
           (cause: unknown) => ({ proven: false, cause }) as const,
-        );
-      const proof = { turnId, child, promise } satisfies AntigravityTreeExitProof;
+        )
+        .then((result) => {
+          proof.result = result;
+          return result;
+        });
+      proof = { turnId, child, promise };
       context.activeTreeExitProof = proof;
       return proof;
     };
@@ -716,7 +742,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     ): Effect.Effect<void, ProviderAdapterRequestError> => {
       const child = context.activeProcess;
       if (!child) return Effect.void;
-      return Effect.tryPromise({
+      const runTeardown = Effect.tryPromise({
         try: () => teardownProcessTree(child),
         catch: (cause) =>
           new ProviderAdapterRequestError({
@@ -726,6 +752,41 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             cause,
           }),
       }).pipe(Effect.asVoid);
+      const existingProof = context.activeTreeExitProof;
+      if (existingProof?.turnId === context.activeTurnId && existingProof.child === child) {
+        return Effect.promise(() => existingProof.promise).pipe(
+          Effect.flatMap((result) => {
+            if (result.proven) return Effect.void;
+            if (child.exitCode === null && child.signalCode === null) {
+              if (context.activeTreeExitProof === existingProof) {
+                delete context.activeTreeExitProof;
+              }
+              return runTeardown;
+            }
+            return Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method,
+                detail: messageFromCause(
+                  result.cause,
+                  "The Antigravity process tree did not prove exit.",
+                ),
+                cause: result.cause,
+              }),
+            );
+          }),
+        );
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method,
+            detail: "Cannot safely capture the Antigravity process tree after its root closed.",
+          }),
+        );
+      }
+      return runTeardown;
     };
 
     /**
@@ -1013,12 +1074,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           const turnId = context.activeTurnId;
           const child = context.activeProcess;
           const closeDrain = context.activeCloseDrain;
+          // Once close/exit has fired the PID can be reused and descendants may
+          // already be reparented. Never start a new signal/capture pass then;
+          // only a proof begun while the owned root was live can gate settlement.
+          if (child.exitCode !== null || child.signalCode !== null) continue;
           const treeExitProof = startTreeExitProof(context, turnId, child);
           void treeExitProof.promise.then(async (result) => {
             if (!result.proven) return;
             if (!closeDrain || closeDrain.turnId !== turnId || closeDrain.child !== child) return;
             const drained = await waitForCloseDrain(closeDrain.promise, closeDrainTimeoutMs);
             if (!drained) {
+              await closeDrain.cleanup();
               settleActiveTurn(context, {
                 turnId,
                 child,
@@ -1284,7 +1350,28 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         const closeDrain = new Promise<void>((resolve) => {
           resolveCloseDrain = resolve;
         });
-        context.activeCloseDrain = { turnId, child, promise: closeDrain };
+        let releaseGatewayPromise: Promise<void> | undefined;
+        const releaseGateway = () =>
+          (releaseGatewayPromise ??= Effect.runPromise(
+            cancelAgentGatewayTurn(gatewaySessionLease, turnId),
+          ).then(() => releaseTurnGatewayLease(context, gatewaySessionLease)));
+        let cleanupRunDirPromise: Promise<void> | undefined;
+        const cleanupRunDir = () =>
+          (cleanupRunDirPromise ??= fs
+            .rm(runDir, { recursive: true, force: true })
+            .catch(() => undefined));
+        const cleanup = async () => {
+          await releaseGateway();
+          await cleanupRunDir();
+        };
+        context.activeCloseDrain = {
+          turnId,
+          child,
+          promise: closeDrain,
+          releaseGateway,
+          cleanupRunDir,
+          cleanup,
+        };
         let stdout = "";
         let stderr = "";
         child.stdout.setEncoding("utf8");
@@ -1315,10 +1402,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           if (context.activePollTimer === timer) delete context.activePollTimer;
           void (async () => {
             try {
-              await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, turnId));
               // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
               // soon as that process exits, even when this callback is stale.
-              releaseTurnGatewayLease(context, gatewaySessionLease);
+              await releaseGateway();
               if (!isCurrentTurnProcess()) return;
               // Drain only this process generation. A forced interrupt may already
               // have made a successor turn active while this close was pending.
@@ -1336,9 +1422,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   "assistant_text",
                 );
               }
-              if (context.modelStopObserved) {
-                const treeExitProof = context.activeTreeExitProof;
-                if (treeExitProof?.turnId !== turnId || treeExitProof.child !== child) return;
+              const treeExitProof = context.activeTreeExitProof;
+              if (treeExitProof?.turnId === turnId && treeExitProof.child === child) {
                 const result = await treeExitProof.promise;
                 if (!isCurrentTurnProcess() || !result.proven) return;
               }
@@ -1368,7 +1453,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               });
             } finally {
               if (context.activeCloseDrain?.child === child) delete context.activeCloseDrain;
-              await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+              await cleanupRunDir();
               resolveCloseDrain();
             }
           })();
@@ -1409,22 +1494,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               });
               return;
             }
-            const teardownSucceeded = yield* teardownActiveProcess(context, "turn/interrupt").pipe(
-              Effect.as(true),
-              Effect.catch((error) => {
-                const detail =
-                  error instanceof ProviderAdapterRequestError
-                    ? error.detail
-                    : messageFromCause(error, "interrupt teardown failed");
-                return Effect.logWarning("antigravity.interrupt_teardown_failed", {
-                  threadId,
-                  detail,
-                }).pipe(Effect.as(false));
-              }),
-            );
+            const treeExitProof = startTreeExitProof(context, activeTurnId, activeProcess);
+            const treeExitResult = yield* Effect.promise(() => treeExitProof.promise);
             // A failed teardown is not exit proof. Retain the child handle and
             // active turn so no successor can overlap a potentially live process.
-            if (!teardownSucceeded) return;
+            if (!treeExitResult.proven) {
+              yield* Effect.logWarning("antigravity.interrupt_teardown_failed", {
+                threadId,
+                detail: messageFromCause(treeExitResult.cause, "interrupt teardown failed"),
+              });
+              return;
+            }
             const drained =
               activeCloseDrain?.turnId === activeTurnId && activeCloseDrain.child === activeProcess
                 ? yield* Effect.promise(() =>
@@ -1432,6 +1512,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   )
                 : false;
             if (drained) return;
+            if (activeCloseDrain) {
+              yield* Effect.promise(() => activeCloseDrain.cleanup());
+            }
             const modelStopped = context.modelStopObserved;
             settleActiveTurn(context, {
               turnId: activeTurnId,

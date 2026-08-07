@@ -73,6 +73,31 @@ function closeControllableAntigravityChild(
   child.emit("close", code, signal);
 }
 
+function makeGatewayCredentials(onRevoke: (token: string) => void): AgentGatewayCredentialsShape {
+  let tokenSequence = 0;
+  return {
+    mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+    setListeningPort: () => undefined,
+    issueSessionToken: () => `test-session-${String(++tokenSequence)}`,
+    verifySessionToken: () => null,
+    verifySession: () => null,
+    issueStdioBootstrapToken: (token) => `bootstrap-${token}`,
+    exchangeStdioBootstrapToken: () => null,
+    bindWriteAuthority: () => null,
+    verifyWriteAuthority: () => false,
+    registerInFlightRequest: () => () => undefined,
+    cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+    cancelSessionTurnRequests: () => Promise.resolve(),
+    retireSessionTurn: () => Promise.resolve(),
+    revokeSessionToken: onRevoke,
+    connectionForThread: () => ({
+      url: "http://127.0.0.1:3773/mcp",
+      bearerToken: `test-session-${String(++tokenSequence)}`,
+    }),
+    stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+  };
+}
+
 describe("Antigravity CLI model translation", () => {
   it("collapses CLI model/effort labels into base models with effort ladders", () => {
     expect(
@@ -723,6 +748,10 @@ describe("Antigravity turn settle on cancel (#465)", () => {
   it("drains final output before settling a successfully interrupted process", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-close-drain-"));
     const child = makeControllableAntigravityChild();
+    let resolveTreeExit!: (result: { escalated: boolean; signalErrors: Error[] }) => void;
+    const treeExit = new Promise<{ escalated: boolean; signalErrors: Error[] }>((resolve) => {
+      resolveTreeExit = resolve;
+    });
     const spawnProcess = (() => child) as NonNullable<
       AntigravityAdapterDependencies["spawnProcess"]
     >;
@@ -734,7 +763,8 @@ describe("Antigravity turn settle on cancel (#465)", () => {
         child.stderr.end();
         closeControllableAntigravityChild(child, null, "SIGTERM");
       }, 10);
-      return { escalated: false, signalErrors: [] };
+      setTimeout(() => resolveTreeExit({ escalated: false, signalErrors: [] }), 30);
+      return treeExit;
     };
 
     try {
@@ -784,6 +814,77 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-close-drain-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps interrupt ownership when root closes before tree-exit proof fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-interrupt-proof-"));
+    const child = makeControllableAntigravityChild();
+    const spawnProcess = (() => child) as NonNullable<
+      AntigravityAdapterDependencies["spawnProcess"]
+    >;
+    const teardownProcessTree: NonNullable<
+      AntigravityAdapterDependencies["teardownProcessTree"]
+    > = async () => {
+      setTimeout(() => {
+        child.stdout.end("output before failed proof\n");
+        child.stderr.end();
+        closeControllableAntigravityChild(child, null, "SIGTERM");
+      }, 10);
+      await new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("interrupt descendants remain alive")), 30),
+      );
+      return { escalated: false, signalErrors: [] };
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-interrupt-proof");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "cancel with surviving descendants",
+            attachments: [],
+          });
+          yield* adapter.interruptTurn(threadId, turn.turnId);
+
+          const afterFailedProof = (yield* adapter.listSessions()).find(
+            (session) => session.threadId === threadId,
+          );
+          expect(afterFailedProof?.status).toBe("running");
+          expect(afterFailedProof?.activeTurnId).toBe(turn.turnId);
+          yield* adapter.sendTurn({ threadId, input: "must remain blocked", attachments: [] }).pipe(
+            Effect.flip,
+            Effect.tap((error) =>
+              Effect.sync(() => expect(error.message).toContain("already active")),
+            ),
+          );
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree,
+              closeDrainTimeoutMs: 100,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-interrupt-proof-" }),
               ),
               Layer.provideMerge(NodeServices.layer),
             ),
@@ -951,8 +1052,15 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               Effect.sync(() => expect(error.message).toContain("already active")),
             ),
           );
-          yield* adapter.stopSession(threadId);
-          expect(teardownCalls).toBe(2);
+          yield* adapter.stopSession(threadId).pipe(
+            Effect.flip,
+            Effect.tap((error) =>
+              Effect.sync(() =>
+                expect(error.message).toContain("descendant exit remains unproven"),
+              ),
+            ),
+          );
+          expect(teardownCalls).toBe(1);
         }).pipe(
           Effect.provide(
             makeAntigravityAdapterLive({
@@ -963,6 +1071,161 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-stop-unproven-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not start teardown from a Stop hook discovered after root close", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-short-close-"));
+    const child = makeControllableAntigravityChild();
+    let eventFile = "";
+    let teardownCalls = 0;
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS ?? "";
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const teardownProcessTree: NonNullable<
+      AntigravityAdapterDependencies["teardownProcessTree"]
+    > = async () => {
+      teardownCalls += 1;
+      return { escalated: false, signalErrors: [] };
+    };
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const runtimeEventsFiber = yield* Stream.runCollect(
+            Stream.take(adapter.streamEvents, 7),
+          ).pipe(Effect.forkChild);
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-short-close");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "short successful turn",
+            attachments: [],
+          });
+          yield* Effect.promise(() => fs.appendFile(eventFile, "stop\t{}\n"));
+          child.stdout.end("short response\n");
+          child.stderr.end();
+          closeControllableAntigravityChild(child, 0, null);
+
+          const runtimeEvents = Array.from(
+            yield* Fiber.join(runtimeEventsFiber).pipe(Effect.timeout("5 seconds")),
+          );
+          expect(teardownCalls).toBe(0);
+          const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+          expect(completed?.turnId).toBe(turn.turnId);
+          expect(completed?.payload).toMatchObject({
+            state: "completed",
+            stopReason: "model_stop",
+          });
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-short-close-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans turn resources before Stop close-drain timeout settlement", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stop-timeout-"));
+    const child = makeControllableAntigravityChild();
+    const revokedTokens: string[] = [];
+    const credentials = makeGatewayCredentials((token) => revokedTokens.push(token));
+    let eventFile = "";
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS ?? "";
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const teardownProcessTree: NonNullable<
+      AntigravityAdapterDependencies["teardownProcessTree"]
+    > = async () => ({ escalated: false, signalErrors: [] });
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-stop-timeout");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "stop without close",
+            attachments: [],
+          });
+          const runDir = path.dirname(eventFile);
+          yield* Effect.promise(() => fs.appendFile(eventFile, "stop\t{}\n"));
+          for (let attempt = 0; attempt < 50; attempt += 1) {
+            const session = (yield* adapter.listSessions()).find(
+              (candidate) => candidate.threadId === threadId,
+            );
+            if (session?.status === "ready") break;
+            yield* Effect.sleep(10);
+          }
+
+          const settled = (yield* adapter.listSessions()).find(
+            (session) => session.threadId === threadId,
+          );
+          expect(settled?.status).toBe("ready");
+          expect(revokedTokens).toEqual(["test-session-1"]);
+          yield* Effect.promise(() =>
+            fs.stat(runDir).then(
+              () => expect.fail("expected the completed turn run directory to be removed"),
+              (error: NodeJS.ErrnoException) => expect(error.code).toBe("ENOENT"),
+            ),
+          );
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree,
+              closeDrainTimeoutMs: 25,
+            }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-stop-timeout-" }),
               ),
               Layer.provideMerge(NodeServices.layer),
             ),
@@ -1023,9 +1286,9 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           const firstChild = children[0]!;
           const secondChild = children[1]!;
           yield* Effect.promise(() =>
-            fs.appendFile(
-              eventFiles[0]!,
-              `pre-invocation\t${JSON.stringify({ conversationId: "stale-conversation" })}\n`,
+            fs.stat(path.dirname(eventFiles[0]!)).then(
+              () => expect.fail("expected the interrupted turn run directory to be removed"),
+              (error: NodeJS.ErrnoException) => expect(error.code).toBe("ENOENT"),
             ),
           );
           firstChild.stdout.write("stale first-turn output\n");
