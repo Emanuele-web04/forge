@@ -164,13 +164,9 @@ async function run(): Promise<void> {
           summary: {
             wallMs: summary(samples.map((sample) => sample.wallMs)),
             cpuTotalMs: summary(samples.map((sample) => sample.cpuTotalMs)),
-            maxObservedRssBytes: summary(
-              samples.map((sample) => sample.maxObservedRssBytes),
-            ),
+            maxObservedRssBytes: summary(samples.map((sample) => sample.maxObservedRssBytes)),
             rssGrowthBytes: summary(samples.map((sample) => sample.rssGrowthBytes)),
-            encodedResponseBytes: summary(
-              samples.map((sample) => sample.encodedResponseBytes),
-            ),
+            encodedResponseBytes: summary(samples.map((sample) => sample.encodedResponseBytes)),
             decodedEvents: summary(samples.map((sample) => sample.decodedEvents)),
           },
           samples,

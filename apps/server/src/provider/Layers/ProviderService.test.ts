@@ -4719,6 +4719,9 @@ persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
       yield* Fiber.interrupt(persistedEventFiber);
       assert.notEqual(canonicalEvent, undefined);
       assert.notEqual(persistedEvent, undefined);
+      if (canonicalEvent === undefined || persistedEvent === undefined) {
+        assert.fail("Expected both canonical and persisted runtime events");
+      }
       assert.equal(canonicalEvent.eventId, completedEvent.eventId);
       assert.equal(persistedEvent.event.eventId, completedEvent.eventId);
       assert.equal(persistedEvent.sequence > 0, true);

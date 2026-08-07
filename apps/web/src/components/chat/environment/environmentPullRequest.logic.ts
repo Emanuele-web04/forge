@@ -115,8 +115,7 @@ export interface PullRequestCommentDisplay {
 
 const COMMENT_TITLE_MAX_LENGTH = 120;
 const COMMENT_SNIPPET_MAX_LENGTH = 160;
-const DESCRIPTION_METADATA_MARKER_PATTERN =
-  /<!--\s*DESCRIPTION\s+(?:START|END)\s*-->/gi;
+const DESCRIPTION_METADATA_MARKER_PATTERN = /<!--\s*DESCRIPTION\s+(?:START|END)\s*-->/gi;
 
 function truncate(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;

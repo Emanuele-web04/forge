@@ -689,16 +689,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const persistCanonicalRuntimeEvent = (
       event: ProviderRuntimeEvent,
-    ): Effect.Effect<PersistedProviderRuntimeEvent | undefined, unknown> =>
-      Effect.uninterruptible(
-        (options?.persistRuntimeEvent
+    ): Effect.Effect<PersistedProviderRuntimeEvent | undefined, unknown> => {
+      const persistence: Effect.Effect<PersistedProviderRuntimeEvent | undefined, unknown> =
+        options?.persistRuntimeEvent
           ? options.persistRuntimeEvent(event)
-          : Effect.succeed(undefined)).pipe(
+          : Effect.succeed(undefined);
+
+      return Effect.uninterruptible(
+        persistence.pipe(
           Effect.tap(() =>
             canonicalEventLogger ? canonicalEventLogger.write(event, null) : Effect.void,
           ),
         ),
       );
+    };
 
     const publishRuntimeEvent = (
       event: ProviderRuntimeEvent,

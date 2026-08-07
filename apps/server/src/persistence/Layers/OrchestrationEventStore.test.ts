@@ -100,13 +100,9 @@ layer("OrchestrationEventStore", (it) => {
         [sameThreadNonDetail.sequence, second.sequence],
       );
       const detailCatchup = yield* Stream.runCollect(
-        eventStore.readThreadEventsFromSequence(
-          threadId,
-          first.sequence,
-          1,
-          second.sequence,
-          ["thread.unarchived"],
-        ),
+        eventStore.readThreadEventsFromSequence(threadId, first.sequence, 1, second.sequence, [
+          "thread.unarchived",
+        ]),
       ).pipe(Effect.map((events) => Array.from(events)));
       assert.deepEqual(
         detailCatchup.map((event) => event.sequence),

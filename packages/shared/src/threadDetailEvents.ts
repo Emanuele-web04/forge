@@ -21,14 +21,9 @@ export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.unarchived",
 ] as const satisfies ReadonlyArray<OrchestrationEvent["type"]>;
 
-const THREAD_DETAIL_EVENT_TYPE_SET = new Set<OrchestrationEvent["type"]>(
-  THREAD_DETAIL_EVENT_TYPES,
-);
+const THREAD_DETAIL_EVENT_TYPE_SET = new Set<OrchestrationEvent["type"]>(THREAD_DETAIL_EVENT_TYPES);
 
-export function isThreadDetailEventFor(
-  event: OrchestrationEvent,
-  threadId: ThreadId,
-): boolean {
+export function isThreadDetailEventFor(event: OrchestrationEvent, threadId: ThreadId): boolean {
   return (
     event.aggregateKind === "thread" &&
     event.aggregateId === threadId &&
