@@ -211,9 +211,7 @@ export interface GitCoreShape {
   readonly statusDetails: (cwd: string) => Effect.Effect<GitStatusDetails, GitCommandError>;
 
   /** Read only branch identity, without diff stats or remote refresh work. */
-  readonly readBranchContext: (
-    cwd: string,
-  ) => Effect.Effect<GitBranchContext, GitCommandError>;
+  readonly readBranchContext: (cwd: string) => Effect.Effect<GitBranchContext, GitCommandError>;
 
   /**
    * Read a unified patch for the current working tree, including untracked files.

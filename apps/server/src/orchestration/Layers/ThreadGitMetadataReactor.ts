@@ -1,8 +1,4 @@
-import {
-  CommandId,
-  type ProviderRuntimeEvent,
-  type ThreadId,
-} from "@synara/contracts";
+import { CommandId, type ProviderRuntimeEvent, type ThreadId } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
@@ -122,8 +118,7 @@ const make = Effect.gen(function* () {
   });
 
   const resolveTerminalContext = Effect.fnUntraced(function* (event: TerminalEvent) {
-    const explicitKey =
-      event.turnId === undefined ? null : turnKey(event.threadId, event.turnId);
+    const explicitKey = event.turnId === undefined ? null : turnKey(event.threadId, event.turnId);
     if (explicitKey) {
       const context = activeContextByTurnKey.get(explicitKey);
       if (context) return { context, activeKey: explicitKey };
@@ -213,9 +208,7 @@ const make = Effect.gen(function* () {
         upstreamRef: captured.upstreamRef,
       })
       .pipe(
-        Effect.map(
-          (pullRequest): ThreadPullRequestLookup => ({ status: "resolved", pullRequest }),
-        ),
+        Effect.map((pullRequest): ThreadPullRequestLookup => ({ status: "resolved", pullRequest })),
         Effect.catch((error) =>
           Effect.logDebug("thread git metadata PR lookup unavailable", {
             threadId: captured.threadId,
