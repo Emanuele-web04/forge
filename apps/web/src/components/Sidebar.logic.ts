@@ -132,7 +132,8 @@ export function resolveSidebarThreadPullRequest<T extends { readonly headBranch:
   readonly persistedPullRequest: T | null;
 }): T | null {
   const persistedPullRequest =
-    input.threadBranch !== null && input.persistedPullRequest?.headBranch === input.threadBranch
+    input.persistedPullRequest !== null &&
+    (input.threadBranch === null || input.persistedPullRequest.headBranch === input.threadBranch)
       ? input.persistedPullRequest
       : null;
   if (!input.hasLiveStatus) {

@@ -207,6 +207,20 @@ describe("resolveSidebarThreadPullRequest", () => {
     ).toBe(persisted);
   });
 
+  it("uses the live worktree branch to validate persisted metadata while thread branch metadata catches up", () => {
+    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: null,
+        liveBranch: "feat/current-branch",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: persisted,
+      }),
+    ).toBe(persisted);
+  });
+
   it("does not attach a persisted PR from another branch to the current worktree branch", () => {
     expect(
       resolveSidebarThreadPullRequest({
