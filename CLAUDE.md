@@ -93,8 +93,8 @@ Codex was the first provider integration and is the most complete reference for 
 How we use it in this codebase:
 
 - Session startup/resume and turn lifecycle are brokered in `apps/server/src/codexAppServerManager.ts`.
-- Provider dispatch and thread event logging are coordinated in `apps/server/src/providerManager.ts`.
-- WebSocket server routes NativeApi methods in `apps/server/src/wsServer.ts`.
+- Provider dispatch and session event streaming are coordinated in `apps/server/src/provider/Services/ProviderService.ts`.
+- WebSocket server routes NativeApi methods in `apps/server/src/wsRpc.ts`.
 - Web app consumes orchestration domain events via WebSocket push on channel `orchestration.domainEvent` (provider runtime activity is projected into orchestration events server-side).
 
 Docs:
