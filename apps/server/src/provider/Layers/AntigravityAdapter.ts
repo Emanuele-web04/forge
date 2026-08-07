@@ -98,6 +98,14 @@ type StoredTurn = {
   readonly items: unknown[];
 };
 
+type AntigravityTreeExitProof = {
+  readonly turnId: TurnId;
+  readonly child: ChildProcess;
+  readonly promise: Promise<
+    { readonly proven: true } | { readonly proven: false; readonly cause: unknown }
+  >;
+};
+
 type AntigravitySessionContext = {
   session: ProviderSession;
   gatewaySessionLease?: AgentGatewaySessionLease;
@@ -113,6 +121,7 @@ type AntigravitySessionContext = {
     readonly child: ChildProcess;
     readonly promise: Promise<void>;
   };
+  activeTreeExitProof?: AntigravityTreeExitProof;
   activePrompt?: string | undefined;
   eventFile?: string | undefined;
   transcriptPath?: string | undefined;
@@ -683,6 +692,24 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       if (context.gatewaySessionLease === lease) delete context.gatewaySessionLease;
     };
 
+    const startTreeExitProof = (
+      context: AntigravitySessionContext,
+      turnId: TurnId,
+      child: ChildProcess,
+    ): AntigravityTreeExitProof => {
+      const existing = context.activeTreeExitProof;
+      if (existing?.turnId === turnId && existing.child === child) return existing;
+      const promise = Promise.resolve()
+        .then(() => teardownProcessTree(child))
+        .then(
+          () => ({ proven: true }) as const,
+          (cause: unknown) => ({ proven: false, cause }) as const,
+        );
+      const proof = { turnId, child, promise } satisfies AntigravityTreeExitProof;
+      context.activeTreeExitProof = proof;
+      return proof;
+    };
+
     const teardownActiveProcess = (
       context: AntigravitySessionContext,
       method: string,
@@ -729,6 +756,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       if (context.activePollTimer) clearInterval(context.activePollTimer);
       delete context.activePollTimer;
       delete context.activeCloseDrain;
+      delete context.activeTreeExitProof;
       delete context.activeProcess;
       delete context.activeTurnId;
       const {
@@ -985,30 +1013,21 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           const turnId = context.activeTurnId;
           const child = context.activeProcess;
           const closeDrain = context.activeCloseDrain;
-          if (child.exitCode === null && child.signalCode === null) {
-            void teardownProcessTree(child)
-              .then(async () => {
-                if (!closeDrain || closeDrain.turnId !== turnId || closeDrain.child !== child)
-                  return;
-                const drained = await waitForCloseDrain(closeDrain.promise, closeDrainTimeoutMs);
-                if (!drained) {
-                  settleActiveTurn(context, {
-                    turnId,
-                    child,
-                    state: "completed",
-                    stopReason: "model_stop",
-                    raw: raw("stop-close-drain-timeout", { timeoutMs: closeDrainTimeoutMs }),
-                  });
-                }
-              })
-              .catch(() => {
-                try {
-                  child.kill("SIGKILL");
-                } catch {
-                  // Process may already be gone. Keep tracking it until close proves exit.
-                }
+          const treeExitProof = startTreeExitProof(context, turnId, child);
+          void treeExitProof.promise.then(async (result) => {
+            if (!result.proven) return;
+            if (!closeDrain || closeDrain.turnId !== turnId || closeDrain.child !== child) return;
+            const drained = await waitForCloseDrain(closeDrain.promise, closeDrainTimeoutMs);
+            if (!drained) {
+              settleActiveTurn(context, {
+                turnId,
+                child,
+                state: "completed",
+                stopReason: "model_stop",
+                raw: raw("stop-close-drain-timeout", { timeoutMs: closeDrainTimeoutMs }),
               });
-          }
+            }
+          });
         }
       }
       await readTranscript(context, isCurrentTurnProcess);
@@ -1316,6 +1335,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                   "assistant_message",
                   "assistant_text",
                 );
+              }
+              if (context.modelStopObserved) {
+                const treeExitProof = context.activeTreeExitProof;
+                if (treeExitProof?.turnId !== turnId || treeExitProof.child !== child) return;
+                const result = await treeExitProof.promise;
+                if (!isCurrentTurnProcess() || !result.proven) return;
               }
               const interrupted =
                 !context.modelStopObserved && (context.interrupted || signal !== null);
