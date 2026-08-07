@@ -990,7 +990,7 @@ function isMatchingHarnessPolicyDelivery(
 function buildOpenCodeResumeCursor(input: {
   readonly openCodeSessionId: string;
   readonly cwd: string;
-  readonly harnessPolicyDelivered?: boolean;
+  readonly harnessPolicyDelivered?: boolean | undefined;
   readonly gatewayControlAvailable: boolean;
 }): OpenCodeResumeCursor {
   return {

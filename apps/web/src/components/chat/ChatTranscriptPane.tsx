@@ -93,6 +93,10 @@ interface ChatTranscriptPaneProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
   worktreeSetup: WorktreeSetupSnapshot | null;
+  worktreeSetupPendingAction?: ComponentProps<
+    typeof MessagesTimeline
+  >["worktreeSetupPendingAction"];
+  onResolveWorktreeSetup?: ComponentProps<typeof MessagesTimeline>["onResolveWorktreeSetup"];
 }
 
 export function ChatTranscriptPane({
@@ -155,6 +159,8 @@ export function ChatTranscriptPane({
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
   worktreeSetup,
+  worktreeSetupPendingAction,
+  onResolveWorktreeSetup,
 }: ChatTranscriptPaneProps) {
   const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
     ? { paddingRight: contentInsetRightPx }
@@ -201,6 +207,8 @@ export function ChatTranscriptPane({
             isWorking={isWorking}
             {...(workingLabel ? { workingLabel } : {})}
             worktreeSetup={worktreeSetup}
+            worktreeSetupPendingAction={worktreeSetupPendingAction ?? null}
+            {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
             activeTurnId={activeTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
             activeTurnStartedAt={activeTurnStartedAt}

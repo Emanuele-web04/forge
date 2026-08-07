@@ -20,6 +20,7 @@ import {
   type Thread,
   type ThreadPrimarySurface,
   type TurnDiffSummary,
+  type WorktreeSetupResolutionAction,
   type WorktreeSetupSnapshot,
   type WorktreeSetupStepId,
 } from "../types";
@@ -993,6 +994,52 @@ export function failWorktreeSetupSnapshot(snapshot: WorktreeSetupSnapshot): Work
 
 export function worktreeSetupHasError(snapshot: WorktreeSetupSnapshot | null): boolean {
   return snapshot?.steps.some((step) => step.status === "error") ?? false;
+}
+
+/**
+ * Thrown by the send pipeline when the user cancels worktree preparation from
+ * the setup card. The shared send-failure path treats it as a silent rollback:
+ * no error styling on the step row and no thread error banner.
+ */
+export class WorktreeSetupCancelledError extends Error {
+  constructor() {
+    super("Worktree preparation cancelled.");
+    this.name = "WorktreeSetupCancelledError";
+  }
+}
+
+/**
+ * Single-shot resolution of an in-flight worktree preparation. The setup
+ * card's "Cancel" / "Work locally" buttons resolve it; the send pipeline races
+ * `promise` against slow steps (worktree creation, setup scripts) and checks
+ * `action` at step boundaries, honoring the choice at the next checkpoint
+ * before the turn is dispatched. Only the first resolve wins.
+ */
+export interface WorktreeSetupResolution {
+  readonly promise: Promise<WorktreeSetupResolutionAction>;
+  readonly action: WorktreeSetupResolutionAction | null;
+  resolve(action: WorktreeSetupResolutionAction): void;
+}
+
+export function createWorktreeSetupResolution(): WorktreeSetupResolution {
+  let action: WorktreeSetupResolutionAction | null = null;
+  let settle: (resolved: WorktreeSetupResolutionAction) => void = () => {};
+  const promise = new Promise<WorktreeSetupResolutionAction>((resolve) => {
+    settle = resolve;
+  });
+  return {
+    promise,
+    get action() {
+      return action;
+    },
+    resolve(next) {
+      if (action !== null) {
+        return;
+      }
+      action = next;
+      settle(next);
+    },
+  };
 }
 
 // Once the turn RPC has resolved the server provably owns the turn; the

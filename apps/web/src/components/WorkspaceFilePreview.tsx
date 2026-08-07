@@ -690,6 +690,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     ) {
       return;
     }
+    // Capture the narrowed disk metadata in locals: the write below runs in a
+    // deferred closure where TypeScript no longer sees the null guards above.
+    const loadedVersion = current.version;
+    const loadedEncoding = current.encoding;
+    const loadedLineEnding = current.lineEnding;
     const nextContents = toggleMarkdownTaskMarker(current.contents, sourceLine, checked);
     if (nextContents === null) {
       return;

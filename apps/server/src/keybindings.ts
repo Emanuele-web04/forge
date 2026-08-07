@@ -146,6 +146,9 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+7", command: "thread.jump.7", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+8", command: "thread.jump.8", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+9", command: "thread.jump.9", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  // Copying the active thread id is not terminal input on macOS, but Ctrl+Shift+C is the
+  // terminal copy chord on Linux/Windows, so it keeps the same `|| isMac` escape hatch.
+  { key: "mod+shift+c", command: "thread.copyId", when: "!terminalFocus || isMac" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
   { key: "mod+o", command: "editor.openFavorite" },

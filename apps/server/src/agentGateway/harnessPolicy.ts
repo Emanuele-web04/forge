@@ -62,7 +62,7 @@ export const SYNARA_IDENTITY_ONLY_HARNESS_POLICY = renderSynaraHarnessPolicy({
 });
 
 export interface SynaraHarnessPolicyDeliveryState {
-  harnessPolicyDelivered?: boolean;
+  harnessPolicyDelivered?: boolean | undefined;
 }
 
 const PROVIDERS_WITH_THREAD_SCOPED_SYNARA_MCP = new Set<ProviderKind>([

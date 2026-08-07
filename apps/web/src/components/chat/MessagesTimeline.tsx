@@ -37,6 +37,7 @@ import {
 } from "../../session-logic";
 import {
   type TurnDiffSummary,
+  type WorktreeSetupResolutionAction,
   type WorktreeSetupSnapshot,
   type WorktreeSetupStep,
 } from "../../types";
@@ -309,7 +310,22 @@ function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"
 // Transient "Preparing worktree..." panel: a compact bordered card with a
 // git-branch header and a connected stepper. Hugs its content so it reads as a
 // status chip rather than a full-width block.
-function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> }) {
+function WorktreeSetupCard({
+  steps,
+  pendingAction,
+  onResolve,
+}: {
+  steps: ReadonlyArray<WorktreeSetupStep>;
+  pendingAction?: WorktreeSetupResolutionAction | null | undefined;
+  onResolve?: ((action: WorktreeSetupResolutionAction) => void) | undefined;
+}) {
+  // The send pipeline only honors a resolution at checkpoints before the turn
+  // dispatch, so hide the actions once "Starting session" is underway (or the
+  // setup already failed) rather than offering a cancel that can no longer win.
+  const canResolve =
+    onResolve !== undefined &&
+    steps.every((step) => step.status !== "error") &&
+    !steps.some((step) => step.id === "start-session" && step.status !== "pending");
   return (
     <div className="w-fit max-w-full rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3.5 py-3 font-system-ui shadow-xs">
       <div className="flex items-center gap-2">
@@ -354,6 +370,26 @@ function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> 
           );
         })}
       </ol>
+      {canResolve ? (
+        <div className="mt-2.5 flex items-center gap-1.5">
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={pendingAction != null}
+            onClick={() => onResolve("work-locally")}
+          >
+            {pendingAction === "work-locally" ? "Switching to local..." : "Work locally"}
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={pendingAction != null}
+            onClick={() => onResolve("cancel")}
+          >
+            {pendingAction === "cancel" ? "Cancelling..." : "Cancel"}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -366,6 +402,10 @@ interface MessagesTimelineProps {
   activeTurnStartedAt: string | null;
   /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
+  /** Action already chosen from the worktree setup card; disables its buttons while it applies. */
+  worktreeSetupPendingAction?: WorktreeSetupResolutionAction | null;
+  /** Resolve the in-flight worktree preparation (cancel the send or fall back to the local checkout). */
+  onResolveWorktreeSetup?: (action: WorktreeSetupResolutionAction) => void;
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
   listRef?: RefObject<LegendListRef | null>;
@@ -454,6 +494,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnInProgress,
   activeTurnStartedAt,
   worktreeSetup: worktreeSetupProp,
+  worktreeSetupPendingAction: worktreeSetupPendingActionProp,
+  onResolveWorktreeSetup,
   followLiveOutput: followLiveOutputProp,
   listRef,
   controllerRef,
@@ -509,6 +551,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // memoization for the whole transcript. See MessagesTimeline.compiler.test.ts.
   const workingLabel = workingLabelProp ?? "Thinking";
   const worktreeSetup = worktreeSetupProp ?? null;
+  const worktreeSetupPendingAction = worktreeSetupPendingActionProp ?? null;
   const followLiveOutput = followLiveOutputProp ?? false;
   const threadMarkers = threadMarkersProp ?? EMPTY_MESSAGE_MARKERS;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
@@ -2155,7 +2198,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "worktree-setup" && (
         <DisclosureRegion open={row.open}>
           <div className="pt-0.5 pb-1">
-            <WorktreeSetupCard steps={row.steps} />
+            <WorktreeSetupCard
+              steps={row.steps}
+              pendingAction={worktreeSetupPendingAction}
+              onResolve={onResolveWorktreeSetup}
+            />
           </div>
         </DisclosureRegion>
       )}

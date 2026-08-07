@@ -279,6 +279,7 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   type ChatMessage,
   type Thread,
+  type WorktreeSetupResolutionAction,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
@@ -450,6 +451,7 @@ import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   acknowledgedRiskIdsForFormWarnings,
   AutomationDialog,
@@ -565,10 +567,13 @@ import {
   resolveThreadArtifactWorkspaceRoot,
   WORKTREE_SETUP_ERROR_HOLD_MS,
   worktreeSetupHasError,
+  WorktreeSetupCancelledError,
+  createWorktreeSetupResolution,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
   type WorktreeSetupDispatchOptions,
+  type WorktreeSetupResolution,
   PullRequestDialogState,
   type QueuedSteerGate,
   resolveQueuedSteerGateTransition,
@@ -636,6 +641,7 @@ function waitForSetupScriptTerminalActivity(input: {
   terminalId: string;
   observeStartTimeoutMs?: number;
   maxRuntimeMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   if (typeof window === "undefined") {
     return Promise.resolve();
@@ -671,6 +677,7 @@ function waitForSetupScriptTerminalActivity(input: {
       resolved = true;
       clearTimers();
       unsubscribe();
+      input.signal?.removeEventListener("abort", finish);
       resolve();
     };
 
@@ -695,6 +702,11 @@ function waitForSetupScriptTerminalActivity(input: {
       }
     }
 
+    if (input.signal?.aborted) {
+      finish();
+      return;
+    }
+    input.signal?.addEventListener("abort", finish, { once: true });
     checkRunningState();
     if (!observedRunning) {
       observeStartTimer = window.setTimeout(finish, observeStartTimeoutMs);
@@ -1384,6 +1396,12 @@ export default function ChatView({
   >({});
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
   const failedWorktreeSetupDispatchStartedAtRef = useRef<string | null>(null);
+  // Live handle to the in-flight send's worktree preparation, resolved by the
+  // setup card's Cancel / Work locally buttons. One send at a time can prepare
+  // a worktree (the composer is send-busy while it runs), so a single ref is safe.
+  const worktreeSetupResolutionRef = useRef<WorktreeSetupResolution | null>(null);
+  const [worktreeSetupPendingAction, setWorktreeSetupPendingAction] =
+    useState<WorktreeSetupResolutionAction | null>(null);
   const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [pendingFileUndo, setPendingFileUndo] = useState<PendingFileUndo | null>(null);
@@ -5840,6 +5858,24 @@ export default function ChatView({
     setLocalDispatch(null);
   }, []);
 
+  // Clears only the setup stepper from the dispatch marker: after "Work
+  // locally" the send continues (composer stays busy, Thinking shimmer takes
+  // over) but the worktree card animates out.
+  const clearLocalDispatchWorktreeSetup = useCallback(() => {
+    setLocalDispatch((current) =>
+      current?.worktreeSetup ? { ...current, worktreeSetup: null } : current,
+    );
+  }, []);
+
+  const onResolveWorktreeSetup = useCallback((action: WorktreeSetupResolutionAction) => {
+    const resolution = worktreeSetupResolutionRef.current;
+    if (!resolution || resolution.action !== null) {
+      return;
+    }
+    resolution.resolve(action);
+    setWorktreeSetupPendingAction(action);
+  }, []);
+
   // The dispatch marker normally clears when the thread stream echoes the sent
   // turn. Once the turn RPC has resolved the server owns the turn, so a stream
   // that never echoes (dead subscription, lost event) must not lock the
@@ -6199,6 +6235,8 @@ export default function ChatView({
     ],
   );
 
+  const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
+
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -6444,6 +6482,15 @@ export default function ChatView({
         return;
       }
 
+      // The handler already bailed out when no thread is open, so the active thread id
+      // is always the one the user is looking at (the focused pane when split).
+      if (command === "thread.copyId") {
+        event.preventDefault();
+        event.stopPropagation();
+        copyThreadIdToClipboard(activeThreadId);
+        return;
+      }
+
       const scriptId = projectScriptIdFromCommand(command);
       if (!scriptId || !activeProject) return;
       const script = activeProject.scripts.find((entry) => entry.id === scriptId);
@@ -6499,6 +6546,7 @@ export default function ChatView({
     selectedModel,
     modelOptionsByProvider,
     onProviderModelSelect,
+    copyThreadIdToClipboard,
   ]);
 
   // Preserve the original "single mic button" contract:
@@ -7866,6 +7914,11 @@ export default function ChatView({
       : null;
     const worktreeSetupScriptName = setupScriptForWorktree?.name ?? null;
     const messageIdForSend = newMessageId();
+    const worktreeSetupResolution = baseBranchForWorktree ? createWorktreeSetupResolution() : null;
+    worktreeSetupResolutionRef.current = worktreeSetupResolution;
+    if (worktreeSetupResolution) {
+      setWorktreeSetupPendingAction(null);
+    }
 
     sendInFlightRef.current = true;
     beginLocalDispatch({
@@ -8016,11 +8069,75 @@ export default function ChatView({
 
     let createdServerThreadForLocalDraft = false;
     let createdWorktreeForSendPath: string | null = null;
+    let switchedToLocalCheckout = false;
     let turnStartSucceeded = false;
     await (async () => {
+      // "Work locally" from the setup card: drop any prepared worktree and
+      // point the send (and the thread's metadata) back at the project
+      // checkout. Awaited before the turn dispatch so the session resolves the
+      // local cwd instead of the abandoned worktree.
+      const applyWorkLocallySwitch = async () => {
+        switchedToLocalCheckout = true;
+        nextThreadEnvMode = "local";
+        nextThreadBranch = null;
+        nextThreadWorktreePath = null;
+        nextAssociatedWorktreePath = null;
+        nextAssociatedWorktreeBranch = null;
+        nextAssociatedWorktreeRef = null;
+        const worktreePathToRemove = createdWorktreeForSendPath;
+        createdWorktreeForSendPath = null;
+        if (worktreePathToRemove) {
+          // Best-effort: a leftover worktree is inert and reclaimable later.
+          void api.git
+            .removeWorktree({
+              cwd: targetProjectCwdForSend,
+              path: worktreePathToRemove,
+              force: true,
+              reclaimTemporaryBranch: true,
+            })
+            .catch(() => undefined);
+        }
+        if (isServerThread || createdServerThreadForLocalDraft) {
+          await api.orchestration.dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId: threadIdForSend,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            associatedWorktreePath: null,
+            associatedWorktreeBranch: null,
+            associatedWorktreeRef: null,
+          });
+          setStoreThreadWorkspace(threadIdForSend, {
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            associatedWorktreePath: null,
+            associatedWorktreeBranch: null,
+            associatedWorktreeRef: null,
+          });
+        }
+        clearLocalDispatchWorktreeSetup();
+      };
+
+      // Honors a Cancel / Work locally choice at a step boundary. Cancel
+      // unwinds through the shared send-failure path below; the cancelled
+      // sentinel keeps that path from painting error state.
+      const consumeWorktreeSetupResolution = async () => {
+        const action = worktreeSetupResolution?.action ?? null;
+        if (action === null || switchedToLocalCheckout) {
+          return;
+        }
+        if (action === "cancel") {
+          throw new WorktreeSetupCancelledError();
+        }
+        await applyWorkLocallySwitch();
+      };
+
       // On first message: lock in branch + create worktree if needed.
-      if (baseBranchForWorktree) {
-        const result = await createWorktreeMutation.mutateAsync({
+      if (baseBranchForWorktree && worktreeSetupResolution) {
+        const creation = createWorktreeMutation.mutateAsync({
           cwd: targetProjectCwdForSend,
           ref: baseBranchForWorktree,
           newBranch: buildTemporaryWorktreeBranchName(),
@@ -8028,40 +8145,60 @@ export default function ChatView({
             ? { copyChangesFrom: targetProjectCwdForSend }
             : {}),
         });
-        beginLocalDispatch({
-          worktreeSetupStepId: "prepare-thread",
-          setupScriptName: worktreeSetupScriptName,
-        });
-        nextThreadBranch = result.worktree.branch;
-        nextThreadWorktreePath = result.worktree.path;
-        createdWorktreeForSendPath = result.worktree.path;
-        const nextAssociatedWorktree = {
-          associatedWorktreePath: result.worktree.path,
-          associatedWorktreeBranch: result.worktree.branch,
-          associatedWorktreeRef: result.worktree.ref,
-        };
-        nextAssociatedWorktreePath = nextAssociatedWorktree.associatedWorktreePath;
-        nextAssociatedWorktreeBranch = nextAssociatedWorktree.associatedWorktreeBranch;
-        nextAssociatedWorktreeRef = nextAssociatedWorktree.associatedWorktreeRef;
-        if (isServerThread) {
-          await api.orchestration.dispatchCommand({
-            type: "thread.meta.update",
-            commandId: newCommandId(),
-            threadId: threadIdForSend,
-            envMode: "worktree",
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
-            associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
-            associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
-            associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
+        // `git worktree add` is the longest step; let the card's buttons win
+        // the wait instead of only taking effect once it finishes.
+        await Promise.race([creation, worktreeSetupResolution.promise]);
+        if (worktreeSetupResolution.action !== null) {
+          // The worktree may still be materializing — tear it down whenever
+          // the creation lands so a resolved send leaves no stray checkout.
+          void creation
+            .then((result) =>
+              api.git.removeWorktree({
+                cwd: targetProjectCwdForSend,
+                path: result.worktree.path,
+                force: true,
+                reclaimTemporaryBranch: true,
+              }),
+            )
+            .catch(() => undefined);
+          await consumeWorktreeSetupResolution();
+        } else {
+          const result = await creation;
+          beginLocalDispatch({
+            worktreeSetupStepId: "prepare-thread",
+            setupScriptName: worktreeSetupScriptName,
           });
-          // Keep local thread state in sync immediately so terminal drawer opens
-          // with the worktree cwd/env instead of briefly using the project root.
-          setStoreThreadWorkspace(threadIdForSend, {
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
-            ...nextAssociatedWorktree,
-          });
+          nextThreadBranch = result.worktree.branch;
+          nextThreadWorktreePath = result.worktree.path;
+          createdWorktreeForSendPath = result.worktree.path;
+          const nextAssociatedWorktree = {
+            associatedWorktreePath: result.worktree.path,
+            associatedWorktreeBranch: result.worktree.branch,
+            associatedWorktreeRef: result.worktree.ref,
+          };
+          nextAssociatedWorktreePath = nextAssociatedWorktree.associatedWorktreePath;
+          nextAssociatedWorktreeBranch = nextAssociatedWorktree.associatedWorktreeBranch;
+          nextAssociatedWorktreeRef = nextAssociatedWorktree.associatedWorktreeRef;
+          if (isServerThread) {
+            await api.orchestration.dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              envMode: "worktree",
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+              associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
+              associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
+              associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
+            });
+            // Keep local thread state in sync immediately so terminal drawer opens
+            // with the worktree cwd/env instead of briefly using the project root.
+            setStoreThreadWorkspace(threadIdForSend, {
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+              ...nextAssociatedWorktree,
+            });
+          }
         }
       }
 
@@ -8129,7 +8266,7 @@ export default function ChatView({
         createdServerThreadForLocalDraft = true;
       }
 
-      const setupScript = setupScriptForWorktree;
+      const setupScript = switchedToLocalCheckout ? null : setupScriptForWorktree;
       if (setupScript) {
         let shouldRunSetupScript = false;
         if (isServerThread) {
@@ -8154,13 +8291,26 @@ export default function ChatView({
           }
           const setupTerminal = await runProjectScript(setupScript, setupScriptOptions);
           if (setupTerminal) {
-            await waitForSetupScriptTerminalActivity({
+            const setupActivityAbortController = new AbortController();
+            const setupActivityWait = waitForSetupScriptTerminalActivity({
               threadId: threadIdForSend,
               terminalId: setupTerminal.terminalId,
+              signal: setupActivityAbortController.signal,
             });
+            // Setup scripts can run for minutes; let Cancel / Work locally win
+            // the wait. The script itself keeps running — a cancelled worktree
+            // is force-removed, a local switch just stops waiting on it.
+            await (
+              worktreeSetupResolution
+                ? Promise.race([setupActivityWait, worktreeSetupResolution.promise])
+                : setupActivityWait
+            ).finally(() => setupActivityAbortController.abort());
           }
         }
       }
+      // Covers a resolution set while the thread was linked or the setup
+      // script ran (the creation-step race above only guards the first step).
+      await consumeWorktreeSetupResolution();
 
       if (isServerThread) {
         await persistThreadSettingsForNextTurn({
@@ -8172,15 +8322,19 @@ export default function ChatView({
         });
       }
 
+      const stagedTurnAttachments = await turnAttachmentsPromise;
+      // Keep setup resolvable while attachment uploads are still preparing the
+      // turn. Once they settle, consume the last possible choice before the
+      // card advances to the non-resolvable "Starting session" step.
+      await consumeWorktreeSetupResolution();
       // Carry the expected message id so a snapshot rebuilt after an interim
       // reset (thread switch, ack effect) keeps the message-echo ack signal.
       beginLocalDispatch({
         expectedUserMessageId: messageIdForSend,
-        ...(baseBranchForWorktree
+        ...(baseBranchForWorktree && !switchedToLocalCheckout
           ? { worktreeSetupStepId: "start-session", setupScriptName: worktreeSetupScriptName }
           : {}),
       });
-      const stagedTurnAttachments = await turnAttachmentsPromise;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
         provider: selectedModelSelectionForSend.provider,
@@ -8240,6 +8394,9 @@ export default function ChatView({
         setRestoredQueuedSourceProposedPlan(threadIdForSend, null);
       }
     })().catch(async (err: unknown) => {
+      // A user-cancelled worktree setup unwinds through this same rollback,
+      // but silently: no error styling on the step row, no thread error.
+      const setupCancelled = err instanceof WorktreeSetupCancelledError;
       // Uploads start in parallel with workspace/session preparation. If any
       // earlier step fails, settle that promise and release every staged blob.
       await turnAttachmentsPromise.then(
@@ -8248,7 +8405,9 @@ export default function ChatView({
       );
       // Surface the failure on whichever setup step was active (no-op for
       // sends without a worktree setup in flight).
-      failLocalDispatchWorktreeSetup();
+      if (!setupCancelled) {
+        failLocalDispatchWorktreeSetup();
+      }
       if (!turnStartSucceeded) {
         // The turn RPC never resolved, so no server turn exists for the
         // watchdog to recover — drop the marker armed when the dispatch began.
@@ -8347,16 +8506,21 @@ export default function ChatView({
         updateSelectedComposerMentions(composerMentionsSnapshot);
         setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
       }
-      setThreadError(
-        threadIdForSend,
-        err instanceof Error ? err.message : "Failed to send message.",
-      );
+      if (!setupCancelled) {
+        setThreadError(
+          threadIdForSend,
+          err instanceof Error ? err.message : "Failed to send message.",
+        );
+      }
     });
     sendInFlightRef.current = false;
+    worktreeSetupResolutionRef.current = null;
     if (!turnStartSucceeded) {
-      if (baseBranchForWorktree) {
+      if (baseBranchForWorktree && (worktreeSetupResolution?.action ?? null) === null) {
         scheduleFailedWorktreeSetupDispatchReset();
       } else {
+        // A resolved setup (cancelled, or switched to local and then failed)
+        // has no error step to hold on screen — release the marker directly.
         resetLocalDispatch();
       }
     }
@@ -11744,6 +11908,8 @@ export default function ChatView({
                     isWorking={isWorking}
                     workingLabel={isSendBusy ? "Loading" : "Thinking"}
                     worktreeSetup={activeWorktreeSetup}
+                    worktreeSetupPendingAction={worktreeSetupPendingAction}
+                    onResolveWorktreeSetup={onResolveWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}

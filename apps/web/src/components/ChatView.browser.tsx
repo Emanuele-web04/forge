@@ -84,6 +84,7 @@ const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
 let attachmentResponseDelayMs = 0;
 let attachmentUploadSequence = 0;
+let attachmentUploadBarrier: Promise<void> | null = null;
 
 interface WsRequestEnvelope {
   id: string;
@@ -1400,6 +1401,7 @@ const worker = setupWorker(
   http.post(`*${ATTACHMENT_UPLOAD_ROUTE_PATH}`, async ({ request }) => {
     const url = new URL(request.url);
     const bytes = await request.arrayBuffer();
+    await attachmentUploadBarrier;
     attachmentUploadSequence += 1;
     return HttpResponse.json(
       {
@@ -2035,6 +2037,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
+    attachmentUploadBarrier = null;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
@@ -6288,6 +6291,86 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps worktree setup resolvable while attachments upload", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    let releaseAttachmentUpload = () => {};
+    attachmentUploadBarrier = new Promise<void>((resolve) => {
+      releaseAttachmentUpload = resolve;
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-new-worktree-cancel-upload-test" as MessageId,
+        targetText: "new worktree cancel upload test",
+      }),
+    });
+
+    try {
+      await page.getByTestId("new-thread-button").click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
+      envPickerTrigger.click();
+      await page.getByText("New worktree").click();
+
+      useComposerDraftStore.getState().setPrompt(newThreadId, "Cancel before upload finishes");
+      useComposerDraftStore.getState().addImage(
+        newThreadId,
+        createComposerImage({
+          id: "new-worktree-cancel-upload-image",
+          previewUrl: "blob:new-worktree-cancel-upload-image",
+        }),
+      );
+      const composerForm = document.querySelector<HTMLFormElement>(
+        'form[data-chat-composer-form="true"]',
+      );
+      expect(composerForm).not.toBeNull();
+      composerForm!.requestSubmit();
+
+      await expect
+        .poll(
+          () =>
+            document.querySelector<HTMLElement>('[data-timeline-row-kind="worktree-setup"]')
+              ?.textContent,
+        )
+        .toContain("Linking thread workspace");
+      const cancelButton = page.getByRole("button", { name: "Cancel" });
+      await expect.element(cancelButton).toBeInTheDocument();
+      expect(
+        wsRequests.some(
+          (candidate) => readDispatchedCommand(candidate)?.type === "thread.turn.start",
+        ),
+      ).toBe(false);
+
+      await cancelButton.click();
+      await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();
+      releaseAttachmentUpload();
+      attachmentUploadBarrier = null;
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).not.toContain("Cancelling...");
+          expect(
+            wsRequests.some(
+              (candidate) => readDispatchedCommand(candidate)?.type === "thread.turn.start",
+            ),
+          ).toBe(false);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      releaseAttachmentUpload();
+      attachmentUploadBarrier = null;
       await mounted.cleanup();
       restoreNativeApi();
     }
