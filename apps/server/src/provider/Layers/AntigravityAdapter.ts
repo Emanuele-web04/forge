@@ -753,7 +753,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           }),
       }).pipe(Effect.asVoid);
       const existingProof = context.activeTreeExitProof;
-      if (existingProof?.turnId === context.activeTurnId && existingProof.child === child) {
+      if (
+        existingProof !== undefined &&
+        existingProof.turnId === context.activeTurnId &&
+        existingProof.child === child
+      ) {
         return Effect.promise(() => existingProof.promise).pipe(
           Effect.flatMap((result) => {
             if (result.proven) return Effect.void;
