@@ -5,6 +5,7 @@ import { Cause, Effect, Layer, Option, Stream } from "effect";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
+import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -60,7 +61,7 @@ const make = Effect.gen(function* () {
 
   const resolveWorkspaceContext = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<ThreadWorkspaceContext | null> {
+  ): Effect.fn.Return<ThreadWorkspaceContext | null, ProjectionRepositoryError> {
     const threadOption = yield* projectionSnapshotQuery.getThreadShellById(threadId);
     const thread = Option.getOrUndefined(threadOption);
     if (!thread) return null;
