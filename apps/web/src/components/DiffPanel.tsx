@@ -43,6 +43,7 @@ import { createProjectSelector } from "../storeSelectors";
 import { inferCheckpointTurnCountByTurnId } from "../session-logic";
 import { type TimestampFormat, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useDiffRenderModeStore } from "../diffRenderModeStore";
 import { DOCK_HEADER_ICON_BUTTON_CLASS, type DiffRenderMode } from "./chat/chatHeaderControls";
 import {
   areAllRenderableFilesCollapsed,
@@ -383,7 +384,6 @@ export default function DiffPanel({
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
-  const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("split");
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(true);
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
@@ -436,6 +436,20 @@ export default function DiffPanel({
     [diffQueriesEnabled, scopePickerOpen],
   );
   const activeThreadId = controlledThreadId ?? routeThreadId;
+  // Per-thread panel override; Settings.diffRenderMode is only the fallback default.
+  const diffRenderMode = useDiffRenderModeStore((store) =>
+    store.getModeForThread(activeThreadId, settings.diffRenderMode),
+  );
+  const setModeForThread = useDiffRenderModeStore((store) => store.setModeForThread);
+  const setDiffRenderMode = useCallback(
+    (mode: DiffRenderMode) => {
+      if (!activeThreadId) {
+        return;
+      }
+      setModeForThread(activeThreadId, mode);
+    },
+    [activeThreadId, setModeForThread],
+  );
   const serverThreadCatalog = useStore(
     useMemo(() => createDiffPanelThreadCatalogSelector(activeThreadId), [activeThreadId]),
   );
@@ -1090,6 +1104,7 @@ export default function DiffPanel({
       selectRepoScope,
       selectTurn,
       selectedTurnId,
+      setDiffRenderMode,
       settings.timestampFormat,
       toggleCollapseAll,
     ],
@@ -1197,6 +1212,7 @@ export default function DiffPanel({
       selectTurn,
       selectedFilePath,
       selectedTurnId,
+      setDiffRenderMode,
       settings.timestampFormat,
       showDiffToolbar,
       toggleCollapseAll,

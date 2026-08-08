@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   type AppSettings,
+  type DiffRenderMode,
   type FollowUpBehavior,
   DEFAULT_UI_DENSITY,
   type UiDensity,
@@ -164,6 +165,11 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
+const DIFF_RENDER_MODE_OPTIONS = [
+  { value: "stacked", label: "Stacked" },
+  { value: "split", label: "Split" },
+] as const satisfies ReadonlyArray<{ value: DiffRenderMode; label: string }>;
+
 // ── Settings UI primitives ────────────────────────────────────────────────
 
 // Shared settings controls live in ~/components/settings/SettingControls.
@@ -267,6 +273,7 @@ function SettingsRouteView() {
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
+    ...(settings.diffRenderMode !== defaults.diffRenderMode ? ["Diff layout"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
       ? ["Pull request diff colors"]
@@ -957,6 +964,31 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Review">
+        <SettingsRow
+          title="Diff layout"
+          description="Default stacked or split layout for threads that have not chosen one in the review panel. In-panel changes are remembered per thread and do not update this default."
+          resetAction={
+            settings.diffRenderMode !== defaults.diffRenderMode ? (
+              <SettingResetButton
+                label="diff layout"
+                onClick={() =>
+                  updateSettings({
+                    diffRenderMode: defaults.diffRenderMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.diffRenderMode}
+              onValueChange={(value) => updateSettings({ diffRenderMode: value })}
+              ariaLabel="Diff layout"
+              options={DIFF_RENDER_MODE_OPTIONS}
+            />
+          }
+        />
+
         {renderBooleanSettingRow({
           settingKey: "showPullRequestDiffColors",
           title: "Pull request diff colors",

@@ -259,6 +259,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show token-by-token output while a response is in progress. streaming",
   },
   {
+    id: "behavior:diff-layout",
+    section: "behavior",
+    title: "Diff layout",
+    keywords:
+      "Default stacked or split layout for threads. review panel side by side unified per thread",
+  },
+  {
     id: "behavior:diff-line-wrapping",
     section: "behavior",
     title: "Diff line wrapping",

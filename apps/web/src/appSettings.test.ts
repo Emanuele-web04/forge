@@ -860,6 +860,13 @@ describe("AppSettingsSchema", () => {
     ).toBe(true);
   });
 
+  it("defaults diff render mode to split and preserves an explicit stacked preference", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode("{}").diffRenderMode).toBe("split");
+    expect(decode(JSON.stringify({ diffRenderMode: "stacked" })).diffRenderMode).toBe("stacked");
+  });
+
   it("fills decoding defaults for persisted settings that predate newer keys", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 

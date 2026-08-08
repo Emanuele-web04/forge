@@ -89,6 +89,9 @@ export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "update
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
+export const DiffRenderMode = Schema.Literals(["stacked", "split"]);
+export type DiffRenderMode = typeof DiffRenderMode.Type;
+export const DEFAULT_DIFF_RENDER_MODE: DiffRenderMode = "split";
 
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
@@ -208,6 +211,9 @@ export const AppSettingsSchema = Schema.Struct({
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only review default for stacked vs split diffs. In-panel toggles are
+  // stored per thread separately and do not overwrite this settings value.
+  diffRenderMode: DiffRenderMode.pipe(withDefaults(() => DEFAULT_DIFF_RENDER_MODE)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
