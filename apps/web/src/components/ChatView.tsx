@@ -5418,11 +5418,20 @@ export default function ChatView({
   // from the observer would race the padding it is supposed to compensate for. Here
   // the new padding is already in the DOM, so the pre-resize viewport is simply the
   // current one with the inset delta backed out.
-  const previousComposerTranscriptInsetRef = useRef(composerTranscriptInsetPx);
+  const previousComposerTranscriptInsetRef = useRef({
+    threadId: activeThread?.id ?? null,
+    insetPx: composerTranscriptInsetPx,
+  });
   useLayoutEffect(() => {
-    const previousInsetPx = previousComposerTranscriptInsetRef.current;
-    previousComposerTranscriptInsetRef.current = composerTranscriptInsetPx;
-    const insetDeltaPx = composerTranscriptInsetPx - previousInsetPx;
+    const threadId = activeThread?.id ?? null;
+    const previous = previousComposerTranscriptInsetRef.current;
+    previousComposerTranscriptInsetRef.current = {
+      threadId,
+      insetPx: composerTranscriptInsetPx,
+    };
+    if (previous.threadId !== threadId) return;
+
+    const insetDeltaPx = composerTranscriptInsetPx - previous.insetPx;
     if (isInactiveSplitPane || Math.abs(insetDeltaPx) < 0.5) return;
 
     const scrollContainer = legendListRef.current?.getScrollableNode?.();
@@ -5440,7 +5449,7 @@ export default function ChatView({
     // land a composer-growth short of the tail.
     programmaticScrollUntilRef.current = performance.now() + 200;
     scrollContainer.scrollTop += insetDeltaPx;
-  }, [composerTranscriptInsetPx, isInactiveSplitPane]);
+  }, [activeThread?.id, composerTranscriptInsetPx, isInactiveSplitPane]);
 
   useEffect(() => {
     isAtEndRef.current = true;
