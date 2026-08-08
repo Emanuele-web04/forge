@@ -7,17 +7,19 @@ import { Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effec
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildOpenCodePermissionRules,
   buildOpenCodeServerProcessEnv,
+  KILO_CLI_SPEC,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   makeOpenCodeRuntimeLive,
   OPENCODE_LOCAL_SERVER_IDLE_TTL_MS,
   parseOpenCodeCliModelsOutput,
   parseOpenCodeCredentialProviderIDs,
+  resolveOpenCodeAuthFilePath,
   toOpenCodeFileParts,
 } from "./opencodeRuntime.ts";
 
@@ -878,5 +880,32 @@ describe("parseOpenCodeCredentialProviderIDs", () => {
 }`);
 
     expect(providerIDs).toEqual(["openai"]);
+  });
+});
+
+describe("resolveOpenCodeAuthFilePath", () => {
+  it("uses OpenCode's XDG data directory on every platform", () => {
+    vi.stubEnv("XDG_DATA_HOME", "");
+    try {
+      expect(resolveOpenCodeAuthFilePath({ home: "/home/developer" }).replaceAll("\\", "/")).toBe(
+        "/home/developer/.local/share/opencode/auth.json",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("respects XDG_DATA_HOME and compatible CLI data directories", () => {
+    vi.stubEnv("XDG_DATA_HOME", "/custom/data");
+    try {
+      expect(
+        resolveOpenCodeAuthFilePath({ home: "/home/developer" }, KILO_CLI_SPEC).replaceAll(
+          "\\",
+          "/",
+        ),
+      ).toBe("/custom/data/kilo/auth.json");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

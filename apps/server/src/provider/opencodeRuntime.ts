@@ -469,12 +469,6 @@ function resolveOpenCodeDataDirectory(
   homeDirectory: string,
   dataDirectoryName = "opencode",
 ): string {
-  if (process.platform === "win32") {
-    const appDataDirectory =
-      trimToNull(process.env.APPDATA) ?? join(homeDirectory, "AppData", "Roaming");
-    return join(appDataDirectory, dataDirectoryName);
-  }
-
   const xdgDataHome =
     trimToNull(process.env.XDG_DATA_HOME) ?? join(homeDirectory, ".local", "share");
   return join(xdgDataHome, dataDirectoryName);
