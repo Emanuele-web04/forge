@@ -165,6 +165,52 @@ layer("OrchestrationEventStore", (it) => {
     }),
   );
 
+  it.effect("filters sparse projector replay before decoding unrelated activity payloads", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const now = "2026-08-09T00:00:00.000Z";
+      const threadId = ThreadId.makeUnsafe("thread-filtered-replay");
+      const appendActivity = (eventId: string, kind: string) =>
+        eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.makeUnsafe(eventId),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe(`${eventId}-activity`),
+              tone: "info",
+              kind,
+              summary: kind,
+              payload: {},
+              turnId: null,
+              createdAt: now,
+            },
+          },
+        } as Parameters<typeof eventStore.append>[0]);
+
+      yield* appendActivity("evt-filtered-replay-noise", "context-window.updated");
+      const relevant = yield* appendActivity("evt-filtered-replay-relevant", "approval.requested");
+      const replayed = yield* Stream.runCollect(
+        eventStore.readFromSequence(0, Number.MAX_SAFE_INTEGER, relevant.sequence, {
+          eventTypes: ["thread.activity-appended"],
+          activityKinds: ["approval.requested"],
+        }),
+      ).pipe(Effect.map((events) => Array.from(events)));
+
+      assert.deepEqual(
+        replayed.map((event) => event.eventId),
+        [relevant.eventId],
+      );
+    }),
+  );
+
   it.effect("normalizes imported Synara model-selection shapes during replay", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;

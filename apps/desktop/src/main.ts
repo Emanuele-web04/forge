@@ -596,7 +596,11 @@ async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" |
     waitForHttpReady: () =>
       waitForBackendHttpReady(baseUrl, {
         path: "/health",
-        timeoutMs: 60_000,
+        // The child supervisor, not elapsed wall time, owns the terminal
+        // condition. Large projection catch-up can legitimately outlive a
+        // minute; this observer is cancelled when that child exits or the app
+        // shuts down.
+        timeoutMs: null,
         isReady: async (response) => {
           if (!response.ok) {
             return false;
@@ -3233,6 +3237,10 @@ async function restartBackendAfterCrash(
   }
 
   cancelBackendReadinessWait();
+  // The aborted observer settles on a later microtask. Clear its identity now
+  // so the replacement child always gets a fresh readiness observation even
+  // when the renderer window survived the crash.
+  backendInitialWindowOpenInFlight = null;
   try {
     await reserveBackendEndpoint("backend restart");
   } catch (error) {

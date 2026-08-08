@@ -163,6 +163,33 @@ const makeRpcClient = RpcClient.make(WsFeatureRpcGroup);
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
 const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 10_000;
+const INITIAL_RECONNECT_RETRY_MS = 500;
+const MAX_RECONNECT_RETRY_MS = 5_000;
+
+/** Keeps outages gentle on the backend while still recovering promptly. */
+export function getReconnectRetryDelayMs(attempt: number): number {
+  const exponent = Math.max(0, Math.min(Math.trunc(attempt), 16));
+  return Math.min(INITIAL_RECONNECT_RETRY_MS * 2 ** exponent, MAX_RECONNECT_RETRY_MS);
+}
+
+function delayWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<void>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      signal.removeEventListener("abort", onAbort);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function resolveRpcUrl(rawUrl: string, path: string): string {
   const url = new URL(rawUrl);
@@ -591,6 +618,14 @@ export class WsTransport {
   constructor(url?: string) {
     this.explicitUrl = url ?? null;
     this.clientPromise = this.createSession().clientPromise;
+    void this.clientPromise.catch((error) => {
+      if (this.disposed || isTerminalCompatibilityFailure(error)) return;
+      void this.reconnect().catch((reconnectError) => {
+        if (!this.disposed && !isTerminalCompatibilityFailure(reconnectError)) {
+          console.warn("WebSocket reconnect loop stopped unexpectedly", reconnectError);
+        }
+      });
+    });
   }
 
   async request<T = unknown>(
@@ -618,20 +653,13 @@ export class WsTransport {
         return undefined as T;
       }
 
-      const client = await awaitWithAbort(this.getClient(), abortScope.signal);
-
-      if (method === WS_METHODS.gitRunStackedAction) {
-        return (await this.runGitActionStream(client, params, abortScope.signal)) as T;
-      }
-      if (method === WS_METHODS.projectsProvisionFromGitHub) {
-        return (await this.runProjectProvisionStream(client, params, abortScope.signal)) as T;
-      }
-
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
+        const wasSubscribed = this.shellSubscribed;
         this.shellSubscribed = true;
         this.resetStreamCapacityRetry("orchestration.shell");
         this.resetStreamCompletionRetry("orchestration.shell");
-        await this.startShellStream(client, this.shellSnapshotDelivered);
+        const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+        await this.startShellStream(client, wasSubscribed && this.shellSnapshotDelivered);
         return undefined as T;
       }
       if (method === ORCHESTRATION_WS_METHODS.subscribeThread) {
@@ -641,10 +669,21 @@ export class WsTransport {
         // Preserve the stored input identity across explicit refreshes so stale
         // restart callbacks cannot supersede the newly requested stream.
         const existingInput = this.threadSubscriptions.get(threadId);
+        const wasSubscribed = existingInput !== undefined;
         const input = threadStreamInputsEqual(existingInput, params) ? existingInput : params;
         this.threadSubscriptions.set(threadId, input);
-        await this.startThreadStream(client, threadId, input as never, true);
+        const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+        await this.startThreadStream(client, threadId, input as never, wasSubscribed);
         return undefined as T;
+      }
+
+      const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+
+      if (method === WS_METHODS.gitRunStackedAction) {
+        return (await this.runGitActionStream(client, params, abortScope.signal)) as T;
+      }
+      if (method === WS_METHODS.projectsProvisionFromGitHub) {
+        return (await this.runProjectProvisionStream(client, params, abortScope.signal)) as T;
       }
 
       const rpcInput =
@@ -791,7 +830,7 @@ export class WsTransport {
     this.disposed = true;
     // Abort before anything else: a pending negotiate must fail now rather
     // than resolve later and build a runtime this teardown will not see.
-    this.lifetime.abort();
+    this.lifetime.abort(new Error("Transport disposed"));
     this.setState("disposed");
     this.resetAllStreamCapacityRetries();
     this.resetAllStreamCompletionRetries();
@@ -803,13 +842,8 @@ export class WsTransport {
     // handled before closing the runtime so test/browser teardown stays quiet.
     void this.clientPromise.catch(() => undefined);
     void this.reconnectPromise?.catch(() => undefined);
-    const runtime = this.runtime;
-    const clientScope = this.clientScope;
-    if (!runtime) return;
-    if (clientScope) {
-      await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
-    }
-    await runtime.dispose().catch(() => undefined);
+    const resources = this.takeCurrentRuntime();
+    if (resources) await this.closeRuntime(resources);
   }
 
   /**
@@ -943,6 +977,10 @@ export class WsTransport {
   }
 
   private async getClient(): Promise<RpcClientInstance> {
+    // Once recovery starts, the last fulfilled client belongs to a runtime
+    // that reconnect() has detached. New work must join the shared recovery
+    // promise instead of briefly reusing that stale socket.
+    if (this.reconnectPromise) return this.reconnectPromise;
     try {
       return await this.clientPromise;
     } catch (error) {
@@ -962,13 +1000,34 @@ export class WsTransport {
     return runtime;
   }
 
+  private takeCurrentRuntime(): {
+    readonly runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
+    readonly clientScope: Scope.Closeable | null;
+  } | null {
+    const runtime = this.runtime;
+    if (!runtime) return null;
+    const clientScope = this.clientScope;
+    this.runtime = null;
+    this.clientScope = null;
+    return { runtime, clientScope };
+  }
+
+  private async closeRuntime(resources: {
+    readonly runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
+    readonly clientScope: Scope.Closeable | null;
+  }): Promise<void> {
+    if (resources.clientScope) {
+      await resources.runtime
+        .runPromise(Scope.close(resources.clientScope, Exit.void))
+        .catch(() => undefined);
+    }
+    await resources.runtime.dispose().catch(() => undefined);
+  }
+
   private reconnect(): Promise<RpcClientInstance> {
     if (this.reconnectPromise) return this.reconnectPromise;
 
-    const oldRuntime = this.runtime;
-    const oldClientScope = this.clientScope;
-    this.runtime = null;
-    this.clientScope = null;
+    const oldResources = this.takeCurrentRuntime();
     this.resetAllStreamCapacityRetries();
     this.resetAllStreamCompletionRetries();
     for (const cleanup of this.streamCleanups.values()) cleanup();
@@ -977,15 +1036,7 @@ export class WsTransport {
 
     this.setState("connecting");
 
-    if (oldRuntime) {
-      void (
-        oldClientScope
-          ? oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).catch(() => undefined)
-          : Promise.resolve()
-      ).finally(() => {
-        void oldRuntime.dispose().catch(() => undefined);
-      });
-    }
+    if (oldResources) void this.closeRuntime(oldResources);
 
     this.reconnectPromise = this.openReconnectSession().finally(() => {
       this.reconnectPromise = null;
@@ -1121,32 +1172,41 @@ export class WsTransport {
   }
 
   private async openReconnectSession(): Promise<RpcClientInstance> {
-    const delayMs = Math.min(500 * 2 ** this.reconnectFailures, 5_000);
-    this.reconnectFailures += 1;
-    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
-    if (this.disposed) {
-      throw new Error("Transport disposed");
-    }
+    for (;;) {
+      if (this.disposed) throw new Error("Transport disposed");
+      this.setState("connecting");
+      const delayMs = getReconnectRetryDelayMs(this.reconnectFailures);
+      this.reconnectFailures += 1;
+      await delayWithAbort(delayMs, this.lifetime.signal);
 
-    const session = this.createSession();
-    this.clientPromise = session.clientPromise;
-
-    const client = await session.clientPromise;
-    this.reconnectFailures = 0;
-    for (const channel of this.listeners.keys()) {
-      this.startChannelStream(channel as WsPushChannel);
+      const session = this.createSession();
+      this.clientPromise = session.clientPromise;
+      try {
+        const client = await session.clientPromise;
+        for (const channel of this.listeners.keys()) {
+          this.startChannelStream(channel as WsPushChannel);
+        }
+        if (this.shellSubscribed) {
+          await this.startShellStream(client);
+        }
+        // Refreshing only overwrites existing keys, so iterating the live key
+        // set is safe here. Each stream starts at most once for this session.
+        for (const threadId of this.threadSubscriptions.keys()) {
+          const input = this.refreshThreadSubscriptionInput(threadId);
+          if (input === undefined) continue;
+          await this.startThreadStream(client, threadId, input);
+        }
+        this.reconnectFailures = 0;
+        return client;
+      } catch (error) {
+        const failedResources = this.takeCurrentRuntime();
+        if (failedResources) await this.closeRuntime(failedResources);
+        if (this.disposed) throw new Error("Transport disposed");
+        if (isTerminalCompatibilityFailure(error)) throw error;
+        // The backend may still be starting. Continue with bounded backoff;
+        // the transport lifetime aborts this loop immediately on disposal.
+      }
     }
-    if (this.shellSubscribed) {
-      void this.startShellStream(client);
-    }
-    // Refreshing only overwrites existing keys, so iterating the live key set
-    // is safe here.
-    for (const threadId of this.threadSubscriptions.keys()) {
-      const input = this.refreshThreadSubscriptionInput(threadId);
-      if (input === undefined) continue;
-      await this.startThreadStream(client, threadId, input);
-    }
-    return client;
   }
 
   private emit<C extends WsPushChannel>(channel: C, data: WsPushMessage<C>["data"]): void {

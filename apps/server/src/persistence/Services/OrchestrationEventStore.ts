@@ -15,6 +15,12 @@ import type { Effect, Stream } from "effect";
 
 import type { OrchestrationEventStoreError } from "../Errors.ts";
 
+export interface OrchestrationEventReplayFilter {
+  readonly eventTypes: ReadonlyArray<OrchestrationEvent["type"]>;
+  readonly activityKinds?: ReadonlyArray<string>;
+  readonly includeBoundaryEvent?: boolean;
+}
+
 /**
  * OrchestrationEventStoreShape - Service API for orchestration event persistence.
  */
@@ -71,6 +77,7 @@ export interface OrchestrationEventStoreShape {
     sequenceExclusive: number,
     limit?: number,
     throughSequenceInclusive?: number,
+    filter?: OrchestrationEventReplayFilter,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
 
   /**

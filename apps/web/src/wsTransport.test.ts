@@ -21,6 +21,7 @@ import {
 import {
   shouldKeepServerLifecycleStream,
   getUnexpectedStreamCompletionRetryDelayMs,
+  getReconnectRetryDelayMs,
   getStreamCapacityRetryDelayMs,
   getStreamDuplicateRetryDelayMs,
   getStreamFailureCode,
@@ -137,10 +138,13 @@ interface WsTransportInternals {
   readonly streamCompletionRetryTimers: Map<string, number>;
   readonly activeThreadStreamInputs: Map<string, unknown>;
   readonly threadSubscriptions: Map<string, unknown>;
+  shellSubscribed: boolean;
   readonly threadStreamFailureListeners: Set<(failure: WsThreadStreamFailure) => void>;
   disposed: boolean;
   sessionVersion: number;
   reconnect(): Promise<unknown>;
+  openReconnectSession(): Promise<unknown>;
+  getClient(): Promise<unknown>;
   startStream<T>(
     client: unknown,
     key: string,
@@ -703,6 +707,170 @@ describe("WsTransport", () => {
     await transport.request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId });
 
     expect(startThreadStream).toHaveBeenCalledWith(client, threadId, input, true);
+  });
+
+  it("retains shell and thread subscription intent while the initial connection is unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, internals } = makeBareTransport();
+      const threadId = "thread-slow-start";
+      Object.assign(internals, {
+        shellSubscribed: false,
+        getClient: vi.fn(() => new Promise(() => {})),
+      });
+
+      const shellRequest = transport
+        .request(ORCHESTRATION_WS_METHODS.subscribeShell, {}, { timeoutMs: 25 })
+        .catch((error: unknown) => error);
+      const threadRequest = transport
+        .request(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId }, { timeoutMs: 25 })
+        .catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(shellRequest).resolves.toMatchObject({ code: "WS_REQUEST_TIMEOUT" });
+      await expect(threadRequest).resolves.toMatchObject({ code: "WS_REQUEST_TIMEOUT" });
+      expect(internals.shellSubscribed).toBe(true);
+      expect(internals.threadSubscriptions.get(threadId)).toEqual({ threadId });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restart an automatically restored shell stream for the initial subscriber", async () => {
+    const { transport, internals } = makeBareTransport();
+    const client = {};
+    let resolveClient!: (client: unknown) => void;
+    const startShellStream = vi.fn(async () => undefined);
+    Object.assign(internals, {
+      shellSubscribed: false,
+      shellSnapshotDelivered: false,
+      getClient: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveClient = resolve;
+          }),
+      ),
+      startShellStream,
+    });
+
+    const subscription = transport.request(ORCHESTRATION_WS_METHODS.subscribeShell, {});
+    // Recovery restored the desired stream and delivered its snapshot before
+    // the original request resumed.
+    Object.assign(internals, { shellSnapshotDelivered: true });
+    resolveClient(client);
+    await subscription;
+
+    expect(startShellStream).toHaveBeenCalledWith(client, false);
+  });
+
+  it("uses bounded exponential reconnect backoff", () => {
+    expect(getReconnectRetryDelayMs(0)).toBe(500);
+    expect(getReconnectRetryDelayMs(1)).toBe(1_000);
+    expect(getReconnectRetryDelayMs(3)).toBe(4_000);
+    expect(getReconnectRetryDelayMs(4)).toBe(5_000);
+    expect(getReconnectRetryDelayMs(100)).toBe(5_000);
+  });
+
+  it("joins an active reconnect instead of returning the detached prior client", async () => {
+    const transport = Object.create(WsTransport.prototype) as WsTransport;
+    const internals = transport as unknown as WsTransportInternals;
+    const recoveredClient = { generation: "recovered" };
+    Object.assign(internals, {
+      reconnectPromise: Promise.resolve(recoveredClient),
+      clientPromise: Promise.resolve({ generation: "stale" }),
+    });
+
+    await expect(internals.getClient()).resolves.toBe(recoveredClient);
+  });
+
+  it("keeps reconnecting and restores shell and thread subscriptions after recovery", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const transport = Object.create(WsTransport.prototype) as WsTransport;
+      const internals = transport as unknown as WsTransportInternals;
+      const threadId = "thread-reconnect";
+      const input = { threadId };
+      const client = { connected: true };
+      const createSession = vi
+        .fn()
+        .mockImplementationOnce(() => ({
+          clientPromise: Promise.reject(new Error("starting-1")),
+        }))
+        .mockImplementationOnce(() => ({
+          clientPromise: Promise.reject(new Error("starting-2")),
+        }))
+        .mockImplementationOnce(() => ({ clientPromise: Promise.resolve(client) }));
+      const startChannelStream = vi.fn();
+      const startShellStream = vi.fn(async () => undefined);
+      const startThreadStream = vi.fn(async () => undefined);
+      Object.assign(internals, {
+        disposed: false,
+        state: "closed",
+        stateListeners: new Set(),
+        reconnectFailures: 0,
+        lifetime: new AbortController(),
+        listeners: new Map([[WS_CHANNELS.serverWelcome, new Set([vi.fn()])]]),
+        shellSubscribed: true,
+        threadSubscriptions: new Map([[threadId, input]]),
+        runtime: null,
+        clientScope: null,
+        createSession,
+        takeCurrentRuntime: () => null,
+        closeRuntime: vi.fn(async () => undefined),
+        startChannelStream,
+        startShellStream,
+        refreshThreadSubscriptionInput: () => input,
+        startThreadStream,
+      });
+
+      const recovery = internals.openReconnectSession();
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(recovery).resolves.toBe(client);
+      expect(createSession).toHaveBeenCalledTimes(3);
+      expect(startChannelStream).toHaveBeenCalledOnce();
+      expect(startShellStream).toHaveBeenCalledOnce();
+      expect(startThreadStream).toHaveBeenCalledOnce();
+      expect(startThreadStream).toHaveBeenCalledWith(client, threadId, input);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending reconnect delay during transport shutdown", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const transport = Object.create(WsTransport.prototype) as WsTransport;
+      const internals = transport as unknown as WsTransportInternals & {
+        disposed: boolean;
+        lifetime: AbortController;
+      };
+      const lifetime = new AbortController();
+      const createSession = vi.fn();
+      Object.assign(internals, {
+        disposed: false,
+        state: "closed",
+        stateListeners: new Set(),
+        reconnectFailures: 0,
+        lifetime,
+        createSession,
+      });
+
+      const recovery = internals.openReconnectSession();
+      internals.disposed = true;
+      lifetime.abort(new Error("Transport disposed"));
+
+      await expect(recovery).rejects.toThrow("Transport disposed");
+      expect(createSession).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("latches terminal compatibility guidance for late UI subscribers", () => {
