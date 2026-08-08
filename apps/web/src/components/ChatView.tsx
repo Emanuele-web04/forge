@@ -947,6 +947,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
     case "pi":
       return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
+    case "devin":
+      return normalizeCustomBinaryPath(providerOptions?.devin?.binaryPath);
   }
 }
 
@@ -2312,6 +2314,7 @@ export default function ChatView({
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
+      devin: resolveHint("devin"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -3682,7 +3685,9 @@ export default function ChatView({
           ? providerOptionsForDispatch?.opencode?.binaryPath
           : selectedProvider === "kilo"
             ? providerOptionsForDispatch?.kilo?.binaryPath
-            : null) ?? null,
+            : selectedProvider === "devin"
+              ? providerOptionsForDispatch?.devin?.binaryPath
+              : null) ?? null,
       serverUrl:
         (selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.serverUrl

@@ -8,6 +8,7 @@ import type {
   ModelCapabilities,
   ProviderKind,
   ProviderModelDescriptor,
+  ProviderModelVariantDescriptor,
 } from "@synara/contracts";
 import {
   getDefaultEffort,
@@ -73,6 +74,54 @@ export function resolveRuntimeModelDescriptor(input: {
   });
 }
 
+/**
+ * Resolves Devin's friendly composer selections to the concrete model UID
+ * accepted by `devin acp --model`. Devin publishes this matrix at the family
+ * level, so keeping the resolver next to the runtime capability bridge avoids
+ * duplicating suffix heuristics in the UI and server.
+ */
+export function resolveDevinModelVariant(input: {
+  runtimeModel?: ProviderModelDescriptor | undefined;
+  reasoningEffort?: string | null | undefined;
+  fastMode?: boolean | undefined;
+  thinking?: boolean | null | undefined;
+  contextWindow?: string | null | undefined;
+}): string | undefined {
+  const variants = input.runtimeModel?.modelVariants;
+  if (!variants || variants.length === 0) {
+    return undefined;
+  }
+
+  const reasoningEffort = trimOrNull(input.reasoningEffort);
+  const contextWindow = trimOrNull(input.contextWindow);
+  const defaultContextWindow = trimOrNull(input.runtimeModel?.defaultContextWindow);
+  const matches = (variant: ProviderModelVariantDescriptor): boolean => {
+    if (reasoningEffort && variant.reasoningEffort !== reasoningEffort) {
+      return false;
+    }
+    if (contextWindow && variant.contextWindow !== contextWindow) {
+      return false;
+    }
+    if (input.fastMode === true && variant.fastMode !== true) {
+      return false;
+    }
+    if (input.fastMode !== true && variant.fastMode === true) {
+      return false;
+    }
+    if (input.thinking !== null && input.thinking !== undefined && variant.thinking !== undefined) {
+      return variant.thinking === input.thinking;
+    }
+    return true;
+  };
+
+  const preferred = variants.filter(matches);
+  const withDefaultContext =
+    !contextWindow && defaultContextWindow
+      ? preferred.filter((variant) => variant.contextWindow === defaultContextWindow)
+      : preferred;
+  return (withDefaultContext[0] ?? preferred[0] ?? variants[0])?.model;
+}
+
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
 export function getRuntimeAwareModelCapabilities(input: {
   provider: ProviderKind;
@@ -82,7 +131,8 @@ export function getRuntimeAwareModelCapabilities(input: {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
-    (input.provider === "codex" || input.provider === "cursor") && input.runtimeModel
+    (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
+    input.runtimeModel
       ? input.runtimeModel.supportsFastMode === true
       : staticCapabilities.supportsFastMode;
   const supportsThinkingToggle =
@@ -105,7 +155,8 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "droid" &&
       input.provider !== "kilo" &&
       input.provider !== "opencode" &&
-      input.provider !== "pi") ||
+      input.provider !== "pi" &&
+      input.provider !== "devin") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {

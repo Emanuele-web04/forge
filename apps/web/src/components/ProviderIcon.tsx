@@ -13,6 +13,7 @@ import {
   AntigravityIcon,
   ClaudeAI,
   CursorIcon,
+  DevinIcon,
   DroidIcon,
   GrokIcon,
   type Icon,
@@ -73,6 +74,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
+  devin: DevinIcon,
 };
 
 export function providerIconToneClassName(

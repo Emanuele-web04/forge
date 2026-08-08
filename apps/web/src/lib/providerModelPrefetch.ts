@@ -32,6 +32,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "openCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir"
+  | "devinBinaryPath"
 >;
 
 /**
@@ -166,6 +167,12 @@ export function providerModelsPrefetchQueryOptions(input: {
         provider: "pi",
         binaryPath: settings.piBinaryPath || null,
         agentDir: settings.piAgentDir || null,
+        cwd,
+      });
+    case "devin":
+      return providerModelsQueryOptions({
+        provider: "devin",
+        binaryPath: settings.devinBinaryPath || null,
         cwd,
       });
   }

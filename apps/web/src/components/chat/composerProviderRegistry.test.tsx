@@ -106,7 +106,122 @@ const GROK_RUNTIME_4_5_WITH_REASONING: ProviderModelDescriptor = {
   defaultReasoningEffort: "low",
 };
 
+const DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS: ProviderModelDescriptor = {
+  slug: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
+  supportedReasoningEfforts: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium", isDefault: true },
+    { value: "high", label: "High" },
+  ],
+  defaultReasoningEffort: "medium",
+  supportsFastMode: true,
+  contextWindowOptions: [
+    { value: "200k", label: "200K", isDefault: true },
+    { value: "1m", label: "1M" },
+  ],
+  defaultContextWindow: "200k",
+  modelVariants: [
+    {
+      model: "gpt-5-6-sol-low",
+      reasoningEffort: "low",
+      contextWindow: "200k",
+      fastMode: false,
+    },
+    {
+      model: "gpt-5-6-sol-medium",
+      reasoningEffort: "medium",
+      contextWindow: "200k",
+      fastMode: false,
+    },
+    {
+      model: "gpt-5-6-sol-high",
+      reasoningEffort: "high",
+      contextWindow: "200k",
+      fastMode: false,
+    },
+    {
+      model: "gpt-5-6-sol-medium-priority",
+      reasoningEffort: "medium",
+      contextWindow: "200k",
+      fastMode: true,
+    },
+  ],
+};
+
 describe("getComposerProviderState", () => {
+  it("dispatches Devin effort selections with their concrete model variant", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "gpt-5.6-sol",
+      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: { devin: { reasoningEffort: "high" } },
+    });
+
+    expect(state).toEqual({
+      provider: "devin",
+      promptEffort: "high",
+      modelOptionsForDispatch: {
+        reasoningEffort: "high",
+        modelVariant: "gpt-5-6-sol-high",
+      },
+    });
+  });
+
+  it("dispatches Devin fast mode using the default effort variant", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "gpt-5.6-sol",
+      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
+      prompt: "",
+      modelOptions: { devin: { fastMode: true } },
+    });
+
+    expect(state).toEqual({
+      provider: "devin",
+      promptEffort: "medium",
+      modelOptionsForDispatch: {
+        fastMode: true,
+        modelVariant: "gpt-5-6-sol-medium-priority",
+      },
+    });
+  });
+
+  it("keeps Devin thinking enabled when only the context window changes", () => {
+    const state = getComposerProviderState({
+      provider: "devin",
+      model: "claude-opus-4.6",
+      runtimeModel: {
+        slug: "claude-opus-4.6",
+        name: "Claude Opus 4.6",
+        supportsThinkingToggle: true,
+        contextWindowOptions: [
+          { value: "200k", label: "200K", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+        defaultContextWindow: "200k",
+        modelVariants: [
+          { model: "claude-opus-4-6", contextWindow: "200k", thinking: false },
+          { model: "claude-opus-4-6-thinking", contextWindow: "200k", thinking: true },
+          { model: "claude-opus-4-6-1m", contextWindow: "1m", thinking: false },
+          { model: "claude-opus-4-6-thinking-1m", contextWindow: "1m", thinking: true },
+        ],
+      },
+      prompt: "",
+      modelOptions: { devin: { contextWindow: "1m" } },
+    });
+
+    expect(state).toEqual({
+      provider: "devin",
+      promptEffort: null,
+      modelOptionsForDispatch: {
+        contextWindow: "1m",
+        modelVariant: "claude-opus-4-6-thinking-1m",
+      },
+    });
+  });
+
   it("dispatches Antigravity effort separately from its base model", () => {
     const state = getComposerProviderState({
       provider: "antigravity",

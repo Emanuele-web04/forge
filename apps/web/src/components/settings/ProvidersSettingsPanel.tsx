@@ -84,7 +84,8 @@ type ProviderInstallTextKey =
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
   | "piBinaryPath"
-  | "piAgentDir";
+  | "piAgentDir"
+  | "devinBinaryPath";
 type ProviderInstallPasswordKey = "kiloServerPassword" | "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey =
   | "kiloServerPasswordConfigured"
@@ -266,6 +267,28 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         description: (
           <>
             Leave blank to use <code>droid</code> from your PATH.
+          </>
+        ),
+      },
+    ],
+  },
+  {
+    provider: "devin",
+    docs: [
+      { label: "Install", href: "https://docs.devin.ai/cli" },
+      { label: "Commands", href: "https://docs.devin.ai/cli/reference/commands" },
+      { label: "Config", href: "https://docs.devin.ai/cli/reference/configuration/config-file" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "devinBinaryPath",
+        label: "Devin binary path",
+        placeholder: "devin",
+        description: (
+          <>
+            Leave blank to use <code>devin</code> from your PATH. Authenticate with{" "}
+            <code>devin auth login</code> or set WINDSURF_API_KEY.
           </>
         ),
       },

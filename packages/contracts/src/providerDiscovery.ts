@@ -17,6 +17,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "kilo",
   "opencode",
   "pi",
+  "devin",
 ]);
 
 export const ProviderSkillInterface = Schema.Struct({
@@ -264,6 +265,18 @@ export const ProviderContextWindowDescriptor = Schema.Struct({
 });
 export type ProviderContextWindowDescriptor = typeof ProviderContextWindowDescriptor.Type;
 
+// Some provider CLIs expose a family-level model with a matrix of concrete
+// process-start variants. The web app uses this mapping to keep the friendly
+// effort/context/fast controls separate from the provider's opaque model UID.
+export const ProviderModelVariantDescriptor = Schema.Struct({
+  model: TrimmedNonEmptyString,
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  contextWindow: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  thinking: Schema.optional(Schema.Boolean),
+});
+export type ProviderModelVariantDescriptor = typeof ProviderModelVariantDescriptor.Type;
+
 export const ProviderModelDescriptor = Schema.Struct({
   slug: TrimmedNonEmptyString,
   resolvedModel: Schema.optional(TrimmedNonEmptyString),
@@ -281,6 +294,7 @@ export const ProviderModelDescriptor = Schema.Struct({
   supportsAutoMode: Schema.optional(Schema.Boolean),
   contextWindowOptions: Schema.optional(Schema.Array(ProviderContextWindowDescriptor)),
   defaultContextWindow: Schema.optional(TrimmedNonEmptyString),
+  modelVariants: Schema.optional(Schema.Array(ProviderModelVariantDescriptor)),
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 

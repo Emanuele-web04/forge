@@ -22,6 +22,7 @@ const PROVIDER_KINDS: ReadonlySet<ProviderKind> = new Set<ProviderKind>([
   "kilo",
   "opencode",
   "pi",
+  "devin",
 ]);
 
 function isProviderKind(value: string): value is ProviderKind {

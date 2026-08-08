@@ -15,6 +15,8 @@ import {
   type CursorModelSelection,
   type DroidModelOptions,
   type DroidModelSelection,
+  type DevinModelOptions,
+  type DevinModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
   type KiloModelSelection,
@@ -184,7 +186,8 @@ export function mergeDynamicModelOptions(input: {
       input.provider === "kilo" ||
       input.provider === "opencode" ||
       input.provider === "cursor" ||
-      input.provider === "droid") &&
+      input.provider === "droid" ||
+      input.provider === "devin") &&
     normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
@@ -320,6 +323,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as DroidModelOptions;
   }
+  if (provider === "devin") {
+    return {
+      ...(modelOptions as DevinModelOptions | undefined),
+      ...patch,
+    } as DevinModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -386,6 +395,11 @@ export function buildModelSelection(
   model: string,
   options?: PiModelOptions | null | undefined,
 ): PiModelSelection;
+export function buildModelSelection(
+  provider: "devin",
+  model: string,
+  options?: DevinModelOptions | null | undefined,
+): DevinModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
@@ -468,6 +482,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as PiModelOptions,
+          }
+        : { provider, model };
+    case "devin":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as DevinModelOptions,
           }
         : { provider, model };
   }

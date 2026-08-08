@@ -110,6 +110,16 @@ describe("discoverSkillsCatalog", () => {
       "Cursor",
     );
     await writeSkill(path.join(homeDir, ".grok", "skills", "grok-only"), "grok-only", "Grok");
+    await writeSkill(
+      path.join(homeDir, ".config", "devin", "skills", "devin-only"),
+      "devin-only",
+      "Devin",
+    );
+    await writeSkill(
+      path.join(homeDir, ".codeium", "windsurf", "skills", "windsurf-only"),
+      "windsurf-only",
+      "Windsurf",
+    );
     await writeSkill(path.join(homeDir, ".kilo", "skills", "kilo-only"), "kilo-only", "Kilo");
     await writeSkill(
       path.join(homeDir, ".config", "opencode", "skills", "opencode-only"),
@@ -126,9 +136,32 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("claude-only")?.scope).toBe("claude");
     expect(byName.get("cursor-only")?.scope).toBe("cursor");
     expect(byName.get("grok-only")?.scope).toBe("grok");
+    expect(byName.get("devin-only")?.scope).toBe("devin");
+    expect(byName.get("windsurf-only")?.scope).toBe("devin");
     expect(byName.get("kilo-only")?.scope).toBe("kilo");
     expect(byName.get("opencode-only")?.scope).toBe("opencode");
     expect(byName.get("pi-only")?.scope).toBe("pi");
+  });
+
+  it("discovers Devin's project-local Windsurf skills root", async () => {
+    const cwd = path.join(root, "repo", "packages", "web");
+    await mkdir(cwd, { recursive: true });
+    await writeSkill(
+      path.join(root, "repo", ".windsurf", "skills", "project-only"),
+      "project-only",
+      "Project Windsurf skill",
+    );
+
+    const skills = await discoverSkillsCatalog({
+      cwd,
+      homeDir,
+      synaraBaseDir,
+      provider: "devin",
+    });
+
+    expect(skills.find((skill) => skill.name === "project-only")).toMatchObject({
+      scope: "project",
+    });
   });
 
   it("discovers only the registered Claude plugin version for Grok with its native namespace", async () => {

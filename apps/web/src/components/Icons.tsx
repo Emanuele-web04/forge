@@ -308,3 +308,14 @@ export const KiloIcon: Icon = (props) => (
     />
   </svg>
 );
+
+export const DevinIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fill="currentColor"
+      fillRule="evenodd"
+      d="M50 6 94 50 50 94 6 50 50 6Zm0 22.6L27.4 50 50 72.6 72.6 50 50 28.6Zm0 16.8L59 50 50 59 41 50l9-4.6Z"
+      clipRule="evenodd"
+    />
+  </svg>
+);

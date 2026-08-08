@@ -28,7 +28,10 @@ import type { ReactNode } from "react";
 import { classifyCodexReasoningEffortSupport } from "../../lib/codexReasoningEffort";
 import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
-import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
+import {
+  getRuntimeAwareModelCapabilities,
+  resolveDevinModelVariant,
+} from "./runtimeModelCapabilities";
 
 export type ComposerProviderStateInput = {
   provider: ProviderKind;
@@ -170,14 +173,14 @@ function getProviderStateFromCapabilities(
           ? rawContextWindow
           : undefined;
       const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
-      const thinking =
+      const requestedThinking =
         caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
           ? providerOptions.thinking
           : undefined;
       const nextOptions = {
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(fastModeEnabled ? { fastMode: true } : {}),
-        ...(thinking !== undefined ? { thinking } : {}),
+        ...(requestedThinking !== undefined ? { thinking: requestedThinking } : {}),
         ...(contextWindow ? { contextWindow } : {}),
       };
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
@@ -235,6 +238,59 @@ function getProviderStateFromCapabilities(
       const providerOptions = modelOptions?.pi;
       rawEffort = trimOrNull(providerOptions?.thinkingLevel);
       normalizedOptions = normalizePiModelOptions(providerOptions);
+      break;
+    }
+    case "devin": {
+      const providerOptions = modelOptions?.devin;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? rawEffort
+          : undefined;
+      const rawContextWindow = trimOrNull(providerOptions?.contextWindow);
+      const defaultContextWindow = getDefaultContextWindow(caps);
+      const contextWindow =
+        rawContextWindow &&
+        hasContextWindowOption(caps, rawContextWindow) &&
+        rawContextWindow !== defaultContextWindow
+          ? rawContextWindow
+          : undefined;
+      const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
+      const requestedThinking =
+        caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
+          ? providerOptions.thinking
+          : undefined;
+      // Thinking is on by default for Devin families that expose a thinking
+      // toggle. Keep the persisted option sparse, but use the effective
+      // default when resolving a non-default context window to its concrete
+      // process-start variant.
+      const thinking =
+        requestedThinking ?? (caps.supportsThinkingToggle ? true : undefined);
+      const modelVariant =
+        trimOrNull(providerOptions?.modelVariant) ??
+        resolveDevinModelVariant({
+          runtimeModel,
+          reasoningEffort: rawEffort ?? defaultReasoningEffort,
+          fastMode: fastModeEnabled,
+          thinking,
+          contextWindow: rawContextWindow ?? defaultContextWindow,
+        });
+      const nextOptions = {
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(fastModeEnabled ? { fastMode: true } : {}),
+        ...(requestedThinking !== undefined ? { thinking: requestedThinking } : {}),
+        ...(contextWindow ? { contextWindow } : {}),
+        ...(modelVariant &&
+        (Boolean(reasoningEffort) ||
+          fastModeEnabled ||
+          requestedThinking !== undefined ||
+          Boolean(contextWindow) ||
+          Boolean(providerOptions?.modelVariant))
+          ? { modelVariant }
+          : {}),
+      };
+      normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;
     }
   }
@@ -318,6 +374,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("pi", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("pi", input),
+  },
+  devin: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("devin", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("devin", input),
   },
 };
 

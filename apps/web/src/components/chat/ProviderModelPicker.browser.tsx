@@ -63,6 +63,14 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "Anthropic",
     },
   ],
+  devin: [
+    {
+      slug: "adaptive",
+      name: "Adaptive model selection",
+      upstreamProviderId: "devin",
+      upstreamProviderName: "Devin",
+    },
+  ],
   antigravity: [
     {
       slug: "Gemini 3.5 Flash",
