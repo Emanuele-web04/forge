@@ -4581,8 +4581,7 @@ describe("ProviderCommandReactor", () => {
     });
 
     await waitFor(
-      async () =>
-        (await readHarnessThread(harness))?.branch === "synara/provider-startup-timeouts",
+      async () => (await readHarnessThread(harness))?.branch === "synara/provider-startup-timeouts",
     );
   });
 
