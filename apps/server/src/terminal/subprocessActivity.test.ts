@@ -77,6 +77,24 @@ describe("inspectSubprocessActivity", () => {
     });
   });
 
+  it("preserves provider and shell semantics for Windows executable names", () => {
+    const map = buildChildrenMap([
+      {
+        ppid: 100,
+        pid: 200,
+        command: '"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoLogo',
+      },
+      { ppid: 200, pid: 300, command: "C:\\tools\\codex.exe" },
+    ]);
+
+    expect(inspectSubprocessActivity(100, map)).toEqual({
+      cliKind: "codex",
+      hasNonProviderSubprocess: false,
+      hasProviderDescendant: true,
+      hasRunningSubprocess: true,
+    });
+  });
+
   it("inspects multiple terminals against one shared snapshot", () => {
     // A single captured snapshot must yield independent, correct results per
     // terminal — this is the property the per-cycle batching relies on.

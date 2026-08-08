@@ -37,11 +37,16 @@ export function disposeAndCloseTerminalSession(input: {
   threadId: string;
   terminalId: string;
   clearHistoryBeforeClose?: boolean;
+  processAlreadyExited?: boolean;
 }): void {
   const { api, threadId, terminalId } = input;
 
-  const fallbackExitWrite = () =>
-    api?.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
+  const fallbackExitWrite = () => {
+    if (input.processAlreadyExited) {
+      return Promise.resolve();
+    }
+    return api?.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
+  };
 
   // Local disposal stays ordered before the server close, as it was when the
   // registry was imported statically.

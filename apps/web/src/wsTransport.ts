@@ -584,6 +584,12 @@ export class WsTransport {
   private readonly streamCompletionRetryTimers = new Map<string, number>();
   private readonly activeThreadStreamInputs = new Map<string, unknown>();
   private shellSubscribed = false;
+  // Whether the active shell stream has already delivered its snapshot item.
+  // An explicit subscribeShell while this is true must restart the stream (the
+  // caller reset its fence and needs a new snapshot); while false, the pending
+  // snapshot of the just-started stream will satisfy the caller, so the call
+  // is absorbed (bootstrap coalescing).
+  private shellSnapshotDelivered = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
@@ -635,7 +641,7 @@ export class WsTransport {
         this.shellSubscribed = true;
         this.resetStreamCapacityRetry("orchestration.shell");
         this.resetStreamCompletionRetry("orchestration.shell");
-        this.startShellStream(client);
+        await this.startShellStream(client, this.shellSnapshotDelivered);
         return undefined as T;
       }
       if (method === ORCHESTRATION_WS_METHODS.subscribeThread) {
@@ -1146,7 +1152,7 @@ export class WsTransport {
       this.startChannelStream(channel as WsPushChannel);
     }
     if (this.shellSubscribed) {
-      this.startShellStream(client);
+      void this.startShellStream(client);
     }
     // Refreshing only overwrites existing keys, so iterating the live key set
     // is safe here.
@@ -1328,20 +1334,38 @@ export class WsTransport {
     );
   }
 
-  private startShellStream(client: RpcClientInstance): void {
+  private async startShellStream(client: RpcClientInstance, forceRestart = false): Promise<void> {
     if (this.disposed || !this.shellSubscribed) return;
+    if (forceRestart) {
+      // An explicit resubscribe expects a fresh snapshot: the caller has reset
+      // its shell fence and buffers events until one arrives. A surviving
+      // stream whose snapshot was already delivered would dedupe the start and
+      // leave the caller buffering forever.
+      const sessionVersion = this.sessionVersion;
+      await this.stopStream("orchestration.shell", { resetCapacityRetry: false });
+      if (this.disposed || this.sessionVersion !== sessionVersion || !this.shellSubscribed) {
+        return;
+      }
+    }
     const restartShell = () => {
       if (!this.shellSubscribed) return;
       void this.getClient()
         .then((nextClient) => this.startShellStream(nextClient))
         .catch((error) => console.warn("WebSocket RPC shell stream failed to restart", error));
     };
+    if (!this.streamCleanups.has("orchestration.shell")) {
+      this.shellSnapshotDelivered = false;
+    }
     this.startStream(
       client,
       "orchestration.shell",
       client[ORCHESTRATION_WS_METHODS.subscribeShell]({}),
-      (event: OrchestrationShellStreamItem) =>
-        this.emit(ORCHESTRATION_WS_CHANNELS.shellEvent, event),
+      (event: OrchestrationShellStreamItem) => {
+        if (event.kind === "snapshot") {
+          this.shellSnapshotDelivered = true;
+        }
+        this.emit(ORCHESTRATION_WS_CHANNELS.shellEvent, event);
+      },
       restartShell,
     );
   }

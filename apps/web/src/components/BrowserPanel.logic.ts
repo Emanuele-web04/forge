@@ -102,6 +102,19 @@ export function createBrowserPanelHideScheduler(
   return { cancel, schedule };
 }
 
+/**
+ * Electron guest surfaces can paint above React portals regardless of CSS
+ * z-index. Hide the guest while browser-owned chrome or another app overlay is
+ * open so that the DOM surface remains the topmost interactive layer.
+ */
+export function shouldOccludeBrowserWebview(input: {
+  showLocalServersHome: boolean;
+  browserActionsMenuOpen: boolean;
+  hasObscuringOverlay: boolean;
+}): boolean {
+  return input.showLocalServersHome || input.browserActionsMenuOpen || input.hasObscuringOverlay;
+}
+
 interface ResolveBrowserAddressSyncInput {
   activeTabId: string | null;
   previousActiveTabId: string | null;

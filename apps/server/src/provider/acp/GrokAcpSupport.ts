@@ -3,7 +3,7 @@
  *
  * @module GrokAcpSupport
  */
-import { type GrokModelOptions } from "@synara/contracts";
+import { type GrokModelOptions, type RuntimeMode } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
@@ -29,6 +29,7 @@ export interface GrokAcpRuntimeInput extends Omit<
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly grokSettings: GrokAcpRuntimeSettings | null | undefined;
+  readonly runtimeMode: RuntimeMode;
 }
 
 export interface GrokAcpModelSelectionErrorContext {
@@ -38,6 +39,7 @@ export interface GrokAcpModelSelectionErrorContext {
 
 const GROK_API_KEY_AUTH_METHOD_ID = "xai.api_key";
 const GROK_CACHED_TOKEN_AUTH_METHOD_ID = "cached_token";
+const GROK_INTERACTIVE_AUTH_METHOD_IDS = new Set(["browser_login", "grok.com"]);
 const GROK_API_KEY_ENV_KEYS = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"] as const;
 const GROK_COMPACT_COMMAND_NAME = "compact";
 const GROK_COMPACT_PROMPT = "/compact";
@@ -89,11 +91,17 @@ export function runGrokAcpCompactionCommand(
 export function buildGrokAcpSpawnInput(
   grokSettings: GrokAcpRuntimeSettings | null | undefined,
   cwd: string,
+  runtimeMode: RuntimeMode,
 ): AcpSpawnInput {
-  // Keep the provider itself in request-based permission mode. Synara then
-  // auto-answers per turn, so Full Access cannot leak into a later Plan turn
-  // through a sticky Grok config or a process-wide always-approve setting.
+  // Keep Grok's request-based mode as the explicit baseline. Full Access also
+  // needs the process-scoped override because some Grok builds deny before
+  // emitting an ACP permission request. Runtime-mode changes restart the Grok
+  // process, while native Plan mode plus Synara's pre-tool hook still gate
+  // writes on Plan turns.
   const args = ["--permission-mode", "default", "agent", "--no-leader"];
+  if (runtimeMode === "full-access") {
+    args.push("--always-approve");
+  }
   const model = grokSettings?.model?.trim();
   if (model) {
     args.push("-m", model);
@@ -113,7 +121,15 @@ export function buildGrokAcpSpawnInput(
 }
 
 function availableAuthMethodIds(initializeResult: Acp.InitializeResponse): ReadonlySet<string> {
-  return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
+  return new Set(
+    (initializeResult.authMethods ?? [])
+      .map((method) => method.id.trim())
+      .filter((methodId) => methodId.length > 0),
+  );
+}
+
+function describeAuthMethodIds(authMethodIds: ReadonlySet<string>): string {
+  return authMethodIds.size > 0 ? [...authMethodIds].join(", ") : "none";
 }
 
 export const resolveGrokAcpAuthMethodId = (
@@ -121,18 +137,46 @@ export const resolveGrokAcpAuthMethodId = (
 ): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    if (hasGrokApiKeyEnv() && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+    const hasApiKey = hasGrokApiKeyEnv();
+    if (hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
       return GROK_API_KEY_AUTH_METHOD_ID;
     }
     if (authMethodIds.has(GROK_CACHED_TOKEN_AUTH_METHOD_ID)) {
       return GROK_CACHED_TOKEN_AUTH_METHOD_ID;
     }
+    const advertised = describeAuthMethodIds(authMethodIds);
+    if (!hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+      return yield* new AcpErrors.AcpRequestError({
+        code: -32602,
+        errorMessage:
+          "Grok ACP requires API-key authentication, but XAI_API_KEY is not set. Set XAI_API_KEY and restart Synara, or run `grok login` to create a cached login.",
+        data: { authMethods: [...authMethodIds], reason: "credentials_missing" },
+      });
+    }
+    if (
+      !hasApiKey &&
+      authMethodIds.size > 0 &&
+      [...authMethodIds].every((methodId) => GROK_INTERACTIVE_AUTH_METHOD_IDS.has(methodId))
+    ) {
+      return yield* new AcpErrors.AcpRequestError({
+        code: -32602,
+        errorMessage: `Grok is not authenticated for headless ACP. Run \`grok login\` (or launch \`grok\`) and retry. Grok advertised only interactive auth methods: ${advertised}.`,
+        data: { authMethods: [...authMethodIds], reason: "credentials_missing" },
+      });
+    }
+    if (hasApiKey && !authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+      return yield* new AcpErrors.AcpRequestError({
+        code: -32602,
+        errorMessage: `Grok did not advertise API-key authentication even though XAI_API_KEY is set (advertised: ${advertised}). Update Grok or check its login policy, then restart Synara.`,
+        data: { authMethods: [...authMethodIds], reason: "compatibility_mismatch" },
+      });
+    }
     return yield* new AcpErrors.AcpRequestError({
       code: -32602,
-      errorMessage: "Grok ACP authentication is unavailable.",
+      errorMessage: `Grok ACP advertised no supported headless authentication method (advertised: ${advertised}). Synara supports cached_token and xai.api_key; update Grok and retry.`,
       data: {
         authMethods: [...authMethodIds],
-        detail: "Run `grok` to authenticate locally, or set XAI_API_KEY.",
+        reason: "compatibility_mismatch",
       },
     });
   });
@@ -144,7 +188,7 @@ export const makeGrokAcpRuntime = (
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd),
+        spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.runtimeMode),
         resolveAuthMethodId: resolveGrokAcpAuthMethodId,
         authenticateMeta: { headless: true },
       }).pipe(

@@ -8,9 +8,8 @@ import {
   type RuntimeMode,
   type ThreadId,
 } from "@synara/contracts";
-import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { newCommandId, newMessageId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import type { Project, Thread } from "../types";
@@ -37,6 +36,12 @@ import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
 import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
+import {
+  createOrJoinSidechat,
+  createSidechatThread,
+  sendSidechatPrompt,
+  type SidechatCreationFlight,
+} from "../lib/sidechatCreation";
 
 type ComposerSnapshot = {
   value: string;
@@ -303,95 +308,87 @@ export function useComposerSlashCommands(input: {
     ],
   );
 
+  const sidechatCreationBySourceThreadIdRef = useRef(new Map<ThreadId, SidechatCreationFlight>());
   const createSidechatFromSlashCommand = useCallback(
-    async (inputOptions?: { initialPrompt?: string }) => {
+    (inputOptions?: { initialPrompt?: string }): Promise<true> => {
       const api = readNativeApi();
-      if (!api || !activeProject || !activeThread || !isServerThread || !canOfferSideCommand) {
+      if (
+        !api ||
+        !activeProject ||
+        !activeThread ||
+        !isServerThread ||
+        activeThread.sidechatSourceThreadId
+      ) {
         toastManager.add({
           type: "warning",
           title: "Side is unavailable",
           description: "Open a server-backed main thread before starting Side.",
         });
-        return true;
+        return Promise.resolve(true);
       }
 
-      const importedMessages = buildThreadHandoffImportedMessages(activeThread);
-      const nextThreadId = newThreadId();
-      const createdAt = new Date().toISOString();
-      const initialPrompt = inputOptions?.initialPrompt?.trim() ?? "";
-      const titleSeed =
-        initialPrompt.length > 0
-          ? buildPromptThreadTitleFallback(initialPrompt)
-          : activeThread.title;
-
-      await api.orchestration.dispatchCommand({
-        type: "thread.fork.create",
-        commandId: newCommandId(),
-        threadId: nextThreadId,
+      return createOrJoinSidechat({
+        inFlightBySourceThreadId: sidechatCreationBySourceThreadIdRef.current,
         sourceThreadId: activeThread.id,
-        sidechatSourceThreadId: activeThread.id,
-        projectId: activeProject.id,
-        title: `Sidechat: ${titleSeed}`,
-        modelSelection: selectedModelSelection,
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
-        branch: activeThread.branch,
-        worktreePath: activeThread.worktreePath,
-        workingDirectory: activeThread.workingDirectory ?? null,
-        associatedWorktreePath: activeThread.associatedWorktreePath ?? null,
-        associatedWorktreeBranch: activeThread.associatedWorktreeBranch ?? null,
-        associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
-        importedMessages: [...importedMessages],
-        createdAt,
+        initialPrompt: inputOptions?.initialPrompt,
+        startCreation: (initialPrompt) =>
+          createSidechatThread({
+            api,
+            project: activeProject,
+            sourceThread: activeThread,
+            selectedModelSelection,
+            initialPrompt,
+            openSidechat: (sidechatThreadId) => {
+              useRightDockStore.getState().openPane(activeThread.id, {
+                kind: "sidechat",
+                threadId: sidechatThreadId,
+              });
+            },
+            syncServerShellSnapshot,
+          }),
+        sendQueuedPrompt: (sidechatThreadId, prompt) =>
+          sendSidechatPrompt({
+            api,
+            threadId: sidechatThreadId,
+            selectedModelSelection,
+            prompt,
+          }),
+        onCreationResult: (result) => {
+          if (result.promptError) {
+            toastManager.add({
+              type: "warning",
+              title: "Side chat started without the prompt",
+              description: "The side chat is open. Send the prompt again when it finishes loading.",
+            });
+          } else if (result.snapshotError) {
+            toastManager.add({
+              type: "warning",
+              title: "Side chat is still syncing",
+              description:
+                "The fork succeeded and will appear as soon as the thread list refreshes.",
+            });
+          }
+        },
+        onQueuedPromptError: () => {
+          toastManager.add({
+            type: "warning",
+            title: "Side chat prompt was not sent",
+            description: "The side chat is open. Send the prompt again when it finishes loading.",
+          });
+        },
       });
-
-      if (initialPrompt.length > 0) {
-        await api.orchestration.dispatchCommand({
-          type: "thread.turn.start",
-          commandId: newCommandId(),
-          threadId: nextThreadId,
-          message: {
-            messageId: newMessageId(),
-            role: "user",
-            text: initialPrompt,
-            attachments: [],
-          },
-          modelSelection: selectedModelSelection,
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          createdAt: new Date().toISOString(),
-        });
-      }
-
-      const snapshot = await api.orchestration.getShellSnapshot();
-      syncServerShellSnapshot(snapshot);
-      // Side chats now live as a tab in the host thread's right dock instead of a
-      // split-view pane, so the user stays on the main conversation.
-      useRightDockStore.getState().openPane(activeThread.id, {
-        kind: "sidechat",
-        threadId: nextThreadId,
-      });
-      return true;
     },
-    [
-      activeProject,
-      activeThread,
-      canOfferSideCommand,
-      isServerThread,
-      selectedModelSelection,
-      syncServerShellSnapshot,
-    ],
+    [activeProject, activeThread, isServerThread, selectedModelSelection, syncServerShellSnapshot],
   );
 
-  // Publish the host thread's sidechat creator so the right-dock "+" button can start
-  // a sidechat using the exact same flow (and model selection) as typing /side.
+  // Publish a stable host capability. Composer drafts, attachments, and modes only
+  // affect whether `/side` is offered; they must not make the dock action disappear.
   useEffect(() => {
-    if (!canOfferSideCommand) {
+    if (!activeProject || !activeThread || !isServerThread || activeThread.sidechatSourceThreadId) {
       return;
     }
     return registerSidechatCreator(threadId, createSidechatFromSlashCommand);
-  }, [canOfferSideCommand, createSidechatFromSlashCommand, threadId]);
+  }, [activeProject, activeThread, createSidechatFromSlashCommand, isServerThread, threadId]);
 
   const runCodexReviewStart = useCallback(
     async (target: "changes" | "base-branch") => {
@@ -755,6 +752,14 @@ export function useComposerSlashCommands(input: {
         return true;
       }
       if (slashInvocation.command === "side") {
+        if (!canOfferSideCommand) {
+          toastManager.add({
+            type: "warning",
+            title: "Side is unavailable",
+            description: "Remove composer attachments or context before using /side.",
+          });
+          return true;
+        }
         try {
           editorActions.clearComposerSlashDraft();
           await createSidechatFromSlashCommand({ initialPrompt: slashInvocation.args });
@@ -772,6 +777,7 @@ export function useComposerSlashCommands(input: {
     },
     [
       availableBuiltInSlashCommands,
+      canOfferSideCommand,
       checkClaudeFastSlashCommandAvailability,
       compactProviderThread,
       createForkThreadFromSlashCommand,

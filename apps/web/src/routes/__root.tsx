@@ -10,6 +10,7 @@ import {
   type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
+import { isThreadDetailEventFor } from "@synara/shared/threadDetailEvents";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -92,6 +93,7 @@ import {
   getThreadDetailResumeCursor,
   setThreadDetailResumeCursor,
 } from "../threadDetailResumeCursors";
+import { hasPendingTurnDispatch } from "../pendingTurnDispatch";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
@@ -109,6 +111,9 @@ import {
 } from "../hooks/useProviderAuthRefreshOnFocus";
 import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { useRightDockStore } from "../rightDockStore";
+import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
+import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 import { useAppSettings } from "../appSettings";
@@ -922,35 +927,25 @@ function shouldFlushDomainEventImmediately(
 }
 
 function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: ThreadId): boolean {
-  if (event.aggregateKind !== "thread" || event.aggregateId !== threadId) {
-    return false;
-  }
-  return (
-    event.type === "thread.message-sent" ||
-    event.type === "thread.proposed-plan-upserted" ||
-    event.type === "thread.activity-appended" ||
-    event.type === "thread.turn-diff-completed" ||
-    event.type === "thread.reverted" ||
-    event.type === "thread.conversation-rolled-back" ||
-    event.type === "thread.session-set" ||
-    event.type === "thread.meta-updated" ||
-    event.type === "thread.pinned-message-added" ||
-    event.type === "thread.pinned-message-removed" ||
-    event.type === "thread.pinned-message-done-set" ||
-    event.type === "thread.pinned-message-label-set" ||
-    event.type === "thread.marker-added" ||
-    event.type === "thread.marker-removed" ||
-    event.type === "thread.marker-done-set" ||
-    event.type === "thread.marker-label-set" ||
-    event.type === "thread.archived" ||
-    event.type === "thread.unarchived"
-  );
+  return isThreadDetailEventFor(event, threadId);
 }
 
+// Both catch-up predicates also honor the composer's pending-dispatch signal:
+// the store-derived checks describe what the client already believes, and the
+// exact failure being repaired is a lost `thread.session-set(running)` event
+// that leaves that belief stale. A turn dispatched with no observed echo must
+// force re-sync regardless of what the store says.
+//
+// A store-derived busy state may belong to an earlier queued turn, so it cannot
+// safely retire the marker for the new dispatch. The marker therefore remains
+// independent until its age cap expires or the dispatch site proves that no
+// server turn remains.
 function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
-    thread?.session?.orchestrationStatus === "running" || thread?.latestTurn?.state === "running"
+    thread?.session?.orchestrationStatus === "running" ||
+    thread?.latestTurn?.state === "running" ||
+    hasPendingTurnDispatch(threadId)
   );
 }
 
@@ -960,7 +955,9 @@ function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
     thread?.session?.orchestrationStatus === "starting" ||
     thread?.session?.orchestrationStatus === "running" ||
     thread?.latestTurn?.state === "running" ||
-    thread?.messages.some((message) => message.role === "assistant" && message.streaming) === true
+    thread?.messages.some((message) => message.role === "assistant" && message.streaming) ===
+      true ||
+    hasPendingTurnDispatch(threadId)
   );
 }
 
@@ -1016,18 +1013,47 @@ function EventRouter() {
   const activeSplitView = useSplitViewStore(
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
-  const visibleThreadIds = activeSplitView
-    ? resolveSplitViewThreadIds(activeSplitView)
-    : routeThreadId
-      ? [routeThreadId]
-      : [];
+  const hostThreadIds = useMemo(
+    () =>
+      activeSplitView
+        ? resolveSplitViewThreadIds(activeSplitView)
+        : routeThreadId
+          ? [routeThreadId]
+          : [],
+    [activeSplitView, routeThreadId],
+  );
+  // Right-dock sidechat panes render a full ChatView for their embedded thread,
+  // so they need a detail lease exactly like split-view panes: without one the
+  // sidechat's snapshot never syncs and its transcript stays on the loading state.
+  const dockStateByThreadId = useRightDockStore((store) => store.dockStateByThreadId);
+  const visibleThreadIds = useMemo(
+    () => [
+      ...hostThreadIds,
+      ...resolveVisibleDockSidechatThreadIds({
+        dockRendered: routeSearch.view !== "editor",
+        dockStateByThreadId,
+        hostThreadIds,
+      }),
+    ],
+    [dockStateByThreadId, hostThreadIds, routeSearch.view],
+  );
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIds = new Set(serverThreads.map((thread) => thread.id));
-  const subscribedThreadIds = resolveThreadDetailSubscriptionLeaseIds({
+  // Stabilize the lease array by content: `serverThreads` re-emits on every
+  // streaming update, and an identity-changing lease list would enqueue a no-op
+  // subscription reconcile per render onto the serialized subscribe chain.
+  const nextSubscribedThreadIds = resolveThreadDetailSubscriptionLeaseIds({
     visibleThreadIds,
     retainedThreadIds,
     serverThreadIds,
   });
+  const subscribedThreadIdsRef = useRef(nextSubscribedThreadIds);
+  const subscribedThreadIds = arraysShallowEqual(
+    subscribedThreadIdsRef.current,
+    nextSubscribedThreadIds,
+  )
+    ? subscribedThreadIdsRef.current
+    : nextSubscribedThreadIds;
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
@@ -1042,6 +1068,7 @@ function EventRouter() {
   useEffect(() => {
     pathnameRef.current = pathname;
     visibleThreadIdsRef.current = subscribedThreadIds;
+    subscribedThreadIdsRef.current = subscribedThreadIds;
     // Retention must know what is on screen: an evicted visible thread keeps its
     // shell row and renders as an empty conversation until a snapshot lands.
     setVisibleThreadDetailIds(visibleThreadIds);
@@ -1111,6 +1138,29 @@ function EventRouter() {
       );
     };
 
+    // Single choke point for handing a thread detail event to the reducer.
+    // The reducer silently ignores detail events for a thread the store no
+    // longer holds (pruned by a shell full sync, evicted, deleted), and domain
+    // events never create thread records, so advancing the fence and resume
+    // cursor first would vouch for events that never landed — a later cursor
+    // resume would then skip them forever. When the thread is missing, drop
+    // the resume bookkeeping and re-snapshot through the projection instead.
+    const applyFencedThreadEvent = (threadId: ThreadId, event: OrchestrationEvent): boolean => {
+      if (!getThreadFromState(useStore.getState(), threadId)) {
+        threadSnapshotSequenceById.delete(threadId);
+        pendingThreadEventsById.delete(threadId);
+        clearThreadDetailResumeCursor(threadId);
+        if (subscribedThreadIds.has(threadId)) {
+          void reconcileThreadProjection(threadId).catch(() => undefined);
+        }
+        return false;
+      }
+      threadSnapshotSequenceById.set(threadId, event.sequence);
+      advanceThreadDetailResumeCursor(threadId, event.sequence);
+      queueDomainEvent(event);
+      return true;
+    };
+
     const flushThreadBuffer = (threadId: ThreadId, snapshotSequence: number) => {
       const pendingEvents = pendingThreadEventsById.get(threadId) ?? [];
       pendingThreadEventsById.delete(threadId);
@@ -1118,9 +1168,9 @@ function EventRouter() {
       for (const event of pendingEvents.toSorted((left, right) => left.sequence - right.sequence)) {
         if (event.sequence > latestThreadSequence) {
           latestThreadSequence = event.sequence;
-          threadSnapshotSequenceById.set(threadId, latestThreadSequence);
-          advanceThreadDetailResumeCursor(threadId, latestThreadSequence);
-          queueDomainEvent(event);
+          if (!applyFencedThreadEvent(threadId, event)) {
+            return;
+          }
         }
       }
     };
@@ -1452,7 +1502,7 @@ function EventRouter() {
       // Promise chain keeps the run-always cleanup (finally) and lets a replay
       // rejection propagate to callers exactly as the try/finally did.
       await api.orchestration
-        .replayEvents(fromSequence)
+        .replayEvents(fromSequence, threadId)
         .then((replayedEvents) => {
           for (const event of replayedEvents
             .filter((candidate) => isThreadDetailEventForThread(candidate, threadId))
@@ -1464,9 +1514,9 @@ function EventRouter() {
             if (event.sequence <= latestThreadSequence) {
               continue;
             }
-            threadSnapshotSequenceById.set(threadId, event.sequence);
-            advanceThreadDetailResumeCursor(threadId, event.sequence);
-            queueDomainEvent(event);
+            if (!applyFencedThreadEvent(threadId, event)) {
+              break;
+            }
           }
         })
         .finally(() => {
@@ -1685,13 +1735,13 @@ function EventRouter() {
       if (item.event.sequence <= latestThreadSequence) {
         return;
       }
-      threadSnapshotSequenceById.set(threadId, item.event.sequence);
-      advanceThreadDetailResumeCursor(threadId, item.event.sequence);
+      if (!applyFencedThreadEvent(threadId, item.event)) {
+        return;
+      }
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
       );
-      queueDomainEvent(item.event);
     });
     const unsubThreadStreamFailure = onThreadStreamFailure((failure) => {
       const threadId = ThreadId.makeUnsafe(failure.threadId);

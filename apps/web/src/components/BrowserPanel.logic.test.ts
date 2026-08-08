@@ -14,6 +14,7 @@ import {
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
+  shouldOccludeBrowserWebview,
 } from "./BrowserPanel.logic";
 import { ThreadId, type BrowserAnnotationEvent } from "@synara/contracts";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
@@ -251,6 +252,28 @@ describe("createBrowserPanelHideScheduler", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("shouldOccludeBrowserWebview", () => {
+  it("occludes the Electron guest while the browser actions menu is open", () => {
+    expect(
+      shouldOccludeBrowserWebview({
+        showLocalServersHome: false,
+        browserActionsMenuOpen: true,
+        hasObscuringOverlay: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the guest visible when no DOM surface covers it", () => {
+    expect(
+      shouldOccludeBrowserWebview({
+        showLocalServersHome: false,
+        browserActionsMenuOpen: false,
+        hasObscuringOverlay: false,
+      }),
+    ).toBe(false);
   });
 });
 

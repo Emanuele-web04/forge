@@ -650,10 +650,11 @@ export function markThreadDetailSyncFailedInClientState(
   state: AppState,
   threadId: ThreadId,
 ): AppState {
-  // Applied detail outranks a late stream failure: keep rendering the data we have.
-  if (state.threadDetailSyncById?.[threadId] === "synced") {
-    return state;
-  }
+  // A "synced" thread downgrades too: the caller reports a terminally dead
+  // stream, and keeping "synced" would let the client treat frozen cached
+  // detail as live. Cached timeline entries keep rendering regardless
+  // (resolveThreadDetailHydration treats a populated timeline as ready), so
+  // the downgrade only surfaces the failure, it never blanks applied detail.
   return writeThreadDetailSyncState(state, threadId, "failed");
 }
 

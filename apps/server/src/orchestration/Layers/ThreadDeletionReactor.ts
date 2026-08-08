@@ -165,9 +165,9 @@ const make = Effect.gen(function* () {
     return false;
   });
 
-  // Retention deletes only hide the thread (its rows keep feeding profile
-  // stats directly). Explicit deletes snapshot the stat aggregates and then
-  // hard-delete the thread's rows so disk space is actually reclaimed.
+  // Legacy retention deletes only hid the thread (their rows kept feeding
+  // profile stats directly). Explicit deletes snapshot the stat aggregates and
+  // then hard-delete the thread's rows so disk space is actually reclaimed.
   const purgeThreadData = (event: ThreadDeletedEvent) => {
     if (event.commandId?.startsWith(THREAD_RETENTION_COMMAND_ID_PREFIX)) {
       return Effect.void;

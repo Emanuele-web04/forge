@@ -102,6 +102,58 @@ export function pullRequestRepositoryConfigFingerprint(
   );
 }
 
+/**
+ * Shared project roots can serve several threads, so their live Git status only belongs to a
+ * thread when the checked-out branch matches the persisted thread branch. A materialized
+ * worktree is thread-scoped, though, and coding agents may checkout or create a new branch
+ * without going through Synara's branch picker. In that case the worktree's checked-out branch
+ * is authoritative even when the persisted branch metadata is stale.
+ */
+export function shouldUseLivePullRequestForSidebarThread(input: {
+  readonly threadBranch: string | null;
+  readonly liveBranch: string | null;
+  readonly hasDedicatedWorktree: boolean;
+}): boolean {
+  if (input.liveBranch === null) {
+    return false;
+  }
+  if (input.hasDedicatedWorktree) {
+    return true;
+  }
+  return input.threadBranch !== null && input.threadBranch === input.liveBranch;
+}
+
+export function resolveSidebarThreadPullRequest<T extends { readonly headBranch: string }>(input: {
+  readonly threadBranch: string | null;
+  readonly liveBranch: string | null;
+  readonly hasLiveStatus: boolean;
+  readonly hasDedicatedWorktree: boolean;
+  readonly livePullRequest: T | null;
+  readonly persistedPullRequest: T | null;
+}): T | null {
+  const persistedValidationBranch =
+    input.hasLiveStatus && input.hasDedicatedWorktree ? input.liveBranch : input.threadBranch;
+  const persistedPullRequest =
+    input.persistedPullRequest !== null &&
+    (persistedValidationBranch === null ||
+      input.persistedPullRequest.headBranch === persistedValidationBranch)
+      ? input.persistedPullRequest
+      : null;
+  if (!input.hasLiveStatus) {
+    return persistedPullRequest;
+  }
+  if (input.liveBranch === null && input.hasDedicatedWorktree) {
+    return null;
+  }
+  if (!shouldUseLivePullRequestForSidebarThread(input)) {
+    return persistedPullRequest;
+  }
+  if (input.livePullRequest !== null) {
+    return input.livePullRequest;
+  }
+  return persistedPullRequest?.headBranch === input.liveBranch ? persistedPullRequest : null;
+}
+
 type SidebarProject = {
   id: string;
   name: string;
@@ -162,6 +214,25 @@ export type SidebarThreadHoverMetadata = {
   worktreeName: string | null;
 };
 
+/** Prefer the branch captured from the active workspace. The associated worktree branch is a
+ * durable handoff/recovery identity and can legitimately lag after an agent checks out a branch. */
+export function resolveThreadDisplayBranch(
+  thread: Pick<
+    SidebarThreadSummary,
+    "envMode" | "branch" | "worktreePath" | "associatedWorktreeBranch"
+  >,
+): string | null {
+  const currentBranch = nonEmptyDisplayValue(thread.branch);
+  if (currentBranch !== null) return currentBranch;
+
+  const isActiveWorktree =
+    resolveThreadEnvironmentMode({
+      envMode: thread.envMode,
+      worktreePath: thread.worktreePath,
+    }) === "worktree";
+  return isActiveWorktree ? null : nonEmptyDisplayValue(thread.associatedWorktreeBranch);
+}
+
 export function resolveThreadHoverCardMetadata(input: {
   thread: Pick<
     SidebarThreadSummary,
@@ -185,9 +256,7 @@ export function resolveThreadHoverCardMetadata(input: {
     sourceProjectName: isWorktree
       ? differentDisplayValue(input.project?.folderName, projectName)
       : null,
-    branch:
-      nonEmptyDisplayValue(input.thread.associatedWorktreeBranch) ??
-      nonEmptyDisplayValue(input.thread.branch),
+    branch: resolveThreadDisplayBranch(input.thread),
     worktreeName: worktreePath ? formatWorktreePathForDisplay(worktreePath) : null,
   };
 }

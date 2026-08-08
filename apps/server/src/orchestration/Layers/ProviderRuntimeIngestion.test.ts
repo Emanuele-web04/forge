@@ -41,6 +41,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import {
   collectPersistedGeneratedImagePaths,
   ProviderRuntimeIngestionLive,
+  selectProviderRuntimeJournalStream,
 } from "./ProviderRuntimeIngestion.ts";
 import {
   OrchestrationEngineService,
@@ -181,6 +182,36 @@ type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][numbe
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
 
 describe("ProviderRuntimeIngestion", () => {
+  it("uses an already-persisted runtime stream without appending the event again", async () => {
+    const event: ProviderRuntimeEvent = {
+      type: "runtime.warning",
+      eventId: asEventId("evt-already-persisted-stream"),
+      provider: "codex",
+      createdAt: "2026-08-07T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { message: "already durable" },
+    };
+    const persisted = { sequence: 42, event };
+    let appendCalls = 0;
+
+    const selected = await Effect.runPromise(
+      Stream.runCollect(
+        selectProviderRuntimeJournalStream({
+          streamEvents: Stream.succeed(event),
+          streamPersistedEvents: Stream.succeed(persisted),
+          append: (candidate) =>
+            Effect.sync(() => {
+              appendCalls += 1;
+              return { sequence: 43, event: candidate };
+            }),
+        }),
+      ).pipe(Effect.map((events) => Array.from(events))),
+    );
+
+    expect(selected).toEqual([persisted]);
+    expect(appendCalls).toBe(0);
+  });
+
   let runtime: ManagedRuntime.ManagedRuntime<
     OrchestrationEngineService | ProviderRuntimeIngestionService | ProviderRuntimeEventRepository,
     unknown

@@ -1635,13 +1635,14 @@ describe("thread detail sync state", () => {
     expect(removed.threadDetailSyncById?.[threadId]).toBeUndefined();
   });
 
-  it("keeps applied detail authoritative over a late stream failure", () => {
+  it("downgrades a synced thread when its stream dies, without touching applied detail", () => {
     const synced = syncServerThreadDetailHotPath(makeState(makeThread()), makeReadModelThread({}));
 
     const afterFailure = markThreadDetailSyncFailedInClientState(synced, threadId);
 
-    expect(afterFailure).toBe(synced);
-    expect(afterFailure.threadDetailSyncById?.[threadId]).toBe("synced");
+    expect(afterFailure.threadDetailSyncById?.[threadId]).toBe("failed");
+    expect(afterFailure.messageByThreadId).toBe(synced.messageByThreadId);
+    expect(afterFailure.threadShellById).toBe(synced.threadShellById);
   });
 
   it("records a failure for an unsynced thread and clears it only from the failed state", () => {

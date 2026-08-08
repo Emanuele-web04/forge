@@ -166,6 +166,12 @@ export interface WorktreeSetupSnapshot {
   steps: WorktreeSetupStep[];
 }
 
+/**
+ * User choice made from the worktree setup card while preparation is in
+ * flight: abandon the send entirely, or redirect it to the local checkout.
+ */
+export type WorktreeSetupResolutionAction = "cancel" | "work-locally";
+
 export interface Project {
   id: ProjectId;
   kind: ProjectKind;

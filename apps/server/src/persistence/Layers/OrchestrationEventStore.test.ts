@@ -30,6 +30,34 @@ layer("OrchestrationEventStore", (it) => {
         metadata: {},
         payload: { threadId, archivedAt: now, updatedAt: now },
       });
+      yield* eventStore.append({
+        type: "thread.archived",
+        eventId: EventId.makeUnsafe("evt-thread-diagnostic-unrelated"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-diagnostic-unrelated"),
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-diagnostic-unrelated"),
+          archivedAt: now,
+          updatedAt: now,
+        },
+      });
+      const sameThreadNonDetail = yield* eventStore.append({
+        type: "thread.deleted",
+        eventId: EventId.makeUnsafe("evt-thread-diagnostic-non-detail"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: { threadId, deletedAt: now },
+      });
       const second = yield* eventStore.append({
         type: "thread.unarchived",
         eventId: EventId.makeUnsafe("evt-thread-diagnostic-second"),
@@ -63,6 +91,22 @@ layer("OrchestrationEventStore", (it) => {
       assert.deepEqual(
         older.map((event) => event.sequence),
         [first.sequence],
+      );
+      const catchup = yield* Stream.runCollect(
+        eventStore.readThreadEventsFromSequence(threadId, first.sequence, 10, second.sequence),
+      ).pipe(Effect.map((events) => Array.from(events)));
+      assert.deepEqual(
+        catchup.map((event) => event.sequence),
+        [sameThreadNonDetail.sequence, second.sequence],
+      );
+      const detailCatchup = yield* Stream.runCollect(
+        eventStore.readThreadEventsFromSequence(threadId, first.sequence, 1, second.sequence, [
+          "thread.unarchived",
+        ]),
+      ).pipe(Effect.map((events) => Array.from(events)));
+      assert.deepEqual(
+        detailCatchup.map((event) => event.sequence),
+        [second.sequence],
       );
     }),
   );

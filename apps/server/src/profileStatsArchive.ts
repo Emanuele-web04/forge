@@ -375,7 +375,7 @@ export interface ProfileStatsArchiveShape {
     readonly threadId: string;
   }) => Effect.Effect<boolean, unknown>;
   // Purges every soft-deleted thread that a recorded delete event proves was a
-  // manual delete; retention hides and threads with unknown provenance are kept.
+  // manual delete; legacy retention deletes and unknown provenance are kept.
   // Catches per-thread failures so one bad thread cannot stall the sweep;
   // returns how many threads were purged.
   readonly purgeSoftDeletedManualThreads: (input?: {

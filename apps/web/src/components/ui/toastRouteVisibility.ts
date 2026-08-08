@@ -10,6 +10,7 @@ import type { RightDockThreadState } from "../../rightDockStore.logic";
 export function resolveVisibleToastThreadIds(input: {
   activeThreadId: ThreadId | null;
   splitView: SplitView | null;
+  rightDockRendered: boolean;
   rightDockState?: RightDockThreadState | null;
 }): ReadonlySet<ThreadId> {
   const visibleThreadIds = input.splitView
@@ -18,7 +19,7 @@ export function resolveVisibleToastThreadIds(input: {
       ? new Set([input.activeThreadId])
       : new Set<ThreadId>();
 
-  if (!input.splitView && input.rightDockState?.open) {
+  if (!input.splitView && input.rightDockRendered && input.rightDockState?.open) {
     const activePane = input.rightDockState.panes.find(
       (pane) => pane.id === input.rightDockState?.activePaneId,
     );

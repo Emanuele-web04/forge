@@ -192,10 +192,10 @@ function whenOr(left: KeybindingWhenNode, right: KeybindingWhenNode): Keybinding
   return { type: "or", left, right };
 }
 
-// Mirrors the production `whenCreationAllowed` guard: new-surface chords fire outside the
+// Mirrors the production `whenModChordAllowed` guard: app-level mod chords fire outside the
 // terminal everywhere, and also from the terminal on macOS (where Cmd-chords never reach
 // the shell). `isMac` is derived from the platform inside resolveContext.
-const whenCreationAllowed = whenOr(
+const whenModChordAllowed = whenOr(
   whenNot(whenIdentifier("terminalFocus")),
   whenIdentifier("isMac"),
 );
@@ -231,7 +231,7 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("u", { altKey: true }),
     command: "sidebar.activity",
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
@@ -321,37 +321,37 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("n"),
     command: "chat.new",
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     shortcut: modShortcut("n", { shiftKey: true }),
     command: "chat.newLatestProject",
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     shortcut: modShortcut("n", { altKey: true }),
     command: "chat.newChat",
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     shortcut: modShortcut("t", { shiftKey: true }),
     command: "chat.newTerminal",
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     shortcut: modShortcut("c", { altKey: true }),
     command: "chat.newClaude",
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     shortcut: modShortcut("x", { altKey: true }),
     command: "chat.newCodex",
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     shortcut: modShortcut("r", { altKey: true }),
     command: "chat.newCursor",
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     shortcut: ctrlShortcut("tab"),
@@ -364,7 +364,7 @@ const DEFAULT_BINDINGS = compile([
   ...Array.from({ length: 9 }, (_, index) => ({
     shortcut: modShortcut(String(index + 1), { altKey: true }),
     command: `space.jump.${index + 1}` as KeybindingCommand,
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   })),
   {
     shortcut: modShortcut("1"),
@@ -437,6 +437,11 @@ const DEFAULT_BINDINGS = compile([
       whenNot(whenIdentifier("terminalFocus")),
       whenNot(whenIdentifier("terminalWorkspaceOpen")),
     ),
+  },
+  {
+    shortcut: modShortcut("c", { shiftKey: true }),
+    command: "thread.copyId",
+    whenAst: whenModChordAllowed,
   },
   {
     shortcut: modShortcut("]", { shiftKey: true }),
@@ -776,6 +781,51 @@ describe("thread jump shortcuts", () => {
         platform: "MacIntel",
         context: { terminalWorkspaceOpen: true },
       }),
+    );
+  });
+});
+
+describe("copy thread id shortcut", () => {
+  it("resolves mod+shift+c outside terminal focus on every platform", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "c", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "thread.copyId",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "c", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false },
+      }),
+      "thread.copyId",
+    );
+  });
+
+  it("fires from a focused terminal on macOS but yields Ctrl+Shift+C to the shell elsewhere", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "c", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+      "thread.copyId",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "c", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+
+  it("does not shadow the new Claude thread chord", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "c", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newClaude",
     );
   });
 });

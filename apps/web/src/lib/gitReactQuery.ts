@@ -419,11 +419,13 @@ export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: Q
       ref,
       path,
       copyChangesFrom,
+      newBranch,
     }: {
       cwd: string;
       ref: string;
       path?: string | null;
       copyChangesFrom?: string;
+      newBranch?: string;
     }) => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git worktree creation is unavailable.");
@@ -432,6 +434,7 @@ export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: Q
         ref,
         path: path ?? null,
         ...(copyChangesFrom ? { copyChangesFrom } : {}),
+        ...(newBranch ? { newBranch } : {}),
       });
     },
     mutationKey: ["git", "mutation", "create-detached-worktree"] as const,
@@ -446,7 +449,9 @@ export function gitRemoveWorktreeMutationOptions(input: { queryClient: QueryClie
     mutationFn: async ({ cwd, path, force }: { cwd: string; path: string; force?: boolean }) => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git worktree removal is unavailable.");
-      return api.git.removeWorktree({ cwd, path, force });
+      // Every UI removal retires a thread-scoped managed worktree, so its
+      // temporary synara/* branch (if any) is reclaimed with it.
+      return api.git.removeWorktree({ cwd, path, force, reclaimTemporaryBranch: true });
     },
     mutationKey: ["git", "mutation", "remove-worktree"] as const,
     onSettled: async () => {

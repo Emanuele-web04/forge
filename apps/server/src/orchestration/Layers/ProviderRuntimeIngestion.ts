@@ -52,6 +52,7 @@ import { OrchestrationCommandReceiptRepository } from "../../persistence/Service
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
+  type PersistedProviderRuntimeEvent,
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
@@ -544,6 +545,36 @@ const takeCached = <Key, Value>(cache: Cache.Cache<Key, Value>, key: Key) =>
   Cache.getOption(cache, key).pipe(
     Effect.flatMap((value) => Cache.invalidate(cache, key).pipe(Effect.as(value))),
   );
+
+export function selectProviderRuntimeJournalStream(input: {
+  readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+  readonly streamPersistedEvents?: Stream.Stream<PersistedProviderRuntimeEvent>;
+  readonly append: (
+    event: ProviderRuntimeEvent,
+  ) => Effect.Effect<PersistedProviderRuntimeEvent, unknown>;
+}) {
+  return (
+    input.streamPersistedEvents ??
+    input.streamEvents.pipe(
+      Stream.mapEffect((event) =>
+        input.append(event).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("provider runtime event journal ingestion failed", {
+                  eventId: event.eventId,
+                  eventType: event.type,
+                  cause: Cause.pretty(cause),
+                }).pipe(Effect.as(undefined)),
+          ),
+        ),
+      ),
+      Stream.filter(
+        (persisted): persisted is NonNullable<typeof persisted> => persisted !== undefined,
+      ),
+    )
+  );
+}
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -2893,20 +2924,22 @@ const make = Effect.gen(function* () {
   const start: ProviderRuntimeIngestionShape["start"] = startDrainableWorkerProducers(
     worker,
     Effect.gen(function* () {
+      const streamPersistedEvents = providerService.streamPersistedEvents;
+      const persistedRuntimeEvents = selectProviderRuntimeJournalStream({
+        streamEvents: providerService.streamEvents,
+        ...(streamPersistedEvents === undefined ? {} : { streamPersistedEvents }),
+        append: (event) => runtimeEvents.append(event),
+      });
       yield* Effect.forkScoped(
-        Stream.runForEach(providerService.streamEvents, (event) =>
-          runtimeEvents.append(event).pipe(
-            Effect.flatMap((persisted) =>
-              Deferred.await(startupRuntimeReplayComplete).pipe(
-                Effect.andThen(drainRuntimeJournalThrough(persisted.sequence)),
-              ),
-            ),
+        Stream.runForEach(persistedRuntimeEvents, (persisted) =>
+          Deferred.await(startupRuntimeReplayComplete).pipe(
+            Effect.andThen(drainRuntimeJournalThrough(persisted.sequence)),
             Effect.catchCause((cause) =>
               Cause.hasInterruptsOnly(cause)
                 ? Effect.failCause(cause)
                 : Effect.logWarning("provider runtime event journal ingestion failed", {
-                    eventId: event.eventId,
-                    eventType: event.type,
+                    eventId: persisted.event.eventId,
+                    eventType: persisted.event.type,
                     cause: Cause.pretty(cause),
                   }),
             ),

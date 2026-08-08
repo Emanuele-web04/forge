@@ -146,7 +146,7 @@ import {
   resolveNewThreadModelPrefetchCwd,
   resolveNewThreadModelPrefetchProvider,
 } from "../lib/providerModelPrefetch";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { serverConfigQueryOptions, serverSettingsQueryOptions } from "../lib/serverReactQuery";
 import {
   onNativeApiServerCapabilitiesChange,
   readNativeApi,
@@ -205,6 +205,9 @@ import {
 } from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
+import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
+import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import {
   SidebarSearchPalette,
   type ImportProviderKind,
@@ -213,6 +216,7 @@ import {
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { openExternalLink } from "~/lib/linkChips";
@@ -301,6 +305,7 @@ import {
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
+  resolveSidebarThreadPullRequest,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
@@ -361,6 +366,7 @@ import {
   ComposerPickerMenuSubPopup,
 } from "./chat/ComposerPickerMenuPopup";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { useRightDockStore } from "../rightDockStore";
 import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
@@ -870,8 +876,11 @@ function ProjectSortMenu({
   );
 }
 
-const SYNARA_CHANGELOG_URL = "https://trysynara.com/changelog";
 const SYNARA_DOCS_URL = "https://trysynara.com/docs";
+
+// Latest curated releases surfaced directly in the help menu. Static data, so
+// computed once at module scope rather than per render.
+const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).slice(0, 3);
 
 // Footer help menu; swapped out for the desktop-update pill while an update is
 // available (see SidebarFooter).
@@ -882,46 +891,82 @@ function SidebarHelpMenu({
   onOpenShortcuts: () => void;
   onOpenFeedback: () => void;
 }) {
+  // `openCount` keys the dialog so each open remounts the accordion — its rows
+  // capture `defaultOpen` in mount state, so a stale mount would ignore a
+  // newly selected version.
+  const [releaseHistory, setReleaseHistory] = useState<{
+    readonly open: boolean;
+    readonly version: string | null;
+    readonly openCount: number;
+  }>({ open: false, version: null, openCount: 0 });
+
+  const openReleaseHistory = (version: string | null) => {
+    setReleaseHistory((prev) => ({ open: true, version, openCount: prev.openCount + 1 }));
+  };
+
   return (
-    <Menu>
-      <SidebarIconButton
-        render={<MenuTrigger />}
-        icon={CircleQuestionIcon}
-        label="Help"
-        tooltip="Help"
-      />
-      <ComposerPickerMenuPopup
-        align="end"
-        side="top"
-        className={SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME}
-      >
-        <MenuGroup>
-          <MenuItem
-            className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
-            onClick={() => openExternalLink(SYNARA_CHANGELOG_URL)}
-          >
-            <SidebarContextMenuIcon icon={GiftIcon} />
-            <span>What’s new</span>
-          </MenuItem>
-          <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenShortcuts}>
-            <SidebarContextMenuIcon icon={KeyboardIcon} />
-            <span>Keyboard shortcuts</span>
-          </MenuItem>
+    <>
+      <Menu>
+        <SidebarIconButton
+          render={<MenuTrigger />}
+          icon={CircleQuestionIcon}
+          label="Help"
+          tooltip="Help"
+        />
+        <ComposerPickerMenuPopup align="end" side="top" className="w-64 min-w-64">
+          <MenuGroup>
+            <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">What’s new</div>
+            {HELP_MENU_RELEASE_ENTRIES.map((entry) => (
+              <MenuItem
+                key={entry.version}
+                className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() => openReleaseHistory(entry.version)}
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  {entry.features[0]?.title ?? `Version ${entry.version}`}
+                </span>
+                <span className="shrink-0 text-[var(--color-text-foreground-secondary)] tabular-nums">
+                  {entry.date}
+                </span>
+              </MenuItem>
+            ))}
+            <MenuItem
+              className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+              onClick={() => openReleaseHistory(null)}
+            >
+              <SidebarContextMenuIcon icon={GiftIcon} />
+              <span>Full changelog</span>
+            </MenuItem>
+          </MenuGroup>
           <MenuSeparator />
-          <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenFeedback}>
-            <SidebarContextMenuIcon icon={ChatBubbleIcon} />
-            <span>Send feedback</span>
-          </MenuItem>
-          <MenuItem
-            className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
-            onClick={() => openExternalLink(SYNARA_DOCS_URL)}
-          >
-            <SidebarContextMenuIcon icon={BookIcon} />
-            <span>Docs</span>
-          </MenuItem>
-        </MenuGroup>
-      </ComposerPickerMenuPopup>
-    </Menu>
+          <MenuGroup>
+            <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenShortcuts}>
+              <SidebarContextMenuIcon icon={KeyboardIcon} />
+              <span>Keyboard shortcuts</span>
+            </MenuItem>
+            <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenFeedback}>
+              <SidebarContextMenuIcon icon={ChatBubbleIcon} />
+              <span>Send feedback</span>
+            </MenuItem>
+            <MenuItem
+              className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+              onClick={() => openExternalLink(SYNARA_DOCS_URL)}
+            >
+              <SidebarContextMenuIcon icon={BookIcon} />
+              <span>Docs</span>
+            </MenuItem>
+          </MenuGroup>
+        </ComposerPickerMenuPopup>
+      </Menu>
+      <ReleaseHistoryDialog
+        key={releaseHistory.openCount}
+        open={releaseHistory.open}
+        onOpenChange={(open) => {
+          setReleaseHistory((prev) => ({ ...prev, open }));
+        }}
+        defaultExpandedVersion={releaseHistory.version}
+      />
+    </>
   );
 }
 
@@ -1500,6 +1545,7 @@ export default function Sidebar() {
   }, []);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
   // Query defaults are applied after destructuring: a default inside the destructuring
   // pattern makes React Compiler bail out on the whole Sidebar component.
   const keybindingsQuery = useQuery({
@@ -1512,6 +1558,8 @@ export default function Sidebar() {
     select: (config) => config.cwd ?? null,
   });
   const serverCwd = serverCwdQuery.data ?? null;
+  const providerStatuses = useProviderStatusesForLocalConfig();
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   // Declared next to `keybindings` (rather than further down) because the project-row render
   // helpers above read these labels. A const declared after the closure that captures it
   // widens its inferred mutable range and makes React Compiler drop the memoization of every
@@ -2895,7 +2943,11 @@ export default function Sidebar() {
       });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
       const handoffTargets = canHandoff
-        ? resolveAvailableHandoffTargetProviders(thread.modelSelection.provider)
+        ? resolveAvailableHandoffTargetProviders({
+            sourceProvider: thread.modelSelection.provider,
+            providerSettings: serverSettingsQuery.data?.providers,
+            providerStatuses,
+          })
         : [];
       const handoffItems = handoffTargets.map((provider, index) => ({
         id: `handoff:${provider}`,
@@ -3088,7 +3140,9 @@ export default function Sidebar() {
       openRenameThreadDialog,
       pinnedThreadIdSet,
       projectCwdById,
+      providerStatuses,
       resolveThreadStatusForSidebar,
+      serverSettingsQuery.data?.providers,
       sidebarThreadSummaryById,
       toggleThreadPinned,
     ],
@@ -3216,13 +3270,10 @@ export default function Sidebar() {
     clearSelection,
     navigate,
     openChatThreadPage,
-    openSidechatSplit: ({ sourceThreadId, ownerProjectId, sidechatThreadId }) =>
-      createSplitViewFromDrop({
-        sourceThreadId,
-        ownerProjectId,
-        droppedThreadId: sidechatThreadId,
-        direction: "horizontal",
-        side: "second",
+    openSidechatDock: ({ sourceThreadId, sidechatThreadId }) =>
+      openRightDockPane(sourceThreadId, {
+        kind: "sidechat",
+        threadId: sidechatThreadId,
       }),
     openTerminalThreadPage,
     prewarmThreadDetailForIntent,
@@ -4031,6 +4082,7 @@ export default function Sidebar() {
         threadId: thread.id,
         branch: thread.branch,
         lastKnownPr: thread.lastKnownPr ?? null,
+        hasDedicatedWorktree: thread.worktreePath !== null,
         cwd: resolveThreadWorkspaceCwd({
           projectCwd: projectCwdById.get(thread.projectId) ?? null,
           envMode: thread.envMode,
@@ -4043,7 +4095,7 @@ export default function Sidebar() {
     () => [
       ...new Set(
         threadGitTargets
-          .filter((target) => target.branch !== null)
+          .filter((target) => target.branch !== null || target.hasDedicatedWorktree)
           .map((target) => target.cwd)
           .filter((cwd): cwd is string => cwd !== null),
       ),
@@ -4083,6 +4135,8 @@ export default function Sidebar() {
     for (let index = 0; index < threadGitStatusCwds.length; index += 1) {
       const cwd = threadGitStatusCwds[index];
       if (!cwd) continue;
+      // Keep the last successful snapshot during a failed background refetch. React Query
+      // retains that data, and it is still a better branch authority than stale thread metadata.
       const status = threadGitStatusQueries[index]?.data;
       if (status) {
         statusByCwd.set(cwd, status);
@@ -4106,10 +4160,20 @@ export default function Sidebar() {
     const map = new Map<ThreadId, ThreadPr>();
     for (const target of threadGitTargets) {
       const status = target.cwd ? statusByCwd.get(target.cwd) : undefined;
-      const branchMatches =
-        target.branch !== null && status?.branch !== null && status?.branch === target.branch;
-      const livePr = branchMatches ? (status?.pr ?? null) : null;
-      map.set(target.threadId, livePr ?? storedPrByThreadId.get(target.threadId) ?? null);
+      const persistedPr =
+        storedPrByThreadId.get(target.threadId) ??
+        (target.lastKnownPr ? toThreadPr(target.lastKnownPr) : null);
+      map.set(
+        target.threadId,
+        resolveSidebarThreadPullRequest({
+          threadBranch: target.branch,
+          liveBranch: status?.branch ?? null,
+          hasLiveStatus: status !== undefined,
+          hasDedicatedWorktree: target.hasDedicatedWorktree,
+          livePullRequest: status?.pr ?? null,
+          persistedPullRequest: persistedPr,
+        }),
+      );
     }
     return map;
   }, [

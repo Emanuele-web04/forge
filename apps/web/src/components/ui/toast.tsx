@@ -21,9 +21,9 @@ import { APP_TOOLTIP_SURFACE_CLASS_NAME } from "~/components/chat/composerPicker
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
 import {
-  COMPACT_NOTIFICATION_SURFACE_CLASS_NAME,
-  EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
   NOTIFICATION_ICON_CLASS_NAME,
+  notificationSurfaceClassName,
+  type NotificationTone,
 } from "./notificationSurface";
 import { useDiffRouteSearch } from "../../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../../splitViewStore";
@@ -82,9 +82,17 @@ const ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME = cn(
 const ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME =
   "rounded-sm font-medium text-[var(--info-foreground)] underline-offset-2 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--info-foreground)]/35 disabled:pointer-events-none disabled:opacity-55";
 
-function toastRootClassName(position: ToastPosition, compact: boolean): string {
+function toastTone(type: ToastObject<ThreadToastData>["type"]): NotificationTone {
+  return type === "error" ? "error" : "default";
+}
+
+function toastRootClassName(
+  position: ToastPosition,
+  compact: boolean,
+  tone: NotificationTone,
+): string {
   return cn(
-    compact ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+    notificationSurfaceClassName({ compact, tone }),
     position.includes("center") ? "mx-auto" : compact ? "" : "w-full",
   );
 }
@@ -130,7 +138,12 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
     useMemo(() => selectRightDockState(activeThreadId), [activeThreadId]),
   );
 
-  return resolveVisibleToastThreadIds({ activeThreadId, splitView, rightDockState });
+  return resolveVisibleToastThreadIds({
+    activeThreadId,
+    splitView,
+    rightDockRendered: routeSearch.view !== "editor",
+    rightDockState,
+  });
 }
 
 function ThreadToastVisibleAutoDismiss({
@@ -559,7 +572,7 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
                       ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME,
                       position.includes("center") ? "mx-auto" : "",
                     )
-                  : toastRootClassName(position, compact),
+                  : toastRootClassName(position, compact, toastTone(toast.type)),
                 // Base positioning using data-position
                 "data-[position*=right]:right-0 data-[position*=right]:left-auto",
                 "data-[position*=left]:right-auto data-[position*=left]:left-0",
@@ -699,9 +712,7 @@ function AnchoredToasts() {
                     "relative text-balance transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0",
                     tooltipStyle
                       ? "rounded-lg border bg-popover text-popover-foreground text-xs shadow-md/5 [-webkit-app-region:no-drag] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
-                      : compact
-                        ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME
-                        : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+                      : notificationSurfaceClassName({ compact, tone: toastTone(toast.type) }),
                   )}
                   data-slot="toast-popup"
                   toast={toast}

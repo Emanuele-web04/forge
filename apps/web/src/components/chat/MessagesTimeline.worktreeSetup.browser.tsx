@@ -11,7 +11,11 @@ import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
 import type { deriveTimelineEntries } from "../../session-logic";
-import type { WorktreeSetupSnapshot, WorktreeSetupStepStatus } from "../../types";
+import type {
+  WorktreeSetupResolutionAction,
+  WorktreeSetupSnapshot,
+  WorktreeSetupStepStatus,
+} from "../../types";
 
 type TimelineEntries = ReturnType<typeof deriveTimelineEntries>;
 
@@ -150,6 +154,54 @@ function FailedSetupWithoutMessagesTimeline() {
   );
 }
 
+function startingSessionSnapshot() {
+  return {
+    steps: [
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
+      { id: "start-session", label: "Starting session", status: "active" },
+    ],
+  } satisfies WorktreeSetupSnapshot;
+}
+
+function ResolvableSetupTimeline({
+  snapshot,
+  pendingAction,
+  onResolve,
+}: {
+  snapshot: WorktreeSetupSnapshot;
+  pendingAction?: WorktreeSetupResolutionAction | null;
+  onResolve: (action: WorktreeSetupResolutionAction) => void;
+}) {
+  return (
+    <div style={{ height: 420 }}>
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        worktreeSetup={snapshot}
+        worktreeSetupPendingAction={pendingAction ?? null}
+        onResolveWorktreeSetup={onResolve}
+        timelineEntries={[userEntry("user-message", "Start in a worktree.")]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />
+    </div>
+  );
+}
+
 const setupRow = () =>
   document.querySelector<HTMLElement>('[data-timeline-row-kind="worktree-setup"]');
 const workingRow = () => document.querySelector<HTMLElement>('[data-timeline-row-kind="working"]');
@@ -192,6 +244,83 @@ describe("MessagesTimeline worktree setup card", () => {
       await expect.poll(() => setupRow()?.textContent).toContain("Creating branch and worktree");
       expect(setupRow()?.textContent).toContain("failed");
       expect(document.body.textContent).not.toContain("Send a message to start the conversation.");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("offers Cancel and Work locally while preparation can still be resolved", async () => {
+    const resolved: WorktreeSetupResolutionAction[] = [];
+    const screen = await render(
+      <ResolvableSetupTimeline
+        snapshot={setupSnapshot(["active", "pending"])}
+        onResolve={(action) => resolved.push(action)}
+      />,
+    );
+
+    try {
+      await expect.poll(() => setupRow() !== null).toBe(true);
+      const buttons = Array.from(setupRow()?.querySelectorAll("button") ?? []);
+      const workLocally = buttons.find((button) => button.textContent === "Work locally");
+      const cancel = buttons.find((button) => button.textContent === "Cancel");
+      expect(workLocally).toBeDefined();
+      expect(cancel).toBeDefined();
+
+      workLocally?.click();
+      cancel?.click();
+      expect(resolved).toEqual(["work-locally", "cancel"]);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("disables the actions and relabels the chosen one while it applies", async () => {
+    const screen = await render(
+      <ResolvableSetupTimeline
+        snapshot={setupSnapshot(["active", "pending"])}
+        pendingAction="cancel"
+        onResolve={() => {}}
+      />,
+    );
+
+    try {
+      await expect.poll(() => setupRow()?.textContent).toContain("Cancelling...");
+      const buttons = Array.from(setupRow()?.querySelectorAll("button") ?? []);
+      expect(buttons.length).toBe(2);
+      for (const button of buttons) {
+        expect(button.disabled).toBe(true);
+      }
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("hides the actions once the session is starting", async () => {
+    const screen = await render(
+      <ResolvableSetupTimeline snapshot={startingSessionSnapshot()} onResolve={() => {}} />,
+    );
+
+    try {
+      await expect.poll(() => setupRow() !== null).toBe(true);
+      expect(setupRow()?.textContent).not.toContain("Work locally");
+      expect(setupRow()?.textContent).not.toContain("Cancel");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("hides the actions after the setup has failed", async () => {
+    const screen = await render(
+      <ResolvableSetupTimeline
+        snapshot={setupSnapshot(["error", "pending"])}
+        onResolve={() => {}}
+      />,
+    );
+
+    try {
+      await expect.poll(() => setupRow()?.textContent).toContain("failed");
+      expect(setupRow()?.textContent).not.toContain("Work locally");
+      expect(setupRow()?.textContent).not.toContain("Cancel");
     } finally {
       await screen.unmount();
     }

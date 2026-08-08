@@ -3,6 +3,7 @@ import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { resolveAcpPermissionPolicy } from "./AcpAdapterSupport.ts";
 import {
   applyGrokAcpModelSelection,
   buildGrokAcpSpawnInput,
@@ -19,7 +20,7 @@ function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeRe
 
 describe("buildGrokAcpSpawnInput", () => {
   it("builds the default Grok ACP command", () => {
-    expect(buildGrokAcpSpawnInput(undefined, "/tmp/project")).toMatchObject({
+    expect(buildGrokAcpSpawnInput(undefined, "/tmp/project", "approval-required")).toMatchObject({
       command: "grok",
       args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
       cwd: "/tmp/project",
@@ -28,7 +29,11 @@ describe("buildGrokAcpSpawnInput", () => {
 
   it("uses the configured Grok binary path", () => {
     expect(
-      buildGrokAcpSpawnInput({ binaryPath: "/usr/local/bin/grok" }, "/tmp/project"),
+      buildGrokAcpSpawnInput(
+        { binaryPath: "/usr/local/bin/grok" },
+        "/tmp/project",
+        "approval-required",
+      ),
     ).toMatchObject({
       command: "/usr/local/bin/grok",
       args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
@@ -44,6 +49,7 @@ describe("buildGrokAcpSpawnInput", () => {
         reasoningEffort: "high",
       },
       "/tmp/project",
+      "approval-required",
     );
 
     expect(spawn).toMatchObject({
@@ -62,6 +68,17 @@ describe("buildGrokAcpSpawnInput", () => {
       cwd: "/tmp/project",
     });
     expect(spawn.args).not.toContain("--always-approve");
+  });
+
+  it("uses Grok's process-scoped approval override only for Full Access", () => {
+    expect(buildGrokAcpSpawnInput(undefined, "/tmp/project", "full-access").args).toEqual([
+      "--permission-mode",
+      "default",
+      "agent",
+      "--no-leader",
+      "--always-approve",
+      "stdio",
+    ]);
   });
 });
 
@@ -114,7 +131,7 @@ describe("resolveGrokAcpAuthMethodId", () => {
     ).resolves.toBe("cached_token");
   });
 
-  it("fails clearly when Grok exposes no supported ACP auth method", async () => {
+  it("identifies an interactive-only advertisement as missing headless credentials", async () => {
     delete process.env.XAI_API_KEY;
     delete process.env.GROK_CODE_XAI_API_KEY;
 
@@ -123,7 +140,82 @@ describe("resolveGrokAcpAuthMethodId", () => {
     );
 
     expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
-    expect(error.message).toBe("Grok ACP authentication is unavailable.");
+    expect(error.message).toContain("not authenticated for headless ACP");
+    expect(error.message).toContain("browser_login");
+  });
+
+  it("explains when an advertised API-key method has no configured key", async () => {
+    delete process.env.XAI_API_KEY;
+    delete process.env.GROK_CODE_XAI_API_KEY;
+
+    const error = await Effect.runPromise(
+      resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["xai.api_key"])).pipe(Effect.flip),
+    );
+
+    expect(error.message).toContain("XAI_API_KEY is not set");
+  });
+
+  it("distinguishes an API-key advertisement mismatch from missing credentials", async () => {
+    process.env.XAI_API_KEY = "xai-test-key";
+
+    const error = await Effect.runPromise(
+      resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["grok.com"])).pipe(Effect.flip),
+    );
+
+    expect(error.message).toContain("did not advertise API-key authentication");
+    expect(error.message).toContain("grok.com");
+  });
+
+  it("reports unknown or empty auth advertisements as a compatibility mismatch", async () => {
+    delete process.env.XAI_API_KEY;
+    delete process.env.GROK_CODE_XAI_API_KEY;
+
+    const unknownError = await Effect.runPromise(
+      resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["future_auth"])).pipe(Effect.flip),
+    );
+    const emptyError = await Effect.runPromise(
+      resolveGrokAcpAuthMethodId(initializeWithAuthMethods([])).pipe(Effect.flip),
+    );
+
+    expect(unknownError.message).toContain("advertised: future_auth");
+    expect(emptyError.message).toContain("advertised: none");
+  });
+});
+
+describe("Grok ACP permission policy", () => {
+  const options = [
+    { kind: "allow_once", optionId: "allow-once" },
+    { kind: "reject_once", optionId: "reject-once" },
+  ] as const;
+
+  it("surfaces approval-required requests to Synara", () => {
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        options,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("auto-allows Full Access requests with the provider's request-scoped option", () => {
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        options,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "allow-once" });
+  });
+
+  it("keeps Plan mode fail-closed above Full Access", () => {
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "reject-once" });
   });
 });
 

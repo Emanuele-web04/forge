@@ -48,6 +48,15 @@ export interface OrchestrationEventStoreShape {
     readonly eventTypes?: ReadonlyArray<string>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationEvent>, OrchestrationEventStoreError>;
 
+  /** Replay one thread's events after an exclusive global sequence cursor. */
+  readonly readThreadEventsFromSequence: (
+    threadId: string,
+    sequenceExclusive: number,
+    limit?: number,
+    throughSequenceInclusive?: number,
+    eventTypes?: ReadonlyArray<string>,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
   /**
    * Replay events after the provided sequence.
    *

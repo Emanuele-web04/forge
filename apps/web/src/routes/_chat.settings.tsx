@@ -268,6 +268,9 @@ function SettingsRouteView() {
       ? ["Provider update checks"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
+      ? ["Pull request diff colors"]
+      : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -954,6 +957,14 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Review">
+        {renderBooleanSettingRow({
+          settingKey: "showPullRequestDiffColors",
+          title: "Pull request diff colors",
+          description: "Show additions in green and deletions in red in pull request summaries.",
+          resetLabel: "pull request diff colors",
+          ariaLabel: "Show pull request diff colors",
+        })}
+
         {renderBooleanSettingRow({
           settingKey: "diffWordWrap",
           title: "Diff line wrapping",

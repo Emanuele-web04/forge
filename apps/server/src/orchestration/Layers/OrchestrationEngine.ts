@@ -1097,6 +1097,31 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       Number.MAX_SAFE_INTEGER,
       throughSequenceInclusive,
     );
+  const readThreadEvents: OrchestrationEngineShape["readThreadEvents"] = (
+    threadId,
+    fromSequenceExclusive,
+    eventTypes,
+  ) =>
+    eventStore.readThreadEventsFromSequence(
+      threadId,
+      fromSequenceExclusive,
+      undefined,
+      undefined,
+      eventTypes,
+    );
+  const readThreadEventsThrough: OrchestrationEngineShape["readThreadEventsThrough"] = (
+    threadId,
+    fromSequenceExclusive,
+    throughSequenceInclusive,
+    eventTypes,
+  ) =>
+    eventStore.readThreadEventsFromSequence(
+      threadId,
+      fromSequenceExclusive,
+      Number.MAX_SAFE_INTEGER,
+      throughSequenceInclusive,
+      eventTypes,
+    );
   const getEventHighWaterSequence = eventStore.getHighWaterSequence();
   const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] = PubSub.subscribe(
     eventPubSub,
@@ -1338,6 +1363,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     refreshCommandReadModel,
     readEvents,
     readEventsThrough,
+    readThreadEvents,
+    readThreadEventsThrough,
     getEventHighWaterSequence,
     subscribeDomainEvents,
     dispatch,

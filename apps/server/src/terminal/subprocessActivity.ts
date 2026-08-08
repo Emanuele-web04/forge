@@ -11,6 +11,7 @@ import {
 
 import { runProcess } from "../processRunner";
 import { parseProcessChildrenMap, type ProcessChildrenMap } from "./processTreeKiller";
+import { captureWindowsProcessChildrenMap } from "./windowsProcessSnapshot";
 
 const POSIX_SUBPROCESS_TREE_WALK_MAX_VISITED = 256;
 
@@ -21,48 +22,16 @@ export interface TerminalSubprocessActivity {
   hasNonProviderSubprocess: boolean;
 }
 
-async function checkWindowsSubprocessActivity(
-  terminalPid: number,
-): Promise<TerminalSubprocessActivity> {
-  const command = [
-    `$children = Get-CimInstance Win32_Process -Filter "ParentProcessId = ${terminalPid}" -ErrorAction SilentlyContinue`,
-    "if ($children) { exit 0 }",
-    "exit 1",
-  ].join("; ");
-  try {
-    const result = await runProcess(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", command],
-      {
-        timeoutMs: 1_500,
-        allowNonZeroExit: true,
-        maxBufferBytes: 32_768,
-        outputMode: "truncate",
-      },
-    );
-    return {
-      cliKind: null,
-      hasNonProviderSubprocess: false,
-      hasProviderDescendant: false,
-      hasRunningSubprocess: result.code === 0,
-    };
-  } catch {
-    return {
-      cliKind: null,
-      hasNonProviderSubprocess: false,
-      hasProviderDescendant: false,
-      hasRunningSubprocess: false,
-    };
-  }
-}
-
 const SHELL_LIKE_PROCESS_NAMES = new Set([
   "bash",
+  "cmd",
   "dash",
   "fish",
   "ksh",
   "login",
   "nu",
+  "powershell",
+  "pwsh",
   "screen",
   "sh",
   "tcsh",
@@ -80,9 +49,25 @@ function emptySubprocessActivity(): TerminalSubprocessActivity {
   };
 }
 
+function processExecutableName(command: string): string {
+  const firstToken = /^\s*"([^"]+)"/.exec(command)?.[1] ?? command.trim().split(/\s+/g)[0] ?? "";
+  const normalizedPath = firstToken.replaceAll("\\", "/");
+  return path
+    .basename(normalizedPath)
+    .replace(/\.(?:cmd|com|exe)$/i, "")
+    .toLowerCase();
+}
+
 function isShellLikeProcessName(command: string): boolean {
-  const normalized = path.basename(command.trim().split(/\s+/g)[0] ?? "").toLowerCase();
-  return SHELL_LIKE_PROCESS_NAMES.has(normalized);
+  return SHELL_LIKE_PROCESS_NAMES.has(processExecutableName(command));
+}
+
+function deriveProcessCliKind(command: string): TerminalCliKind | null {
+  return (
+    deriveTerminalProcessIdentity(command)?.cliKind ??
+    deriveTerminalProcessIdentity(processExecutableName(command))?.cliKind ??
+    null
+  );
 }
 
 function includeChildActivity(
@@ -90,7 +75,7 @@ function includeChildActivity(
   command: string,
   nestedActivity: TerminalSubprocessActivity,
 ): TerminalSubprocessActivity {
-  const childCliKind = deriveTerminalProcessIdentity(command)?.cliKind ?? null;
+  const childCliKind = deriveProcessCliKind(command);
   const isShellLike = isShellLikeProcessName(command);
   return {
     cliKind: activity.cliKind ?? childCliKind ?? nestedActivity.cliKind,
@@ -245,7 +230,10 @@ export async function defaultSubprocessChecker(
     return emptySubprocessActivity();
   }
   if (process.platform === "win32") {
-    return checkWindowsSubprocessActivity(terminalPid);
+    const childrenByParentPid = await captureWindowsProcessChildrenMap();
+    return childrenByParentPid === null
+      ? emptySubprocessActivity()
+      : inspectSubprocessActivity(terminalPid, childrenByParentPid);
   }
   return checkPosixSubprocessActivity(terminalPid);
 }

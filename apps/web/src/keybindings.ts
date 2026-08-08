@@ -74,19 +74,19 @@ const whenThreadJumpAvailable = whenAnd(
   whenNotTerminalFocus,
   whenNot(whenIdentifier("terminalWorkspaceOpen")),
 );
-// New-surface creation chords (new chat/terminal/provider chat/split) bind to `mod`,
-// which is Cmd on macOS. xterm never forwards a Cmd-chord to the PTY, so a bare
+// App-level `mod` chords (new chat/terminal/provider chat/split, copy thread id) bind to
+// `mod`, which is Cmd on macOS. xterm never forwards a Cmd-chord to the PTY, so a bare
 // `!terminalFocus` guard silently dropped these chords whenever the terminal had focus
-// — the chord did nothing instead of creating anything. `|| isMac` lets them fire from
+// — the chord did nothing instead of running the command. `|| isMac` lets them fire from
 // the terminal on macOS while still yielding the chord to the shell on Linux/Windows,
 // where `mod` is Ctrl and keys like Ctrl+N are real shell input that must pass through.
-const whenCreationAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
+const whenModChordAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "sidebar.activity",
     shortcut: commandShortcut("u", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "sidebar.addProject",
@@ -101,42 +101,42 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "chat.new",
     shortcut: commandShortcut("n"),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newLatestProject",
     shortcut: commandShortcut("n", { shiftKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newClaude",
     shortcut: commandShortcut("c", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newChat",
     shortcut: commandShortcut("n", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newTerminal",
     shortcut: commandShortcut("t", { shiftKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newCodex",
     shortcut: commandShortcut("x", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.newCursor",
     shortcut: commandShortcut("r", { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   {
     command: "chat.split",
     shortcut: commandShortcut("\\"),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   },
   // Installed-app only (Electron / standalone PWA). Browsers reserve Ctrl+Tab and
   // Ctrl+Shift+Tab for tab switching and won't deliver them to the page, so the
@@ -202,7 +202,7 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   ...SPACE_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
     command,
     shortcut: commandShortcut(String(index + 1), { altKey: true }),
-    whenAst: whenCreationAllowed,
+    whenAst: whenModChordAllowed,
   })),
   {
     command: "thread.jump.1",
@@ -248,6 +248,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     command: "thread.jump.9",
     shortcut: commandShortcut("9"),
     whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.copyId",
+    shortcut: commandShortcut("c", { shiftKey: true }),
+    whenAst: whenModChordAllowed,
   },
   {
     command: "terminal.workspace.newFullWidth",
@@ -365,7 +370,7 @@ function resolvePlatform(options: ShortcutMatchOptions | undefined): string {
 
 function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatchContext {
   // `isMac` is derived from the resolved platform so `when` clauses can gate on it
-  // (e.g. `whenCreationAllowed`) without every dispatch site having to thread the flag
+  // (e.g. `whenModChordAllowed`) without every dispatch site having to thread the flag
   // through `context`. An explicit `context.isMac` still wins via the spread below.
   return {
     terminalFocus: false,

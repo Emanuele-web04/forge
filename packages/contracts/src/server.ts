@@ -152,6 +152,9 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   status: Schema.optional(ProviderUsageStatus),
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
+  // True when this is a re-served last-good snapshot (e.g. the provider is rate-limiting live
+  // fetches) rather than a fresh read; `updatedAt` then still reflects the original fetch time.
+  stale: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
 
@@ -403,6 +406,7 @@ export const ServerLifecycleStreamEvent = Schema.Union([
       task: Schema.Literal("thread-retention"),
       state: Schema.Literals(["started", "progress", "completed", "failed"]),
       at: IsoDateTime,
+      // Legacy wire name retained so older clients can read retention progress.
       deletedCount: Schema.optional(Schema.Number),
       totalCount: Schema.optional(Schema.Number),
       error: Schema.optional(Schema.String),

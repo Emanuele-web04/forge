@@ -67,7 +67,6 @@ import {
   makeSqlitePersistenceLive,
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
-import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
@@ -412,7 +411,6 @@ function makeProviderServiceLayer(
     makeProviderServiceLive(options).pipe(
       Layer.provide(providerAdapterLayer),
       Layer.provide(directoryLayer),
-      Layer.provideMerge(AnalyticsService.layerTest),
     ),
     directoryLayer,
     runtimeRepositoryLayer,
@@ -443,7 +441,7 @@ const rotationRetry = makeProviderServiceLayer({
       if (eventId === ROTATION_RETRY_FAILURE_EVENT_ID && attempts === 1) {
         return Effect.fail(new Error("injected transient runtime persistence failure"));
       }
-      return Effect.void;
+      return Effect.succeed({ sequence: attempts, event });
     }),
   runtimeEventRetryBaseDelayMs: 1,
   runtimeEventRetryMaxDelayMs: 1,
@@ -483,7 +481,6 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
     const providerLayer = makeProviderServiceLive().pipe(
       Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
       Layer.provide(directoryLayer),
-      Layer.provide(AnalyticsService.layerTest),
     );
 
     yield* Effect.gen(function* () {
@@ -555,7 +552,6 @@ it.effect(
       const providerLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
         Layer.provide(ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer))),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       yield* Effect.gen(function* () {
@@ -618,7 +614,6 @@ it.effect(
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
       const updatedResumeCursor = {
         threadId: asThreadId("thread-1"),
@@ -669,7 +664,6 @@ it.effect(
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       secondCodex.startSession.mockClear();
@@ -2839,7 +2833,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -2871,7 +2864,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       secondClaude.startSession.mockClear();
@@ -2935,7 +2927,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -2968,7 +2959,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       yield* Effect.gen(function* () {
@@ -3028,7 +3018,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -3063,7 +3052,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       yield* Effect.gen(function* () {
@@ -4676,6 +4664,67 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
       assert.equal(runtimePayload.activeTurnId, null);
+    }),
+  );
+});
+
+let persistedFanoutSequence = 0;
+const persistedFanout = makeProviderServiceLayer({
+  persistRuntimeEvent: (event) =>
+    Effect.sync(() => ({
+      sequence: ++persistedFanoutSequence,
+      event,
+    })),
+});
+persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
+  it.effect("reuses the durable journal result without changing the canonical event stream", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-persisted-fanout");
+      const session = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.notEqual(provider.streamPersistedEvents, undefined);
+
+      const canonicalEvents = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
+      const persistedEvents = yield* Ref.make<
+        Array<{ readonly sequence: number; readonly event: ProviderRuntimeEvent }>
+      >([]);
+      const canonicalEventFiber = yield* Stream.runForEach(provider.streamEvents, (event) =>
+        Ref.update(canonicalEvents, (current) => [...current, event]),
+      ).pipe(Effect.forkChild);
+      const persistedEventFiber = yield* Stream.runForEach(
+        provider.streamPersistedEvents!,
+        (event) => Ref.update(persistedEvents, (current) => [...current, event]),
+      ).pipe(Effect.forkChild);
+      yield* sleep(50);
+
+      const completedEvent: LegacyProviderRuntimeEvent = {
+        type: "turn.completed",
+        eventId: asEventId("evt-persisted-fanout"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: session.threadId,
+        turnId: asTurnId("turn-persisted-fanout"),
+        status: "completed",
+      };
+      persistedFanout.codex.emit(completedEvent);
+      yield* sleep(100);
+
+      const canonicalEvent = (yield* Ref.get(canonicalEvents))[0];
+      const persistedEvent = (yield* Ref.get(persistedEvents))[0];
+      yield* Fiber.interrupt(canonicalEventFiber);
+      yield* Fiber.interrupt(persistedEventFiber);
+      assert.notEqual(canonicalEvent, undefined);
+      assert.notEqual(persistedEvent, undefined);
+      if (canonicalEvent === undefined || persistedEvent === undefined) {
+        assert.fail("Expected both canonical and persisted runtime events");
+      }
+      assert.equal(canonicalEvent.eventId, completedEvent.eventId);
+      assert.equal(persistedEvent.event.eventId, completedEvent.eventId);
+      assert.equal(persistedEvent.sequence > 0, true);
     }),
   );
 });

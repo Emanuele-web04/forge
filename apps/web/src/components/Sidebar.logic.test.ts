@@ -36,6 +36,8 @@ import {
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
+  resolveSidebarThreadPullRequest,
+  resolveThreadDisplayBranch,
   resolveSidebarThreadListPaging,
   resolveProjectEmptyState,
   resolveSettingsBackTarget,
@@ -48,6 +50,7 @@ import {
   isUrgentThreadStatusPill,
   type ThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
+  shouldUseLivePullRequestForSidebarThread,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -119,6 +122,143 @@ describe("pullRequestRepositoryConfigFingerprint", () => {
     expect(
       pullRequestRepositoryConfigFingerprint([{ ...first, name: "Renamed" }, second]),
     ).not.toBe(baseline);
+  });
+});
+
+describe("shouldUseLivePullRequestForSidebarThread", () => {
+  it("trusts the checked-out branch for a dedicated worktree when persisted metadata is stale", () => {
+    expect(
+      shouldUseLivePullRequestForSidebarThread({
+        threadBranch: "synara/original-branch",
+        liveBranch: "feat/agent-created-branch",
+        hasDedicatedWorktree: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("still requires a branch match for a shared project root", () => {
+    expect(
+      shouldUseLivePullRequestForSidebarThread({
+        threadBranch: "feature/another-thread",
+        liveBranch: "feat/agent-created-branch",
+        hasDedicatedWorktree: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseLivePullRequestForSidebarThread({
+        threadBranch: "feat/agent-created-branch",
+        liveBranch: "feat/agent-created-branch",
+        hasDedicatedWorktree: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not use live PR data for a detached worktree", () => {
+    expect(
+      shouldUseLivePullRequestForSidebarThread({
+        threadBranch: "synara/original-branch",
+        liveBranch: null,
+        hasDedicatedWorktree: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveSidebarThreadPullRequest", () => {
+  it("keeps persisted PR metadata when the worktree is no longer available", () => {
+    const persisted = { number: 574, headBranch: "feat/provider-usage-snapshot-cache" };
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/provider-usage-snapshot-cache",
+        liveBranch: null,
+        hasLiveStatus: false,
+        hasDedicatedWorktree: false,
+        livePullRequest: null,
+        persistedPullRequest: persisted,
+      }),
+    ).toBe(persisted);
+  });
+
+  it("prefers live metadata for the worktree's current branch", () => {
+    const live = { number: 575, headBranch: "feat/current-branch" };
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "synara/stale-branch",
+        liveBranch: "feat/current-branch",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: live,
+        persistedPullRequest: { number: 574, headBranch: "synara/stale-branch" },
+      }),
+    ).toBe(live);
+  });
+
+  it("keeps persisted metadata during a transient lookup failure on the same branch", () => {
+    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/current-branch",
+        liveBranch: "feat/current-branch",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: persisted,
+      }),
+    ).toBe(persisted);
+  });
+
+  it("uses the live worktree branch to validate persisted metadata while thread branch metadata catches up", () => {
+    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: null,
+        liveBranch: "feat/current-branch",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: persisted,
+      }),
+    ).toBe(persisted);
+  });
+
+  it("uses the live worktree branch to validate persisted metadata when the thread branch is stale", () => {
+    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/previous-branch",
+        liveBranch: "feat/current-branch",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: persisted,
+      }),
+    ).toBe(persisted);
+  });
+
+  it("does not attach a persisted PR from another branch to the current worktree branch", () => {
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/previous-branch",
+        liveBranch: "feat/current-branch",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: { number: 574, headBranch: "feat/previous-branch" },
+      }),
+    ).toBeNull();
+  });
+
+  it("hides a persisted PR when an active dedicated worktree is detached", () => {
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/previous-branch",
+        liveBranch: null,
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: { number: 574, headBranch: "feat/previous-branch" },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -249,6 +389,41 @@ describe("resolveThreadHoverCardMetadata", () => {
       branch: "main",
       worktreeName: null,
     });
+  });
+
+  it("shows the current branch instead of a stale associated worktree branch", () => {
+    const thread = makeSidebarThreadSummary({
+      envMode: "worktree",
+      branch: "feat/current-branch",
+      worktreePath: "/repo/.worktrees/thread",
+      associatedWorktreeBranch: "synara/stale-branch",
+    });
+
+    expect(resolveThreadDisplayBranch(thread)).toBe("feat/current-branch");
+    expect(
+      resolveThreadHoverCardMetadata({
+        thread,
+        project: {
+          kind: "project",
+          name: "synara",
+          folderName: "synara",
+          cwd: "/repo",
+        },
+      }).branch,
+    ).toBe("feat/current-branch");
+  });
+
+  it("does not label a detached active worktree with its historical branch", () => {
+    expect(
+      resolveThreadDisplayBranch(
+        makeSidebarThreadSummary({
+          envMode: "worktree",
+          branch: null,
+          worktreePath: "/repo/.worktrees/thread",
+          associatedWorktreeBranch: "feat/previous-branch",
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("labels project-less chat containers as Synara instead of the slug folder", () => {

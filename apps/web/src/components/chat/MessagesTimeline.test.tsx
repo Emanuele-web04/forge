@@ -7,7 +7,8 @@ import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
-import type { WorkLogEntry } from "../../workLog";
+import { makeActivity } from "../../storeTestFixtures";
+import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
 import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
@@ -1739,13 +1740,86 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Reasoning trace Inspecting");
   });
 
-  it("keeps Thinking when a new local send has no server turn id yet", async () => {
+  it.each([
+    {
+      provider: "Anti-Gravity",
+      expectedText: "Run_command",
+      activity: makeActivity({
+        id: "antigravity-live-tool",
+        createdAt: "2026-03-17T19:12:28.100Z",
+        turnId: "turn-provider-live-tool",
+        kind: "tool.started",
+        summary: "run_command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "run_command",
+          data: {
+            toolCallId: "antigravity-tool-1",
+            toolName: "run_command",
+          },
+        },
+      }),
+    },
+    {
+      provider: "Codex",
+      expectedText: "Checking git status",
+      activity: makeActivity({
+        id: "codex-live-tool",
+        createdAt: "2026-03-17T19:12:28.100Z",
+        turnId: "turn-provider-live-tool",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "codex-tool-1",
+              command: "/bin/zsh -lc 'git status --short'",
+              status: "inProgress",
+              commandActions: [{ type: "unknown", command: "git status --short" }],
+            },
+          },
+        },
+      }),
+    },
+  ])("renders $provider tool activity beside live Thinking", async ({ activity, expectedText }) => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-provider-live-tool");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={deriveWorkLogEntries([activity], activeTurnId).map((entry) => ({
+          id: entry.id,
+          kind: "work" as const,
+          createdAt: entry.createdAt,
+          entry,
+        }))}
+      />,
+    );
+
+    expect(markup).toContain('data-timeline-row-kind="work"');
+    expect(markup).toContain('data-work-entry-display-text="true"');
+    expect(markup).toContain('data-live-activity-meta="true"');
+    expect(markup).toContain(">Thinking<");
+    expect(markup).toContain(expectedText);
+  });
+
+  it("shows Loading when a new local send has no server turn id yet", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const previousTurnId = TurnId.makeUnsafe("turn-previous");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
         isWorking
+        workingLabel="Loading"
         activeTurnInProgress
         activeTurnId={null}
         activeTurnStartedAt={null}
@@ -1817,7 +1891,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain(">Thinking<");
+    expect(markup).toContain(">Loading<");
   });
 
   it("attaches trailing tool rows to the last assistant reply after completion", async () => {

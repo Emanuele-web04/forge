@@ -198,6 +198,9 @@ export const GitCreateDetachedWorktreeInput = Schema.Struct({
   ref: TrimmedNonEmptyStringSchema,
   path: Schema.NullOr(TrimmedNonEmptyStringSchema),
   copyChangesFrom: Schema.optional(TrimmedNonEmptyStringSchema),
+  // When set, the worktree is created on this new branch (pinned at `ref`)
+  // instead of a detached HEAD, so threads get a branch attached from birth.
+  newBranch: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type GitCreateDetachedWorktreeInput = typeof GitCreateDetachedWorktreeInput.Type;
 
@@ -240,6 +243,11 @@ export const GitRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   path: TrimmedNonEmptyStringSchema,
   force: Schema.optional(Schema.Boolean),
+  // Managed worktrees are born on temporary synara/* branches. When set, a
+  // removal also deletes that branch so retiring the worktree cannot strand it;
+  // user-named branches are never touched. Handoff flows leave this unset
+  // because they re-home the branch into the root checkout instead.
+  reclaimTemporaryBranch: Schema.optional(Schema.Boolean),
 });
 export type GitRemoveWorktreeInput = typeof GitRemoveWorktreeInput.Type;
 

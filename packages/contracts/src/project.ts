@@ -16,6 +16,12 @@ const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
 const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
+export const ProjectFileEncoding = Schema.Literals(["utf8", "utf8-bom"]);
+export type ProjectFileEncoding = typeof ProjectFileEncoding.Type;
+
+export const ProjectFileLineEnding = Schema.Literals(["lf", "crlf", "cr", "mixed"]);
+export type ProjectFileLineEnding = typeof ProjectFileLineEnding.Type;
+
 export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
 export type ProjectKind = typeof ProjectKind.Type;
 
@@ -128,11 +134,15 @@ export const ProjectWriteFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_FILE_PATH_MAX_LENGTH)),
   contents: Schema.String.check(Schema.isMaxLength(PROJECT_READ_FILE_MAX_BYTES)),
+  expectedVersion: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  encoding: Schema.optional(ProjectFileEncoding),
+  lineEnding: Schema.optional(ProjectFileLineEnding),
 });
 export type ProjectWriteFileInput = typeof ProjectWriteFileInput.Type;
 
 export const ProjectWriteFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
+  version: TrimmedNonEmptyString,
 });
 export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 
@@ -150,6 +160,9 @@ export const ProjectReadFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
   contents: Schema.String,
   truncated: Schema.Boolean,
+  version: Schema.NullOr(TrimmedNonEmptyString),
+  encoding: Schema.NullOr(ProjectFileEncoding),
+  lineEnding: Schema.NullOr(ProjectFileLineEnding),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 

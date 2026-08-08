@@ -240,14 +240,18 @@ describe("external MCP gateway stdio flow", () => {
           stdout: "0123456789abcdef0123456789abcdef01234567\n",
           stderr: "",
         }),
-      createDetachedWorktree: (input: { readonly path?: string; readonly ref: string }) =>
+      createDetachedWorktree: (input: {
+        readonly path?: string;
+        readonly ref: string;
+        readonly newBranch?: string;
+      }) =>
         Effect.sync(() => {
           worktreeCreates.push(input);
           return {
             worktree: {
               path: input.path ?? path.join(worktreesDir, "generated"),
               ref: input.ref,
-              branch: null,
+              branch: input.newBranch ?? null,
             },
           };
         }),

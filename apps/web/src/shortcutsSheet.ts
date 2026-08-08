@@ -187,6 +187,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Reveal the iOS Simulator panel for the active thread. macOS servers only.",
   },
   {
+    command: "thread.copyId",
+    label: "Copy thread ID",
+    description: "Copy the active thread's ID to the clipboard.",
+  },
+  {
     command: "chat.visible.previous",
     label: "Previous visible thread",
     description: "Cycle to the previous thread that is currently visible in the sidebar.",

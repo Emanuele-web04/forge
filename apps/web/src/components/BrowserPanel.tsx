@@ -67,6 +67,7 @@ import {
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
+  shouldOccludeBrowserWebview,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -613,6 +614,7 @@ export function BrowserPanel({
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
+  const [browserActionsMenuOpen, setBrowserActionsMenuOpen] = useState(false);
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
     threadBrowserState?.tabs.find((tab) => tab.id === threadBrowserState.activeTabId) ??
@@ -1047,7 +1049,11 @@ export function BrowserPanel({
       // While the local-servers home is up, force the browser surface hidden instead of
       // trusting the obscuring-overlay heuristic. The native/inline webview otherwise paints
       // about:blank white over our dark DOM home — the "always white" empty state.
-      const obscuredByOverlay = showLocalServersHome || hasNativeBrowserObscuringOverlay(element);
+      const obscuredByOverlay = shouldOccludeBrowserWebview({
+        showLocalServersHome,
+        browserActionsMenuOpen,
+        hasObscuringOverlay: hasNativeBrowserObscuringOverlay(element),
+      });
       lastOverlayObscuredRef.current = obscuredByOverlay;
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const rect = element.getBoundingClientRect();
@@ -1189,7 +1195,14 @@ export function BrowserPanel({
       burstFramesRemainingRef.current = 0;
       burstStableFramesRef.current = 0;
     };
-  }, [api, isLiveRuntime, showLocalServersHome, threadId, usesNativeRuntime]);
+  }, [
+    api,
+    browserActionsMenuOpen,
+    isLiveRuntime,
+    showLocalServersHome,
+    threadId,
+    usesNativeRuntime,
+  ]);
 
   const onSubmitAddress = useCallback(() => {
     if (!ensureLiveRuntime()) {
@@ -1689,7 +1702,7 @@ export function BrowserPanel({
           <LinkIcon className="size-3.5" />
           <span className="sr-only">Copy link</span>
         </Button>
-        <Menu modal={false}>
+        <Menu modal={false} open={browserActionsMenuOpen} onOpenChange={setBrowserActionsMenuOpen}>
           <MenuTrigger
             render={
               <Button

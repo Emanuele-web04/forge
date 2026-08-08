@@ -541,7 +541,10 @@ describe("wsNativeApi", () => {
   });
 
   it("forwards workspace file writes to the websocket project method", async () => {
-    requestMock.mockResolvedValue({ relativePath: "plan.md" });
+    requestMock.mockResolvedValue({
+      relativePath: "plan.md",
+      version: `sha256:${"1".repeat(64)}`,
+    });
     const { createWsNativeApi } = await import("./wsNativeApi");
 
     const api = createWsNativeApi();
@@ -563,6 +566,9 @@ describe("wsNativeApi", () => {
       relativePath: "src/app.ts",
       contents: "export {};\n",
       truncated: false,
+      version: `sha256:${"1".repeat(64)}`,
+      encoding: "utf8",
+      lineEnding: "lf",
     });
     const { createWsNativeApi } = await import("./wsNativeApi");
 
@@ -824,6 +830,19 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.getFullThreadDiff, {
       threadId: "thread-1",
       toTurnCount: 1,
+    });
+  });
+
+  it("scopes orchestration replay requests to the visible thread when provided", async () => {
+    requestMock.mockResolvedValue([]);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.orchestration.replayEvents(41, ThreadId.makeUnsafe("thread-1"));
+
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.replayEvents, {
+      fromSequenceExclusive: 41,
+      threadId: "thread-1",
     });
   });
 
