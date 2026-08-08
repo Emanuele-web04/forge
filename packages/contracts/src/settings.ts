@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { TrimmedString } from "./baseSchemas";
+import { jsonBytes, jsonDepth } from "./browserAutomationToolOutputs";
 import { DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
 
@@ -96,7 +97,9 @@ export const ServerSettings = Schema.Struct({
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   textGenerationModelSelection: ModelSelection.pipe(
-    Schema.withDecodingDefault(() => DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.codex),
+    Schema.withDecodingDefault(() => ({
+      ...DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.codex,
+    })),
   ),
   providers: Schema.Struct({
     codex: CodexServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -124,13 +127,19 @@ export const DEFAULT_SERVER_SETTINGS_VIEW: ServerSettingsView = Schema.decodeSyn
   ServerSettingsView,
 )({});
 
+const BoundedJson = Schema.Json.check(
+  Schema.makeFilter((value: Schema.Json) => jsonDepth(value) <= 20 && jsonBytes(value) <= 262_144),
+);
+
 const ModelSelectionPatch = Schema.Struct({
   provider: Schema.optionalKey(ProviderKind),
   model: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
   // Schema.Json (not Schema.Unknown) so option overrides survive the JSON RPC
   // codec: the RPC layer encodes Schema.Unknown as null, which would turn every
-  // options-only patch into an explicit null on the wire.
-  options: Schema.optionalKey(Schema.Json),
+  // options-only patch into an explicit null on the wire. Bounded (depth <= 20,
+  // serialized bytes <= 262_144) because the server persists and re-sends
+  // these options on every Git text generation turn.
+  options: Schema.optionalKey(BoundedJson),
 });
 
 const ProviderSettingsBasePatch = {

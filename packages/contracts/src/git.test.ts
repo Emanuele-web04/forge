@@ -194,8 +194,8 @@ describe("DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER", () => {
     }
   });
 
-  it("has one registered entry per Git-writing provider the picker exposes", () => {
-    expect(Object.keys(DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER).sort()).toEqual([
+  it("has one registered entry per Git text generation provider the picker exposes", () => {
+    expect(Object.keys(DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER).toSorted()).toEqual([
       "codex",
       "cursor",
       "kilo",

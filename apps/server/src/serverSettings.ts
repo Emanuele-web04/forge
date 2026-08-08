@@ -7,7 +7,7 @@
  */
 import {
   DEFAULT_SERVER_SETTINGS,
-  type GitTextGenerationDefaultProvider,
+  GIT_TEXT_GENERATION_DEFAULT_PROVIDER_ORDER,
   type ModelSelection,
   ServerSettings,
   ServerSettingsError,
@@ -89,7 +89,21 @@ export class ServerSettingsService extends ServiceMap.Service<
         const updateSettings = (patch: ServerSettingsPatch) =>
           Ref.get(currentSettingsRef).pipe(
             Effect.flatMap((currentSettings) =>
-              normalizeSettings("<memory>", currentSettings, patch),
+              // Merge against the RAW persisted row: an unrelated/options-only/
+              // empty selection patch must never disturb the persisted pair (a
+              // temporary disabled-provider fallback alone never changes
+              // persistence; provider.enabled toggles and password changes must
+              // not silently replace the persisted pair with the fallback view).
+              // Only a deliberate provider/model edit resolves against the
+              // EFFECTIVE view (the disabled-provider fallback the UI displays):
+              // the resolved pair then replaces the persisted one, attributed to
+              // the provider the user is looking at.
+              normalizeSettings(
+                "<memory>",
+                currentSettings,
+                patch,
+                resolveTextGenerationProvider(currentSettings),
+              ),
             ),
             Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
             Effect.tap(() => Ref.update(revisionRef, (revision) => revision + 1)),
@@ -129,18 +143,12 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
-type GitWritingFallbackProvider = GitTextGenerationDefaultProvider;
-
-// Only providers with a dedicated Git writing default participate in the
+// Only providers with a dedicated Git text generation default participate in the
 // fallback. Searching over chat providers (e.g. claudeAgent) would let the
-// fallback "resolve" to a provider that cannot generate Git text, or worse
-// rewrite to Codex even when Codex itself is disabled.
-const PROVIDER_ORDER: readonly GitWritingFallbackProvider[] = [
-  "codex",
-  "kilo",
-  "opencode",
-  "cursor",
-];
+// fallback "resolve" to a provider that cannot generate Git text.
+// Registry-driven: insertion order in the registry IS the fallback preference
+// order, so adding a provider to the registry extends the fallback too.
+const PROVIDER_ORDER = GIT_TEXT_GENERATION_DEFAULT_PROVIDER_ORDER;
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
@@ -150,22 +158,22 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
 
   const fallback = PROVIDER_ORDER.find((provider) => settings.providers[provider].enabled);
   if (!fallback) {
-    // All-disabled guard: every Git-writing-capable provider is disabled, so
+    // All-disabled guard: every Git text generation provider is disabled, so
     // there is no valid rewrite target. Preserve the persisted selection
     // unchanged instead of silently replacing it with a provider the user
     // disabled (or an unsupported chat provider).
     return settings;
   }
 
-  // The fallback selection is the complete Git writing default for that
-  // provider (PROVIDER_ORDER only contains Git-writing-capable providers).
-  const gitWritingFallback = defaultGitTextGenerationSelectionFor(fallback);
+  // The fallback selection is the complete Git text generation default for
+  // that provider (PROVIDER_ORDER only contains Git text generation providers).
+  const gitTextGenerationFallback = defaultGitTextGenerationSelectionFor(fallback);
 
   return {
     ...settings,
     textGenerationModelSelection: {
-      provider: gitWritingFallback.provider,
-      model: gitWritingFallback.model,
+      provider: gitTextGenerationFallback.provider,
+      model: gitTextGenerationFallback.model,
     } as ModelSelection,
   };
 }
@@ -174,8 +182,11 @@ function normalizeSettings(
   settingsPath: string,
   current: ServerSettings,
   patch: ServerSettingsPatch,
+  resolveAgainst?: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> {
-  return Schema.decodeUnknownEffect(ServerSettings)(applyServerSettingsPatch(current, patch)).pipe(
+  return Schema.decodeUnknownEffect(ServerSettings)(
+    applyServerSettingsPatch(current, patch, resolveAgainst),
+  ).pipe(
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
@@ -430,6 +441,15 @@ const makeServerSettings = Effect.gen(function* () {
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const disk = yield* loadSettingsFromDisk;
+        // Merge against the RAW persisted row (see the layerTest comment): an
+        // unrelated/options-only/empty selection patch must never disturb the
+        // persisted pair (a temporary disabled-provider fallback alone never
+        // changes persistence; provider.enabled toggles and password changes
+        // must not silently replace the persisted pair with the fallback view).
+        // Only a deliberate provider/model edit resolves against the EFFECTIVE
+        // view (the disabled-provider fallback the UI displays): the resolved
+        // pair then replaces the persisted one, attributed to the provider the
+        // user is looking at.
         const current = disk.settings;
         for (const provider of EXTERNAL_SERVER_PROVIDERS) {
           const password = patch.providers?.[provider]?.serverPassword;
@@ -450,6 +470,7 @@ const makeServerSettings = Effect.gen(function* () {
           settingsPath,
           current,
           omitProviderPasswords(patch),
+          resolveTextGenerationProvider(current),
         );
         const next = yield* withCredentialState(normalized);
         const nextRevision = Math.max(disk.revision, yield* Ref.get(revisionRef)) + 1;

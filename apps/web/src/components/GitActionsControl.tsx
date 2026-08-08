@@ -3,7 +3,10 @@
 // Layer: Header action control
 // Depends on: git React Query hooks, native shell bridges, and shared picker/menu primitives.
 
-import { resolveGitTextGenerationSelection } from "~/appSettings";
+import {
+  defaultGitTextGenerationSelectionFor,
+  resolveGitTextGenerationSelection,
+} from "@synara/shared/model";
 import type {
   GitActionProgressEvent,
   GitRunStackedActionResult,
@@ -368,11 +371,14 @@ export default function GitActionsControl({
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
   const gitTextGenerationModelSelection = useMemo((): ModelSelection => {
-    const resolved = resolveGitTextGenerationSelection({
-      provider: settings.textGenerationProvider ?? null,
-      model: settings.textGenerationModel ?? null,
-    });
-    return { provider: resolved.provider, model: resolved.model };
+    // The resolver already returns the complete {provider, model} pair; the
+    // registry lookup only supplies the fallback for an unattributable input.
+    return (
+      resolveGitTextGenerationSelection({
+        provider: settings.textGenerationProvider ?? null,
+        model: settings.textGenerationModel ?? null,
+      }) ?? defaultGitTextGenerationSelectionFor("codex")
+    );
   }, [settings.textGenerationModel, settings.textGenerationProvider]);
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),

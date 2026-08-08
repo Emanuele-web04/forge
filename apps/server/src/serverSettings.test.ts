@@ -245,4 +245,121 @@ describe("ServerSettingsService", () => {
       model: "auto",
     });
   });
+
+  it("resolves a model-only patch against the effective provider while a fallback is active", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const initial = yield* service.getSettings;
+        const patched = yield* service.updateSettings({
+          textGenerationModelSelection: { model: "gpt-5.4-mini" },
+        });
+        const afterPatch = yield* service.getSettings;
+        const reenabled = yield* service.updateSettings({
+          providers: { kilo: { enabled: true } },
+        });
+        const afterReenable = yield* service.getSettings;
+        return { initial, patched, afterPatch, reenabled, afterReenable };
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "kilo",
+              model: "kilo/kilo-auto/free",
+            },
+            providers: {
+              kilo: { enabled: false },
+            },
+          }),
+        ),
+      ),
+    );
+
+    // The read view resolves to the first enabled Git-writing provider.
+    expect(result.initial.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+    // A deliberate model-only edit while viewing the fallback is resolved
+    // against the displayed provider (codex), not the hidden persisted kilo row.
+    expect(result.patched.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      model: "gpt-5.4-mini",
+    });
+    expect(result.afterPatch.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      model: "gpt-5.4-mini",
+    });
+    // Re-enabling kilo must not flip the persisted pair (deliberate-edit
+    // semantics only; no surprise flip).
+    expect(result.afterReenable.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      model: "gpt-5.4-mini",
+    });
+  });
+
+  it("preserves the persisted pair across unrelated, options-only, and empty patches while a fallback is active", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const unrelated = yield* service.updateSettings({
+          enableAssistantStreaming: true,
+        });
+        const optionsOnly = yield* service.updateSettings({
+          textGenerationModelSelection: { options: { variant: "low" } },
+        });
+        const emptySelection = yield* service.updateSettings({
+          textGenerationModelSelection: {},
+        });
+        // Re-enable kilo: no deliberate edit happened, so the ORIGINAL
+        // persisted kilo pair (with the options-only override) must still be
+        // intact. A temporary fallback alone never changes persistence.
+        const reenabled = yield* service.updateSettings({
+          providers: { kilo: { enabled: true } },
+        });
+        const afterReenable = yield* service.getSettings;
+        return { unrelated, optionsOnly, emptySelection, reenabled, afterReenable };
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "kilo",
+              model: "kilo/kilo-auto/free",
+              options: { variant: "high" },
+            },
+            providers: {
+              kilo: { enabled: false },
+            },
+          }),
+        ),
+      ),
+    );
+
+    // Unrelated, options-only, and empty patches all surface the codex fallback
+    // while it is active...
+    expect(result.unrelated.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+    expect(result.optionsOnly.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+    expect(result.emptySelection.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+    // ...but none of them may replace the persisted kilo pair: re-enabling kilo
+    // surfaces the original pair again (with the options-only override applied).
+    expect(result.reenabled.textGenerationModelSelection).toEqual({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+      options: { variant: "low" },
+    });
+    expect(result.afterReenable.textGenerationModelSelection).toEqual({
+      provider: "kilo",
+      model: "kilo/kilo-auto/free",
+      options: { variant: "low" },
+    });
+  });
 });

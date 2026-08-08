@@ -9,6 +9,7 @@ import {
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
   type CodexModelOptions,
+  type GitTextGenerationDefaultProvider,
   type GrokModelOptions,
   type GrokReasoningEffort,
   type ModelCapabilities,
@@ -21,7 +22,6 @@ import {
   type PiThinkingLevel,
   type ProviderKind,
   type ProviderWithDefaultModel,
-  type GitTextGenerationDefaultProvider,
   CodexReasoningEffort,
 } from "@synara/contracts";
 
@@ -75,14 +75,14 @@ export function getDefaultModel(provider: ProviderKind = "codex"): ModelSlug | n
 }
 
 /**
- * Return the complete default Git writing selection (commit messages, PR
- * titles/branches, diff summaries) for a provider exposed in the Git writing
+ * Return the complete default Git text generation selection (commit messages, PR
+ * titles/branches, diff summaries) for a provider exposed in the Git text generation
  * picker. The map lives in contracts (data); this lookup helper is shared
  * runtime logic used by both server and web.
  */
-export function defaultGitTextGenerationSelectionFor(
-  provider: GitTextGenerationDefaultProvider,
-): (typeof DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER)[GitTextGenerationDefaultProvider] {
+export function defaultGitTextGenerationSelectionFor<P extends GitTextGenerationDefaultProvider>(
+  provider: P,
+): (typeof DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER)[P] {
   return DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER[provider];
 }
 
@@ -98,10 +98,10 @@ function isGitTextGenerationDefaultProvider(
 
 /**
  * Bare slugs without a provider prefix live in Codex's namespace: Codex is the
- * default Git writing provider and owns every gpt-* built-in/alias. Anything
+ * default Git text generation provider and owns every gpt-* built-in/alias. Anything
  * else (a Cursor/Claude/Gemini slug such as "composer-2.5" or "auto") has no
- * reliable owner, so it stays on the active Git writing provider when one is
- * set instead of being silently paired with Codex.
+ * reliable owner, so it can only be kept on a provider that actually owns it;
+ * otherwise the patch is rejected (see resolveGitTextGenerationSelection).
  */
 function isCodexScopedBareSlug(model: string): boolean {
   if (/^gpt-/i.test(model)) {
@@ -110,46 +110,85 @@ function isCodexScopedBareSlug(model: string): boolean {
   const aliases = MODEL_SLUG_ALIASES_BY_PROVIDER.codex;
   return (
     Object.prototype.hasOwnProperty.call(aliases, model) ||
-    MODEL_OPTIONS_BY_PROVIDER.codex.some((option) => option.slug === model)
+    MODEL_SLUG_SET_BY_PROVIDER.codex.has(model)
   );
 }
 
 /**
- * Resolve a complete Git writing {provider, model} pair atomically so a partial
+ * Whether `model` is valid for `provider`. Used to attribute a model-only patch
+ * to the active Git text generation provider without manufacturing a mismatched pair.
+ */
+function isValidModelForProvider(
+  provider: GitTextGenerationDefaultProvider,
+  model: string,
+): boolean {
+  switch (provider) {
+    case "codex":
+      return isCodexScopedBareSlug(model);
+    case "kilo":
+      return model.includes("/") || model === "kilo/kilo-auto/free";
+    case "opencode":
+      return model.includes("/") || model === "opencode/big-pickle" || model === "openai/gpt-5";
+    case "cursor":
+      return model === "auto" || MODEL_SLUG_SET_BY_PROVIDER.cursor.has(model);
+  }
+}
+
+/**
+ * Resolve a complete Git text generation {provider, model} pair atomically.
+ *
+ * Contract: the result is either a complete pair or `null` (REJECT). A `null`
+ * result means the caller must keep the current selection unchanged. A partial
  * patch (provider-only, model-only, or neither) can never produce a mismatched
- * pair (e.g. {provider: "cursor", model: "gpt-5.6-luna"}).
+ * pair (e.g. {provider: "cursor", model: "gpt-5.6-luna"}), and an explicitly
+ * supplied model is never silently discarded or paired with a provider that
+ * cannot run it.
  *
- * This is the ONE shared resolver: the web settings patch path, the direct
- * server settings merge boundary, and the disabled-provider fallback all run
- * through it, so their outcomes cannot drift.
+ * This is the ONE shared resolver: the web settings patch path and the direct
+ * server settings merge boundary run through it, so their outcomes cannot
+ * drift. The server disabled-provider fallback uses the same registry defaults
+ * via defaultGitTextGenerationSelectionFor. The merge boundary additionally
+ * short-circuits options-only/empty selection patches to preserve legacy pairs.
  *
+ * Rules, in order:
  * - Explicit provider + explicit model → that pair (never rewritten).
- * - Provider-only → that provider's own registered default (Codex/Luna for
- *   providers outside the Git writing registry, e.g. legacy claudeAgent).
- * - Model-only → infer the provider from the slug shape, preferring the
- *   currently active Git writing provider for ambiguous slugs; bare non-Codex
- *   slugs stay on the active provider rather than borrowing Codex.
- * - Neither → the active provider's registered default, else Codex/Luna.
+ * - Provider without model → that provider's own registered default (Codex/Luna
+ *   for providers outside the Git text generation registry, e.g. legacy claudeAgent).
+ * - Model without provider:
+ *   - `kilo/` and `opencode/` prefixes are the only slug-based attribution.
+ *   - A codex-scoped bare slug (gpt-* and Codex's own aliases/options) resolves
+ *     to Codex. A successful resolver never infers a provider change from any
+ *     other bare model slug.
+ *   - Otherwise the model is attributed to the currently active Git text generation
+ *     provider only when it is valid for that provider
+ *     (isValidModelForProvider); a foreign model is REJECTED (null), never
+ *     paired with the active provider. A legacy (non-Git text generation) current
+ *     provider keeps the pair — the model is never discarded to Codex. With no
+ *     current provider the patch is REJECTED (cannot attribute).
+ * - Neither provider nor model (including a null/empty model, i.e. a reset):
+ *   the active provider's registered default, else Codex/Luna.
  */
 export function resolveGitTextGenerationSelection(input: {
   readonly provider?: ProviderKind | null | undefined;
   readonly model?: string | null | undefined;
   readonly currentProvider?: ProviderKind | null | undefined;
-}): { readonly provider: ProviderKind; readonly model: string } {
+}): { readonly provider: ProviderKind; readonly model: string } | null {
   const model = input.model?.trim();
   const provider = input.provider;
+  const currentProvider = input.currentProvider ?? undefined;
+
+  if (provider && model) {
+    // Explicit provider + explicit model: that pair, never rewritten.
+    return { provider, model };
+  }
 
   if (provider) {
     if (isGitTextGenerationDefaultProvider(provider)) {
-      return { provider, model: model || defaultGitTextGenerationSelectionFor(provider).model };
-    }
-    if (model) {
-      // Explicit unsupported provider + explicit model: preserve the legacy pair.
-      return { provider, model };
+      return { provider, model: defaultGitTextGenerationSelectionFor(provider).model };
     }
     // Unsupported provider with no model: return the complete Codex/Luna
     // selection so the pair stays atomic (never {claudeAgent, gpt-5.6-luna}).
-    return defaultGitTextGenerationSelectionFor("codex");
+    return { ...defaultGitTextGenerationSelectionFor("codex") };
   }
 
   if (model) {
@@ -161,38 +200,33 @@ export function resolveGitTextGenerationSelection(input: {
     if (model.startsWith("opencode/")) {
       return { provider: "opencode", model };
     }
-    if (!model.includes("/")) {
-      if (isCodexScopedBareSlug(model)) {
-        return { provider: "codex", model };
-      }
-      // A bare slug that is not Codex's (e.g. a Cursor model) stays on the
-      // active Git writing provider when there is one.
-      if (input.currentProvider && isGitTextGenerationDefaultProvider(input.currentProvider)) {
-        return { provider: input.currentProvider, model };
-      }
-      // No active Git writing provider to attribute the slug to: pairing a
-      // foreign bare slug (e.g. "composer-2.5" or "auto") with Codex would be
-      // a mismatched pair, so return the complete Codex/Luna default instead.
-      return defaultGitTextGenerationSelectionFor("codex");
+    if (isCodexScopedBareSlug(model)) {
+      return { provider: "codex", model };
     }
-    // Genuinely ambiguous vendor/model slug (e.g. openrouter/...): prefer the
-    // currently active provider when it is a Git writing provider.
-    if (input.currentProvider && isGitTextGenerationDefaultProvider(input.currentProvider)) {
-      return {
-        provider: input.currentProvider,
-        model,
-      };
+    if (currentProvider && isGitTextGenerationDefaultProvider(currentProvider)) {
+      if (isValidModelForProvider(currentProvider, model)) {
+        return { provider: currentProvider, model };
+      }
+      // REJECT: the model is foreign to the active Git text generation provider.
+      // Never {activeProvider, foreignModel}.
+      return null;
     }
-    return { provider: "opencode", model };
+    if (currentProvider) {
+      // A legacy (non-Git text generation) provider keeps the pair: never discard the
+      // explicit model to Codex.
+      return { provider: currentProvider, model };
+    }
+    // No current provider to attribute the model to: REJECT.
+    return null;
   }
 
   // Neither explicit provider nor model: fall back to the currently active
-  // Git writing provider's default (e.g. clearing only the model while Kilo is
+  // Git text generation provider's default (e.g. clearing only the model while Kilo is
   // active should stay on Kilo/free, not reset to Codex), else Codex/Luna.
-  if (input.currentProvider && isGitTextGenerationDefaultProvider(input.currentProvider)) {
-    return defaultGitTextGenerationSelectionFor(input.currentProvider);
+  if (currentProvider && isGitTextGenerationDefaultProvider(currentProvider)) {
+    return { ...defaultGitTextGenerationSelectionFor(currentProvider) };
   }
-  return defaultGitTextGenerationSelectionFor("codex");
+  return { ...defaultGitTextGenerationSelectionFor("codex") };
 }
 
 const MODEL_NAME_BY_SLUG = new Map(

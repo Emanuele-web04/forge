@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added per-provider default Git writing models for commit messages, PR titles and branches, and diff summaries. Codex now defaults to `gpt-5.6-luna`, Kilo to `kilo/kilo-auto/free`, OpenCode to `opencode/big-pickle`, and Cursor to its `auto` default model.
+
+### Changed
+
+- Changed Git writing model selection resolution so provider and model always resolve as one atomic pair. A model-only patch that names a model the active provider cannot use is now rejected and the current selection stays unchanged instead of being silently rewritten into a mismatched provider/model pair.
+- Preserved persisted Git writing selections on load. The new per-provider defaults apply only when a provider or model part is missing, unset, or reset, so upgrading never silently migrates an existing selection.
+- Bounded the settings patch `options` field with JSON depth and size limits so option overrides stay well-formed and cannot grow without bound.
+
+### Fixed
+
+- Fixed settings patches with nested `options` being encoded as `null` over the JSON-RPC codec. The `options` field now round-trips as an object through `Schema.Json` instead of being flattened to `null`.
+
+### Upgrade note
+
+- No migration is needed. Existing Git writing model selections are kept exactly as they are. The new per-provider defaults appear only for provider or model parts that are missing, unset, or reset.
+
 ## 0.7.1 - 2026-08-09
 
 ### Added

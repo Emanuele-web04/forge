@@ -7,7 +7,9 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
+  type AppSettings,
   AppSettingsSchema,
+  appSettingsPatchToServerSettingsPatch,
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_FOLLOW_UP_BEHAVIOR,
@@ -34,7 +36,6 @@ import {
   patchCustomModels,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
-  resolveGitTextGenerationSelection,
   resolveTerminalFontFamilyStack,
 } from "./appSettings";
 
@@ -216,7 +217,7 @@ describe("getGitTextGenerationModelOptions", () => {
     });
   });
 
-  it("humanizes transient OpenCode git-writing models instead of showing the raw slug", () => {
+  it("humanizes transient OpenCode git text generation models instead of showing the raw slug", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
       customKiloModels: [],
@@ -251,7 +252,7 @@ describe("getGitTextGenerationModelOptions", () => {
     expect(slugs).toContain("cursor:auto");
   });
 
-  it("does not inject a registered default as a phantom option when the runtime catalog is authoritative", () => {
+  it("always offers each provider's own registered default even when the runtime catalog is authoritative", () => {
     const options = getGitTextGenerationModelOptions(
       {
         customCodexModels: [],
@@ -267,20 +268,19 @@ describe("getGitTextGenerationModelOptions", () => {
         opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
         cursor: [{ slug: "composer-2.5", name: "Composer 2.5" }],
       },
-      {
-        codex: [{ slug: "gpt-5.5" }],
-        kilo: [{ slug: "kilo/kilo-auto/pro" }],
-        opencode: [{ slug: "openrouter/gpt-oss-120b" }],
-        cursor: [{ slug: "composer-2.5" }],
-      },
     );
 
     const slugs = options.map((option) => `${option.provider}:${option.slug}`);
-    // Authoritative catalogs that do not advertise the defaults must not
-    // surface them as selectable custom options.
-    expect(slugs).not.toContain("codex:gpt-5.6-luna");
-    expect(slugs).not.toContain("kilo:kilo/kilo-auto/free");
-    expect(slugs).not.toContain("opencode:opencode/big-pickle");
+    // AC4: a provider's OWN registered default is always offered even when the
+    // runtime catalog is authoritative and does not advertise it.
+    expect(slugs).toContain("codex:gpt-5.6-luna");
+    expect(slugs).toContain("kilo:kilo/kilo-auto/free");
+    expect(slugs).toContain("opencode:opencode/big-pickle");
+    // Defaults of OTHER providers are never injected (no cross-provider pairs).
+    expect(slugs).not.toContain("codex:kilo/kilo-auto/free");
+    expect(slugs).not.toContain("opencode:gpt-5.6-luna");
+    // Cursor's "auto" is a meta-slug and stays exempt from picker injection
+    // unless it is the persisted selection (covered below).
     expect(slugs).not.toContain("cursor:auto");
   });
 
@@ -300,12 +300,6 @@ describe("getGitTextGenerationModelOptions", () => {
         opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
         cursor: [{ slug: "composer-2.5", name: "Composer 2.5" }],
       },
-      {
-        codex: [{ slug: "gpt-5.5" }],
-        kilo: [{ slug: "kilo/kilo-auto/pro" }],
-        opencode: [{ slug: "openrouter/gpt-oss-120b" }],
-        cursor: [{ slug: "composer-2.5" }],
-      },
     );
 
     expect(
@@ -313,6 +307,49 @@ describe("getGitTextGenerationModelOptions", () => {
         (option) => option.provider === "opencode" && option.slug === "opencode/big-pickle",
       ),
     ).toBe(true);
+  });
+
+  it("surfaces Cursor's auto default only when it is the persisted selection", () => {
+    const options = getGitTextGenerationModelOptions(
+      {
+        customCodexModels: [],
+        customKiloModels: [],
+        customOpenCodeModels: [],
+        customCursorModels: [],
+        textGenerationModel: "auto",
+        textGenerationProvider: "cursor",
+      },
+      {
+        codex: [{ slug: "gpt-5.5", name: "GPT-5.5" }],
+        kilo: [{ slug: "kilo/kilo-auto/pro", name: "Kilo Auto Pro" }],
+        opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
+        cursor: [{ slug: "composer-2.5", name: "Composer 2.5" }],
+      },
+    );
+
+    expect(options.some((option) => option.provider === "cursor" && option.slug === "auto")).toBe(
+      true,
+    );
+  });
+
+  it("labels injected registered defaults as non-custom", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customKiloModels: [],
+      customOpenCodeModels: [],
+      customCursorModels: [],
+      textGenerationModel: undefined,
+      textGenerationProvider: "codex",
+    });
+
+    expect(
+      options.find(
+        (option) => option.provider === "opencode" && option.slug === "opencode/big-pickle",
+      ),
+    ).toMatchObject({ isCustom: false });
+    expect(
+      options.find((option) => option.provider === "codex" && option.slug === "gpt-5.6-luna"),
+    ).toMatchObject({ isCustom: false });
   });
 });
 
@@ -328,153 +365,111 @@ describe("isGitTextGenerationSettingsDirty", () => {
       ),
     ).toBe(true);
   });
+
+  it("flags a legacy non-default Codex pair as dirty", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+    // gpt-5.4-mini was the pre-PR default; the new default is gpt-5.6-luna, so
+    // an untouched old-default user is deliberately signaled as dirty.
+    expect(
+      isGitTextGenerationSettingsDirty(
+        { ...defaults, textGenerationProvider: "codex", textGenerationModel: "gpt-5.4-mini" },
+        defaults,
+      ),
+    ).toBe(true);
+  });
+
+  it("flags a provider-only difference as dirty", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+
+    expect(
+      isGitTextGenerationSettingsDirty({ ...defaults, textGenerationProvider: "kilo" }, defaults),
+    ).toBe(true);
+  });
+
+  it("stays clean when the stored pair equals the default after normalization", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+    // {codex, no model} normalizes to the complete Codex/Luna default.
+    expect(
+      isGitTextGenerationSettingsDirty({ ...defaults, textGenerationProvider: "codex" }, defaults),
+    ).toBe(false);
+  });
+
+  it("flags an unattributable stored model as dirty", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+    // A bare non-Codex slug with no provider is rejected by the shared resolver
+    // (null): the stored pair cannot be represented, so it is dirty.
+    expect(
+      isGitTextGenerationSettingsDirty(
+        {
+          ...defaults,
+          textGenerationProvider: null,
+          textGenerationModel: "composer-2.5",
+        } as unknown as AppSettings,
+        defaults,
+      ),
+    ).toBe(true);
+  });
 });
 
-describe("resolveGitTextGenerationSelection", () => {
-  it("returns the Codex/Luna default when nothing is provided", () => {
-    expect(resolveGitTextGenerationSelection({})).toEqual({
-      provider: "codex",
-      model: "gpt-5.6-luna",
-    });
-  });
-
-  it("returns a complete pair for a provider-only patch", () => {
-    expect(resolveGitTextGenerationSelection({ provider: "codex" })).toEqual({
-      provider: "codex",
-      model: "gpt-5.6-luna",
-    });
-    expect(resolveGitTextGenerationSelection({ provider: "kilo" })).toEqual({
-      provider: "kilo",
-      model: "kilo/kilo-auto/free",
-    });
-    expect(resolveGitTextGenerationSelection({ provider: "opencode" })).toEqual({
-      provider: "opencode",
-      model: "opencode/big-pickle",
-    });
-    // A provider-only Cursor patch stays on Cursor with its registered default;
-    // it is never rewritten to Codex/Luna.
-    expect(resolveGitTextGenerationSelection({ provider: "cursor" })).toEqual({
-      provider: "cursor",
-      model: "auto",
-    });
-  });
-
-  it("routes a bare Kilo slug to the Kilo provider", () => {
-    expect(resolveGitTextGenerationSelection({ model: "kilo/kilo-auto/free" })).toEqual({
-      provider: "kilo",
-      model: "kilo/kilo-auto/free",
-    });
-  });
-
-  it("lets a recognized Kilo slug win over a conflicting current provider", () => {
+describe("appSettingsPatchToServerSettingsPatch", () => {
+  it("keeps an explicit provider+model pair verbatim", () => {
     expect(
-      resolveGitTextGenerationSelection({
-        model: "kilo/kilo-auto/free",
-        currentProvider: "opencode",
+      appSettingsPatchToServerSettingsPatch({
+        textGenerationProvider: "opencode",
+        textGenerationModel: "openrouter/gpt-oss-120b",
       }),
     ).toEqual({
-      provider: "kilo",
-      model: "kilo/kilo-auto/free",
-    });
-  });
-
-  it("lets a recognized OpenCode slug win over a conflicting current provider", () => {
-    expect(
-      resolveGitTextGenerationSelection({
-        model: "opencode/big-pickle",
-        currentProvider: "kilo",
-      }),
-    ).toEqual({
-      provider: "opencode",
-      model: "opencode/big-pickle",
-    });
-  });
-
-  it("preserves an explicit provider+model pair", () => {
-    expect(
-      resolveGitTextGenerationSelection({ provider: "opencode", model: "openrouter/gpt-oss-120b" }),
-    ).toEqual({
-      provider: "opencode",
-      model: "openrouter/gpt-oss-120b",
-    });
-    expect(
-      resolveGitTextGenerationSelection({ provider: "cursor", model: "composer-2.5" }),
-    ).toEqual({
-      provider: "cursor",
-      model: "composer-2.5",
-    });
-  });
-
-  it("falls back to the complete Codex/Luna selection for an unsupported provider with no model", () => {
-    expect(resolveGitTextGenerationSelection({ provider: "claudeAgent" })).toEqual({
-      provider: "codex",
-      model: "gpt-5.6-luna",
-    });
-  });
-
-  it("preserves an explicit model for a provider outside the Git writing registry (legacy)", () => {
-    expect(resolveGitTextGenerationSelection({ provider: "claudeAgent", model: "sonnet" })).toEqual(
-      {
-        provider: "claudeAgent",
-        model: "sonnet",
+      textGenerationModelSelection: {
+        provider: "opencode",
+        model: "openrouter/gpt-oss-120b",
       },
-    );
-  });
-
-  it("keeps a bare non-Codex slug on the active Git writing provider instead of borrowing Codex", () => {
-    expect(resolveGitTextGenerationSelection({ model: "auto", currentProvider: "cursor" })).toEqual(
-      { provider: "cursor", model: "auto" },
-    );
-    expect(
-      resolveGitTextGenerationSelection({ model: "composer-2.5", currentProvider: "cursor" }),
-    ).toEqual({ provider: "cursor", model: "composer-2.5" });
-  });
-
-  it("prefers the current supported provider for an ambiguous custom slug", () => {
-    expect(
-      resolveGitTextGenerationSelection({
-        model: "openrouter/custom-model",
-        currentProvider: "kilo",
-      }),
-    ).toEqual({
-      provider: "kilo",
-      model: "openrouter/custom-model",
     });
   });
 
-  it("clearing the model under Kilo stays on the Kilo default", () => {
-    expect(
-      resolveGitTextGenerationSelection({
-        model: "",
-        currentProvider: "kilo",
-      }),
-    ).toEqual({
-      provider: "kilo",
-      model: "kilo/kilo-auto/free",
+  it("completes a provider-only patch with the registered default", () => {
+    expect(appSettingsPatchToServerSettingsPatch({ textGenerationProvider: "kilo" })).toEqual({
+      textGenerationModelSelection: {
+        provider: "kilo",
+        model: "kilo/kilo-auto/free",
+      },
     });
   });
 
-  it("clearing the model under OpenCode stays on the OpenCode default", () => {
-    expect(
-      resolveGitTextGenerationSelection({
-        model: null,
-        currentProvider: "opencode",
-      }),
-    ).toEqual({
-      provider: "opencode",
-      model: "opencode/big-pickle",
+  it("keeps a Codex-scoped bare model on Codex", () => {
+    expect(appSettingsPatchToServerSettingsPatch({ textGenerationModel: "gpt-5.4-mini" })).toEqual({
+      textGenerationModelSelection: {
+        provider: "codex",
+        model: "gpt-5.4-mini",
+      },
     });
   });
 
-  it("clearing the model under Cursor stays on the Cursor default", () => {
+  it("skips the selection when the resolver rejects an unattributable model", () => {
+    // A bare non-Codex slug with no current provider cannot be attributed: the
+    // shared resolver rejects it (null) and the server keeps its current pair.
     expect(
-      resolveGitTextGenerationSelection({
-        model: "",
-        currentProvider: "cursor",
-      }),
+      appSettingsPatchToServerSettingsPatch({ textGenerationModel: "composer-2.5" }),
+    ).not.toHaveProperty("textGenerationModelSelection");
+    expect(
+      appSettingsPatchToServerSettingsPatch({ textGenerationModel: "auto" }),
+    ).not.toHaveProperty("textGenerationModelSelection");
+  });
+
+  it("skips the selection when the resolver rejects a foreign model for the current provider", () => {
+    // composer-2.5 is a Cursor model; it is not valid under Codex.
+    expect(
+      appSettingsPatchToServerSettingsPatch({ textGenerationModel: "composer-2.5" }, "codex"),
+    ).toEqual({});
+  });
+
+  it("resolves a foreign bare slug against the current provider when it is valid", () => {
+    expect(
+      appSettingsPatchToServerSettingsPatch({ textGenerationModel: "composer-2.5" }, "cursor"),
     ).toEqual({
-      provider: "cursor",
-      model: "auto",
+      textGenerationModelSelection: {
+        provider: "cursor",
+        model: "composer-2.5",
+      },
     });
   });
 });

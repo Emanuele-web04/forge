@@ -23,7 +23,7 @@ const optionalDialogFields = {
   dialogs: Schema.optional(Schema.Array(BrowserDialogEvent).check(Schema.isMaxLength(20))),
 };
 
-const jsonDepth = (value: unknown, depth = 0): number => {
+export const jsonDepth = (value: unknown, depth = 0): number => {
   if (value === null || typeof value !== "object") return depth;
   if (depth > 20) return depth;
   if (Array.isArray(value)) {
@@ -34,7 +34,7 @@ const jsonDepth = (value: unknown, depth = 0): number => {
     depth,
   );
 };
-const jsonBytes = (value: unknown): number => {
+export const jsonBytes = (value: unknown): number => {
   try {
     return utf8ByteLength(JSON.stringify(value));
   } catch {

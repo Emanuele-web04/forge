@@ -14,6 +14,7 @@ import {
   DEFAULT_SERVER_SETTINGS_VIEW,
   TrimmedNonEmptyString,
   ProviderKind,
+  type GitTextGenerationDefaultProvider,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -302,6 +303,10 @@ export function isGitTextGenerationSettingsDirty(
   settings: AppSettings,
   defaults: AppSettings,
 ): boolean {
+  // currentProvider is intentionally omitted here: both sides resolve against
+  // the same empty context, so an equal stored pair normalizes to an equal
+  // complete pair. A rejected resolution (null) cannot be compared, so treat
+  // it as dirty: the stored pair is unattributable and needs a deliberate fix.
   const resolvedSettings = resolveGitTextGenerationSelection({
     provider: settings.textGenerationProvider ?? null,
     model: settings.textGenerationModel ?? null,
@@ -310,6 +315,10 @@ export function isGitTextGenerationSettingsDirty(
     provider: defaults.textGenerationProvider ?? null,
     model: defaults.textGenerationModel ?? null,
   });
+
+  if (resolvedSettings === null || resolvedDefaults === null) {
+    return true;
+  }
 
   return (
     resolvedSettings.provider !== resolvedDefaults.provider ||
@@ -601,30 +610,6 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
   };
 }
 
-function resolveTextGenerationProvider(input: {
-  readonly provider?: ProviderKind | null;
-  readonly model?: string | null;
-}): ProviderKind {
-  if (input.provider) {
-    return input.provider;
-  }
-  const model = input.model?.trim();
-  if (!model) {
-    return "codex";
-  }
-  // Kilo slugs are provider/model shaped too ("kilo/kilo-auto/free"), so a
-  // bare model alone cannot always mean OpenCode — check the kilo prefix first.
-  if (model.startsWith("kilo/")) {
-    return "kilo";
-  }
-  return model.includes("/") ? "opencode" : "codex";
-}
-
-// The one shared atomic resolver lives in @synara/shared (registry-driven, used
-// by the web patch path, the direct server merge boundary, and the
-// disabled-provider fallback). Re-export it so web call sites cannot drift.
-export { resolveGitTextGenerationSelection } from "@synara/shared/model";
-
 function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key: Key): boolean {
   return Object.prototype.hasOwnProperty.call(patch, key);
 }
@@ -642,7 +627,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
   );
 }
 
-function appSettingsPatchToServerSettingsPatch(
+export function appSettingsPatchToServerSettingsPatch(
   patch: Partial<AppSettings>,
   currentProvider?: ProviderKind | null,
 ): ServerSettingsPatch {
@@ -659,15 +644,20 @@ function appSettingsPatchToServerSettingsPatch(
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
-    // Resolve provider and model atomically so a partial patch (provider-only,
-    // model-only, or neither) can never produce a mismatched pair.
-    serverPatch.textGenerationModelSelection = resolveGitTextGenerationSelection({
+    // Resolve the provider and model as one complete pair so a partial patch
+    // (provider-only, model-only, or neither) can never produce a mismatched
+    // pair. When the resolver rejects the input (null), leave the selection
+    // out of the patch: the server keeps the current pair unchanged.
+    const resolved = resolveGitTextGenerationSelection({
       ...(patch.textGenerationProvider !== undefined
         ? { provider: patch.textGenerationProvider }
         : {}),
       ...(patch.textGenerationModel !== undefined ? { model: patch.textGenerationModel } : {}),
       ...(currentProvider !== undefined && currentProvider !== null ? { currentProvider } : {}),
     });
+    if (resolved !== null) {
+      serverPatch.textGenerationModelSelection = resolved;
+    }
   }
 
   if (
@@ -944,17 +934,35 @@ export function getAppModelOptions(
   return options;
 }
 
-type GitTextGenerationDiscoveredProvider = "codex" | "kilo" | "opencode" | "cursor";
+// Registry-driven union (keyof the default-selection registry), so the
+// picker types cannot drift when the registry gains a provider.
+type GitTextGenerationDiscoveredProvider = GitTextGenerationDefaultProvider;
 
 /**
- * The providers the Git writing picker exposes, in display order. Derived from
+ * The providers the Git text generation picker exposes, in display order. Derived from
  * the registry keys so the picker list cannot drift from the registered
  * defaults (registry insertion order == picker order).
  */
-export const GIT_TEXT_GENERATION_PICKER_PROVIDERS: readonly GitTextGenerationDiscoveredProvider[] =
+export const GIT_TEXT_GENERATION_PICKER_PROVIDERS: readonly GitTextGenerationDefaultProvider[] =
   Object.keys(
     DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER,
-  ) as GitTextGenerationDiscoveredProvider[];
+  ) as GitTextGenerationDefaultProvider[];
+
+// Precomputed registered-default rows for the Git text generation picker (AC4): a
+// provider's OWN registered default is always a valid selectable option for
+// that provider, so it is always offered. Cursor's default "auto" is exempt
+// (it is a meta-slug that only surfaces when persisted), so it is not here.
+// Hoisted because every input is a module constant.
+const GIT_TEXT_GENERATION_DEFAULT_OPTIONS = GIT_TEXT_GENERATION_PICKER_PROVIDERS.filter(
+  (provider) => provider !== "cursor",
+).map((provider) => {
+  const slug = defaultGitTextGenerationSelectionFor(provider).model;
+  return {
+    provider,
+    slug,
+    name: formatProviderModelOptionName({ provider, slug }),
+  };
+});
 
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,
@@ -983,9 +991,6 @@ export function getGitTextGenerationModelOptions(
       ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
     >
   >,
-  runtimeModelsByProvider?: Partial<
-    Record<GitTextGenerationDiscoveredProvider, ReadonlyArray<unknown>>
-  >,
 ): AppModelOption[] {
   const options = [
     ...(discoveredOptionsByProvider?.codex
@@ -1013,32 +1018,30 @@ export function getGitTextGenerationModelOptions(
     deduped.push(option);
   }
 
-  // A provider's registered default is offered only when its runtime model
-  // catalog has not resolved to an authoritative non-empty list (pending,
-  // unavailable, or empty). When discovery IS authoritative and does not
-  // advertise the default, the default must not surface as a phantom option.
-  for (const provider of GIT_TEXT_GENERATION_PICKER_PROVIDERS) {
-    if ((runtimeModelsByProvider?.[provider]?.length ?? 0) > 0) {
-      continue;
-    }
-    const registeredDefault = defaultGitTextGenerationSelectionFor(provider).model;
-    const key = `${provider}:${registeredDefault}`;
+  // AC4 refinement: a provider's OWN registered default is always a valid
+  // selectable option for that provider. It is not a phantom, even when the
+  // runtime catalog is authoritative and does not advertise it. Defaults of
+  // OTHER providers are never injected. Cursor's default model "auto" stays
+  // exempt from picker injection: it is a meta-slug that only surfaces when
+  // persisted (via the selected-model dedup below).
+  for (const defaultOption of GIT_TEXT_GENERATION_DEFAULT_OPTIONS) {
+    const key = `${defaultOption.provider}:${defaultOption.slug}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
     deduped.push({
-      provider,
-      slug: registeredDefault,
-      name: formatProviderModelOptionName({ provider, slug: registeredDefault }),
-      isCustom: true,
+      ...defaultOption,
+      isCustom: false,
     });
   }
 
   const selectedModel = settings.textGenerationModel?.trim();
-  const selectedProvider =
-    settings.textGenerationProvider ??
-    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
+  // The provider always defaults to codex; no slug-shape inference happens
+  // here. Slug attribution is the shared resolver's job (kilo/ and opencode/
+  // prefixes); this row only labels a persisted selection under the provider
+  // it came from.
+  const selectedProvider = settings.textGenerationProvider ?? "codex";
   if (selectedModel && !seen.has(`${selectedProvider}:${selectedModel}`)) {
     deduped.push({
       provider: selectedProvider,

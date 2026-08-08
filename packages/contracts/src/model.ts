@@ -499,6 +499,11 @@ type ModelDefinition = {
  */
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
+    // The Codex Git text generation default (gpt-5.6-luna, see
+    // DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER) is not in this static
+    // list: codex surfaces the gpt-5.6 family through runtime discovery, and the
+    // Git text generation picker injects the registered default on its own, so this
+    // general-picker offline fallback does not need a duplicate entry.
     {
       slug: "gpt-5.5",
       name: "GPT-5.5",
@@ -811,6 +816,17 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         contextWindowOptions: [],
       },
     },
+    {
+      slug: "opencode/big-pickle",
+      name: "OpenCode Big Pickle",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
   ],
   kilo: [
     {
@@ -1036,11 +1052,11 @@ export const MODEL_OPTIONS = MODEL_OPTIONS_BY_PROVIDER.codex;
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 
 /**
- * Default Git writing model selections (commit messages, PR titles/branches,
+ * Default Git text generation model selections (commit messages, PR titles/branches,
  * diff summaries) per provider. Stored as complete provider+model pairs so a
  * provider change can never produce a mismatched selection (e.g. an OpenCode
  * model under the Codex provider). These are the recommended defaults for the
- * providers Synara exposes in the Git writing picker.
+ * providers Synara exposes in the Git text generation picker.
  */
 export const DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER = {
   codex: {
@@ -1060,13 +1076,20 @@ export const DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER = {
     provider: "cursor",
     model: "auto",
   },
-} as const satisfies Record<
-  "codex" | "kilo" | "opencode" | "cursor",
-  { readonly provider: "codex" | "kilo" | "opencode" | "cursor"; readonly model: string }
->;
+} as const satisfies {
+  [P in "codex" | "kilo" | "opencode" | "cursor"]: { readonly provider: P; readonly model: string };
+};
 
 export type GitTextGenerationDefaultProvider =
   keyof typeof DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER;
+
+// Git text generation provider display/fallback order, derived from the registry keys
+// (insertion order) so the provider list cannot drift from the registered
+// defaults. The server fallback order and the web picker order derive from this.
+export const GIT_TEXT_GENERATION_DEFAULT_PROVIDER_ORDER: readonly GitTextGenerationDefaultProvider[] =
+  Object.keys(
+    DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER,
+  ) as GitTextGenerationDefaultProvider[];
 
 // Backward-compatible Codex-shaped default for existing call sites that only
 // thread a raw model slug. Derived from the map so the two cannot drift.
