@@ -121,6 +121,8 @@ const DEV_ARGS_PATTERN =
 
 const pageTitleCache = new Map<string, CachedPageTitle>();
 const pageTitleInFlight = new Map<string, Promise<string | null>>();
+// Preserve lineage-only command context without extending the public local-server contract.
+const pageTitleProbeArgs = new WeakMap<ServerLocalServerProcess, string>();
 
 function execFileText(command: string, args: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -271,7 +273,10 @@ function tokenizeCommandLine(commandLine: string): string[] {
 }
 
 function commandTokenName(token: string): string {
-  return path.basename(token).replace(/\.[cm]?js$/i, "").toLowerCase();
+  return path
+    .basename(token)
+    .replace(/\.[cm]?js$/i, "")
+    .toLowerCase();
 }
 
 function normalizeCommandName(command: string, args: string): string {
@@ -696,10 +701,11 @@ function pageTitleCandidateUrls(server: ServerLocalServerProcess): string[] {
 }
 
 function allowsPageTitleProbe(server: ServerLocalServerProcess): boolean {
-  if (server.displayName === "Expo" || isExpoDevServerCommand(server.command, server.args)) {
-    return tokenizeCommandLine(server.args).includes("--web");
+  const detectionArgs = pageTitleProbeArgs.get(server) ?? server.args;
+  if (server.displayName === "Expo" || isExpoDevServerCommand(server.command, detectionArgs)) {
+    return tokenizeCommandLine(detectionArgs).includes("--web");
   }
-  return server.displayName !== "Metro" && !isMetroDevServerCommand(server.command, server.args);
+  return server.displayName !== "Metro" && !isMetroDevServerCommand(server.command, detectionArgs);
 }
 
 async function firstResolvedPageTitle(
@@ -811,7 +817,7 @@ function toServerProcess(
 
   const isStoppable = isProcessSignalable(pid);
   const cwd = resolveProcessCwd(pid, processInfoByPid, cwdByPid);
-  return {
+  const server: ServerLocalServerProcess = {
     id: `${pid}:${ports.join(",")}`,
     pid,
     ...(typeof processInfo?.ppid === "number" && processInfo.ppid > 0
@@ -826,6 +832,8 @@ function toServerProcess(
     isStoppable,
     ...(isStoppable ? {} : { stopDisabledReason: "Synara cannot signal this process." }),
   };
+  pageTitleProbeArgs.set(server, detectionArgs);
+  return server;
 }
 
 // Resolves the working directory for a listener, walking up the process lineage

@@ -33,9 +33,7 @@ async function withMockedFetch<T>(
 }
 
 function buildServerForCommand(commandLine: string, port: number) {
-  const processInfo = new Map<number, LocalServerProcessInfo>([
-    [123, { ppid: 1, commandLine }],
-  ]);
+  const processInfo = new Map<number, LocalServerProcessInfo>([[123, { ppid: 1, commandLine }]]);
   return buildLocalServerProcesses(
     parseLsofTcpListenOutput(["p123", "cnode", "PTCP", `n127.0.0.1:${port}`].join("\n")),
     processInfo,
@@ -330,6 +328,23 @@ describe("localServerMonitor", () => {
       displayName: "Expo",
       pageTitle: "Expo Web",
     });
+    expect(fetchTitle).toHaveBeenCalledOnce();
+  });
+
+  it("uses parent process arguments to recognize Expo web mode", async () => {
+    const processInfo = new Map<number, LocalServerProcessInfo>([
+      [123, { ppid: 456, commandLine: "node generic-listener.js" }],
+      [456, { ppid: 1, commandLine: "bunx expo start --web" }],
+    ]);
+    const servers = buildLocalServerProcesses(
+      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:8081"].join("\n")),
+      processInfo,
+    );
+    const fetchTitle = vi.fn(async () => "Expo Web");
+
+    const enriched = await enrichLocalServerProcessesWithPageTitles(servers, fetchTitle);
+
+    expect(enriched[0]).toMatchObject({ displayName: "Expo", pageTitle: "Expo Web" });
     expect(fetchTitle).toHaveBeenCalledOnce();
   });
 
