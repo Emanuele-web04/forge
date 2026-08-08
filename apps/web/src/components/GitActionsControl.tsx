@@ -961,12 +961,13 @@ export default function GitActionsControl({
           !prUrl &&
           result.push.status === "pushed" &&
           !actionIsDefaultBranch &&
-          resolveCreatePrActionAvailability({
+          resolveCreatePrExecution({
             gitStatus: postPushStatus,
+            isBusy: false,
             isDefaultBranch: actionIsDefaultBranch,
             hasOriginRemote,
             defaultBranchName,
-          }).canRun;
+          }).kind === "run_action";
         const closeResultToast = () => {
           toastManager.close(resolvedProgressToastId);
         };
