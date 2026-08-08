@@ -16,6 +16,14 @@ import {
   refreshGitQueriesForCwd,
 } from "./gitReactQuery";
 
+function deferredVoid() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("gitMutationKeys", () => {
   it("scopes stacked action keys by cwd", () => {
     expect(gitMutationKeys.runStackedAction("/repo/a")).not.toEqual(
@@ -60,15 +68,13 @@ describe("git mutation options", () => {
     const cwd = "/repo/non-blocking";
     const statusKey = gitQueryKeys.status(cwd);
     let statusCalls = 0;
-    let releaseStatus: (() => void) | null = null;
+    const statusGate = deferredVoid();
     queryClient.setQueryData(statusKey, { branch: "main" });
     const observer = new QueryObserver(queryClient, {
       queryKey: statusKey,
       queryFn: async () => {
         statusCalls += 1;
-        await new Promise<void>((resolve) => {
-          releaseStatus = resolve;
-        });
+        await statusGate.promise;
         return { branch: "main" };
       },
       staleTime: Number.POSITIVE_INFINITY,
@@ -81,7 +87,7 @@ describe("git mutation options", () => {
 
     const refresh = refreshGitQueriesForCwd(queryClient, cwd);
     await vi.waitFor(() => expect(statusCalls).toBe(1));
-    releaseStatus?.();
+    statusGate.resolve();
     await refresh;
     unsubscribe();
   });
@@ -149,15 +155,13 @@ describe("git query invalidation", () => {
     const cwd = "/repo/coalesced";
     const statusKey = gitQueryKeys.status(cwd);
     let statusCalls = 0;
-    let releaseStatus: (() => void) | null = null;
+    const statusGate = deferredVoid();
     queryClient.setQueryData(statusKey, { branch: "main" });
     const observer = new QueryObserver(queryClient, {
       queryKey: statusKey,
       queryFn: async () => {
         statusCalls += 1;
-        await new Promise<void>((resolve) => {
-          releaseStatus = resolve;
-        });
+        await statusGate.promise;
         return { branch: "main" };
       },
       staleTime: Number.POSITIVE_INFINITY,
@@ -169,8 +173,38 @@ describe("git query invalidation", () => {
 
     expect(second).toBe(first);
     await vi.waitFor(() => expect(statusCalls).toBe(1));
-    releaseStatus?.();
+    statusGate.resolve();
     await Promise.all([first, second]);
+    unsubscribe();
+  });
+
+  it("keeps availability coalesced when a refresh is upgraded to include details", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/upgraded";
+    const statusKey = gitQueryKeys.status(cwd);
+    let statusCalls = 0;
+    const statusGate = deferredVoid();
+    queryClient.setQueryData(statusKey, {});
+    const observer = new QueryObserver(queryClient, {
+      queryKey: statusKey,
+      queryFn: async () => {
+        statusCalls += 1;
+        await statusGate.promise;
+        return {};
+      },
+      staleTime: Number.POSITIVE_INFINITY,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    const availability = refreshGitActionAvailability(queryClient, cwd);
+    const details = refreshGitQueriesForCwd(queryClient, cwd);
+    const repeatedAvailability = refreshGitActionAvailability(queryClient, cwd);
+
+    expect(repeatedAvailability).toBe(availability);
+    await vi.waitFor(() => expect(statusCalls).toBe(1));
+    statusGate.resolve();
+    await Promise.all([availability, details, repeatedAvailability]);
+    expect(statusCalls).toBe(1);
     unsubscribe();
   });
 
@@ -213,7 +247,7 @@ describe("git query invalidation", () => {
     const queryClient = new QueryClient();
     const cwd = "/repo/prioritized";
     const calls: string[] = [];
-    let releaseStats: (() => void) | null = null;
+    const statsGate = deferredVoid();
     const observe = (queryKey: readonly unknown[], label: string, waitForRelease = false) => {
       queryClient.setQueryData(queryKey, {});
       const observer = new QueryObserver(queryClient, {
@@ -221,9 +255,7 @@ describe("git query invalidation", () => {
         queryFn: async () => {
           calls.push(label);
           if (waitForRelease) {
-            await new Promise<void>((resolve) => {
-              releaseStats = resolve;
-            });
+            await statsGate.promise;
           }
           return {};
         },
@@ -241,7 +273,7 @@ describe("git query invalidation", () => {
     await vi.waitFor(() => expect(calls).toEqual(["status", "stats"]));
     const availabilityRefresh = refreshGitActionAvailability(queryClient, cwd);
 
-    releaseStats?.();
+    statsGate.resolve();
     await availabilityRefresh;
     expect(calls).toEqual(["status", "stats", "status"]);
 

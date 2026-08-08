@@ -1381,7 +1381,9 @@ export default function GitActionsControl({
         </p>
       )}
       {gitStatusError && !isGitStatusRefreshDelayed && (
-        <p className="px-3 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
+        <p className="px-3 py-1.5 text-xs text-destructive">
+          {gitStatusError instanceof Error ? gitStatusError.message : "Git status refresh failed."}
+        </p>
       )}
     </>
   );

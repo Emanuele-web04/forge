@@ -110,7 +110,7 @@ type GitRefreshDepth = "availability" | "active-details";
 interface ActiveGitRefresh {
   readonly depth: GitRefreshDepth;
   readonly promise: Promise<void>;
-  availabilityPromise?: Promise<void>;
+  availabilityPromise: Promise<void> | undefined;
 }
 
 const activeGitRefreshes = new WeakMap<QueryClient, Map<string, ActiveGitRefresh>>();
@@ -144,8 +144,7 @@ function trackGitRefresh(
     refreshes = new Map();
     activeGitRefreshes.set(queryClient, refreshes);
   }
-  const entry: ActiveGitRefresh = { depth, promise };
-  if (availabilityPromise) entry.availabilityPromise = availabilityPromise;
+  const entry: ActiveGitRefresh = { depth, promise, availabilityPromise };
   refreshes.set(cwd, entry);
   if (availabilityPromise) {
     void availabilityPromise.then(
@@ -277,7 +276,13 @@ export function refreshGitQueriesForCwd(
     const upgraded = existing.promise
       .catch(() => undefined)
       .then(() => refreshActiveGitDetails(queryClient, cwd));
-    return trackGitRefresh(queryClient, cwd, "active-details", upgraded);
+    return trackGitRefresh(
+      queryClient,
+      cwd,
+      "active-details",
+      upgraded,
+      existing.availabilityPromise,
+    );
   }
 
   const availability = enqueueGitRefresh(queryClient, () =>
