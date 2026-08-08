@@ -1092,6 +1092,19 @@ describe("resolveGitTextGenerationSelection", () => {
     ).toEqual({ provider: "cursor", model: "composer-2.5" });
   });
 
+  it("returns the complete Codex/Luna default for an unattributable bare slug with no active provider", () => {
+    // No Git writing provider is active, so "composer-2.5" cannot be attributed
+    // to Cursor; pairing it with Codex would be a mismatched pair.
+    expect(resolveGitTextGenerationSelection({ model: "composer-2.5" })).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+    expect(resolveGitTextGenerationSelection({ model: "auto" })).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-luna",
+    });
+  });
+
   it("falls back to the complete Codex/Luna selection for an unsupported provider with no model", () => {
     expect(resolveGitTextGenerationSelection({ provider: "claudeAgent" })).toEqual({
       provider: "codex",

@@ -170,7 +170,10 @@ export function resolveGitTextGenerationSelection(input: {
       if (input.currentProvider && isGitTextGenerationDefaultProvider(input.currentProvider)) {
         return { provider: input.currentProvider, model };
       }
-      return { provider: "codex", model };
+      // No active Git writing provider to attribute the slug to: pairing a
+      // foreign bare slug (e.g. "composer-2.5" or "auto") with Codex would be
+      // a mismatched pair, so return the complete Codex/Luna default instead.
+      return defaultGitTextGenerationSelectionFor("codex");
     }
     // Genuinely ambiguous vendor/model slug (e.g. openrouter/...): prefer the
     // currently active provider when it is a Git writing provider.
