@@ -39,6 +39,7 @@ import {
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveCreatePrActionAvailability,
+  resolveCreatePrDialogRuntimeStatus,
   resolveCreatePrExecution,
   resolveQuickAction,
   resolvePullActionAvailability,
@@ -1037,22 +1038,30 @@ export default function GitActionsControl({
     ],
   );
 
+  const createPrDialogRuntimeStatus = useMemo(
+    () =>
+      resolveCreatePrDialogRuntimeStatus({
+        liveGitStatus: gitStatusForActions,
+        statusOverride: createPrDialog?.statusOverride ?? null,
+        isDefaultBranch,
+        isDefaultBranchOverride: createPrDialog?.isDefaultBranchOverride ?? null,
+      }),
+    [createPrDialog, gitStatusForActions, isDefaultBranch],
+  );
+
   const handleCreatePrDialogSubmit = useCallback(
     (submission: GitCreatePrDialogSubmission) => {
-      const dialogState = createPrDialog;
       setCreatePrDialog(null);
-      const statusOverride = dialogState?.statusOverride ?? null;
-      const actionStatus = statusOverride ?? gitStatusForActions;
-      const actionIsDefaultBranch = dialogState?.isDefaultBranchOverride ?? isDefaultBranch;
+      const actionStatus = createPrDialogRuntimeStatus.gitStatus;
+      const actionIsDefaultBranch = createPrDialogRuntimeStatus.isDefaultBranch;
       const excludesDirtyChanges =
         !submission.includeLocalChanges && actionStatus?.hasWorkingTreeChanges === true;
       void runGitActionWithToast({
         action: submission.action,
-        ...(statusOverride ? { statusOverride } : {}),
-        ...(dialogState?.isDefaultBranchOverride !== null &&
-        dialogState?.isDefaultBranchOverride !== undefined
-          ? { isDefaultBranchOverride: dialogState.isDefaultBranchOverride }
+        ...(createPrDialogRuntimeStatus.statusOverride
+          ? { statusOverride: createPrDialogRuntimeStatus.statusOverride }
           : {}),
+        isDefaultBranchOverride: actionIsDefaultBranch,
         ...(actionIsDefaultBranch ? { featureBranch: true } : {}),
         skipDefaultBranchPrompt: true,
         ...(submission.title ? { prTitle: submission.title } : {}),
@@ -1061,16 +1070,14 @@ export default function GitActionsControl({
         ...(excludesDirtyChanges ? { allowDirtyWorkingTree: true } : {}),
       });
     },
-    [createPrDialog, gitStatusForActions, isDefaultBranch, runGitActionWithToast],
+    [createPrDialogRuntimeStatus, runGitActionWithToast],
   );
 
   const handleCreatePrDialogBrowser = useCallback(
     (request: GitCreatePrDialogBrowserRequest) => {
-      const dialogState = createPrDialog;
       setCreatePrDialog(null);
-      const statusOverride = dialogState?.statusOverride ?? null;
-      const actionStatus = statusOverride ?? gitStatusForActions;
-      const actionIsDefaultBranch = dialogState?.isDefaultBranchOverride ?? isDefaultBranch;
+      const actionStatus = createPrDialogRuntimeStatus.gitStatus;
+      const actionIsDefaultBranch = createPrDialogRuntimeStatus.isDefaultBranch;
       const preparation = request.preparation;
       if (preparation.kind === "open_pr") {
         void openExistingPr();
@@ -1093,11 +1100,10 @@ export default function GitActionsControl({
         !request.includeLocalChanges && actionStatus?.hasWorkingTreeChanges === true;
       void runGitActionWithToast({
         action: preparation.action,
-        ...(statusOverride ? { statusOverride } : {}),
-        ...(dialogState?.isDefaultBranchOverride !== null &&
-        dialogState?.isDefaultBranchOverride !== undefined
-          ? { isDefaultBranchOverride: dialogState.isDefaultBranchOverride }
+        ...(createPrDialogRuntimeStatus.statusOverride
+          ? { statusOverride: createPrDialogRuntimeStatus.statusOverride }
           : {}),
+        isDefaultBranchOverride: actionIsDefaultBranch,
         ...(actionIsDefaultBranch ? { featureBranch: true } : {}),
         skipDefaultBranchPrompt: true,
         ...(excludesDirtyChanges ? { allowDirtyWorkingTree: true } : {}),
@@ -1109,9 +1115,7 @@ export default function GitActionsControl({
       });
     },
     [
-      createPrDialog,
-      gitStatusForActions,
-      isDefaultBranch,
+      createPrDialogRuntimeStatus,
       openComparePage,
       openExistingPr,
       runGitActionWithToast,
@@ -1121,18 +1125,16 @@ export default function GitActionsControl({
 
   const createPrDialogContext = useMemo<CreatePrDialogContext>(
     () => ({
-      gitStatus: createPrDialog?.statusOverride ?? gitStatusForActions,
+      gitStatus: createPrDialogRuntimeStatus.gitStatus,
       isBusy: isGitActionRunning,
-      isDefaultBranch: createPrDialog?.isDefaultBranchOverride ?? isDefaultBranch,
+      isDefaultBranch: createPrDialogRuntimeStatus.isDefaultBranch,
       hasOriginRemote,
       defaultBranchName,
     }),
     [
-      createPrDialog,
+      createPrDialogRuntimeStatus,
       defaultBranchName,
-      gitStatusForActions,
       hasOriginRemote,
-      isDefaultBranch,
       isGitActionRunning,
     ],
   );

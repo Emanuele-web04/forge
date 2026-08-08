@@ -188,6 +188,39 @@ export interface CreatePrDialogContext {
   defaultBranchName?: string | null | undefined;
 }
 
+export interface CreatePrDialogRuntimeStatus {
+  gitStatus: GitStatusResult | null;
+  isDefaultBranch: boolean;
+  statusOverride: GitStatusResult | null;
+}
+
+/**
+ * A post-push toast carries a synthetic status so its CTA can open even when
+ * the query cache still reflects the pre-push branch. Once live status is
+ * available, it must win: the working tree or branch may have changed while
+ * the dialog was open. The synthetic snapshot remains only as a temporary
+ * fallback while live status is unavailable.
+ */
+export function resolveCreatePrDialogRuntimeStatus(input: {
+  liveGitStatus: GitStatusResult | null;
+  statusOverride: GitStatusResult | null;
+  isDefaultBranch: boolean;
+  isDefaultBranchOverride: boolean | null;
+}): CreatePrDialogRuntimeStatus {
+  if (input.liveGitStatus) {
+    return {
+      gitStatus: input.liveGitStatus,
+      isDefaultBranch: input.isDefaultBranch,
+      statusOverride: null,
+    };
+  }
+  return {
+    gitStatus: input.statusOverride,
+    isDefaultBranch: input.isDefaultBranchOverride ?? input.isDefaultBranch,
+    statusOverride: input.statusOverride,
+  };
+}
+
 /**
  * Execution for the Create PR dialog, honoring the "Commit and push local
  * changes" toggle: with the toggle off a dirty tree is evaluated as if it were

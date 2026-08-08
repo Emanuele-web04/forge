@@ -9,6 +9,7 @@ import {
   resolveCreatePrActionAvailability,
   resolveCreatePrBrowserPreparation,
   resolveCreatePrDialogExecution,
+  resolveCreatePrDialogRuntimeStatus,
   resolveCreatePrDialogView,
   resolveCreatePrExecution,
   resolveDefaultCreateBranchName,
@@ -1316,6 +1317,46 @@ describe("resolveCreatePrDialogExecution", () => {
       kind: "unavailable",
       hint: "Branch is behind upstream. Pull before creating a PR.",
     });
+  });
+});
+
+describe("resolveCreatePrDialogRuntimeStatus", () => {
+  it("uses a newly dirty live tree instead of a clean post-push snapshot", () => {
+    const postPushStatus = status({ hasWorkingTreeChanges: false, aheadCount: 0 });
+    const liveStatus = status({
+      hasWorkingTreeChanges: true,
+      workingTree: {
+        files: [{ path: "new-edit.ts", insertions: 7, deletions: 2 }],
+        insertions: 7,
+        deletions: 2,
+      },
+    });
+
+    const resolved = resolveCreatePrDialogRuntimeStatus({
+      liveGitStatus: liveStatus,
+      statusOverride: postPushStatus,
+      isDefaultBranch: false,
+      isDefaultBranchOverride: false,
+    });
+
+    assert.strictEqual(resolved.gitStatus, liveStatus);
+    assert.isTrue(resolved.gitStatus?.hasWorkingTreeChanges);
+    assert.isNull(resolved.statusOverride);
+  });
+
+  it("keeps the post-push snapshot only while live status is unavailable", () => {
+    const postPushStatus = status({ hasUpstream: true, aheadCount: 0 });
+
+    const resolved = resolveCreatePrDialogRuntimeStatus({
+      liveGitStatus: null,
+      statusOverride: postPushStatus,
+      isDefaultBranch: true,
+      isDefaultBranchOverride: false,
+    });
+
+    assert.strictEqual(resolved.gitStatus, postPushStatus);
+    assert.strictEqual(resolved.statusOverride, postPushStatus);
+    assert.isFalse(resolved.isDefaultBranch);
   });
 });
 
