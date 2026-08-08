@@ -393,9 +393,7 @@ export default function GitActionsControl({
     data: gitStatusData,
     error: gitStatusError,
     isFetching: isGitStatusFetching,
-  } = useQuery(
-    gitStatusQueryOptions(gitCwd, branchListReady && branchList?.isRepo === true),
-  );
+  } = useQuery(gitStatusQueryOptions(gitCwd, branchListReady && branchList?.isRepo === true));
   const gitStatus = gitStatusData ?? null;
   const isGitStatusRefreshDelayed = isGitExpensiveReadCapacityError(gitStatusError);
   const requestGitActionAvailabilityRefresh = useCallback(() => {

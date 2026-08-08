@@ -208,6 +208,47 @@ describe("git query invalidation", () => {
     expect(maxActiveCalls).toBe(1);
     for (const unsubscribe of unsubscribes) unsubscribe();
   });
+
+  it("prioritizes an availability refresh between active detail reads", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/prioritized";
+    const calls: string[] = [];
+    let releaseStats: (() => void) | null = null;
+    const observe = (queryKey: readonly unknown[], label: string, waitForRelease = false) => {
+      queryClient.setQueryData(queryKey, {});
+      const observer = new QueryObserver(queryClient, {
+        queryKey,
+        queryFn: async () => {
+          calls.push(label);
+          if (waitForRelease) {
+            await new Promise<void>((resolve) => {
+              releaseStats = resolve;
+            });
+          }
+          return {};
+        },
+        staleTime: Number.POSITIVE_INFINITY,
+      });
+      return observer.subscribe(() => undefined);
+    };
+    const unsubscribes = [
+      observe(gitQueryKeys.status(cwd), "status"),
+      observe(gitQueryKeys.workingTreeDiffStats(cwd, "unstaged"), "stats", true),
+      observe(gitQueryKeys.workingTreeDiff(cwd, "unstaged"), "patch"),
+    ];
+
+    const detailsRefresh = refreshGitQueriesForCwd(queryClient, cwd);
+    await vi.waitFor(() => expect(calls).toEqual(["status", "stats"]));
+    const availabilityRefresh = refreshGitActionAvailability(queryClient, cwd);
+
+    releaseStats?.();
+    await availabilityRefresh;
+    expect(calls).toEqual(["status", "stats", "status"]);
+
+    await detailsRefresh;
+    expect(calls).toEqual(["status", "stats", "status", "patch"]);
+    for (const unsubscribe of unsubscribes) unsubscribe();
+  });
 });
 
 describe("git expensive-read capacity retry", () => {
