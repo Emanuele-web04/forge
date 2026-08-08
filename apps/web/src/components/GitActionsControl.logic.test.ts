@@ -1335,6 +1335,7 @@ describe("resolveCreatePrDialogRuntimeStatus", () => {
     const resolved = resolveCreatePrDialogRuntimeStatus({
       liveGitStatus: liveStatus,
       statusOverride: postPushStatus,
+      statusOverrideSource: status(),
       isDefaultBranch: false,
       isDefaultBranchOverride: false,
     });
@@ -1344,12 +1345,14 @@ describe("resolveCreatePrDialogRuntimeStatus", () => {
     assert.isNull(resolved.statusOverride);
   });
 
-  it("keeps the post-push snapshot only while live status is unavailable", () => {
+  it("keeps the post-push snapshot while the cache still returns its source object", () => {
+    const stalePrePushStatus = status({ aheadCount: 2 });
     const postPushStatus = status({ hasUpstream: true, aheadCount: 0 });
 
     const resolved = resolveCreatePrDialogRuntimeStatus({
-      liveGitStatus: null,
+      liveGitStatus: stalePrePushStatus,
       statusOverride: postPushStatus,
+      statusOverrideSource: stalePrePushStatus,
       isDefaultBranch: true,
       isDefaultBranchOverride: false,
     });
@@ -1357,6 +1360,21 @@ describe("resolveCreatePrDialogRuntimeStatus", () => {
     assert.strictEqual(resolved.gitStatus, postPushStatus);
     assert.strictEqual(resolved.statusOverride, postPushStatus);
     assert.isFalse(resolved.isDefaultBranch);
+  });
+
+  it("keeps the post-push snapshot while live status is unavailable", () => {
+    const postPushStatus = status({ hasUpstream: true, aheadCount: 0 });
+
+    const resolved = resolveCreatePrDialogRuntimeStatus({
+      liveGitStatus: null,
+      statusOverride: postPushStatus,
+      statusOverrideSource: status({ aheadCount: 2 }),
+      isDefaultBranch: false,
+      isDefaultBranchOverride: false,
+    });
+
+    assert.strictEqual(resolved.gitStatus, postPushStatus);
+    assert.strictEqual(resolved.statusOverride, postPushStatus);
   });
 });
 

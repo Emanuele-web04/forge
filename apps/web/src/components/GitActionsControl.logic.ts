@@ -196,18 +196,21 @@ export interface CreatePrDialogRuntimeStatus {
 
 /**
  * A post-push toast carries a synthetic status so its CTA can open even when
- * the query cache still reflects the pre-push branch. Once live status is
- * available, it must win: the working tree or branch may have changed while
- * the dialog was open. The synthetic snapshot remains only as a temporary
- * fallback while live status is unavailable.
+ * the query cache still reflects the pre-push branch. Preserve that exact
+ * stale object as a freshness marker: the synthetic snapshot wins while the
+ * cache still returns it, then a newly fetched live object takes over so later
+ * working-tree or branch changes are reflected by the dialog.
  */
 export function resolveCreatePrDialogRuntimeStatus(input: {
   liveGitStatus: GitStatusResult | null;
   statusOverride: GitStatusResult | null;
+  statusOverrideSource: GitStatusResult | null;
   isDefaultBranch: boolean;
   isDefaultBranchOverride: boolean | null;
 }): CreatePrDialogRuntimeStatus {
-  if (input.liveGitStatus) {
+  const liveStatusIsKnownStale =
+    input.liveGitStatus !== null && input.liveGitStatus === input.statusOverrideSource;
+  if (input.liveGitStatus && !liveStatusIsKnownStale) {
     return {
       gitStatus: input.liveGitStatus,
       isDefaultBranch: input.isDefaultBranch,

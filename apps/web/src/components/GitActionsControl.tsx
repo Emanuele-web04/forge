@@ -169,6 +169,7 @@ interface RunGitActionWithToastInput {
 // against the live status".
 interface CreatePrDialogState {
   statusOverride: GitStatusResult | null;
+  statusOverrideSource: GitStatusResult | null;
   isDefaultBranchOverride: boolean | null;
 }
 
@@ -683,7 +684,11 @@ export default function GitActionsControl({
   // PR can be created, opens the existing PR when one is already open, and
   // explains unavailability otherwise.
   const openCreatePrDialog = useCallback(
-    (input?: { statusOverride?: GitStatusResult | null; isDefaultBranchOverride?: boolean }) => {
+    (input?: {
+      statusOverride?: GitStatusResult | null;
+      statusOverrideSource?: GitStatusResult | null;
+      isDefaultBranchOverride?: boolean;
+    }) => {
       const execution = resolveCreatePrExecution({
         gitStatus: input?.statusOverride ?? gitStatusForActions,
         isBusy: isGitActionRunning,
@@ -706,6 +711,7 @@ export default function GitActionsControl({
       }
       setCreatePrDialog({
         statusOverride: input?.statusOverride ?? null,
+        statusOverrideSource: input?.statusOverrideSource ?? null,
         isDefaultBranchOverride: input?.isDefaultBranchOverride ?? null,
       });
     },
@@ -1008,6 +1014,7 @@ export default function GitActionsControl({
                         closeResultToast();
                         openCreatePrDialog({
                           statusOverride: postPushStatus,
+                          statusOverrideSource: actionStatus,
                           isDefaultBranchOverride: actionIsDefaultBranch,
                         });
                       },
@@ -1043,6 +1050,7 @@ export default function GitActionsControl({
       resolveCreatePrDialogRuntimeStatus({
         liveGitStatus: gitStatusForActions,
         statusOverride: createPrDialog?.statusOverride ?? null,
+        statusOverrideSource: createPrDialog?.statusOverrideSource ?? null,
         isDefaultBranch,
         isDefaultBranchOverride: createPrDialog?.isDefaultBranchOverride ?? null,
       }),
