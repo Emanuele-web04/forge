@@ -426,9 +426,7 @@ export function normalizeProviderModelOptions(
     devinContextWindow !== undefined ||
     devinModelVariant !== undefined
       ? {
-          ...(devinReasoningEffort !== undefined
-            ? { reasoningEffort: devinReasoningEffort }
-            : {}),
+          ...(devinReasoningEffort !== undefined ? { reasoningEffort: devinReasoningEffort } : {}),
           ...(devinFastMode !== undefined ? { fastMode: devinFastMode } : {}),
           ...(devinThinking !== undefined ? { thinking: devinThinking } : {}),
           ...(devinContextWindow !== undefined ? { contextWindow: devinContextWindow } : {}),

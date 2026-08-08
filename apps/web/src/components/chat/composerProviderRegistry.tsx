@@ -265,8 +265,7 @@ function getProviderStateFromCapabilities(
       // toggle. Keep the persisted option sparse, but use the effective
       // default when resolving a non-default context window to its concrete
       // process-start variant.
-      const thinking =
-        requestedThinking ?? (caps.supportsThinkingToggle ? true : undefined);
+      const thinking = requestedThinking ?? (caps.supportsThinkingToggle ? true : undefined);
       const modelVariant =
         trimOrNull(providerOptions?.modelVariant) ??
         resolveDevinModelVariant({
