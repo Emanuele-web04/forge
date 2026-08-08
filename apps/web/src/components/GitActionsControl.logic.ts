@@ -174,6 +174,9 @@ export function resolveCreatePrBaseBranch(
   gitStatus: GitStatusResult | null,
   defaultBranchName?: string | null,
 ): string {
+  if (gitStatus?.configuredPrBaseBranch) {
+    return gitStatus.configuredPrBaseBranch;
+  }
   const trackedBranchName = extractTrackedBranchName(gitStatus?.upstreamBranch);
   if (gitStatus?.hasUpstream && trackedBranchName && trackedBranchName !== gitStatus.branch) {
     return trackedBranchName;
@@ -601,10 +604,21 @@ export function resolveCreatePrActionAvailability(input: {
     defaultBranchName: input.defaultBranchName,
   });
   const canRun = execution.kind === "run_action" && execution.action === "create_pr";
+  const hint = (() => {
+    if (canRun) return null;
+    if (execution.kind === "unavailable") return execution.hint;
+    if (execution.kind === "open_pr") {
+      return "A pull request is already open for this branch.";
+    }
+    if (execution.kind === "run_action" && execution.action === "commit_push_pr") {
+      return "Commit local changes before creating a PR.";
+    }
+    return CREATE_PR_UNAVAILABLE_HINT;
+  })();
 
   return {
     canRun,
-    hint: canRun ? null : CREATE_PR_UNAVAILABLE_HINT,
+    hint,
   };
 }
 

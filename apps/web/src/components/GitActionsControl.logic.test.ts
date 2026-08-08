@@ -357,6 +357,30 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
     });
   });
 
+  it("resolveCreatePrActionAvailability preserves the resolver's blocked reason", () => {
+    const availability = resolveCreatePrActionAvailability({
+      gitStatus: status({ aheadCount: 1, behindCount: 1 }),
+      defaultBranchName: "main",
+    });
+
+    assert.deepEqual(availability, {
+      canRun: false,
+      hint: "Branch has diverged from upstream. Rebase/merge first.",
+    });
+  });
+
+  it("resolveCreatePrActionAvailability explains why literal create_pr cannot run dirty", () => {
+    const availability = resolveCreatePrActionAvailability({
+      gitStatus: status({ hasWorkingTreeChanges: true }),
+      defaultBranchName: "main",
+    });
+
+    assert.deepEqual(availability, {
+      canRun: false,
+      hint: "Commit local changes before creating a PR.",
+    });
+  });
+
   it("buildMenuItems disables create PR when the branch tracks the default branch", () => {
     const items = buildMenuItems(
       status({
@@ -1411,6 +1435,21 @@ describe("resolveCreatePrDialogView", () => {
     assert.equal(
       resolveCreatePrDialogView({ ...baseContext, gitStatus }).baseBranchName,
       "develop",
+    );
+  });
+
+  it("prefers the configured PR merge base over the tracked upstream", () => {
+    const gitStatus = status({
+      branch: "feature/test",
+      hasUpstream: true,
+      upstreamBranch: "develop",
+      configuredPrBaseBranch: "release",
+    });
+
+    assert.equal(resolveCreatePrBaseBranch(gitStatus, "main"), "release");
+    assert.equal(
+      resolveCreatePrDialogView({ ...baseContext, gitStatus }).baseBranchName,
+      "release",
     );
   });
 

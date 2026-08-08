@@ -342,6 +342,7 @@ export const GitStatusResult = Schema.Struct({
   }),
   hasUpstream: Schema.Boolean,
   upstreamBranch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  configuredPrBaseBranch: Schema.optional(TrimmedNonEmptyStringSchema.pipe(Schema.NullOr)),
   aheadCount: NonNegativeInt,
   behindCount: NonNegativeInt,
   pr: Schema.NullOr(GitStatusPr),
@@ -358,6 +359,7 @@ export type GitStatusLocalResult = typeof GitStatusLocalResult.Type;
 export const GitStatusRemoteResult = Schema.Struct({
   hasUpstream: Schema.Boolean,
   upstreamBranch: GitStatusResult.fields.upstreamBranch,
+  configuredPrBaseBranch: GitStatusResult.fields.configuredPrBaseBranch,
   aheadCount: NonNegativeInt,
   behindCount: NonNegativeInt,
   pr: Schema.NullOr(GitStatusPr),

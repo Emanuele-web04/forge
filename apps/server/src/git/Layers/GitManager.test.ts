@@ -430,6 +430,24 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("status exposes the configured PR merge base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/configured-pr-base"]);
+      yield* runGit(repoDir, [
+        "config",
+        "branch.feature/configured-pr-base.gh-merge-base",
+        "release",
+      ]);
+
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.configuredPrBaseBranch).toBe("release");
+    }),
+  );
+
   it.effect("resolves a captured branch PR after the checkout has moved elsewhere", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
