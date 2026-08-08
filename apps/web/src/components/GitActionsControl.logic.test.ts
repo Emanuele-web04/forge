@@ -7,6 +7,7 @@ import {
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveCreatePrActionAvailability,
+  resolveCreatePrBaseBranch,
   resolveCreatePrBrowserPreparation,
   resolveCreatePrDialogExecution,
   resolveCreatePrDialogRuntimeStatus,
@@ -1397,6 +1398,30 @@ describe("resolveCreatePrDialogView", () => {
       insertions: 0,
       deletions: 0,
     });
+  });
+
+  it("uses a different tracked upstream as the PR base branch", () => {
+    const gitStatus = status({
+      branch: "feature/test",
+      hasUpstream: true,
+      upstreamBranch: "develop",
+    });
+
+    assert.equal(resolveCreatePrBaseBranch(gitStatus, "main"), "develop");
+    assert.equal(
+      resolveCreatePrDialogView({ ...baseContext, gitStatus }).baseBranchName,
+      "develop",
+    );
+  });
+
+  it("uses the default branch when the tracked upstream is the PR head", () => {
+    assert.equal(
+      resolveCreatePrBaseBranch(
+        status({ branch: "feature/test", upstreamBranch: "feature/test" }),
+        "main",
+      ),
+      "main",
+    );
   });
 
   it("describes an unpublished branch as new and surfaces diff stats", () => {

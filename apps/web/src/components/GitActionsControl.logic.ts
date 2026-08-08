@@ -170,6 +170,17 @@ function extractTrackedBranchName(upstreamBranch: string | null | undefined): st
   return branchName.length > 0 ? branchName : null;
 }
 
+export function resolveCreatePrBaseBranch(
+  gitStatus: GitStatusResult | null,
+  defaultBranchName?: string | null,
+): string {
+  const trackedBranchName = extractTrackedBranchName(gitStatus?.upstreamBranch);
+  if (gitStatus?.hasUpstream && trackedBranchName && trackedBranchName !== gitStatus.branch) {
+    return trackedBranchName;
+  }
+  return defaultBranchName ?? "main";
+}
+
 function tracksDefaultUpstream(
   gitStatus: GitStatusResult,
   defaultBranchName?: string | null,
@@ -261,7 +272,7 @@ export function resolveCreatePrDialogView(context: CreatePrDialogContext): Creat
   const gitStatus = context.gitStatus;
   return {
     branchName: gitStatus?.branch ?? null,
-    baseBranchName: context.defaultBranchName ?? "main",
+    baseBranchName: resolveCreatePrBaseBranch(gitStatus, context.defaultBranchName),
     isNewBranch: context.isDefaultBranch || gitStatus?.hasUpstream !== true,
     willCreateFeatureBranch: context.isDefaultBranch,
     showCommitToggle: gitStatus?.hasWorkingTreeChanges === true,

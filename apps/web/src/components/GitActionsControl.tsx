@@ -39,6 +39,7 @@ import {
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveCreatePrActionAvailability,
+  resolveCreatePrBaseBranch,
   resolveCreatePrDialogRuntimeStatus,
   resolveCreatePrExecution,
   resolveQuickAction,
@@ -727,7 +728,7 @@ export default function GitActionsControl({
   );
 
   const openComparePage = useCallback(
-    async (headBranch: string | null) => {
+    async (headBranch: string | null, baseBranch: string) => {
       const api = readNativeApi();
       if (!api || !gitCwd || !headBranch) {
         toastManager.add({
@@ -749,7 +750,6 @@ export default function GitActionsControl({
           });
           return;
         }
-        const baseBranch = defaultBranchName ?? "main";
         await api.shell.openExternal(
           `${repoUrl}/compare/${encodeBranchForCompareUrl(baseBranch)}...${encodeBranchForCompareUrl(headBranch)}?expand=1`,
         );
@@ -762,7 +762,7 @@ export default function GitActionsControl({
         });
       }
     },
-    [defaultBranchName, gitCwd, threadToastData],
+    [gitCwd, threadToastData],
   );
 
   const runSyncWithRemote = useCallback(() => {
@@ -1102,7 +1102,10 @@ export default function GitActionsControl({
         return;
       }
       if (preparation.kind === "open_compare") {
-        void openComparePage(actionStatus?.branch ?? null);
+        void openComparePage(
+          actionStatus?.branch ?? null,
+          resolveCreatePrBaseBranch(actionStatus, defaultBranchName),
+        );
         return;
       }
       const excludesDirtyChanges =
@@ -1119,12 +1122,14 @@ export default function GitActionsControl({
         afterSuccess: (result) => {
           void openComparePage(
             result.push.branch ?? result.branch.name ?? actionStatus?.branch ?? null,
+            resolveCreatePrBaseBranch(actionStatus, defaultBranchName),
           );
         },
       });
     },
     [
       createPrDialogRuntimeStatus,
+      defaultBranchName,
       openComparePage,
       openExistingPr,
       runGitActionWithToast,
