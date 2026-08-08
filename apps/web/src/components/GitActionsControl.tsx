@@ -1131,12 +1131,7 @@ export default function GitActionsControl({
       hasOriginRemote,
       defaultBranchName,
     }),
-    [
-      createPrDialogRuntimeStatus,
-      defaultBranchName,
-      hasOriginRemote,
-      isGitActionRunning,
-    ],
+    [createPrDialogRuntimeStatus, defaultBranchName, hasOriginRemote, isGitActionRunning],
   );
 
   const continuePendingDefaultBranchAction = useCallback(() => {
