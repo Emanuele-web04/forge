@@ -10,11 +10,25 @@ import type {
 
 export const ACP_LOG_REDACTED_VALUE = "[REDACTED]";
 
-const SENSITIVE_ENTRY_NAMES = new Set(["authorization", "synara_agent_gateway_token"]);
+const SENSITIVE_ENTRY_NAMES = new Set([
+  "authorization",
+  "api_key",
+  "devin_api_key",
+  "synara_agent_gateway_token",
+  "windsurf_api_key",
+]);
 
 function redactSecretString(value: string): string {
   return value
     .replace(/(\bBearer\s+)[^\s"',}\]]+/gi, `$1${ACP_LOG_REDACTED_VALUE}`)
+    .replace(
+      /("(?:api_key|devin_api_key|windsurf_api_key)"\s*:\s*")[^"]*/gi,
+      `$1${ACP_LOG_REDACTED_VALUE}`,
+    )
+    .replace(
+      /((?:api_key|devin_api_key|windsurf_api_key)\s*=\s*)[^\s"',}\]]+/gi,
+      `$1${ACP_LOG_REDACTED_VALUE}`,
+    )
     .replace(/(SYNARA_AGENT_GATEWAY_TOKEN\s*=\s*)[^\s"',}\]]+/g, `$1${ACP_LOG_REDACTED_VALUE}`)
     .replace(/("SYNARA_AGENT_GATEWAY_TOKEN"\s*:\s*")[^"]*/g, `$1${ACP_LOG_REDACTED_VALUE}`)
     .replace(
@@ -30,6 +44,9 @@ export function redactAcpLogSecrets(value: unknown): unknown {
   const visit = (current: unknown): unknown => {
     if (typeof current === "string") {
       return redactSecretString(current);
+    }
+    if (current instanceof Uint8Array) {
+      return redactSecretString(new TextDecoder().decode(current));
     }
     if (current === null || typeof current !== "object") {
       return current;
@@ -135,7 +152,8 @@ export function makeAcpDebugLoggers(input: {
   readonly payloadLimit: number;
   readonly shouldMirrorIncomingRaw: (payload: string) => boolean;
 }): Pick<AcpSessionRuntimeOptions, "requestLogger" | "protocolLogging"> {
-  const summarize = (payload: unknown) => summarizeAcpLogPayload(payload, input.payloadLimit);
+  const summarize = (payload: unknown) =>
+    summarizeAcpLogPayload(redactAcpLogSecrets(payload), input.payloadLimit);
   const requestLogger: AcpSessionRuntimeOptions["requestLogger"] =
     input.base.requestLogger || input.enabled
       ? (event) =>

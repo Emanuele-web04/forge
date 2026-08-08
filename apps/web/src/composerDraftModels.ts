@@ -9,6 +9,7 @@ import {
   type CodexReasoningEffort,
   type CursorModelOptions,
   type DroidReasoningEffort,
+  type DevinModelOptions,
   type GrokReasoningEffort,
   type ModelSelection,
   type ModelSlug,
@@ -38,6 +39,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "kilo",
   "opencode",
   "pi",
+  "devin",
 ] as const satisfies readonly ProviderKind[];
 
 const isProviderKind = Schema.is(ProviderKind);
@@ -210,6 +212,14 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
           : {}),
       };
+    case "devin":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "devin" }>["options"] }
+          : {}),
+      };
   }
 }
 
@@ -254,6 +264,10 @@ export function normalizeProviderModelOptions(
   const piCandidate =
     candidate?.pi && typeof candidate.pi === "object"
       ? (candidate.pi as Record<string, unknown>)
+      : null;
+  const devinCandidate =
+    candidate?.devin && typeof candidate.devin === "object"
+      ? (candidate.devin as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -391,6 +405,37 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
+  const devinFastMode =
+    devinCandidate?.fastMode === true
+      ? true
+      : devinCandidate?.fastMode === false
+        ? false
+        : undefined;
+  const devinReasoningEffort = trimStringOrUndefined(devinCandidate?.reasoningEffort);
+  const devinThinking =
+    devinCandidate?.thinking === true
+      ? true
+      : devinCandidate?.thinking === false
+        ? false
+        : undefined;
+  const devinContextWindow = trimStringOrUndefined(devinCandidate?.contextWindow);
+  const devinModelVariant = trimStringOrUndefined(devinCandidate?.modelVariant);
+  const devin: DevinModelOptions | undefined =
+    devinReasoningEffort !== undefined ||
+    devinFastMode !== undefined ||
+    devinThinking !== undefined ||
+    devinContextWindow !== undefined ||
+    devinModelVariant !== undefined
+      ? {
+          ...(devinReasoningEffort !== undefined
+            ? { reasoningEffort: devinReasoningEffort }
+            : {}),
+          ...(devinFastMode !== undefined ? { fastMode: devinFastMode } : {}),
+          ...(devinThinking !== undefined ? { thinking: devinThinking } : {}),
+          ...(devinContextWindow !== undefined ? { contextWindow: devinContextWindow } : {}),
+          ...(devinModelVariant !== undefined ? { modelVariant: devinModelVariant } : {}),
+        }
+      : undefined;
   if (
     !codex &&
     !claude &&
@@ -400,7 +445,8 @@ export function normalizeProviderModelOptions(
     !droid &&
     !kilo &&
     !opencode &&
-    !pi
+    !pi &&
+    !devin
   ) {
     return null;
   }
@@ -414,6 +460,7 @@ export function normalizeProviderModelOptions(
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
+    ...(devin ? { devin } : {}),
   };
 }
 
@@ -487,7 +534,9 @@ export function normalizeModelSelection(
                     ? modelOptions?.opencode
                     : provider === "pi"
                       ? modelOptions?.pi
-                      : undefined;
+                      : provider === "devin"
+                        ? modelOptions?.devin
+                        : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {

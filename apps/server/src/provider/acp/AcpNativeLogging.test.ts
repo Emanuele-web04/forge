@@ -17,6 +17,8 @@ describe("AcpNativeLogging", () => {
       const basePath = path.join(tempDir, "provider-native.ndjson");
       const threadId = ThreadId.makeUnsafe("thread-secret-redaction");
       const sentinelToken = "sagw_session_SENTINEL_MUST_NEVER_REACH_NDJSON";
+      const sentinelApiKey = "windsurf_api_key_SENTINEL_MUST_NEVER_REACH_NDJSON";
+      const sentinelRawApiKey = "windsurf_raw_api_key_SENTINEL_MUST_NEVER_REACH_NDJSON";
 
       try {
         const nativeEventLogger = yield* makeEventNdjsonLogger(basePath, {
@@ -41,6 +43,7 @@ describe("AcpNativeLogging", () => {
           method: "session/new",
           status: "started",
           payload: {
+            _meta: { api_key: sentinelApiKey },
             mcpServers: [
               {
                 type: "http",
@@ -67,11 +70,18 @@ describe("AcpNativeLogging", () => {
             env: [{ name: SYNARA_AGENT_GATEWAY_TOKEN_ENV, value: sentinelToken }],
           }),
         });
+        yield* protocolLogger({
+          direction: "outgoing",
+          stage: "raw",
+          payload: new TextEncoder().encode(JSON.stringify({ api_key: sentinelRawApiKey })),
+        });
         yield* nativeEventLogger.close();
 
         const logPath = path.join(tempDir, `${threadId}.log`);
         const written = fs.readFileSync(logPath, "utf8");
         assert.notInclude(written, sentinelToken);
+        assert.notInclude(written, sentinelApiKey);
+        assert.notInclude(written, sentinelRawApiKey);
         assert.include(written, ACP_LOG_REDACTED_VALUE);
         assert.include(written, "X-Safe");
         assert.include(written, "SAFE_ENV");

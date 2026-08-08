@@ -150,6 +150,18 @@ export const DroidModelOptions = Schema.Struct({
 });
 export type DroidModelOptions = typeof DroidModelOptions.Type;
 
+export const DevinModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  thinking: Schema.optional(Schema.Boolean),
+  contextWindow: Schema.optional(TrimmedNonEmptyString),
+  // Devin's ACP command accepts a concrete model UID at process start. This
+  // is populated from runtime discovery when an abstract effort/context
+  // selection needs to resolve to a specific variant.
+  modelVariant: Schema.optional(TrimmedNonEmptyString),
+});
+export type DevinModelOptions = typeof DevinModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
@@ -160,6 +172,7 @@ export const ProviderModelOptions = Schema.Struct({
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
+  devin: Schema.optional(DevinModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -863,6 +876,9 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
+  // Devin owns its model catalog. The web app populates this provider from
+  // `devin models list --format json` so CLI updates appear without a Synara release.
+  devin: [],
   cursor: [
     {
       // Cursor exposes auto as the `default` model id over ACP; the adapter maps it.
@@ -1078,6 +1094,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
+  devin: "adaptive",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -1219,6 +1236,12 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   kilo: {},
   opencode: {},
   pi: {},
+  devin: {
+    adaptive: "adaptive",
+    auto: "adaptive",
+    fast: "devin-fast",
+    "swe-1.6-fast": "devin-fast",
+  },
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -1261,4 +1284,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",
+  devin: "Devin",
 };
