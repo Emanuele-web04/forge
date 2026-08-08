@@ -444,7 +444,9 @@ function parseDevinModelVariant(value: unknown): DevinModelVariantSeed | undefin
   };
 }
 
-function parseDevinModelFamily(value: Record<string, unknown>): DevinModelDescriptorSeed | undefined {
+function parseDevinModelFamily(
+  value: Record<string, unknown>,
+): DevinModelDescriptorSeed | undefined {
   const hasVariantIdentity =
     readDevinModelString(value, ["model_uid", "modelUid", "uid"]) !== undefined;
   const slug = readDevinModelString(
@@ -568,9 +570,7 @@ function formatDevinContextWindow(value: number | undefined, model: string): str
 }
 
 function inferDevinReasoningEffort(variant: DevinModelVariantSeed): string | undefined {
-  const haystack = `${variant.model} ${variant.label ?? ""}`
-    .toLowerCase()
-    .replace(/[_.-]+/gu, " ");
+  const haystack = `${variant.model} ${variant.label ?? ""}`.toLowerCase().replace(/[_.-]+/gu, " ");
   if (/\b(?:no thinking|none|off)\b/u.test(haystack)) return "none";
   if (/\bminimal\b/u.test(haystack)) return "minimal";
   if (/\blow\b/u.test(haystack)) return "low";
@@ -587,9 +587,7 @@ function isDevinFastVariant(variant: DevinModelVariantSeed): boolean {
 }
 
 function isDevinThinkingVariant(variant: DevinModelVariantSeed): boolean {
-  const haystack = `${variant.model} ${variant.label ?? ""}`
-    .toLowerCase()
-    .replace(/[_.-]+/gu, " ");
+  const haystack = `${variant.model} ${variant.label ?? ""}`.toLowerCase().replace(/[_.-]+/gu, " ");
   return (
     /\bthinking\b/u.test(haystack) &&
     !/\bno thinking\b/u.test(haystack) &&
@@ -649,7 +647,9 @@ export function mergeDevinModelDescriptors(
         (left, right) => DEVIN_EFFORT_ORDER.indexOf(left) - DEVIN_EFFORT_ORDER.indexOf(right),
       );
       const rawContextValues = uniqueStrings(
-        rawVariants.map((variant) => formatDevinContextWindow(variant.maxContextTokens, variant.model)),
+        rawVariants.map((variant) =>
+          formatDevinContextWindow(variant.maxContextTokens, variant.model),
+        ),
       );
       const contextWindowValues = rawContextValues.length > 1 ? rawContextValues : [];
       const defaultContextWindow =
@@ -667,10 +667,7 @@ export function mergeDevinModelDescriptors(
       const hasThinkingToggle = hasThinkingVariant && hasPlainThinkingVariant;
       const modelVariants = rawVariants.map((variant) => {
         const reasoningEffort = inferDevinReasoningEffort(variant);
-        const contextWindow = formatDevinContextWindow(
-          variant.maxContextTokens,
-          variant.model,
-        );
+        const contextWindow = formatDevinContextWindow(variant.maxContextTokens, variant.model);
         return {
           model: variant.model,
           ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -2187,7 +2184,8 @@ export function makeDevinAdapter(
               issue: "cwd is required and no server cwd fallback is available.",
             });
           }
-          const binaryPath = input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin";
+          const binaryPath =
+            input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin";
           const cacheKey = `${binaryPath}\u0000${cwd}`;
           const cached = commandDiscoveryCache.get(cacheKey);
           if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {

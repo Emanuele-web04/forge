@@ -21,10 +21,7 @@ describe("mapDevinAcpCommands", () => {
         { name: "compact", description: "Compact the current context" },
         { name: "plan" },
       ]),
-    ).toEqual([
-      { name: "compact", description: "Compact the current context" },
-      { name: "plan" },
-    ]);
+    ).toEqual([{ name: "compact", description: "Compact the current context" }, { name: "plan" }]);
   });
 });
 
@@ -153,9 +150,7 @@ describe("resolveDevinAcpAuthMethodId", () => {
     delete process.env.DEVIN_API_KEY;
 
     const error = await Effect.runPromise(
-      resolveDevinAcpAuthMethodId(initializeWithAuthMethods(["devin-browser"])).pipe(
-        Effect.flip,
-      ),
+      resolveDevinAcpAuthMethodId(initializeWithAuthMethods(["devin-browser"])).pipe(Effect.flip),
     );
 
     expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);

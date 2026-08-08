@@ -173,10 +173,12 @@ export async function readDevinStoredCredentials(
   return raw === undefined ? undefined : parseDevinCredentialsToml(raw);
 }
 
-export function buildDevinAcpAuthenticateMeta(input: {
-  readonly credentials?: DevinAcpCredentials;
-  readonly env?: NodeJS.ProcessEnv;
-} = {}): Record<string, unknown> {
+export function buildDevinAcpAuthenticateMeta(
+  input: {
+    readonly credentials?: DevinAcpCredentials;
+    readonly env?: NodeJS.ProcessEnv;
+  } = {},
+): Record<string, unknown> {
   const env = input.env ?? process.env;
   const apiKey = getDevinApiKeyEnv(env) ?? input.credentials?.apiKey;
   const apiServerUrl = getDevinApiServerUrlEnv(env) ?? input.credentials?.apiServerUrl;

@@ -128,12 +128,7 @@ describe("composerDraftStore modelSelection", () => {
   it("preserves Devin model options in the draft", () => {
     const store = useComposerDraftStore.getState();
 
-    store.setProviderModelOptions(
-      threadId,
-      "devin",
-      { fastMode: true },
-      { model: "adaptive" },
-    );
+    store.setProviderModelOptions(threadId, "devin", { fastMode: true }, { model: "adaptive" });
 
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider.devin,
