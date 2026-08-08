@@ -80,6 +80,14 @@ import {
 // save confirmations and input errors alike — was silently discarded.
 import { toastManager } from "./ui/toast";
 
+/**
+ * How often the pane re-reads setup state while the checklist is up.
+ *
+ * Installing Xcode takes many minutes, so this only has to be faster than a
+ * person's patience, not fast. It stops the moment setup completes.
+ */
+const DEVICE_SETUP_POLL_INTERVAL_MS = 5_000;
+
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.length > 0 ? error.message : fallback;
 }
@@ -126,6 +134,11 @@ export default function DevicePanel(props: {
     );
   }, [reportedUdid]);
 
+  // A stable primitive rather than the view object: the effect below depends on
+  // it, and a fresh object each render would tear down and restart the poll.
+  const pollSetupState =
+    availabilityView.kind === "blocked" && availabilityView.retryable ? "blocked" : null;
+
   // The pane is the only reader of this thread's device state, so it seeds the
   // store on mount; every later change arrives on the device.event push.
   //
@@ -150,11 +163,19 @@ export default function DevicePanel(props: {
     const unsubscribe = addWsTransportStateListener((state) => {
       if (state === "open") seed();
     });
+    // Setup progress is the one state nothing pushes. Installing Xcode,
+    // accepting its licence or downloading a runtime all happen outside Synara
+    // and raise no device event, so a pane opened on the checklist would sit on
+    // a stale list and a spinner forever on a perfectly healthy connection.
+    // Polling only while the checklist is up and retryable, and only every few
+    // seconds, costs nothing once the environment is ready.
+    const poll = pollSetupState !== null ? setInterval(seed, DEVICE_SETUP_POLL_INTERVAL_MS) : null;
     return () => {
       cancelled = true;
       unsubscribe();
+      if (poll !== null) clearInterval(poll);
     };
-  }, [threadId, upsertThreadState]);
+  }, [threadId, upsertThreadState, pollSetupState]);
 
   // Non-null while the attachment is still coming up, and names which stage: a
   // cold boot spends most of a minute here, and "Starting up…" versus "Waiting

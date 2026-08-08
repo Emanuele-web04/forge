@@ -326,8 +326,21 @@ export class DeviceManager {
       };
     }
 
-    const device = await this.backend.boot(udid);
+    // The slot is taken before the await, not after it. A boot runs for the
+    // better part of a minute, so two threads asking for different simulators
+    // would both read a size under the limit and both proceed, and the cap that
+    // exists to stop Synara accumulating multi-gigabyte simulators would be
+    // exceeded by however many requests arrived inside that window.
     this.synaraBooted.add(udid);
+    let device: DeviceDescriptor;
+    try {
+      device = await this.backend.boot(udid);
+    } catch (cause) {
+      // A reservation only stands for a boot that actually happened; holding it
+      // after a failure would leak the slot for the process lifetime.
+      this.synaraBooted.delete(udid);
+      throw cause;
+    }
     // Persisted before the caller is told the boot succeeded, so a crash in the
     // next instant still leaves a record to reclaim from.
     await this.recordBootOwnership();
@@ -502,7 +515,14 @@ export class DeviceManager {
     void this.startStream(udid).catch(() => undefined);
     return () => {
       unsubscribe();
-      if (this.transport.deviceSubscriberCount(udid) === 0 && !this.isAttachedAnywhere(udid)) {
+      // Capture stops as soon as the last viewer goes, whether or not a thread
+      // is still attached. Collapsing the pane closes the frame socket but
+      // leaves the attachment, and gating this on the attachment too meant the
+      // helper kept reading the framebuffer and encoding H.264 for nobody,
+      // indefinitely. An agent-driven attachment that never opens a pane cost
+      // the same. The attachment is metadata and survives; only the encode
+      // stops, and `subscribeFrames` starts it again on the next subscriber.
+      if (this.transport.deviceSubscriberCount(udid) === 0) {
         void this.stopStream(udid).catch(() => undefined);
       }
     };
@@ -810,6 +830,18 @@ export class DeviceManager {
 
   private async startStream(udid: string): Promise<void> {
     if (this.streaming.has(udid) || this.disposed) return;
+    // The helper holds one attachment, and its `startStream` stops whatever it
+    // was already streaming before binding the new device. So a second device
+    // does not run alongside the first, it replaces it: without this the
+    // manager would still list the first as streaming and its pane would sit on
+    // a frozen last frame with nothing to explain it. Stopping the old stream
+    // here keeps `streaming` describing what the helper is really doing, and
+    // the displaced thread re-attaches through the normal path when the user
+    // returns to it.
+    for (const other of [...this.streaming]) {
+      if (other === udid) continue;
+      await this.stopStream(other).catch(() => undefined);
+    }
     this.streaming.add(udid);
     try {
       // No input nudge is needed to get a first picture: the helper primes the

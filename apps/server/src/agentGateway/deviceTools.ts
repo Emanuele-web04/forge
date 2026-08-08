@@ -100,12 +100,21 @@ const DEVICE_APPROVAL_REQUIRED_TOOLS = new Set([
   "device_press_button",
 ]);
 
+/**
+ * The buttons an agent may press.
+ *
+ * `rotate` is in the contract's button union but deliberately absent here: the
+ * backend refuses it on every call, because rotation is a Simulator.app window
+ * command with no HID usage and no simctl equivalent on a headless boot.
+ * Advertising a value that is guaranteed to fail only invites agents to plan
+ * around it and then report an error the user cannot act on. The pane's own
+ * rail leaves it out for the same reason.
+ */
 const DEVICE_HARDWARE_BUTTONS: readonly DeviceHardwareButton[] = [
   "home",
   "lock",
   "volume-up",
   "volume-down",
-  "rotate",
 ];
 
 const UDID_PROPERTY = {
@@ -483,7 +492,7 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_press_button",
-        description: "Press a hardware button: home, lock, volume-up, volume-down, or rotate.",
+        description: "Press a hardware button: home, lock, volume-up, or volume-down.",
         inputSchema: {
           type: "object",
           properties: {

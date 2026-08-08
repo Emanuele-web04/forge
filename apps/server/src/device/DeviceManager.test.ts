@@ -45,6 +45,19 @@ type ThreadDeviceSnapshot = Awaited<ReturnType<DeviceManager["getThreadState"]>>
  * settles a few turns later. Polling the published state observes that without
  * reaching into the manager's internals.
  */
+/** The stream is brought up after `attach` resolves, so wait for the swap. */
+async function waitForStream(
+  backend: FakeDeviceBackend,
+  udid: string,
+  streaming: boolean,
+): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (backend.hasStream(udid) === streaming) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error(`Device ${udid} never reached hasStream=${streaming}`);
+}
+
 async function waitForThreadState(
   manager: DeviceManager,
   threadId: string,
@@ -457,7 +470,7 @@ describe("DeviceManager device switching", () => {
     expect(backend.callsOfKind("shutdown")).toHaveLength(0);
   });
 
-  it("keeps a device another thread is still watching", async () => {
+  it("keeps a device another thread is still watching booted", async () => {
     const { backend, manager } = makeManager();
     await manager.boot(DEVICE_A);
     await manager.boot(DEVICE_B);
@@ -466,8 +479,30 @@ describe("DeviceManager device switching", () => {
 
     await manager.attach(THREAD_A, DEVICE_B);
 
+    // The device stays up for the thread still watching it. Its stream does
+    // not: the helper holds one attachment, so B's stream replaces A's either
+    // way, and stopping A explicitly is what keeps the manager's record honest
+    // instead of leaving a pane frozen on a stream the helper already dropped.
     expect(backend.callsOfKind("shutdown")).toHaveLength(0);
-    expect(backend.hasStream(DEVICE_A)).toBe(true);
+    await waitForStream(backend, DEVICE_B, true);
+    await waitForStream(backend, DEVICE_A, false);
+  });
+
+  it("streams one device at a time, because the helper attaches to one", async () => {
+    const { backend, manager } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await manager.attach(THREAD_A, DEVICE_A);
+    await waitForStream(backend, DEVICE_A, true);
+
+    // A second thread on a different device: the helper's startStream stops
+    // whatever it was streaming before binding the new one, so believing both
+    // were live left the first pane on a frozen last frame with nothing to
+    // explain it.
+    await manager.attach(THREAD_B, DEVICE_B);
+
+    await waitForStream(backend, DEVICE_B, true);
+    await waitForStream(backend, DEVICE_A, false);
   });
 
   it("frees the slot for the next boot rather than refusing it", async () => {
