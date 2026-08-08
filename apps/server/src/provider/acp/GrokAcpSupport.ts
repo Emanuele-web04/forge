@@ -25,7 +25,7 @@ export interface GrokAcpRuntimeSettings {
 
 export interface GrokAcpRuntimeInput extends Omit<
   AcpSessionRuntimeOptions,
-  "authMethodId" | "resolveAuthMethodId" | "spawn"
+  "authMethodId" | "freshSessionRetry" | "resolveAuthMethodId" | "spawn"
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly grokSettings: GrokAcpRuntimeSettings | null | undefined;
@@ -43,6 +43,15 @@ const GROK_INTERACTIVE_AUTH_METHOD_IDS = new Set(["browser_login", "grok.com"]);
 const GROK_API_KEY_ENV_KEYS = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"] as const;
 const GROK_COMPACT_COMMAND_NAME = "compact";
 const GROK_COMPACT_PROMPT = "/compact";
+const GROK_SESSION_STORAGE_NOT_FOUND_CODE = "FS_NOT_FOUND";
+const GROK_SESSION_STORAGE_RETRY_DELAY_MS = 100;
+
+export function isGrokSessionStoragePathNotFoundError(error: AcpErrors.AcpError): boolean {
+  if (error._tag !== "AcpRequestError" || typeof error.data !== "object" || error.data === null) {
+    return false;
+  }
+  return (error.data as { readonly code?: unknown }).code === GROK_SESSION_STORAGE_NOT_FOUND_CODE;
+}
 
 export function getGrokApiKeyEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
   for (const key of GROK_API_KEY_ENV_KEYS) {
@@ -191,6 +200,10 @@ export const makeGrokAcpRuntime = (
         spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.runtimeMode),
         resolveAuthMethodId: resolveGrokAcpAuthMethodId,
         authenticateMeta: { headless: true },
+        freshSessionRetry: {
+          shouldRetry: isGrokSessionStoragePathNotFoundError,
+          delayMs: GROK_SESSION_STORAGE_RETRY_DELAY_MS,
+        },
       }).pipe(
         Layer.provide(
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),

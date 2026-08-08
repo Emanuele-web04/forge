@@ -7,6 +7,7 @@ import { resolveAcpPermissionPolicy } from "./AcpAdapterSupport.ts";
 import {
   applyGrokAcpModelSelection,
   buildGrokAcpSpawnInput,
+  isGrokSessionStoragePathNotFoundError,
   resolveGrokAcpAuthMethodId,
   runGrokAcpCompactionCommand,
 } from "./GrokAcpSupport.ts";
@@ -79,6 +80,40 @@ describe("buildGrokAcpSpawnInput", () => {
       "--always-approve",
       "stdio",
     ]);
+  });
+});
+
+describe("isGrokSessionStoragePathNotFoundError", () => {
+  it("matches Grok's stable persistence code", () => {
+    expect(
+      isGrokSessionStoragePathNotFoundError(
+        new AcpErrors.AcpRequestError({
+          code: -32603,
+          errorMessage: "Path not found.",
+          data: { code: "FS_NOT_FOUND", detail: "No such file or directory (os error 2)" },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not retry other ACP or filesystem failures", () => {
+    expect(
+      isGrokSessionStoragePathNotFoundError(
+        new AcpErrors.AcpRequestError({
+          code: -32603,
+          errorMessage: "Permission denied.",
+          data: { code: "FS_PERMISSION_DENIED" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isGrokSessionStoragePathNotFoundError(
+        new AcpErrors.AcpTransportError({
+          detail: "connection closed",
+          cause: new Error("connection closed"),
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

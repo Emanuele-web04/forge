@@ -187,4 +187,23 @@ describe("AcpAdapterSupport", () => {
     expect(error.message).toContain('402 {"title":"Payment Required"}');
     expect(error.message).not.toContain("Internal error: Agent error");
   });
+
+  it("preserves filesystem detail from ACP persistence errors", () => {
+    const error = mapAcpToAdapterError(
+      "grok",
+      "thread-1" as never,
+      "session/start",
+      new AcpErrors.AcpRequestError({
+        code: -32603,
+        errorMessage: "Path not found.",
+        data: {
+          code: "FS_NOT_FOUND",
+          detail: "No such file or directory (os error 2)",
+        },
+      }),
+    );
+
+    expect(error.message).toContain("Path not found.");
+    expect(error.message).toContain("No such file or directory (os error 2)");
+  });
 });
