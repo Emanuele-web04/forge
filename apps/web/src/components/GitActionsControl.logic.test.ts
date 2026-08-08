@@ -7,6 +7,9 @@ import {
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveCreatePrActionAvailability,
+  resolveCreatePrBrowserPreparation,
+  resolveCreatePrDialogExecution,
+  resolveCreatePrDialogView,
   resolveCreatePrExecution,
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -1259,6 +1262,178 @@ describe("resolveCreatePrExecution", () => {
       gitStatus: status({ hasWorkingTreeChanges: true }),
     });
     assert.deepEqual(execution, { kind: "unavailable", hint: "Git action in progress." });
+  });
+});
+
+describe("resolveCreatePrDialogExecution", () => {
+  const baseContext = {
+    isBusy: false,
+    isDefaultBranch: false,
+    hasOriginRemote: true,
+    defaultBranchName: "main",
+  };
+
+  it("keeps the full commit chain when local changes are included", () => {
+    const execution = resolveCreatePrDialogExecution(
+      { ...baseContext, gitStatus: status({ hasWorkingTreeChanges: true }) },
+      true,
+    );
+    assert.deepEqual(execution, { kind: "run_action", action: "commit_push_pr" });
+  });
+
+  it("evaluates a dirty tree as clean when local changes are excluded", () => {
+    const execution = resolveCreatePrDialogExecution(
+      { ...baseContext, gitStatus: status({ hasWorkingTreeChanges: true, aheadCount: 2 }) },
+      false,
+    );
+    assert.deepEqual(execution, { kind: "run_action", action: "create_pr" });
+  });
+
+  it("reports unavailability when excluding changes leaves nothing to include", () => {
+    const execution = resolveCreatePrDialogExecution(
+      {
+        ...baseContext,
+        gitStatus: status({
+          hasWorkingTreeChanges: true,
+          upstreamBranch: "main",
+          aheadCount: 0,
+        }),
+      },
+      false,
+    );
+    assert.deepEqual(execution, {
+      kind: "unavailable",
+      hint: "No branch changes to include in a PR.",
+    });
+  });
+
+  it("keeps blocking states (behind upstream) regardless of the toggle", () => {
+    const execution = resolveCreatePrDialogExecution(
+      { ...baseContext, gitStatus: status({ hasWorkingTreeChanges: true, behindCount: 1 }) },
+      false,
+    );
+    assert.deepEqual(execution, {
+      kind: "unavailable",
+      hint: "Branch is behind upstream. Pull before creating a PR.",
+    });
+  });
+});
+
+describe("resolveCreatePrDialogView", () => {
+  const baseContext = {
+    isBusy: false,
+    isDefaultBranch: false,
+    hasOriginRemote: true,
+    defaultBranchName: "main",
+  };
+
+  it("describes a published feature branch as an existing branch", () => {
+    const view = resolveCreatePrDialogView({ ...baseContext, gitStatus: status() });
+    assert.deepEqual(view, {
+      branchName: "feature/test",
+      baseBranchName: "main",
+      isNewBranch: false,
+      willCreateFeatureBranch: false,
+      showCommitToggle: false,
+      insertions: 0,
+      deletions: 0,
+    });
+  });
+
+  it("describes an unpublished branch as new and surfaces diff stats", () => {
+    const view = resolveCreatePrDialogView({
+      ...baseContext,
+      gitStatus: status({
+        hasWorkingTreeChanges: true,
+        hasUpstream: false,
+        upstreamBranch: null,
+        workingTree: {
+          files: [{ path: "a.ts", insertions: 400, deletions: 41 }],
+          insertions: 400,
+          deletions: 41,
+        },
+      }),
+    });
+    assert.isTrue(view.isNewBranch);
+    assert.isFalse(view.willCreateFeatureBranch);
+    assert.isTrue(view.showCommitToggle);
+    assert.equal(view.insertions, 400);
+    assert.equal(view.deletions, 41);
+  });
+
+  it("plans an auto-named feature branch on the default branch", () => {
+    const view = resolveCreatePrDialogView({
+      ...baseContext,
+      isDefaultBranch: true,
+      gitStatus: status({ branch: "main", upstreamBranch: "main", hasWorkingTreeChanges: true }),
+    });
+    assert.isTrue(view.isNewBranch);
+    assert.isTrue(view.willCreateFeatureBranch);
+  });
+
+  it("falls back to main without a resolved default branch name", () => {
+    const view = resolveCreatePrDialogView({
+      ...baseContext,
+      defaultBranchName: null,
+      gitStatus: null,
+    });
+    assert.equal(view.baseBranchName, "main");
+    assert.isNull(view.branchName);
+  });
+});
+
+describe("resolveCreatePrBrowserPreparation", () => {
+  const baseContext = {
+    isBusy: false,
+    isDefaultBranch: false,
+    hasOriginRemote: true,
+    defaultBranchName: "main",
+  };
+
+  it("commits and pushes (without creating the PR) when local changes are included", () => {
+    const preparation = resolveCreatePrBrowserPreparation(
+      { ...baseContext, gitStatus: status({ hasWorkingTreeChanges: true }) },
+      true,
+    );
+    assert.deepEqual(preparation, { kind: "run_action", action: "commit_push" });
+  });
+
+  it("pushes first when the branch is ahead of upstream", () => {
+    const preparation = resolveCreatePrBrowserPreparation(
+      { ...baseContext, gitStatus: status({ aheadCount: 2 }) },
+      true,
+    );
+    assert.deepEqual(preparation, { kind: "run_action", action: "push" });
+  });
+
+  it("pushes committed work only when local changes are excluded on an ahead branch", () => {
+    const preparation = resolveCreatePrBrowserPreparation(
+      { ...baseContext, gitStatus: status({ hasWorkingTreeChanges: true, aheadCount: 1 }) },
+      false,
+    );
+    assert.deepEqual(preparation, { kind: "run_action", action: "push" });
+  });
+
+  it("opens the compare page directly for a clean published branch", () => {
+    const preparation = resolveCreatePrBrowserPreparation(
+      { ...baseContext, gitStatus: status() },
+      true,
+    );
+    assert.deepEqual(preparation, { kind: "open_compare" });
+  });
+
+  it("passes through open-PR and unavailable outcomes", () => {
+    assert.deepEqual(
+      resolveCreatePrBrowserPreparation(
+        { ...baseContext, gitStatus: status({ pr: statusPr() }) },
+        true,
+      ),
+      { kind: "open_pr" },
+    );
+    assert.deepEqual(resolveCreatePrBrowserPreparation({ ...baseContext, gitStatus: null }, true), {
+      kind: "unavailable",
+      hint: "Git status is unavailable.",
+    });
   });
 });
 

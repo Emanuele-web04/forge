@@ -355,6 +355,10 @@ export function gitRunStackedActionMutationOptions(input: {
       commitMessage?: string;
       featureBranch?: boolean;
       filePaths?: string[];
+      prTitle?: string;
+      prBody?: string;
+      prDraft?: boolean;
+      allowDirtyWorkingTree?: boolean;
     },
     Awaited<ReturnType<NativeApi["git"]["runStackedAction"]>>
   >({
@@ -362,7 +366,21 @@ export function gitRunStackedActionMutationOptions(input: {
     queryClient: input.queryClient,
     mutationKey: gitMutationKeys.runStackedAction(input.cwd),
     unavailableMessage: "Git action is unavailable.",
-    run: (api, cwd, { actionId, action, commitMessage, featureBranch, filePaths }) =>
+    run: (
+      api,
+      cwd,
+      {
+        actionId,
+        action,
+        commitMessage,
+        featureBranch,
+        filePaths,
+        prTitle,
+        prBody,
+        prDraft,
+        allowDirtyWorkingTree,
+      },
+    ) =>
       api.git.runStackedAction({
         actionId,
         cwd,
@@ -370,6 +388,10 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
+        ...(prTitle ? { prTitle } : {}),
+        ...(prBody ? { prBody } : {}),
+        ...(prDraft !== undefined ? { prDraft } : {}),
+        ...(allowDirtyWorkingTree ? { allowDirtyWorkingTree } : {}),
         ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
         ...(input.modelSelection ? { textGenerationModelSelection: input.modelSelection } : {}),

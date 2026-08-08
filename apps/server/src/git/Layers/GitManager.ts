@@ -1235,6 +1235,11 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string,
     fallbackBranch: string | null,
     textGenerationParams?: GitTextGenerationParams,
+    prOptions?: {
+      readonly title?: string | undefined;
+      readonly body?: string | undefined;
+      readonly draft?: boolean | undefined;
+    },
   ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
@@ -1276,38 +1281,45 @@ export const makeGitManager = Effect.gen(function* () {
           `Cannot create a pull request from '${headContext.headBranch}' into itself. Create or switch to a feature branch and retry.`,
         );
       }
-      const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
-      const originRemoteUrl = headContext.isCrossRepository
-        ? yield* readConfigValueNullable(cwd, "remote.origin.url")
-        : null;
-      const targetRemoteName = headContext.isCrossRepository
-        ? originRemoteUrl
-          ? "origin"
-          : null
-        : headContext.remoteName;
-      const remoteBaseRef = targetRemoteName
-        ? `refs/remotes/${targetRemoteName}/${baseBranch}`
-        : null;
-      const useRemoteBaseRef = remoteBaseRef !== null && (yield* gitRefExists(cwd, remoteBaseRef));
-      const prTemplateTreeish = useRemoteBaseRef ? remoteBaseRef : baseBranch;
-      const prTemplate = Option.getOrUndefined(
-        yield* detectPrTemplate(cwd, prTemplateTreeish, gitCore.execute),
-      );
+      let prTitle = prOptions?.title;
+      let prBody = prOptions?.body;
+      if (prTitle === undefined || prBody === undefined) {
+        const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
+        const originRemoteUrl = headContext.isCrossRepository
+          ? yield* readConfigValueNullable(cwd, "remote.origin.url")
+          : null;
+        const targetRemoteName = headContext.isCrossRepository
+          ? originRemoteUrl
+            ? "origin"
+            : null
+          : headContext.remoteName;
+        const remoteBaseRef = targetRemoteName
+          ? `refs/remotes/${targetRemoteName}/${baseBranch}`
+          : null;
+        const useRemoteBaseRef =
+          remoteBaseRef !== null && (yield* gitRefExists(cwd, remoteBaseRef));
+        const prTemplateTreeish = useRemoteBaseRef ? remoteBaseRef : baseBranch;
+        const prTemplate = Option.getOrUndefined(
+          yield* detectPrTemplate(cwd, prTemplateTreeish, gitCore.execute),
+        );
 
-      const generated = yield* textGeneration.generatePrContent({
-        cwd,
-        baseBranch,
-        headBranch: headContext.headBranch,
-        commitSummary: limitContext(rangeContext.commitSummary, 20_000),
-        diffSummary: limitContext(rangeContext.diffSummary, 20_000),
-        diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-        ...(prTemplate !== undefined ? { prTemplate } : {}),
-        ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
-      });
+        const generated = yield* textGeneration.generatePrContent({
+          cwd,
+          baseBranch,
+          headBranch: headContext.headBranch,
+          commitSummary: limitContext(rangeContext.commitSummary, 20_000),
+          diffSummary: limitContext(rangeContext.diffSummary, 20_000),
+          diffPatch: limitContext(rangeContext.diffPatch, 60_000),
+          ...(prTemplate !== undefined ? { prTemplate } : {}),
+          ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
+        });
+        prTitle ??= generated.title;
+        prBody ??= generated.body;
+      }
 
       const bodyFile = path.join(tempDir, `synara-pr-body-${process.pid}-${randomUUID()}.md`);
       yield* fileSystem
-        .writeFileString(bodyFile, generated.body)
+        .writeFileString(bodyFile, prBody)
         .pipe(
           Effect.mapError((cause) =>
             gitManagerError("runPrStep", "Failed to write pull request body temp file.", cause),
@@ -1318,8 +1330,9 @@ export const makeGitManager = Effect.gen(function* () {
           cwd,
           baseBranch,
           headSelector: headContext.preferredHeadSelector,
-          title: generated.title,
+          title: prTitle,
           bodyFile,
+          ...(prOptions?.draft !== undefined ? { draft: prOptions.draft } : {}),
         })
         .pipe(
           Effect.as(null),
@@ -1348,7 +1361,7 @@ export const makeGitManager = Effect.gen(function* () {
           status: "created" as const,
           baseBranch,
           headBranch: headContext.headBranch,
-          title: generated.title,
+          title: prTitle,
         };
       }
 
@@ -2614,13 +2627,21 @@ The local stash entry was kept for recovery.`,
           phases,
         });
 
-        if (input.action === "push" && initialStatus.hasWorkingTreeChanges) {
+        if (
+          input.action === "push" &&
+          initialStatus.hasWorkingTreeChanges &&
+          !input.allowDirtyWorkingTree
+        ) {
           return yield* gitManagerError(
             "runStackedAction",
             "Commit or stash local changes before pushing.",
           );
         }
-        if (input.action === "create_pr" && initialStatus.hasWorkingTreeChanges) {
+        if (
+          input.action === "create_pr" &&
+          initialStatus.hasWorkingTreeChanges &&
+          !input.allowDirtyWorkingTree
+        ) {
           return yield* gitManagerError(
             "runStackedAction",
             "Commit local changes before creating a PR.",
@@ -2719,7 +2740,11 @@ The local stash entry was kept for recovery.`,
                 Effect.flatMap(() =>
                   Effect.gen(function* () {
                     currentPhase = "pr";
-                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams);
+                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams, {
+                      title: input.prTitle,
+                      body: input.prBody,
+                      draft: input.prDraft,
+                    });
                   }),
                 ),
               )
