@@ -50,6 +50,7 @@ import { isWindowsShellCommandMissingResult } from "../shell-command-detection.t
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 export const OPENCODE_LOCAL_SERVER_IDLE_TTL_MS = 5 * 60_000;
+export const KILO_CREDENTIAL_STARTUP_RETRY_DELAYS_MS = [500, 1_500] as const;
 const OPENCODE_STARTUP_OUTPUT_MAX_CHARS = 4_000;
 const REDACTED_STARTUP_SECRET = "[redacted]";
 const STARTUP_OUTPUT_AUTHORIZATION_PATTERN =
@@ -329,6 +330,25 @@ function pooledOpenCodeServerKey(input: {
       serverAuthUsername: cliSpec.serverAuthUsername,
     },
   });
+}
+
+function isRetryableKiloCredentialStartupFailure(
+  cliSpec: OpenCodeCompatibleCliSpec,
+  cause: unknown,
+): boolean {
+  if (cliSpec.dataDirectoryName !== KILO_CLI_SPEC.dataDirectoryName) {
+    return false;
+  }
+
+  const detail = openCodeRuntimeErrorDetail(cause).toLowerCase();
+  return (
+    detail.includes('failed query: update "credential" set') ||
+    detail.includes("failed query: update 'credential' set") ||
+    detail.includes("failed query: update `credential` set") ||
+    detail.includes("sqlite_busy") ||
+    detail.includes("database is busy") ||
+    detail.includes("database is locked")
+  );
 }
 
 export function parseOpenCodeModelSlug(
@@ -1217,24 +1237,50 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           // Start lazily on first real use, then keep warm only while recent sessions need it.
           return yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
-              const serverScope = yield* Scope.make();
-              const startedExit = yield* Effect.exit(
-                restore(
-                  startOpenCodeServerProcess(input).pipe(
-                    Effect.provideService(Scope.Scope, serverScope),
-                  ),
-                ),
-              );
+              const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
+              let retryIndex = 0;
+              let started: { server: OpenCodeServerProcess; scope: Scope.Closeable } | undefined;
 
-              if (Exit.isFailure(startedExit)) {
+              while (!started) {
+                const serverScope = yield* Scope.make();
+                const startedExit = yield* Effect.exit(
+                  restore(
+                    startOpenCodeServerProcess(input).pipe(
+                      Effect.provideService(Scope.Scope, serverScope),
+                    ),
+                  ),
+                );
+
+                if (Exit.isSuccess(startedExit)) {
+                  started = { server: startedExit.value, scope: serverScope };
+                  break;
+                }
+
                 yield* Scope.close(serverScope, Exit.void).pipe(Effect.ignore);
-                return yield* Effect.failCause(startedExit.cause);
+                const retryDelayMs = KILO_CREDENTIAL_STARTUP_RETRY_DELAYS_MS[retryIndex];
+                const failure = Cause.squash(startedExit.cause);
+                if (
+                  retryDelayMs === undefined ||
+                  !isRetryableKiloCredentialStartupFailure(cliSpec, failure)
+                ) {
+                  return yield* Effect.failCause(startedExit.cause);
+                }
+
+                retryIndex += 1;
+                yield* Effect.logWarning(
+                  "Kilo credential reconciliation failed during startup; retrying",
+                  {
+                    attempt: retryIndex + 1,
+                    delayMs: retryDelayMs,
+                  },
+                );
+                yield* restore(Effect.sleep(retryDelayMs));
               }
 
               const pooledServer: PooledOpenCodeServer = {
                 key,
-                server: startedExit.value,
-                scope: serverScope,
+                server: started.server,
+                scope: started.scope,
                 closeOnRelease: input.poolIsolationKey !== undefined,
                 refCount: 1,
                 idleCloseFiber: null,
