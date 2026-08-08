@@ -111,7 +111,7 @@ const DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS: ProviderModelDescriptor = {
   name: "GPT-5.6 Sol",
   supportedReasoningEfforts: [
     { value: "low", label: "Low" },
-    { value: "medium", label: "Medium", isDefault: true },
+    { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
   ],
   defaultReasoningEffort: "medium",

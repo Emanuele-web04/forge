@@ -304,7 +304,9 @@ export const makeDevinAcpRuntime = (
     const storedCredentials = yield* Effect.tryPromise(() => readDevinStoredCredentials()).pipe(
       Effect.orElseSucceed(() => undefined),
     );
-    const authenticateMeta = buildDevinAcpAuthenticateMeta({ credentials: storedCredentials });
+    const authenticateMeta = buildDevinAcpAuthenticateMeta(
+      storedCredentials ? { credentials: storedCredentials } : {},
+    );
     const apiKey = authenticateMeta.api_key;
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({

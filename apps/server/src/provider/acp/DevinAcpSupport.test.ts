@@ -19,9 +19,12 @@ describe("mapDevinAcpCommands", () => {
     expect(
       mapDevinAcpCommands([
         { name: "compact", description: "Compact the current context" },
-        { name: "plan" },
+        { name: "plan", description: "Plan the current task" },
       ]),
-    ).toEqual([{ name: "compact", description: "Compact the current context" }, { name: "plan" }]);
+    ).toEqual([
+      { name: "compact", description: "Compact the current context" },
+      { name: "plan", description: "Plan the current task" },
+    ]);
   });
 });
 
