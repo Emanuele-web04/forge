@@ -7,6 +7,7 @@
  */
 import {
   DEFAULT_SERVER_SETTINGS,
+  type GitTextGenerationDefaultProvider,
   type ModelSelection,
   ServerSettings,
   ServerSettingsError,
@@ -128,13 +129,18 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
-type GitWritingFallbackProvider = "codex" | "kilo" | "opencode";
+type GitWritingFallbackProvider = GitTextGenerationDefaultProvider;
 
 // Only providers with a dedicated Git writing default participate in the
 // fallback. Searching over chat providers (e.g. claudeAgent) would let the
 // fallback "resolve" to a provider that cannot generate Git text, or worse
 // rewrite to Codex even when Codex itself is disabled.
-const PROVIDER_ORDER: readonly GitWritingFallbackProvider[] = ["codex", "kilo", "opencode"];
+const PROVIDER_ORDER: readonly GitWritingFallbackProvider[] = [
+  "codex",
+  "kilo",
+  "opencode",
+  "cursor",
+];
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
@@ -144,6 +150,10 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
 
   const fallback = PROVIDER_ORDER.find((provider) => settings.providers[provider].enabled);
   if (!fallback) {
+    // All-disabled guard: every Git-writing-capable provider is disabled, so
+    // there is no valid rewrite target. Preserve the persisted selection
+    // unchanged instead of silently replacing it with a provider the user
+    // disabled (or an unsupported chat provider).
     return settings;
   }
 

@@ -127,7 +127,10 @@ export const DEFAULT_SERVER_SETTINGS_VIEW: ServerSettingsView = Schema.decodeSyn
 const ModelSelectionPatch = Schema.Struct({
   provider: Schema.optionalKey(ProviderKind),
   model: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
-  options: Schema.optionalKey(Schema.Unknown),
+  // Schema.Json (not Schema.Unknown) so option overrides survive the JSON RPC
+  // codec: the RPC layer encodes Schema.Unknown as null, which would turn every
+  // options-only patch into an explicit null on the wire.
+  options: Schema.optionalKey(Schema.Json),
 });
 
 const ProviderSettingsBasePatch = {

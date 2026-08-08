@@ -3,17 +3,14 @@
 // Layer: Settings panel
 
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
-import {
-  defaultGitTextGenerationSelectionFor,
-  getModelOptions,
-  normalizeModelSlug,
-} from "@synara/shared/model";
+import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
 import {
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   type AppSettingsBinding,
+  GIT_TEXT_GENERATION_PICKER_PROVIDERS,
   MAX_CUSTOM_MODEL_LENGTH,
   getCustomModelsForProvider,
   getDefaultCustomModelsForProvider,
@@ -47,7 +44,8 @@ type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
   | { readonly model?: never; readonly error: string };
 
-const GIT_WRITING_DISCOVERY_PROVIDERS = ["codex", "kilo", "opencode"] as const;
+const GIT_WRITING_DISCOVERY_PROVIDERS: readonly ProviderKind[] =
+  GIT_TEXT_GENERATION_PICKER_PROVIDERS;
 
 export function validateCustomModelInput(input: {
   readonly provider: ProviderKind;
@@ -103,6 +101,7 @@ export function ModelsSettingsPanel({
     customCodexModels,
     customKiloModels,
     customOpenCodeModels,
+    customCursorModels,
     textGenerationModel,
     textGenerationProvider,
   } = settings;
@@ -112,27 +111,18 @@ export function ModelsSettingsPanel({
   });
   const currentGitTextGenerationProvider = resolvedGitTextGenerationSelection.provider;
   const currentGitTextGenerationModel = resolvedGitTextGenerationSelection.model;
-  const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
-    () => ({
-      codex: defaultGitTextGenerationSelectionFor("codex").model,
-      kilo: defaultGitTextGenerationSelectionFor("kilo").model,
-      opencode: defaultGitTextGenerationSelectionFor("opencode").model,
-      [currentGitTextGenerationProvider]: currentGitTextGenerationModel,
-    }),
-    [currentGitTextGenerationModel, currentGitTextGenerationProvider],
-  );
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: null,
     activeProjectCwd: null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
-  const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider } = useProviderModelCatalog({
-    selectedProvider: currentGitTextGenerationProvider,
-    discoveryEnabled: active,
-    cwd: providerModelDiscoveryCwd,
-    modelHintByProvider: gitWritingModelHintByProvider,
-    prefetchProviders: GIT_WRITING_DISCOVERY_PROVIDERS,
-  });
+  const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider, runtimeModelsByProvider } =
+    useProviderModelCatalog({
+      selectedProvider: currentGitTextGenerationProvider,
+      discoveryEnabled: active,
+      cwd: providerModelDiscoveryCwd,
+      prefetchProviders: GIT_WRITING_DISCOVERY_PROVIDERS,
+    });
   const gitTextGenerationModelOptions = useMemo(
     () =>
       getGitTextGenerationModelOptions(
@@ -140,6 +130,7 @@ export function ModelsSettingsPanel({
           customCodexModels,
           customKiloModels,
           customOpenCodeModels,
+          customCursorModels,
           textGenerationModel,
           textGenerationProvider,
         },
@@ -147,15 +138,20 @@ export function ModelsSettingsPanel({
           codex: gitWritingCatalogOptionsByProvider.codex,
           kilo: gitWritingCatalogOptionsByProvider.kilo,
           opencode: gitWritingCatalogOptionsByProvider.opencode,
+          cursor: gitWritingCatalogOptionsByProvider.cursor,
         },
+        runtimeModelsByProvider,
       ),
     [
       customCodexModels,
       customKiloModels,
       customOpenCodeModels,
+      customCursorModels,
       gitWritingCatalogOptionsByProvider.codex,
       gitWritingCatalogOptionsByProvider.kilo,
       gitWritingCatalogOptionsByProvider.opencode,
+      gitWritingCatalogOptionsByProvider.cursor,
+      runtimeModelsByProvider,
       textGenerationModel,
       textGenerationProvider,
     ],

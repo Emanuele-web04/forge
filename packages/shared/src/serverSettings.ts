@@ -4,7 +4,7 @@ import {
   type ServerSettings,
   type ServerSettingsPatch,
 } from "@synara/contracts";
-import { defaultGitTextGenerationSelectionFor } from "./model";
+import { defaultGitTextGenerationSelectionFor, resolveGitTextGenerationSelection } from "./model";
 import { deepMerge, type DeepPartial } from "./Struct";
 
 function shouldReplaceTextGenerationModelSelection(
@@ -23,34 +23,29 @@ export function applyServerSettingsPatch(
     return next;
   }
 
-  const provider = selectionPatch.provider ?? current.textGenerationModelSelection.provider;
-  const explicitModel = selectionPatch.model ?? undefined;
-  const providerChanged =
-    selectionPatch.provider !== undefined &&
-    selectionPatch.provider !== "pi" &&
-    selectionPatch.provider !== current.textGenerationModelSelection.provider;
+  // Options-only or empty selection patch: preserve the persisted pair exactly
+  // (no silent migration) and only replace the option overrides.
+  if (selectionPatch.provider === undefined && selectionPatch.model === undefined) {
+    const options = selectionPatch.options ?? current.textGenerationModelSelection.options;
+    return {
+      ...next,
+      textGenerationModelSelection: {
+        ...current.textGenerationModelSelection,
+        ...(options !== undefined ? { options } : {}),
+      } as ModelSelection,
+    };
+  }
 
-  // Resolve the whole selection atomically. A provider outside the Git writing
-  // map (claudeAgent, antigravity, grok, droid, legacy cursor) must never borrow
-  // Codex's model: when only the provider changes, either use its mapped default
-  // or fall back to the complete Codex/Luna pair.
-  const resolvedSelection = (() => {
-    // Options-only patch: preserve the current selection untouched.
-    if (selectionPatch.provider === undefined && selectionPatch.model === undefined) {
-      return current.textGenerationModelSelection;
-    }
-    if (explicitModel !== undefined && explicitModel.length > 0) {
-      return { provider, model: explicitModel } as ModelSelection;
-    }
-    if (providerChanged || explicitModel === undefined) {
-      if (provider === "codex" || provider === "kilo" || provider === "opencode") {
-        return defaultGitTextGenerationSelectionFor(provider) as ModelSelection;
-      }
-      // Unsupported provider with no explicit model: never {claudeAgent, gpt-5.6-luna}.
-      return defaultGitTextGenerationSelectionFor("codex") as ModelSelection;
-    }
-    return { provider, model: current.textGenerationModelSelection.model } as ModelSelection;
-  })();
+  // Resolve the whole selection atomically through the one shared resolver, so
+  // the web patch path and this direct merge boundary cannot drift. A provider
+  // outside the Git writing registry (claudeAgent, antigravity, grok, droid,
+  // pi) with no explicit model resolves to the complete Codex/Luna pair and
+  // never borrows another provider's model.
+  const resolvedSelection = resolveGitTextGenerationSelection({
+    provider: selectionPatch.provider,
+    model: selectionPatch.model,
+    currentProvider: current.textGenerationModelSelection.provider,
+  });
 
   const options = shouldReplaceTextGenerationModelSelection(selectionPatch)
     ? selectionPatch.options
