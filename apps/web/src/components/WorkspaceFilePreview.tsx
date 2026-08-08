@@ -834,6 +834,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onMarkdownPreviewChange={handleMarkdownPreviewChange}
         onReferenceInChat={onReferenceInChat}
         onAskWhyInChat={onAskWhyInChat}
+        contentsForCopy={fileIsImage || fileQuery.data === undefined ? null : displayedFileContents}
         truncated={fileQuery.data?.truncated ?? false}
         dirty={editBufferDirty}
         readOnlyReason={readOnlyReason}

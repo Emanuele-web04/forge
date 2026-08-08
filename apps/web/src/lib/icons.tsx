@@ -154,6 +154,11 @@ export const ClockIcon = centralIconWrapper("clock");
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);
+// Markdown Source/Preview toggle glyphs, sourced from the Central set so the
+// file-preview header controls share one visual language with the rest of the
+// chrome (raw source = code brackets, rendered preview = open eye).
+export const CodeIcon: LucideIcon = centralIconWrapper("code");
+export const EyeOpenIcon: LucideIcon = centralIconWrapper("eye-open");
 export const PaperclipIcon = adaptIcon(IconPaperclip);
 export const ArchiveIcon = adaptIcon(IconArchive);
 export const BrainIcon = adaptIcon(IconBrain);
