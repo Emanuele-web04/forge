@@ -159,4 +159,90 @@ describe("ServerSettingsService", () => {
     expect(settings.textGenerationModelSelection.provider).toBe("kilo");
     expect(settings.textGenerationModelSelection.model).toBe("kilo/kilo-auto/free");
   });
+
+  it("falls back to an enabled Cursor when the persisted Git-writing provider is disabled", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "codex",
+              model: "gpt-5.6-luna",
+            },
+            providers: {
+              codex: { enabled: false },
+              kilo: { enabled: false },
+              opencode: { enabled: false },
+              cursor: { enabled: true },
+            },
+          }),
+        ),
+      ),
+    );
+
+    expect(settings.textGenerationModelSelection).toEqual({
+      provider: "cursor",
+      model: "auto",
+    });
+  });
+
+  it("preserves the persisted selection without a rewrite when every Git-writing provider is disabled", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "cursor",
+              model: "auto",
+            },
+            providers: {
+              codex: { enabled: false },
+              kilo: { enabled: false },
+              opencode: { enabled: false },
+              cursor: { enabled: false },
+              claudeAgent: { enabled: true },
+            },
+          }),
+        ),
+      ),
+    );
+
+    // No silent rewrite: the all-disabled guard keeps the persisted pair even
+    // though an unrelated chat provider (claudeAgent) is enabled.
+    expect(settings.textGenerationModelSelection).toEqual({
+      provider: "cursor",
+      model: "auto",
+    });
+  });
+
+  it("keeps a provider-only Cursor patch on Cursor with its registered default", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        yield* service.start;
+        const updated = yield* service.updateSettings({
+          textGenerationModelSelection: { provider: "cursor" },
+        });
+        const persisted = yield* service.getSettings;
+        return { updated, persisted };
+      }),
+    );
+
+    // The direct server patch path must never rewrite a provider-only Cursor
+    // selection to Codex/Luna, and the pair must round-trip to disk.
+    expect(result.updated.textGenerationModelSelection).toEqual({
+      provider: "cursor",
+      model: "auto",
+    });
+    expect(result.persisted.textGenerationModelSelection).toEqual({
+      provider: "cursor",
+      model: "auto",
+    });
+  });
 });

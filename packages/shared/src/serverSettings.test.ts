@@ -1,4 +1,8 @@
-import { DEFAULT_SERVER_SETTINGS, ProviderSessionStartInput } from "@synara/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderSessionStartInput,
+  type ModelSelection,
+} from "@synara/contracts";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { applyServerSettingsPatch, providerStartOptionsFromServerSettings } from "./serverSettings";
@@ -109,37 +113,157 @@ describe("providerStartOptionsFromServerSettings", () => {
 });
 
 describe("applyServerSettingsPatch textGenerationModelSelection", () => {
-  it("defaults a provider-only patch to the provider's Git writing model", () => {
+  const GIT_WRITING_PROVIDERS = ["codex", "kilo", "opencode", "cursor"] as const;
+  const REGISTERED_DEFAULT_MODEL: Record<(typeof GIT_WRITING_PROVIDERS)[number], string> = {
+    codex: "gpt-5.6-luna",
+    kilo: "kilo/kilo-auto/free",
+    opencode: "opencode/big-pickle",
+    cursor: "auto",
+  };
+
+  it.each(GIT_WRITING_PROVIDERS)(
+    "defaults a provider-only %s patch to that provider's own registered pair",
+    (provider) => {
+      const patched = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+        textGenerationModelSelection: { provider },
+      });
+
+      expect(patched.textGenerationModelSelection).toEqual({
+        provider,
+        model: REGISTERED_DEFAULT_MODEL[provider],
+      });
+    },
+  );
+
+  it.each([
+    { provider: "codex", model: "gpt-5.4-mini" },
+    { provider: "kilo", model: "kilo/kilo-auto/free" },
+    { provider: "opencode", model: "opencode/big-pickle" },
+    { provider: "cursor", model: "composer-2.5" },
+  ] as const)("keeps an explicit provider+model pair ($provider/$model) unchanged", (selection) => {
     const patched = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
-      textGenerationModelSelection: { provider: "opencode" },
+      textGenerationModelSelection: selection,
     });
 
     expect(patched.textGenerationModelSelection).toEqual({
-      provider: "opencode",
-      model: "opencode/big-pickle",
+      provider: selection.provider,
+      model: selection.model,
     });
   });
 
-  it("defaults a provider-only Kilo patch to the Kilo free alias", () => {
-    const patched = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
-      textGenerationModelSelection: { provider: "kilo" },
-    });
-
-    expect(patched.textGenerationModelSelection).toEqual({
-      provider: "kilo",
-      model: "kilo/kilo-auto/free",
-    });
-  });
-
-  it("preserves the model when a patch only changes the model", () => {
-    const patched = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
-      textGenerationModelSelection: { model: "gpt-5.4-mini" },
-    });
-
-    expect(patched.textGenerationModelSelection).toEqual({
-      provider: "codex",
+  it.each([
+    {
       model: "gpt-5.4-mini",
+      current: "codex",
+      expected: { provider: "codex", model: "gpt-5.4-mini" },
+    },
+    {
+      model: "kilo/kilo-auto/free",
+      current: "opencode",
+      expected: { provider: "kilo", model: "kilo/kilo-auto/free" },
+    },
+    {
+      model: "opencode/big-pickle",
+      current: "kilo",
+      expected: { provider: "opencode", model: "opencode/big-pickle" },
+    },
+  ] as const)(
+    "infers the provider from a model-only patch ($model)",
+    ({ model, current, expected }) => {
+      const patched = applyServerSettingsPatch(
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          textGenerationModelSelection: {
+            provider: current,
+            model: "current-model",
+          } as ModelSelection,
+        },
+        {
+          textGenerationModelSelection: { model },
+        },
+      );
+
+      expect(patched.textGenerationModelSelection).toEqual(expected);
+    },
+  );
+
+  it("keeps a bare non-Codex model on the active Git writing provider instead of borrowing Codex", () => {
+    // "composer-2.5" is a Cursor model. With Cursor active, a model-only patch
+    // must not produce the mismatched pair {codex, composer-2.5}.
+    const patched = applyServerSettingsPatch(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        textGenerationModelSelection: { provider: "cursor", model: "auto" },
+      },
+      {
+        textGenerationModelSelection: { model: "composer-2.5" },
+      },
+    );
+
+    expect(patched.textGenerationModelSelection).toEqual({
+      provider: "cursor",
+      model: "composer-2.5",
     });
+  });
+
+  it.each(GIT_WRITING_PROVIDERS)(
+    "preserves the persisted pair for an empty %s-selection patch",
+    (provider) => {
+      const current = {
+        ...DEFAULT_SERVER_SETTINGS,
+        textGenerationModelSelection: {
+          provider,
+          model: REGISTERED_DEFAULT_MODEL[provider],
+        } as ModelSelection,
+      };
+      const patched = applyServerSettingsPatch(current, {
+        textGenerationModelSelection: {},
+      });
+
+      expect(patched.textGenerationModelSelection).toEqual(current.textGenerationModelSelection);
+    },
+  );
+
+  it.each(GIT_WRITING_PROVIDERS)(
+    "preserves the persisted pair for an options-only %s-selection patch",
+    (provider) => {
+      const current = {
+        ...DEFAULT_SERVER_SETTINGS,
+        textGenerationModelSelection: {
+          provider,
+          model: "custom/model",
+          options: { variant: "high" as const },
+        } as ModelSelection,
+      };
+      const patched = applyServerSettingsPatch(current, {
+        textGenerationModelSelection: {
+          options: { variant: "low" as const },
+        },
+      });
+
+      expect(patched.textGenerationModelSelection).toEqual({
+        provider,
+        model: "custom/model",
+        options: { variant: "low" },
+      });
+    },
+  );
+
+  it("preserves a legacy non-default Codex pair across options-only and empty patches", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" } as ModelSelection,
+    };
+
+    expect(
+      applyServerSettingsPatch(current, { textGenerationModelSelection: {} })
+        .textGenerationModelSelection,
+    ).toEqual({ provider: "codex", model: "gpt-5.4-mini" });
+    expect(
+      applyServerSettingsPatch(current, {
+        textGenerationModelSelection: { options: { reasoningEffort: "high" as const } },
+      }).textGenerationModelSelection,
+    ).toEqual({ provider: "codex", model: "gpt-5.4-mini", options: { reasoningEffort: "high" } });
   });
 
   it("never pairs an unsupported provider with Codex's model", () => {
@@ -157,36 +281,12 @@ describe("applyServerSettingsPatch textGenerationModelSelection", () => {
 
   it("keeps an unsupported provider when an explicit model is supplied (legacy)", () => {
     const patched = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
-      textGenerationModelSelection: { provider: "cursor", model: "auto" },
+      textGenerationModelSelection: { provider: "claudeAgent", model: "sonnet" },
     });
 
     expect(patched.textGenerationModelSelection).toEqual({
-      provider: "cursor",
-      model: "auto",
-    });
-  });
-
-  it("preserves the current selection for an options-only patch", () => {
-    const patched = applyServerSettingsPatch(
-      {
-        ...DEFAULT_SERVER_SETTINGS,
-        textGenerationModelSelection: {
-          provider: "kilo",
-          model: "openrouter/custom-model",
-          options: { variant: "high" as const },
-        },
-      },
-      {
-        textGenerationModelSelection: {
-          options: { variant: "low" as const },
-        },
-      },
-    );
-
-    expect(patched.textGenerationModelSelection).toEqual({
-      provider: "kilo",
-      model: "openrouter/custom-model",
-      options: { variant: "low" },
+      provider: "claudeAgent",
+      model: "sonnet",
     });
   });
 });
