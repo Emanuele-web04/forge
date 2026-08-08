@@ -663,7 +663,8 @@ const makeWsRpcHandlersLayer = () =>
       const refreshGitStatusInBackground = (cwd: string) =>
         gitStatusBroadcaster.refreshStatus(cwd).pipe(
           Effect.catchCause(() => Effect.void),
-          Effect.forkDaemon,
+          Effect.forkDetach,
+          Effect.asVoid,
         );
 
       const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
