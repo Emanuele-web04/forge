@@ -107,11 +107,13 @@ describe("waitForHttpReady", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(0);
-      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () =>
-        Date.now() >= 130_000
-          ? new Response(null, { status: 200 })
-          : new Response(null, { status: 503 }),
-      );
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async () =>
+          Date.now() >= 130_000
+            ? new Response(null, { status: 200 })
+            : new Response(null, { status: 503 }),
+        );
 
       const readiness = waitForHttpReady("http://127.0.0.1:3773", {
         fetchImpl,

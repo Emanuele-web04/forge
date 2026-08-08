@@ -626,7 +626,7 @@ const makeEventStore = Effect.gen(function* () {
               decodePersistedEventRow("OrchestrationEventStore.readFromSequence:rowToEvent", row),
             ),
           ),
-      ),
+        ),
     });
   };
 

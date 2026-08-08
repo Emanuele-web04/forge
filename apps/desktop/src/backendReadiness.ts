@@ -62,8 +62,7 @@ export async function waitForHttpReady(
 ): Promise<void> {
   const fetchImpl = options?.fetchImpl ?? fetch;
   const signal = options?.signal;
-  const timeoutMs =
-    options?.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
+  const timeoutMs = options?.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
   const intervalMs = options?.intervalMs ?? DEFAULT_INTERVAL_MS;
   const requestTimeoutMs = options?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const readinessPath = options?.path ?? "/";

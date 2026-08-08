@@ -38,9 +38,7 @@ const OTHER_THREAD_SHELL_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.turn-diff-completed",
 ]);
 
-export const DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES = new Set<
-  OrchestrationEvent["type"]
->([
+export const DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.message-sent",
   "thread.proposed-plan-upserted",
   "thread.reverted",
