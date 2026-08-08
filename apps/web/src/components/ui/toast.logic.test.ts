@@ -1,5 +1,15 @@
 import { assert, describe, it } from "vitest";
-import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
+import {
+  buildVisibleToastLayout,
+  DEFAULT_TOAST_TIMEOUT_MS,
+  shouldHideCollapsedToastContent,
+} from "./toast.logic";
+
+describe("DEFAULT_TOAST_TIMEOUT_MS", () => {
+  it("auto-dismisses standard toasts after ten seconds", () => {
+    assert.equal(DEFAULT_TOAST_TIMEOUT_MS, 10_000);
+  });
+});
 
 describe("shouldHideCollapsedToastContent", () => {
   it("keeps a single visible toast readable", () => {
