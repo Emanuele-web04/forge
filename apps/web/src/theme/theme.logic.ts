@@ -734,10 +734,12 @@ export function buildThemeCssVariables(
         : readCodexVariable("--color-background-surface-under"),
     "--app-composer-focus-border": composerFocusBorder,
     // Frosted blur only when the shell is translucent (macOS). On an opaque
-    // shell these promote the surface to a GPU layer that Chromium rasterizes at
+    // shell this promotes the surface to a GPU layer that Chromium rasterizes at
     // the wrong scale on fractional DPI (Windows), so text reads blurry until a
-    // repaint. Keep them "none" off macOS.
-    "--app-composer-backdrop-filter": material === "translucent" ? "blur(16px)" : "none",
+    // repaint. Keep it "none" off macOS.
+    // NOTE: this gates window-vibrancy frosting only. The composer's own glass
+    // (`.chat-composer-surface`, index.css) frosts page content, not the window
+    // material, so — like the floating menus — it stays on across platforms.
     "--app-composer-picker-backdrop-filter": material === "translucent" ? "blur(32px)" : "none",
     "--app-composer-picker-surface": composerPickerMenuSurface,
     "--app-chat-code-surface": chatCodeSurface,

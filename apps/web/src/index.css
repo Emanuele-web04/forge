@@ -2546,17 +2546,56 @@ diffs-container {
   border-top-right-radius: 0;
 }
 
-/* Stacked rail above the composer input: the composer's own surface color at
-   half opacity, so the rail reads as a lighter continuation of the input shell
-   rather than a differently-colored block. */
+/* Composer glass — the same material as the floating menus/pickers
+   (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`), applied to the composer's own
+   surface color instead of the popover token so the fill keeps its familiar tint.
+
+   The blur lives on a `::before` at `z-index: -1` rather than on the element itself,
+   exactly like the popup primitive: `backdrop-filter` on the element would make it a
+   containing block and clip the composer's anchored pickers (which rely on
+   `overflow-visible`). Painted behind the element's own translucent fill, the layer
+   frosts the transcript scrolling underneath (see composerOverlay.ts).
+
+   `--composer-glass-opacity` keeps every composer-family surface on one knob. */
+:root {
+  --composer-glass-opacity: 72%;
+  --composer-glass-filter: blur(40px) saturate(150%);
+}
+
+.chat-composer-surface,
 .chat-composer-stacked-top {
-  background: color-mix(in srgb, var(--composer-surface) 50%, transparent);
+  position: relative;
+}
+
+.chat-composer-surface::before,
+.chat-composer-stacked-top::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  backdrop-filter: var(--composer-glass-filter);
+  -webkit-backdrop-filter: var(--composer-glass-filter);
+}
+
+/* Stacked rail above the composer input: the composer's own surface color at
+   half the glass opacity, so the rail reads as a lighter continuation of the input
+   shell rather than a differently-colored block. */
+.chat-composer-stacked-top {
+  background: color-mix(
+    in srgb,
+    var(--composer-surface) calc(var(--composer-glass-opacity) / 2),
+    transparent
+  );
 }
 
 .chat-composer-surface {
-  background: var(--composer-surface);
-  backdrop-filter: var(--app-composer-backdrop-filter, none);
-  -webkit-backdrop-filter: var(--app-composer-backdrop-filter, none);
+  background: color-mix(
+    in srgb,
+    var(--composer-surface) var(--composer-glass-opacity),
+    transparent
+  );
 }
 
 /* Recessed track: a hairline border + faint inner shadow read the base as a sunken

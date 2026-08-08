@@ -485,6 +485,12 @@ interface MessagesTimelineProps {
    * far right; only the content is inset.
    */
   contentInsetRightPx?: number | undefined;
+  /**
+   * Bottom padding (px) applied to the scroll viewport so transcript rows clear the
+   * floating composer. Passed through `style` (not a class) on purpose: LegendList reads
+   * style padding, so it can account for the inset in its own end-space math.
+   */
+  contentInsetBottomPx?: number | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -544,6 +550,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   workspaceRoot,
   emptyStateContent,
   contentInsetRightPx,
+  contentInsetBottomPx,
 }: MessagesTimelineProps) {
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
@@ -583,9 +590,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // Inset rows from the right (overriding the gutter's right padding) without moving the
   // scroll viewport, so the scrollbar stays pinned to the far right while content clears
   // any right-edge overlay. Kept stable so LegendList isn't re-rendered on unrelated updates.
+  // The bottom inset clears the floating composer the transcript scrolls under; it is
+  // padding on the scroll viewport (not a taller footer) so the list's own footer-layout
+  // and initial-scroll machinery is never resized from outside.
   const listScrollStyle = useMemo(
-    () => (contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined),
-    [contentInsetRightPx],
+    () =>
+      contentInsetRightPx || contentInsetBottomPx
+        ? {
+            ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
+            ...(contentInsetBottomPx ? { paddingBottom: contentInsetBottomPx } : {}),
+          }
+        : undefined,
+    [contentInsetBottomPx, contentInsetRightPx],
   );
   const appTypographyScale = useMemo(
     () => getAppTypographyScale(normalizedChatFontSizePx),
@@ -751,10 +767,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return;
     }
     const style = getComputedStyle(node);
-    const inset =
-      (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+    // Only the *class-based* padding belongs here. The composer inset is applied through
+    // `style.paddingBottom`, which the list already reads and reserves for itself —
+    // counting it twice would push the anchored message a composer-height off the top.
+    const bottomPadding = Math.max(
+      0,
+      (Number.parseFloat(style.paddingBottom) || 0) - (contentInsetBottomPx ?? 0),
+    );
+    const inset = (Number.parseFloat(style.paddingTop) || 0) + bottomPadding;
     setAnchorVerticalInsetPx((current) => (Math.abs(current - inset) > 0.5 ? inset : current));
-  }, [resolvedListRef, tailAnchorMessageId]);
+  }, [contentInsetBottomPx, resolvedListRef, tailAnchorMessageId]);
   const anchoredEndSpace = useMemo(
     () =>
       tailAnchorRowIndex < 0
@@ -2272,8 +2294,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // edge so streamed content dissolves toward the composer. It is scroll-aware
         // via `animation-timeline: scroll()`, so the fade clears at the live edge and a
         // pinned or non-scrollable transcript stays crisp (no permanent shadow).
+        // With the floating composer the viewport bottom sits *behind* the frosted
+        // surface, so the fade would erase exactly the content the glass should reveal —
+        // the composer's own material is the dissolve there instead.
         className={cn(
-          "scroll-fade-b h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          contentInsetBottomPx ? null : "scroll-fade-b",
           ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
           CHAT_COLUMN_GUTTER_CLASS_NAME,
         )}

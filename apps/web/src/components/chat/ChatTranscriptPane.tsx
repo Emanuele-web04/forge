@@ -26,6 +26,7 @@ import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
 import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
+import { composerOverlayAffordanceBottomPx } from "./composerOverlay";
 import { MessageTrail } from "./MessageTrail";
 import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
@@ -38,6 +39,7 @@ interface ChatTranscriptPaneProps {
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
+  contentInsetBottomPx?: ComponentProps<typeof MessagesTimeline>["contentInsetBottomPx"];
   chatFontSizePx: number;
   emptyStateContent?: ReactNode;
   emptyStateProjectName: string | undefined;
@@ -106,6 +108,7 @@ export function ChatTranscriptPane({
   activeTurnStartedAt,
   agentActivityDetail,
   contentInsetRightPx,
+  contentInsetBottomPx,
   chatFontSizePx,
   emptyStateContent,
   emptyStateProjectName,
@@ -162,9 +165,17 @@ export function ChatTranscriptPane({
   worktreeSetupPendingAction,
   onResolveWorktreeSetup,
 }: ChatTranscriptPaneProps) {
-  const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
-    ? { paddingRight: contentInsetRightPx }
-    : undefined;
+  // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
+  // affordance rides above it on the same inset the transcript content uses.
+  const scrollButtonFrameStyle: CSSProperties | undefined =
+    contentInsetRightPx || contentInsetBottomPx
+      ? {
+          ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
+          ...(contentInsetBottomPx
+            ? { bottom: composerOverlayAffordanceBottomPx(contentInsetBottomPx) }
+            : {}),
+        }
+      : undefined;
 
   // Left-edge navigation trail: one tick per sent message. Current + visible
   // highlights are pushed up from MessagesTimeline as the viewport scrolls. They
@@ -254,6 +265,7 @@ export function ChatTranscriptPane({
             timestampFormat={timestampFormat}
             workspaceRoot={workspaceRoot}
             contentInsetRightPx={contentInsetRightPx}
+            contentInsetBottomPx={contentInsetBottomPx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
             emptyStateContent={
               emptyStateContent === undefined ? (
