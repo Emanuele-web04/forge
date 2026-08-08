@@ -96,7 +96,7 @@ export function splitRemoteStatusDetails(
   return {
     hasUpstream: status.hasUpstream,
     upstreamBranch: status.upstreamBranch,
-    configuredPrBaseBranch: cachedRemote?.configuredPrBaseBranch,
+    configuredPrBaseBranch: status.configuredPrBaseBranch,
     aheadCount: status.aheadCount,
     behindCount: status.behindCount,
     pr: cachedRemote?.pr ?? null,

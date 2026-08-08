@@ -1388,11 +1388,6 @@ export const makeGitManager = Effect.gen(function* () {
   const status: GitManagerShape["status"] = Effect.fnUntraced(function* (input) {
     const details = yield* gitCore.statusDetails(input.cwd);
 
-    const configuredPrBaseBranch =
-      details.branch === null
-        ? null
-        : yield* gitCore.readConfigValue(input.cwd, `branch.${details.branch}.gh-merge-base`);
-
     const pr =
       details.branch !== null
         ? yield* pullRequestForBranch({
@@ -1408,7 +1403,7 @@ export const makeGitManager = Effect.gen(function* () {
       workingTree: details.workingTree,
       hasUpstream: details.hasUpstream,
       upstreamBranch: details.upstreamBranch,
-      configuredPrBaseBranch,
+      configuredPrBaseBranch: details.configuredPrBaseBranch,
       aheadCount: details.aheadCount,
       behindCount: details.behindCount,
       pr,

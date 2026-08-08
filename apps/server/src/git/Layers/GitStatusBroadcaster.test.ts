@@ -126,6 +126,41 @@ describe("GitStatusBroadcasterLive", () => {
     );
   });
 
+  it("refreshes the configured PR base while reusing cached remote metadata", async () => {
+    const initialStatus = {
+      ...baseStatus,
+      configuredPrBaseBranch: "main",
+    };
+    const state = {
+      currentDetails: {
+        ...baseDetails,
+        configuredPrBaseBranch: "main",
+      },
+      currentStatus: initialStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+
+        const first = yield* broadcaster.getStatus({ cwd: "/repo" });
+        state.currentDetails = {
+          ...baseDetails,
+          configuredPrBaseBranch: "release",
+        };
+        const second = yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        expect(first.configuredPrBaseBranch).toBe("main");
+        expect(second.configuredPrBaseBranch).toBe("release");
+        expect(state.statusCalls).toBe(1);
+        expect(state.detailsCalls).toBe(1);
+      }),
+    );
+  });
+
   it("refreshes full status when cached remote metadata expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

@@ -85,6 +85,7 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   branch: null,
   upstreamRef: null,
   upstreamBranch: null,
+  configuredPrBaseBranch: null,
   hasWorkingTreeChanges: false,
   workingTree: { files: [], insertions: 0, deletions: 0 },
   hasUpstream: false,
@@ -1371,6 +1372,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
         }
 
+        const configuredPrBaseBranch = branch
+          ? yield* runGitStdout(
+              "GitCore.statusDetails.configuredPrBaseBranch",
+              cwd,
+              ["config", "--get", `branch.${branch}.gh-merge-base`],
+              true,
+            ).pipe(
+              Effect.map((stdout) => stdout.trim()),
+              Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
+              Effect.catch(() => Effect.succeed(null)),
+            )
+          : null;
+
         if (!upstreamRef && branch) {
           aheadCount = yield* computeAheadCountAgainstBase(cwd, branch).pipe(
             Effect.catch(() => Effect.succeed(0)),
@@ -1411,6 +1425,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             branch,
             upstreamRef,
             upstreamBranch,
+            configuredPrBaseBranch,
             hasWorkingTreeChanges,
             workingTree: moveAwareWorkingTree,
             hasUpstream: upstreamRef !== null,
@@ -1472,6 +1487,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           branch,
           upstreamRef,
           upstreamBranch,
+          configuredPrBaseBranch,
           hasWorkingTreeChanges,
           workingTree: {
             files,
