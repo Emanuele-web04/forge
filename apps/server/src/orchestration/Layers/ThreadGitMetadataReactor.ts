@@ -25,6 +25,7 @@ type TerminalEvent = Extract<
   ProviderRuntimeEvent,
   { type: "turn.completed" | "turn.aborted" | "session.exited" | "runtime.error" }
 >;
+type VcsStateChangedEvent = Extract<ProviderRuntimeEvent, { type: "vcs.state.changed" }>;
 
 interface ThreadWorkspaceContext {
   readonly threadId: ThreadId;
@@ -179,25 +180,54 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const threadOption = yield* projectionSnapshotQuery.getThreadShellById(event.threadId);
-      const thread = Option.getOrUndefined(threadOption);
-      if (!thread) return;
-
-      const details = yield* gitCore.readBranchContext(context.cwd);
-      if (!details.isRepo) return;
-
-      const token = Symbol(event.eventId);
-      latestCaptureTokenByThread.set(event.threadId, token);
-      yield* worker.enqueue({
-        token,
-        threadId: event.threadId,
-        cwd: context.cwd,
-        expectedThreadBranch: thread.branch,
-        observedBranch: details.branch,
-        upstreamRef: details.upstreamRef,
-        hasDedicatedWorktree: context.hasDedicatedWorktree,
-      });
+      yield* enqueueMetadataCapture(event.threadId, context, event.eventId);
     }).pipe(Effect.ensuring(cleanup));
+  });
+
+  const enqueueMetadataCapture = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    context: ThreadWorkspaceContext,
+    eventId: string,
+  ) {
+    const threadOption = yield* projectionSnapshotQuery.getThreadShellById(threadId);
+    const thread = Option.getOrUndefined(threadOption);
+    if (!thread) return;
+
+    const details = yield* gitCore.readBranchContext(context.cwd);
+    if (!details.isRepo) return;
+
+    const token = Symbol(eventId);
+    latestCaptureTokenByThread.set(threadId, token);
+    yield* worker.enqueue({
+      token,
+      threadId,
+      cwd: context.cwd,
+      expectedThreadBranch: thread.branch,
+      observedBranch: details.branch,
+      upstreamRef: details.upstreamRef,
+      hasDedicatedWorktree: context.hasDedicatedWorktree,
+    });
+  });
+
+  // Mid-turn VCS transitions (commit/checkout/rebase) refresh the durable thread
+  // metadata immediately; long-running turns would otherwise leave the projected
+  // branch stale until the turn boundary reconciliation.
+  const captureVcsMetadata = Effect.fnUntraced(function* (event: VcsStateChangedEvent) {
+    const context = yield* resolveWorkspaceContext(event.threadId);
+    if (!context) return;
+    if (event.payload.cwd !== undefined && event.payload.cwd !== context.cwd) return;
+
+    if (!context.hasDedicatedWorktree) {
+      const threadKeys = activeKeysForThread(event.threadId);
+      if (threadKeys.length !== 1) return;
+      const activeKey = threadKeys[0]!;
+      const owners = activeTurnKeysByCwd.get(context.cwd);
+      if (ambiguousSharedTurnKeys.has(activeKey) || owners?.size !== 1 || !owners.has(activeKey)) {
+        return;
+      }
+    }
+
+    yield* enqueueMetadataCapture(event.threadId, context, event.eventId);
   });
 
   const lookupPullRequest = (
@@ -295,6 +325,7 @@ const make = Effect.gen(function* () {
     // and suppress reconciliation when the actual parent turn completes.
     if (event.providerRefs?.providerParentThreadId !== undefined) return Effect.void;
     if (event.type === "turn.started") return trackTurnStart(event);
+    if (event.type === "vcs.state.changed") return captureVcsMetadata(event);
     if (
       event.type === "turn.completed" ||
       event.type === "turn.aborted" ||

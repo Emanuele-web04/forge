@@ -2086,95 +2086,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         );
       });
 
-      const submitOpenCodePrompt = Effect.fn("submitOpenCodePrompt")(function* (
-        context: OpenCodeSessionContext,
-        input: {
-          readonly turnId: TurnId;
-          readonly promptInput: Parameters<OpencodeClient["session"]["prompt"]>[0];
-        },
-      ) {
-        const settled = yield* Deferred.make<ProviderAdapterRequestError | null, never>();
-
-        // Keep the documented prompt request off the command path; SSE streams live
-        // updates, and the final HTTP response lets us recover if events are missed.
-        yield* runOpenCodeSdk("session.prompt", () =>
-          context.client.session.prompt(input.promptInput),
-        ).pipe(
-          Effect.mapError(toAdapterRequestError),
-          Effect.tap(() =>
-            Effect.sync(() => markOpenCodeHarnessPolicyDelivered(context, input.turnId)),
-          ),
-          Effect.flatMap((response) =>
-            Effect.gen(function* () {
-              if (yield* Ref.get(context.stopped)) {
-                return null;
-              }
-              if (context.activeTurnId !== input.turnId) {
-                return null;
-              }
-              const assistantEntry =
-                response.data && response.data.info.role === "assistant"
-                  ? ({
-                      info: response.data.info,
-                      parts: response.data.parts,
-                    } satisfies OpenCodeMessageSnapshot)
-                  : null;
-              if (assistantEntry && isOpenCodeCompletedAssistantMessage(assistantEntry)) {
-                yield* recoverOpenCodeTurnFromAssistantMessage(context, {
-                  turnId: input.turnId,
-                  assistantEntry,
-                  raw: {
-                    source: "synara.opencode.prompt.response",
-                    message: assistantEntry,
-                  },
-                });
-              }
-              return null;
-            }),
-          ),
-          Effect.catch((requestError) =>
-            Effect.gen(function* () {
-              if (yield* Ref.get(context.stopped)) {
-                return requestError;
-              }
-              if (
-                context.activeTurnId !== input.turnId ||
-                context.activeTurnProviderActivitySerial > 0
-              ) {
-                return requestError;
-              }
-              yield* clearActiveTurnState(context);
-              updateProviderSession(
-                context,
-                {
-                  status: "ready",
-                  model: context.session.model,
-                  lastError: requestError.detail,
-                },
-                { clearActiveTurnId: true },
-              );
-              yield* emit(context, {
-                ...buildEventBase({ threadId: context.session.threadId, turnId: input.turnId }),
-                type: "turn.aborted",
-                payload: {
-                  reason: requestError.detail,
-                },
-              });
-              return requestError;
-            }),
-          ),
-          Effect.flatMap((result) => Deferred.succeed(settled, result)),
-          Effect.forkIn(context.sessionScope),
-        );
-
-        const quickResult = yield* Deferred.await(settled).pipe(
-          Effect.timeoutOption(promptSubmissionInlineWaitMs),
-        );
-        if (quickResult._tag === "Some" && quickResult.value) {
-          return yield* quickResult.value;
-        }
-      });
-
       const submitOpenCodePromptAsync = Effect.fn("submitOpenCodePromptAsync")(function* (
         context: OpenCodeSessionContext,
         input: {
@@ -4039,7 +3950,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             providerActivitySerial,
             excludedMessageIds: recoveryBaselineMessageIds,
           });
-          yield* submitOpenCodePrompt(context, {
+          // Kilo's own editor client uses promptAsync so execution is owned by the
+          // server rather than by one long-lived HTTP request. Keep Synara's event
+          // and message-snapshot recovery as the authoritative completion paths.
+          yield* submitOpenCodePromptAsync(context, {
             turnId,
             promptInput: {
               sessionID: context.openCodeSessionId,
@@ -4047,7 +3961,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               model: parsedModel,
               ...(context.activeAgent ? { agent: context.activeAgent } : {}),
               ...(context.activeVariant ? { variant: context.activeVariant } : {}),
-              noReply: false,
               parts: [
                 ...(providerText ? [{ type: "text" as const, text: providerText }] : []),
                 ...fileParts,

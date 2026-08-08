@@ -660,6 +660,13 @@ const makeWsRpcHandlersLayer = () =>
           ),
         );
 
+      const refreshGitStatusInBackground = (cwd: string) =>
+        gitStatusBroadcaster.refreshStatus(cwd).pipe(
+          Effect.catchCause(() => Effect.void),
+          Effect.forkDetach,
+          Effect.asVoid,
+        );
+
       const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
         homeDir: config.homeDir,
         worktreesDir: config.worktreesDir,
@@ -1316,20 +1323,21 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.gitRunStackedAction]: (input) =>
           bufferLiveUiStream(
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-              refreshGitStatusAfter(
-                input.cwd,
-                gitManager.runStackedAction(input, {
+              gitManager
+                .runStackedAction(input, {
                   actionId: input.actionId,
                   progressReporter: {
                     publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
                   },
-                }),
-              ).pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
-                }),
-              ),
+                })
+                .pipe(
+                  Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
+                  Effect.matchCauseEffect({
+                    onFailure: (cause) =>
+                      Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                    onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                  }),
+                ),
             ),
             { label: "git.stacked-action" },
           ),

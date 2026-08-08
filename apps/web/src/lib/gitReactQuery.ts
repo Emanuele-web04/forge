@@ -19,6 +19,41 @@ const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 300_000;
 const GIT_WORKING_TREE_DIFF_STALE_TIME_MS = 5_000;
 export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;
+const RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED = "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED";
+const GIT_CAPACITY_RETRY_LIMIT = 12;
+const DEFAULT_GIT_CAPACITY_RETRY_MS = 250;
+
+export function isGitExpensiveReadCapacityError(
+  error: unknown,
+): error is { readonly code: string; readonly retryAfterMs?: unknown } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED
+  );
+}
+
+function shouldRetryGitExpensiveRead(failureCount: number, error: unknown): boolean {
+  return isGitExpensiveReadCapacityError(error)
+    ? failureCount < GIT_CAPACITY_RETRY_LIMIT
+    : failureCount < 3;
+}
+
+function gitExpensiveReadRetryDelay(attemptIndex: number, error: unknown): number {
+  if (isGitExpensiveReadCapacityError(error)) {
+    const retryAfterMs = "retryAfterMs" in error ? error.retryAfterMs : undefined;
+    return typeof retryAfterMs === "number" && retryAfterMs > 0
+      ? retryAfterMs
+      : DEFAULT_GIT_CAPACITY_RETRY_MS;
+  }
+  return Math.min(1_000 * 2 ** attemptIndex, 30_000);
+}
+
+const GIT_EXPENSIVE_READ_RETRY_OPTIONS = {
+  retry: shouldRetryGitExpensiveRead,
+  retryDelay: gitExpensiveReadRetryDelay,
+} as const;
 
 export const gitQueryKeys = {
   all: ["git"] as const,
@@ -70,28 +105,231 @@ export const gitMutationKeys = {
   unstageFiles: (cwd: string | null) => ["git", "mutation", "unstage-files", cwd] as const,
 };
 
-export function invalidateGitQueries(queryClient: QueryClient) {
-  return Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["git", "github-repository"] as const }),
-    queryClient.invalidateQueries({ queryKey: gitQueryKeys.statuses }),
-    queryClient.invalidateQueries({ queryKey: ["git", "branches"] as const }),
-    queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff"] as const }),
-    queryClient.invalidateQueries({ queryKey: gitQueryKeys.pullRequests }),
+type GitRefreshDepth = "availability" | "active-details";
+
+interface ActiveGitRefresh {
+  readonly depth: GitRefreshDepth;
+  readonly promise: Promise<void>;
+  availabilityPromise: Promise<void> | undefined;
+}
+
+const activeGitRefreshes = new WeakMap<QueryClient, Map<string, ActiveGitRefresh>>();
+const gitRefreshQueueTails = new WeakMap<QueryClient, Promise<void>>();
+
+function enqueueGitRefresh(queryClient: QueryClient, refresh: () => Promise<void>): Promise<void> {
+  const previous = gitRefreshQueueTails.get(queryClient) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(refresh);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  gitRefreshQueueTails.set(queryClient, settled);
+  void settled.then(() => {
+    if (gitRefreshQueueTails.get(queryClient) === settled) {
+      gitRefreshQueueTails.delete(queryClient);
+    }
+  });
+  return result;
+}
+
+function trackGitRefresh(
+  queryClient: QueryClient,
+  cwd: string,
+  depth: GitRefreshDepth,
+  promise: Promise<void>,
+  availabilityPromise?: Promise<void>,
+): Promise<void> {
+  let refreshes = activeGitRefreshes.get(queryClient);
+  if (!refreshes) {
+    refreshes = new Map();
+    activeGitRefreshes.set(queryClient, refreshes);
+  }
+  const entry: ActiveGitRefresh = { depth, promise, availabilityPromise };
+  refreshes.set(cwd, entry);
+  if (availabilityPromise) {
+    void availabilityPromise.then(
+      () => {
+        if (entry.availabilityPromise === availabilityPromise) {
+          entry.availabilityPromise = undefined;
+        }
+      },
+      () => {
+        if (entry.availabilityPromise === availabilityPromise) {
+          entry.availabilityPromise = undefined;
+        }
+      },
+    );
+  }
+  void promise.then(
+    () => {
+      if (refreshes?.get(cwd) === entry) refreshes.delete(cwd);
+    },
+    () => {
+      if (refreshes?.get(cwd) === entry) refreshes.delete(cwd);
+    },
+  );
+  return promise;
+}
+
+async function refreshGitAvailability(queryClient: QueryClient, cwd: string): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.githubRepository(cwd),
+      exact: true,
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.status(cwd),
+      exact: true,
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.branches(cwd),
+      exact: true,
+      refetchType: "none",
+    }),
   ]);
+  await Promise.all([
+    queryClient.refetchQueries(
+      { queryKey: gitQueryKeys.githubRepository(cwd), exact: true, type: "active" },
+      { cancelRefetch: false },
+    ),
+    queryClient.refetchQueries(
+      { queryKey: gitQueryKeys.status(cwd), exact: true, type: "active" },
+      { cancelRefetch: false },
+    ),
+    queryClient.refetchQueries(
+      { queryKey: gitQueryKeys.branches(cwd), exact: true, type: "active" },
+      { cancelRefetch: false },
+    ),
+  ]);
+}
+
+function activeGitDetailQueries(queryClient: QueryClient, cwd: string) {
+  const queryCache = queryClient.getQueryCache();
+  const queries = [
+    ...queryCache.findAll({
+      queryKey: ["git", "working-tree-diff", cwd] as const,
+      type: "active",
+    }),
+    ...queryCache.findAll({ queryKey: gitQueryKeys.pullRequest(cwd), type: "active" }),
+  ];
+  const uniqueQueries = [...new Map(queries.map((query) => [query.queryHash, query])).values()];
+  return uniqueQueries.toSorted((left, right) => {
+    const leftIsStats = left.queryKey.at(-1) === "stats";
+    const rightIsStats = right.queryKey.at(-1) === "stats";
+    if (leftIsStats !== rightIsStats) return leftIsStats ? -1 : 1;
+    const leftIsPatch = left.queryKey[1] === "working-tree-diff" && !leftIsStats;
+    const rightIsPatch = right.queryKey[1] === "working-tree-diff" && !rightIsStats;
+    if (leftIsPatch !== rightIsPatch) return leftIsPatch ? 1 : -1;
+    return left.queryHash.localeCompare(right.queryHash);
+  });
+}
+
+async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: ["git", "working-tree-diff", cwd] as const,
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: gitQueryKeys.pullRequest(cwd),
+      refetchType: "none",
+    }),
+  ]);
+  for (const query of activeGitDetailQueries(queryClient, cwd)) {
+    await enqueueGitRefresh(queryClient, () =>
+      queryClient.refetchQueries(
+        { queryKey: query.queryKey, exact: true, type: "active" },
+        { cancelRefetch: false },
+      ),
+    );
+  }
+}
+
+/**
+ * Coalesces refreshes by repository and serializes their expensive reads across the client.
+ * Availability is refreshed first; active diff/PR details follow one at a time so Git UI work
+ * cannot consume both expensive-read leases or fan out across every visible worktree.
+ */
+export function refreshGitQueriesForCwd(
+  queryClient: QueryClient,
+  cwd: string,
+  depth: GitRefreshDepth = "active-details",
+): Promise<void> {
+  const existing = activeGitRefreshes.get(queryClient)?.get(cwd);
+  if (existing) {
+    if (depth === "availability") {
+      if (existing.availabilityPromise) return existing.availabilityPromise;
+      if (existing.depth === "availability") return existing.promise;
+
+      const availability = enqueueGitRefresh(queryClient, () =>
+        refreshGitAvailability(queryClient, cwd),
+      );
+      const extended = existing.promise.finally(() => availability);
+      trackGitRefresh(queryClient, cwd, "active-details", extended, availability);
+      return availability;
+    }
+    if (existing.depth === "active-details") {
+      return existing.promise;
+    }
+    const upgraded = existing.promise
+      .catch(() => undefined)
+      .then(() => refreshActiveGitDetails(queryClient, cwd));
+    return trackGitRefresh(
+      queryClient,
+      cwd,
+      "active-details",
+      upgraded,
+      existing.availabilityPromise,
+    );
+  }
+
+  const availability = enqueueGitRefresh(queryClient, () =>
+    refreshGitAvailability(queryClient, cwd),
+  );
+  const refresh =
+    depth === "active-details"
+      ? availability.then(() => refreshActiveGitDetails(queryClient, cwd))
+      : availability;
+  return trackGitRefresh(queryClient, cwd, depth, refresh, availability);
+}
+
+export function refreshGitActionAvailability(queryClient: QueryClient, cwd: string): Promise<void> {
+  return refreshGitQueriesForCwd(queryClient, cwd, "availability");
+}
+
+function cachedGitCwds(queryClient: QueryClient): string[] {
+  const cwdFamilies = new Set([
+    "github-repository",
+    "status",
+    "branches",
+    "working-tree-diff",
+    "pull-request",
+  ]);
+  const cwds = queryClient
+    .getQueryCache()
+    .findAll({ queryKey: gitQueryKeys.all })
+    .flatMap((query) => {
+      const family = query.queryKey[1];
+      const cwd = query.queryKey[2];
+      return typeof family === "string" && cwdFamilies.has(family) && typeof cwd === "string"
+        ? [cwd]
+        : [];
+    });
+  return [...new Set(cwds)];
+}
+
+export function invalidateGitQueries(queryClient: QueryClient) {
+  return Promise.all(
+    cachedGitCwds(queryClient).map((cwd) => refreshGitQueriesForCwd(queryClient, cwd)),
+  );
 }
 
 // Scope live file-change invalidations so unrelated project/worktree git caches stay warm.
 export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iterable<string>) {
   const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
-  return Promise.all(
-    uniqueCwds.flatMap((cwd) => [
-      queryClient.invalidateQueries({ queryKey: gitQueryKeys.githubRepository(cwd) }),
-      queryClient.invalidateQueries({ queryKey: gitQueryKeys.status(cwd) }),
-      queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(cwd) }),
-      queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff", cwd] as const }),
-      queryClient.invalidateQueries({ queryKey: gitQueryKeys.pullRequest(cwd) }),
-    ]),
-  );
+  return Promise.all(uniqueCwds.map((cwd) => refreshGitQueriesForCwd(queryClient, cwd)));
 }
 
 export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
@@ -107,6 +345,7 @@ export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
     refetchOnWindowFocus: true,
     refetchOnReconnect: "always",
     refetchInterval: GIT_STATUS_REFETCH_INTERVAL_MS,
+    ...GIT_EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -192,6 +431,7 @@ export function gitPullRequestSnapshotQueryOptions(input: {
     refetchOnWindowFocus: (query) =>
       !query.state.data || query.state.data.pullRequest.state === "open",
     refetchOnReconnect: true,
+    ...GIT_EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -226,6 +466,7 @@ export function gitWorkingTreeDiffStatsQueryOptions(input: {
     ...(refetchInterval !== undefined ? { refetchInterval } : {}),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+    ...GIT_EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -251,6 +492,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
     ...(refetchInterval !== undefined ? { refetchInterval } : {}),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+    ...GIT_EXPENSIVE_READ_RETRY_OPTIONS,
   });
 }
 
@@ -269,6 +511,7 @@ function makeGitMutationOptions<TArgs, TResult>(config: {
   run: (api: NativeApi, cwd: string, args: TArgs) => Promise<TResult>;
   invalidate?: GitMutationInvalidation;
   invalidateOn?: GitMutationInvalidateOn;
+  awaitInvalidation?: boolean;
 }) {
   const invalidate = config.invalidate ?? "all";
   const invalidateOn = config.invalidateOn ?? "settled";
@@ -281,6 +524,12 @@ function makeGitMutationOptions<TArgs, TResult>(config: {
     }
     await invalidateGitQueries(config.queryClient);
   };
+  const handleInvalidation =
+    config.awaitInvalidation === false
+      ? () => {
+          void runInvalidation().catch(() => undefined);
+        }
+      : runInvalidation;
 
   return mutationOptions({
     mutationKey: config.mutationKey,
@@ -290,8 +539,8 @@ function makeGitMutationOptions<TArgs, TResult>(config: {
       return config.run(api, config.cwd, args);
     },
     ...(invalidateOn === "success"
-      ? { onSuccess: runInvalidation }
-      : { onSettled: runInvalidation }),
+      ? { onSuccess: handleInvalidation }
+      : { onSettled: handleInvalidation }),
   });
 }
 
@@ -366,6 +615,8 @@ export function gitRunStackedActionMutationOptions(input: {
     queryClient: input.queryClient,
     mutationKey: gitMutationKeys.runStackedAction(input.cwd),
     unavailableMessage: "Git action is unavailable.",
+    invalidate: "cwd",
+    awaitInvalidation: false,
     run: (
       api,
       cwd,
@@ -406,6 +657,8 @@ export function gitPullMutationOptions(input: { cwd: string | null; queryClient:
     queryClient: input.queryClient,
     mutationKey: gitMutationKeys.pull(input.cwd),
     unavailableMessage: "Git pull is unavailable.",
+    invalidate: "cwd",
+    awaitInvalidation: false,
     run: (api, cwd) => api.git.pull({ cwd }),
   });
 }

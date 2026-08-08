@@ -201,6 +201,18 @@ describe("ThreadGitMetadataReactor", () => {
     payload: { state: "completed" },
   });
 
+  const vcsStateChangedEvent = (
+    threadId: ThreadId,
+    options?: { readonly cwd?: string; readonly eventId?: string },
+  ): ProviderRuntimeEvent => ({
+    type: "vcs.state.changed",
+    eventId: EventId.makeUnsafe(options?.eventId ?? `vcs-${threadId}`),
+    provider: "claudeAgent",
+    threadId,
+    createdAt: "2026-08-07T10:00:30.000Z",
+    payload: { kind: "commit", ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}) },
+  });
+
   const runtimeErrorEvent = (threadId: ThreadId): ProviderRuntimeEvent => ({
     type: "runtime.error",
     eventId: EventId.makeUnsafe(`runtime-error-${threadId}`),
@@ -465,6 +477,121 @@ describe("ThreadGitMetadataReactor", () => {
     await harness.drain();
 
     expect(harness.commands).toEqual([]);
+  });
+
+  it("refreshes worktree thread metadata mid-turn on a VCS state change", async () => {
+    const threadId = ThreadId.makeUnsafe("vcs-worktree-thread");
+    const cwd = "/repo/.worktrees/vcs";
+    const harness = await createHarness({
+      threads: [
+        {
+          id: threadId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          envMode: "worktree",
+          worktreePath: cwd,
+          branch: "synara/stale-branch",
+          lastKnownPr: null,
+        },
+      ],
+      branchByCwd: { [cwd]: pullRequest.headBranch },
+    });
+
+    await harness.publish(startedEvent(threadId, TurnId.makeUnsafe("vcs-running-turn")));
+    await harness.publish(vcsStateChangedEvent(threadId, { cwd }));
+    await waitFor(() => harness.commands.length === 1);
+
+    expect(harness.commands[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId,
+      branch: pullRequest.headBranch,
+      lastKnownPr: pullRequest,
+      associatedWorktreeBranch: pullRequest.headBranch,
+    });
+  });
+
+  it("ignores VCS state changes reported for a different workspace", async () => {
+    const threadId = ThreadId.makeUnsafe("vcs-mismatch-thread");
+    const cwd = "/repo/.worktrees/vcs-mismatch";
+    const harness = await createHarness({
+      threads: [
+        {
+          id: threadId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          envMode: "worktree",
+          worktreePath: cwd,
+          branch: "synara/stale-branch",
+          lastKnownPr: null,
+        },
+      ],
+      branchByCwd: { [cwd]: pullRequest.headBranch },
+    });
+
+    await harness.publish(
+      vcsStateChangedEvent(threadId, { cwd: "/elsewhere", eventId: "vcs-elsewhere" }),
+    );
+    await harness.publish(vcsStateChangedEvent(threadId, { cwd }));
+    await waitFor(() => harness.commands.length === 1);
+
+    expect(harness.statusCwds).toEqual([cwd]);
+    expect(harness.commands[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId,
+      branch: pullRequest.headBranch,
+    });
+  });
+
+  it("only applies shared-checkout VCS changes for the sole active owning thread", async () => {
+    const firstThreadId = ThreadId.makeUnsafe("vcs-first-local-thread");
+    const secondThreadId = ThreadId.makeUnsafe("vcs-second-local-thread");
+    const sentinelThreadId = ThreadId.makeUnsafe("vcs-sentinel-worktree-thread");
+    const sentinelCwd = "/repo/.worktrees/vcs-sentinel";
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const harness = await createHarness({
+      threads: [
+        ...[firstThreadId, secondThreadId].map((id) => ({
+          id,
+          projectId,
+          envMode: "local" as const,
+          worktreePath: null,
+          branch: "synara/stale-branch",
+          lastKnownPr: null,
+        })),
+        {
+          id: sentinelThreadId,
+          projectId,
+          envMode: "worktree" as const,
+          worktreePath: sentinelCwd,
+          branch: "synara/stale-sentinel",
+          lastKnownPr: null,
+        },
+      ],
+      branchByCwd: {
+        "/repo": pullRequest.headBranch,
+        [sentinelCwd]: pullRequest.headBranch,
+      },
+    });
+
+    await harness.publish(startedEvent(firstThreadId, TurnId.makeUnsafe("vcs-first-turn")));
+    await harness.publish(vcsStateChangedEvent(firstThreadId, { cwd: "/repo" }));
+    await waitFor(() => harness.commands.length === 1);
+    expect(harness.commands[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId: firstThreadId,
+      branch: pullRequest.headBranch,
+    });
+
+    await harness.publish(startedEvent(secondThreadId, TurnId.makeUnsafe("vcs-second-turn")));
+    await harness.publish(
+      vcsStateChangedEvent(secondThreadId, { cwd: "/repo", eventId: "vcs-ambiguous" }),
+    );
+    await harness.publish(completedEvent(sentinelThreadId, TurnId.makeUnsafe("vcs-sentinel-turn")));
+    await waitFor(() => harness.commands.length === 2);
+
+    expect(harness.statusCwds).toEqual(["/repo", sentinelCwd]);
+    expect(harness.commands[1]).toMatchObject({
+      type: "thread.meta.update",
+      threadId: sentinelThreadId,
+    });
   });
 
   it("releases ambiguous local turn ownership when the provider runtime exits", async () => {

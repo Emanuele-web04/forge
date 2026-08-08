@@ -19,6 +19,7 @@ import {
   ApprovalRequestId,
   type ChatAttachment,
   CommandId,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
@@ -206,6 +207,7 @@ describe("ProviderCommandReactor", () => {
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
     readonly commandEventTimeout?: Duration.Duration;
     readonly gatewayOperationId?: string;
+    readonly gitWritingModelSelection?: ModelSelection;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -519,7 +521,13 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         } as unknown as TextGenerationShape),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest(
+          input?.gitWritingModelSelection
+            ? { textGenerationModelSelection: input.gitWritingModelSelection }
+            : {},
+        ),
+      ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
@@ -4395,6 +4403,13 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.renameBranch.mock.calls.length === 1);
     await waitFor(() => harness.publishBranch.mock.calls.length === 1);
 
+    expect(harness.generateBranchName.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: {
+        provider: "codex",
+        model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      },
+    });
+
     await waitFor(async () => {
       const thread = await readHarnessThread(harness);
       return (
@@ -4505,9 +4520,17 @@ describe("ProviderCommandReactor", () => {
     expect(harness.publishBranch).not.toHaveBeenCalled();
   });
 
-  it("falls back to prompt-based worktree branch names when the provider cannot generate one", async () => {
-    const harness = await createHarness();
+  it("uses the configured Git-writing model when the chat provider cannot generate names", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
+      },
+    });
     const now = new Date().toISOString();
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "provider-startup-timeouts" }),
+    );
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -4544,17 +4567,83 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
     await waitFor(() => harness.renameBranch.mock.calls.length === 1);
-    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    expect(harness.generateBranchName.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: {
+        provider: "codex",
+        model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      },
+    });
     expect(harness.renameBranch.mock.calls[0]?.[0]).toMatchObject({
       oldBranch: "synara/cb661f0d",
-      newBranch: "synara/fix-provider-startup-timeouts",
+      newBranch: "synara/provider-startup-timeouts",
     });
 
     await waitFor(
-      async () =>
-        (await readHarnessThread(harness))?.branch === "synara/fix-provider-startup-timeouts",
+      async () => (await readHarnessThread(harness))?.branch === "synara/provider-startup-timeouts",
     );
+  });
+
+  it("keeps the temporary worktree branch when no Git-writing generator is available", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
+      },
+      gitWritingModelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-8",
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-worktree-keep-temporary"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-worktree-keep-temporary"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-keep-temporary"),
+          role: "user",
+          text: "This entire message must never become the branch name",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    expect(harness.renameBranch).not.toHaveBeenCalled();
+    expect(harness.publishBranch).not.toHaveBeenCalled();
+
+    const thread = await readHarnessThread(harness);
+    expect(thread).toMatchObject({
+      branch: "synara/cb661f0d",
+      associatedWorktreeBranch: "synara/cb661f0d",
+      associatedWorktreeRef: "synara/cb661f0d",
+    });
   });
 
   it("renames generic OpenCode first-turn thread titles using text generation", async () => {

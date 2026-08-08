@@ -665,6 +665,14 @@ const make = Effect.gen(function* () {
     completePendingContextBootstrapAttempt(event.threadId, attempt, event);
   };
 
+  const resolveConfiguredTextGenerationInput = Effect.fnUntraced(function* () {
+    const settings = yield* serverSettings.getSettings;
+    return resolveTextGenerationInputForSelection(
+      settings.textGenerationModelSelection,
+      providerStartOptionsFromServerSettings(settings),
+    );
+  });
+
   const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly modelSelection?: ModelSelection;
@@ -687,11 +695,7 @@ const make = Effect.gen(function* () {
     }
 
     // Non-generating chat providers still get AI titles via the configured git-writing model.
-    const settings = yield* serverSettings.getSettings;
-    return resolveTextGenerationInputForSelection(
-      settings.textGenerationModelSelection,
-      providerOptions,
-    );
+    return yield* resolveConfiguredTextGenerationInput();
   });
 
   const appendProviderFailureActivity = (input: {
@@ -1960,8 +1964,6 @@ const make = Effect.gen(function* () {
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
-    readonly modelSelection?: ModelSelection;
-    readonly providerOptions?: ProviderStartOptions;
   }) {
     if (!input.branch || !input.worktreePath) {
       return;
@@ -1976,34 +1978,18 @@ const make = Effect.gen(function* () {
     const oldBranch = input.branch;
     const cwd = input.worktreePath;
     const attachments = input.attachments ?? [];
-    const textGenerationInput = yield* resolveThreadTextGenerationInput({
-      threadId: input.threadId,
-      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-    });
+    // Branch naming is a Git-writing concern, just like commit and PR text.
+    // Keep it on the dedicated configured model instead of coupling it to the
+    // conversation provider, which may not support structured text generation.
+    const textGenerationInput = yield* resolveConfiguredTextGenerationInput();
     if (!textGenerationInput) {
-      const targetBranch = buildGeneratedWorktreeBranchName(
-        input.messageText.trim() || attachmentTitleSeed(attachments[0]) || "",
-      );
-      yield* renameTemporaryWorktreeBranch({
-        threadId: input.threadId,
-        cwd,
-        oldBranch,
-        targetBranch,
-        gatewayOperationId: thread.gatewayOperationId ?? null,
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            "provider command reactor failed to apply fallback worktree branch name",
-            {
-              threadId: input.threadId,
-              cwd,
-              oldBranch,
-              targetBranch,
-              cause: Cause.pretty(cause),
-            },
-          ),
-        ),
+      yield* Effect.logDebug(
+        "provider command reactor has no Git-writing model for worktree branch naming; keeping temporary branch",
+        {
+          threadId: input.threadId,
+          cwd,
+          branch: oldBranch,
+        },
       );
       return;
     }
@@ -2019,7 +2005,7 @@ const make = Effect.gen(function* () {
     yield* textGeneration.generateBranchName(branchNameGenerationInput).pipe(
       Effect.catch((error) =>
         Effect.logWarning(
-          "provider command reactor failed to generate worktree branch name; skipping rename",
+          "provider command reactor failed to generate worktree branch name; keeping temporary branch",
           { threadId: input.threadId, cwd, oldBranch, reason: error.message },
         ),
       ),
@@ -2293,12 +2279,6 @@ const make = Effect.gen(function* () {
         messageId: message.id,
         messageText: message.text,
         ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
-        ...(event.payload.modelSelection !== undefined
-          ? { modelSelection: event.payload.modelSelection }
-          : {}),
-        ...(event.payload.providerOptions !== undefined
-          ? { providerOptions: event.payload.providerOptions }
-          : {}),
       }).pipe(Effect.forkScoped);
       yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
         threadId: event.payload.threadId,

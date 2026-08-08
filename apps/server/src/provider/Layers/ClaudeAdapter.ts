@@ -777,6 +777,34 @@ function readClaudeModelRefusalFallback(message: unknown): ClaudeModelRefusalFal
   };
 }
 
+// VCS state transitions (commit, checkout, rebase) stream as an untyped system
+// message; match structurally so SDK type drift stays inert.
+interface ClaudeVcsStateChange {
+  readonly kind?: string;
+  readonly cwd?: string;
+}
+
+function readClaudeVcsStateChange(message: unknown): ClaudeVcsStateChange | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const record = message as {
+    type?: unknown;
+    subtype?: unknown;
+    kind?: unknown;
+    cwd?: unknown;
+  };
+  if (record.type !== "system" || record.subtype !== "vcs_state_changed") {
+    return undefined;
+  }
+  const kind = readNonEmptyString(record.kind);
+  const cwd = readNonEmptyString(record.cwd);
+  return {
+    ...(kind !== undefined ? { kind } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+  };
+}
+
 const DEFAULT_WORKFLOW_RUNTIME_POLL_INTERVAL_MS = 2_000;
 // Synthetic description for poller-emitted task.progress events; consumers key
 // off payload.workflowAgents, not this text.
@@ -3979,6 +4007,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               toModel: refusalFallback.fallbackModel,
               reason: refusalFallback.content ?? "Model safeguards rerouted this request.",
             },
+          });
+          return;
+        }
+
+        // VCS transitions let the thread git metadata reactor refresh the durable
+        // branch/PR projection mid-turn instead of waiting for the turn boundary.
+        const vcsStateChange = readClaudeVcsStateChange(message);
+        if (vcsStateChange) {
+          yield* offerRuntimeEvent(context, {
+            ...base,
+            type: "vcs.state.changed",
+            payload: vcsStateChange,
           });
           return;
         }
