@@ -7,6 +7,7 @@ import {
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveCreatePrActionAvailability,
+  resolveCreatePrExecution,
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
@@ -596,7 +597,7 @@ describe("when: working tree has local changes", () => {
     });
   });
 
-  it("buildMenuItems enables commit and disables push and PR", () => {
+  it("buildMenuItems enables commit and create PR while push stays disabled", () => {
     const items = buildMenuItems(status({ hasWorkingTreeChanges: true }), false);
     assert.deepEqual(items, [
       {
@@ -626,7 +627,7 @@ describe("when: working tree has local changes", () => {
       {
         id: "pr",
         label: "Create PR",
-        disabled: true,
+        disabled: false,
         icon: "pr",
         kind: "open_dialog",
         dialogAction: "create_pr",
@@ -664,7 +665,7 @@ describe("when: on default branch without open PR", () => {
     });
   });
 
-  it("buildMenuItems enables commit-and-push row when local changes exist on default branch", () => {
+  it("buildMenuItems enables commit-and-push and create PR when local changes exist on default branch", () => {
     const items = buildMenuItems(
       status({ branch: "main", hasWorkingTreeChanges: true, aheadCount: 0, pr: null }),
       false,
@@ -691,7 +692,7 @@ describe("when: on default branch without open PR", () => {
       {
         id: "pr",
         label: "Create PR",
-        disabled: true,
+        disabled: false,
         icon: "pr",
         kind: "open_dialog",
         dialogAction: "create_pr",
@@ -1131,6 +1132,133 @@ describe("when: branch has no upstream configured", () => {
         dialogAction: "create_pr",
       },
     ]);
+  });
+});
+
+describe("resolveCreatePrExecution", () => {
+  const baseInput = {
+    isBusy: false,
+    isDefaultBranch: false,
+    hasOriginRemote: true,
+    defaultBranchName: "main",
+  };
+
+  it("runs the full commit+push+PR chain when the working tree is dirty", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({ hasWorkingTreeChanges: true }),
+    });
+    assert.deepEqual(execution, { kind: "run_action", action: "commit_push_pr" });
+  });
+
+  it("runs the commit chain even when the dirty branch has no upstream yet", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({ hasWorkingTreeChanges: true, hasUpstream: false, upstreamBranch: null }),
+    });
+    assert.deepEqual(execution, { kind: "run_action", action: "commit_push_pr" });
+  });
+
+  it("runs the commit chain on the default branch so the caller can confirm a feature branch", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      isDefaultBranch: true,
+      gitStatus: status({ branch: "main", hasWorkingTreeChanges: true }),
+    });
+    assert.deepEqual(execution, { kind: "run_action", action: "commit_push_pr" });
+  });
+
+  it("runs push+PR when the branch is clean but ahead", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({ aheadCount: 2 }),
+    });
+    assert.deepEqual(execution, { kind: "run_action", action: "create_pr" });
+  });
+
+  it("runs create PR for a clean published feature branch", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({ aheadCount: 0 }),
+    });
+    assert.deepEqual(execution, { kind: "run_action", action: "create_pr" });
+  });
+
+  it("opens the existing PR instead of creating a new one", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({ hasWorkingTreeChanges: true, pr: statusPr() }),
+    });
+    assert.deepEqual(execution, { kind: "open_pr" });
+  });
+
+  it("stays unavailable when the branch is behind upstream, even with local changes", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({ hasWorkingTreeChanges: true, behindCount: 1 }),
+    });
+    assert.deepEqual(execution, {
+      kind: "unavailable",
+      hint: "Branch is behind upstream. Pull before creating a PR.",
+    });
+  });
+
+  it("stays unavailable when the branch has diverged from upstream", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({ aheadCount: 2, behindCount: 1 }),
+    });
+    assert.deepEqual(execution, {
+      kind: "unavailable",
+      hint: "Branch has diverged from upstream. Rebase/merge first.",
+    });
+  });
+
+  it("stays unavailable without an origin remote", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      hasOriginRemote: false,
+      gitStatus: status({ hasWorkingTreeChanges: true, hasUpstream: false, upstreamBranch: null }),
+    });
+    assert.deepEqual(execution, {
+      kind: "unavailable",
+      hint: 'Add an "origin" remote before creating a PR.',
+    });
+  });
+
+  it("stays unavailable on a detached HEAD", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({ branch: null }),
+    });
+    assert.deepEqual(execution, {
+      kind: "unavailable",
+      hint: "Detached HEAD: checkout a branch before creating a PR.",
+    });
+  });
+
+  it("stays unavailable when a clean branch only tracks the default branch", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      gitStatus: status({
+        branch: "synara/pi-cleanup",
+        upstreamBranch: "main",
+        aheadCount: 0,
+      }),
+    });
+    assert.deepEqual(execution, {
+      kind: "unavailable",
+      hint: "No branch changes to include in a PR.",
+    });
+  });
+
+  it("stays unavailable while a git action is running", () => {
+    const execution = resolveCreatePrExecution({
+      ...baseInput,
+      isBusy: true,
+      gitStatus: status({ hasWorkingTreeChanges: true }),
+    });
+    assert.deepEqual(execution, { kind: "unavailable", hint: "Git action in progress." });
   });
 });
 

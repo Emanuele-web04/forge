@@ -37,6 +37,7 @@ import {
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveCreatePrActionAvailability,
+  resolveCreatePrExecution,
   resolveQuickAction,
   resolvePullActionAvailability,
   shouldShowEnvironmentPanelPullRow,
@@ -178,11 +179,15 @@ function getMenuActionDisabledReason({
   gitStatus,
   isBusy,
   hasOriginRemote,
+  isDefaultBranch,
+  defaultBranchName,
 }: {
   item: GitActionMenuItem;
   gitStatus: GitStatusResult | null;
   isBusy: boolean;
   hasOriginRemote: boolean;
+  isDefaultBranch: boolean;
+  defaultBranchName: string | null;
 }): string | null {
   if (!item.disabled) return null;
   if (isBusy) return "Git action in progress.";
@@ -239,20 +244,15 @@ function getMenuActionDisabledReason({
   if (hasOpenPr) {
     return "View PR is currently unavailable.";
   }
-  if (!hasBranch) {
-    return "Detached HEAD: checkout a branch before creating a PR.";
-  }
-  if (hasChanges) {
-    return "Commit local changes before creating a PR.";
-  }
-  if (!gitStatus.hasUpstream && !hasOriginRemote) {
-    return 'Add an "origin" remote before creating a PR.';
-  }
-  if (!isAhead) {
-    return "No local commits to include in a PR.";
-  }
-  if (isBehind) {
-    return "Branch is behind upstream. Pull/rebase before creating a PR.";
+  const prExecution = resolveCreatePrExecution({
+    gitStatus,
+    isBusy,
+    isDefaultBranch,
+    hasOriginRemote,
+    defaultBranchName,
+  });
+  if (prExecution.kind === "unavailable") {
+    return prExecution.hint;
   }
   return "Create PR is currently unavailable.";
 }
@@ -1140,12 +1140,45 @@ export default function GitActionsControl({
         return;
       }
       if (item.dialogAction === "create_pr") {
-        void runGitActionWithToast({ action: "create_pr" });
+        // Create PR runs the whole missing chain: resolve which stacked action
+        // covers the current git state (commit_push_pr on a dirty tree,
+        // create_pr when clean but unpushed/unpublished).
+        const execution = resolveCreatePrExecution({
+          gitStatus: gitStatusForActions,
+          isBusy: isGitActionRunning,
+          isDefaultBranch,
+          hasOriginRemote,
+          defaultBranchName,
+        });
+        if (execution.kind === "open_pr") {
+          void openExistingPr();
+          return;
+        }
+        if (execution.kind === "run_action") {
+          void runGitActionWithToast({ action: execution.action });
+          return;
+        }
+        toastManager.add({
+          type: "info",
+          title: "Create PR unavailable",
+          description: execution.hint,
+          data: threadToastData,
+        });
         return;
       }
       openCommitDialog();
     },
-    [openCommitDialog, openExistingPr, runGitActionWithToast],
+    [
+      defaultBranchName,
+      gitStatusForActions,
+      hasOriginRemote,
+      isDefaultBranch,
+      isGitActionRunning,
+      openCommitDialog,
+      openExistingPr,
+      runGitActionWithToast,
+      threadToastData,
+    ],
   );
 
   useEffect(() => {
@@ -1181,6 +1214,8 @@ export default function GitActionsControl({
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
           hasOriginRemote,
+          isDefaultBranch,
+          defaultBranchName,
         }),
         icon: "commit",
         onSelect: () => openDialogForMenuItem(commitMenuItem),
@@ -1197,6 +1232,8 @@ export default function GitActionsControl({
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
           hasOriginRemote,
+          isDefaultBranch,
+          defaultBranchName,
         }),
         icon: "push",
         onSelect: () => openDialogForMenuItem(commitPushMenuItem),
@@ -1222,6 +1259,8 @@ export default function GitActionsControl({
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
           hasOriginRemote,
+          isDefaultBranch,
+          defaultBranchName,
         }),
         icon: "push",
         onSelect: () => openDialogForMenuItem(pushMenuItem),
@@ -1238,6 +1277,8 @@ export default function GitActionsControl({
           gitStatus: gitStatusForActions,
           isBusy: isGitActionRunning,
           hasOriginRemote,
+          isDefaultBranch,
+          defaultBranchName,
         }),
         icon: "pr",
         onSelect: () => openDialogForMenuItem(prMenuItem),
@@ -1259,9 +1300,11 @@ export default function GitActionsControl({
 
     return items;
   }, [
+    defaultBranchName,
     gitActionMenuItems,
     gitStatusForActions,
     hasOriginRemote,
+    isDefaultBranch,
     isGitActionRunning,
     openCreateBranchDialog,
     openDialogForMenuItem,

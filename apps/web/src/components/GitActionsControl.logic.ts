@@ -108,37 +108,60 @@ export function buildGitActionProgressStages(input: {
 const withDescription = (title: string, description: string | undefined) =>
   description ? { title, description } : { title };
 
-// Shared PR eligibility for explicit menu/CTA paths; the primary quick action ranks separately.
-function canRunCreatePrAction(input: {
+export type CreatePrExecution =
+  | { kind: "run_action"; action: "create_pr" | "commit_push_pr" }
+  | { kind: "open_pr" }
+  | { kind: "unavailable"; hint: string };
+
+/**
+ * Create PR is a "do everything" action: it resolves whichever stacked action
+ * completes the missing steps (commit → push/publish → PR) from the current git
+ * state. Behind/diverged branches stay blocked so a one-click action never has
+ * to auto-resolve merge conflicts; the default branch keeps its confirmation
+ * dialog (handled by the caller) before switching to a feature branch.
+ */
+export function resolveCreatePrExecution(input: {
   gitStatus: GitStatusResult | null;
   isBusy: boolean;
   isDefaultBranch: boolean;
   hasOriginRemote: boolean;
   defaultBranchName?: string | null | undefined;
-}): boolean {
+}): CreatePrExecution {
   const { gitStatus, isBusy, isDefaultBranch, hasOriginRemote, defaultBranchName } = input;
-  if (!gitStatus) return false;
+  if (isBusy) return { kind: "unavailable", hint: "Git action in progress." };
+  if (!gitStatus) return { kind: "unavailable", hint: "Git status is unavailable." };
+  if (gitStatus.pr?.state === "open") return { kind: "open_pr" };
+  if (gitStatus.branch === null) {
+    return { kind: "unavailable", hint: "Detached HEAD: checkout a branch before creating a PR." };
+  }
 
-  const hasBranch = gitStatus.branch !== null;
-  const hasChanges = gitStatus.hasWorkingTreeChanges;
-  const hasOpenPr = gitStatus.pr?.state === "open";
-  const isBehind = gitStatus.behindCount > 0;
-  const canPushWithoutUpstream = hasOriginRemote && !gitStatus.hasUpstream;
+  const isAhead = gitStatus.aheadCount > 0;
+  if (gitStatus.behindCount > 0) {
+    return {
+      kind: "unavailable",
+      hint: isAhead
+        ? "Branch has diverged from upstream. Rebase/merge first."
+        : "Branch is behind upstream. Pull before creating a PR.",
+    };
+  }
+  if (!gitStatus.hasUpstream && !hasOriginRemote) {
+    return { kind: "unavailable", hint: 'Add an "origin" remote before creating a PR.' };
+  }
+
+  if (gitStatus.hasWorkingTreeChanges) {
+    return { kind: "run_action", action: "commit_push_pr" };
+  }
+
   const canCreateCleanPublishedPr =
     !isDefaultBranch &&
     gitStatus.hasUpstream &&
     gitStatus.upstreamBranch !== null &&
     !tracksDefaultUpstream(gitStatus, defaultBranchName);
+  if (isAhead || canCreateCleanPublishedPr) {
+    return { kind: "run_action", action: "create_pr" };
+  }
 
-  return (
-    !isBusy &&
-    hasBranch &&
-    !hasChanges &&
-    !hasOpenPr &&
-    !isBehind &&
-    (canCreateCleanPublishedPr ||
-      (gitStatus.aheadCount > 0 && (gitStatus.hasUpstream || canPushWithoutUpstream)))
-  );
+  return { kind: "unavailable", hint: CREATE_PR_UNAVAILABLE_HINT };
 }
 
 function extractTrackedBranchName(upstreamBranch: string | null | undefined): string | null {
@@ -215,7 +238,7 @@ export function buildMenuItems(
     !isBehind &&
     (hasChanges || gitStatus.aheadCount > 0) &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
-  const canCreatePr = canRunCreatePrAction({
+  const prExecution = resolveCreatePrExecution({
     gitStatus,
     isBusy,
     isDefaultBranch,
@@ -264,7 +287,7 @@ export function buildMenuItems(
       : {
           id: "pr",
           label: "Create PR",
-          disabled: !canCreatePr,
+          disabled: prExecution.kind !== "run_action",
           icon: "pr",
           kind: "open_dialog",
           dialogAction: "create_pr",
@@ -431,19 +454,26 @@ export function resolveQuickAction(
   };
 }
 
+/**
+ * Availability of the literal `create_pr` stacked action (clean tree required).
+ * Guards stale dispatches from surfaces that resolved their action earlier
+ * (quick action, post-push toast CTA); the menu path resolves the full chain
+ * via resolveCreatePrExecution instead.
+ */
 export function resolveCreatePrActionAvailability(input: {
   gitStatus: GitStatusResult | null;
   isDefaultBranch?: boolean;
   hasOriginRemote?: boolean;
   defaultBranchName?: string | null | undefined;
 }): { canRun: boolean; hint: string | null } {
-  const canRun = canRunCreatePrAction({
+  const execution = resolveCreatePrExecution({
     gitStatus: input.gitStatus,
     isBusy: false,
     isDefaultBranch: input.isDefaultBranch ?? false,
     hasOriginRemote: input.hasOriginRemote ?? true,
     defaultBranchName: input.defaultBranchName,
   });
+  const canRun = execution.kind === "run_action" && execution.action === "create_pr";
 
   return {
     canRun,
