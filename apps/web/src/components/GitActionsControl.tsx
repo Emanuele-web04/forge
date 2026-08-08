@@ -94,6 +94,8 @@ import {
   gitRunStackedActionMutationOptions,
   gitStatusQueryOptions,
   invalidateGitQueries,
+  isGitExpensiveReadCapacityError,
+  refreshGitActionAvailability,
 } from "~/lib/gitReactQuery";
 import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
@@ -387,10 +389,19 @@ export default function GitActionsControl({
   const currentBranch = branchList?.branches.find((branch) => branch.current)?.name ?? null;
   // Only poll status after branch discovery confirms a repo — avoids non-repo
   // cwds feeding a permanent "Refreshing git status..." invalidation loop.
-  const { data: gitStatusData, error: gitStatusError } = useQuery(
+  const {
+    data: gitStatusData,
+    error: gitStatusError,
+    isFetching: isGitStatusFetching,
+  } = useQuery(
     gitStatusQueryOptions(gitCwd, branchListReady && branchList?.isRepo === true),
   );
   const gitStatus = gitStatusData ?? null;
+  const isGitStatusRefreshDelayed = isGitExpensiveReadCapacityError(gitStatusError);
+  const requestGitActionAvailabilityRefresh = useCallback(() => {
+    if (!gitCwd) return;
+    void refreshGitActionAvailability(queryClient, gitCwd).catch(() => undefined);
+  }, [gitCwd, queryClient]);
   const liveThreadBranchUpdate = useMemo(
     () =>
       resolveLiveThreadBranchUpdate({
@@ -403,8 +414,8 @@ export default function GitActionsControl({
 
   useEffect(() => {
     if (!isGitStatusOutOfSync) return;
-    void invalidateGitQueries(queryClient);
-  }, [isGitStatusOutOfSync, queryClient]);
+    requestGitActionAvailabilityRefresh();
+  }, [isGitStatusOutOfSync, requestGitActionAvailabilityRefresh]);
 
   const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatus;
 
@@ -592,11 +603,8 @@ export default function GitActionsControl({
           progress.lastOutputLine = null;
           break;
         case "action_finished":
-          // Don't clear timestamps here — the HTTP response handler (line 496)
-          // sets activeGitActionProgressRef to null and shows the success toast.
-          // Clearing timestamps early causes the "Running for Xs" description
-          // to disappear before the success state renders, leaving a bare
-          // "Pushing..." toast in the gap between the WS event and HTTP response.
+          // The terminal stream response owns the final toast so success is rendered once.
+          // Its server-side status refresh is detached, keeping this event-to-response gap short.
           return;
         case "action_failed":
           // Same reasoning as action_finished — let the HTTP error handler
@@ -1369,7 +1377,12 @@ export default function GitActionsControl({
       {isGitStatusOutOfSync && (
         <p className="px-3 py-1.5 text-xs text-muted-foreground">Refreshing git status...</p>
       )}
-      {gitStatusError && (
+      {isGitStatusRefreshDelayed && !isGitStatusOutOfSync && (
+        <p className="px-3 py-1.5 text-xs text-muted-foreground">
+          {isGitStatusFetching ? "Refreshing git status..." : "Git status refresh delayed."}
+        </p>
+      )}
+      {gitStatusError && !isGitStatusRefreshDelayed && (
         <p className="px-3 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
       )}
     </>
@@ -1674,7 +1687,7 @@ export default function GitActionsControl({
     const panelGitActionsMenu = (
       <Menu
         onOpenChange={(open) => {
-          if (open) void invalidateGitQueries(queryClient);
+          if (open) requestGitActionAvailabilityRefresh();
         }}
       >
         <MenuTrigger
@@ -1824,7 +1837,7 @@ export default function GitActionsControl({
           <ChatHeaderSplitDivider />
           <Menu
             onOpenChange={(open) => {
-              if (open) void invalidateGitQueries(queryClient);
+              if (open) requestGitActionAvailabilityRefresh();
             }}
           >
             <MenuTrigger
