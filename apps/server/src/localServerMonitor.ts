@@ -270,12 +270,38 @@ function tokenizeCommandLine(commandLine: string): string[] {
     .filter((token) => token.length > 0);
 }
 
+function commandTokenName(token: string): string {
+  return path.basename(token).replace(/\.[cm]?js$/i, "").toLowerCase();
+}
+
 function normalizeCommandName(command: string, args: string): string {
-  const firstToken = tokenizeCommandLine(args)[0] ?? command;
-  return path
-    .basename(firstToken || command)
-    .replace(/\.[cm]?js$/i, "")
-    .toLowerCase();
+  return commandTokenName(tokenizeCommandLine(args)[0] ?? command);
+}
+
+function processCommandTokens(command: string, args: string): string[] {
+  return tokenizeCommandLine(`${command} ${args}`);
+}
+
+function isExpoDevServerCommand(command: string, args: string): boolean {
+  return processCommandTokens(command, args).some((token) => {
+    const normalizedToken = token.replaceAll("\\", "/").toLowerCase();
+    return (
+      commandTokenName(token) === "expo" || normalizedToken.includes("/node_modules/@expo/cli/")
+    );
+  });
+}
+
+function isMetroDevServerCommand(command: string, args: string): boolean {
+  const tokens = processCommandTokens(command, args);
+  const tokenNames = tokens.map(commandTokenName);
+  const reactNativeIndex = tokenNames.indexOf("react-native");
+  return (
+    tokenNames.includes("metro") ||
+    tokens.some((token) =>
+      token.replaceAll("\\", "/").toLowerCase().includes("/node_modules/metro/"),
+    ) ||
+    (reactNativeIndex >= 0 && tokenNames.slice(reactNativeIndex + 1).includes("start"))
+  );
 }
 
 // Some dev tools let a generic child own the port while the parent has the useful command.
@@ -345,18 +371,21 @@ function devScriptNameFromArgs(args: string): string | null {
 
 function detectDevServerKindFromText(input: DevServerCandidateInput): string | null {
   const commandName = normalizeCommandName(input.command, input.args);
+  const text = normalizeProcessText(input.command, input.args);
+  if (isExpoDevServerCommand(input.command, input.args)) return "Expo";
+  if (isMetroDevServerCommand(input.command, input.args)) return "Metro";
+
   const directToolLabel = DEV_COMMAND_LABELS.get(commandName);
   if (directToolLabel) {
     if (commandName === "next" && !/\bnext\s+dev\b/i.test(input.args)) return null;
     return directToolLabel;
   }
-
-  const text = normalizeProcessText(input.command, input.args);
-  if (/(^|[\s/\\])vite(?:\.js|\.mjs|\.cjs)?(?:\s|$)/i.test(text)) return "Vite";
+  if (/(^|[\s/\\])vite(?:\.js|\.mjs|\.cjs)?(?:\s|$)/i.test(text)) {
+    return "Vite";
+  }
   if (/\bnext\s+dev\b/i.test(text)) return "Next.js";
   if (/\bnuxt\b/i.test(text)) return "Nuxt";
   if (/\bastro\b/i.test(text)) return "Astro";
-  if (/\bexpo\b/i.test(text)) return "Expo";
   if (/\bwebpack(?:-dev-server|\s+serve)\b/i.test(text)) return "Webpack";
   if (/\bparcel\b/i.test(text)) return "Parcel";
   if (/\buvicorn\b/i.test(text)) return "Uvicorn";
@@ -383,25 +412,6 @@ function detectDevServerKindFromText(input: DevServerCandidateInput): string | n
 
 export function isLikelyDevServerProcess(input: DevServerCandidateInput): boolean {
   return !isIgnoredLocalServerProcess(input) && detectDevServerKindFromText(input) !== null;
-}
-
-function formatDisplayName(command: string, args: string): string {
-  const textKind = detectDevServerKindFromText({ command, args, ports: [] });
-  if (textKind) return textKind;
-  const text = normalizeProcessText(command, args);
-  if (/\bvite\b/.test(text)) return "Vite";
-  if (/\bnext\b/.test(text)) return "Next.js";
-  if (/\bnuxt\b/.test(text)) return "Nuxt";
-  if (/\bastro\b/.test(text)) return "Astro";
-  if (/\bexpo\b/.test(text)) return "Expo";
-  if (/\bwebpack\b/.test(text)) return "Webpack";
-  if (/\bparcel\b/.test(text)) return "Parcel";
-  if (/\buvicorn\b/.test(text)) return "Uvicorn";
-  if (/\bflask\b/.test(text)) return "Flask";
-  if (/(?:manage\.py\s+runserver)|\bdjango\b/.test(text)) return "Django";
-  if (/(?:php\s+artisan\s+serve)|\blaravel\b/.test(text)) return "Laravel";
-  if (/\brails\b/.test(text)) return "Rails";
-  return path.basename(command).replace(/\.[cm]?js$/i, "") || command;
 }
 
 function addressUrl(address: Omit<ServerLocalServerAddress, "url">): string | null {
@@ -685,6 +695,13 @@ function pageTitleCandidateUrls(server: ServerLocalServerProcess): string[] {
   return localServerCandidateUrls(server.addresses);
 }
 
+function allowsPageTitleProbe(server: ServerLocalServerProcess): boolean {
+  if (server.displayName === "Expo" || isExpoDevServerCommand(server.command, server.args)) {
+    return tokenizeCommandLine(server.args).includes("--web");
+  }
+  return server.displayName !== "Metro" && !isMetroDevServerCommand(server.command, server.args);
+}
+
 async function firstResolvedPageTitle(
   urls: readonly string[],
   fetchTitle: (url: string) => Promise<string | null>,
@@ -721,6 +738,9 @@ export async function enrichLocalServerProcessesWithPageTitles(
   fetchTitle: (url: string) => Promise<string | null> = resolvePageTitleFromUrl,
 ): Promise<ServerLocalServerProcess[]> {
   return mapWithConcurrency(servers, PAGE_TITLE_FETCH_CONCURRENCY, async (server) => {
+    if (!allowsPageTitleProbe(server)) {
+      return server;
+    }
     const pageTitle = await firstResolvedPageTitle(pageTitleCandidateUrls(server), fetchTitle);
     return pageTitle ? { ...server, pageTitle } : server;
   });
@@ -780,7 +800,12 @@ function toServerProcess(
   const processInfo = processInfoByPid.get(pid);
   const args = processInfo?.commandLine ?? command;
   const detectionArgs = processLineageCommandLines(pid, processInfoByPid) ?? args;
-  if (!isLikelyDevServerProcess({ command, args: detectionArgs, ports })) {
+  const candidate = { command, args: detectionArgs, ports };
+  if (isIgnoredLocalServerProcess(candidate)) {
+    return null;
+  }
+  const displayName = detectDevServerKindFromText(candidate);
+  if (!displayName) {
     return null;
   }
 
@@ -793,7 +818,7 @@ function toServerProcess(
       ? { ppid: processInfo.ppid }
       : {}),
     command,
-    displayName: formatDisplayName(command, detectionArgs),
+    displayName,
     ...(cwd ? { cwd } : {}),
     args,
     ports,
