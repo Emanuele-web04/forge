@@ -6,7 +6,7 @@
 import { WS_STREAM_LIMITS, type ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
 import { useStore } from "./store";
-import { getThreadFromState } from "./threadDerivation";
+import type { AppState } from "./storeState";
 
 const THREAD_DETAIL_RETENTION_EVICTION_MS = 15 * 60 * 1000;
 // This is a client-side memory cache, not a stream budget: concurrent server
@@ -79,8 +79,8 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
     }
   }
 
-  const thread = getThreadFromState(state, threadId);
-  if (!thread) {
+  const threadShell = state.threadShellById?.[threadId];
+  if (!threadShell) {
     // Claude subagent children can have detail without a shell/sidebar row.
     // Their normalized lifecycle slices still tell us whether eviction would
     // discard live work. Once terminal, the retain timeout and capacity limit
@@ -95,13 +95,27 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
     );
   }
 
-  const orchestrationStatus = thread.session?.orchestrationStatus;
+  const session = state.threadSessionById?.[threadId];
+  const turnState = state.threadTurnStateById?.[threadId];
+  const orchestrationStatus = session?.orchestrationStatus;
   return (
     Boolean(
       orchestrationStatus && orchestrationStatus !== "idle" && orchestrationStatus !== "stopped",
     ) ||
-    thread.latestTurn?.state === "running" ||
-    thread.pendingSourceProposedPlan !== undefined
+    turnState?.latestTurn?.state === "running" ||
+    turnState?.pendingSourceProposedPlan !== undefined
+  );
+}
+
+export function shouldReconcileThreadDetailRetention(
+  current: AppState,
+  previous: AppState,
+): boolean {
+  return (
+    current.sidebarThreadSummaryById !== previous.sidebarThreadSummaryById ||
+    current.threadShellById !== previous.threadShellById ||
+    current.threadSessionById !== previous.threadSessionById ||
+    current.threadTurnStateById !== previous.threadTurnStateById
   );
 }
 
@@ -223,7 +237,10 @@ function reconcileRetentionEntries(): void {
 // the live map, so a nested pass can only evict entries the outer pass has not
 // claimed. The eviction notice is the one part that must not run inline — lease
 // owners answer it by queueing a stream refresh rather than writing state here.
-useStore.subscribe(() => {
+useStore.subscribe((current, previous) => {
+  if (!shouldReconcileThreadDetailRetention(current, previous)) {
+    return;
+  }
   reconcileRetentionEntries();
 });
 

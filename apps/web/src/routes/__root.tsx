@@ -57,6 +57,7 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useStore } from "../store";
+import { EMPTY_THREAD_IDS } from "../storeState";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
@@ -1001,7 +1002,7 @@ function EventRouter() {
     (store) => store.removeOrphanedTerminalStates,
   );
   const setServerWorkspacePaths = useWorkspacePathsStore((store) => store.setServerWorkspacePaths);
-  const serverThreads = useStore(selectAllThreads);
+  const serverThreadIds = useStore((store) => store.threadIds ?? EMPTY_THREAD_IDS);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -1038,14 +1039,14 @@ function EventRouter() {
     [dockStateByThreadId, hostThreadIds, routeSearch.view],
   );
   const retainedThreadIds = useRetainedThreadDetailIds();
-  const serverThreadIds = new Set(serverThreads.map((thread) => thread.id));
+  const serverThreadIdSet = useMemo(() => new Set(serverThreadIds), [serverThreadIds]);
   // Stabilize the lease array by content: `serverThreads` re-emits on every
   // streaming update, and an identity-changing lease list would enqueue a no-op
   // subscription reconcile per render onto the serialized subscribe chain.
   const nextSubscribedThreadIds = resolveThreadDetailSubscriptionLeaseIds({
     visibleThreadIds,
     retainedThreadIds,
-    serverThreadIds,
+    serverThreadIds: serverThreadIdSet,
   });
   const subscribedThreadIdsRef = useRef(nextSubscribedThreadIds);
   const subscribedThreadIds = arraysShallowEqual(

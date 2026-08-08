@@ -9,6 +9,7 @@ import {
   resolveThreadDetailSubscriptionLeaseIds,
   retainThreadDetailSubscription,
   setVisibleThreadDetailIds,
+  shouldReconcileThreadDetailRetention,
   subscribeThreadDetailEvictions,
 } from "./threadDetailSubscriptionRetention";
 
@@ -124,6 +125,22 @@ describe("threadDetailSubscriptionRetention", () => {
     vi.advanceTimersByTime(60 * 1000);
 
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
+  });
+
+  it("skips retention scans for message-only streaming updates", () => {
+    const previous = useStore.getState();
+    const current = {
+      ...previous,
+      messageByThreadId: { ...previous.messageByThreadId },
+    };
+
+    expect(shouldReconcileThreadDetailRetention(current, previous)).toBe(false);
+    expect(
+      shouldReconcileThreadDetailRetention(
+        { ...current, threadSessionById: { ...current.threadSessionById } },
+        previous,
+      ),
+    ).toBe(true);
   });
 
   it("keeps non-idle threads retained past the idle timeout until they settle", () => {

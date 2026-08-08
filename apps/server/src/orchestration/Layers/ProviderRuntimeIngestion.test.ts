@@ -40,6 +40,7 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
   collectPersistedGeneratedImagePaths,
+  nextRuntimeJournalSafetyPollDelayMs,
   ProviderRuntimeIngestionLive,
   selectProviderRuntimeJournalStream,
 } from "./ProviderRuntimeIngestion.ts";
@@ -182,6 +183,18 @@ type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][numbe
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
 
 describe("ProviderRuntimeIngestion", () => {
+  it("backs off idle journal safety polls and returns to the fast recovery cadence", () => {
+    let delayMs = 250;
+    const idleDelays: number[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      delayMs = nextRuntimeJournalSafetyPollDelayMs(delayMs, false);
+      idleDelays.push(delayMs);
+    }
+
+    expect(idleDelays).toEqual([500, 1_000, 2_000, 4_000, 5_000, 5_000]);
+    expect(nextRuntimeJournalSafetyPollDelayMs(delayMs, true)).toBe(250);
+  });
+
   it("uses an already-persisted runtime stream without appending the event again", async () => {
     const event: ProviderRuntimeEvent = {
       type: "runtime.warning",

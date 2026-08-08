@@ -51,7 +51,6 @@ import {
   Scope,
   Stream,
 } from "effect";
-import * as Semaphore from "effect/Semaphore";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
 import { ProviderValidationError } from "../Errors.ts";
@@ -73,6 +72,7 @@ import {
   isStartedTurnApplicable,
 } from "../terminalTurnApplicability.ts";
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
+import { makeKeyedLock } from "../keyedLock.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
 import {
   makeProviderRuntimeEventPumpHealthRegistry,
@@ -288,35 +288,6 @@ function runtimeActiveTurnId(value: unknown): string | undefined {
 
 function hasResumeCursor(value: unknown): boolean {
   return value !== null && value !== undefined;
-}
-
-function makeKeyedThreadLock() {
-  const entries = new Map<ThreadId, { readonly semaphore: Semaphore.Semaphore; users: number }>();
-  const withLock = <A, E, R>(
-    threadId: ThreadId,
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> => {
-    let entry = entries.get(threadId);
-    if (entry === undefined) {
-      entry = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
-      entries.set(threadId, entry);
-    }
-    entry.users += 1;
-    const acquiredEntry = entry;
-    return acquiredEntry.semaphore
-      .withPermits(1)(effect)
-      .pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            acquiredEntry.users -= 1;
-            if (acquiredEntry.users === 0 && entries.get(threadId) === acquiredEntry) {
-              entries.delete(threadId);
-            }
-          }),
-        ),
-      );
-  };
-  return withLock;
 }
 
 function runtimeStatusForEvent(
@@ -835,7 +806,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     // still be overwritten. Lifecycle events are low-frequency, so a per-thread
     // mutex adds no meaningful contention. Creation is synchronous
     // (Semaphore.makeUnsafe), so concurrent callers cannot mint two locks.
-    const withBindingWriteLock = makeKeyedThreadLock();
+    const withBindingWriteLock = makeKeyedLock<ThreadId>().withLock;
 
     interface StartedTurnPersistenceInput {
       readonly threadId: ThreadId;

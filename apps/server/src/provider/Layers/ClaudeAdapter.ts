@@ -85,7 +85,6 @@ import {
   Queue,
   Random,
   Ref,
-  Semaphore,
   Stream,
 } from "effect";
 
@@ -147,6 +146,7 @@ import {
   MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION,
 } from "../claudeCliVersion.ts";
 import { parseGenericCliVersion } from "../providerMaintenance.ts";
+import { makeKeyedLock } from "../keyedLock.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -1762,7 +1762,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const sessions = new Map<ThreadId, ClaudeSessionContext>();
     const failedStartupProcessOwners = new Map<ThreadId, ClaudeProcessOwner>();
     const failedDiscoveryProcessOwners = new Set<ClaudeProcessOwner>();
-    const sessionLifecycleLocks = new Map<ThreadId, Semaphore.Semaphore>();
+    const sessionLifecycleLock = makeKeyedLock<ThreadId>();
     let cachedModels: ProviderListModelsResult | null = null;
     let cachedAgents: ProviderListAgentsResult | null = null;
     const verifyClaudeAutoModelSupport = (input: {
@@ -1831,17 +1831,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
-    const withSessionLifecycleLock = <A, E, R>(
-      threadId: ThreadId,
-      effect: Effect.Effect<A, E, R>,
-    ): Effect.Effect<A, E, R> => {
-      let lock = sessionLifecycleLocks.get(threadId);
-      if (lock === undefined) {
-        lock = Semaphore.makeUnsafe(1);
-        sessionLifecycleLocks.set(threadId, lock);
-      }
-      return lock.withPermits(1)(effect);
-    };
+    const withSessionLifecycleLock = sessionLifecycleLock.withLock;
     const resolveClaudeSdkEnv = Effect.sync(() =>
       buildClaudeProcessEnv({ homeDir: serverConfig.homeDir }),
     );
