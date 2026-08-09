@@ -143,6 +143,67 @@ export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
 export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
 
+export const ProviderUsageActivityStatus = Schema.Literals([
+  "ok",
+  "partial",
+  "unavailable",
+  "error",
+]);
+export type ProviderUsageActivityStatus = typeof ProviderUsageActivityStatus.Type;
+
+export const ProviderUsageActivityPeriodId = Schema.Literals(["24h", "7d", "30d"]);
+export type ProviderUsageActivityPeriodId = typeof ProviderUsageActivityPeriodId.Type;
+
+export const ServerProviderUsageTokenCounts = Schema.Struct({
+  input: Schema.optional(NonNegativeInt),
+  cachedInput: Schema.optional(NonNegativeInt),
+  cacheWrite: Schema.optional(NonNegativeInt),
+  output: Schema.optional(NonNegativeInt),
+  reasoning: Schema.optional(NonNegativeInt),
+  total: NonNegativeInt,
+});
+export type ServerProviderUsageTokenCounts = typeof ServerProviderUsageTokenCounts.Type;
+
+export const ServerProviderUsageActivityPeriod = Schema.Struct({
+  id: ProviderUsageActivityPeriodId,
+  startAt: IsoDateTime,
+  endAt: IsoDateTime,
+  sessions: NonNegativeInt,
+  tokens: ServerProviderUsageTokenCounts,
+  recordedCostUsd: Schema.optional(
+    Schema.NullOr(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
+  estimatedCostUsd: Schema.optional(
+    Schema.NullOr(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
+});
+export type ServerProviderUsageActivityPeriod = typeof ServerProviderUsageActivityPeriod.Type;
+
+export const ServerProviderUsageActivityBreakdown = Schema.Struct({
+  model: TrimmedNonEmptyString,
+  upstreamProviderId: Schema.optional(TrimmedNonEmptyString),
+  sessions: NonNegativeInt,
+  tokens: ServerProviderUsageTokenCounts,
+  recordedCostUsd: Schema.optional(
+    Schema.NullOr(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
+  estimatedCostUsd: Schema.optional(
+    Schema.NullOr(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
+});
+export type ServerProviderUsageActivityBreakdown = typeof ServerProviderUsageActivityBreakdown.Type;
+
+export const ServerProviderUsageActivity = Schema.Struct({
+  status: ProviderUsageActivityStatus,
+  scope: Schema.Literal("machine"),
+  source: TrimmedNonEmptyString,
+  capturedAt: IsoDateTime,
+  periods: Schema.Array(ServerProviderUsageActivityPeriod),
+  breakdown: Schema.Array(ServerProviderUsageActivityBreakdown),
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerProviderUsageActivity = typeof ServerProviderUsageActivity.Type;
+
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
   updatedAt: IsoDateTime,
@@ -155,12 +216,14 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   // True when this is a re-served last-good snapshot (e.g. the provider is rate-limiting live
   // fetches) rather than a fresh read; `updatedAt` then still reflects the original fetch time.
   stale: Schema.optional(Schema.Boolean),
+  // Machine-wide provider activity is deliberately separate from account limits above. It can
+  // be present even when the account source is needs-auth or unsupported.
+  activity: Schema.optional(ServerProviderUsageActivity),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
 
 export const ServerGetProviderUsageSnapshotInput = Schema.Struct({
   provider: ProviderKind,
-  homePath: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageSnapshotInput.Type;
 
