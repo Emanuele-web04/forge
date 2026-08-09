@@ -571,6 +571,7 @@ import {
   worktreeSetupHasError,
   WorktreeSetupCancelledError,
   createWorktreeSetupResolution,
+  runWorktreeCreationFlow,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
@@ -7909,6 +7910,10 @@ export default function ChatView({
       ? setupProjectScript(targetProjectScriptsForSend)
       : null;
     const worktreeSetupScriptName = setupScriptForWorktree?.name ?? null;
+    // Branching off the checkout's current branch also carries its uncommitted
+    // changes into the worktree, which the setup card surfaces as its own step.
+    const worktreeCopiesLocalChanges =
+      Boolean(baseBranchForWorktree) && baseBranchForWorktree === activeRootBranch;
     const messageIdForSend = newMessageId();
     const worktreeSetupResolution = baseBranchForWorktree ? createWorktreeSetupResolution() : null;
     worktreeSetupResolutionRef.current = worktreeSetupResolution;
@@ -7920,7 +7925,11 @@ export default function ChatView({
     beginLocalDispatch({
       expectedUserMessageId: messageIdForSend,
       ...(baseBranchForWorktree
-        ? { worktreeSetupStepId: "create-worktree", setupScriptName: worktreeSetupScriptName }
+        ? {
+            worktreeSetupStepId: "create-branch" as const,
+            setupScriptName: worktreeSetupScriptName,
+            copyLocalChanges: worktreeCopiesLocalChanges,
+          }
         : {}),
     });
 
@@ -8133,36 +8142,44 @@ export default function ChatView({
 
       // On first message: lock in branch + create worktree if needed.
       if (baseBranchForWorktree && worktreeSetupResolution) {
-        const creation = createWorktreeMutation.mutateAsync({
-          cwd: targetProjectCwdForSend,
-          ref: baseBranchForWorktree,
-          newBranch: buildTemporaryWorktreeBranchName(),
-          ...(baseBranchForWorktree === activeRootBranch
-            ? { copyChangesFrom: targetProjectCwdForSend }
-            : {}),
+        // The server streams each real setup phase (branch → worktree → copy
+        // changes); advance the card's rows from those events instead of
+        // letting one row spin through the whole creation.
+        const worktreeProgressId = randomUUID();
+        const creationFlow = await runWorktreeCreationFlow({
+          progressId: worktreeProgressId,
+          subscribeToProgress: (listener) => api.git.onWorktreeSetupProgress(listener),
+          startCreation: () =>
+            createWorktreeMutation.mutateAsync({
+              cwd: targetProjectCwdForSend,
+              ref: baseBranchForWorktree,
+              newBranch: buildTemporaryWorktreeBranchName(),
+              progressId: worktreeProgressId,
+              ...(worktreeCopiesLocalChanges ? { copyChangesFrom: targetProjectCwdForSend } : {}),
+            }),
+          resolution: worktreeSetupResolution,
+          onCreationStep: (stepId) =>
+            beginLocalDispatch({
+              worktreeSetupStepId: stepId,
+              setupScriptName: worktreeSetupScriptName,
+              copyLocalChanges: worktreeCopiesLocalChanges,
+            }),
+          removeWorktree: (worktreePath) =>
+            api.git.removeWorktree({
+              cwd: targetProjectCwdForSend,
+              path: worktreePath,
+              force: true,
+              reclaimTemporaryBranch: true,
+            }),
         });
-        // `git worktree add` is the longest step; let the card's buttons win
-        // the wait instead of only taking effect once it finishes.
-        await Promise.race([creation, worktreeSetupResolution.promise]);
-        if (worktreeSetupResolution.action !== null) {
-          // The worktree may still be materializing — tear it down whenever
-          // the creation lands so a resolved send leaves no stray checkout.
-          void creation
-            .then((result) =>
-              api.git.removeWorktree({
-                cwd: targetProjectCwdForSend,
-                path: result.worktree.path,
-                force: true,
-                reclaimTemporaryBranch: true,
-              }),
-            )
-            .catch(() => undefined);
+        if (creationFlow.outcome === "resolved") {
           await consumeWorktreeSetupResolution();
         } else {
-          const result = await creation;
+          const result = creationFlow.result;
           beginLocalDispatch({
             worktreeSetupStepId: "prepare-thread",
             setupScriptName: worktreeSetupScriptName,
+            copyLocalChanges: worktreeCopiesLocalChanges,
           });
           nextThreadBranch = result.worktree.branch;
           nextThreadWorktreePath = result.worktree.path;
@@ -8276,6 +8293,7 @@ export default function ChatView({
           beginLocalDispatch({
             worktreeSetupStepId: "run-setup-action",
             setupScriptName: setupScript.name,
+            copyLocalChanges: worktreeCopiesLocalChanges,
           });
           const setupScriptOptions: Parameters<typeof runProjectScript>[1] = {
             worktreePath: nextThreadWorktreePath,
@@ -8328,7 +8346,11 @@ export default function ChatView({
       beginLocalDispatch({
         expectedUserMessageId: messageIdForSend,
         ...(baseBranchForWorktree && !switchedToLocalCheckout
-          ? { worktreeSetupStepId: "start-session", setupScriptName: worktreeSetupScriptName }
+          ? {
+              worktreeSetupStepId: "start-session" as const,
+              setupScriptName: worktreeSetupScriptName,
+              copyLocalChanges: worktreeCopiesLocalChanges,
+            }
           : {}),
       });
       rememberCustomBinaryPathForDispatch({

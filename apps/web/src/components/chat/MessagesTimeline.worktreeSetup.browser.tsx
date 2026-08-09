@@ -37,7 +37,7 @@ function userEntry(id: string, text: string): TimelineEntries[number] {
 function setupSnapshot(statuses: [WorktreeSetupStepStatus, WorktreeSetupStepStatus]) {
   return {
     steps: [
-      { id: "create-worktree", label: "Creating branch and worktree", status: statuses[0] },
+      { id: "create-branch", label: "Creating branch", status: statuses[0] },
       { id: "prepare-thread", label: "Linking thread workspace", status: statuses[1] },
     ],
   } satisfies WorktreeSetupSnapshot;
@@ -46,7 +46,8 @@ function setupSnapshot(statuses: [WorktreeSetupStepStatus, WorktreeSetupStepStat
 function setupActionSnapshot() {
   return {
     steps: [
-      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "create-branch", label: "Creating branch", status: "done" },
+      { id: "create-worktree", label: "Creating worktree", status: "done" },
       { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
       { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
       { id: "start-session", label: "Starting session", status: "pending" },
@@ -157,7 +158,8 @@ function FailedSetupWithoutMessagesTimeline() {
 function startingSessionSnapshot() {
   return {
     steps: [
-      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "create-branch", label: "Creating branch", status: "done" },
+      { id: "create-worktree", label: "Creating worktree", status: "done" },
       { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
       { id: "start-session", label: "Starting session", status: "active" },
     ],
@@ -217,7 +219,7 @@ describe("MessagesTimeline worktree setup card", () => {
     try {
       await expect.poll(() => setupRow() !== null).toBe(true);
       expect(setupRow()?.textContent).toContain("Preparing worktree...");
-      expect(setupRow()?.textContent).toContain("Creating branch and worktree");
+      expect(setupRow()?.textContent).toContain("Creating branch");
       expect(setupRow()?.querySelector(".shimmer")?.classList).not.toContain("shimmer-once");
       // The generic working shimmer stays suppressed while the card is open.
       expect(workingRow()).toBeNull();
@@ -243,7 +245,7 @@ describe("MessagesTimeline worktree setup card", () => {
     const screen = await render(<FailedSetupWithoutMessagesTimeline />);
 
     try {
-      await expect.poll(() => setupRow()?.textContent).toContain("Creating branch and worktree");
+      await expect.poll(() => setupRow()?.textContent).toContain("Creating branch");
       expect(setupRow()?.textContent).toContain("failed");
       expect(document.body.textContent).not.toContain("Send a message to start the conversation.");
     } finally {

@@ -305,6 +305,50 @@ describe("WsTransport", () => {
     expect(emit).toHaveBeenNthCalledWith(2, WS_CHANNELS.projectProvisionProgress, completed);
   });
 
+  it("returns the completed worktree setup result and emits each progress event", async () => {
+    const phase = {
+      progressId: "progress-1",
+      kind: "phase_started" as const,
+      phase: "worktree" as const,
+    };
+    const completed = {
+      progressId: "progress-1",
+      kind: "completed" as const,
+      result: {
+        worktree: {
+          path: "/repo/.codex/worktrees/generated/synara",
+          ref: "0123456789abcdef0123456789abcdef01234567",
+          branch: "synara/abcd1234",
+        },
+      },
+    };
+    const emit = vi.fn();
+    const transport = Object.create(WsTransport.prototype) as WsTransport;
+    Object.assign(transport, {
+      emit,
+      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+    });
+    const runWorktreeSetupStream = (
+      transport as unknown as {
+        runWorktreeSetupStream: (
+          client: Record<string, () => Stream.Stream<typeof phase | typeof completed>>,
+          params: unknown,
+        ) => Promise<typeof completed.result>;
+      }
+    ).runWorktreeSetupStream.bind(transport);
+
+    await expect(
+      runWorktreeSetupStream(
+        {
+          [WS_METHODS.gitCreateDetachedWorktree]: () => Stream.make(phase, completed),
+        },
+        { cwd: "/repo", ref: "main" },
+      ),
+    ).resolves.toEqual(completed.result);
+    expect(emit).toHaveBeenNthCalledWith(1, WS_CHANNELS.gitWorktreeSetupProgress, phase);
+    expect(emit).toHaveBeenNthCalledWith(2, WS_CHANNELS.gitWorktreeSetupProgress, completed);
+  });
+
   it("does not reconnect the socket for typed stream-admission failures", () => {
     expect(
       shouldReconnectAfterStreamFailure(

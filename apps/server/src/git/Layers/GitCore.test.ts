@@ -1295,6 +1295,64 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("reports setup phases at the real command boundaries", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "notes.txt"), "untracked note\n");
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-phase-events");
+        const phases: string[] = [];
+        yield* core.createDetachedWorktree(
+          {
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            newBranch: "synara/ph123456",
+            copyChangesFrom: tmp,
+          },
+          {
+            onPhase: (phase) =>
+              Effect.sync(() => {
+                phases.push(phase);
+              }),
+          },
+        );
+
+        expect(phases).toEqual(["branch", "worktree", "copy-changes"]);
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          force: true,
+          reclaimTemporaryBranch: true,
+        });
+      }),
+    );
+
+    it.effect("deletes the pre-created branch when worktree add fails", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-rollback-branch");
+        // A plain file at the target path makes `git worktree add` fail after
+        // the branch has already been created.
+        yield* writeTextFile(wtPath, "occupied\n");
+
+        const result = yield* Effect.exit(
+          core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            newBranch: "synara/rollback1",
+          }),
+        );
+
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(yield* git(tmp, ["branch", "--list", "synara/rollback1"])).toBe("");
+      }),
+    );
+
     it.effect("removeWorktree reclamation never deletes user-named branches", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

@@ -12,6 +12,7 @@ import type {
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
+  GitWorktreeSetupPhase,
   GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
@@ -315,10 +316,14 @@ export interface GitCoreShape {
   ) => Effect.Effect<void, GitCommandError>;
 
   /**
-   * Create a detached worktree from a branch or ref.
+   * Create a detached worktree from a branch or ref. `onPhase` fires as each
+   * setup phase (branch → worktree → copy-changes) begins, for progress UIs.
    */
   readonly createDetachedWorktree: (
     input: GitCreateDetachedWorktreeInput,
+    options?: {
+      readonly onPhase?: (phase: GitWorktreeSetupPhase) => Effect.Effect<void>;
+    },
   ) => Effect.Effect<GitCreateDetachedWorktreeResult, GitCommandError>;
 
   /**

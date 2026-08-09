@@ -1,6 +1,8 @@
 import {
   ProjectId,
   ThreadId,
+  type GitWorktreeSetupPhase,
+  type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
   type ProviderApprovalDecision,
@@ -923,19 +925,30 @@ export interface PullRequestDialogState {
   key: number;
 }
 
-// Ordered client-side phases of the "New worktree" first-send setup. The
-// labels surface verbatim in the transcript's transient setup row.
-export const WORKTREE_SETUP_STEP_DEFINITIONS: ReadonlyArray<{
-  id: WorktreeSetupStepId;
-  label: string;
-}> = [
-  { id: "create-worktree", label: "Creating branch and worktree" },
-  { id: "prepare-thread", label: "Linking thread workspace" },
-  { id: "start-session", label: "Starting session" },
-];
+// Labels for the "New worktree" first-send setup steps, surfaced verbatim in
+// the transcript's transient setup row. Single source — the ordered step list
+// is assembled in `worktreeSetupStepDefinitions`.
+const WORKTREE_SETUP_STEP_LABELS: Record<WorktreeSetupStepId, string> = {
+  "create-branch": "Creating branch",
+  "create-worktree": "Creating worktree",
+  "copy-changes": "Copying local changes",
+  "prepare-thread": "Linking thread workspace",
+  "run-setup-action": "Running setup action",
+  "start-session": "Starting session",
+};
+
+// Creation phases mirror the server's real worktree setup progress events, so
+// each row completes on an actual boundary instead of one row spinning through
+// all of them.
+export const WORKTREE_SETUP_STEP_ID_BY_PHASE: Record<GitWorktreeSetupPhase, WorktreeSetupStepId> = {
+  branch: "create-branch",
+  worktree: "create-worktree",
+  "copy-changes": "copy-changes",
+};
 
 export interface WorktreeSetupSnapshotOptions {
   setupScriptName?: string | null;
+  copyLocalChanges?: boolean;
 }
 
 export interface WorktreeSetupDispatchOptions extends WorktreeSetupSnapshotOptions {
@@ -949,18 +962,23 @@ function worktreeSetupStepDefinitions(
 ): ReadonlyArray<{ id: WorktreeSetupStepId; label: string }> {
   const setupScriptName = options?.setupScriptName?.trim();
   const includeSetupStep = activeStepId === "run-setup-action" || Boolean(setupScriptName);
-  if (!includeSetupStep) {
-    return WORKTREE_SETUP_STEP_DEFINITIONS;
+  const includeCopyStep = activeStepId === "copy-changes" || Boolean(options?.copyLocalChanges);
+  const stepIds: WorktreeSetupStepId[] = ["create-branch", "create-worktree"];
+  if (includeCopyStep) {
+    stepIds.push("copy-changes");
   }
-  return [
-    { id: "create-worktree", label: "Creating branch and worktree" },
-    { id: "prepare-thread", label: "Linking thread workspace" },
-    {
-      id: "run-setup-action",
-      label: setupScriptName ? `Running setup action: ${setupScriptName}` : "Running setup action",
-    },
-    { id: "start-session", label: "Starting session" },
-  ];
+  stepIds.push("prepare-thread");
+  if (includeSetupStep) {
+    stepIds.push("run-setup-action");
+  }
+  stepIds.push("start-session");
+  return stepIds.map((id) => ({
+    id,
+    label:
+      id === "run-setup-action" && setupScriptName
+        ? `${WORKTREE_SETUP_STEP_LABELS[id]}: ${setupScriptName}`
+        : WORKTREE_SETUP_STEP_LABELS[id],
+  }));
 }
 
 // How long a failed setup step stays visible before the row is dismissed, so
@@ -1040,6 +1058,58 @@ export function createWorktreeSetupResolution(): WorktreeSetupResolution {
       settle(next);
     },
   };
+}
+
+export interface WorktreeCreationFlowDeps<Result extends { worktree: { path: string } }> {
+  /** Correlates streamed progress events with this creation request. */
+  progressId: string;
+  subscribeToProgress: (listener: (event: GitWorktreeSetupProgressEvent) => void) => () => void;
+  startCreation: () => Promise<Result>;
+  resolution: WorktreeSetupResolution;
+  /** Advances the setup card to the step matching a streamed creation phase. */
+  onCreationStep: (stepId: WorktreeSetupStepId) => void;
+  removeWorktree: (worktreePath: string) => Promise<unknown>;
+}
+
+export type WorktreeCreationFlowOutcome<Result> =
+  | { outcome: "resolved" }
+  | { outcome: "created"; result: Result };
+
+/**
+ * Runs one worktree creation while the setup card is showing: subscribes to
+ * the server's streamed setup phases, races the creation against the card's
+ * "Cancel" / "Work locally" resolution, and — when the user resolves first —
+ * tears the (possibly still materializing) worktree down once the creation
+ * lands so a resolved send leaves no stray checkout.
+ */
+export async function runWorktreeCreationFlow<Result extends { worktree: { path: string } }>(
+  deps: WorktreeCreationFlowDeps<Result>,
+): Promise<WorktreeCreationFlowOutcome<Result>> {
+  const unsubscribe = deps.subscribeToProgress((event) => {
+    if (
+      event.progressId !== deps.progressId ||
+      event.kind !== "phase_started" ||
+      deps.resolution.action !== null
+    ) {
+      return;
+    }
+    deps.onCreationStep(WORKTREE_SETUP_STEP_ID_BY_PHASE[event.phase]);
+  });
+  try {
+    const creation = deps.startCreation();
+    // `git worktree add` is the longest step; let the card's buttons win the
+    // wait instead of only taking effect once the creation finishes.
+    await Promise.race([creation, deps.resolution.promise]);
+    if (deps.resolution.action !== null) {
+      void creation
+        .then((result) => deps.removeWorktree(result.worktree.path))
+        .catch(() => undefined);
+      return { outcome: "resolved" };
+    }
+    return { outcome: "created", result: await creation };
+  } finally {
+    unsubscribe();
+  }
 }
 
 // Once the turn RPC has resolved the server provably owns the turn; the

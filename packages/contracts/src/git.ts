@@ -208,6 +208,9 @@ export const GitCreateDetachedWorktreeInput = Schema.Struct({
   // When set, the worktree is created on this new branch (pinned at `ref`)
   // instead of a detached HEAD, so threads get a branch attached from birth.
   newBranch: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Caller-chosen correlation id echoed on every setup progress event, so
+  // concurrent creations can be told apart by progress subscribers.
+  progressId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type GitCreateDetachedWorktreeInput = typeof GitCreateDetachedWorktreeInput.Type;
 
@@ -441,6 +444,32 @@ export const GitCreateDetachedWorktreeResult = Schema.Struct({
   worktree: GitDetachedWorktree,
 });
 export type GitCreateDetachedWorktreeResult = typeof GitCreateDetachedWorktreeResult.Type;
+
+// Real phases of detached-worktree creation, in execution order: create the
+// branch, materialize the checkout, then copy local changes (when requested).
+export const GitWorktreeSetupPhase = Schema.Literals(["branch", "worktree", "copy-changes"]);
+export type GitWorktreeSetupPhase = typeof GitWorktreeSetupPhase.Type;
+
+const GitWorktreeSetupProgressBase = Schema.Struct({
+  progressId: Schema.NullOr(TrimmedNonEmptyStringSchema),
+});
+
+const GitWorktreeSetupPhaseStartedEvent = Schema.Struct({
+  ...GitWorktreeSetupProgressBase.fields,
+  kind: Schema.Literal("phase_started"),
+  phase: GitWorktreeSetupPhase,
+});
+const GitWorktreeSetupCompletedEvent = Schema.Struct({
+  ...GitWorktreeSetupProgressBase.fields,
+  kind: Schema.Literal("completed"),
+  result: GitCreateDetachedWorktreeResult,
+});
+
+export const GitWorktreeSetupProgressEvent = Schema.Union([
+  GitWorktreeSetupPhaseStartedEvent,
+  GitWorktreeSetupCompletedEvent,
+]);
+export type GitWorktreeSetupProgressEvent = typeof GitWorktreeSetupProgressEvent.Type;
 
 export const GitStashInfoResult = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,

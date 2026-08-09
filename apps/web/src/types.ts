@@ -147,10 +147,12 @@ export interface TurnDiffSummary {
 }
 
 // Ephemeral client-side progress of the "New worktree" first-send setup
-// sequence (create worktree → link thread → start session). Rendered as a
-// transient transcript row; never persisted.
+// sequence (create branch → create worktree → copy changes → link thread →
+// start session). Rendered as a transient transcript row; never persisted.
 export type WorktreeSetupStepId =
+  | "create-branch"
   | "create-worktree"
+  | "copy-changes"
   | "prepare-thread"
   | "run-setup-action"
   | "start-session";

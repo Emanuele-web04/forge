@@ -17,6 +17,7 @@ import {
   PullRequestsUnavailableError,
   type GitActionProgressEvent,
   type GitHubProjectProvisionProgressEvent,
+  type GitWorktreeSetupProgressEvent,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
@@ -1381,12 +1382,33 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to create worktree",
           ),
         [WS_METHODS.gitCreateDetachedWorktree]: (input) =>
-          rpcEffect(
-            refreshGitStatusAfter(
-              input.cwd,
-              git.withMutation(input.cwd, git.createDetachedWorktree(input)),
-            ),
-            "Failed to create detached worktree",
+          bufferLiveUiStream(
+            Stream.callback<GitWorktreeSetupProgressEvent, WsRpcError>((queue) => {
+              const progressId = input.progressId ?? null;
+              return refreshGitStatusAfter(
+                input.cwd,
+                git.withMutation(
+                  input.cwd,
+                  git.createDetachedWorktree(input, {
+                    onPhase: (phase) =>
+                      Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
+                        Effect.asVoid,
+                      ),
+                  }),
+                ),
+              ).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) =>
+                    Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
+                  onSuccess: (result) =>
+                    Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
+                      Effect.andThen(Queue.end(queue)),
+                      Effect.asVoid,
+                    ),
+                }),
+              );
+            }),
+            { label: "git.create-detached-worktree" },
           ),
         [WS_METHODS.gitRemoveWorktree]: (input) =>
           rpcEffect(

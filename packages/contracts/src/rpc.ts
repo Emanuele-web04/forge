@@ -41,7 +41,6 @@ import {
   GitActionProgressEvent,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
-  GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitHubRepositoryInput,
@@ -76,6 +75,7 @@ import {
   GitSummarizeDiffInput,
   GitSummarizeDiffResult,
   GitUnstageFilesInput,
+  GitWorktreeSetupProgressEvent,
   GitUnstageFilesResult,
 } from "./git";
 import {
@@ -575,10 +575,13 @@ export const WsGitCreateWorktreeRpc = Rpc.make(WS_METHODS.gitCreateWorktree, {
   error: WsRpcError,
 });
 
+// Streams setup phases (branch → worktree → copy-changes) so the UI can show
+// real progress; the terminal `completed` event carries the created worktree.
 export const WsGitCreateDetachedWorktreeRpc = Rpc.make(WS_METHODS.gitCreateDetachedWorktree, {
   payload: GitCreateDetachedWorktreeInput,
-  success: GitCreateDetachedWorktreeResult,
+  success: GitWorktreeSetupProgressEvent,
   error: WsRpcError,
+  stream: true,
 });
 
 export const WsGitRemoveWorktreeRpc = Rpc.make(WS_METHODS.gitRemoveWorktree, {

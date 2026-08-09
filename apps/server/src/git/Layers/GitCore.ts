@@ -2628,8 +2628,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return { verified: true, reason: null };
       });
 
-    const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input) =>
+    const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input, options) =>
       Effect.gen(function* () {
+        const onPhase = options?.onPhase ?? (() => Effect.void);
+        const newBranch = input.newBranch ?? null;
+        if (newBranch) {
+          yield* onPhase("branch");
+        }
         const refResult = yield* executeGit(
           "GitCore.createDetachedWorktree.resolveRef",
           input.cwd,
@@ -2667,16 +2672,38 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         // Branch-backed managed worktrees still pin to the resolved commit, so
         // ownership proofs and pruning behave exactly like the detached form.
-        const newBranch = input.newBranch ?? null;
-        yield* executeGit(
+        // The branch is created before the (slow) checkout so progress phases
+        // reflect the real boundary between the two.
+        if (newBranch) {
+          yield* executeGit("GitCore.createDetachedWorktree.createBranch", input.cwd, [
+            "branch",
+            newBranch,
+            resolvedRef,
+          ]);
+        }
+        yield* onPhase("worktree");
+        const addWorktree = executeGit(
           "GitCore.createDetachedWorktree",
           input.cwd,
           newBranch
-            ? ["worktree", "add", "-b", newBranch, worktreePath, resolvedRef]
+            ? ["worktree", "add", worktreePath, newBranch]
             : ["worktree", "add", "--detach", worktreePath, resolvedRef],
         );
+        yield* newBranch
+          ? addWorktree.pipe(
+              Effect.onError(() =>
+                executeGit(
+                  "GitCore.createDetachedWorktree.rollbackBranch",
+                  input.cwd,
+                  ["branch", "-D", newBranch],
+                  { allowNonZeroExit: true },
+                ).pipe(Effect.ignore),
+              ),
+            )
+          : addWorktree;
 
         if (input.copyChangesFrom) {
+          yield* onPhase("copy-changes");
           yield* copyCheckoutChanges(input.copyChangesFrom, worktreePath).pipe(
             Effect.onError(() =>
               executeGit(

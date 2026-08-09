@@ -24,7 +24,9 @@ import {
   WsFeatureRpcGroup,
   type AutomationStreamEvent,
   type GitActionProgressEvent,
+  type GitCreateDetachedWorktreeResult,
   type GitRunStackedActionResult,
+  type GitWorktreeSetupProgressEvent,
   type GitHubProjectProvisionProgressEvent,
   type GitHubProjectProvisionResult,
   type OrchestrationEvent,
@@ -681,6 +683,9 @@ export class WsTransport {
 
       if (method === WS_METHODS.gitRunStackedAction) {
         return (await this.runGitActionStream(client, params, abortScope.signal)) as T;
+      }
+      if (method === WS_METHODS.gitCreateDetachedWorktree) {
+        return (await this.runWorktreeSetupStream(client, params, abortScope.signal)) as T;
       }
       if (method === WS_METHODS.projectsProvisionFromGitHub) {
         return (await this.runProjectProvisionStream(client, params, abortScope.signal)) as T;
@@ -1635,6 +1640,28 @@ export class WsTransport {
       signal ? { signal } : undefined,
     );
     if (!result) throw new Error("Git action stream completed without a final result.");
+    return result;
+  }
+
+  private async runWorktreeSetupStream(
+    client: RpcClientInstance,
+    params: unknown,
+    signal?: AbortSignal,
+  ): Promise<GitCreateDetachedWorktreeResult> {
+    let result: GitCreateDetachedWorktreeResult | null = null;
+    await this.getClientRuntime(client).runPromise(
+      Stream.runForEach(client[WS_METHODS.gitCreateDetachedWorktree](params as never), (event) =>
+        Effect.sync(() => {
+          const progressEvent = event as GitWorktreeSetupProgressEvent;
+          this.emit(WS_CHANNELS.gitWorktreeSetupProgress, progressEvent);
+          if (progressEvent.kind === "completed") {
+            result = progressEvent.result;
+          }
+        }),
+      ),
+      signal ? { signal } : undefined,
+    );
+    if (!result) throw new Error("Worktree creation completed without a final result.");
     return result;
   }
 
