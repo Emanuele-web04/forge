@@ -528,15 +528,18 @@ export function BranchToolbarBranchSelector({
     const api = readNativeApi();
     if (!dialog || !api || isDroppingStash) return;
     setIsDroppingStash(true);
-    runBranchAction(async () => {
-      try {
-        if (!dialog.info) return;
-        await api.git.stashDrop({ cwd: dialog.cwd, stashRef: dialog.info.stashRef });
-        setStashDiscardDialog(null);
-      } finally {
-        setIsDroppingStash(false);
-      }
-    });
+    runBranchAction(
+      async () => {
+        try {
+          if (!dialog.info) return;
+          await api.git.stashDrop({ cwd: dialog.cwd, stashRef: dialog.info.stashRef });
+          setStashDiscardDialog(null);
+        } finally {
+          setIsDroppingStash(false);
+        }
+      },
+      { refreshCwds: [dialog.cwd] },
+    );
   }, [isDroppingStash, runBranchAction, stashDiscardDialog]);
 
   const selectBranch = (branch: GitBranch) => {
