@@ -56,6 +56,7 @@ import {
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import {
   OrchestrationEventDeliveryRepository,
   PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -942,6 +943,224 @@ describe("ProviderCommandReactor", () => {
     expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
       state: "succeeded",
       attemptCount: 2,
+    });
+  });
+
+  it("REL-01B gate: retries a transient queued-promotion enqueue before advancing", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("message-queued-enqueue-retry");
+    const commandId = CommandId.makeUnsafe("cmd-queued-enqueue-retry");
+    const messageEventId = asEventId("evt-message-queued-enqueue-retry");
+    const persisted = await harness.persistWithoutLivePublication([
+      {
+        eventId: messageEventId,
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: null,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "survive the first enqueue failure",
+          dispatchMode: "queue",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      {
+        eventId: asEventId("evt-turn-queued-enqueue-retry"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: messageEventId,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.turn-queued",
+        payload: {
+          threadId,
+          messageId,
+          dispatchMode: "queue",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      },
+    ]);
+    const queuedEvent = persisted[1]!;
+
+    const repository = harness.queuedTurnPromotionRepository as {
+      enqueue: typeof harness.queuedTurnPromotionRepository.enqueue;
+    };
+    const enqueue = repository.enqueue;
+    let enqueueAttempts = 0;
+    repository.enqueue = (input) => {
+      enqueueAttempts += 1;
+      return enqueueAttempts === 1
+        ? Effect.fail(
+            new PersistenceSqlError({
+              operation: "QueuedTurnPromotion.enqueue",
+              detail: "injected transient enqueue failure",
+            }),
+          )
+        : enqueue(input);
+    };
+
+    await harness.startReactor();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(enqueueAttempts).toBe(2);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "survive the first enqueue failure",
+    });
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: queuedEvent.sequence,
+      }),
+    );
+    expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "succeeded",
+      attemptCount: 2,
+    });
+    const promotion = await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.getBySequence(queuedEvent.sequence),
+    );
+    expect(promotion.pipe(Option.getOrThrow)).toMatchObject({
+      state: "promoted",
+      attemptCount: 1,
+    });
+  });
+
+  it("reconciles and drains a queued-turn delivery without restart or a terminal event", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("message-queued-reconcile");
+    const commandId = CommandId.makeUnsafe("cmd-queued-reconcile");
+    const messageEventId = asEventId("evt-message-queued-reconcile");
+    const persisted = await harness.persistWithoutLivePublication([
+      {
+        eventId: messageEventId,
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: null,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "drain immediately after reconciliation",
+          dispatchMode: "queue",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      {
+        eventId: asEventId("evt-turn-queued-reconcile"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: messageEventId,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.turn-queued",
+        payload: {
+          threadId,
+          messageId,
+          dispatchMode: "queue",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      },
+    ]);
+    const queuedEvent = persisted[1]!;
+
+    const repository = harness.queuedTurnPromotionRepository as {
+      enqueue: typeof harness.queuedTurnPromotionRepository.enqueue;
+    };
+    const enqueue = repository.enqueue;
+    let rejectEnqueue = true;
+    let enqueueAttempts = 0;
+    repository.enqueue = (input) => {
+      enqueueAttempts += 1;
+      return rejectEnqueue
+        ? Effect.fail(
+            new PersistenceSqlError({
+              operation: "QueuedTurnPromotion.enqueue",
+              detail: "injected persistent enqueue failure",
+            }),
+          )
+        : enqueue(input);
+    };
+
+    await harness.startReactor();
+
+    const blockedDelivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: queuedEvent.sequence,
+      }),
+    );
+    expect(blockedDelivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "dead",
+      attemptCount: 3,
+    });
+    expect(enqueueAttempts).toBe(3);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    rejectEnqueue = false;
+    const reconciled = await Effect.runPromise(
+      harness.reactor.reconcileDelivery({
+        eventSequence: queuedEvent.sequence,
+        threadId,
+        expectedState: "dead",
+        outcome: "safe_retry",
+        reconciledBy: "test-operator",
+        note: "SQLite is writable again.",
+      }),
+    );
+
+    expect(reconciled).toMatchObject({
+      eventSequence: queuedEvent.sequence,
+      threadId,
+      outcome: "safe_retry",
+      state: "succeeded",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(enqueueAttempts).toBe(4);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "drain immediately after reconciliation",
+    });
+    const promotion = await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.getBySequence(queuedEvent.sequence),
+    );
+    expect(promotion.pipe(Option.getOrThrow)).toMatchObject({
+      state: "promoted",
+      attemptCount: 1,
     });
   });
 
