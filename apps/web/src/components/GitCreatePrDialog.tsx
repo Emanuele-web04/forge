@@ -14,7 +14,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "~/components/ui/dialog";
-import { ShortcutKbd } from "~/components/ui/shortcut-kbd";
+import { Kbd } from "~/components/ui/kbd";
 import {
   type CreatePrBrowserPreparation,
   type CreatePrDialogContext,
@@ -22,6 +22,7 @@ import {
   resolveCreatePrDialogExecution,
   resolveCreatePrDialogView,
 } from "./GitActionsControl.logic";
+import { ArrowUpRightIcon, GitPullRequestDraftIcon, GitPullRequestIcon } from "~/lib/icons";
 import { cn, isMacPlatform } from "~/lib/utils";
 
 export interface GitCreatePrDialogSubmission {
@@ -49,12 +50,14 @@ function CreatePrActionRow({
   highlighted,
   disabled,
   onClick,
+  icon,
   label,
   trailing,
 }: {
   highlighted?: boolean;
   disabled?: boolean;
   onClick: () => void;
+  icon: React.ReactNode;
   label: string;
   trailing?: React.ReactNode;
 }) {
@@ -64,13 +67,14 @@ function CreatePrActionRow({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm outline-none transition-colors",
+        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none transition-colors",
         "hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:bg-[var(--color-background-button-secondary-hover)]",
         highlighted && "bg-[var(--color-background-button-secondary-hover)]",
         disabled && "pointer-events-none opacity-50",
       )}
     >
-      <span className="truncate">{label}</span>
+      <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{icon}</span>
+      <span className="flex-1 truncate">{label}</span>
       {trailing}
     </button>
   );
@@ -152,7 +156,7 @@ export function GitCreatePrDialog({
           <input
             autoFocus
             aria-label="Pull request title"
-            className="w-full bg-transparent py-1 font-medium text-sm outline-none placeholder:text-muted-foreground/70"
+            className="w-full bg-transparent py-1 font-system-ui text-sm outline-none placeholder:text-muted-foreground/70"
             maxLength={300}
             placeholder="Title (leave empty to generate)"
             value={title}
@@ -160,7 +164,7 @@ export function GitCreatePrDialog({
           />
           <textarea
             aria-label="Pull request description"
-            className="w-full resize-none bg-transparent py-1 text-sm outline-none placeholder:text-muted-foreground/70"
+            className="w-full resize-none bg-transparent py-1 font-system-ui text-sm outline-none placeholder:text-muted-foreground/70"
             maxLength={60_000}
             placeholder="Description (leave empty to generate)"
             rows={2}
@@ -185,18 +189,21 @@ export function GitCreatePrDialog({
         <div className="border-[color:var(--color-border)] border-t p-2">
           <CreatePrActionRow
             disabled={!canCreate}
+            icon={<GitPullRequestDraftIcon />}
             label="Create draft PR"
             onClick={() => submit(true)}
           />
           <CreatePrActionRow
             highlighted
             disabled={!canCreate}
+            icon={<GitPullRequestIcon />}
             label="Create PR"
-            trailing={<ShortcutKbd shortcutLabel={isMac ? "⌘↵" : "Ctrl+↵"} />}
+            trailing={<Kbd>{isMac ? "⌘↵" : "Ctrl ↵"}</Kbd>}
             onClick={() => submit(false)}
           />
           <CreatePrActionRow
             disabled={!canOpenInBrowser}
+            icon={<ArrowUpRightIcon />}
             label="Open PR in browser"
             onClick={() =>
               onOpenInBrowser({ preparation: browserPreparation, includeLocalChanges })
