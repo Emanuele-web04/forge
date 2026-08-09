@@ -2574,6 +2574,51 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("does not let delayed tail-expansion retries override a user scroll takeover", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithBottomAttachments(),
+    });
+    let restoreScrollTo = () => {};
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      const tailImage = await waitForElement(
+        () => document.querySelector<HTMLImageElement>("img[alt='bottom-attachment-3.png']"),
+        "Unable to find the tail attachment image.",
+      );
+      await waitForImagesToLoad(document.body);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      await waitForLayout();
+
+      const scrollSpy = installImmediateScrollToSpy(scrollContainer);
+      restoreScrollTo = scrollSpy.restore;
+
+      scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+      scrollContainer.scrollTo({ top: 0, behavior: "auto" });
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      tailImage.dispatchEvent(new Event("load", { bubbles: true }));
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 320));
+      expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+      );
+      expect(
+        scrollSpy.calls.every(
+          (call) =>
+            typeof call.top !== "number" ||
+            call.top <= scrollContainer.scrollTop + AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        ),
+      ).toBe(true);
+    } finally {
+      restoreScrollTo();
+      await mounted.cleanup();
+    }
+  });
+
   // Leaving a thread you just sent in and coming back must not replay the
   // send-time anchor slide: the transcript is remounted with no scroll history,
   // so replaying it means bootstrapping at the top of the conversation and then
