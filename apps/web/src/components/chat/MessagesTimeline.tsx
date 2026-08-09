@@ -493,6 +493,8 @@ interface MessagesTimelineProps {
    * style padding, so it can account for the inset in its own end-space math.
    */
   contentInsetBottomPx?: number | undefined;
+  /** Measured distance from the composer's bottom edge to the top of its footer controls. */
+  contentInsetBottomClearancePx?: number | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -553,6 +555,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   emptyStateContent,
   contentInsetRightPx,
   contentInsetBottomPx,
+  contentInsetBottomClearancePx,
 }: MessagesTimelineProps) {
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
@@ -607,14 +610,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     if (contentInsetBottomPx) {
       style.paddingBottom = contentInsetBottomPx;
-      const maskImage = composerOverlayScrollMaskImage(contentInsetBottomPx);
+      const maskImage = composerOverlayScrollMaskImage(
+        contentInsetBottomPx,
+        contentInsetBottomClearancePx,
+      );
       if (maskImage) {
         style.maskImage = maskImage;
         style.WebkitMaskImage = maskImage;
       }
     }
     return style;
-  }, [contentInsetBottomPx, contentInsetRightPx]);
+  }, [contentInsetBottomClearancePx, contentInsetBottomPx, contentInsetRightPx]);
   const appTypographyScale = useMemo(
     () => getAppTypographyScale(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],

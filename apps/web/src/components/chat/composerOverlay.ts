@@ -36,8 +36,15 @@ export function composerTranscriptBottomInsetPx(overlayHeightPx: number): number
  */
 export const COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX = 52;
 
-/** Minimum dissolve run so a very short overlay never produces an inverted gradient. */
-const COMPOSER_OVERLAY_MIN_FADE_PX = 16;
+export function composerOverlayBottomClearancePx(
+  surfaceBottomPx: number,
+  footerTopPx: number,
+): number {
+  return Math.max(
+    COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+    Math.ceil(Math.max(0, surfaceBottomPx - footerTopPx)),
+  );
+}
 
 /**
  * Mask for the transcript scroll viewport while the composer floats over it:
@@ -46,12 +53,18 @@ const COMPOSER_OVERLAY_MIN_FADE_PX = 16;
  * also the viewport's bottom edge). Derived from the same bottom inset the viewport
  * uses for padding so both always track the measured composer height together.
  */
-export function composerOverlayScrollMaskImage(bottomInsetPx: number): string | null {
-  const overlayHeightPx = bottomInsetPx + COMPOSER_OVERLAY_TUCK_PX;
-  if (overlayHeightPx < COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX + COMPOSER_OVERLAY_MIN_FADE_PX) {
-    return null;
-  }
-  return `linear-gradient(to bottom, #000 calc(100% - ${overlayHeightPx}px), transparent calc(100% - ${COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX}px))`;
+export function composerOverlayScrollMaskImage(
+  bottomInsetPx: number,
+  bottomClearancePx = COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+): string | null {
+  if (bottomInsetPx <= 0) return null;
+  const overlayHeightPx = Math.max(0, Math.round(bottomInsetPx) + COMPOSER_OVERLAY_TUCK_PX);
+
+  const effectiveClearancePx = Math.min(
+    overlayHeightPx,
+    Math.max(COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX, Math.round(bottomClearancePx)),
+  );
+  return `linear-gradient(to bottom, #000 calc(100% - ${overlayHeightPx}px), transparent calc(100% - ${effectiveClearancePx}px))`;
 }
 
 /** Gap between the composer's top edge and floating transcript affordances. */
@@ -73,19 +86,43 @@ export function composerOverlayAffordanceBottomPx(bottomInsetPx: number): number
 export function useComposerOverlayHeight(): {
   overlayRef: (node: HTMLElement | null) => void;
   overlayHeightPx: number;
+  overlayBottomClearancePx: number;
 } {
-  const [overlayHeightPx, setOverlayHeightPx] = useState(0);
+  const [measurement, setMeasurement] = useState({
+    overlayHeightPx: 0,
+    overlayBottomClearancePx: COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+  });
   const observerRef = useRef<ResizeObserver | null>(null);
   const overlayRef = useCallback((node: HTMLElement | null) => {
     observerRef.current?.disconnect();
     observerRef.current = null;
     if (!node) {
-      setOverlayHeightPx(0);
+      setMeasurement({
+        overlayHeightPx: 0,
+        overlayBottomClearancePx: COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+      });
       return;
     }
     const commit = (height: number) => {
-      const next = Math.round(height);
-      setOverlayHeightPx((current) => (current === next ? current : next));
+      const footer = node.querySelector<HTMLElement>("[data-chat-composer-footer]");
+      const surface = footer?.closest<HTMLElement>(".chat-composer-surface");
+      const overlayBottomClearancePx =
+        footer && surface
+          ? composerOverlayBottomClearancePx(
+              surface.getBoundingClientRect().bottom,
+              footer.getBoundingClientRect().top,
+            )
+          : COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX;
+      const next = {
+        overlayHeightPx: Math.round(height),
+        overlayBottomClearancePx,
+      };
+      setMeasurement((current) =>
+        current.overlayHeightPx === next.overlayHeightPx &&
+        current.overlayBottomClearancePx === next.overlayBottomClearancePx
+          ? current
+          : next,
+      );
     };
     commit(node.getBoundingClientRect().height);
     if (typeof ResizeObserver === "undefined") {
@@ -100,5 +137,5 @@ export function useComposerOverlayHeight(): {
     observer.observe(node);
     observerRef.current = observer;
   }, []);
-  return { overlayRef, overlayHeightPx };
+  return { overlayRef, ...measurement };
 }
