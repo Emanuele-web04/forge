@@ -247,6 +247,43 @@ describe("git query invalidation", () => {
     unsubscribe();
   });
 
+  it("cancels a cold query's initial fetch instead of adopting its pre-mutation result", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/cold-cache";
+    const statusKey = gitQueryKeys.status(cwd);
+    let branch = "main";
+    let statusCalls = 0;
+    const firstStatusGate = deferredVoid();
+    // No initial cache data: the observer's mount fetch is the query's first ever fetch,
+    // which refetchQueries' cancelRefetch alone would join instead of cancelling.
+    const observer = new QueryObserver(queryClient, {
+      queryKey: statusKey,
+      queryFn: async () => {
+        statusCalls += 1;
+        const observed = branch;
+        if (statusCalls === 1) {
+          await firstStatusGate.promise;
+        }
+        return { branch: observed };
+      },
+      retry: false,
+      staleTime: Number.POSITIVE_INFINITY,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    await vi.waitFor(() => expect(statusCalls).toBe(1));
+
+    // A mutation settles while the initial fetch is still reading pre-mutation state.
+    branch = "feature";
+    await refreshGitActionAvailability(queryClient, cwd);
+
+    expect(statusCalls).toBe(2);
+    expect(queryClient.getQueryData(statusKey)).toEqual({ branch: "feature" });
+    firstStatusGate.resolve();
+    await Promise.resolve();
+    expect(queryClient.getQueryData(statusKey)).toEqual({ branch: "feature" });
+    unsubscribe();
+  });
+
   it("serializes active expensive Git detail reads after status", async () => {
     const queryClient = new QueryClient();
     const cwd = "/repo/serialized";

@@ -5,7 +5,7 @@
 // menu-item-style affordance inside a ComboboxPopup, not a generic action.
 import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
 import { CentralIcon } from "~/lib/central-icons";
@@ -25,8 +25,7 @@ import {
   gitBranchesQueryOptions,
   gitQueryKeys,
   gitStatusQueryOptions,
-  invalidateGitQueries,
-  invalidateGitQueriesForCwds,
+  refreshGitQueriesScoped,
 } from "../lib/gitReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { parsePullRequestReference } from "../pullRequestReference";
@@ -178,14 +177,19 @@ function handleCheckoutError(
     cwd: string;
     fallbackTitle: string;
     onSuccess: () => void;
-    queryClient: QueryClient;
-    runBranchAction: (action: () => Promise<void>) => void;
+    runBranchAction: (
+      action: () => Promise<void>,
+      options?: { readonly refreshCwds?: readonly string[] },
+    ) => void;
     onRequestDiscardStash: (input: { cwd: string }) => void;
   },
 ): void {
+  // Recovery always acts on input.cwd, which can differ from the selector's own checkout
+  // (e.g. "Stash & Switch" from a dedicated worktree back to the project root), so every
+  // retry passes it as the awaited refresh scope instead of relying on the default.
+  const retryRefreshOptions = { refreshCwds: [input.cwd] } as const;
   const retryStashAndCheckout = async (): Promise<void> => {
     await input.api.git.stashAndCheckout({ cwd: input.cwd, branch: input.branch });
-    await invalidateGitQueriesForCwds(input.queryClient, [input.cwd]);
     input.onSuccess();
   };
 
@@ -210,7 +214,7 @@ function handleCheckoutError(
             } catch (retryError) {
               handleCheckoutError(retryError, input);
             }
-          });
+          }, retryRefreshOptions);
         },
       },
     });
@@ -232,7 +236,7 @@ function handleCheckoutError(
             } catch (retryError) {
               handleCheckoutError(retryError, input);
             }
-          });
+          }, retryRefreshOptions);
         },
       },
     });
@@ -263,7 +267,6 @@ function handleCheckoutError(
                 return;
               }
               if (isStashConflictError(stashError)) {
-                await invalidateGitQueriesForCwds(input.queryClient, [input.cwd]);
                 input.onSuccess();
                 addBranchRecoveryToast({
                   type: "warning",
@@ -300,7 +303,7 @@ function handleCheckoutError(
                 data: { copyText: toBranchActionErrorMessage(stashError) },
               });
             }
-          });
+          }, retryRefreshOptions);
         },
       },
     });
@@ -480,8 +483,7 @@ export function BranchToolbarBranchSelector({
       // repos (checked-out markers in sibling worktrees) refresh in the background so a
       // slow unrelated worktree cannot hold the selector disabled.
       const awaitedCwds = options?.refreshCwds ?? (branchCwd ? [branchCwd] : []);
-      await invalidateGitQueriesForCwds(queryClient, awaitedCwds).catch(() => undefined);
-      void invalidateGitQueries(queryClient, { excludeCwds: awaitedCwds }).catch(() => undefined);
+      await refreshGitQueriesScoped(queryClient, awaitedCwds).catch(() => undefined);
     });
   };
 
@@ -591,7 +593,6 @@ export function BranchToolbarBranchSelector({
                 worktreePath: selectionTarget.nextWorktreePath,
               });
             },
-            queryClient,
             runBranchAction,
             onRequestDiscardStash: openStashDiscardDialog,
           });
@@ -646,7 +647,6 @@ export function BranchToolbarBranchSelector({
               setBranchQuery("");
               setCreateBranchName("");
             },
-            queryClient,
             runBranchAction,
             onRequestDiscardStash: openStashDiscardDialog,
           });
