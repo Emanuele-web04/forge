@@ -970,16 +970,14 @@ export const GIT_TEXT_GENERATION_PICKER_PROVIDERS: readonly GitTextGenerationDef
 // provider's OWN registered default is always a valid selectable option for
 // that provider, so it is always offered.
 // Hoisted because every input is a module constant.
-const GIT_TEXT_GENERATION_DEFAULT_OPTIONS = GIT_TEXT_GENERATION_PICKER_PROVIDERS.map(
-  (provider) => {
-    const slug = defaultGitTextGenerationSelectionFor(provider).model;
-    return {
-      provider,
-      slug,
-      name: formatProviderModelOptionName({ provider, slug }),
-    };
-  },
-);
+const GIT_TEXT_GENERATION_DEFAULT_OPTIONS = GIT_TEXT_GENERATION_PICKER_PROVIDERS.map((provider) => {
+  const slug = defaultGitTextGenerationSelectionFor(provider).model;
+  return {
+    provider,
+    slug,
+    name: formatProviderModelOptionName({ provider, slug }),
+  };
+});
 
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,

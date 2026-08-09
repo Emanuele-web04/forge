@@ -129,8 +129,7 @@ export const DEFAULT_SERVER_SETTINGS_VIEW: ServerSettingsView = Schema.decodeSyn
 
 const BoundedJson = Schema.Json.check(
   Schema.makeFilter(
-    (value: Schema.Json) =>
-      value !== null && jsonDepth(value) <= 20 && jsonBytes(value) <= 262_144,
+    (value: Schema.Json) => value !== null && jsonDepth(value) <= 20 && jsonBytes(value) <= 262_144,
   ),
 );
 
