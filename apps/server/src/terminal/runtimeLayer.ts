@@ -1,6 +1,7 @@
 import { Effect, FileSystem, Layer, Path } from "effect";
 
 import { TerminalManagerLive } from "./Layers/Manager";
+import { selectPtyAdapterRuntime, type PtyAdapterRuntime } from "./runtimeSelection";
 import { PtyAdapter } from "./Services/PTY";
 
 type RuntimePtyAdapterLoader = {
@@ -10,11 +11,14 @@ type RuntimePtyAdapterLoader = {
 const runtimePtyAdapterLoaders = {
   bun: () => import("./Layers/BunPTY"),
   node: () => import("./Layers/NodePTY"),
-} satisfies Record<string, () => Promise<RuntimePtyAdapterLoader>>;
+} satisfies Record<PtyAdapterRuntime, () => Promise<RuntimePtyAdapterLoader>>;
 
 const makeRuntimePtyAdapterLayer = () =>
   Effect.gen(function* () {
-    const runtime = process.versions.bun !== undefined ? "bun" : "node";
+    const runtime = selectPtyAdapterRuntime({
+      platform: process.platform,
+      runtime: process.versions.bun !== undefined ? "bun" : "node",
+    });
     const loader = runtimePtyAdapterLoaders[runtime];
     const ptyAdapterModule = yield* Effect.promise<RuntimePtyAdapterLoader>(loader);
     return ptyAdapterModule.layer;
