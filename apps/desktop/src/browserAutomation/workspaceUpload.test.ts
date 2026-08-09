@@ -1,5 +1,15 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative } from "node:path";
 
@@ -129,15 +139,20 @@ describe("workspace-confined browser upload", () => {
 
   it("rejects traversal and symlinks whose final target leaves the workspace", async () => {
     const { base, workspaceRoot } = await workspaceFixture();
-    const outside = join(base, "outside.txt");
-    await writeFile(outside, "secret");
-    await symlink(outside, join(workspaceRoot, "fixtures", "outside-link.txt"));
+    const outsideDirectory = join(base, "outside");
+    await mkdir(outsideDirectory);
+    await writeFile(join(outsideDirectory, "outside.txt"), "secret");
+    await symlink(
+      outsideDirectory,
+      join(workspaceRoot, "fixtures", "outside-link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     await expect(
-      resolveWorkspaceUploadFiles(workspaceRoot, ["../outside.txt"]),
+      resolveWorkspaceUploadFiles(workspaceRoot, ["../outside/outside.txt"]),
     ).rejects.toMatchObject({ browserError: { code: "BrowserUploadPathOutsideWorkspace" } });
     await expect(
-      resolveWorkspaceUploadFiles(workspaceRoot, ["fixtures/outside-link.txt"]),
+      resolveWorkspaceUploadFiles(workspaceRoot, ["fixtures/outside-link/outside.txt"]),
     ).rejects.toMatchObject({ browserError: { code: "BrowserUploadPathOutsideWorkspace" } });
   });
 
@@ -230,7 +245,7 @@ describe("workspace-confined browser upload", () => {
         // staging have completed, but the fake Chromium consumer has not opened
         // the path yet.
         await rm(workspaceFile);
-        await symlink(outside, workspaceFile);
+        await link(outside, workspaceFile);
         bytesSeenByChromium = await readFile(stagedPath, "utf8");
       },
       { userDataRoot: join(base, "user-data") },

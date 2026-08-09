@@ -1,3 +1,5 @@
+import * as Path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,16 +12,20 @@ import {
 
 describe("canary tooling", () => {
   it("keeps managed source and Canary data separate from Stable", () => {
+    const home = Path.resolve("/Users/tester", ".synara-canary");
+    const source = Path.resolve("/Users/tester", ".cache", "synara-canary", "source");
     expect(resolveCanaryPaths({}, "/Users/tester")).toEqual({
-      home: "/Users/tester/.synara-canary",
-      source: "/Users/tester/.cache/synara-canary/source",
-      state: "/Users/tester/.synara-canary/canary-state.json",
-      pid: "/Users/tester/.synara-canary/canary.pid",
-      log: "/Users/tester/.synara-canary/canary.log",
+      home,
+      source,
+      state: Path.join(home, "canary-state.json"),
+      pid: Path.join(home, "canary.pid"),
+      log: Path.join(home, "canary.log"),
     });
   });
 
   it("supports explicit path overrides", () => {
+    const home = Path.resolve("/tmp/canary-data");
+    const source = Path.resolve("/tmp/canary-source");
     expect(
       resolveCanaryPaths(
         {
@@ -29,11 +35,11 @@ describe("canary tooling", () => {
         "/Users/tester",
       ),
     ).toEqual({
-      home: "/tmp/canary-data",
-      source: "/tmp/canary-source",
-      state: "/tmp/canary-data/canary-state.json",
-      pid: "/tmp/canary-data/canary.pid",
-      log: "/tmp/canary-data/canary.log",
+      home,
+      source,
+      state: Path.join(home, "canary-state.json"),
+      pid: Path.join(home, "canary.pid"),
+      log: Path.join(home, "canary.log"),
     });
   });
 
