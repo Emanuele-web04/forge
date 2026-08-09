@@ -9,6 +9,7 @@ const importRuntimeModule = (specifier: string): Promise<unknown> =>
 
 interface ReadonlyStatement {
   get: (...params: ReadonlyArray<unknown>) => unknown;
+  all?: (...params: ReadonlyArray<unknown>) => unknown;
 }
 
 interface ReadonlyDatabase {
@@ -72,4 +73,47 @@ export async function readItemTableValues(input: {
     }
   }
   return result;
+}
+
+/**
+ * Run one bounded, read-only query against a provider-owned SQLite database.
+ * Provider databases are allowed to be absent, locked, or on an older schema;
+ * callers receive an empty result instead of turning a usage refresh into an
+ * app error. The SQL is owned by the caller and never contains credentials.
+ * A failed open/query surfaces as `error` so callers can distinguish "empty
+ * database" from "database could not be read" (locked, corrupt, wrong schema).
+ */
+export async function readSqliteRows(input: {
+  dbPath: string;
+  sql: string;
+  params?: ReadonlyArray<unknown>;
+}): Promise<{
+  rows: ReadonlyArray<Record<string, unknown>>;
+  error?: string;
+}> {
+  let database: ReadonlyDatabase | null = null;
+  try {
+    database = await openReadOnlyDatabase(input.dbPath);
+    const statement = database.query?.(input.sql) ?? database.prepare?.(input.sql);
+    if (!statement?.all) {
+      return { rows: [] };
+    }
+    const rows = statement.all(...(input.params ?? []));
+    return {
+      rows: Array.isArray(rows)
+        ? rows.filter(
+            (row): row is Record<string, unknown> =>
+              row !== null && typeof row === "object" && !Array.isArray(row),
+          )
+        : [],
+    };
+  } catch (cause) {
+    return { rows: [], error: cause instanceof Error ? cause.message : String(cause) };
+  } finally {
+    try {
+      database?.close();
+    } catch {
+      // ignore close failures
+    }
+  }
 }
