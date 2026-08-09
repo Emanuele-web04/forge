@@ -2070,9 +2070,9 @@ function DesktopProjectBootstrap() {
   const projects = useStore((store) => store.projects);
   const threads = useStore(selectAllThreads);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const recoveryAttemptGateRef = useRef<
-    ReturnType<typeof createDesktopProjectRecoveryAttemptGate> | null
-  >(null);
+  const recoveryAttemptGateRef = useRef<ReturnType<
+    typeof createDesktopProjectRecoveryAttemptGate
+  > | null>(null);
   if (recoveryAttemptGateRef.current === null) {
     recoveryAttemptGateRef.current = createDesktopProjectRecoveryAttemptGate();
   }
