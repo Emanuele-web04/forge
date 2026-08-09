@@ -422,6 +422,14 @@ function findEffectiveShortcutForCommand(
   command: KeybindingCommand,
   options?: ShortcutMatchOptions,
 ): KeybindingShortcut | null {
+  return findEffectiveKeybindingForCommand(keybindings, command, options)?.shortcut ?? null;
+}
+
+export function findEffectiveKeybindingForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): ResolvedKeybindingRule | null {
   const platform = resolvePlatform(options);
   const context = resolveContext(options);
   const claimedShortcuts = new Set<string>();
@@ -438,11 +446,36 @@ function findEffectiveShortcutForCommand(
 
     claimedShortcuts.add(conflictKey);
     if (binding.command === command) {
-      return binding.shortcut;
+      return binding;
     }
   }
 
   return null;
+}
+
+export function resolveKeybindingForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): ResolvedKeybindingRule | null {
+  return (
+    findEffectiveKeybindingForCommand(keybindings, command, options) ??
+    findEffectiveKeybindingForCommand(getFallbackBindings(keybindings), command, options)
+  );
+}
+
+export function formatKeybindingWhenExpression(node: KeybindingWhenNode | undefined): string {
+  if (!node) return "";
+  switch (node.type) {
+    case "identifier":
+      return node.name;
+    case "not":
+      return `!(${formatKeybindingWhenExpression(node.node)})`;
+    case "and":
+      return `(${formatKeybindingWhenExpression(node.left)} && ${formatKeybindingWhenExpression(node.right)})`;
+    case "or":
+      return `(${formatKeybindingWhenExpression(node.left)} || ${formatKeybindingWhenExpression(node.right)})`;
+  }
 }
 
 function matchesCommandShortcut(

@@ -81,7 +81,7 @@ function ShortcutsDialogContent(props: {
   return (
     <>
       <DialogHeader className="pb-2">
-        <DialogTitle className="text-base">Keyboard shortcuts</DialogTitle>
+        <DialogTitle className="text-base">Keybindings</DialogTitle>
         <DialogDescription className="text-xs">
           Reflects the bindings active in your current context.
         </DialogDescription>

@@ -93,7 +93,6 @@ import {
   PullRequestsListResult,
   PullRequestsUnavailableError,
 } from "./pullRequests";
-import { KeybindingRule } from "./keybindings";
 import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
@@ -172,6 +171,7 @@ import {
   ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
+  ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
   ServerVoicePrewarmInput,
   ServerVoicePrewarmResult,
@@ -847,7 +847,7 @@ export const WsServerGenerateAutomationIntentRpc = Rpc.make(
 );
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
-  payload: KeybindingRule,
+  payload: ServerUpsertKeybindingInput,
   success: ServerUpsertKeybindingResult,
   error: WsRpcError,
 });
