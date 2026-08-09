@@ -2632,9 +2632,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const onPhase = options?.onPhase ?? (() => Effect.void);
         const newBranch = input.newBranch ?? null;
-        if (newBranch) {
-          yield* onPhase("branch");
-        }
         const refResult = yield* executeGit(
           "GitCore.createDetachedWorktree.resolveRef",
           input.cwd,
@@ -2675,6 +2672,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         // The branch is created before the (slow) checkout so progress phases
         // reflect the real boundary between the two.
         if (newBranch) {
+          yield* onPhase("branch");
           yield* executeGit("GitCore.createDetachedWorktree.createBranch", input.cwd, [
             "branch",
             newBranch,

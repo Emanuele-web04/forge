@@ -1329,6 +1329,36 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("does not report branch creation before preliminary validation", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const phases: string[] = [];
+
+        const result = yield* Effect.exit(
+          core.createDetachedWorktree(
+            {
+              cwd: tmp,
+              ref: "refs/heads/missing",
+              path: path.join(tmp, "wt-invalid-ref"),
+              newBranch: "synara/notstarted",
+            },
+            {
+              onPhase: (phase) =>
+                Effect.sync(() => {
+                  phases.push(phase);
+                }),
+            },
+          ),
+        );
+
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(phases).toEqual([]);
+        expect(yield* git(tmp, ["branch", "--list", "synara/notstarted"])).toBe("");
+      }),
+    );
+
     it.effect("deletes the pre-created branch when worktree add fails", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
