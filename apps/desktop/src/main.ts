@@ -90,6 +90,10 @@ import {
   type UpdateInstallPreparationAttempt,
 } from "./updateInstallPreparation";
 import {
+  makeDeferredDesktopQuitIntentCoordinator,
+  settleDeferredDesktopQuitAfterUpdaterFailure,
+} from "./desktopQuitIntent";
+import {
   hasPendingDesktopMigrationRecovery,
   requiresDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
@@ -334,6 +338,7 @@ let isQuitting = false;
 let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
+const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForMigrationRecovery = false;
 let desktopShutdownComplete = false;
@@ -800,6 +805,45 @@ function clearUpdaterInstallInFlightAfterError(input?: {
   return preparationCancelled;
 }
 
+function deferDesktopQuitUntilUpdaterSettles(reason: string): void {
+  const deferred = deferredDesktopQuitIntent.defer(reason);
+  writeDesktopLogHeader(
+    deferred
+      ? `${reason} deferred until updater install preparation settles`
+      : `${reason} waiting for previously deferred quit after updater install preparation`,
+  );
+}
+
+function replayDeferredDesktopQuitAfterUpdaterSettles(): boolean {
+  const outcome = settleDeferredDesktopQuitAfterUpdaterFailure(deferredDesktopQuitIntent, {
+    replayQuit: (intent) => {
+      writeDesktopLogHeader(`${intent.reason} replaying deferred quit after updater settled`);
+      requestGracefulAppQuit(intent.reason);
+    },
+    // Preflight callers only need to replay a pending quit. Full install
+    // recovery separately decides whether the stopped backend must be resumed.
+    resumeApp: () => undefined,
+  });
+  return outcome !== "resumed-app";
+}
+
+function recoverDesktopAfterUpdaterInstallFailure(): void {
+  if (replayDeferredDesktopQuitAfterUpdaterSettles()) return;
+
+  // A second updater failure signal can race the replay above (for example,
+  // before-quit handoff validation followed by the cancelled preparation).
+  // Once graceful shutdown owns the lifecycle, do not revive the backend or
+  // enqueue another quit chain.
+  if (desktopShutdownPromise !== null || isQuitting) {
+    return;
+  }
+
+  // The backend was already stopped for install preparation. When no quit was
+  // requested in the meantime, restore the live app and its update polling.
+  startBackend();
+  scheduleUpdatePoll();
+}
+
 function clearUpdateInstallWatchdogTimer(): void {
   if (updateInstallWatchdogTimer) {
     clearTimeout(updateInstallWatchdogTimer);
@@ -882,13 +926,6 @@ function armInstallWatchdog(): void {
     }
     const failedHandoff = activeUpdateInstallHandoff;
     clearUpdaterInstallInFlightAfterError();
-    // The backend was already stopped before quitAndInstall(); since the app is
-    // not actually quitting, bring it back so the recovered app is functional
-    // (renderer reconnects) instead of a zombie window with a dead backend.
-    startBackend();
-    // Polling was stopped before the install attempt; resume it so background
-    // update checks keep running after this recovery.
-    scheduleUpdatePoll();
     const consecutiveFailures = recordInstallMarkerFailure(new Date().toISOString(), failedHandoff);
     setUpdateState({
       ...reduceDesktopUpdateStateOnInstallFailure(
@@ -900,6 +937,7 @@ function armInstallWatchdog(): void {
     console.error(
       "[desktop-updater] quitAndInstall did not exit the app within the watchdog window; surfacing manual-download fallback.",
     );
+    recoverDesktopAfterUpdaterInstallFailure();
   }, AUTO_UPDATE_INSTALL_WATCHDOG_MS);
 }
 
@@ -2807,8 +2845,6 @@ async function runDownloadedUpdateInstall(
     const consecutiveFailures = markerWritten
       ? recordInstallMarkerFailure(new Date().toISOString(), handoffExpectation)
       : updateState.installFailureCount;
-    startBackend();
-    scheduleUpdatePoll();
     setUpdateState({
       ...(artifactInvalidated
         ? reduceDesktopUpdateStateOnDownloadFailure(updateState, message)
@@ -2816,6 +2852,7 @@ async function runDownloadedUpdateInstall(
       installFailureCount: consecutiveFailures,
     });
     console.error(`[desktop-updater] Failed to install update: ${message}`);
+    recoverDesktopAfterUpdaterInstallFailure();
     return { accepted: true, completed: false };
   }
 }
@@ -2838,6 +2875,10 @@ async function installDownloadedUpdate(): Promise<{
   } finally {
     if (!isUpdaterQuitAndInstallInFlight && isUpdaterInstallPreparing) {
       clearUpdaterInstallInFlightAfterError();
+      // Validation can reject a stale or changed artifact before the backend is
+      // stopped and before the main install try/catch starts. A quit deferred
+      // during that asynchronous validation still has to be replayed.
+      replayDeferredDesktopQuitAfterUpdaterSettles();
     }
     updateInstallPreparation.release(preparationAttempt);
   }
@@ -2996,10 +3037,6 @@ function configureAutoUpdater(): void {
       errorContext === "install"
         ? recordInstallMarkerFailure(new Date().toISOString(), failedHandoff)
         : updateState.installFailureCount;
-    if (errorContext === "install" && !installPreparationPending) {
-      startBackend();
-      scheduleUpdatePoll();
-    }
     if (!updateCheckInFlight && !updateDownloadInFlight) {
       setUpdateState({
         status: "error",
@@ -3012,6 +3049,9 @@ function configureAutoUpdater(): void {
       });
     }
     console.error(`[desktop-updater] Updater error: ${message}`);
+    if (errorContext === "install" && !installPreparationPending) {
+      recoverDesktopAfterUpdaterInstallFailure();
+    }
   });
   autoUpdater.on("download-progress", (progress) => {
     const percent = Math.floor(progress.percent);
@@ -3553,7 +3593,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
 
 function requestGracefulAppQuit(reason: string): void {
   if (isUpdaterInstallPreparing) {
-    writeDesktopLogHeader(`${reason} waiting for updater quit-and-install`);
+    deferDesktopQuitUntilUpdaterSettles(reason);
     return;
   }
 
@@ -4393,8 +4433,6 @@ app.on("before-quit", (event) => {
         new Date().toISOString(),
         failedHandoff,
       );
-      startBackend();
-      scheduleUpdatePoll();
       setUpdateState({
         ...reduceDesktopUpdateStateOnInstallFailure(
           updateState,
@@ -4405,7 +4443,14 @@ app.on("before-quit", (event) => {
       console.error(
         `[desktop-updater] Refused mismatched install handoff during quit: ${formatErrorMessage(error)}`,
       );
+      recoverDesktopAfterUpdaterInstallFailure();
       return;
+    }
+    // Keep any deferred plain-quit intent until the process actually exits.
+    // before-quit is not proof of a successful updater handoff: the watchdog
+    // can still discover that quitAndInstall left this process alive.
+    if (deferredDesktopQuitIntent.observeUpdaterQuitAttempt()) {
+      writeDesktopLogHeader("deferred quit preserved through updater quit-and-install attempt");
     }
     writeDesktopLogHeader("before-quit allowing updater quit-and-install");
     return;
@@ -4413,7 +4458,7 @@ app.on("before-quit", (event) => {
 
   if (isUpdaterInstallPreparing) {
     // Keep user/system quits from preempting the pending updater install with a plain app.quit().
-    writeDesktopLogHeader("before-quit waiting for updater quit-and-install");
+    deferDesktopQuitUntilUpdaterSettles("before-quit");
     event.preventDefault();
     return;
   }
