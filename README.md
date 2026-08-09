@@ -103,6 +103,17 @@ Forkara proudly supports every kind of fork:
 - 🎵 Tuning forks
 - 🔥 Pitchforks (for Twitter discourse only)
 
+## Fork Glossary
+
+- **Git fork**: A real Git hosting term for a copy of a repository under another account or organization, usually used to propose changes back upstream.
+- **Clone**: A real Git term for a local copy of a repository; Forkara strongly respects the difference while making jokes about it anyway.
+- **Dinner fork**: A parody fork used for moving food from plate to mouth, with no known pull request workflow.
+- **Tuning fork**: A parody fork that produces a pitch when struck, useful for finding the right note and not for resolving merge conflicts.
+- **Pitchfork**: A parody fork for hay, mobs, and dramatic project governance discussions.
+- **Spork**: A parody hybrid fork-spoon that Forkara lists on the roadmap because some forks refuse to pick one abstraction.
+- **Chess fork**: A real chess tactic where one piece attacks multiple targets; in Forkara terms, it is the board-game cousin of parallel worktrees.
+- **Process fork**: A real operating-system term for creating a new process from an existing one, which is much closer to copying than cutlery.
+
 ---
 
 ## Philosophy
