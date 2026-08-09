@@ -35,14 +35,14 @@ export function useRadioGroupKeyboardNav<T extends string>({
 }): (itemValue: T) => RadioGroupItemProps {
   const itemNodesRef = useRef(new Map<T, HTMLButtonElement>());
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, itemValue: T) => {
     const delta = ARROW_KEY_DELTAS[event.key];
     if (!delta || values.length === 0) return;
     event.preventDefault();
     // A missing selection (indexOf -1) starts navigation from the first option.
-    const currentIndex = Math.max(0, values.indexOf(value));
+    const currentIndex = Math.max(0, values.indexOf(itemValue));
     const nextValue = values[(currentIndex + delta + values.length) % values.length];
-    if (nextValue === undefined || nextValue === value) return;
+    if (nextValue === undefined || nextValue === itemValue) return;
     onValueChange(nextValue);
     itemNodesRef.current.get(nextValue)?.focus();
   };
@@ -56,6 +56,6 @@ export function useRadioGroupKeyboardNav<T extends string>({
       }
     },
     tabIndex: itemValue === value ? 0 : -1,
-    onKeyDown: handleKeyDown,
+    onKeyDown: (event) => handleKeyDown(event, itemValue),
   });
 }
