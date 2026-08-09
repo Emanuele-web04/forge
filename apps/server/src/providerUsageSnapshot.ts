@@ -989,6 +989,10 @@ async function getCachedProviderUsageSnapshot(input: {
   return pending;
 }
 
+// Exposed as the `serverGetProviderUsageSnapshot` WS RPC. The web client no
+// longer calls it (enrichment is server-side via loadLocalProviderUsageSnapshot
+// and the batch all-provider fetch), but the endpoint is retained deliberately
+// for API stability and diagnostics.
 export const getProviderUsageSnapshot = Effect.fn(function* (
   input: ServerGetProviderUsageSnapshotInput,
 ) {
@@ -1010,22 +1014,6 @@ export const getProviderUsageSnapshot = Effect.fn(function* (
     catch: () => null,
   });
 });
-
-// Reused by the live-usage batch (providerUsage/index.ts) to enrich live snapshots with the
-// locally-derived 24h/7d/30d token-total lines for providers that keep on-disk archives.
-export async function loadLocalProviderUsageLines(input: {
-  provider: ProviderKind;
-  homeDir: string;
-  homePath?: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<ReadonlyArray<ServerProviderUsageLine>> {
-  try {
-    const snapshot = await getCachedProviderUsageSnapshot(input);
-    return snapshot?.usageLines ?? [];
-  } catch {
-    return [];
-  }
-}
 
 export async function loadLocalProviderUsageSnapshot(input: {
   provider: ProviderKind;

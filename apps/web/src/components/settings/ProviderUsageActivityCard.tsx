@@ -150,7 +150,12 @@ export function ProviderUsageActivityCard({
   );
   const hasPartialCost = costCoverage.some((coverage) => coverage !== "complete");
   const tokenCoverage = usage.map((entry) => tokenCoverageOf(entry));
-  const hasReportedTokens = tokenCoverage.some((coverage) => coverage !== "not-reported");
+  // A provider with token totals but a not-reported coverage (e.g. its only
+  // tokens come from deleted-thread archives) still reports values; the summary
+  // must agree with the provider row instead of saying "Not reported".
+  const hasReportedTokens = usage.some(
+    (entry) => entry.tokensReported || tokenCoverageOf(entry) !== "not-reported",
+  );
   const hasPartialTokens = tokenCoverage.some((coverage) => coverage === "partial");
   const tokenSummary = !hasReportedTokens
     ? "Not reported"

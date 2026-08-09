@@ -136,4 +136,31 @@ describe("ProviderUsageActivityCard", () => {
     expect(markup).toContain("Actual usage is unavailable.");
     expect(markup).toContain("Try again");
   });
+
+  it("shows archive-only token totals instead of a not-reported summary", () => {
+    // A provider whose only tokens come from deleted-thread archives has
+    // tokensReported true but tokenCoverage not-reported; the summary must
+    // agree with the provider row and show the total.
+    const markup = renderToStaticMarkup(
+      <ProviderUsageActivityCard
+        usage={[
+          {
+            ...usage[0]!,
+            tokens: 500,
+            tokensReported: true,
+            tokenCoverage: "not-reported",
+            turnCount: 0,
+            threadCount: 1,
+            costUsd: 0,
+            models: [{ provider: "opencode", model: "archive-model", tokens: 500, percent: 100 }],
+            history: [{ day: "2026-08-08", tokens: 500, turnCount: 0, threadCount: 1, costUsd: 0 }],
+          },
+        ]}
+        isLoading={false}
+      />,
+    );
+
+    expect(markup).toContain("500 tokens");
+    expect(markup).not.toContain("Not reported");
+  });
 });

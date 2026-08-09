@@ -32,20 +32,6 @@ function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProvi
   };
 }
 
-function fallbackSnapshot(): ServerProviderUsageSnapshot {
-  return snapshot({
-    limits: [
-      {
-        window: "Weekly",
-        usedPercent: 64,
-        resetsAt: "2026-06-15T12:00:00.000Z",
-        windowDurationMins: 10080,
-      },
-    ],
-    usageLines: [{ label: "24h", value: "123M tokens", subtitle: "12 recent sessions" }],
-  });
-}
-
 function renderWithQueryClient(queryClient: QueryClient, node: ReactNode) {
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>,
@@ -112,7 +98,6 @@ describe("useProviderUsageSummary", () => {
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot({ status: "needs-auth", detail: "Sign in with claude to see usage." }),
     ]);
-    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent"), fallbackSnapshot());
 
     const summary = readProviderUsageSummary({ queryClient });
 
@@ -123,7 +108,6 @@ describe("useProviderUsageSummary", () => {
   it("does not present local archive rows as account usage when no live snapshot exists", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
-    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent"), fallbackSnapshot());
 
     const summary = readProviderUsageSummary({ queryClient });
 
@@ -216,7 +200,6 @@ describe("useProviderUsageSummary", () => {
   it("does not show fallback rows when an explicit provider card snapshot is non-ok", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
-    queryClient.setQueryData(serverQueryKeys.providerUsage("claudeAgent"), fallbackSnapshot());
 
     const summary = readProviderUsageSummary({
       queryClient,

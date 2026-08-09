@@ -1729,6 +1729,86 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("marks a provider partial when evidenced and non-evidenced turns land in different model rows", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-coverage-split', 'project-profile', 'Coverage Split',
+            '{"provider":"cursor","model":"cursor-base"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, state, requested_at, checkpoint_files_json
+          ) VALUES
+            ('thread-coverage-split', 'turn-split-a', 'message-split-a', 'completed', '2026-06-15T09:01:00.000Z', '[]'),
+            ('thread-coverage-split', 'turn-split-b', 'message-split-b', 'completed', '2026-06-15T09:11:00.000Z', '[]')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, dispatch_origin,
+            is_streaming, source, created_at, updated_at
+          ) VALUES
+            ('message-split-a', 'thread-coverage-split', 'turn-split-a', 'user', 'a', NULL, 0, 'native', '2026-06-15T09:01:00.000Z', '2026-06-15T09:01:00.000Z'),
+            ('message-split-b', 'thread-coverage-split', 'turn-split-b', 'user', 'b', NULL, 0, 'native', '2026-06-15T09:11:00.000Z', '2026-06-15T09:11:00.000Z')
+        `;
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id, aggregate_kind, stream_id, stream_version, event_type,
+            occurred_at, actor_kind, payload_json, metadata_json
+          ) VALUES
+            (
+              'event-split-a', 'thread', 'thread-coverage-split', 1,
+              'thread.turn-start-requested', '2026-06-15T09:01:00.000Z', 'client',
+              '{"threadId":"thread-coverage-split","messageId":"message-split-a","modelSelection":{"provider":"cursor","model":"cursor-model-a"}}', '{}'
+            ),
+            (
+              'event-split-b', 'thread', 'thread-coverage-split', 2,
+              'thread.turn-start-requested', '2026-06-15T09:11:00.000Z', 'client',
+              '{"threadId":"thread-coverage-split","messageId":"message-split-b","modelSelection":{"provider":"cursor","model":"cursor-model-b"}}', '{}'
+            )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'split-turn-a', 'thread-coverage-split', 'turn-split-a',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":1.00}', 1, '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'split-evidence-a', 'thread-coverage-split', 'turn-split-a',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":100,"provider":"cursor"}', 2, '2026-06-15T09:06:00.000Z'
+            ),
+            (
+              'split-turn-b', 'thread-coverage-split', 'turn-split-b',
+              'info', 'turn.completed', 'Turn completed',
+              '{}', 3, '2026-06-15T09:15:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage?.find((entry) => entry.provider === "cursor");
+        // turn-split-a (cursor-model-a) reports tokens; turn-split-b
+        // (cursor-model-b) does not. They land in different rows, so the
+        // provider must still aggregate to partial — never complete.
+        expect(usage).toMatchObject({ turnCount: 2, tokenCoverage: "partial" });
+      }),
+    );
+  });
+
   it("computes cumulative token deltas before replacing modelUsage turns so nothing is double counted", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {

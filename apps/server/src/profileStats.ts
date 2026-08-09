@@ -528,6 +528,11 @@ interface ProviderUsageAccumulator {
   costUsd: number | null;
   costCoverage: "complete" | "partial" | "not-reported";
   tokenCoverage: "complete" | "partial" | "not-reported";
+  // Provider-level turn evidence counts, accumulated across every row so the
+  // coverage state is derived once over the whole provider instead of being
+  // order-dependent per (day, provider, model) row.
+  tokenMissingCount: number;
+  tokenReportedCount: number;
   lastUsedAt: string | null;
   readonly models: Map<string, ProviderUsageModelAccumulator>;
   readonly history: Map<string, ProviderUsageHistoryAccumulator>;
@@ -579,6 +584,8 @@ function buildProviderUsage(
       costUsd: null,
       costCoverage: "not-reported",
       tokenCoverage: "not-reported",
+      tokenMissingCount: 0,
+      tokenReportedCount: 0,
       lastUsedAt: null,
       models: new Map(),
       history: new Map(),
@@ -676,14 +683,11 @@ function buildProviderUsage(
       } else if (row.costReportedCount > 0 && provider.costCoverage === "not-reported") {
         provider.costCoverage = "complete";
       }
-      // Token coverage mirrors cost coverage, but a provider whose turns carry
-      // NO token evidence stays "not-reported" (honest, like the
-      // unavailableProviders list) instead of rendering a partial total.
-      if (row.tokenMissingCount > 0 && row.tokenReportedCount > 0) {
-        provider.tokenCoverage = "partial";
-      } else if (row.tokenReportedCount > 0 && provider.tokenCoverage === "not-reported") {
-        provider.tokenCoverage = "complete";
-      }
+      // Accumulate the per-row turn-evidence counts; the coverage state is
+      // derived once per provider after the loop (rows group by day, provider,
+      // and model, so a single row's evidence must not decide the provider).
+      provider.tokenMissingCount += Math.max(0, Math.trunc(num(row.tokenMissingCount)));
+      provider.tokenReportedCount += Math.max(0, Math.trunc(num(row.tokenReportedCount)));
     }
     model.turnCount += turnCount;
     model.costUsd = addOptionalCost(model.costUsd, costUsd);
@@ -695,6 +699,22 @@ function buildProviderUsage(
     const lastUsedAt = nonEmptyString(row.lastUsedAt);
     if (lastUsedAt && (!provider.lastUsedAt || lastUsedAt > provider.lastUsedAt)) {
       provider.lastUsedAt = lastUsedAt;
+    }
+  }
+
+  // Derive token coverage once per provider from the accumulated turn-evidence
+  // counts: partial when some turns report and some do not, complete when every
+  // turn reports, and not-reported when turns exist without any token evidence
+  // (honest, like the unavailableProviders list). Providers whose only tokens
+  // come from deleted-thread archives keep "not-reported" here — their totals
+  // are still rendered by the UI because tokensReported is set.
+  for (const provider of providers.values()) {
+    if (provider.turnCount > 0) {
+      if (provider.tokenMissingCount > 0 && provider.tokenReportedCount > 0) {
+        provider.tokenCoverage = "partial";
+      } else if (provider.tokenReportedCount > 0 && provider.tokenMissingCount === 0) {
+        provider.tokenCoverage = "complete";
+      }
     }
   }
 

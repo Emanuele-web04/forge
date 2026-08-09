@@ -7,12 +7,6 @@ import type { ServerGetProviderUsageSnapshotResult } from "@synara/contracts";
 import type { OpenUsageUsageLine } from "./openUsageRateLimits";
 import type { ProviderRateLimit } from "./rateLimits";
 
-export function isProviderUsageSnapshotNonOk(
-  snapshot: ServerGetProviderUsageSnapshotResult | null | undefined,
-): boolean {
-  return snapshot?.status !== undefined && snapshot.status !== "ok";
-}
-
 export function normalizeServerProviderUsageRateLimit(
   snapshot: ServerGetProviderUsageSnapshotResult | null | undefined,
 ): ProviderRateLimit | null {
