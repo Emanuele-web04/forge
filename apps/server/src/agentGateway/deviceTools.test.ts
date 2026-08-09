@@ -251,6 +251,37 @@ describe("agent gateway device tool handlers", () => {
     expect(backend.callsOfKind("tap")).toHaveLength(0);
   });
 
+  it("enforces contract bounds for swipe duration and scroll budget", async () => {
+    const { backend, call } = await setup();
+
+    const fractionalDuration = await call("device_swipe", {
+      udid: DEVICE,
+      fromX: 0,
+      fromY: 0,
+      toX: 10,
+      toY: 10,
+      durationMs: 10.5,
+    });
+    const excessiveDuration = await call("device_swipe", {
+      udid: DEVICE,
+      fromX: 0,
+      fromY: 0,
+      toX: 10,
+      toY: 10,
+      durationMs: 10_001,
+    });
+    const excessiveScrolls = await call("device_scroll_to_element", {
+      udid: DEVICE,
+      label: "Deep Row",
+      maxSwipes: 33,
+    });
+
+    expect(fractionalDuration.isError).toBe(true);
+    expect(excessiveDuration.isError).toBe(true);
+    expect(excessiveScrolls.isError).toBe(true);
+    expect(backend.callsOfKind("swipe")).toHaveLength(0);
+  });
+
   it("marks the thread agent-active only while a tool runs", async () => {
     const { manager, structured } = await setup();
 

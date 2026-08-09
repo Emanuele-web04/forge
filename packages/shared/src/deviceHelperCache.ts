@@ -25,6 +25,9 @@ export const DEVICE_HELPER_CACHE_SEGMENTS = [
 
 export const DEVICE_HELPER_BINARY_NAME = "synara-device-helper";
 
+/** Physical helper source directory passed from packaged desktop to its backend child. */
+export const DEVICE_HELPER_SOURCE_DIR_ENV = "SYNARA_DEVICE_HELPER_SOURCE_DIR";
+
 /**
  * Derive the cache key from `xcodebuild -version` output, which looks like:
  *

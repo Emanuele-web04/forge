@@ -1,7 +1,13 @@
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { DeviceDescriptor, DeviceListResult, ThreadDeviceState } from "./device";
+import {
+  DeviceDescriptor,
+  DeviceListResult,
+  DeviceScrollToElementInput,
+  DeviceSwipeInput,
+  ThreadDeviceState,
+} from "./device";
 
 function decodeSync<S extends Schema.Top>(schema: S, input: unknown): Schema.Schema.Type<S> {
   return Schema.decodeUnknownSync(schema as never)(input) as Schema.Schema.Type<S>;
@@ -97,5 +103,25 @@ describe("geometry on the wire", () => {
     });
     const attached = decoded.devices.find((device) => device.udid === decoded.attachedDeviceUdid);
     expect(attached?.geometry).toEqual(GEOMETRY);
+  });
+});
+
+describe("device control limits", () => {
+  it("keeps swipe duration and scroll budgets bounded to safe integers", () => {
+    const swipe = {
+      udid: BASE_DEVICE.udid,
+      fromX: 0,
+      fromY: 0,
+      toX: 10,
+      toY: 10,
+    };
+    const scroll = { udid: BASE_DEVICE.udid, label: "Continue" };
+
+    expect(decodes(DeviceSwipeInput, { ...swipe, durationMs: 10_000 })).toBe(true);
+    expect(decodes(DeviceSwipeInput, { ...swipe, durationMs: 10_001 })).toBe(false);
+    expect(decodes(DeviceSwipeInput, { ...swipe, durationMs: 10.5 })).toBe(false);
+    expect(decodes(DeviceScrollToElementInput, { ...scroll, maxSwipes: 32 })).toBe(true);
+    expect(decodes(DeviceScrollToElementInput, { ...scroll, maxSwipes: 33 })).toBe(false);
+    expect(decodes(DeviceScrollToElementInput, { ...scroll, maxSwipes: 1.5 })).toBe(false);
   });
 });

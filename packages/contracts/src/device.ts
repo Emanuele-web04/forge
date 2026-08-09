@@ -352,13 +352,21 @@ export const DeviceTapInput = Schema.Struct({
 });
 export type DeviceTapInput = typeof DeviceTapInput.Type;
 
+export const DEVICE_SWIPE_DURATION_MIN_MS = 0;
+export const DEVICE_SWIPE_DURATION_MAX_MS = 10_000;
+
 export const DeviceSwipeInput = Schema.Struct({
   udid: DeviceUdid,
   fromX: DeviceCoordinate,
   fromY: DeviceCoordinate,
   toX: DeviceCoordinate,
   toY: DeviceCoordinate,
-  durationMs: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 10_000 })),
+  durationMs: Schema.Int.check(
+    Schema.isBetween({
+      minimum: DEVICE_SWIPE_DURATION_MIN_MS,
+      maximum: DEVICE_SWIPE_DURATION_MAX_MS,
+    }),
+  ),
 });
 export type DeviceSwipeInput = typeof DeviceSwipeInput.Type;
 
@@ -571,11 +579,18 @@ export type DeviceDescribeUiResult = typeof DeviceDescribeUiResult.Type;
  * The swipe loop belongs to the server: driven by hand it becomes a guess at
  * distances, an overshoot, and a describe between every attempt.
  */
+export const DEVICE_SCROLL_MIN_SWIPES = 1;
+export const DEVICE_SCROLL_MAX_SWIPES = 32;
+
 export const DeviceScrollToElementInput = Schema.Struct({
   udid: DeviceUdid,
   label: TrimmedNonEmptyString.check(Schema.isMaxLength(1_024)),
   role: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
-  maxSwipes: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 }))),
+  maxSwipes: Schema.optional(
+    Schema.Int.check(
+      Schema.isBetween({ minimum: DEVICE_SCROLL_MIN_SWIPES, maximum: DEVICE_SCROLL_MAX_SWIPES }),
+    ),
+  ),
 });
 export type DeviceScrollToElementInput = typeof DeviceScrollToElementInput.Type;
 

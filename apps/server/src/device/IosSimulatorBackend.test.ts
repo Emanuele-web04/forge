@@ -43,6 +43,18 @@ const successfulProcessResult = (stdout = ""): ProcessRunResult => ({
 });
 
 describe("device helper source resolution", () => {
+  it("prefers a physical helper directory supplied by packaged desktop", () => {
+    const external = "/Applications/Synara.app/Contents/Resources/device-helper";
+
+    expect(
+      resolveDeviceHelperSourceDir(
+        "/Applications/Synara.app/Contents/Resources/app.asar/apps/server/dist",
+        (candidate) => candidate === external,
+        external,
+      ),
+    ).toBe(external);
+  });
+
   it("uses the helper copied beside a bundled server entry", () => {
     const distDir = "/app/apps/server/dist";
     const bundled = path.join(distDir, "device-helper");

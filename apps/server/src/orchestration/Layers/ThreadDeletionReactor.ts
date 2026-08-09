@@ -84,6 +84,23 @@ export const cleanupSucceededUnlessInterrupted = <R, E>({
     }),
   );
 
+export const detachThreadDevice = (threadId: ThreadId) =>
+  Effect.serviceOption(DeviceService).pipe(
+    Effect.flatMap((service) =>
+      Option.isNone(service)
+        ? Effect.void
+        : Effect.promise(() => service.value.manager.handleThreadRemoved(threadId)),
+    ),
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause)
+        : Effect.logDebug("thread lifecycle cleanup skipped device detach", {
+            threadId,
+            cause: Cause.pretty(cause),
+          }),
+    ),
+  );
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const profileStatsArchive = yield* ProfileStatsArchive;
@@ -202,25 +219,6 @@ const make = Effect.gen(function* () {
     return providerCleanupSucceeded && terminalCleanupSucceeded;
   });
 
-  // Archiving a thread ends its device attachment the same way it ends its
-  // terminals. Optional so non-macOS builds and tests need not provide it.
-  const detachThreadDevice = (threadId: ThreadId) =>
-    Effect.serviceOption(DeviceService).pipe(
-      Effect.flatMap((service) =>
-        Option.isNone(service)
-          ? Effect.void
-          : Effect.promise(() => service.value.manager.handleThreadArchived(threadId)),
-      ),
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logDebug("thread archive cleanup skipped device detach", {
-              threadId,
-              cause: Cause.pretty(cause),
-            }),
-      ),
-    );
-
   const cleanupArchivedThread = Effect.fn(function* (event: ThreadArchivedEvent) {
     const threadId = event.payload.threadId;
     for (let attempt = 1; attempt <= ARCHIVE_CLEANUP_RETRY_ATTEMPTS; attempt += 1) {
@@ -257,6 +255,7 @@ const make = Effect.gen(function* () {
 
   const processThreadDeleted = Effect.fn(function* (event: ThreadDeletedEvent) {
     const { threadId } = event.payload;
+    yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
     if (!cleanupSucceeded) {
       yield* Effect.logWarning("thread deletion cleanup deferred stats archive purge", {

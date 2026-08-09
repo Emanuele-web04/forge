@@ -21,6 +21,10 @@
  * @module agentGateway/deviceTools
  */
 import {
+  DEVICE_SCROLL_MAX_SWIPES,
+  DEVICE_SCROLL_MIN_SWIPES,
+  DEVICE_SWIPE_DURATION_MAX_MS,
+  DEVICE_SWIPE_DURATION_MIN_MS,
   type DeviceHardwareButton,
   type DeviceOpenPaneReason,
   type ProviderKind,
@@ -122,6 +126,16 @@ const UDID_PROPERTY = {
   description: "Device udid from device_list.",
 } as const;
 
+const DEVICE_SWIPE_DURATION_RANGE = {
+  minimum: DEVICE_SWIPE_DURATION_MIN_MS,
+  maximum: DEVICE_SWIPE_DURATION_MAX_MS,
+} as const;
+
+const DEVICE_SCROLL_BUDGET_RANGE = {
+  minimum: DEVICE_SCROLL_MIN_SWIPES,
+  maximum: DEVICE_SCROLL_MAX_SWIPES,
+} as const;
+
 function approvalUnavailableResult(name: string): McpToolCallResult {
   return {
     ...mcpToolResultJson({
@@ -143,6 +157,21 @@ function readCoordinate(args: Record<string, unknown>, name: string): number {
   if (value === undefined) throw new ToolInputError(`Missing required argument "${name}".`);
   if (value < 0 || value > 20_000) {
     throw new ToolInputError(`Argument "${name}" must be a device point between 0 and 20000.`);
+  }
+  return value;
+}
+
+function readBoundedIntegerArg(
+  args: Record<string, unknown>,
+  name: string,
+  range: { readonly minimum: number; readonly maximum: number },
+): number | undefined {
+  const value = readNumberArg(args, name);
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < range.minimum || value > range.maximum) {
+    throw new ToolInputError(
+      `Argument "${name}" must be an integer between ${range.minimum} and ${range.maximum}.`,
+    );
   }
   return value;
 }
@@ -439,7 +468,8 @@ export function makeAgentGatewayDeviceTools(
             toX: { type: "number" },
             toY: { type: "number" },
             durationMs: {
-              type: "number",
+              type: "integer",
+              ...DEVICE_SWIPE_DURATION_RANGE,
               description: "Gesture duration in milliseconds (default 300).",
             },
           },
@@ -455,7 +485,7 @@ export function makeAgentGatewayDeviceTools(
           fromY: readCoordinate(args, "fromY"),
           toX: readCoordinate(args, "toX"),
           toY: readCoordinate(args, "toY"),
-          durationMs: readNumberArg(args, "durationMs") ?? 300,
+          durationMs: readBoundedIntegerArg(args, "durationMs", DEVICE_SWIPE_DURATION_RANGE) ?? 300,
         };
         await manager.swipe(udid, gesture);
         return { udid, ...gesture };
@@ -597,7 +627,8 @@ export function makeAgentGatewayDeviceTools(
               description: "Optional role or subrole to disambiguate a repeated label.",
             },
             maxSwipes: {
-              type: "number",
+              type: "integer",
+              ...DEVICE_SCROLL_BUDGET_RANGE,
               description: "Swipe budget before giving up. Defaults to 8.",
             },
           },
@@ -618,7 +649,9 @@ export function makeAgentGatewayDeviceTools(
             label: readStringArg(args, "label", { required: true })!,
             role: readStringArg(args, "role") ?? undefined,
           },
-          { maxScrolls: readNumberArg(args, "maxSwipes") },
+          {
+            maxScrolls: readBoundedIntegerArg(args, "maxSwipes", DEVICE_SCROLL_BUDGET_RANGE),
+          },
         );
         return {
           udid,

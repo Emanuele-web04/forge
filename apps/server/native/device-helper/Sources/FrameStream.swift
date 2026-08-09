@@ -71,7 +71,8 @@ final class FrameSocketWriter {
   init(path: String) throws {
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     guard fd >= 0 else {
-      throw SimulatorError.displayUnavailable("cannot create socket: \(String(cString: strerror(errno)))")
+      throw SimulatorError.displayUnavailable(
+        "cannot create socket: \(String(cString: strerror(errno)))")
     }
 
     var address = sockaddr_un()
@@ -208,17 +209,20 @@ final class FrameStream {
   private var surfaceRegistered = false
 
   private var session: VTCompressionSession?
-  private var pixelBufferPool: CVPixelBufferPool?
   private let startedAt = CFAbsoluteTimeGetCurrent()
   private var sequence: UInt32 = 0
   private var lastKeyframeAt: Double = -.greatestFiniteMagnitude
   private var encodingInFlight = false
+  private var streamGeneration: UInt64 = 0
+  private var stopped = false
+  private var emittedFrameCount = 0
+  private var droppedBusyFrameCount = 0
   private let stateLock = NSLock()
 
   private(set) var pixelWidth = 0
   private(set) var pixelHeight = 0
-  private(set) var emittedFrames = 0
-  private(set) var droppedBusyFrames = 0
+  var emittedFrames: Int { withStateLock { emittedFrameCount } }
+  var droppedBusyFrames: Int { withStateLock { droppedBusyFrameCount } }
 
   init(
     descriptor: NSObject,
@@ -226,7 +230,8 @@ final class FrameStream {
     writer: FrameSocketWriter,
     keyframeIntervalSeconds: Double
   ) throws {
-    guard let idBytes = deviceId.data(using: .utf8), idBytes.count <= FrameEnvelope.maxDeviceIdBytes,
+    guard let idBytes = deviceId.data(using: .utf8),
+      idBytes.count <= FrameEnvelope.maxDeviceIdBytes,
       !idBytes.isEmpty
     else {
       throw SimulatorError.displayUnavailable("device id is not a valid envelope identifier")
@@ -243,16 +248,19 @@ final class FrameStream {
     }
     pixelWidth = IOSurfaceGetWidth(surface)
     pixelHeight = IOSurfaceGetHeight(surface)
-    try startSession(width: pixelWidth, height: pixelHeight)
+    try encodeQueue.sync {
+      try startSessionOnQueue(width: pixelWidth, height: pixelHeight)
+    }
 
     // Prime with a first frame so a consumer sees the screen immediately rather
     // than waiting for the display to change.
     encode(surface: surface)
 
     let damageSelector = NSSelectorFromString("registerCallbackWithUUID:damageRectanglesCallback:")
-    typealias DamageFn = @convention(c) (
-      AnyObject, Selector, NSUUID, @convention(block) (AnyObject?) -> Void
-    ) -> Void
+    typealias DamageFn =
+      @convention(c) (
+        AnyObject, Selector, NSUUID, @convention(block) (AnyObject?) -> Void
+      ) -> Void
     if let imp = descriptor.method(for: damageSelector) {
       let block: @convention(block) (AnyObject?) -> Void = { [weak self] _ in
         guard let self, let current = self.descriptor.currentFramebufferSurface() else { return }
@@ -265,24 +273,36 @@ final class FrameStream {
     // The backing IOSurface can be swapped wholesale (rotation, resize); pick up
     // the new one when that happens.
     let surfaceSelector = NSSelectorFromString("registerCallbackWithUUID:ioSurfacesChangeCallback:")
-    typealias SurfaceFn = @convention(c) (
-      AnyObject, Selector, NSUUID, @convention(block) (AnyObject?, AnyObject?) -> Void
-    ) -> Void
+    typealias SurfaceFn =
+      @convention(c) (
+        AnyObject, Selector, NSUUID, @convention(block) (AnyObject?, AnyObject?) -> Void
+      ) -> Void
     if let imp = descriptor.method(for: surfaceSelector) {
       let block: @convention(block) (AnyObject?, AnyObject?) -> Void = { [weak self] _, updated in
         guard let self, let updated, CFGetTypeID(updated) == IOSurfaceGetTypeID() else { return }
         self.encode(surface: unsafeBitCast(updated, to: IOSurfaceRef.self))
       }
-      unsafeBitCast(imp, to: SurfaceFn.self)(descriptor, surfaceSelector, surfaceCallbackUUID, block)
+      unsafeBitCast(imp, to: SurfaceFn.self)(
+        descriptor, surfaceSelector, surfaceCallbackUUID, block)
       surfaceRegistered = true
     }
 
     guard damageRegistered || surfaceRegistered else {
+      stop()
       throw SimulatorError.displayUnavailable("display exposes no frame callbacks")
     }
   }
 
   func stop() {
+    let shouldStop = withStateLock {
+      if stopped { return false }
+      stopped = true
+      streamGeneration &+= 1
+      encodingInFlight = false
+      return true
+    }
+    guard shouldStop else { return }
+
     if damageRegistered {
       let selector = NSSelectorFromString("unregisterDamageRectanglesCallbackWithUUID:")
       typealias Fn = @convention(c) (AnyObject, Selector, NSUUID) -> Void
@@ -299,17 +319,19 @@ final class FrameStream {
       }
       surfaceRegistered = false
     }
-    if let session {
-      VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
-      VTCompressionSessionInvalidate(session)
-      self.session = nil
+    encodeQueue.sync {
+      if let session {
+        VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+        VTCompressionSessionInvalidate(session)
+        self.session = nil
+      }
     }
     writer.close()
   }
 
   var droppedSocketFrames: Int { writer.droppedFrames }
 
-  private func startSession(width: Int, height: Int) throws {
+  private func startSessionOnQueue(width: Int, height: Int) throws {
     var created: VTCompressionSession?
     let status = VTCompressionSessionCreate(
       allocator: kCFAllocatorDefault,
@@ -342,21 +364,22 @@ final class FrameStream {
     VTCompressionSessionPrepareToEncodeFrames(session)
 
     self.session = session
-    self.pixelBufferPool = VTCompressionSessionGetPixelBufferPool(session)
   }
 
   /// Encodes one surface. Returns immediately when an encode is already in
   /// flight: dropping is the correct response to a display that outruns the
   /// encoder, since only the newest frame matters.
   private func encode(surface: IOSurfaceRef) {
-    stateLock.lock()
-    if encodingInFlight {
-      droppedBusyFrames += 1
-      stateLock.unlock()
-      return
+    let generation = withStateLock { () -> UInt64? in
+      if stopped { return nil }
+      if encodingInFlight {
+        droppedBusyFrameCount += 1
+        return nil
+      }
+      encodingInFlight = true
+      return streamGeneration
     }
-    encodingInFlight = true
-    stateLock.unlock()
+    guard let generation else { return }
 
     // The surface must be retained across the async hop: the simulator may
     // recycle it as soon as this callback returns.
@@ -364,18 +387,14 @@ final class FrameStream {
     encodeQueue.async { [weak self] in
       defer {
         retained.release()
-        if let self {
-          self.stateLock.lock()
-          self.encodingInFlight = false
-          self.stateLock.unlock()
-        }
+        self?.finishEncoding(generation: generation)
       }
-      self?.encodeOnQueue(surface: surface)
+      self?.encodeOnQueue(surface: surface, generation: generation)
     }
   }
 
-  private func encodeOnQueue(surface: IOSurfaceRef) {
-    guard let session, !writer.isClosed else { return }
+  private func encodeOnQueue(surface: IOSurfaceRef, generation: UInt64) {
+    guard accepts(generation: generation), let session, !writer.isClosed else { return }
 
     var unmanagedBuffer: Unmanaged<CVPixelBuffer>?
     let status = CVPixelBufferCreateWithIOSurface(
@@ -402,15 +421,18 @@ final class FrameStream {
       frameProperties: properties as CFDictionary?,
       infoFlagsOut: nil
     ) { [weak self] encodeStatus, _, sampleBuffer in
-      guard let self, encodeStatus == noErr, let sampleBuffer else { return }
-      self.emit(sampleBuffer: sampleBuffer)
+      guard let self, encodeStatus == noErr, let sampleBuffer,
+        self.accepts(generation: generation)
+      else { return }
+      self.emit(sampleBuffer: sampleBuffer, generation: generation)
     }
   }
 
-  private func emit(sampleBuffer: CMSampleBuffer) {
+  private func emit(sampleBuffer: CMSampleBuffer, generation: UInt64) {
     guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
 
-    let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+    let attachments = CMSampleBufferGetSampleAttachmentsArray(
+      sampleBuffer, createIfNecessary: false)
     var isKeyframe = true
     if let attachments, CFArrayGetCount(attachments) > 0 {
       let entry = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFDictionary.self)
@@ -423,7 +445,7 @@ final class FrameStream {
     // A keyframe is only decodable alongside its parameter sets, so SPS/PPS are
     // sent as their own codec-config message immediately before it.
     if isKeyframe, let format = CMSampleBufferGetFormatDescription(sampleBuffer) {
-      emitParameterSets(format: format)
+      emitParameterSets(format: format, generation: generation)
     }
 
     var lengthAtOffset = 0
@@ -455,11 +477,17 @@ final class FrameStream {
     }
     guard !annexB.isEmpty else { return }
 
-    send(payload: annexB, keyframe: isKeyframe, codecConfig: false)
-    emittedFrames += 1
+    guard
+      send(
+        payload: annexB, keyframe: isKeyframe, codecConfig: false, generation: generation
+      )
+    else { return }
+    withStateLock {
+      if acceptsGenerationLocked(generation) { emittedFrameCount += 1 }
+    }
   }
 
-  private func emitParameterSets(format: CMFormatDescription) {
+  private func emitParameterSets(format: CMFormatDescription, generation: UInt64) {
     var parameterSetCount = 0
     guard
       CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
@@ -482,18 +510,46 @@ final class FrameStream {
       payload.append(UnsafeBufferPointer(start: setPointer, count: setSize))
     }
     guard !payload.isEmpty else { return }
-    send(payload: payload, keyframe: false, codecConfig: true)
+    _ = send(payload: payload, keyframe: false, codecConfig: true, generation: generation)
   }
 
-  private func send(payload: Data, keyframe: Bool, codecConfig: Bool) {
+  private func send(
+    payload: Data, keyframe: Bool, codecConfig: Bool, generation: UInt64
+  ) -> Bool {
     // Sequence wraps rather than saturating, matching the decoder's contract.
-    sequence = sequence &+ 1
+    let nextSequence = withStateLock { () -> UInt32? in
+      guard acceptsGenerationLocked(generation) else { return nil }
+      sequence = sequence &+ 1
+      return sequence
+    }
+    guard let nextSequence else { return false }
     let timestampMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
     let message = payload.withUnsafeBytes { buffer in
       FrameEnvelope.encode(
-        deviceId: deviceIdBytes, sequence: sequence, timestampMs: timestampMs,
+        deviceId: deviceIdBytes, sequence: nextSequence, timestampMs: timestampMs,
         keyframe: keyframe, codecConfig: codecConfig, payload: buffer)
     }
     writer.write(message)
+    return true
+  }
+
+  private func finishEncoding(generation: UInt64) {
+    withStateLock {
+      if acceptsGenerationLocked(generation) { encodingInFlight = false }
+    }
+  }
+
+  private func accepts(generation: UInt64) -> Bool {
+    withStateLock { acceptsGenerationLocked(generation) }
+  }
+
+  private func acceptsGenerationLocked(_ generation: UInt64) -> Bool {
+    !stopped && generation == streamGeneration
+  }
+
+  private func withStateLock<T>(_ operation: () -> T) -> T {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return operation()
   }
 }

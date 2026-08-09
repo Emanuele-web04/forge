@@ -12,8 +12,8 @@
  * - The Synara boot cap (`DEVICE_SYNARA_BOOT_LIMIT`). Boot past the cap is
  *   refusable rather than fatal: the caller is handed the shutdown candidates
  *   so the pane can prompt.
- * - Shutdown triggers: app quit (`dispose`), thread archive
- *   (`handleThreadArchived`), and an idle timeout after the last detach.
+ * - Shutdown triggers: app quit (`dispose`), thread removal
+ *   (`handleThreadRemoved`), and an idle timeout after the last detach.
  *
  * Everything the manager does to the device itself goes through DeviceBackend,
  * so the whole state machine is testable against `FakeDeviceBackend`.
@@ -163,7 +163,10 @@ export class DeviceManager {
   /** Devices this manager booted, and therefore may shut down again. */
   private readonly synaraBooted = new Set<string>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
-  private readonly streaming = new Set<string>();
+  private activeStreamUdid: string | null = null;
+  private desiredStreamUdid: string | null = null;
+  /** Serializes the native helper's single stream while allowing the desired device to change. */
+  private streamTransition: Promise<void> = Promise.resolve();
   private readonly recording = new Set<string>();
   private readonly listeners = new Set<DeviceEventListener>();
   private disposed = false;
@@ -397,7 +400,7 @@ export class DeviceManager {
 
     // Already streaming (another thread is watching the same device): there is
     // nothing to wait for, so the phase clears without a round trip.
-    if (this.streaming.has(udid)) {
+    if (this.activeStreamUdid === udid || this.desiredStreamUdid === udid) {
       attachment.attachPhase = null;
       return await this.publish(threadId);
     }
@@ -426,7 +429,9 @@ export class DeviceManager {
       if (!attachment || attachment.attachToken !== token) return;
 
       try {
-        await this.startStream(udid);
+        const started = await this.startStream(udid);
+        if (!started) return;
+        if (attachment.attachPhase === null && attachment.lastError === null) return;
         attachment.attachPhase = null;
         attachment.lastError = null;
         await this.publish(threadId);
@@ -497,8 +502,8 @@ export class DeviceManager {
     return await this.publish(threadId);
   }
 
-  /** Thread archive is terminal for its attachment; treat it as a detach. */
-  async handleThreadArchived(threadId: string): Promise<void> {
+  /** Thread archive or deletion is terminal for its attachment; treat it as a detach. */
+  async handleThreadRemoved(threadId: string): Promise<void> {
     if (!this.threads.has(threadId)) return;
     await this.detach(threadId);
     this.threads.delete(threadId);
@@ -775,10 +780,10 @@ export class DeviceManager {
     for (const [, timer] of this.idleTimers) this.cancel(timer);
     this.idleTimers.clear();
     // Snapshotted: both loops mutate the set they are walking.
-    const streaming = Array.from(this.streaming);
     const recording = Array.from(this.recording);
     const booted = Array.from(this.synaraBooted);
-    for (const udid of streaming) await this.stopStream(udid).catch(() => undefined);
+    this.desiredStreamUdid = null;
+    await this.queueStreamReconciliation().catch(() => undefined);
     for (const udid of recording) await this.stopRecordingIfActive(udid).catch(() => undefined);
     for (const udid of booted) {
       await this.backend.shutdown(udid).catch(() => undefined);
@@ -828,46 +833,25 @@ export class DeviceManager {
     return false;
   }
 
-  private async startStream(udid: string): Promise<void> {
-    if (this.streaming.has(udid) || this.disposed) return;
-    // The helper holds one attachment, and its `startStream` stops whatever it
-    // was already streaming before binding the new device. So a second device
-    // does not run alongside the first, it replaces it: without this the
-    // manager would still list the first as streaming and its pane would sit on
-    // a frozen last frame with nothing to explain it. Stopping the old stream
-    // here keeps `streaming` describing what the helper is really doing, and
-    // the displaced thread re-attaches through the normal path when the user
-    // returns to it.
-    for (const other of [...this.streaming]) {
-      if (other === udid) continue;
-      await this.stopStream(other).catch(() => undefined);
-    }
-    this.streaming.add(udid);
-    try {
-      // No input nudge is needed to get a first picture: the helper primes the
-      // stream by encoding the current framebuffer as its opening frame, so an
-      // idle screen paints without anything touching the guest. This used to
-      // press volume-up for that, which on a headless boot is delivered to the
-      // app but paints no system HUD — so it repainted nothing and only risked
-      // sending a stray button press into whatever was running.
-      await this.backend.attachStream(udid, (frame) => this.transport.publish(udid, frame));
-      // A stream that started supersedes whatever failed before it. Attaching
-      // to a device still publishing its display fails with "no framebuffer
-      // surface yet"; without this the pane kept that message under a picture
-      // that had been live for minutes.
-      void this.clearStreamErrors(udid);
-    } catch (error) {
-      this.streaming.delete(udid);
-      throw error;
-    }
+  private async startStream(udid: string): Promise<boolean> {
+    if (this.disposed) return false;
+    this.desiredStreamUdid = udid;
+    await this.queueStreamReconciliation();
+    return this.activeStreamUdid === udid;
   }
 
-  /** Drop a stale attach failure from every thread now watching this device. */
-  private async clearStreamErrors(udid: string): Promise<void> {
+  /** Clear stale startup state from every thread now watching this device. */
+  private async clearStreamStartupState(udid: string): Promise<void> {
     const cleared: string[] = [];
     for (const [threadId, attachment] of this.threads) {
-      if (attachment.attachedDeviceUdid !== udid || attachment.lastError === null) continue;
+      if (
+        attachment.attachedDeviceUdid !== udid ||
+        (attachment.lastError === null && attachment.attachPhase === null)
+      ) {
+        continue;
+      }
       attachment.lastError = null;
+      attachment.attachPhase = null;
       cleared.push(threadId);
     }
     for (const threadId of cleared) await this.publish(threadId);
@@ -885,15 +869,69 @@ export class DeviceManager {
    * a keyframe from the previous generation.
    */
   async requestKeyframe(udid: string): Promise<void> {
-    if (!this.streaming.has(udid) || this.disposed) return;
-    await this.stopStream(udid);
+    if (this.activeStreamUdid !== udid || this.disposed) return;
+    this.desiredStreamUdid = null;
+    await this.queueStreamReconciliation();
+    if (
+      this.disposed ||
+      this.desiredStreamUdid !== null ||
+      this.transport.deviceSubscriberCount(udid) === 0
+    ) {
+      return;
+    }
     await this.startStream(udid);
   }
 
   private async stopStream(udid: string): Promise<void> {
-    if (!this.streaming.delete(udid)) return;
-    this.transport.resetDevice(udid);
-    await this.backend.detachStream(udid);
+    if (this.desiredStreamUdid === udid) {
+      this.desiredStreamUdid = null;
+    } else if (this.desiredStreamUdid !== null || this.activeStreamUdid !== udid) {
+      return;
+    }
+    await this.queueStreamReconciliation();
+  }
+
+  private queueStreamReconciliation(): Promise<void> {
+    const transition = this.streamTransition.then(() => this.reconcileStream());
+    this.streamTransition = transition.catch(() => undefined);
+    return transition;
+  }
+
+  private async reconcileStream(): Promise<void> {
+    while (true) {
+      const desired = this.disposed ? null : this.desiredStreamUdid;
+      if (this.activeStreamUdid === desired) return;
+      if (this.activeStreamUdid !== null) {
+        const active = this.activeStreamUdid;
+        this.activeStreamUdid = null;
+        this.transport.resetDevice(active);
+        await this.backend.detachStream(active);
+        continue;
+      }
+      if (desired === null) return;
+
+      try {
+        await this.backend.attachStream(desired, (frame) => {
+          if (this.desiredStreamUdid === desired || this.activeStreamUdid === desired) {
+            this.transport.publish(desired, frame);
+          }
+        });
+      } catch (error) {
+        if (!this.disposed && this.desiredStreamUdid === desired) {
+          this.desiredStreamUdid = null;
+          throw error;
+        }
+        continue;
+      }
+
+      if (this.disposed || this.desiredStreamUdid !== desired) {
+        this.transport.resetDevice(desired);
+        await this.backend.detachStream(desired);
+        continue;
+      }
+      this.activeStreamUdid = desired;
+      await this.clearStreamStartupState(desired);
+    }
   }
 
   /**

@@ -14,6 +14,14 @@ const DEVICE_B = "FAKE-0002";
 const DEVICE_C = "FAKE-0003";
 const DEVICE_D = "FAKE-0004";
 
+function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let resolve = () => {};
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 function makeManager(
   backend = new FakeDeviceBackend(),
   options: {
@@ -56,6 +64,18 @@ async function waitForStream(
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
   throw new Error(`Device ${udid} never reached hasStream=${streaming}`);
+}
+
+async function waitForBackendCall(
+  backend: FakeDeviceBackend,
+  kind: "attachStream" | "detachStream",
+  count: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (backend.callsOfKind(kind).length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error(`Backend never recorded ${count} ${kind} call(s)`);
 }
 
 async function waitForThreadState(
@@ -159,7 +179,7 @@ describe("DeviceManager attachment", () => {
     await backend.boot(DEVICE_A);
     await manager.attach(THREAD_A, DEVICE_A);
 
-    await manager.handleThreadArchived(THREAD_A);
+    await manager.handleThreadRemoved(THREAD_A);
 
     expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBeNull();
     expect(backend.hasStream(DEVICE_A)).toBe(false);
@@ -238,6 +258,12 @@ describe("DeviceManager keyframe resync", () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);
     await manager.attach(THREAD_A, DEVICE_A);
+    manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    await waitForStream(backend, DEVICE_A, true);
 
     await manager.requestKeyframe(DEVICE_A);
 
@@ -265,6 +291,12 @@ describe("DeviceManager keyframe resync", () => {
     await backend.boot(DEVICE_A);
     await manager.attach(THREAD_A, DEVICE_A);
     backend.emitFrame(DEVICE_A, { keyframe: true });
+    manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    await waitForStream(backend, DEVICE_A, true);
 
     await manager.requestKeyframe(DEVICE_A);
     const received: number[] = [];
@@ -284,6 +316,63 @@ describe("DeviceManager keyframe resync", () => {
     await manager.requestKeyframe(DEVICE_A);
 
     expect(backend.callsOfKind("attachStream")).toHaveLength(0);
+  });
+});
+
+describe("DeviceManager stream transition ordering", () => {
+  it("stops a stream whose last subscriber leaves while startup is pending", async () => {
+    const backend = new FakeDeviceBackend();
+    await backend.boot(DEVICE_A);
+    const attachStarted = deferred();
+    const allowAttach = deferred();
+    const attachStream = backend.attachStream.bind(backend);
+    backend.attachStream = async (...args) => {
+      attachStarted.resolve();
+      await allowAttach.promise;
+      await attachStream(...args);
+    };
+    const { manager } = makeManager(backend);
+
+    const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    await attachStarted.promise;
+    unsubscribe();
+    allowAttach.resolve();
+
+    await waitForBackendCall(backend, "detachStream", 1);
+    expect(backend.hasStream(DEVICE_A)).toBe(false);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(1);
+    expect(backend.callsOfKind("detachStream")).toHaveLength(1);
+  });
+
+  it("lets the latest device win when singleton stream starts overlap", async () => {
+    const backend = new FakeDeviceBackend();
+    await backend.boot(DEVICE_A);
+    await backend.boot(DEVICE_B);
+    const firstAttachStarted = deferred();
+    const allowFirstAttach = deferred();
+    const attachStream = backend.attachStream.bind(backend);
+    backend.attachStream = async (...args) => {
+      if (args[0] === DEVICE_A) {
+        firstAttachStarted.resolve();
+        await allowFirstAttach.promise;
+      }
+      await attachStream(...args);
+    };
+    const { manager } = makeManager(backend);
+    const sink = { send: () => undefined, bufferedAmount: () => 0, isOpen: () => true };
+
+    manager.subscribeFrames(DEVICE_A, sink);
+    await firstAttachStarted.promise;
+    manager.subscribeFrames(DEVICE_B, sink);
+    allowFirstAttach.resolve();
+
+    await waitForStream(backend, DEVICE_B, true);
+    expect(backend.hasStream(DEVICE_A)).toBe(false);
+    expect(backend.callsOfKind("detachStream").map((call) => call.udid)).toContain(DEVICE_A);
   });
 });
 

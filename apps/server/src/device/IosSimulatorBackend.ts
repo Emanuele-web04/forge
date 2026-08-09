@@ -43,6 +43,7 @@ import type {
 import {
   DEVICE_HELPER_BINARY_NAME,
   DEVICE_HELPER_CACHE_SEGMENTS,
+  DEVICE_HELPER_SOURCE_DIR_ENV,
   deviceHelperCacheKey,
   readDeviceHelperSourceRevision,
 } from "@synara/shared/deviceHelperCache";
@@ -93,7 +94,12 @@ export function resolveDeviceHelperSourceDir(
   moduleDirectory: string,
   sourceExists: (candidate: string) => boolean = (candidate) =>
     existsSync(path.join(candidate, "build.sh")),
+  configuredDirectory: string | undefined = process.env[DEVICE_HELPER_SOURCE_DIR_ENV],
 ): string {
+  if (configuredDirectory) {
+    const external = path.resolve(configuredDirectory);
+    if (sourceExists(external)) return external;
+  }
   const bundled = path.resolve(moduleDirectory, "device-helper");
   if (sourceExists(bundled)) return bundled;
   return path.resolve(moduleDirectory, "..", "..", "native", "device-helper");
@@ -278,8 +284,14 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   constructor(options: IosSimulatorBackendOptions = {}) {
     this.osPlatform = options.platform ?? process.platform;
+    this.processEnv = options.processEnv ?? process.env;
     this.helperSourceDir =
-      options.helperSourceDir ?? resolveDeviceHelperSourceDir(import.meta.dirname);
+      options.helperSourceDir ??
+      resolveDeviceHelperSourceDir(
+        import.meta.dirname,
+        undefined,
+        this.processEnv[DEVICE_HELPER_SOURCE_DIR_ENV],
+      );
     this.helperCacheRoot = options.helperCacheRoot ?? DEVICE_HELPER_CACHE_ROOT;
     this.run = options.run ?? runProcess;
     this.makeHelperClient =
@@ -290,7 +302,6 @@ export class IosSimulatorBackend implements DeviceBackend {
       ((command, args) => spawn(command, [...args], { stdio: "pipe", windowsHide: true }));
     this.recordingDirectoryOverride = options.recordingDirectory;
     this.now = options.now ?? Date.now;
-    this.processEnv = options.processEnv ?? process.env;
   }
 
   // ── Availability ───────────────────────────────────────────────────
