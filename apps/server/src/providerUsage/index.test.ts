@@ -12,6 +12,7 @@ import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { ServerConfig } from "../config";
 import { ServerSettingsService } from "../serverSettings";
 import {
+  __enrichWithLocalUsageForTests,
   __resetProviderUsageCacheForTests,
   collectProviderUsageSnapshots,
   listProviderUsage,
@@ -279,5 +280,63 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(result.disabled).toEqual([]);
     expect(result.reenabled).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("enrichWithLocalUsage plane separation", () => {
+  it("attaches only machine activity and leaves account usage lines untouched", async () => {
+    const accountSnapshot: ServerProviderUsageSnapshot = {
+      provider: "codex",
+      updatedAt: new Date(NOW_MS).toISOString(),
+      limits: [{ window: "5h", usedPercent: 41 }],
+      usageLines: [{ label: "24h", value: "10 tokens" }],
+      source: "live",
+      status: "ok",
+    };
+    const localSnapshot: ServerProviderUsageSnapshot = {
+      provider: "codex",
+      updatedAt: new Date(NOW_MS).toISOString(),
+      limits: [],
+      usageLines: [{ label: "24h", value: "99 tokens", subtitle: "3 recent sessions" }],
+      source: "codex-session-archive",
+      activity: {
+        status: "ok",
+        scope: "machine",
+        source: "codex-session-archive",
+        capturedAt: new Date(NOW_MS).toISOString(),
+        periods: [],
+        breakdown: [],
+      },
+    };
+
+    const enriched = await __enrichWithLocalUsageForTests({
+      snapshot: accountSnapshot,
+      ctx: { homeDir: "/nonexistent-home", env: {}, platform: "linux", nowMs: NOW_MS },
+      loadLocal: async () => localSnapshot,
+    });
+
+    // The machine activity is attached...
+    expect(enriched.activity).toEqual(localSnapshot.activity);
+    // ...but the account usage lines stay the account's own, not the local ones.
+    expect(enriched.usageLines).toEqual(accountSnapshot.usageLines);
+    expect(enriched.limits).toEqual(accountSnapshot.limits);
+    expect(enriched.source).toBe("live");
+  });
+
+  it("returns the live snapshot unchanged when no local snapshot exists", async () => {
+    const accountSnapshot: ServerProviderUsageSnapshot = {
+      provider: "codex",
+      updatedAt: new Date(NOW_MS).toISOString(),
+      limits: [],
+      usageLines: [],
+      source: "live",
+      status: "ok",
+    };
+    const enriched = await __enrichWithLocalUsageForTests({
+      snapshot: accountSnapshot,
+      ctx: { homeDir: "/nonexistent-home", env: {}, platform: "linux", nowMs: NOW_MS },
+      loadLocal: async () => null,
+    });
+    expect(enriched).toEqual(accountSnapshot);
   });
 });
