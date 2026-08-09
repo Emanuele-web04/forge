@@ -57,6 +57,11 @@ interface TokenActivityRow {
   readonly model: string | null;
   readonly dispatchOrigin?: string | null;
   readonly createdAt: string | null;
+  // Turn the context-window row belongs to; used to keep a modelUsage turn's
+  // counter in the LAG baseline while contributing zero (see §6.7 mirror).
+  // Optional so legacy callers constructing rows without turn attribution
+  // keep compiling.
+  readonly turnId?: string | null;
 }
 
 interface SkillMessageRow {
@@ -64,6 +69,13 @@ interface SkillMessageRow {
   readonly text: string | null;
   readonly skillsJson: string | null;
   readonly mentionsJson: string | null;
+}
+
+interface ModelUsageActivityRow {
+  readonly createdAt: string;
+  readonly provider: string | null;
+  readonly model: string;
+  readonly tokens: number;
 }
 
 interface CheckpointTurnRow {
@@ -288,6 +300,7 @@ function addTokenSnapshotRow(
 export function aggregateThreadTokenRows(
   rows: ReadonlyArray<TokenActivityRow>,
   fallbackSelection?: { readonly provider: string | null; readonly model: string | null },
+  modelUsageTurnIds: ReadonlySet<string> = new Set(),
 ): ThreadTokenSnapshotRow[] {
   const tokensByKey = new Map<string, ThreadTokenSnapshotRow>();
   const cumulativeProviderModels = new Set<string>();
@@ -305,22 +318,30 @@ export function aggregateThreadTokenRows(
     if (total === null) {
       continue;
     }
+    const { provider } = resolveTokenProviderModel(row, fallbackSelection);
+    // OpenCode/Kilo `totalProcessedTokens` is per-assistant-message, not a
+    // running thread total — same raw-sum branch as the live query.
     const delta =
-      previousCumulativeTotal === null || total < previousCumulativeTotal
+      provider === "opencode" || provider === "kilo"
         ? total
-        : Math.max(0, total - previousCumulativeTotal);
+        : previousCumulativeTotal === null || total < previousCumulativeTotal
+          ? total
+          : Math.max(0, total - previousCumulativeTotal);
     previousCumulativeTotal = total;
     if (
       delta <= 0 ||
       row.createdAt === null ||
-      (row.dispatchOrigin != null && row.dispatchOrigin !== "user")
+      (row.dispatchOrigin != null && row.dispatchOrigin !== "user") ||
+      // A modelUsage turn's context-window row keeps the LAG baseline chain
+      // intact but contributes zero: its tokens come from the modelUsage join.
+      (row.turnId != null && modelUsageTurnIds.has(row.turnId))
     ) {
       continue;
     }
-    const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
+    const { provider: resolvedProvider, model } = resolveTokenProviderModel(row, fallbackSelection);
     addTokenSnapshotRow(tokensByKey, {
       createdAt: row.createdAt,
-      provider,
+      provider: resolvedProvider,
       model,
       tokens: delta,
     });
@@ -348,7 +369,8 @@ export function aggregateThreadTokenRows(
     if (
       delta <= 0 ||
       row.createdAt === null ||
-      (row.dispatchOrigin != null && row.dispatchOrigin !== "user")
+      (row.dispatchOrigin != null && row.dispatchOrigin !== "user") ||
+      (row.turnId != null && modelUsageTurnIds.has(row.turnId))
     ) {
       continue;
     }
@@ -620,6 +642,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           COALESCE(tm.provider, json_extract(a.payload_json, '$.provider')) AS provider,
           tm.model AS model,
           pm.dispatch_origin AS dispatchOrigin,
+          a.turn_id AS turnId,
           a.created_at AS createdAt
         FROM projection_thread_activities a
         LEFT JOIN turn_model tm
@@ -643,6 +666,55 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           a.created_at ASC,
           a.activity_id ASC
       `;
+      // Turns whose modelUsage telemetry replaces their context-window rows:
+      // their counters stay in the LAG baseline but contribute zero (mirror of
+      // the live queryTokenActivity keep-and-zero, so a post-delete read of the
+      // archived rows matches the live totals).
+      const modelUsageTurnRows = yield* sql<{ readonly turnId: string }>`
+        SELECT DISTINCT a.turn_id AS turnId
+        FROM projection_thread_activities a
+        WHERE a.thread_id = ${threadId}
+          AND a.kind = 'turn.completed'
+          AND a.turn_id IS NOT NULL
+          AND json_type(a.payload_json, '$.modelUsage') = 'object'
+          AND EXISTS (
+            SELECT 1
+            FROM json_each(a.payload_json, '$.modelUsage') AS model_entry
+            WHERE json_type(model_entry.value, '$.totalTokens') IN ('integer', 'real')
+              AND CAST(json_extract(model_entry.value, '$.totalTokens') AS INTEGER) > 0
+          )
+      `;
+      const modelUsageTurnIds = new Set(modelUsageTurnRows.map((row) => row.turnId));
+      // Authoritative per-model token rows from `turn.completed` modelUsage
+      // payloads, attributed exactly like the live model_usage_activity CTE:
+      // the turn's resolved provider plus the modelUsage key as the model.
+      const modelUsageActivityRows = yield* sql<ModelUsageActivityRow>`
+        WITH turn_model AS (
+          ${turnModelSelectionCte(sql, { threadId })}
+        )
+        SELECT
+          a.created_at AS createdAt,
+          COALESCE(tm.provider, json_extract(a.payload_json, '$.provider')) AS provider,
+          model_entry.key AS model,
+          CAST(json_extract(model_entry.value, '$.totalTokens') AS INTEGER) AS tokens
+        FROM projection_thread_activities a
+        LEFT JOIN turn_model tm
+          ON tm.thread_id = a.thread_id
+         AND tm.turn_id = a.turn_id
+        LEFT JOIN projection_turns pt
+          ON pt.thread_id = a.thread_id
+         AND pt.turn_id = a.turn_id
+        LEFT JOIN projection_thread_messages pm
+          ON pm.thread_id = pt.thread_id
+         AND pm.message_id = pt.pending_message_id
+        CROSS JOIN json_each(a.payload_json, '$.modelUsage') AS model_entry
+        WHERE a.thread_id = ${threadId}
+          AND a.kind = 'turn.completed'
+          AND json_type(a.payload_json, '$.modelUsage') = 'object'
+          AND (pm.dispatch_origin IS NULL OR pm.dispatch_origin = 'user')
+          AND json_type(model_entry.value, '$.totalTokens') IN ('integer', 'real')
+          AND CAST(json_extract(model_entry.value, '$.totalTokens') AS INTEGER) > 0
+      `;
       const skillMessageRows = yield* sql<SkillMessageRow>`
         SELECT
           message_id AS messageId,
@@ -659,10 +731,41 @@ const makeProfileStatsArchive = Effect.gen(function* () {
 
       const turnRows = aggregateThreadTurnSnapshotRows(turnEventRows, thread.modelSelectionJson);
       const threadSelection = parseModelSelectionJson(thread.modelSelectionJson);
-      const tokenRows = aggregateThreadTokenRows(tokenActivityRows, {
-        provider: threadSelection?.provider ?? null,
-        model: threadSelection?.model ?? null,
+      const aggregatedTokenRows = aggregateThreadTokenRows(
+        tokenActivityRows,
+        {
+          provider: threadSelection?.provider ?? null,
+          model: threadSelection?.model ?? null,
+        },
+        modelUsageTurnIds,
+      );
+      const modelUsageTokenRows: ThreadTokenSnapshotRow[] = modelUsageActivityRows.map((row) => {
+        const resolved = resolveTokenProviderModel(
+          {
+            totalProcessedTokens: null,
+            usedTokens: null,
+            provider: row.provider,
+            model: row.model,
+            dispatchOrigin: "user",
+            createdAt: row.createdAt,
+            turnId: null,
+          },
+          { provider: threadSelection?.provider ?? null, model: threadSelection?.model ?? null },
+        );
+        return {
+          createdAt: row.createdAt,
+          provider: resolved.provider,
+          model: resolved.model,
+          tokens: row.tokens,
+        };
       });
+      // Merge the modelUsage rows into the same keyed snapshot rows (summed
+      // when a modelUsage row collides with a context-window row).
+      const mergedTokenRows = new Map<string, ThreadTokenSnapshotRow>();
+      for (const row of [...aggregatedTokenRows, ...modelUsageTokenRows]) {
+        addTokenSnapshotRow(mergedTokenRows, row);
+      }
+      const tokenRows = [...mergedTokenRows.values()];
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
       const hasStatsContribution = hasProfileStatsContribution({
         promptRows: skillMessageRows,

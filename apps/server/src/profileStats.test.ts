@@ -890,6 +890,17 @@ describe("ProfileStatsQuery", () => {
               '2026-06-13T12:04:00.000Z'
             ),
             (
+              'activity-hybrid-codex-completed',
+              'thread-hybrid',
+              'turn-hybrid-codex',
+              'info',
+              'turn.completed',
+              'Turn completed',
+              '{"modelUsage":{"gpt-5-codex":{"totalTokens":2500}}}',
+              6,
+              '2026-06-13T12:05:00.000Z'
+            ),
+            (
               'activity-hybrid-claude-1',
               'thread-hybrid',
               'turn-hybrid-claude',
@@ -1455,6 +1466,103 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("delta-calculates cumulative turn costs and counts a day thread once", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-provider-usage-cost', 'project-profile', 'Provider usage cost',
+            '{"provider":"opencode","model":"openai/gpt-5"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'activity-provider-usage-turn-1', 'thread-provider-usage-cost', 'turn-provider-usage-1',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":1.25,"modelUsage":{"openai/gpt-5":{"totalTokens":75}}}', 1,
+              '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'activity-provider-usage-turn-2', 'thread-provider-usage-cost', 'turn-provider-usage-2',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":3.75,"modelUsage":{"anthropic/claude-sonnet-4-6":{"totalTokens":125}}}', 2,
+              '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'activity-provider-usage-tokens-1', 'thread-provider-usage-cost', 'turn-provider-usage-1',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":100,"provider":"opencode"}', 3,
+              '2026-06-15T09:06:00.000Z'
+            ),
+            (
+              'activity-provider-usage-tokens-2', 'thread-provider-usage-cost', 'turn-provider-usage-2',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":220,"provider":"opencode"}', 4,
+              '2026-06-15T09:16:00.000Z'
+            ),
+            (
+              'activity-provider-usage-turn-3', 'thread-provider-usage-cost', 'turn-provider-usage-3',
+              'info', 'turn.completed', 'Turn completed',
+              '{}', 5,
+              '2026-06-15T09:25:00.000Z'
+            ),
+            (
+              'activity-provider-usage-turn-4', 'thread-provider-usage-cost', 'turn-provider-usage-4',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":5.00}', 6,
+              '2026-06-15T09:35:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage?.find((entry) => entry.provider === "opencode");
+
+        expect(usage).toMatchObject({
+          tokens: 200,
+          tokensReported: true,
+          tokenCoverage: "partial",
+          turnCount: 4,
+          threadCount: 1,
+          costUsd: 5,
+          costCoverage: "partial",
+        });
+        expect(usage?.history).toEqual([
+          {
+            day: "2026-06-15",
+            tokens: 200,
+            turnCount: 4,
+            threadCount: 1,
+            costUsd: 5,
+          },
+        ]);
+        expect(usage?.models).toEqual([
+          expect.objectContaining({
+            model: "anthropic/claude-sonnet-4-6",
+            tokens: 125,
+            upstreamProviderId: "anthropic",
+          }),
+          expect.objectContaining({
+            model: "openai/gpt-5",
+            tokens: 75,
+            upstreamProviderId: "openai",
+          }),
+        ]);
+      }),
+    );
+  });
+
   it("uses the activity provider stamp when a legacy thread has malformed model JSON", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {
@@ -1533,6 +1641,427 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.models).toEqual([
           { provider: "claudeAgent", model: "unknown", tokens: 1500, percent: 100 },
         ]);
+      }),
+    );
+  });
+
+  it("reports token coverage per provider as complete, partial, or not-reported", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES
+            (
+              'thread-coverage-complete', 'project-profile', 'Complete',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access', 'default', 'local',
+              '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+            ),
+            (
+              'thread-coverage-mixed', 'project-profile', 'Mixed',
+              '{"provider":"cursor","model":"cursor-model"}',
+              'full-access', 'default', 'local',
+              '2026-06-15T10:00:00.000Z', '2026-06-15T10:00:00.000Z', NULL
+            ),
+            (
+              'thread-coverage-none', 'project-profile', 'None',
+              '{"provider":"claudeAgent","model":"claude-sonnet-4-6"}',
+              'full-access', 'default', 'local',
+              '2026-06-15T11:00:00.000Z', '2026-06-15T11:00:00.000Z', NULL
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'coverage-complete-1', 'thread-coverage-complete', 'turn-complete-1',
+              'info', 'turn.completed', 'Turn completed',
+              '{"modelUsage":{"openai/gpt-5":{"totalTokens":50}}}', 1,
+              '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'coverage-complete-2', 'thread-coverage-complete', 'turn-complete-2',
+              'info', 'turn.completed', 'Turn completed',
+              '{"modelUsage":{"anthropic/claude-sonnet-4-6":{"totalTokens":50}}}', 2,
+              '2026-06-15T09:10:00.000Z'
+            ),
+            (
+              'coverage-mixed-1', 'thread-coverage-mixed', 'turn-mixed-1',
+              'info', 'turn.completed', 'Turn completed',
+              '{"modelUsage":{"openai/gpt-5":{"totalTokens":30}}}', 1,
+              '2026-06-15T10:05:00.000Z'
+            ),
+            (
+              'coverage-mixed-2', 'thread-coverage-mixed', 'turn-mixed-2',
+              'info', 'turn.completed', 'Turn completed',
+              '{}', 2,
+              '2026-06-15T10:10:00.000Z'
+            ),
+            (
+              'coverage-none-1', 'thread-coverage-none', 'turn-none-1',
+              'info', 'turn.completed', 'Turn completed',
+              '{}', 1,
+              '2026-06-15T11:05:00.000Z'
+            ),
+            (
+              'coverage-none-2', 'thread-coverage-none', 'turn-none-2',
+              'info', 'turn.completed', 'Turn completed',
+              '{}', 2,
+              '2026-06-15T11:10:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage;
+        expect(usage?.find((entry) => entry.provider === "codex")?.tokenCoverage).toBe("complete");
+        expect(usage?.find((entry) => entry.provider === "cursor")?.tokenCoverage).toBe("partial");
+        expect(usage?.find((entry) => entry.provider === "claudeAgent")?.tokenCoverage).toBe(
+          "not-reported",
+        );
+      }),
+    );
+  });
+
+  it("computes cumulative token deltas before replacing modelUsage turns so nothing is double counted", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-delta-order', 'project-profile', 'Delta Order',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'delta-order-a', 'thread-delta-order', 'turn-delta-a',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":100,"provider":"codex"}', 1,
+              '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'delta-order-m', 'thread-delta-order', 'turn-delta-m',
+              'info', 'turn.completed', 'Turn completed',
+              '{"modelUsage":{"openai/gpt-5":{"totalTokens":80}}}', 2,
+              '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'delta-order-m-row', 'thread-delta-order', 'turn-delta-m',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":180,"provider":"codex"}', 3,
+              '2026-06-15T09:16:00.000Z'
+            ),
+            (
+              'delta-order-b', 'thread-delta-order', 'turn-delta-b',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":300,"provider":"codex"}', 4,
+              '2026-06-15T09:25:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        // 100 (A) + 80 (modelUsage) + 120 (B minus the kept M-row baseline 180) = 300.
+        expect(tokenStats.lifetimeTotalTokens).toBe(300);
+        const usage = tokenStats.providerUsage?.find((entry) => entry.provider === "codex");
+        expect(usage?.tokens).toBe(300);
+        expect(usage?.models.find((model) => model.model === "openai/gpt-5")?.tokens).toBe(80);
+      }),
+    );
+  });
+
+  it("excludes automation turn costs after computing the cumulative delta", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-cost-dispatch', 'project-profile', 'Cost Dispatch',
+            '{"provider":"opencode","model":"openai/gpt-5"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, state, requested_at, checkpoint_files_json
+          ) VALUES
+            ('thread-cost-dispatch', 'turn-cost-1', 'message-user-1', 'completed', '2026-06-15T09:01:00.000Z', '[]'),
+            ('thread-cost-dispatch', 'turn-cost-2', 'message-agent-1', 'completed', '2026-06-15T09:11:00.000Z', '[]'),
+            ('thread-cost-dispatch', 'turn-cost-3', 'message-user-2', 'completed', '2026-06-15T09:21:00.000Z', '[]')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, dispatch_origin,
+            is_streaming, source, created_at, updated_at
+          ) VALUES
+            ('message-user-1', 'thread-cost-dispatch', 'turn-cost-1', 'user', 'first', NULL, 0, 'native', '2026-06-15T09:01:00.000Z', '2026-06-15T09:01:00.000Z'),
+            ('message-agent-1', 'thread-cost-dispatch', 'turn-cost-2', 'user', 'agent run', 'agent', 0, 'native', '2026-06-15T09:11:00.000Z', '2026-06-15T09:11:00.000Z'),
+            ('message-user-2', 'thread-cost-dispatch', 'turn-cost-3', 'user', 'second', NULL, 0, 'native', '2026-06-15T09:21:00.000Z', '2026-06-15T09:21:00.000Z')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'cost-dispatch-1', 'thread-cost-dispatch', 'turn-cost-1',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":1.00}', 1, '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'cost-dispatch-2', 'thread-cost-dispatch', 'turn-cost-2',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":1.60}', 2, '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'cost-dispatch-3', 'thread-cost-dispatch', 'turn-cost-3',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":2.00}', 3, '2026-06-15T09:25:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage?.find((entry) => entry.provider === "opencode");
+        // Deltas run over the full sequence (1.00 + 0.60 + 0.40); the agent turn
+        // is then filtered, so the provider total is 1.40, not the session's
+        // final cumulative value 2.00.
+        expect(usage).toMatchObject({ turnCount: 2, costUsd: 1.4, costCoverage: "complete" });
+      }),
+    );
+  });
+
+  it("sums per-message OpenCode/Kilo token totals instead of delta-differencing them", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES
+            (
+              'thread-opencode-pm', 'project-profile', 'OpenCode Per Message',
+              '{"provider":"opencode","model":"openai/gpt-5"}',
+              'full-access', 'default', 'local',
+              '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+            ),
+            (
+              'thread-kilo-pm', 'project-profile', 'Kilo Per Message',
+              '{"provider":"kilo","model":"openai/gpt-5"}',
+              'full-access', 'default', 'local',
+              '2026-06-15T10:00:00.000Z', '2026-06-15T10:00:00.000Z', NULL
+            ),
+            (
+              'thread-cursor-pm', 'project-profile', 'Cursor Cumulative',
+              '{"provider":"cursor","model":"cursor-model"}',
+              'full-access', 'default', 'local',
+              '2026-06-15T11:00:00.000Z', '2026-06-15T11:00:00.000Z', NULL
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'opencode-pm-1', 'thread-opencode-pm', 'turn-opencode-1',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":190,"provider":"opencode"}', 1, '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'opencode-pm-2', 'thread-opencode-pm', 'turn-opencode-2',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":325,"provider":"opencode"}', 2, '2026-06-15T09:10:00.000Z'
+            ),
+            (
+              'kilo-pm-1', 'thread-kilo-pm', 'turn-kilo-1',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":190,"provider":"kilo"}', 1, '2026-06-15T10:05:00.000Z'
+            ),
+            (
+              'kilo-pm-2', 'thread-kilo-pm', 'turn-kilo-2',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":325,"provider":"kilo"}', 2, '2026-06-15T10:10:00.000Z'
+            ),
+            (
+              'cursor-pm-1', 'thread-cursor-pm', 'turn-cursor-1',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":190,"provider":"cursor"}', 1, '2026-06-15T11:05:00.000Z'
+            ),
+            (
+              'cursor-pm-2', 'thread-cursor-pm', 'turn-cursor-2',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":325,"provider":"cursor"}', 2, '2026-06-15T11:10:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage;
+        // OpenCode/Kilo per-message totals sum raw (190 + 325 = 515); a
+        // cumulative provider stays delta-based (190 + 135 = 325).
+        expect(usage?.find((entry) => entry.provider === "opencode")?.tokens).toBe(515);
+        expect(usage?.find((entry) => entry.provider === "kilo")?.tokens).toBe(515);
+        expect(usage?.find((entry) => entry.provider === "cursor")?.tokens).toBe(325);
+      }),
+    );
+  });
+
+  it("resets cumulative cost baselines across provider switches inside one thread", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-cost-collision', 'project-profile', 'Cost Collision',
+            '{"provider":"cursor","model":"cursor-base"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, state, requested_at, checkpoint_files_json
+          ) VALUES
+            ('thread-cost-collision', 'turn-collision-a1', 'message-collision-a1', 'completed', '2026-06-15T09:01:00.000Z', '[]'),
+            ('thread-cost-collision', 'turn-collision-b1', 'message-collision-b1', 'completed', '2026-06-15T09:11:00.000Z', '[]'),
+            ('thread-cost-collision', 'turn-collision-a2', 'message-collision-a2', 'completed', '2026-06-15T09:21:00.000Z', '[]')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, dispatch_origin,
+            is_streaming, source, created_at, updated_at
+          ) VALUES
+            ('message-collision-a1', 'thread-cost-collision', 'turn-collision-a1', 'user', 'a1', NULL, 0, 'native', '2026-06-15T09:01:00.000Z', '2026-06-15T09:01:00.000Z'),
+            ('message-collision-b1', 'thread-cost-collision', 'turn-collision-b1', 'user', 'b1', NULL, 0, 'native', '2026-06-15T09:11:00.000Z', '2026-06-15T09:11:00.000Z'),
+            ('message-collision-a2', 'thread-cost-collision', 'turn-collision-a2', 'user', 'a2', NULL, 0, 'native', '2026-06-15T09:21:00.000Z', '2026-06-15T09:21:00.000Z')
+        `;
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id, aggregate_kind, stream_id, stream_version, event_type,
+            occurred_at, actor_kind, payload_json, metadata_json
+          ) VALUES
+            (
+              'event-collision-a1', 'thread', 'thread-cost-collision', 1,
+              'thread.turn-start-requested', '2026-06-15T09:01:00.000Z', 'client',
+              '{"threadId":"thread-cost-collision","messageId":"message-collision-a1","modelSelection":{"provider":"cursor","model":"cursor-model"}}', '{}'
+            ),
+            (
+              'event-collision-b1', 'thread', 'thread-cost-collision', 2,
+              'thread.turn-start-requested', '2026-06-15T09:11:00.000Z', 'client',
+              '{"threadId":"thread-cost-collision","messageId":"message-collision-b1","modelSelection":{"provider":"codex","model":"gpt-5-codex"}}', '{}'
+            ),
+            (
+              'event-collision-a2', 'thread', 'thread-cost-collision', 3,
+              'thread.turn-start-requested', '2026-06-15T09:21:00.000Z', 'client',
+              '{"threadId":"thread-cost-collision","messageId":"message-collision-a2","modelSelection":{"provider":"cursor","model":"cursor-model"}}', '{}'
+            )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'collision-a1', 'thread-cost-collision', 'turn-collision-a1',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":1.00}', 1, '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'collision-b1', 'thread-cost-collision', 'turn-collision-b1',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":2.00}', 2, '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'collision-a2', 'thread-cost-collision', 'turn-collision-a2',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":3.00}', 3, '2026-06-15T09:25:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage;
+        // A's sequence (1.00 → 3.00) keeps its own baseline: 1.00 + 2.00 = 3.00.
+        // B's first sample is a fresh baseline: 2.00.
+        expect(usage?.find((entry) => entry.provider === "cursor")?.costUsd).toBe(3);
+        expect(usage?.find((entry) => entry.provider === "codex")?.costUsd).toBe(2);
+      }),
+    );
+  });
+
+  it("resets cumulative cost baselines when a new provider session marker appears", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-cost-sessions', 'project-profile', 'Cost Sessions',
+            '{"provider":"cursor","model":"cursor-model"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'session-1a', 'thread-cost-sessions', 'turn-session-1a',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":1.00,"providerThreadId":"session-1"}', 1, '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'session-1b', 'thread-cost-sessions', 'turn-session-1b',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":3.00,"providerThreadId":"session-1"}', 2, '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'session-2a', 'thread-cost-sessions', 'turn-session-2a',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":5.00,"providerThreadId":"session-2"}', 3, '2026-06-15T09:25:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage?.find((entry) => entry.provider === "cursor");
+        // Session 1: 1.00 + 2.00; session 2's first cumulative (5.00) is a fresh
+        // baseline instead of inheriting session 1's end.
+        expect(usage).toMatchObject({ turnCount: 3, costUsd: 8 });
       }),
     );
   });

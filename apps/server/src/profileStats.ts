@@ -11,6 +11,7 @@ import nodePath from "node:path";
 import type {
   ProfileQuota,
   ProfileStats,
+  ProfileTokenProviderUsage,
   ProfileTokenStats,
   ProviderKind,
   StatsGetProfileStatsInput,
@@ -85,6 +86,23 @@ interface TokenDayRow {
   readonly provider: string | null;
   readonly model: string | null;
   readonly tokens: number;
+}
+
+interface TurnUsageRow {
+  readonly day: string | null;
+  readonly provider: string | null;
+  readonly model: string | null;
+  readonly tokenCount: number | null;
+  readonly modelUsageReported: number;
+  readonly turnCount: number;
+  readonly threadCount: number;
+  readonly providerThreadCount: number;
+  readonly costMissingCount: number;
+  readonly costReportedCount: number;
+  readonly tokenMissingCount: number;
+  readonly tokenReportedCount: number;
+  readonly costUsd: number | null;
+  readonly lastUsedAt: string | null;
 }
 
 type UsageKind = "skill" | "agent";
@@ -454,6 +472,8 @@ interface TokenActivityAggregate {
   readonly lifetime: number;
 }
 
+const PROVIDER_USAGE_HISTORY_DAYS = 90;
+
 function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivityAggregate {
   const tokensByDay = new Map<string, number>();
   const tokensByProvider = new Map<ProviderKind, number>();
@@ -481,6 +501,258 @@ function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivity
     }
   }
   return { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime };
+}
+
+interface ProviderUsageModelAccumulator {
+  readonly provider: ProviderKind | "unknown";
+  readonly model: string;
+  tokens: number;
+  turnCount: number;
+  costUsd: number | null;
+}
+
+interface ProviderUsageHistoryAccumulator {
+  readonly day: string;
+  tokens: number;
+  turnCount: number;
+  threadCount: number;
+  costUsd: number | null;
+}
+
+interface ProviderUsageAccumulator {
+  readonly provider: ProviderKind | "unknown";
+  tokens: number;
+  tokensReported: boolean;
+  turnCount: number;
+  threadCount: number;
+  costUsd: number | null;
+  costCoverage: "complete" | "partial" | "not-reported";
+  tokenCoverage: "complete" | "partial" | "not-reported";
+  lastUsedAt: string | null;
+  readonly models: Map<string, ProviderUsageModelAccumulator>;
+  readonly history: Map<string, ProviderUsageHistoryAccumulator>;
+}
+
+function addOptionalCost(current: number | null, next: number | null | undefined): number | null {
+  if (next === null || next === undefined || !Number.isFinite(next) || next < 0) {
+    return current;
+  }
+  return (current ?? 0) + next;
+}
+
+function upstreamProviderIdForModel(
+  provider: ProviderKind | "unknown",
+  model: string,
+): string | undefined {
+  if (provider !== "opencode" && provider !== "kilo") {
+    return undefined;
+  }
+  const separator = model.indexOf("/");
+  if (separator <= 0) {
+    return undefined;
+  }
+  const upstream = model.slice(0, separator).trim();
+  return /^[a-z0-9][a-z0-9._-]*$/u.test(upstream) ? upstream : undefined;
+}
+
+function buildProviderUsage(
+  tokenRows: ReadonlyArray<TokenDayRow>,
+  turnRows: ReadonlyArray<TurnUsageRow>,
+  todayKey: string,
+): ReadonlyArray<ProfileTokenProviderUsage> {
+  const providers = new Map<string, ProviderUsageAccumulator>();
+
+  const providerFor = (value: unknown): ProviderKind | "unknown" => normalizeProviderKind(value);
+  const getProvider = (value: unknown): ProviderUsageAccumulator => {
+    const provider = providerFor(value);
+    const key = provider;
+    const existing = providers.get(key);
+    if (existing) {
+      return existing;
+    }
+    const created: ProviderUsageAccumulator = {
+      provider,
+      tokens: 0,
+      tokensReported: false,
+      turnCount: 0,
+      threadCount: 0,
+      costUsd: null,
+      costCoverage: "not-reported",
+      tokenCoverage: "not-reported",
+      lastUsedAt: null,
+      models: new Map(),
+      history: new Map(),
+    };
+    providers.set(key, created);
+    return created;
+  };
+
+  const getModel = (
+    provider: ProviderUsageAccumulator,
+    value: unknown,
+  ): ProviderUsageModelAccumulator => {
+    const model = nonEmptyString(value) ?? "unknown";
+    const existing = provider.models.get(model);
+    if (existing) {
+      return existing;
+    }
+    const created: ProviderUsageModelAccumulator = {
+      provider: provider.provider,
+      model,
+      tokens: 0,
+      turnCount: 0,
+      costUsd: null,
+    };
+    provider.models.set(model, created);
+    return created;
+  };
+
+  const getHistory = (
+    provider: ProviderUsageAccumulator,
+    value: unknown,
+  ): ProviderUsageHistoryAccumulator | null => {
+    const day = nonEmptyString(value);
+    if (!day) {
+      return null;
+    }
+    const existing = provider.history.get(day);
+    if (existing) {
+      return existing;
+    }
+    const created: ProviderUsageHistoryAccumulator = {
+      day,
+      tokens: 0,
+      turnCount: 0,
+      threadCount: 0,
+      costUsd: null,
+    };
+    provider.history.set(day, created);
+    return created;
+  };
+
+  for (const row of tokenRows) {
+    const tokens = Math.max(0, Math.trunc(num(row.tokens)));
+    const historyDay = nonEmptyString(row.day);
+    if (tokens <= 0 || !historyDay) {
+      continue;
+    }
+    const provider = getProvider(row.provider);
+    const model = getModel(provider, row.model);
+    const history = getHistory(provider, historyDay);
+    provider.tokens += tokens;
+    provider.tokensReported = true;
+    model.tokens += tokens;
+    if (history) {
+      history.tokens += tokens;
+    }
+  }
+
+  for (const row of turnRows) {
+    const turnCount = Math.max(0, Math.trunc(num(row.turnCount)));
+    const threadCount = Math.max(0, Math.trunc(num(row.threadCount)));
+    const historyDay = nonEmptyString(row.day);
+    const tokenCount = Math.max(0, Math.trunc(num(row.tokenCount)));
+    if ((turnCount <= 0 && threadCount <= 0 && tokenCount <= 0) || !historyDay) {
+      continue;
+    }
+    const provider = getProvider(row.provider);
+    const model = getModel(provider, row.model);
+    const history = getHistory(provider, historyDay);
+    const costUsd = typeof row.costUsd === "number" ? row.costUsd : null;
+    if (tokenCount > 0) {
+      provider.tokens += tokenCount;
+      provider.tokensReported = true;
+      model.tokens += tokenCount;
+      if (history) {
+        history.tokens += tokenCount;
+      }
+    }
+    provider.turnCount += turnCount;
+    provider.threadCount = Math.max(provider.threadCount, Math.trunc(num(row.providerThreadCount)));
+    provider.costUsd = addOptionalCost(provider.costUsd, costUsd);
+    if (turnCount > 0) {
+      if (row.costMissingCount > 0) {
+        provider.costCoverage = "partial";
+      } else if (row.costReportedCount > 0 && provider.costCoverage === "not-reported") {
+        provider.costCoverage = "complete";
+      }
+      // Token coverage mirrors cost coverage, but a provider whose turns carry
+      // NO token evidence stays "not-reported" (honest, like the
+      // unavailableProviders list) instead of rendering a partial total.
+      if (row.tokenMissingCount > 0 && row.tokenReportedCount > 0) {
+        provider.tokenCoverage = "partial";
+      } else if (row.tokenReportedCount > 0 && provider.tokenCoverage === "not-reported") {
+        provider.tokenCoverage = "complete";
+      }
+    }
+    model.turnCount += turnCount;
+    model.costUsd = addOptionalCost(model.costUsd, costUsd);
+    if (history) {
+      history.turnCount += turnCount;
+      history.threadCount += threadCount;
+      history.costUsd = addOptionalCost(history.costUsd, costUsd);
+    }
+    const lastUsedAt = nonEmptyString(row.lastUsedAt);
+    if (lastUsedAt && (!provider.lastUsedAt || lastUsedAt > provider.lastUsedAt)) {
+      provider.lastUsedAt = lastUsedAt;
+    }
+  }
+
+  const historyStart = addDaysIso(todayKey, -(PROVIDER_USAGE_HISTORY_DAYS - 1));
+  return [...providers.values()]
+    .filter((provider) => provider.tokens > 0 || provider.turnCount > 0)
+    .toSorted(
+      (left, right) =>
+        right.tokens - left.tokens ||
+        right.turnCount - left.turnCount ||
+        left.provider.localeCompare(right.provider),
+    )
+    .map((provider) => {
+      const tokenOrTurnTotal = provider.tokens > 0 ? provider.tokens : provider.turnCount;
+      const models = [...provider.models.values()]
+        .filter((model) => model.tokens > 0 || model.turnCount > 0)
+        .toSorted(
+          (left, right) =>
+            (provider.tokens > 0 ? right.tokens - left.tokens : right.turnCount - left.turnCount) ||
+            left.model.localeCompare(right.model),
+        )
+        .slice(0, 12)
+        .map((model) => ({
+          provider: model.provider,
+          model: model.model,
+          tokens: model.tokens,
+          percent: percent1(provider.tokens > 0 ? model.tokens : model.turnCount, tokenOrTurnTotal),
+          ...(model.turnCount > 0 ? { turnCount: model.turnCount } : {}),
+          ...(model.costUsd !== null ? { costUsd: model.costUsd } : {}),
+          ...(upstreamProviderIdForModel(model.provider, model.model)
+            ? { upstreamProviderId: upstreamProviderIdForModel(model.provider, model.model) }
+            : {}),
+        }));
+      const history = [...provider.history.values()]
+        .filter((entry) => entry.day >= historyStart && entry.day <= todayKey)
+        .toSorted((left, right) => right.day.localeCompare(left.day))
+        .map((entry) => ({
+          day: entry.day,
+          tokens: entry.tokens,
+          turnCount: entry.turnCount,
+          threadCount: entry.threadCount,
+          costUsd: entry.costUsd,
+        }));
+
+      return {
+        provider: provider.provider,
+        tokens: provider.tokens,
+        tokensReported: provider.tokensReported,
+        tokenCoverage: provider.tokenCoverage,
+        turnCount: provider.turnCount,
+        threadCount: provider.threadCount,
+        costUsd: provider.costUsd,
+        costCoverage: provider.costCoverage,
+        lastUsedAt: provider.lastUsedAt,
+        models,
+        history,
+      } satisfies ProfileTokenProviderUsage;
+    });
 }
 
 function computeStreaks(
@@ -707,12 +979,29 @@ const makeProfileStatsQuery = Effect.gen(function* () {
   // Counter scale: totalProcessedTokens is the preferred cumulative counter.
   // Some provider/model groups only emit usedTokens; keep those as separate
   // fallback series so a mixed-provider thread does not drop their tokens.
-  const queryTokenActivity = (tz: string) =>
-    legacyCompatibleQuery(
+  const queryTokenActivity = (tz: string, options: { readonly includeNonUser?: boolean } = {}) => {
+    const dispatchFilter = options.includeNonUser
+      ? sql``
+      : sql`WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'`;
+    return legacyCompatibleQuery(
       "profileStats.tokenActivity",
       sql<TokenDayRow>`
         WITH turn_model AS (
           ${turnModelSelectionCte(sql)}
+        ),
+        model_usage_turns AS (
+          SELECT DISTINCT
+            a.thread_id AS thread_id,
+            a.turn_id AS turn_id
+          FROM projection_thread_activities a
+          WHERE a.kind = 'turn.completed'
+            AND json_type(a.payload_json, '$.modelUsage') = 'object'
+            AND EXISTS (
+              SELECT 1
+              FROM json_each(a.payload_json, '$.modelUsage') AS model_entry
+              WHERE json_type(model_entry.value, '$.totalTokens') IN ('integer', 'real')
+                AND CAST(json_extract(model_entry.value, '$.totalTokens') AS INTEGER) > 0
+            )
         ),
         ev AS (
           SELECT
@@ -744,6 +1033,10 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tp,
             CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
             pm.dispatch_origin AS dispatch_origin,
+            -- modelUsage turns are replaced per-turn by their authoritative
+            -- modelUsage totals; their context-window rows stay in the LAG
+            -- sequence (baseline) but contribute zero below.
+            (mut.turn_id IS NOT NULL) AS is_model_usage_turn,
             a.sequence AS sequence,
             a.created_at AS created_at,
             a.activity_id AS activity_id
@@ -758,6 +1051,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           LEFT JOIN projection_thread_messages pm
             ON pm.thread_id = pt.thread_id
            AND pm.message_id = pt.pending_message_id
+          LEFT JOIN model_usage_turns mut
+            ON mut.thread_id = a.thread_id
+           AND mut.turn_id = a.turn_id
           WHERE a.kind = 'context-window.updated'
             AND COALESCE(
               json_extract(a.payload_json, '$.totalProcessedTokens'),
@@ -767,6 +1063,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         provider_model_scale AS (
           SELECT thread_id, provider, model, MAX(tp IS NOT NULL) AS has_cumulative
           FROM ev
+          WHERE NOT is_model_usage_turn
           GROUP BY thread_id, provider, model
         ),
         cumulative_kept AS (
@@ -777,6 +1074,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             thread_id,
             tp AS tot,
             dispatch_origin,
+            is_model_usage_turn,
             sequence,
             created_at,
             activity_id
@@ -789,7 +1087,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             provider,
             model,
             dispatch_origin,
+            is_model_usage_turn,
             CASE
+              WHEN provider IN ('opencode', 'kilo') THEN tot
               WHEN previous_tot IS NULL OR tot < previous_tot THEN tot
               ELSE MAX(0, tot - previous_tot)
             END AS d
@@ -799,6 +1099,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               provider,
               model,
               dispatch_origin,
+              is_model_usage_turn,
               tot,
               LAG(tot) OVER (
                 PARTITION BY thread_id
@@ -819,6 +1120,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             ev.thread_id AS thread_id,
             ev.ut AS tot,
             ev.dispatch_origin AS dispatch_origin,
+            ev.is_model_usage_turn AS is_model_usage_turn,
             ev.sequence AS sequence,
             ev.created_at AS created_at,
             ev.activity_id AS activity_id
@@ -837,6 +1139,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             provider,
             model,
             dispatch_origin,
+            is_model_usage_turn,
             CASE
               WHEN previous_tot IS NULL THEN tot
               WHEN tot < previous_tot
@@ -850,6 +1153,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               provider,
               model,
               dispatch_origin,
+              is_model_usage_turn,
               tot,
               LAG(tot) OVER (
                 PARTITION BY thread_id
@@ -879,11 +1183,15 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           )
         ),
         all_tokens AS (
-          SELECT day, provider, model, d FROM cumulative_delta
-          WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
+          SELECT day, provider, model,
+            CASE WHEN is_model_usage_turn THEN 0 ELSE d END AS d
+          FROM cumulative_delta
+          ${dispatchFilter}
           UNION ALL
-          SELECT day, provider, model, d FROM used_only_delta
-          WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
+          SELECT day, provider, model,
+            CASE WHEN is_model_usage_turn THEN 0 ELSE d END AS d
+          FROM used_only_delta
+          ${dispatchFilter}
           UNION ALL
           SELECT
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
@@ -897,6 +1205,277 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         GROUP BY day, provider, model
       `,
     );
+  };
+
+  // Terminal turn rows carry the provider-independent facts that token
+  // snapshots cannot: turn count, thread count, cost when the adapter reports
+  // it, and the last observed timestamp. Grouping stays in SQLite so a busy
+  // local database does not send every activity row through JavaScript.
+  const queryProviderTurnActivity = (
+    tz: string,
+    options: { readonly includeNonUser?: boolean } = {},
+  ) => {
+    const turnsFilter = options.includeNonUser
+      ? sql``
+      : sql`WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'`;
+    return legacyCompatibleQuery(
+      "profileStats.providerTurnActivity",
+      sql<TurnUsageRow>`
+        WITH turn_model AS (
+          ${turnModelSelectionCte(sql)}
+        ),
+        model_usage_turns AS (
+          SELECT DISTINCT
+            a.thread_id AS thread_id,
+            a.turn_id AS turn_id
+          FROM projection_thread_activities a
+          WHERE a.kind = 'turn.completed'
+            AND json_type(a.payload_json, '$.modelUsage') = 'object'
+            AND EXISTS (
+              SELECT 1
+              FROM json_each(a.payload_json, '$.modelUsage') AS model_entry
+              WHERE json_type(model_entry.value, '$.totalTokens') IN ('integer', 'real')
+                AND CAST(json_extract(model_entry.value, '$.totalTokens') AS INTEGER) > 0
+            )
+        ),
+        -- A completed turn is token-reported when it has modelUsage evidence or
+        -- a context-window.updated counter for the same (thread_id, turn_id).
+        token_evidence_turns AS (
+          SELECT DISTINCT a.thread_id AS thread_id, a.turn_id AS turn_id
+          FROM projection_thread_activities a
+          WHERE a.kind = 'context-window.updated'
+            AND COALESCE(
+              json_extract(a.payload_json, '$.totalProcessedTokens'),
+              json_extract(a.payload_json, '$.usedTokens')
+            ) IS NOT NULL
+          UNION
+          SELECT thread_id, turn_id FROM model_usage_turns
+        ),
+        turns_raw AS (
+          SELECT
+            a.activity_id AS activity_id,
+            a.thread_id AS thread_id,
+            a.turn_id AS turn_id,
+            STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
+            COALESCE(
+              tm.provider,
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN json_extract(th.model_selection_json, '$.provider')
+              END,
+              'unknown'
+            ) AS provider,
+            COALESCE(
+              tm.model,
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN json_extract(th.model_selection_json, '$.model')
+              END,
+              'unknown'
+            ) AS model,
+            CASE
+              WHEN json_type(a.payload_json, '$.totalCostUsd') IN ('integer', 'real')
+              THEN CAST(json_extract(a.payload_json, '$.totalCostUsd') AS REAL)
+              ELSE NULL
+            END AS total_cost_usd,
+            CASE
+              WHEN json_type(a.payload_json, '$.cumulativeCostUsd') IN ('integer', 'real')
+              THEN CAST(json_extract(a.payload_json, '$.cumulativeCostUsd') AS REAL)
+              ELSE NULL
+            END AS cumulative_cost_usd,
+            CASE
+              WHEN json_type(a.payload_json, '$.modelUsage') = 'object'
+              THEN json_extract(a.payload_json, '$.modelUsage')
+              ELSE NULL
+            END AS model_usage_json,
+            -- Optional provider session marker (Cursor ACP session id) so
+            -- cumulative-cost baselines reset across same-provider sessions.
+            COALESCE(json_extract(a.payload_json, '$.providerThreadId'), '') AS session_key,
+            pm.dispatch_origin AS dispatch_origin,
+            (tet.thread_id IS NOT NULL) AS tokenEvidence,
+            a.created_at AS created_at
+          FROM projection_thread_activities a
+          JOIN projection_threads th ON th.thread_id = a.thread_id
+          LEFT JOIN turn_model tm
+            ON tm.thread_id = a.thread_id
+           AND tm.turn_id = a.turn_id
+          LEFT JOIN projection_turns pt
+            ON pt.thread_id = a.thread_id
+           AND pt.turn_id = a.turn_id
+          LEFT JOIN projection_thread_messages pm
+            ON pm.thread_id = pt.thread_id
+           AND pm.message_id = pt.pending_message_id
+          LEFT JOIN token_evidence_turns tet
+            ON tet.thread_id = a.thread_id
+           AND tet.turn_id = a.turn_id
+          WHERE a.kind = 'turn.completed'
+        ),
+        turns_with_cumulative_group AS (
+          SELECT
+            turns_raw.*,
+            COUNT(turns_raw.cumulative_cost_usd) OVER (
+              PARTITION BY turns_raw.thread_id, turns_raw.provider, turns_raw.session_key
+              ORDER BY turns_raw.created_at ASC, turns_raw.activity_id ASC
+              ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS cumulative_group
+          FROM turns_raw
+        ),
+        cumulative_groups AS (
+          SELECT
+            thread_id,
+            provider,
+            session_key,
+            cumulative_group,
+            MAX(cumulative_cost_usd) AS cumulative_cost_usd
+          FROM turns_with_cumulative_group
+          WHERE cumulative_cost_usd IS NOT NULL
+          GROUP BY thread_id, provider, session_key, cumulative_group
+        ),
+        cumulative_groups_with_previous AS (
+          SELECT
+            cumulative_groups.*,
+            LAG(cumulative_groups.cumulative_cost_usd) OVER (
+              PARTITION BY cumulative_groups.thread_id, cumulative_groups.provider, cumulative_groups.session_key
+              ORDER BY cumulative_groups.cumulative_group ASC
+            ) AS previous_cumulative_cost_usd
+          FROM cumulative_groups
+        ),
+        turns AS (
+          SELECT
+            turns_with_cumulative_group.*,
+            CASE
+              WHEN turns_with_cumulative_group.total_cost_usd IS NOT NULL
+              THEN turns_with_cumulative_group.total_cost_usd
+              WHEN turns_with_cumulative_group.cumulative_cost_usd IS NOT NULL
+              THEN CASE
+                WHEN cumulative_groups_with_previous.previous_cumulative_cost_usd IS NULL
+                THEN turns_with_cumulative_group.cumulative_cost_usd
+                WHEN turns_with_cumulative_group.cumulative_cost_usd >= cumulative_groups_with_previous.previous_cumulative_cost_usd
+                THEN turns_with_cumulative_group.cumulative_cost_usd - cumulative_groups_with_previous.previous_cumulative_cost_usd
+                ELSE turns_with_cumulative_group.cumulative_cost_usd
+              END
+              ELSE NULL
+            END AS cost_usd
+          FROM turns_with_cumulative_group
+          LEFT JOIN cumulative_groups_with_previous
+            ON cumulative_groups_with_previous.thread_id = turns_with_cumulative_group.thread_id
+           AND cumulative_groups_with_previous.provider = turns_with_cumulative_group.provider
+           AND cumulative_groups_with_previous.session_key = turns_with_cumulative_group.session_key
+           AND cumulative_groups_with_previous.cumulative_group = turns_with_cumulative_group.cumulative_group
+        ),
+        -- Automation (agent-dispatched) turns are excluded AFTER the cumulative
+        -- LAG so an agent turn between two user turns cannot leak its cost into
+        -- the next user turn's delta.
+        turns_filtered AS (
+          SELECT * FROM turns
+          ${turnsFilter}
+        ),
+        provider_thread_counts AS (
+          SELECT provider, COUNT(DISTINCT thread_id) AS provider_thread_count
+          FROM turns_filtered
+          GROUP BY provider
+        ),
+        day_provider_thread_counts AS (
+          SELECT day, provider, COUNT(DISTINCT thread_id) AS day_thread_count
+          FROM turns_filtered
+          GROUP BY day, provider
+        ),
+        turn_activity AS (
+          SELECT
+            turns.day,
+            turns.provider,
+            turns.model,
+            NULL AS tokenCount,
+            0 AS modelUsageReported,
+            COUNT(*) AS turnCount,
+            CASE
+              WHEN ROW_NUMBER() OVER (
+                PARTITION BY turns.day, turns.provider
+                ORDER BY turns.model ASC
+              ) = 1
+              THEN day_provider_thread_counts.day_thread_count
+              ELSE 0
+            END AS threadCount,
+            provider_thread_counts.provider_thread_count AS providerThreadCount,
+            SUM(CASE WHEN turns.cost_usd IS NULL THEN 1 ELSE 0 END) AS costMissingCount,
+            SUM(CASE WHEN turns.cost_usd IS NOT NULL THEN 1 ELSE 0 END) AS costReportedCount,
+            SUM(CASE WHEN turns.tokenEvidence THEN 0 ELSE 1 END) AS tokenMissingCount,
+            SUM(CASE WHEN turns.tokenEvidence THEN 1 ELSE 0 END) AS tokenReportedCount,
+            CASE
+              WHEN COUNT(turns.cost_usd) > 0 THEN SUM(turns.cost_usd)
+              ELSE NULL
+            END AS costUsd,
+            MAX(turns.created_at) AS lastUsedAt
+          FROM turns_filtered turns
+          JOIN provider_thread_counts
+            ON provider_thread_counts.provider = turns.provider
+          JOIN day_provider_thread_counts
+            ON day_provider_thread_counts.day = turns.day
+           AND day_provider_thread_counts.provider = turns.provider
+          GROUP BY
+            turns.day,
+            turns.provider,
+            turns.model,
+            provider_thread_counts.provider_thread_count,
+            day_provider_thread_counts.day_thread_count
+        ),
+        model_usage_activity AS (
+          SELECT
+            turns.day,
+            turns.provider,
+            model_entry.key AS model,
+            SUM(CAST(json_extract(model_entry.value, '$.totalTokens') AS INTEGER)) AS tokenCount,
+            1 AS modelUsageReported,
+            0 AS turnCount,
+            0 AS threadCount,
+            provider_thread_counts.provider_thread_count AS providerThreadCount,
+            0 AS costMissingCount,
+            0 AS costReportedCount,
+            -- modelUsage turns are token-evidenced by the join itself.
+            0 AS tokenMissingCount,
+            0 AS tokenReportedCount,
+            NULL AS costUsd,
+            MAX(turns.created_at) AS lastUsedAt
+          FROM turns_filtered turns
+          CROSS JOIN json_each(turns.model_usage_json) AS model_entry
+          JOIN provider_thread_counts
+            ON provider_thread_counts.provider = turns.provider
+          WHERE json_type(model_entry.value, '$.totalTokens') IN ('integer', 'real')
+            AND CAST(json_extract(model_entry.value, '$.totalTokens') AS INTEGER) > 0
+          GROUP BY
+            turns.day,
+            turns.provider,
+            model_entry.key,
+            provider_thread_counts.provider_thread_count
+        ),
+        combined_activity AS (
+          SELECT * FROM turn_activity
+          UNION ALL
+          SELECT * FROM model_usage_activity
+        )
+        SELECT
+          day,
+          provider,
+          model,
+          SUM(tokenCount) AS tokenCount,
+          MAX(modelUsageReported) AS modelUsageReported,
+          SUM(turnCount) AS turnCount,
+          SUM(threadCount) AS threadCount,
+          MAX(providerThreadCount) AS providerThreadCount,
+          SUM(costMissingCount) AS costMissingCount,
+          SUM(costReportedCount) AS costReportedCount,
+          SUM(tokenMissingCount) AS tokenMissingCount,
+          SUM(tokenReportedCount) AS tokenReportedCount,
+          MAX(costUsd) AS costUsd,
+          MAX(lastUsedAt) AS lastUsedAt
+        FROM combined_activity
+        GROUP BY
+          day,
+          provider,
+          model
+      `,
+    );
+  };
 
   const queryTotalThreads = () =>
     legacyCompatibleQuery(
@@ -1270,9 +1849,29 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const tz = sqliteModifierFromUtcOffsetMinutes(input.utcOffsetMinutes);
       const todayKey = localToday(input.utcOffsetMinutes);
       const rows = yield* queryTokenActivity(tz);
+      const providerTurnRows = yield* queryProviderTurnActivity(tz);
+      // Keep the same lifetime token semantics as the Profile card. Deleted-thread archives only
+      // retain token totals, so the UI labels turn/cost detail independently when it is absent.
+      // A completed turn's modelUsage telemetry replaces its context-window rows at the exact
+      // turn boundary to avoid double counting. Add that authoritative modelUsage series back to
+      // the top-level token aggregate, which otherwise only sees context-window rows.
+      const modelUsageTokenRows = providerTurnRows
+        .filter(
+          (row) => row.modelUsageReported > 0 && row.tokenCount !== null && row.tokenCount > 0,
+        )
+        .map(
+          (row) =>
+            ({
+              day: row.day,
+              provider: row.provider,
+              model: row.model,
+              tokens: row.tokenCount!,
+            }) satisfies TokenDayRow,
+        );
       const turnInsightRows = yield* queryTurnInsights();
       const { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime } =
-        aggregateTokenActivity(rows);
+        aggregateTokenActivity([...rows, ...modelUsageTokenRows]);
+      const providerUsage = buildProviderUsage(rows, providerTurnRows, todayKey);
 
       let peakDay: string | null = null;
       let peakDayTokens: number | null = null;
@@ -1344,6 +1943,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         topProvider,
         topProviderPercent,
         models,
+        providerUsage,
         heatmapMetric: "tokens",
         heatmap: buildHeatmap(tokensByDay, todayKey),
       } satisfies ProfileTokenStats;
