@@ -151,6 +151,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+c", command: "thread.copyId", when: "!terminalFocus || isMac" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
+  { key: "meta+ctrl+p", command: "git.commitAndPush", when: "!terminalFocus && isMac" },
+  { key: "ctrl+alt+p", command: "git.commitAndPush", when: "!terminalFocus && !isMac" },
   { key: "mod+o", command: "editor.openFavorite" },
 ];
 
@@ -441,6 +443,20 @@ function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): bool
     left.key === right.key &&
     (left.when ?? undefined) === (right.when ?? undefined)
   );
+}
+
+function resolvedKeybindingRuleIdentity(rule: KeybindingRule): string | null {
+  const resolved = compileResolvedKeybindingRule(rule);
+  if (!resolved) return null;
+  const key = encodeShortcut(resolved.shortcut);
+  if (!key) return null;
+  const when = resolved.whenAst ? encodeWhenAst(resolved.whenAst) : "";
+  return `${resolved.command}\u0000${key}\u0000${when}`;
+}
+
+function isSameResolvedKeybindingRule(left: KeybindingRule, right: KeybindingRule): boolean {
+  const leftIdentity = resolvedKeybindingRuleIdentity(left);
+  return leftIdentity !== null && leftIdentity === resolvedKeybindingRuleIdentity(right);
 }
 
 function keybindingShortcutContext(rule: KeybindingRule): string | null {
@@ -801,11 +817,16 @@ export interface KeybindingsShape {
   /**
    * Upsert a keybinding rule and persist the resulting configuration.
    *
+   * When `replacing` is supplied, only that semantic rule is replaced so sibling
+   * conditions for the same command remain intact. Without it, the command keeps
+   * the existing command-wide replacement behavior.
+   *
    * Writes config atomically and enforces the max rule count by truncating
    * oldest entries when needed.
    */
   readonly upsertKeybindingRule: (
     rule: KeybindingRule,
+    replacing?: KeybindingRule,
   ) => Effect.Effect<ResolvedKeybindingsConfig, KeybindingsConfigError>;
 }
 
@@ -1199,6 +1220,25 @@ const makeKeybindings = Effect.gen(function* () {
     yield* Deferred.succeed(startedDeferred, undefined).pipe(Effect.orDie);
   });
 
+  const validateUpsertRule = (rule: KeybindingRule) =>
+    compileResolvedKeybindingRule(rule) === null
+      ? Effect.fail(
+          new KeybindingsConfigError({
+            configPath: keybindingsConfigPath,
+            detail: "invalid shortcut or condition expression",
+          }),
+        )
+      : Effect.void;
+
+  const keepExistingRuleDuringUpsert = (
+    existingRule: KeybindingRule,
+    rule: KeybindingRule,
+    replacing: KeybindingRule | undefined,
+  ) =>
+    replacing
+      ? !isSameResolvedKeybindingRule(existingRule, replacing)
+      : existingRule.command !== rule.command;
+
   return {
     start,
     ready: Deferred.await(startedDeferred),
@@ -1208,12 +1248,14 @@ const makeKeybindings = Effect.gen(function* () {
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },
-    upsertKeybindingRule: (rule) =>
+    upsertKeybindingRule: (rule, replacing) =>
       upsertSemaphore.withPermits(1)(
         Effect.gen(function* () {
+          yield* validateUpsertRule(rule);
+          if (replacing) yield* validateUpsertRule(replacing);
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
           const nextConfig = [
-            ...customConfig.filter((entry) => entry.command !== rule.command),
+            ...customConfig.filter((entry) => keepExistingRuleDuringUpsert(entry, rule, replacing)),
             rule,
           ];
           const cappedConfig =

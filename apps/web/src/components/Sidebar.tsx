@@ -942,7 +942,7 @@ function SidebarHelpMenu({
           <MenuGroup>
             <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenShortcuts}>
               <SidebarContextMenuIcon icon={KeyboardIcon} />
-              <span>Keyboard shortcuts</span>
+              <span>Keybindings</span>
             </MenuItem>
             <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenFeedback}>
               <SidebarContextMenuIcon icon={ChatBubbleIcon} />

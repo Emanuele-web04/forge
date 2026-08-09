@@ -3,9 +3,14 @@
 // Layer: UI helper
 // Depends on: keybinding label resolution, project script command mapping, and platform helpers.
 
-import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@synara/contracts";
+import {
+  STATIC_KEYBINDING_COMMANDS,
+  type KeybindingCommand,
+  type ResolvedKeybindingRule,
+  type ResolvedKeybindingsConfig,
+} from "@synara/contracts";
 import { isMacPlatform } from "./lib/utils";
-import { shortcutLabelForCommand } from "./keybindings";
+import { formatShortcutLabel, resolveKeybindingForCommand } from "./keybindings";
 import { commandForProjectScript } from "./projectScripts";
 import type { ProjectScript } from "./types";
 
@@ -18,6 +23,8 @@ export interface ShortcutSheetContext {
 
 export interface ShortcutSheetEntry {
   id: string;
+  command: KeybindingCommand | null;
+  binding: ResolvedKeybindingRule | null;
   label: string;
   description: string;
   shortcutLabel: string;
@@ -240,6 +247,47 @@ const WORKSPACE_DEFINITIONS: readonly ShortcutDefinition[] = [
   },
 ] as const;
 
+const SIDEBAR_TOGGLE_DEFINITION: ShortcutDefinition = {
+  command: "sidebar.toggle",
+  label: "Toggle sidebar",
+  description: "Collapse or reveal the sidebar shell.",
+};
+
+export interface EditableShortcutDefinition {
+  command: KeybindingCommand;
+  label: string;
+  description: string;
+}
+
+/** All built-in commands that can be assigned from Settings → Keybindings. */
+export function listEditableShortcutDefinitions(): EditableShortcutDefinition[] {
+  const definitionsByCommand = new Map<KeybindingCommand, EditableShortcutDefinition>();
+  for (const definition of [
+    SIDEBAR_TOGGLE_DEFINITION,
+    ...AVAILABLE_NOW_DEFINITIONS,
+    ...WORKSPACE_DEFINITIONS,
+    ...THREAD_JUMP_DEFINITIONS,
+  ]) {
+    const commands = Array.isArray(definition.command) ? definition.command : [definition.command];
+    for (const command of commands) {
+      definitionsByCommand.set(command, {
+        command,
+        label: definition.label,
+        description: definition.description,
+      });
+    }
+  }
+
+  return STATIC_KEYBINDING_COMMANDS.map(
+    (command): EditableShortcutDefinition =>
+      definitionsByCommand.get(command) ?? {
+        command,
+        label: command,
+        description: "Assign a shortcut to this built-in command.",
+      },
+  );
+}
+
 function modSlashLabel(platform: string): string {
   return isMacPlatform(platform) ? "⌘/" : "Ctrl+/";
 }
@@ -268,19 +316,19 @@ function definitionToEntry(
   context: ShortcutSheetContext,
 ): ShortcutSheetEntry | null {
   const commands = Array.isArray(definition.command) ? definition.command : [definition.command];
-  const shortcutLabel = commands.reduce<string | null>((resolved, command) => {
-    if (resolved) return resolved;
-    return shortcutLabelForCommand(keybindings, command, {
-      platform,
-      context,
-    });
-  }, null);
-  if (!shortcutLabel) return null;
+  const binding = commands.reduce<ResolvedKeybindingRule | null>(
+    (resolved, command) =>
+      resolved ?? resolveKeybindingForCommand(keybindings, command, { platform, context }),
+    null,
+  );
+  if (!binding) return null;
   return {
-    id: commands[0] ?? definition.label,
+    id: binding.command,
+    command: binding.command,
+    binding,
     label: definition.label,
     description: definition.description,
-    shortcutLabel,
+    shortcutLabel: formatShortcutLabel(binding.shortcut, platform),
   };
 }
 
@@ -303,7 +351,9 @@ export function buildShortcutSheetSections(
   const currentEntries: ShortcutSheetEntry[] = [
     {
       id: "shortcuts.show",
-      label: "Show keyboard shortcuts",
+      command: null,
+      binding: null,
+      label: "Show keybindings",
       description: "Open this sheet from anywhere without leaving your current context.",
       shortcutLabel: modSlashLabel(options.platform),
     },
@@ -316,11 +366,7 @@ export function buildShortcutSheetSections(
   ];
 
   const sidebarToggle = definitionToEntry(
-    {
-      command: "sidebar.toggle",
-      label: "Toggle sidebar",
-      description: "Collapse or reveal the sidebar shell.",
-    },
+    SIDEBAR_TOGGLE_DEFINITION,
     options.keybindings,
     options.platform,
     options.context,
@@ -381,21 +427,22 @@ export function buildShortcutSheetSections(
   }
 
   const projectScriptEntries = options.projectScripts
-    .map((script) => {
-      const shortcutLabel = shortcutLabelForCommand(
-        options.keybindings,
-        commandForProjectScript(script.id),
-        options.platform,
-      );
-      if (!shortcutLabel) return null;
+    .map<ShortcutSheetEntry | null>((script) => {
+      const command = commandForProjectScript(script.id);
+      const binding = resolveKeybindingForCommand(options.keybindings, command, {
+        platform: options.platform,
+      });
+      if (!binding) return null;
       return {
         id: script.id,
+        command,
+        binding,
         label: script.runOnWorktreeCreate ? `${script.name} setup script` : script.name,
         description: script.runOnWorktreeCreate
           ? "Run the project setup script directly from the keyboard."
           : "Run this project script without opening the scripts menu.",
-        shortcutLabel,
-      } satisfies ShortcutSheetEntry;
+        shortcutLabel: formatShortcutLabel(binding.shortcut, options.platform),
+      };
     })
     .filter((entry): entry is ShortcutSheetEntry => entry !== null);
 

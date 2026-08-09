@@ -283,11 +283,11 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Ask before closing a terminal tab and clearing its history. safety confirm",
   },
 
-  // ── Keyboard Shortcuts ────────────────────────────────────────────────────────
+  // ── Keybindings ───────────────────────────────────────────────────────────────
   {
     id: "shortcuts:keyboard-shortcuts",
     section: "shortcuts",
-    title: "Keyboard Shortcuts",
+    title: "Keybindings",
     keywords:
       "Every keyboard shortcut available in Synara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
     target: null,

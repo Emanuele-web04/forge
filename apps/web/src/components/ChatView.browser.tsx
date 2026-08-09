@@ -5479,6 +5479,46 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("focuses and keyboard-selects from the new-thread project picker", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withOpenProjectPickerFixtures(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-project-picker-keyboard-test" as MessageId,
+          targetText: "project picker keyboard test",
+        }),
+      ),
+    });
+
+    try {
+      await page.getByLabelText("Create new thread in Project").click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      await page.getByTestId("project-picker-trigger").click();
+      const searchInput = page.getByPlaceholder("Search projects");
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(searchInput.element());
+      });
+
+      await searchInput.fill("oth");
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+
+      await vi.waitFor(() => {
+        expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+          projectId: OTHER_PROJECT_ID,
+        });
+      });
+      expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("coalesces repeated Studio new-chat clicks and stays in Studio after navigation settles", async () => {
     useComposerDraftStore.setState({
       draftThreadsByThreadId: {

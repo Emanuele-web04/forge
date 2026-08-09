@@ -4737,7 +4737,7 @@ export default function ChatView({
       });
 
       if (isElectron && keybindingRule) {
-        await api.server.upsertKeybinding(keybindingRule);
+        await api.server.upsertKeybinding({ rule: keybindingRule });
         await queryClient.invalidateQueries({ queryKey: serverQueryKeys.all });
       }
     },
