@@ -25,6 +25,10 @@ import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
+import {
+  calculateBreadcrumbLayout,
+  type CollapsedBreadcrumbLayout,
+} from "./workspaceFilePreviewBreadcrumb";
 
 interface WorkspaceFilePreviewHeaderProps {
   workspaceRoot: string | null;
@@ -75,14 +79,6 @@ interface BreadcrumbSegment {
   key: string;
 }
 
-// How the directory prefix is drawn: `null` means everything fits at natural
-// width; otherwise only the trailing `visibleTail` directories are shown
-// behind a "…" crumb (dropped too when even the ellipsis alone cannot fit).
-interface CollapsedPrefixLayout {
-  visibleTail: number;
-  showEllipsis: boolean;
-}
-
 // Reserved room for the unsaved-changes dot after the filename (size-1.5 dot
 // + ml-1.5 gap), plus a small epsilon absorbing fractional-width rounding.
 const DIRTY_DOT_RESERVE_PX = 12;
@@ -105,12 +101,14 @@ function CollapsingPathBreadcrumb(props: {
   const { prefixSegments, fileSegment, filePath, dirty } = props;
   const navRef = useRef<HTMLElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
-  const [collapsedLayout, setCollapsedLayout] = useState<CollapsedPrefixLayout | null>(null);
+  const fileRef = useRef<HTMLSpanElement>(null);
+  const [collapsedLayout, setCollapsedLayout] = useState<CollapsedBreadcrumbLayout | null>(null);
 
   useLayoutEffect(() => {
     const nav = navRef.current;
     const measure = measureRef.current;
-    if (!nav || !measure) {
+    const file = fileRef.current;
+    if (!nav || !measure || !file) {
       return;
     }
 
@@ -122,37 +120,23 @@ function CollapsingPathBreadcrumb(props: {
       const ellipsisWidth =
         measure.querySelector<HTMLElement>('[data-measure="ellipsis"]')?.getBoundingClientRect()
           .width ?? 0;
-      const fileWidth =
-        measure.querySelector<HTMLElement>('[data-measure="file"]')?.getBoundingClientRect()
-          .width ?? 0;
-      const available =
-        nav.clientWidth - fileWidth - (dirty ? DIRTY_DOT_RESERVE_PX : 0) - MEASURE_EPSILON_PX;
-
-      const totalPrefixWidth = crumbWidths.reduce((sum, width) => sum + width, 0);
-      if (totalPrefixWidth <= available) {
-        setCollapsedLayout(null);
-        return;
-      }
-      let usedWidth = ellipsisWidth;
-      let visibleTail = 0;
-      for (let index = crumbWidths.length - 1; index >= 0; index -= 1) {
-        const crumbWidth = crumbWidths[index] ?? 0;
-        if (usedWidth + crumbWidth > available) {
-          break;
-        }
-        usedWidth += crumbWidth;
-        visibleTail += 1;
-      }
-      const showEllipsis = ellipsisWidth <= available;
+      const nextLayout = calculateBreadcrumbLayout({
+        containerWidth: nav.clientWidth,
+        renderedFileWidth: file.getBoundingClientRect().width,
+        prefixWidths: crumbWidths,
+        ellipsisWidth,
+        trailingReserveWidth: (dirty ? DIRTY_DOT_RESERVE_PX : 0) + MEASURE_EPSILON_PX,
+      });
       // Keep the previous state object when nothing changed so resize frames
       // that land on the same layout skip the re-render entirely.
-      setCollapsedLayout((current) =>
-        current !== null &&
-        current.visibleTail === visibleTail &&
-        current.showEllipsis === showEllipsis
+      setCollapsedLayout((current) => {
+        if (current === nextLayout) return current;
+        if (current === null || nextLayout === null) return nextLayout;
+        return current.visibleTail === nextLayout.visibleTail &&
+          current.showEllipsis === nextLayout.showEllipsis
           ? current
-          : { visibleTail, showEllipsis },
-      );
+          : nextLayout;
+      });
     };
 
     compute();
@@ -161,6 +145,7 @@ function CollapsingPathBreadcrumb(props: {
     const observer = new ResizeObserver(compute);
     observer.observe(nav);
     observer.observe(measure);
+    observer.observe(file);
     return () => observer.disconnect();
   }, [filePath, prefixSegments.length, dirty]);
 
@@ -204,9 +189,6 @@ function CollapsingPathBreadcrumb(props: {
             {crumbChevron}
           </span>
         ))}
-        <span data-measure="file" className="font-medium">
-          {fileSegment}
-        </span>
       </div>
 
       {showEllipsisCrumb ? (
@@ -223,7 +205,11 @@ function CollapsingPathBreadcrumb(props: {
           {crumbChevron}
         </Fragment>
       ))}
-      <span className="min-w-0 shrink truncate font-medium text-foreground" title={filePath}>
+      <span
+        ref={fileRef}
+        className="min-w-0 shrink truncate font-medium text-foreground"
+        title={filePath}
+      >
         {fileSegment}
       </span>
       {dirty ? (
