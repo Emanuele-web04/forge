@@ -135,6 +135,7 @@ import {
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
 } from "./-rootEventInvalidation";
+import { createDesktopProjectRecoveryAttemptGate } from "./-desktopProjectRecoveryAttempt";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
@@ -2069,12 +2070,18 @@ function DesktopProjectBootstrap() {
   const projects = useStore((store) => store.projects);
   const threads = useStore(selectAllThreads);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const attemptedRecoveryRef = useRef(false);
+  const recoveryAttemptGateRef = useRef<
+    ReturnType<typeof createDesktopProjectRecoveryAttemptGate> | null
+  >(null);
+  if (recoveryAttemptGateRef.current === null) {
+    recoveryAttemptGateRef.current = createDesktopProjectRecoveryAttemptGate();
+  }
+  const recoveryAttemptGate = recoveryAttemptGateRef.current;
 
   useEffect(() => {
     let disposed = false;
     const api = readNativeApi();
-    if (!api || attemptedRecoveryRef.current || !threadsHydrated) {
+    if (!api || !threadsHydrated) {
       return;
     }
 
@@ -2084,35 +2091,39 @@ function DesktopProjectBootstrap() {
       return;
     }
 
-    attemptedRecoveryRef.current = true;
+    const attempt = recoveryAttemptGate.begin();
+    if (!attempt) return;
+    const ownsAttempt = () => !disposed && attempt.isCurrent();
 
     // Shell subscriptions should normally hydrate the sidebar. If project rows
     // are missing while live threads exist, repair before accepting the snapshot.
     void api.orchestration
       .getShellSnapshot()
       .then((snapshot) => {
-        if (disposed) return;
+        if (!ownsAttempt()) return;
         const needsRepair =
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
         if (!needsRepair) {
+          if (!ownsAttempt() || !attempt.complete()) return;
           useStore.getState().syncServerShellSnapshot(snapshot);
           return snapshot;
         }
         return api.orchestration.repairState().then((repairedSnapshot) => {
-          if (disposed) return;
+          if (!ownsAttempt() || !attempt.complete()) return;
           syncServerReadModel(repairedSnapshot);
           return repairedSnapshot;
         });
       })
       .catch(() => {
-        attemptedRecoveryRef.current = false;
+        attempt.release();
       });
 
     return () => {
       disposed = true;
+      attempt.release();
     };
-  }, [projects, syncServerReadModel, threads, threadsHydrated]);
+  }, [projects, recoveryAttemptGate, syncServerReadModel, threads, threadsHydrated]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;
