@@ -1136,9 +1136,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     },
     [clearTailExpansionScrollTimers, onMessagesTouchStart],
   );
-  const handleMessagesWheel = useCallback<
-    NonNullable<MessagesTimelineProps["onMessagesWheel"]>
-  >(
+  const handleMessagesWheel = useCallback<NonNullable<MessagesTimelineProps["onMessagesWheel"]>>(
     (event) => {
       suppressTailExpansionScroll();
       onMessagesWheel?.(event);
