@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Effect, Layer, ServiceMap } from "effect";
 
+import { ThreadId } from "@synara/contracts";
+
 import { DeviceManager } from "./device/DeviceManager";
 import { FakeDeviceBackend } from "./device/FakeDeviceBackend";
 import { DeviceService } from "./device/Services/DeviceService";
@@ -14,7 +16,7 @@ class ThreadDeletionDeviceProbe extends ServiceMap.Service<
 
 describe("thread deletion reactor device-service wiring", () => {
   it("feeds the same DeviceService instance into lifecycle cleanup", async () => {
-    const threadId = "thread-delete-layer-wiring";
+    const threadId = ThreadId.makeUnsafe("thread-delete-layer-wiring");
     const backend = new FakeDeviceBackend();
     const manager = new DeviceManager({ backend });
     await backend.boot("FAKE-0001");
