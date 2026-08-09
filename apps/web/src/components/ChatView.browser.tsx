@@ -74,13 +74,15 @@ const THREAD_ID = "thread-browser-test" as ThreadId;
 const OTHER_THREAD_ID = "thread-browser-test-other" as ThreadId;
 
 // Each call to the snapshot factory gets a fresh, monotonically increasing sequence.
-// A generous step between calls guarantees that `recordProjectCreateCommand` and
-// `updateCurrentSnapshot` increments within one test never overlap the next test's
-// base sequence, so a late in-flight shell snapshot from a previous test is always
-// stale and ignored by `isStaleSnapshot`.
+// The step (1_000_000) is far larger than any single test can bridge: in-test
+// increments come only from `recordProjectCreateCommand`, `addThreadToSnapshot`, and
+// the per-test snapshot-sync helpers, each +1 per call and bounded by waitFor-driven
+// helper invocations (hundreds at most). So a late in-flight shell snapshot from a
+// previous test is always strictly below the next test's base sequence and is ignored
+// by `isStaleSnapshot`.
 let snapshotSequenceFactory = 0;
 function nextSnapshotSequence(): number {
-  snapshotSequenceFactory += 1000;
+  snapshotSequenceFactory += 1_000_000;
   return snapshotSequenceFactory;
 }
 const THREAD_TITLE = "Browser test thread";
