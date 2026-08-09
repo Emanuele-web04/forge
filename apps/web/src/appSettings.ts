@@ -778,7 +778,9 @@ function isServerSettingsPatchEmpty(patch: ServerSettingsPatch): boolean {
   return Object.keys(patch).length === 0;
 }
 
-function buildInitialServerSettingsMigrationPatch(settings: AppSettings): ServerSettingsPatch {
+export function buildInitialServerSettingsMigrationPatch(
+  settings: AppSettings,
+): ServerSettingsPatch {
   const patch: Partial<Mutable<AppSettings>> = {};
   const normalizedSettings = normalizeAppSettings(settings);
   const defaults = DEFAULT_APP_SETTINGS;
@@ -837,7 +839,23 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     }
   }
 
-  return appSettingsPatchToServerSettingsPatch(patch);
+  // Before server-owned settings, the browser inferred slash-qualified models
+  // as OpenCode and bare models as Codex when no provider was saved. Preserve
+  // those legacy mappings only for this one-time migration. Normal patches
+  // stay strict so an unattributable model cannot create a mismatched pair.
+  const legacyModel = patch.textGenerationModel;
+  const migrationPatch: Partial<Mutable<AppSettings>> =
+    patch.textGenerationProvider === undefined &&
+    typeof legacyModel === "string" &&
+    !legacyModel.startsWith("kilo/") &&
+    !legacyModel.startsWith("opencode/")
+      ? {
+          ...patch,
+          textGenerationProvider: legacyModel.includes("/") ? "opencode" : "codex",
+        }
+      : patch;
+
+  return appSettingsPatchToServerSettingsPatch(migrationPatch);
 }
 
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
@@ -950,19 +968,18 @@ export const GIT_TEXT_GENERATION_PICKER_PROVIDERS: readonly GitTextGenerationDef
 
 // Precomputed registered-default rows for the Git text generation picker (AC4): a
 // provider's OWN registered default is always a valid selectable option for
-// that provider, so it is always offered. Cursor's default "auto" is exempt
-// (it is a meta-slug that only surfaces when persisted), so it is not here.
+// that provider, so it is always offered.
 // Hoisted because every input is a module constant.
-const GIT_TEXT_GENERATION_DEFAULT_OPTIONS = GIT_TEXT_GENERATION_PICKER_PROVIDERS.filter(
-  (provider) => provider !== "cursor",
-).map((provider) => {
-  const slug = defaultGitTextGenerationSelectionFor(provider).model;
-  return {
-    provider,
-    slug,
-    name: formatProviderModelOptionName({ provider, slug }),
-  };
-});
+const GIT_TEXT_GENERATION_DEFAULT_OPTIONS = GIT_TEXT_GENERATION_PICKER_PROVIDERS.map(
+  (provider) => {
+    const slug = defaultGitTextGenerationSelectionFor(provider).model;
+    return {
+      provider,
+      slug,
+      name: formatProviderModelOptionName({ provider, slug }),
+    };
+  },
+);
 
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,
@@ -981,7 +998,6 @@ export function getGitTextGenerationModelOptions(
     | "customCodexModels"
     | "customKiloModels"
     | "customOpenCodeModels"
-    | "customCursorModels"
     | "textGenerationModel"
     | "textGenerationProvider"
   >,
@@ -1002,9 +1018,6 @@ export function getGitTextGenerationModelOptions(
     ...(discoveredOptionsByProvider?.opencode
       ? mapCatalogModelOptionsToAppModelOptions("opencode", discoveredOptionsByProvider.opencode)
       : getAppModelOptions("opencode", settings.customOpenCodeModels)),
-    ...(discoveredOptionsByProvider?.cursor
-      ? mapCatalogModelOptionsToAppModelOptions("cursor", discoveredOptionsByProvider.cursor)
-      : getAppModelOptions("cursor", settings.customCursorModels)),
   ];
   const deduped: AppModelOption[] = [];
   const seen = new Set<string>();
@@ -1021,9 +1034,7 @@ export function getGitTextGenerationModelOptions(
   // AC4 refinement: a provider's OWN registered default is always a valid
   // selectable option for that provider. It is not a phantom, even when the
   // runtime catalog is authoritative and does not advertise it. Defaults of
-  // OTHER providers are never injected. Cursor's default model "auto" stays
-  // exempt from picker injection: it is a meta-slug that only surfaces when
-  // persisted (via the selected-model dedup below).
+  // OTHER providers are never injected.
   for (const defaultOption of GIT_TEXT_GENERATION_DEFAULT_OPTIONS) {
     const key = `${defaultOption.provider}:${defaultOption.slug}`;
     if (seen.has(key)) {

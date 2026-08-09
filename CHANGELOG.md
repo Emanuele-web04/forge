@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added per-provider default Git writing models for commit messages, PR titles and branches, and diff summaries. Codex now defaults to `gpt-5.6-luna`, Kilo to `kilo/kilo-auto/free`, OpenCode to `opencode/big-pickle`, and Cursor to its `auto` default model.
+- Added per-provider default Git writing models for commit messages, PR titles and branches, and diff summaries. Codex now defaults to `gpt-5.6-luna`, Kilo to `kilo/kilo-auto/free`, and OpenCode to `opencode/big-pickle`.
 
 ### Changed
 

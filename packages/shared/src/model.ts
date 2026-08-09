@@ -129,8 +129,6 @@ function isValidModelForProvider(
       return model.includes("/") || model === "kilo/kilo-auto/free";
     case "opencode":
       return model.includes("/") || model === "opencode/big-pickle" || model === "openai/gpt-5";
-    case "cursor":
-      return model === "auto" || MODEL_SLUG_SET_BY_PROVIDER.cursor.has(model);
   }
 }
 

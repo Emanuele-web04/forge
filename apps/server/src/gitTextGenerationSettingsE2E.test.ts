@@ -2,7 +2,7 @@
 // Purpose: E2E round-trip of the Git text generation model selection through the
 // real server settings service (real file IO under a scratch directory, real
 // atomic writes, real disabled-provider fallback). Drives every patch shape
-// across all four Git text generation providers. The returned selection is
+// across all three Git text generation providers. The returned selection is
 // asserted after each step; the persisted pair is asserted on disk once, for
 // the final state. The full loop runs twice and must produce identical results.
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -21,23 +21,19 @@ const runWithSettings = <A, E>(
   effect: Effect.Effect<A, E, ServerSettingsService | ServerConfig | FileSystem.FileSystem>,
 ) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)));
 
-const GIT_TEXT_GENERATION_PROVIDERS = ["codex", "kilo", "opencode", "cursor"] as const;
+const GIT_TEXT_GENERATION_PROVIDERS = ["codex", "kilo", "opencode"] as const;
 
 const REGISTERED_DEFAULT_MODEL: Record<(typeof GIT_TEXT_GENERATION_PROVIDERS)[number], string> = {
   codex: "gpt-5.6-luna",
   kilo: "kilo/kilo-auto/free",
   opencode: "opencode/big-pickle",
-  cursor: "auto",
 };
 
-// A provider-scoped model for the model-only shape. Cursor models are bare
-// slugs, so the cursor case keeps the active (cursor) provider instead of
-// borrowing Codex.
+// A provider-scoped model for the model-only shape.
 const MODEL_ONLY_MODEL: Record<(typeof GIT_TEXT_GENERATION_PROVIDERS)[number], string> = {
   codex: "gpt-5.4-mini",
   kilo: "kilo/kilo-auto/free",
   opencode: "opencode/big-pickle",
-  cursor: "composer-2.5",
 };
 
 // Provider-valid option overrides: options are schema-filtered per provider.
@@ -48,7 +44,6 @@ const OPTIONS_HIGH: Record<
   codex: { reasoningEffort: "high" },
   kilo: { variant: "high" },
   opencode: { variant: "high" },
-  cursor: { reasoningEffort: "high" },
 };
 
 const OPTIONS_LOW: Record<
@@ -58,7 +53,6 @@ const OPTIONS_LOW: Record<
   codex: { reasoningEffort: "low" },
   kilo: { variant: "low" },
   opencode: { variant: "low" },
-  cursor: { reasoningEffort: "low" },
 };
 
 async function runRoundTrip() {
@@ -89,9 +83,8 @@ async function runRoundTrip() {
           model: REGISTERED_DEFAULT_MODEL[provider],
         });
 
-        // 2. Model-only → provider inferred from the slug (or the active
-        //    provider for a bare Cursor slug); never a mismatched pair. The
-        //    resolved provider is the loop's own provider in every case.
+        // 2. Model-only → provider inferred from the slug; never a mismatched
+        //    pair. The resolved provider is the loop's own provider in every case.
         const modelOnly = yield* service.updateSettings({
           textGenerationModelSelection: { model: MODEL_ONLY_MODEL[provider] },
         });
@@ -141,7 +134,6 @@ async function runRoundTrip() {
             codex: { enabled: false },
             kilo: { enabled: false },
             opencode: { enabled: false },
-            cursor: { enabled: false },
           },
         });
         expect(allDisabled.textGenerationModelSelection).toEqual({
@@ -156,7 +148,6 @@ async function runRoundTrip() {
             codex: { enabled: true },
             kilo: { enabled: true },
             opencode: { enabled: true },
-            cursor: { enabled: true },
           },
         });
       }
@@ -167,9 +158,9 @@ async function runRoundTrip() {
         settings?: { textGenerationModelSelection?: unknown };
       };
       expect(persisted.settings?.textGenerationModelSelection).toEqual({
-        provider: "cursor",
+        provider: "opencode",
         model: "custom/e2e-model",
-        options: OPTIONS_LOW.cursor,
+        options: OPTIONS_LOW.opencode,
       });
     }),
   );
@@ -178,7 +169,7 @@ async function runRoundTrip() {
 }
 
 describe("Git text generation settings E2E (real server service, scratch SYNARA_HOME)", () => {
-  it("round-trips every patch shape across all four providers, twice, identically", async () => {
+  it("round-trips every patch shape across all three providers, twice, identically", async () => {
     const first = await runRoundTrip();
     const second = await runRoundTrip();
 

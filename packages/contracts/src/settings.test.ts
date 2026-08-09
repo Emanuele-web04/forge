@@ -33,6 +33,18 @@ describe("ServerSettingsPatch options bounds", () => {
     ).toThrow();
   });
 
+  it("rejects null options before provider-specific settings normalization", () => {
+    expect(() =>
+      decodePatch({
+        textGenerationModelSelection: {
+          provider: "codex",
+          model: "gpt-5.6-luna",
+          options: null,
+        },
+      }),
+    ).toThrow();
+  });
+
   it("round-trips valid nested options", () => {
     const patch: ServerSettingsPatch = {
       textGenerationModelSelection: {

@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { BoundedUtf8String, utf8ByteLength } from "./browserAutomationBounds";
 import { BrowserElementRef, BrowserSnapshotId, BrowserTabId } from "./browserAutomationIds";
 import { BrowserAriaRole, BrowserPoint } from "./browserAutomationTargets";
+import { jsonBytes, jsonDepth } from "./jsonBounds";
 import {
   BrowserLoadState,
   browserBoundedInt as boundedInt,
@@ -21,25 +22,6 @@ export const BrowserDialogEvent = closedStruct({
 });
 const optionalDialogFields = {
   dialogs: Schema.optional(Schema.Array(BrowserDialogEvent).check(Schema.isMaxLength(20))),
-};
-
-export const jsonDepth = (value: unknown, depth = 0): number => {
-  if (value === null || typeof value !== "object") return depth;
-  if (depth > 20) return depth;
-  if (Array.isArray(value)) {
-    return value.reduce((maximum, item) => Math.max(maximum, jsonDepth(item, depth + 1)), depth);
-  }
-  return Object.values(value as Record<string, unknown>).reduce<number>(
-    (maximum, item) => Math.max(maximum, jsonDepth(item, depth + 1)),
-    depth,
-  );
-};
-export const jsonBytes = (value: unknown): number => {
-  try {
-    return utf8ByteLength(JSON.stringify(value));
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
 };
 
 export const BrowserBoundedJson = Schema.Json.check(

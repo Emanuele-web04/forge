@@ -171,13 +171,6 @@ describe("DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER", () => {
     });
   });
 
-  it("defaults Cursor to its ACP `default` (auto) model id", () => {
-    expect(DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER.cursor).toEqual({
-      provider: "cursor",
-      model: "auto",
-    });
-  });
-
   it("derives the legacy Codex-shaped constant from the map", () => {
     expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe("gpt-5.6-luna");
     expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe(
@@ -186,7 +179,7 @@ describe("DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER", () => {
   });
 
   it("returns atomic provider+model pairs for every exposed provider", () => {
-    const providers = ["codex", "kilo", "opencode", "cursor"] as const;
+    const providers = ["codex", "kilo", "opencode"] as const;
     for (const provider of providers) {
       const selection = DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER[provider];
       expect(selection.provider).toBe(provider);
@@ -197,7 +190,6 @@ describe("DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER", () => {
   it("has one registered entry per Git text generation provider the picker exposes", () => {
     expect(Object.keys(DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER).toSorted()).toEqual([
       "codex",
-      "cursor",
       "kilo",
       "opencode",
     ]);

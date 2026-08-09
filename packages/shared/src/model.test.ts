@@ -1007,10 +1007,6 @@ describe("defaultGitTextGenerationSelectionFor", () => {
       provider: "opencode",
       model: "opencode/big-pickle",
     });
-    expect(defaultGitTextGenerationSelectionFor("cursor")).toEqual({
-      provider: "cursor",
-      model: "auto",
-    });
   });
 });
 
@@ -1034,10 +1030,6 @@ describe("resolveGitTextGenerationSelection", () => {
     expect(resolveGitTextGenerationSelection({ provider: "opencode" })).toEqual({
       provider: "opencode",
       model: "opencode/big-pickle",
-    });
-    expect(resolveGitTextGenerationSelection({ provider: "cursor" })).toEqual({
-      provider: "cursor",
-      model: "auto",
     });
   });
 
@@ -1081,9 +1073,9 @@ describe("resolveGitTextGenerationSelection", () => {
     ).toEqual({ provider: "codex", model: "gpt-5.4-mini" });
   });
 
-  it("keeps a bare non-Codex slug on the active Git text generation provider that owns it", () => {
-    // "auto"/"composer-2.5" are Cursor models; pairing them with Codex would be
-    // a mismatched pair, so they stay on the active provider when it owns them.
+  it("keeps a bare non-Codex slug on a legacy active provider", () => {
+    // Cursor is not in the Git text generation registry, but an explicitly
+    // persisted legacy Cursor pair must not be discarded.
     expect(resolveGitTextGenerationSelection({ model: "auto", currentProvider: "cursor" })).toEqual(
       { provider: "cursor", model: "auto" },
     );
@@ -1152,13 +1144,6 @@ describe("resolveGitTextGenerationSelection", () => {
         currentProvider: "kilo",
       }),
     ).toEqual({ provider: "kilo", model: "openrouter/custom-model" });
-    // A vendor/model slug the active provider cannot run is rejected.
-    expect(
-      resolveGitTextGenerationSelection({
-        model: "cursor/custom-model",
-        currentProvider: "cursor",
-      }),
-    ).toBeNull();
   });
 
   it("rejects an ambiguous vendor/model slug without an active provider", () => {
@@ -1188,8 +1173,8 @@ describe("resolveGitTextGenerationSelection", () => {
       { provider: "opencode", model: "opencode/big-pickle" },
     );
     expect(resolveGitTextGenerationSelection({ model: "", currentProvider: "cursor" })).toEqual({
-      provider: "cursor",
-      model: "auto",
+      provider: "codex",
+      model: "gpt-5.6-luna",
     });
   });
 });

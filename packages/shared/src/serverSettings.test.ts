@@ -115,12 +115,11 @@ describe("providerStartOptionsFromServerSettings", () => {
 });
 
 describe("applyServerSettingsPatch textGenerationModelSelection", () => {
-  const GIT_TEXT_GENERATION_PROVIDERS = ["codex", "kilo", "opencode", "cursor"] as const;
+  const GIT_TEXT_GENERATION_PROVIDERS = ["codex", "kilo", "opencode"] as const;
   const REGISTERED_DEFAULT_MODEL: Record<(typeof GIT_TEXT_GENERATION_PROVIDERS)[number], string> = {
     codex: "gpt-5.6-luna",
     kilo: "kilo/kilo-auto/free",
     opencode: "opencode/big-pickle",
-    cursor: "auto",
   };
 
   it.each(GIT_TEXT_GENERATION_PROVIDERS)(
@@ -141,7 +140,6 @@ describe("applyServerSettingsPatch textGenerationModelSelection", () => {
     { provider: "codex", model: "gpt-5.4-mini" },
     { provider: "kilo", model: "kilo/kilo-auto/free" },
     { provider: "opencode", model: "opencode/big-pickle" },
-    { provider: "cursor", model: "composer-2.5" },
   ] as const)("keeps an explicit provider+model pair ($provider/$model) unchanged", (selection) => {
     const patched = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       textGenerationModelSelection: selection,
@@ -189,9 +187,9 @@ describe("applyServerSettingsPatch textGenerationModelSelection", () => {
     },
   );
 
-  it("keeps a bare non-Codex model on the active Git text generation provider instead of borrowing Codex", () => {
-    // "composer-2.5" is a Cursor model. With Cursor active, a model-only patch
-    // must not produce the mismatched pair {codex, composer-2.5}.
+  it("keeps a bare non-Codex model on a legacy active provider instead of borrowing Codex", () => {
+    // Cursor is not a Git text generation provider in this registry, but an
+    // explicitly persisted legacy Cursor pair must still round-trip safely.
     const patched = applyServerSettingsPatch(
       {
         ...DEFAULT_SERVER_SETTINGS,

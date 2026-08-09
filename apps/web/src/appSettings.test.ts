@@ -10,6 +10,7 @@ import {
   type AppSettings,
   AppSettingsSchema,
   appSettingsPatchToServerSettingsPatch,
+  buildInitialServerSettingsMigrationPatch,
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_FOLLOW_UP_BEHAVIOR,
@@ -159,12 +160,11 @@ describe("getAppModelOptions", () => {
 });
 
 describe("getGitTextGenerationModelOptions", () => {
-  it("merges codex, OpenCode, and Cursor model options for git writing settings", () => {
+  it("merges Codex, Kilo, and OpenCode model options for Git writing settings", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: ["custom/codex-model"],
       customKiloModels: [],
       customOpenCodeModels: ["openrouter/gpt-oss-120b"],
-      customCursorModels: ["cursor/custom-model"],
       textGenerationModel: "openai/gpt-5",
       textGenerationProvider: "opencode",
     });
@@ -172,30 +172,25 @@ describe("getGitTextGenerationModelOptions", () => {
     expect(options.some((option) => option.slug === "gpt-5.4-mini")).toBe(true);
     expect(options.some((option) => option.slug === "openai/gpt-5")).toBe(true);
     expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
-    expect(options.some((option) => option.slug === "auto")).toBe(true);
-    expect(options.some((option) => option.slug === "cursor/custom-model")).toBe(true);
   });
 
-  it("prefers runtime-discovered OpenCode, Kilo, and Cursor models for git writing settings", () => {
+  it("prefers runtime-discovered OpenCode and Kilo models for Git writing settings", () => {
     const options = getGitTextGenerationModelOptions(
       {
         customCodexModels: [],
         customKiloModels: [],
         customOpenCodeModels: [],
-        customCursorModels: [],
         textGenerationModel: "openrouter/custom-model",
         textGenerationProvider: "opencode",
       },
       {
         opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
         kilo: [{ slug: "kilo/kilo-auto/free", name: "Kilo Auto Free" }],
-        cursor: [{ slug: "composer-2.5", name: "Composer 2.5" }],
       },
     );
 
     expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
     expect(options.some((option) => option.slug === "kilo/kilo-auto/free")).toBe(true);
-    expect(options.some((option) => option.slug === "composer-2.5")).toBe(true);
     expect(options.some((option) => option.slug === "openrouter/custom-model")).toBe(true);
   });
 
@@ -204,7 +199,6 @@ describe("getGitTextGenerationModelOptions", () => {
       customCodexModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
-      customCursorModels: [],
       textGenerationModel: "openrouter/custom-model",
       textGenerationProvider: "opencode",
     });
@@ -222,7 +216,6 @@ describe("getGitTextGenerationModelOptions", () => {
       customCodexModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
-      customCursorModels: [],
       textGenerationModel: "opencode-go/kimi-k2.6",
       textGenerationProvider: "opencode",
     });
@@ -240,7 +233,6 @@ describe("getGitTextGenerationModelOptions", () => {
       customCodexModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
-      customCursorModels: [],
       textGenerationModel: undefined,
       textGenerationProvider: "codex",
     });
@@ -249,7 +241,6 @@ describe("getGitTextGenerationModelOptions", () => {
     expect(slugs).toContain("codex:gpt-5.6-luna");
     expect(slugs).toContain("kilo:kilo/kilo-auto/free");
     expect(slugs).toContain("opencode:opencode/big-pickle");
-    expect(slugs).toContain("cursor:auto");
   });
 
   it("always offers each provider's own registered default even when the runtime catalog is authoritative", () => {
@@ -258,7 +249,6 @@ describe("getGitTextGenerationModelOptions", () => {
         customCodexModels: [],
         customKiloModels: [],
         customOpenCodeModels: [],
-        customCursorModels: [],
         textGenerationModel: undefined,
         textGenerationProvider: "codex",
       },
@@ -266,7 +256,6 @@ describe("getGitTextGenerationModelOptions", () => {
         codex: [{ slug: "gpt-5.5", name: "GPT-5.5" }],
         kilo: [{ slug: "kilo/kilo-auto/pro", name: "Kilo Auto Pro" }],
         opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
-        cursor: [{ slug: "composer-2.5", name: "Composer 2.5" }],
       },
     );
 
@@ -279,9 +268,6 @@ describe("getGitTextGenerationModelOptions", () => {
     // Defaults of OTHER providers are never injected (no cross-provider pairs).
     expect(slugs).not.toContain("codex:kilo/kilo-auto/free");
     expect(slugs).not.toContain("opencode:gpt-5.6-luna");
-    // Cursor's "auto" is a meta-slug and stays exempt from picker injection
-    // unless it is the persisted selection (covered below).
-    expect(slugs).not.toContain("cursor:auto");
   });
 
   it("keeps the persisted selection selectable even when an authoritative catalog omits it", () => {
@@ -290,7 +276,6 @@ describe("getGitTextGenerationModelOptions", () => {
         customCodexModels: [],
         customKiloModels: [],
         customOpenCodeModels: [],
-        customCursorModels: [],
         textGenerationModel: "opencode/big-pickle",
         textGenerationProvider: "opencode",
       },
@@ -298,7 +283,6 @@ describe("getGitTextGenerationModelOptions", () => {
         codex: [{ slug: "gpt-5.5", name: "GPT-5.5" }],
         kilo: [{ slug: "kilo/kilo-auto/pro", name: "Kilo Auto Pro" }],
         opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
-        cursor: [{ slug: "composer-2.5", name: "Composer 2.5" }],
       },
     );
 
@@ -309,35 +293,11 @@ describe("getGitTextGenerationModelOptions", () => {
     ).toBe(true);
   });
 
-  it("surfaces Cursor's auto default only when it is the persisted selection", () => {
-    const options = getGitTextGenerationModelOptions(
-      {
-        customCodexModels: [],
-        customKiloModels: [],
-        customOpenCodeModels: [],
-        customCursorModels: [],
-        textGenerationModel: "auto",
-        textGenerationProvider: "cursor",
-      },
-      {
-        codex: [{ slug: "gpt-5.5", name: "GPT-5.5" }],
-        kilo: [{ slug: "kilo/kilo-auto/pro", name: "Kilo Auto Pro" }],
-        opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
-        cursor: [{ slug: "composer-2.5", name: "Composer 2.5" }],
-      },
-    );
-
-    expect(options.some((option) => option.provider === "cursor" && option.slug === "auto")).toBe(
-      true,
-    );
-  });
-
   it("labels injected registered defaults as non-custom", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
-      customCursorModels: [],
       textGenerationModel: undefined,
       textGenerationProvider: "codex",
     });
@@ -461,14 +421,44 @@ describe("appSettingsPatchToServerSettingsPatch", () => {
       appSettingsPatchToServerSettingsPatch({ textGenerationModel: "composer-2.5" }, "codex"),
     ).toEqual({});
   });
+});
 
-  it("resolves a foreign bare slug against the current provider when it is valid", () => {
+describe("buildInitialServerSettingsMigrationPatch", () => {
+  it("preserves the legacy model-only slash inference for OpenCode", () => {
+    const legacy = AppSettingsSchema.makeUnsafe({
+      textGenerationModel: "openrouter/gpt-oss-120b",
+    });
+
+    expect(buildInitialServerSettingsMigrationPatch(legacy)).toEqual({
+      textGenerationModelSelection: {
+        provider: "opencode",
+        model: "openrouter/gpt-oss-120b",
+      },
+    });
+  });
+
+  it("keeps authoritative provider-qualified models on their provider", () => {
     expect(
-      appSettingsPatchToServerSettingsPatch({ textGenerationModel: "composer-2.5" }, "cursor"),
+      buildInitialServerSettingsMigrationPatch(
+        AppSettingsSchema.makeUnsafe({ textGenerationModel: "kilo/kilo-auto/pro" }),
+      ),
     ).toEqual({
       textGenerationModelSelection: {
-        provider: "cursor",
-        model: "composer-2.5",
+        provider: "kilo",
+        model: "kilo/kilo-auto/pro",
+      },
+    });
+  });
+
+  it("preserves legacy model-only custom Codex slugs", () => {
+    expect(
+      buildInitialServerSettingsMigrationPatch(
+        AppSettingsSchema.makeUnsafe({ textGenerationModel: "galapagos-alpha" }),
+      ),
+    ).toEqual({
+      textGenerationModelSelection: {
+        provider: "codex",
+        model: "galapagos-alpha",
       },
     });
   });

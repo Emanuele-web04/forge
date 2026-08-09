@@ -1,8 +1,8 @@
 import { Schema } from "effect";
 import { TrimmedString } from "./baseSchemas";
-import { jsonBytes, jsonDepth } from "./browserAutomationToolOutputs";
 import { DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
+import { jsonBytes, jsonDepth } from "./jsonBounds";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
@@ -128,7 +128,10 @@ export const DEFAULT_SERVER_SETTINGS_VIEW: ServerSettingsView = Schema.decodeSyn
 )({});
 
 const BoundedJson = Schema.Json.check(
-  Schema.makeFilter((value: Schema.Json) => jsonDepth(value) <= 20 && jsonBytes(value) <= 262_144),
+  Schema.makeFilter(
+    (value: Schema.Json) =>
+      value !== null && jsonDepth(value) <= 20 && jsonBytes(value) <= 262_144,
+  ),
 );
 
 const ModelSelectionPatch = Schema.Struct({

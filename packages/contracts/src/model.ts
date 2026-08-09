@@ -1071,13 +1071,8 @@ export const DEFAULT_GIT_TEXT_GENERATION_SELECTION_BY_PROVIDER = {
     provider: "opencode",
     model: "opencode/big-pickle",
   },
-  // Cursor exposes `auto` as the `default` model id over ACP; the adapter maps it.
-  cursor: {
-    provider: "cursor",
-    model: "auto",
-  },
 } as const satisfies {
-  [P in "codex" | "kilo" | "opencode" | "cursor"]: { readonly provider: P; readonly model: string };
+  [P in "codex" | "kilo" | "opencode"]: { readonly provider: P; readonly model: string };
 };
 
 export type GitTextGenerationDefaultProvider =
