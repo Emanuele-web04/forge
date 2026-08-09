@@ -1204,8 +1204,11 @@ export default function ChatView({
   const timestampFormat = settings.timestampFormat;
   // The composer floats over the transcript; its measured height becomes the
   // transcript's bottom content inset (see composerOverlay.ts).
-  const { overlayRef: composerOverlayRef, overlayHeightPx: composerOverlayHeightPx } =
-    useComposerOverlayHeight();
+  const {
+    overlayRef: composerOverlayRef,
+    overlayHeightPx: composerOverlayHeightPx,
+    overlayBottomClearancePx: composerOverlayBottomClearancePx,
+  } = useComposerOverlayHeight();
   const composerTranscriptInsetPx = composerTranscriptBottomInsetPx(composerOverlayHeightPx);
   const navigate = useNavigate();
   const { handleNewThread } = useHandleNewThread();
@@ -4737,7 +4740,7 @@ export default function ChatView({
       });
 
       if (isElectron && keybindingRule) {
-        await api.server.upsertKeybinding(keybindingRule);
+        await api.server.upsertKeybinding({ rule: keybindingRule });
         await queryClient.invalidateQueries({ queryKey: serverQueryKeys.all });
       }
     },
@@ -11965,6 +11968,7 @@ export default function ChatView({
                         : undefined
                     }
                     contentInsetBottomPx={composerTranscriptInsetPx}
+                    contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
                   />
                 </div>
 

@@ -108,9 +108,12 @@ export const gitMutationKeys = {
 type GitRefreshDepth = "availability" | "active-details";
 
 interface ActiveGitRefresh {
-  readonly depth: GitRefreshDepth;
-  readonly promise: Promise<void>;
-  availabilityPromise: Promise<void> | undefined;
+  depth: GitRefreshDepth;
+  started: boolean;
+  /** Resolves after the availability phase (repository/status/branches). */
+  availability: Promise<void>;
+  /** Resolves after the full refresh, including active detail reads when requested. */
+  promise: Promise<void>;
 }
 
 const activeGitRefreshes = new WeakMap<QueryClient, Map<string, ActiveGitRefresh>>();
@@ -135,40 +138,37 @@ function enqueueGitRefresh(queryClient: QueryClient, refresh: () => Promise<void
 function trackGitRefresh(
   queryClient: QueryClient,
   cwd: string,
-  depth: GitRefreshDepth,
-  promise: Promise<void>,
-  availabilityPromise?: Promise<void>,
+  entry: ActiveGitRefresh,
 ): Promise<void> {
   let refreshes = activeGitRefreshes.get(queryClient);
   if (!refreshes) {
     refreshes = new Map();
     activeGitRefreshes.set(queryClient, refreshes);
   }
-  const entry: ActiveGitRefresh = { depth, promise, availabilityPromise };
   refreshes.set(cwd, entry);
-  if (availabilityPromise) {
-    void availabilityPromise.then(
-      () => {
-        if (entry.availabilityPromise === availabilityPromise) {
-          entry.availabilityPromise = undefined;
-        }
-      },
-      () => {
-        if (entry.availabilityPromise === availabilityPromise) {
-          entry.availabilityPromise = undefined;
-        }
-      },
-    );
-  }
-  void promise.then(
-    () => {
-      if (refreshes?.get(cwd) === entry) refreshes.delete(cwd);
-    },
-    () => {
-      if (refreshes?.get(cwd) === entry) refreshes.delete(cwd);
-    },
+  const cleanup = () => {
+    if (refreshes.get(cwd) === entry) refreshes.delete(cwd);
+  };
+  void entry.promise.then(cleanup, cleanup);
+  return entry.promise;
+}
+
+/**
+ * Refetches the matching active queries from scratch. A fetch already in flight may have
+ * read the repository before whatever change triggered this refresh (e.g. a checkout or
+ * pull that just settled), so reusing it would mark stale data fresh. It is cancelled
+ * explicitly first because refetchQueries' cancelRefetch only cancels fetches on queries
+ * that already hold data — a cold query's initial fetch would otherwise be joined.
+ */
+async function refetchFreshGitQueries(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+): Promise<void> {
+  await queryClient.cancelQueries({ queryKey, exact: true, fetchStatus: "fetching" });
+  await queryClient.refetchQueries(
+    { queryKey, exact: true, type: "active" },
+    { cancelRefetch: true },
   );
-  return promise;
 }
 
 async function refreshGitAvailability(queryClient: QueryClient, cwd: string): Promise<void> {
@@ -190,18 +190,9 @@ async function refreshGitAvailability(queryClient: QueryClient, cwd: string): Pr
     }),
   ]);
   await Promise.all([
-    queryClient.refetchQueries(
-      { queryKey: gitQueryKeys.githubRepository(cwd), exact: true, type: "active" },
-      { cancelRefetch: false },
-    ),
-    queryClient.refetchQueries(
-      { queryKey: gitQueryKeys.status(cwd), exact: true, type: "active" },
-      { cancelRefetch: false },
-    ),
-    queryClient.refetchQueries(
-      { queryKey: gitQueryKeys.branches(cwd), exact: true, type: "active" },
-      { cancelRefetch: false },
-    ),
+    refetchFreshGitQueries(queryClient, gitQueryKeys.githubRepository(cwd)),
+    refetchFreshGitQueries(queryClient, gitQueryKeys.status(cwd)),
+    refetchFreshGitQueries(queryClient, gitQueryKeys.branches(cwd)),
   ]);
 }
 
@@ -238,12 +229,7 @@ async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): P
     }),
   ]);
   for (const query of activeGitDetailQueries(queryClient, cwd)) {
-    await enqueueGitRefresh(queryClient, () =>
-      queryClient.refetchQueries(
-        { queryKey: query.queryKey, exact: true, type: "active" },
-        { cancelRefetch: false },
-      ),
-    );
+    await enqueueGitRefresh(queryClient, () => refetchFreshGitQueries(queryClient, query.queryKey));
   }
 }
 
@@ -251,6 +237,11 @@ async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): P
  * Coalesces refreshes by repository and serializes their expensive reads across the client.
  * Availability is refreshed first; active diff/PR details follow one at a time so Git UI work
  * cannot consume both expensive-read leases or fan out across every visible worktree.
+ *
+ * A refresh only joins an existing one while that refresh is still queued: once its reads
+ * have begun they may predate whatever change triggered this request (a checkout or pull
+ * that just settled), so joining would return without ever observing the new repository
+ * state. In that case a fresh refresh is queued behind the running one instead.
  */
 export function refreshGitQueriesForCwd(
   queryClient: QueryClient,
@@ -258,43 +249,32 @@ export function refreshGitQueriesForCwd(
   depth: GitRefreshDepth = "active-details",
 ): Promise<void> {
   const existing = activeGitRefreshes.get(queryClient)?.get(cwd);
-  if (existing) {
-    if (depth === "availability") {
-      if (existing.availabilityPromise) return existing.availabilityPromise;
-      if (existing.depth === "availability") return existing.promise;
-
-      const availability = enqueueGitRefresh(queryClient, () =>
-        refreshGitAvailability(queryClient, cwd),
-      );
-      const extended = existing.promise.finally(() => availability);
-      trackGitRefresh(queryClient, cwd, "active-details", extended, availability);
-      return availability;
-    }
-    if (existing.depth === "active-details") {
-      return existing.promise;
-    }
-    const upgraded = existing.promise
-      .catch(() => undefined)
-      .then(() => refreshActiveGitDetails(queryClient, cwd));
-    return trackGitRefresh(
-      queryClient,
-      cwd,
-      "active-details",
-      upgraded,
-      existing.availabilityPromise,
-    );
+  if (existing && !existing.started) {
+    if (depth === "active-details") existing.depth = "active-details";
+    return depth === "availability" ? existing.availability : existing.promise;
   }
 
-  const availability = enqueueGitRefresh(queryClient, () =>
-    refreshGitAvailability(queryClient, cwd),
+  const entry: ActiveGitRefresh = {
+    depth,
+    started: false,
+    availability: Promise.resolve(),
+    promise: Promise.resolve(),
+  };
+  entry.availability = enqueueGitRefresh(queryClient, () => {
+    entry.started = true;
+    return refreshGitAvailability(queryClient, cwd);
+  });
+  // Read entry.depth only after availability settles so a pre-start upgrade to
+  // "active-details" is honored even when the original request was availability-only.
+  entry.promise = entry.availability.then(() =>
+    entry.depth === "active-details" ? refreshActiveGitDetails(queryClient, cwd) : undefined,
   );
-  const refresh =
-    depth === "active-details"
-      ? availability.then(() => refreshActiveGitDetails(queryClient, cwd))
-      : availability;
-  return trackGitRefresh(queryClient, cwd, depth, refresh, availability);
+  trackGitRefresh(queryClient, cwd, entry);
+  return depth === "availability" ? entry.availability : entry.promise;
 }
 
+/** Resolves once repository/status/branches are fresh, even when the underlying refresh
+ * was upgraded to also re-read active details after the availability phase. */
 export function refreshGitActionAvailability(queryClient: QueryClient, cwd: string): Promise<void> {
   return refreshGitQueriesForCwd(queryClient, cwd, "availability");
 }
@@ -320,9 +300,17 @@ function cachedGitCwds(queryClient: QueryClient): string[] {
   return [...new Set(cwds)];
 }
 
-export function invalidateGitQueries(queryClient: QueryClient) {
+// excludeCwds lets a caller that already refreshed (and awaited) specific checkouts fan the
+// rest out in the background without queueing duplicate refreshes for the awaited ones.
+export function invalidateGitQueries(
+  queryClient: QueryClient,
+  options?: { readonly excludeCwds?: Iterable<string> },
+) {
+  const excludedCwds = new Set(options?.excludeCwds ?? []);
   return Promise.all(
-    cachedGitCwds(queryClient).map((cwd) => refreshGitQueriesForCwd(queryClient, cwd)),
+    cachedGitCwds(queryClient)
+      .filter((cwd) => !excludedCwds.has(cwd))
+      .map((cwd) => refreshGitQueriesForCwd(queryClient, cwd)),
   );
 }
 
@@ -330,6 +318,22 @@ export function invalidateGitQueries(queryClient: QueryClient) {
 export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iterable<string>) {
   const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
   return Promise.all(uniqueCwds.map((cwd) => refreshGitQueriesForCwd(queryClient, cwd)));
+}
+
+/**
+ * Refreshes the given checkouts and resolves once they are fresh; every other cached
+ * repository refreshes in the background. For callers gating UI on a refresh (e.g. a
+ * branch action transition) so one slow unrelated worktree cannot hold the UI busy.
+ * The awaited checkouts are queued first so background work cannot delay them.
+ */
+export function refreshGitQueriesScoped(
+  queryClient: QueryClient,
+  cwds: Iterable<string>,
+): Promise<void> {
+  const awaitedCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
+  const scoped = invalidateGitQueriesForCwds(queryClient, awaitedCwds);
+  void invalidateGitQueries(queryClient, { excludeCwds: awaitedCwds }).catch(() => undefined);
+  return scoped.then(() => undefined);
 }
 
 export function gitStatusQueryOptions(cwd: string | null, enabled = true) {

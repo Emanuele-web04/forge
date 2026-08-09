@@ -2559,7 +2559,17 @@ diffs-container {
    `--composer-glass-opacity` keeps every composer-family surface on one knob. */
 :root {
   --composer-glass-opacity: 72%;
+  --composer-glass-stacked-opacity: calc(var(--composer-glass-opacity) / 2);
   --composer-glass-filter: blur(40px) saturate(150%);
+}
+
+/* macOS Electron paints into a transparent vibrancy window, where Chromium skips
+   `backdrop-filter` entirely (electron/electron#32317): the frost never renders and
+   the thin fill lets transcript rows read through crisply. Lean on a near-opaque
+   fill there so the glass still reads as translucent material, not a see-through hole. */
+:root[data-window-transparent="true"] {
+  --composer-glass-opacity: 92%;
+  --composer-glass-stacked-opacity: 80%;
 }
 
 .chat-composer-surface,
@@ -2585,7 +2595,7 @@ diffs-container {
 .chat-composer-stacked-top {
   background: color-mix(
     in srgb,
-    var(--composer-surface) calc(var(--composer-glass-opacity) / 2),
+    var(--composer-surface) var(--composer-glass-stacked-opacity),
     transparent
   );
 }

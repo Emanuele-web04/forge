@@ -40,6 +40,9 @@ interface ChatTranscriptPaneProps {
   agentActivityDetail?: AgentActivityDetail | null;
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
   contentInsetBottomPx?: ComponentProps<typeof MessagesTimeline>["contentInsetBottomPx"];
+  contentInsetBottomClearancePx?: ComponentProps<
+    typeof MessagesTimeline
+  >["contentInsetBottomClearancePx"];
   chatFontSizePx: number;
   emptyStateContent?: ReactNode;
   emptyStateProjectName: string | undefined;
@@ -109,6 +112,7 @@ export function ChatTranscriptPane({
   agentActivityDetail,
   contentInsetRightPx,
   contentInsetBottomPx,
+  contentInsetBottomClearancePx,
   chatFontSizePx,
   emptyStateContent,
   emptyStateProjectName,
@@ -266,6 +270,7 @@ export function ChatTranscriptPane({
             workspaceRoot={workspaceRoot}
             contentInsetRightPx={contentInsetRightPx}
             contentInsetBottomPx={contentInsetBottomPx}
+            contentInsetBottomClearancePx={contentInsetBottomClearancePx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
             emptyStateContent={
               emptyStateContent === undefined ? (

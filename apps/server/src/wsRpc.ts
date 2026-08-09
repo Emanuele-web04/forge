@@ -1714,7 +1714,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverUpsertKeybinding]: (input) =>
           rpcEffect(
             keybindings
-              .upsertKeybindingRule(input)
+              .upsertKeybindingRule(input.rule, input.replacing)
               .pipe(
                 Effect.map((keybindingsConfig) => ({ keybindings: keybindingsConfig, issues: [] })),
               ),

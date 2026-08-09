@@ -59,6 +59,7 @@ import {
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
+import { composerOverlayScrollMaskImage } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -492,6 +493,8 @@ interface MessagesTimelineProps {
    * style padding, so it can account for the inset in its own end-space math.
    */
   contentInsetBottomPx?: number | undefined;
+  /** Measured distance from the composer's bottom edge to the top of its footer controls. */
+  contentInsetBottomClearancePx?: number | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -552,6 +555,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   emptyStateContent,
   contentInsetRightPx,
   contentInsetBottomPx,
+  contentInsetBottomClearancePx,
 }: MessagesTimelineProps) {
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
@@ -593,17 +597,30 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // any right-edge overlay. Kept stable so LegendList isn't re-rendered on unrelated updates.
   // The bottom inset clears the floating composer the transcript scrolls under; it is
   // padding on the scroll viewport (not a taller footer) so the list's own footer-layout
-  // and initial-scroll machinery is never resized from outside.
-  const listScrollStyle = useMemo(
-    () =>
-      contentInsetRightPx || contentInsetBottomPx
-        ? {
-            ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
-            ...(contentInsetBottomPx ? { paddingBottom: contentInsetBottomPx } : {}),
-          }
-        : undefined,
-    [contentInsetBottomPx, contentInsetRightPx],
-  );
+  // and initial-scroll machinery is never resized from outside. The mask dissolves rows
+  // as they pass behind the composer's glass so nothing remains visible behind its
+  // footer controls (see composerOverlayScrollMaskImage).
+  const listScrollStyle = useMemo(() => {
+    if (!contentInsetRightPx && !contentInsetBottomPx) {
+      return undefined;
+    }
+    const style: CSSProperties = {};
+    if (contentInsetRightPx) {
+      style.paddingRight = contentInsetRightPx;
+    }
+    if (contentInsetBottomPx) {
+      style.paddingBottom = contentInsetBottomPx;
+      const maskImage = composerOverlayScrollMaskImage(
+        contentInsetBottomPx,
+        contentInsetBottomClearancePx,
+      );
+      if (maskImage) {
+        style.maskImage = maskImage;
+        style.WebkitMaskImage = maskImage;
+      }
+    }
+    return style;
+  }, [contentInsetBottomClearancePx, contentInsetBottomPx, contentInsetRightPx]);
   const appTypographyScale = useMemo(
     () => getAppTypographyScale(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
@@ -789,12 +806,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           },
     [anchorVerticalInsetPx, tailAnchorRowIndex],
   );
-  // Surface the live reserve for tests/diagnostics without re-rendering. The
-  // signal (unlike `onSizeChanged`) also reports the collapse to zero after the
-  // anchor is cleared, when no config object exists to receive a callback.
+  // `anchoredEndSpaceSize` is an internal LegendList signal used only to make
+  // the native reserve observable to the browser regression harness. Its
+  // public listener union deliberately omits it, so narrow the internal hook
+  // locally rather than weakening the ref type throughout the transcript.
   useEffect(() => {
     const state = resolvedListRef.current?.getState?.();
-    return state?.listen?.("anchoredEndSpaceSize", (size) => {
+    const listenForAnchoredEndSpace = state?.listen as
+      | ((listenerType: "anchoredEndSpaceSize", callback: (size: number) => void) => () => void)
+      | undefined;
+    return listenForAnchoredEndSpace?.("anchoredEndSpaceSize", (size) => {
       timelineRootRef.current?.setAttribute("data-anchored-end-space", String(Math.round(size)));
     });
   }, [resolvedListRef]);
@@ -2298,8 +2319,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // via `animation-timeline: scroll()`, so the fade clears at the live edge and a
         // pinned or non-scrollable transcript stays crisp (no permanent shadow).
         // With the floating composer the viewport bottom sits *behind* the frosted
-        // surface, so the fade would erase exactly the content the glass should reveal —
-        // the composer's own material is the dissolve there instead.
+        // surface, so the scroll-aware fade is replaced by the fixed composer mask in
+        // `listScrollStyle`: rows dissolve through the glass over the editor region and
+        // are fully cut before the composer's footer controls.
         className={cn(
           "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
           contentInsetBottomPx ? null : "scroll-fade-b",

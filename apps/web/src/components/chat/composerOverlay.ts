@@ -6,8 +6,9 @@
 //
 // The composer is absolutely positioned at `bottom-full` of the in-flow block that
 // carries the trailing gutter (and the git BranchToolbar), so the transcript's scroll
-// viewport ends exactly at the composer's BOTTOM edge: content dissolves behind the
-// glass and is clipped there, never appearing in the padding strip below it.
+// viewport ends exactly at the composer's BOTTOM edge. A viewport mask dissolves
+// content as it passes behind the glass and cuts it fully above the composer's footer
+// row, so nothing ever shows behind the send controls or the padding strip below.
 
 import { useCallback, useRef, useState } from "react";
 
@@ -26,6 +27,44 @@ export const COMPOSER_OVERLAY_TUCK_PX = 20;
  */
 export function composerTranscriptBottomInsetPx(overlayHeightPx: number): number {
   return Math.max(0, Math.round(overlayHeightPx) - COMPOSER_OVERLAY_TUCK_PX);
+}
+
+/**
+ * Transcript content is fully dissolved this far above the composer's bottom edge,
+ * keeping the footer row (attach, access mode, model picker, send) clear of any
+ * content scrolling underneath — only the editor region reveals the transcript.
+ */
+export const COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX = 52;
+
+export function composerOverlayBottomClearancePx(
+  surfaceBottomPx: number,
+  footerTopPx: number,
+): number {
+  return Math.max(
+    COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+    Math.ceil(Math.max(0, surfaceBottomPx - footerTopPx)),
+  );
+}
+
+/**
+ * Mask for the transcript scroll viewport while the composer floats over it:
+ * opaque above the composer's top edge, dissolving to fully transparent
+ * `COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX` above the composer's bottom edge (which is
+ * also the viewport's bottom edge). Derived from the same bottom inset the viewport
+ * uses for padding so both always track the measured composer height together.
+ */
+export function composerOverlayScrollMaskImage(
+  bottomInsetPx: number,
+  bottomClearancePx = COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+): string | null {
+  if (bottomInsetPx <= 0) return null;
+  const overlayHeightPx = Math.max(0, Math.round(bottomInsetPx) + COMPOSER_OVERLAY_TUCK_PX);
+
+  const effectiveClearancePx = Math.min(
+    overlayHeightPx,
+    Math.max(COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX, Math.round(bottomClearancePx)),
+  );
+  return `linear-gradient(to bottom, #000 calc(100% - ${overlayHeightPx}px), transparent calc(100% - ${effectiveClearancePx}px))`;
 }
 
 /** Gap between the composer's top edge and floating transcript affordances. */
@@ -47,19 +86,43 @@ export function composerOverlayAffordanceBottomPx(bottomInsetPx: number): number
 export function useComposerOverlayHeight(): {
   overlayRef: (node: HTMLElement | null) => void;
   overlayHeightPx: number;
+  overlayBottomClearancePx: number;
 } {
-  const [overlayHeightPx, setOverlayHeightPx] = useState(0);
+  const [measurement, setMeasurement] = useState({
+    overlayHeightPx: 0,
+    overlayBottomClearancePx: COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+  });
   const observerRef = useRef<ResizeObserver | null>(null);
   const overlayRef = useCallback((node: HTMLElement | null) => {
     observerRef.current?.disconnect();
     observerRef.current = null;
     if (!node) {
-      setOverlayHeightPx(0);
+      setMeasurement({
+        overlayHeightPx: 0,
+        overlayBottomClearancePx: COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+      });
       return;
     }
     const commit = (height: number) => {
-      const next = Math.round(height);
-      setOverlayHeightPx((current) => (current === next ? current : next));
+      const footer = node.querySelector<HTMLElement>("[data-chat-composer-footer]");
+      const surface = footer?.closest<HTMLElement>(".chat-composer-surface");
+      const overlayBottomClearancePx =
+        footer && surface
+          ? composerOverlayBottomClearancePx(
+              surface.getBoundingClientRect().bottom,
+              footer.getBoundingClientRect().top,
+            )
+          : COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX;
+      const next = {
+        overlayHeightPx: Math.round(height),
+        overlayBottomClearancePx,
+      };
+      setMeasurement((current) =>
+        current.overlayHeightPx === next.overlayHeightPx &&
+        current.overlayBottomClearancePx === next.overlayBottomClearancePx
+          ? current
+          : next,
+      );
     };
     commit(node.getBoundingClientRect().height);
     if (typeof ResizeObserver === "undefined") {
@@ -74,5 +137,5 @@ export function useComposerOverlayHeight(): {
     observer.observe(node);
     observerRef.current = observer;
   }, []);
-  return { overlayRef, overlayHeightPx };
+  return { overlayRef, ...measurement };
 }

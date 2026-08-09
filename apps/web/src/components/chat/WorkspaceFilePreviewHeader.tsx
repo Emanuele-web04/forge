@@ -3,24 +3,32 @@
 //          breadcrumb (project › …dirs › file) on the left, and an overflow
 //          menu + "Open in editor" split button on the right. Shared by the
 //          right-dock file/explorer panes and the editor center pane so every
-//          surface reads identically. The header is a `header-actions` inline-size
-//          query container, so the breadcrumb collapses dir-first then truncates
-//          the filename, and the controls (markdown toggle, "Open") shed their
-//          text labels for icons as the pane narrows — no overlap at any width.
+//          surface reads identically. Under width pressure the breadcrumb
+//          collapses whole middle directories behind a single "…" crumb
+//          (never letter-shards like "S… › O…"), keeping the nearest parent
+//          folders and the filename readable; only once every directory is
+//          hidden does the filename itself truncate. The header is a
+//          `header-actions` inline-size query container so the "Open" control
+//          sheds its text label for an icon as the pane narrows.
 // Layer: Chat/editor file-preview UI
 // Exports: WorkspaceFilePreviewHeader
 
 import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@synara/shared/path";
-import { Fragment } from "react";
+import { Fragment, useLayoutEffect, useRef, useState } from "react";
 
 import { basenameOfPath } from "~/file-icons";
+import { useCopyFileContentsToClipboard } from "~/hooks/useCopyToClipboard";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { ChevronRightIcon, EllipsisIcon, EyeIcon, FileIcon } from "~/lib/icons";
+import { ChevronRightIcon, CodeIcon, EllipsisIcon, EyeOpenIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
+import {
+  calculateBreadcrumbLayout,
+  type CollapsedBreadcrumbLayout,
+} from "./workspaceFilePreviewBreadcrumb";
 
 interface WorkspaceFilePreviewHeaderProps {
   workspaceRoot: string | null;
@@ -33,6 +41,12 @@ interface WorkspaceFilePreviewHeaderProps {
   /** Whole-file chat actions, surfaced in the overflow menu when wired. */
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
+  /**
+   * Text contents of the previewed file, enabling the overflow menu's
+   * "Copy contents" action. Null when no text is loaded (binary previews,
+   * pending/failed reads).
+   */
+  contentsForCopy?: string | null;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
   /** Marks the currently open source buffer as different from its saved version. */
@@ -44,20 +58,171 @@ interface WorkspaceFilePreviewHeaderProps {
 // Source (raw file, where selecting text yields a precise line/column chat
 // reference) vs. Preview (rendered markdown, read-only — browse + task lists).
 // Ordered Source-first so the interactive mode reads as the primary surface.
+// Icon-only by design: the title tooltip + sr-only text carry the labels.
 const MARKDOWN_VIEW_SEGMENTS = [
   {
     rendered: false,
     label: "Source",
     title: "Source view — select text to reference exact lines in chat",
-    Icon: FileIcon,
+    Icon: CodeIcon,
   },
   {
     rendered: true,
     label: "Preview",
     title: "Rendered preview — browse and toggle task lists",
-    Icon: EyeIcon,
+    Icon: EyeOpenIcon,
   },
 ] as const;
+
+interface BreadcrumbSegment {
+  name: string;
+  key: string;
+}
+
+// Reserved room for the unsaved-changes dot after the filename (size-1.5 dot
+// + ml-1.5 gap), plus a small epsilon absorbing fractional-width rounding.
+const DIRTY_DOT_RESERVE_PX = 12;
+const MEASURE_EPSILON_PX = 1;
+
+/**
+ * Breadcrumb that collapses whole middle directories behind a single "…"
+ * crumb when the row runs out of room, instead of letting every crumb
+ * truncate into unreadable letter-shards. A hidden mirror of the full path
+ * is measured (ResizeObserver keeps it honest across pane resizes and late
+ * font loads) to decide how many trailing directories still fit next to the
+ * filename; the filename itself only truncates once no directory fits.
+ */
+function CollapsingPathBreadcrumb(props: {
+  prefixSegments: BreadcrumbSegment[];
+  fileSegment: string;
+  filePath: string;
+  dirty: boolean;
+}) {
+  const { prefixSegments, fileSegment, filePath, dirty } = props;
+  const navRef = useRef<HTMLElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLSpanElement>(null);
+  const [collapsedLayout, setCollapsedLayout] = useState<CollapsedBreadcrumbLayout | null>(null);
+
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const measure = measureRef.current;
+    const file = fileRef.current;
+    if (!nav || !measure || !file) {
+      return;
+    }
+
+    const compute = () => {
+      const crumbWidths = Array.from(
+        measure.querySelectorAll<HTMLElement>('[data-measure="crumb"]'),
+        (crumb) => crumb.getBoundingClientRect().width,
+      );
+      const ellipsisWidth =
+        measure.querySelector<HTMLElement>('[data-measure="ellipsis"]')?.getBoundingClientRect()
+          .width ?? 0;
+      const nextLayout = calculateBreadcrumbLayout({
+        containerWidth: nav.clientWidth,
+        renderedFileWidth: file.getBoundingClientRect().width,
+        prefixWidths: crumbWidths,
+        ellipsisWidth,
+        trailingReserveWidth: (dirty ? DIRTY_DOT_RESERVE_PX : 0) + MEASURE_EPSILON_PX,
+      });
+      // Keep the previous state object when nothing changed so resize frames
+      // that land on the same layout skip the re-render entirely.
+      setCollapsedLayout((current) => {
+        if (current === nextLayout) return current;
+        if (current === null || nextLayout === null) return nextLayout;
+        return current.visibleTail === nextLayout.visibleTail &&
+          current.showEllipsis === nextLayout.showEllipsis
+          ? current
+          : nextLayout;
+      });
+    };
+
+    compute();
+    // Observing the hidden mirror too re-measures when its natural width
+    // changes without a pane resize (late-loading fonts, new file path).
+    const observer = new ResizeObserver(compute);
+    observer.observe(nav);
+    observer.observe(measure);
+    observer.observe(file);
+    return () => observer.disconnect();
+  }, [filePath, prefixSegments.length, dirty]);
+
+  const visiblePrefix =
+    collapsedLayout === null
+      ? prefixSegments
+      : prefixSegments.slice(prefixSegments.length - collapsedLayout.visibleTail);
+  const showEllipsisCrumb =
+    collapsedLayout !== null &&
+    collapsedLayout.showEllipsis &&
+    visiblePrefix.length < prefixSegments.length;
+
+  const crumbChevron = (
+    <ChevronRightIcon
+      aria-hidden="true"
+      className="mx-0.5 size-3 shrink-0 text-muted-foreground/40"
+    />
+  );
+
+  return (
+    <nav
+      ref={navRef}
+      aria-label="File path"
+      className="relative flex min-w-0 flex-1 items-center overflow-hidden text-[12px] leading-none"
+    >
+      {/* Hidden mirror of the full breadcrumb at natural width, measured to
+          decide how many directories fit. Absolutely positioned so it never
+          affects layout; invisible so it never paints. */}
+      <div
+        ref={measureRef}
+        aria-hidden="true"
+        className="pointer-events-none invisible absolute top-0 left-0 flex items-center whitespace-nowrap"
+      >
+        <span data-measure="ellipsis" className="flex items-center">
+          <span>…</span>
+          {crumbChevron}
+        </span>
+        {prefixSegments.map((segment) => (
+          <span key={segment.key} data-measure="crumb" className="flex items-center">
+            <span>{segment.name}</span>
+            {crumbChevron}
+          </span>
+        ))}
+      </div>
+
+      {showEllipsisCrumb ? (
+        <span className="flex shrink-0 items-center" title={filePath}>
+          <span className="text-muted-foreground/80">…</span>
+          {crumbChevron}
+        </span>
+      ) : null}
+      {visiblePrefix.map((segment) => (
+        <Fragment key={segment.key}>
+          <span className="shrink-0 whitespace-nowrap text-muted-foreground/80">
+            {segment.name}
+          </span>
+          {crumbChevron}
+        </Fragment>
+      ))}
+      <span
+        ref={fileRef}
+        className="min-w-0 shrink truncate font-medium text-foreground"
+        title={filePath}
+      >
+        {fileSegment}
+      </span>
+      {dirty ? (
+        <span
+          className="ml-1.5 size-1.5 shrink-0 rounded-full bg-foreground/75"
+          role="status"
+          aria-label="Unsaved changes"
+          title="Unsaved changes"
+        />
+      ) : null}
+    </nav>
+  );
+}
 
 export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
   props: WorkspaceFilePreviewHeaderProps,
@@ -69,9 +234,9 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
   const fileIsOutsideWorkspace = !isWorkspaceRelativePathSafe(filePath);
 
   // Breadcrumb segments: project folder name, then each path part. Splitting
-  // here (vs. rendering the raw string) lets the directory prefix collapse
-  // first under width pressure while the filename stays pinned. Absolute
-  // paths drop the project prefix — they live outside the workspace.
+  // here (vs. rendering the raw string) lets middle directories collapse
+  // behind a "…" crumb under width pressure while the filename stays pinned.
+  // Absolute paths drop the project prefix — they live outside the workspace.
   const projectName =
     fileIsOutsideWorkspace || !workspaceRoot ? null : basenameOfPath(workspaceRoot);
   const relativeSegments = filePath
@@ -87,15 +252,17 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
   }));
   const fileSegment = segments.at(-1) ?? filePath;
 
-  const { onReferenceInChat, onAskWhyInChat } = props;
+  const { onReferenceInChat, onAskWhyInChat, contentsForCopy } = props;
   const referenceWholeFile = () => {
     onReferenceInChat?.({ path: filePath });
   };
   const askWhyWholeFile = () => {
     onAskWhyInChat?.({ path: filePath });
   };
+  const copyFileContents = useCopyFileContentsToClipboard();
 
-  const hasChatActions = Boolean(onReferenceInChat || onAskWhyInChat);
+  const canCopyContents = contentsForCopy != null;
+  const hasOverflowMenu = canCopyContents || Boolean(onReferenceInChat || onAskWhyInChat);
 
   return (
     <div
@@ -104,38 +271,12 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
         CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
       )}
     >
-      <nav
-        aria-label="File path"
-        className="flex min-w-0 flex-1 items-center text-[12px] leading-none"
-      >
-        {/* Dir prefix shrinks far faster than the filename (shrink-[9999]), so under
-            width pressure it collapses to nothing before the filename gives up any
-            room; only once the prefix is gone does the filename itself truncate.
-            This keeps the filename pinned-yet-bounded so it never overflows into the
-            controls on its right. */}
-        <span className="flex min-w-0 shrink-[9999] items-center overflow-hidden">
-          {prefixSegments.map((segment) => (
-            <Fragment key={segment.key}>
-              <span className="truncate text-muted-foreground/80">{segment.name}</span>
-              <ChevronRightIcon
-                aria-hidden="true"
-                className="mx-0.5 size-3 shrink-0 text-muted-foreground/40"
-              />
-            </Fragment>
-          ))}
-        </span>
-        <span className="min-w-0 shrink truncate font-medium text-foreground" title={filePath}>
-          {fileSegment}
-        </span>
-        {props.dirty ? (
-          <span
-            className="ml-1.5 size-1.5 shrink-0 rounded-full bg-foreground/75"
-            role="status"
-            aria-label="Unsaved changes"
-            title="Unsaved changes"
-          />
-        ) : null}
-      </nav>
+      <CollapsingPathBreadcrumb
+        prefixSegments={prefixSegments}
+        fileSegment={fileSegment}
+        filePath={filePath}
+        dirty={props.dirty ?? false}
+      />
 
       {props.truncated ? (
         <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 @sm/header-actions:inline">
@@ -167,29 +308,38 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
                   aria-checked={selected}
                   title={segment.title}
                   className={cn(
-                    "flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[11px] transition-colors",
+                    "flex h-6 w-7 cursor-pointer items-center justify-center rounded-md transition-colors",
                     selected
                       ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                   onClick={() => props.onMarkdownPreviewChange(segment.rendered)}
                 >
-                  <segment.Icon aria-hidden="true" className="size-3.5 shrink-0" />
-                  {/* Label collapses to icon-only on a narrow pane; the title +
-                      sr-only text keep both modes labelled for a11y/tooltips. */}
-                  <span className="sr-only @sm/header-actions:not-sr-only">{segment.label}</span>
+                  <segment.Icon className="size-3.5 shrink-0" />
+                  <span className="sr-only">{segment.label}</span>
                 </button>
               );
             })}
           </div>
         ) : null}
 
-        {hasChatActions ? (
+        {hasOverflowMenu ? (
           <Menu>
             <MenuTrigger render={<ChatHeaderIconButton label="More actions" tone="plain" />}>
               <EllipsisIcon aria-hidden="true" className="size-3.5" />
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
+              {canCopyContents ? (
+                <MenuItem
+                  onClick={() =>
+                    copyFileContents(contentsForCopy ?? "", fileSegment, {
+                      partial: props.truncated ?? false,
+                    })
+                  }
+                >
+                  Copy contents
+                </MenuItem>
+              ) : null}
               {onReferenceInChat ? (
                 <MenuItem onClick={referenceWholeFile}>Reference in chat</MenuItem>
               ) : null}

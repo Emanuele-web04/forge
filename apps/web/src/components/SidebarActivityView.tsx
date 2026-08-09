@@ -35,6 +35,7 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
   sidebarHoverRevealHideClassName,
 } from "../sidebarRowStyles";
+import { resolveThreadPullRequestFallback } from "../hooks/useThreadPullRequests";
 import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { FolderClosed } from "./FolderClosed";
@@ -700,7 +701,18 @@ export function SidebarActivityView({
       isActive={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
-      pr={prByThreadId.get(thread.id) ?? thread.lastKnownPr ?? null}
+      pr={
+        // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+        // checkout moved on); falling back to raw lastKnownPr would resurrect that stale
+        // badge. Rows not yet covered (revealed by paging a paint before the parent's map
+        // catches up) get the same resolution without live status instead.
+        prByThreadId.has(thread.id)
+          ? (prByThreadId.get(thread.id) ?? null)
+          : resolveThreadPullRequestFallback({
+              branch: thread.branch,
+              lastKnownPr: thread.lastKnownPr ?? null,
+            })
+      }
       status={resolveThreadStatus(thread)}
       onOpen={() => onOpenThread(thread.id)}
       onSetSettled={(settled) => {

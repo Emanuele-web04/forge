@@ -7,6 +7,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
 import {
+  formatKeybindingWhenExpression,
   formatShortcutLabel,
   isBrowserToggleShortcut,
   isChatNewShortcut,
@@ -21,6 +22,7 @@ import {
   isTerminalSplitShortcut,
   isTerminalToggleShortcut,
   resolveShortcutCommand,
+  resolveKeybindingForCommand,
   shouldShowThreadJumpHints,
   shortcutLabelForCommand,
   spaceJumpIndexFromCommand,
@@ -40,6 +42,18 @@ function event(overrides: Partial<ShortcutEventLike> = {}): ShortcutEventLike {
     ...overrides,
   };
 }
+
+describe("editable keybinding resolution", () => {
+  it("preserves the effective platform condition as editable text", () => {
+    const binding = resolveKeybindingForCommand([], "chat.new", {
+      platform: "MacIntel",
+      context: { terminalFocus: false, terminalOpen: false },
+    });
+
+    assert.isNotNull(binding);
+    assert.equal(formatKeybindingWhenExpression(binding?.whenAst), "(!(terminalFocus) || isMac)");
+  });
+});
 
 describe("isKeyboardShortcutsHelpShortcut", () => {
   it("does not mistake the physical minus keys for shortcuts help on Windows", () => {

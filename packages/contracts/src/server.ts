@@ -353,7 +353,10 @@ export const ServerGenerateAutomationIntentResult = Schema.Struct({
 });
 export type ServerGenerateAutomationIntentResult = typeof ServerGenerateAutomationIntentResult.Type;
 
-export const ServerUpsertKeybindingInput = KeybindingRule;
+export const ServerUpsertKeybindingInput = Schema.Struct({
+  rule: KeybindingRule,
+  replacing: Schema.optional(KeybindingRule),
+});
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;
 
 export const ServerUpsertKeybindingResult = Schema.Struct({
