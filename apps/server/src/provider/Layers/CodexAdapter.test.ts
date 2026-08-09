@@ -229,6 +229,27 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
+  it.effect("forwards an external fork cursor when starting a session", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      const forkSourceResumeCursor = { threadId: "external-codex-thread" };
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-import"),
+        forkSourceResumeCursor,
+        runtimeMode: "full-access",
+      });
+
+      assert.deepStrictEqual(validationManager.startSessionImpl.mock.calls[0]?.[0], {
+        provider: "codex",
+        threadId: asThreadId("thread-import"),
+        forkSourceResumeCursor,
+        runtimeMode: "full-access",
+      });
+    }),
+  );
 });
 
 const sessionErrorManager = new FakeCodexManager();

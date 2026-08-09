@@ -702,6 +702,35 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("does not resume a persisted thread when an external fork is requested", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-external-fork");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        resumeCursor: { threadId: "persisted-thread" },
+        runtimeMode: "full-access",
+      });
+      routing.codex.startSession.mockClear();
+
+      const forkSourceResumeCursor = { threadId: "external-thread" };
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        forkSourceResumeCursor,
+        runtimeMode: "full-access",
+      });
+
+      const startInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(startInput?.forkSourceResumeCursor, forkSourceResumeCursor);
+      assert.equal(startInput?.resumeCursor, undefined);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("runs the idempotent adapter cleanup barrier for an inactive binding", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

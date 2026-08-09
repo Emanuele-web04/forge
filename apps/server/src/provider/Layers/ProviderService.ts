@@ -1542,10 +1542,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           Effect.gen(function* () {
             const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
             const effectiveResumeCursor =
-              input.resumeCursor ??
-              (persistedBinding?.provider === input.provider
-                ? persistedBinding.resumeCursor
-                : undefined);
+              input.forkSourceResumeCursor !== undefined
+                ? undefined
+                : (input.resumeCursor ??
+                  (persistedBinding?.provider === input.provider
+                    ? persistedBinding.resumeCursor
+                    : undefined));
             const effectiveProviderOptions =
               input.providerOptions ??
               (persistedBinding?.provider === input.provider
