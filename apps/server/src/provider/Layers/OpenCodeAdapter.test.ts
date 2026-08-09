@@ -12,7 +12,10 @@ import { Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect";
 import { describe, it, expect, vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
-import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
+import {
+  SYNARA_HARNESS_POLICY_MARKER,
+  SYNARA_HARNESS_POLICY_VERSION,
+} from "../../agentGateway/harnessPolicy.ts";
 import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
@@ -90,6 +93,7 @@ function createMockOpenCodeRuntime(options?: {
   const forkCalls: Array<{ sessionID: string }> = [];
   const permissionReplyCalls: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
+  const promptCallKinds: Array<"async" | "sync"> = [];
   const mcpAddCalls: Array<Record<string, unknown>> = [];
   let eventSubscribeCallCount = 0;
   const emptySubscription = {
@@ -122,6 +126,7 @@ function createMockOpenCodeRuntime(options?: {
       },
       promptAsync: async (promptInput: Record<string, unknown>) => {
         promptCalls.push(promptInput);
+        promptCallKinds.push("async");
         if (options?.promptAsync) {
           return options.promptAsync(promptInput);
         }
@@ -129,6 +134,7 @@ function createMockOpenCodeRuntime(options?: {
       },
       prompt: async (promptInput: Record<string, unknown>) => {
         promptCalls.push(promptInput);
+        promptCallKinds.push("sync");
         if (options?.prompt) {
           return options.prompt(promptInput);
         }
@@ -259,12 +265,24 @@ function createMockOpenCodeRuntime(options?: {
     forkCalls,
     permissionReplyCalls,
     promptCalls,
+    promptCallKinds,
     mcpAddCalls,
     get eventSubscribeCallCount() {
       return eventSubscribeCallCount;
     },
     runtime,
   };
+}
+
+function makeOpenCodeAdapterTestLayer(runtime: OpenCodeRuntimeShape) {
+  return makeOpenCodeAdapterLive({ runtime }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" })),
+    Layer.provideMerge(NodeServices.layer),
+  );
+}
+
+function promptContainsHarnessPolicy(prompt: Record<string, unknown> | undefined): boolean {
+  return JSON.stringify(prompt).includes(SYNARA_HARNESS_POLICY_MARKER);
 }
 
 function makeGatewayCredentials(options?: {
@@ -519,6 +537,306 @@ describe("normalizeOpenCodeTokenUsage", () => {
       maxTokens: 200,
       lastUsedTokens: 200,
     });
+  });
+});
+
+describe("OpenCode host policy delivery", () => {
+  const modelSelection = { provider: "opencode", model: "openai/gpt-5" } as const;
+
+  it("injects the host policy exactly once for a new native session", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-new-session");
+
+    const cursors = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "first turn",
+          attachments: [],
+          modelSelection,
+        });
+        const second = yield* adapter.sendTurn({
+          threadId,
+          input: "second turn",
+          attachments: [],
+          modelSelection,
+        });
+        return [first.resumeCursor, second.resumeCursor];
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
+    for (const cursor of cursors) {
+      expect(cursor).toMatchObject({
+        openCodeSessionId: "opencode-session-1",
+        harnessPolicyDelivery: {
+          sessionId: "opencode-session-1",
+          policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+          gatewayControlAvailable: false,
+        },
+      });
+    }
+  });
+
+  it("does not re-inject the host policy when the same native session is restarted", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-same-session-restart");
+
+    const resumedSession = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "first turn",
+          attachments: [],
+          modelSelection,
+        });
+        const resumed = yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: first.resumeCursor,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "after restart",
+          attachments: [],
+          modelSelection,
+        });
+        return resumed;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
+    expect(resumedSession.resumeCursor).toMatchObject({
+      openCodeSessionId: "opencode-session-1",
+      harnessPolicyDelivery: {
+        sessionId: "opencode-session-1",
+        policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+        gatewayControlAvailable: false,
+      },
+    });
+  });
+
+  it("retries host policy delivery after the first prompt is rejected", async () => {
+    let promptAttempt = 0;
+    const runtime = createMockOpenCodeRuntime({
+      promptAsync: async () => {
+        promptAttempt += 1;
+        if (promptAttempt === 1) {
+          throw new Error("prompt rejected");
+        }
+        return { data: null };
+      },
+    });
+    const threadId = asThreadId("thread-host-policy-rejected-prompt");
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const firstExit = yield* Effect.exit(
+          adapter.sendTurn({
+            threadId,
+            input: "rejected turn",
+            attachments: [],
+            modelSelection,
+          }),
+        );
+        const [failedSession] = yield* adapter.listSessions();
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: failedSession?.resumeCursor,
+        });
+        const retry = yield* adapter.sendTurn({
+          threadId,
+          input: "retry turn",
+          attachments: [],
+          modelSelection,
+        });
+        return {
+          firstFailed: Exit.isFailure(firstExit),
+          failedCursor: failedSession?.resumeCursor,
+          retryCursor: retry.resumeCursor,
+        };
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(result.firstFailed).toBe(true);
+    expect(result.failedCursor).not.toHaveProperty("harnessPolicyDelivery");
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true]);
+    expect(result.retryCursor).toMatchObject({
+      harnessPolicyDelivery: {
+        sessionId: "opencode-session-1",
+        policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+      },
+    });
+  });
+
+  it("re-injects the host policy when an in-memory restart has a stale policy version", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-stale-version-restart");
+
+    const secondCursor = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "first turn",
+          attachments: [],
+          modelSelection,
+        });
+        const firstCursor = first.resumeCursor as {
+          readonly openCodeSessionId: string;
+          readonly cwd: string;
+          readonly harnessPolicyDelivery: {
+            readonly sessionId: string;
+            readonly gatewayControlAvailable: boolean;
+          };
+        };
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: {
+            ...firstCursor,
+            harnessPolicyDelivery: {
+              ...firstCursor.harnessPolicyDelivery,
+              policyVersion: "stale-policy-version",
+            },
+          },
+        });
+        const second = yield* adapter.sendTurn({
+          threadId,
+          input: "after policy update",
+          attachments: [],
+          modelSelection,
+        });
+        return second.resumeCursor;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true]);
+    expect(secondCursor).toMatchObject({
+      harnessPolicyDelivery: {
+        sessionId: "opencode-session-1",
+        policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+      },
+    });
+  });
+
+  it("injects the host policy when the native session id changes", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-changed-session");
+
+    const secondCursor = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "first turn",
+          attachments: [],
+          modelSelection,
+        });
+        const firstCursor = first.resumeCursor as Record<string, unknown>;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: {
+            ...firstCursor,
+            openCodeSessionId: "opencode-session-2",
+          },
+        });
+        const second = yield* adapter.sendTurn({
+          threadId,
+          input: "new native session",
+          attachments: [],
+          modelSelection,
+        });
+        return second.resumeCursor;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true]);
+    expect(secondCursor).toMatchObject({
+      openCodeSessionId: "opencode-session-2",
+      harnessPolicyDelivery: {
+        sessionId: "opencode-session-2",
+        policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+        gatewayControlAvailable: false,
+      },
+    });
+  });
+
+  it("rehydrates host policy state after adapter teardown and recreation", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-adapter-recreation");
+
+    const resumeCursor = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "before teardown",
+          attachments: [],
+          modelSelection,
+        });
+        return first.resumeCursor;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "after recreation",
+          attachments: [],
+          modelSelection,
+        });
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
   });
 });
 
@@ -1113,6 +1431,49 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       headers: { Authorization: "Bearer gateway-token-1" },
     });
     expect(gateway.revoked).toEqual(["gateway-token-1"]);
+  });
+
+  it("submits Kilo turns through the asynchronous prompt endpoint", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      prompt: async () => {
+        throw new Error("Kilo's blocking prompt endpoint must not be used");
+      },
+    });
+    const threadId = asThreadId("thread-kilo-async-prompt");
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* KiloAdapter;
+        yield* adapter.startSession({
+          provider: "kilo",
+          threadId,
+          runtimeMode: "full-access",
+          cwd: "/repo",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "perform a long-running task",
+          attachments: [],
+          modelSelection: { provider: "kilo", model: "openai/gpt-5" },
+        });
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          makeKiloAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.promptCallKinds).toEqual(["async"]);
+    expect(runtime.promptCalls[0]).toMatchObject({
+      sessionID: "opencode-session-1",
+      messageID: expect.stringMatching(/^msg_/),
+    });
   });
 
   it("keeps shared external Kilo servers identity-only and never installs a token", async () => {

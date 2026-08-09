@@ -120,6 +120,10 @@
       "types": "./src/threadEnvironment.ts",
       "import": "./src/threadEnvironment.ts"
     },
+    "./threadDetailEvents": {
+      "types": "./src/threadDetailEvents.ts",
+      "import": "./src/threadDetailEvents.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
@@ -267,6 +271,14 @@
     "./browserAnnotations": {
       "types": "./src/browserAnnotations.ts",
       "import": "./src/browserAnnotations.ts"
+    },
+    "./deviceFrame": {
+      "types": "./src/deviceFrame.ts",
+      "import": "./src/deviceFrame.ts"
+    },
+    "./deviceHelperCache": {
+      "types": "./src/deviceHelperCache.ts",
+      "import": "./src/deviceHelperCache.ts"
     }
   },
   "scripts": {

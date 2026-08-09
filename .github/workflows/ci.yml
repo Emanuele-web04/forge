@@ -117,6 +117,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify Windows terminal PTY native dependency under Bun
+        run: bun scripts/node-pty-smoke.mjs
+
       - name: Test Windows process planning
         run: bun run --cwd packages/shared test src/windowsProcess.test.ts
 

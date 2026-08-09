@@ -272,6 +272,7 @@ export interface CodexAppServerStartSessionInput {
   readonly model?: string;
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
+  readonly forkSourceResumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
 }
@@ -598,6 +599,51 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   }
 }
 
+interface CodexThreadSessionOverrides {
+  readonly model: string | null;
+  readonly serviceTier?: string;
+  readonly cwd: string;
+  readonly approvalPolicy: CodexApprovalPolicy;
+  readonly approvalsReviewer: CodexApprovalsReviewer;
+  readonly sandbox: CodexSandboxMode;
+}
+
+type CodexThreadOpenRequest =
+  | {
+      readonly method: "thread/start";
+      readonly params: CodexThreadSessionOverrides & { readonly experimentalRawEvents: false };
+    }
+  | {
+      readonly method: "thread/resume" | "thread/fork";
+      readonly params: CodexThreadSessionOverrides & { readonly threadId: string };
+    };
+
+export function buildCodexThreadOpenRequest(input: {
+  readonly forkSourceThreadId?: string;
+  readonly resumeThreadId?: string;
+  readonly sessionOverrides: CodexThreadSessionOverrides;
+}): CodexThreadOpenRequest {
+  if (input.forkSourceThreadId && input.resumeThreadId) {
+    throw new Error("A Codex session cannot resume and fork at the same time.");
+  }
+  if (input.forkSourceThreadId) {
+    return {
+      method: "thread/fork",
+      params: { ...input.sessionOverrides, threadId: input.forkSourceThreadId },
+    };
+  }
+  if (input.resumeThreadId) {
+    return {
+      method: "thread/resume",
+      params: { ...input.sessionOverrides, threadId: input.resumeThreadId },
+    };
+  }
+  return {
+    method: "thread/start",
+    params: { ...input.sessionOverrides, experimentalRawEvents: false },
+  };
+}
+
 // turn/start uses sandboxPolicy objects, so keep this separate from thread/start.
 function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: CodexApprovalPolicy;
@@ -854,6 +900,18 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
   return RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
 }
 
+export function formatCodexThreadResumeError(error: unknown, providerThreadId: string): Error {
+  const originalError = error instanceof Error ? error : new Error(String(error));
+  if (!originalError.message.toLowerCase().includes("already has an active writer")) {
+    return originalError;
+  }
+
+  return new Error(
+    `Codex thread ${providerThreadId} is open in another Codex client. Close that client before continuing the original thread, or import it as a copy instead.`,
+    { cause: originalError },
+  );
+}
+
 export interface CodexAppServerManagerEvents {
   event: [event: ProviderEvent];
 }
@@ -1078,70 +1136,89 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
       };
 
-      const threadStartParams = {
-        ...sessionOverrides,
-        experimentalRawEvents: false,
-      };
       const resumeThreadId = readResumeThreadId(input);
+      const forkSourceThreadId = readResumeCursorThreadId(input.forkSourceResumeCursor);
+      const threadOpenRequest = buildCodexThreadOpenRequest({
+        ...(forkSourceThreadId ? { forkSourceThreadId } : {}),
+        ...(resumeThreadId ? { resumeThreadId } : {}),
+        sessionOverrides,
+      });
       this.emitLifecycleEvent(
         context,
         "session/threadOpenRequested",
-        resumeThreadId
-          ? `Attempting to resume thread ${resumeThreadId}.`
-          : "Starting a new Codex thread.",
+        threadOpenRequest.method === "thread/fork"
+          ? `Forking Codex thread ${forkSourceThreadId}.`
+          : threadOpenRequest.method === "thread/resume"
+            ? `Attempting to resume thread ${resumeThreadId}.`
+            : "Starting a new Codex thread.",
       );
       await Effect.logInfo("codex app-server opening thread", {
         threadId,
+        threadOpenMethod: threadOpenRequest.method,
         requestedRuntimeMode: input.runtimeMode,
         requestedModel: normalizedModel ?? null,
         requestedCwd: resolvedCwd,
         resumeThreadId: resumeThreadId ?? null,
+        forkSourceThreadId: forkSourceThreadId ?? null,
       }).pipe(this.runPromise);
 
-      let threadOpenMethod: "thread/start" | "thread/resume" = "thread/start";
+      let threadOpenMethod = threadOpenRequest.method;
       let threadOpenResponse: unknown;
-      if (resumeThreadId) {
-        try {
-          threadOpenMethod = "thread/resume";
-          threadOpenResponse = await this.sendRequest(context, "thread/resume", {
-            ...sessionOverrides,
-            threadId: resumeThreadId,
-          });
-        } catch (error) {
-          if (!isRecoverableThreadResumeError(error)) {
-            this.emitErrorEvent(
-              context,
-              "session/threadResumeFailed",
-              error instanceof Error ? error.message : "Codex thread resume failed.",
-            );
-            await Effect.logWarning("codex app-server thread resume failed", {
-              threadId,
-              requestedRuntimeMode: input.runtimeMode,
-              resumeThreadId,
-              recoverable: false,
-              cause: error instanceof Error ? error.message : String(error),
-            }).pipe(this.runPromise);
-            throw error;
-          }
-
-          threadOpenMethod = "thread/start";
-          this.emitLifecycleEvent(
+      try {
+        threadOpenResponse = await this.sendRequest(
+          context,
+          threadOpenRequest.method,
+          threadOpenRequest.params,
+        );
+      } catch (error) {
+        const recoverableResumeFailure =
+          threadOpenRequest.method === "thread/resume" && isRecoverableThreadResumeError(error);
+        if (!recoverableResumeFailure) {
+          const threadOpenError =
+            threadOpenRequest.method === "thread/resume" && resumeThreadId
+              ? formatCodexThreadResumeError(error, resumeThreadId)
+              : error instanceof Error
+                ? error
+                : new Error(String(error));
+          this.emitErrorEvent(
             context,
-            "session/threadResumeFallback",
-            `Could not resume thread ${resumeThreadId}; started a new thread instead.`,
+            threadOpenRequest.method === "thread/fork"
+              ? "session/threadForkFailed"
+              : threadOpenRequest.method === "thread/resume"
+                ? "session/threadResumeFailed"
+                : "session/threadStartFailed",
+            threadOpenError.message,
           );
-          await Effect.logWarning("codex app-server thread resume fell back to fresh start", {
+          await Effect.logWarning(`codex app-server ${threadOpenRequest.method} failed`, {
             threadId,
             requestedRuntimeMode: input.runtimeMode,
-            resumeThreadId,
-            recoverable: true,
-            cause: error instanceof Error ? error.message : String(error),
+            resumeThreadId: resumeThreadId ?? null,
+            forkSourceThreadId: forkSourceThreadId ?? null,
+            recoverable: false,
+            cause: threadOpenError.message,
           }).pipe(this.runPromise);
-          threadOpenResponse = await this.sendRequest(context, "thread/start", threadStartParams);
+          throw threadOpenError;
         }
-      } else {
+
         threadOpenMethod = "thread/start";
-        threadOpenResponse = await this.sendRequest(context, "thread/start", threadStartParams);
+        this.emitLifecycleEvent(
+          context,
+          "session/threadResumeFallback",
+          `Could not resume thread ${resumeThreadId}; started a new thread instead.`,
+        );
+        await Effect.logWarning("codex app-server thread resume fell back to fresh start", {
+          threadId,
+          requestedRuntimeMode: input.runtimeMode,
+          resumeThreadId,
+          recoverable: true,
+          cause: error instanceof Error ? error.message : String(error),
+        }).pipe(this.runPromise);
+        const fallbackRequest = buildCodexThreadOpenRequest({ sessionOverrides });
+        threadOpenResponse = await this.sendRequest(
+          context,
+          fallbackRequest.method,
+          fallbackRequest.params,
+        );
       }
 
       const threadOpenRecord = this.readObject(threadOpenResponse);
@@ -1166,6 +1243,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadId,
         threadOpenMethod,
         requestedResumeThreadId: resumeThreadId ?? null,
+        requestedForkSourceThreadId: forkSourceThreadId ?? null,
         resolvedThreadId: providerThreadId,
         requestedRuntimeMode: input.runtimeMode,
       }).pipe(this.runPromise);

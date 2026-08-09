@@ -12,7 +12,7 @@ import { memo, useMemo, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { PlusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { KanbanCardView } from "./KanbanCardView";
+import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
 import {
   KANBAN_COLUMN_LABELS,
@@ -45,11 +45,13 @@ function SortableKanbanCard({
   card,
   onOpen,
   onContextMenu,
+  prByThreadId,
   nowMs,
 }: {
   card: KanbanCard;
   onOpen: (card: KanbanCard) => void;
   onContextMenu?: ((card: KanbanCard, event: React.MouseEvent) => void) | undefined;
+  prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -68,6 +70,7 @@ function SortableKanbanCard({
         card={card}
         onOpen={onOpen}
         {...(onContextMenu ? { onContextMenu } : {})}
+        prByThreadId={prByThreadId}
         isDragSource={isDragging}
         {...(nowMs !== undefined ? { nowMs } : {})}
       />
@@ -85,6 +88,7 @@ function KanbanColumnComponent({
   droppable: droppableProp,
   activeCard: activeCardProp,
   onNewCard,
+  prByThreadId,
   nowMs,
 }: {
   projectId: ProjectId;
@@ -101,6 +105,7 @@ function KanbanColumnComponent({
   activeCard?: KanbanCard | null;
   /** Renders a + button in the column header (Draft column's new-task entry point). */
   onNewCard?: (() => void) | undefined;
+  prByThreadId: KanbanCardPrLookup;
   /** Shared board clock for live elapsed labels. */
   nowMs?: number;
 }) {
@@ -133,6 +138,7 @@ function KanbanColumnComponent({
         card={card}
         onOpen={onOpenCard}
         onContextMenu={onCardContextMenu}
+        prByThreadId={prByThreadId}
         {...(nowMs !== undefined ? { nowMs } : {})}
       />
     ) : (
@@ -141,6 +147,7 @@ function KanbanColumnComponent({
           card={card}
           onOpen={onOpenCard}
           {...(onCardContextMenu ? { onContextMenu: onCardContextMenu } : {})}
+          prByThreadId={prByThreadId}
           {...(nowMs !== undefined ? { nowMs } : {})}
         />
       </li>

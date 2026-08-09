@@ -24,6 +24,7 @@ import {
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
+  type GitWorktreeSetupProgressEvent,
   type GitHubProjectProvisionProgressEvent,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
@@ -44,6 +45,9 @@ import {
   type WsWelcomePayload,
   type WsBootstrapNegotiateResult,
   type AutomationStreamEvent,
+  DEVICE_WS_CHANNELS,
+  DEVICE_WS_METHODS,
+  type DeviceEvent,
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
@@ -129,6 +133,7 @@ const serverProviderStatusesUpdatedListeners =
 const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
+const gitWorktreeSetupProgressListeners = createListenerRegistry<GitWorktreeSetupProgressEvent>();
 const projectProvisionProgressListeners =
   createListenerRegistry<GitHubProjectProvisionProgressEvent>();
 
@@ -151,6 +156,7 @@ function omitNullUserInputAnswers(
 const terminalEventListeners = createListenerRegistry<TerminalEvent>();
 const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
 const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
+const deviceEventListeners = createListenerRegistry<DeviceEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
@@ -165,10 +171,12 @@ function clearWsNativeApiListeners(): void {
   serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
   gitActionProgressListeners.clear();
+  gitWorktreeSetupProgressListeners.clear();
   projectProvisionProgressListeners.clear();
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
   automationEventListeners.clear();
+  deviceEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
@@ -447,6 +455,9 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
   });
+  transport.subscribe(WS_CHANNELS.gitWorktreeSetupProgress, (message) => {
+    gitWorktreeSetupProgressListeners.emit(message.data);
+  });
   transport.subscribe(WS_CHANNELS.projectProvisionProgress, (message) => {
     projectProvisionProgressListeners.emit(message.data);
   });
@@ -458,6 +469,9 @@ export function createWsNativeApi(): NativeApi {
   });
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
     automationEventListeners.emit(message.data);
+  });
+  transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
+    deviceEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
@@ -573,8 +587,12 @@ export function createWsNativeApi(): NativeApi {
         }),
       listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),
+      // Worktree materialization scales with checkout size; progress events
+      // keep the UI honest while the stream runs, so no fixed timeout.
       createDetachedWorktree: (input) =>
-        transport.request(WS_METHODS.gitCreateDetachedWorktree, input),
+        transport.request(WS_METHODS.gitCreateDetachedWorktree, input, {
+          timeoutMs: null,
+        }),
       removeWorktree: (input) => transport.request(WS_METHODS.gitRemoveWorktree, input),
       createBranch: (input) => transport.request(WS_METHODS.gitCreateBranch, input),
       checkout: (input) => transport.request(WS_METHODS.gitCheckout, input),
@@ -591,6 +609,7 @@ export function createWsNativeApi(): NativeApi {
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.gitPreparePullRequestThread, input),
       onActionProgress: gitActionProgressListeners.subscribe,
+      onWorktreeSetupProgress: gitWorktreeSetupProgressListeners.subscribe,
     },
     pullRequests: {
       list: (input) => transport.request(WS_METHODS.pullRequestsList, input),
@@ -737,9 +756,10 @@ export function createWsNativeApi(): NativeApi {
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
       getFullThreadDiff: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
-      replayEvents: (fromSequenceExclusive) =>
+      replayEvents: (fromSequenceExclusive, threadId) =>
         transport.request(ORCHESTRATION_WS_METHODS.replayEvents, {
           fromSequenceExclusive,
+          ...(threadId === undefined ? {} : { threadId }),
         }),
       listProviderDeliveryBlockers: (input = {}) =>
         transport.request(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers, input),
@@ -784,6 +804,34 @@ export function createWsNativeApi(): NativeApi {
       archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
       resolveProposal: (input) => transport.request(WS_METHODS.automationResolveProposal, input),
       onEvent: automationEventListeners.subscribe,
+    },
+    device: {
+      list: (input) => transport.request(DEVICE_WS_METHODS.list, input),
+      // Booting a cold simulator routinely outruns the default RPC deadline.
+      boot: (input) => transport.request(DEVICE_WS_METHODS.boot, input, { timeoutMs: null }),
+      shutdown: (input) => transport.request(DEVICE_WS_METHODS.shutdown, input),
+      attach: (input) => transport.request(DEVICE_WS_METHODS.attach, input),
+      detach: (input) => transport.request(DEVICE_WS_METHODS.detach, input),
+      getThreadState: (input) => transport.request(DEVICE_WS_METHODS.getThreadState, input),
+      tap: (input) => transport.request(DEVICE_WS_METHODS.tap, input),
+      swipe: (input) => transport.request(DEVICE_WS_METHODS.swipe, input),
+      typeText: (input) => transport.request(DEVICE_WS_METHODS.typeText, input),
+      keyEvent: (input) => transport.request(DEVICE_WS_METHODS.keyEvent, input),
+      pressButton: (input) => transport.request(DEVICE_WS_METHODS.pressButton, input),
+      installApp: (input) =>
+        transport.request(DEVICE_WS_METHODS.installApp, input, { timeoutMs: null }),
+      launchApp: (input) => transport.request(DEVICE_WS_METHODS.launchApp, input),
+      openUrl: (input) => transport.request(DEVICE_WS_METHODS.openUrl, input),
+      screenshot: (input) => transport.request(DEVICE_WS_METHODS.screenshot, input),
+      startRecording: (input) =>
+        transport.request(DEVICE_WS_METHODS.startRecording, input, { timeoutMs: null }),
+      stopRecording: (input) =>
+        transport.request(DEVICE_WS_METHODS.stopRecording, input, { timeoutMs: null }),
+      describeUi: (input) => transport.request(DEVICE_WS_METHODS.describeUi, input),
+      // A scroll loop runs several swipe/describe round-trips on the device.
+      scrollToElement: (input) =>
+        transport.request(DEVICE_WS_METHODS.scrollToElement, input, { timeoutMs: null }),
+      onEvent: deviceEventListeners.subscribe,
     },
     browser: {
       open: async (input) => {

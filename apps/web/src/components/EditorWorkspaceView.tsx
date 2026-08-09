@@ -629,6 +629,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                 <WorkspaceFilePreview
                   workspaceRoot={props.workspaceRoot}
                   filePath={props.selectedFilePath}
+                  editable
                   onReferenceInChat={props.onReferenceInChat}
                   onAskWhyInChat={props.onAskWhyInChat}
                   onCommentInChat={props.onCommentInChat}

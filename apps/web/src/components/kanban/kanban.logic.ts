@@ -662,6 +662,23 @@ export function flattenProjectBoardForOverview(board: KanbanProjectBoard): Kanba
   return [...board.inProgress, ...board.draft, ...board.done];
 }
 
+const OVERVIEW_RENDER_CAP = 20;
+
+/**
+ * The capped card list an overview project column actually renders, plus the count folded
+ * behind its "Show more" affordance. Shared with the board root so per-card data (PR
+ * badges) is fetched for exactly the rendered set.
+ */
+export function overviewVisibleKanbanCards(board: KanbanProjectBoard): {
+  visibleCards: KanbanCard[];
+  hiddenCount: number;
+} {
+  const cards = flattenProjectBoardForOverview(board);
+  const visibleCards =
+    cards.length > OVERVIEW_RENDER_CAP ? cards.slice(0, OVERVIEW_RENDER_CAP) : cards;
+  return { visibleCards, hiddenCount: cards.length - visibleCards.length };
+}
+
 export type KanbanDraftOpenThreadReason = "not-draft" | "empty" | "worktree-pending";
 export type KanbanDraftDropAction = "dispatch" | "open-thread";
 

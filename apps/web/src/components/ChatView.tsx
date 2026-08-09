@@ -39,6 +39,7 @@ import {
   RuntimeMode,
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
+import { respondingInteractionReclaimAt } from "@synara/shared/pendingInteractions";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import {
@@ -77,6 +78,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Debouncer, useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";
 import { type LegendListRef } from "@legendapp/list/react";
+import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitCreateDetachedWorktreeMutationOptions,
@@ -95,7 +97,11 @@ import {
   supportsThreadCompaction,
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
-import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverQueryKeys,
+  serverSettingsQueryOptions,
+} from "~/lib/serverReactQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import {
@@ -110,7 +116,6 @@ import {
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import {
   findProviderStatus,
-  isProviderUsable,
   normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
   resolveProviderSendAvailabilityWithRefresh,
@@ -136,6 +141,10 @@ import {
   maybeResolveBrowserPromptAttachment,
   type BrowserPromptAttachmentResolution,
 } from "../lib/browserPromptContext";
+import {
+  maybeResolveDevicePromptAttachment,
+  type DevicePromptAttachmentResolution,
+} from "../lib/devicePromptContext";
 import {
   buildComposerFileAttachmentsFromFiles,
   stageUploadComposerAttachments,
@@ -180,6 +189,7 @@ import {
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveComposerStripWorkLogEntries,
   resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
@@ -273,6 +283,7 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   type ChatMessage,
   type Thread,
+  type WorktreeSetupResolutionAction,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
@@ -444,6 +455,7 @@ import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   acknowledgedRiskIdsForFormWarnings,
   AutomationDialog,
@@ -516,6 +528,7 @@ import {
   dispatchThreadMarkerRemove,
 } from "../threadMarkers";
 import { getComposerProviderState } from "./chat/composerProviderRegistry";
+import { composerTranscriptBottomInsetPx, useComposerOverlayHeight } from "./chat/composerOverlay";
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
@@ -533,7 +546,7 @@ import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
-import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
+import { useThreadErrorToast } from "./chat/useThreadErrorToast";
 import {
   RateLimitBanner,
   deriveLatestRateLimitStatus,
@@ -551,15 +564,23 @@ import {
   deriveComposerSendState,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
+  LOCAL_DISPATCH_ACK_TIMEOUT_MS,
+  LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveNextLocalDispatchSnapshot,
+  resolveWorkingLabel,
   resolveThreadArtifactWorkspaceRoot,
   WORKTREE_SETUP_ERROR_HOLD_MS,
   worktreeSetupHasError,
+  WorktreeSetupCancelledError,
+  createWorktreeSetupResolution,
+  runWorktreeCreationFlow,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
   type WorktreeSetupDispatchOptions,
+  type WorktreeSetupResolution,
   PullRequestDialogState,
   type QueuedSteerGate,
   resolveQueuedSteerGateTransition,
@@ -568,6 +589,7 @@ import {
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
 } from "./ChatView.logic";
+import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
@@ -626,6 +648,7 @@ function waitForSetupScriptTerminalActivity(input: {
   terminalId: string;
   observeStartTimeoutMs?: number;
   maxRuntimeMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   if (typeof window === "undefined") {
     return Promise.resolve();
@@ -661,6 +684,7 @@ function waitForSetupScriptTerminalActivity(input: {
       resolved = true;
       clearTimers();
       unsubscribe();
+      input.signal?.removeEventListener("abort", finish);
       resolve();
     };
 
@@ -685,6 +709,11 @@ function waitForSetupScriptTerminalActivity(input: {
       }
     }
 
+    if (input.signal?.aborted) {
+      finish();
+      return;
+    }
+    input.signal?.addEventListener("abort", finish, { once: true });
     checkRunningState();
     if (!observedRunning) {
       observeStartTimer = window.setTimeout(finish, observeStartTimeoutMs);
@@ -1085,6 +1114,7 @@ interface ChatViewProps {
   onToggleDiffPanel?: () => void;
   onToggleRightDock?: () => void;
   onToggleBrowserPanel?: () => void;
+  onToggleDevicePanel?: () => void;
   onOpenBrowserUrl?: (url: string) => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
@@ -1148,6 +1178,7 @@ export default function ChatView({
   onToggleDiffPanel,
   onToggleRightDock,
   onToggleBrowserPanel,
+  onToggleDevicePanel,
   onOpenBrowserUrl,
   onOpenTurnDiffPanel,
   onSplitSurface,
@@ -1178,6 +1209,14 @@ export default function ChatView({
     (store) => store.setModelSelectionAndSticky,
   );
   const timestampFormat = settings.timestampFormat;
+  // The composer floats over the transcript; its measured height becomes the
+  // transcript's bottom content inset (see composerOverlay.ts).
+  const {
+    overlayRef: composerOverlayRef,
+    overlayHeightPx: composerOverlayHeightPx,
+    overlayBottomClearancePx: composerOverlayBottomClearancePx,
+  } = useComposerOverlayHeight();
+  const composerTranscriptInsetPx = composerTranscriptBottomInsetPx(composerOverlayHeightPx);
   const navigate = useNavigate();
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
@@ -1374,6 +1413,12 @@ export default function ChatView({
   >({});
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
   const failedWorktreeSetupDispatchStartedAtRef = useRef<string | null>(null);
+  // Live handle to the in-flight send's worktree preparation, resolved by the
+  // setup card's Cancel / Work locally buttons. One send at a time can prepare
+  // a worktree (the composer is send-busy while it runs), so a single ref is safe.
+  const worktreeSetupResolutionRef = useRef<WorktreeSetupResolution | null>(null);
+  const [worktreeSetupPendingAction, setWorktreeSetupPendingAction] =
+    useState<WorktreeSetupResolutionAction | null>(null);
   const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [pendingFileUndo, setPendingFileUndo] = useState<PendingFileUndo | null>(null);
@@ -2172,6 +2217,7 @@ export default function ChatView({
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
@@ -2494,18 +2540,27 @@ export default function ChatView({
       ? null
       : (activeLatestTurn?.turnId ?? null);
   // Composer-strip source: the strip needs the routed subagent entries the
-  // transcript drops, so it derives from the parent thread's own activities.
+  // transcript drops. A top-level thread has already derived that exact source
+  // above; reuse it so every live activity does not scan and normalize the full
+  // history twice. Subagent views still derive from their distinct parent source.
   const stripRawWorkLogEntries = useMemo(
     () =>
-      deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
-        visibleTurnIds: stripVisibleTurnIds,
-        activeTurnId: stripLiveTurnId,
-        activeTurnStartedAt: stripSourceLatestTurnStartedAt,
-        latestTurnState: stripSourceLatestTurnState,
-        latestTurnCompletedAt: stripSourceLatestTurnCompletedAt,
+      resolveComposerStripWorkLogEntries({
+        hasDistinctParentSource: stripParentThread !== undefined,
+        activeWorkLogEntries: rawWorkLogEntries,
+        deriveParentWorkLogEntries: () =>
+          deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
+            visibleTurnIds: stripVisibleTurnIds,
+            activeTurnId: stripLiveTurnId,
+            activeTurnStartedAt: stripSourceLatestTurnStartedAt,
+            latestTurnState: stripSourceLatestTurnState,
+            latestTurnCompletedAt: stripSourceLatestTurnCompletedAt,
+          }),
       }),
     [
+      rawWorkLogEntries,
       stripLiveTurnId,
+      stripParentThread,
       stripSourceActivities,
       stripSourceLatestTurnCompletedAt,
       stripSourceLatestTurnId,
@@ -2585,17 +2640,48 @@ export default function ChatView({
       threadActivities,
     ],
   );
+  const nextUserInputResponseReclaimAt = useMemo(() => {
+    let earliest: string | null = null;
+    for (const interaction of activeThread?.pendingInteractions ?? []) {
+      if (interaction.interactionKind !== "userInput" || interaction.status !== "responding") {
+        continue;
+      }
+      if (interaction.responseRequestedAt === null) {
+        return new Date(0).toISOString();
+      }
+      const reclaimAt = respondingInteractionReclaimAt(interaction.responseRequestedAt);
+      if (earliest === null || reclaimAt < earliest) {
+        earliest = reclaimAt;
+      }
+    }
+    return earliest;
+  }, [activeThread?.pendingInteractions]);
+  const [userInputResponseClaimReferenceAt, setUserInputResponseClaimReferenceAt] = useState(() =>
+    new Date().toISOString(),
+  );
+  useEffect(() => {
+    if (nextUserInputResponseReclaimAt === null) {
+      return;
+    }
+    const delayMs = Math.max(0, Date.parse(nextUserInputResponseReclaimAt) - Date.now());
+    const timeoutId = window.setTimeout(() => {
+      setUserInputResponseClaimReferenceAt(new Date().toISOString());
+    }, delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [nextUserInputResponseReclaimAt]);
   const pendingUserInputs = useMemo(
     () =>
       derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions, {
         authoritativeHasPending: activeThread?.hasPendingUserInput,
         latestTurnId: activeThread?.latestTurn?.turnId,
+        responseClaimReferenceAt: userInputResponseClaimReferenceAt,
       }),
     [
       activeThread?.hasPendingUserInput,
       activeThread?.latestTurn?.turnId,
       activeThread?.pendingInteractions,
       threadActivities,
+      userInputResponseClaimReferenceAt,
     ],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
@@ -2854,7 +2940,30 @@ export default function ChatView({
       phase,
     ],
   );
+  const turnTakenOver = useMemo(
+    () =>
+      hasLiveTurnTakenOver({
+        localDispatch,
+        phase,
+        latestTurn: activeLatestTurn,
+        session: activeThread?.session ?? null,
+        hasPendingApproval: activePendingApproval !== null,
+        hasPendingUserInput: activePendingUserInput !== null,
+        threadError: activeThread?.error,
+        now: Date.now(),
+      }),
+    [
+      activeLatestTurn,
+      activePendingApproval,
+      activePendingUserInput,
+      activeThread?.error,
+      activeThread?.session,
+      localDispatch,
+      phase,
+    ],
+  );
   const isSendBusy = localDispatch !== null && !serverAcknowledgedLocalDispatch;
+  const isAwaitingTurnStart = localDispatch !== null && !turnTakenOver;
   const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
   const isPreparingWorktree = activeWorktreeSetup !== null;
   const hasLiveTurn = phase === "running";
@@ -2924,7 +3033,10 @@ export default function ChatView({
     promptRef,
     setComposerDraftPrompt,
   });
-  const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
+  // Keep Thinking through the post-ack gap where the server has the message /
+  // turn request but the provider session is not live yet (common on first send).
+  const isWorking =
+    hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint || isAwaitingTurnStart;
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
@@ -3842,11 +3954,13 @@ export default function ChatView({
   const handoffTargetProviders = useMemo(
     () =>
       activeThread
-        ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider).filter(
-            (provider) => isProviderUsable(findProviderStatus(providerStatuses, provider)),
-          )
+        ? resolveAvailableHandoffTargetProviders({
+            sourceProvider: activeThread.modelSelection.provider,
+            providerSettings: serverSettingsQuery.data?.providers,
+            providerStatuses,
+          })
         : [],
-    [activeThread, providerStatuses],
+    [activeThread, providerStatuses, serverSettingsQuery.data?.providers],
   );
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
@@ -4633,7 +4747,7 @@ export default function ChatView({
       });
 
       if (isElectron && keybindingRule) {
-        await api.server.upsertKeybinding(keybindingRule);
+        await api.server.upsertKeybinding({ rule: keybindingRule });
         await queryClient.invalidateQueries({ queryKey: serverQueryKeys.all });
       }
     },
@@ -5305,58 +5419,47 @@ export default function ChatView({
     };
   }, [activeThread?.id, composerFooterHasWideActions, isInactiveSplitPane]);
 
+  // A composer that grows (attachments, approval cards, queued turns) eats into the
+  // transcript's bottom content inset, which would push the tail behind the frosted
+  // surface. Re-stick a transcript that was already parked at the end.
+  //
+  // This is driven by the *committed* inset rather than by a ResizeObserver on the
+  // composer: the inset lands a render after the measurement, so a scroll scheduled
+  // from the observer would race the padding it is supposed to compensate for. Here
+  // the new padding is already in the DOM, so the pre-resize viewport is simply the
+  // current one with the inset delta backed out.
+  const previousComposerTranscriptInsetRef = useRef({
+    threadId: activeThread?.id ?? null,
+    insetPx: composerTranscriptInsetPx,
+  });
   useLayoutEffect(() => {
-    if (isInactiveSplitPane || typeof ResizeObserver === "undefined") return;
-    const composerForm = composerFormRef.current;
-    if (!composerForm) return;
-
-    let previousHeight = composerForm.getBoundingClientRect().height;
-    let pendingScrollTimeout: number | null = null;
-    const observer = new ResizeObserver((entries) => {
-      const [entry] = entries;
-      if (!entry) return;
-
-      const nextHeight = entry.contentRect.height;
-      const heightDelta = nextHeight - previousHeight;
-      previousHeight = nextHeight;
-      if (Math.abs(heightDelta) < 0.5) return;
-
-      const scrollContainer = legendListRef.current?.getScrollableNode?.();
-      // A composer resize can make LegendList report `isAtEnd: false` after the viewport
-      // has already changed. Reconstruct the pre-resize viewport so only an existing
-      // tail stick is preserved; a user who was already scrolled away stays there.
-      const wasNearEndBeforeResize =
-        scrollContainer instanceof HTMLElement &&
-        isScrollContainerNearBottom({
-          scrollTop: scrollContainer.scrollTop,
-          clientHeight: scrollContainer.clientHeight + heightDelta,
-          scrollHeight: scrollContainer.scrollHeight,
-        });
-      if (!wasNearEndBeforeResize) return;
-
-      if (pendingScrollTimeout !== null) {
-        window.clearTimeout(pendingScrollTimeout);
-      }
-      pendingScrollTimeout = window.setTimeout(() => {
-        pendingScrollTimeout = null;
-        scrollToEnd(false);
-      }, 0);
-    });
-
-    observer.observe(composerForm);
-    return () => {
-      observer.disconnect();
-      if (pendingScrollTimeout !== null) {
-        window.clearTimeout(pendingScrollTimeout);
-      }
+    const threadId = activeThread?.id ?? null;
+    const previous = previousComposerTranscriptInsetRef.current;
+    previousComposerTranscriptInsetRef.current = {
+      threadId,
+      insetPx: composerTranscriptInsetPx,
     };
-  }, [
-    activeThread?.id,
-    isInactiveSplitPane,
-    scrollToEnd,
-    secondaryChromeReady,
-    shouldRenderChatPaneContent,
-  ]);
+    if (previous.threadId !== threadId) return;
+
+    const insetDeltaPx = composerTranscriptInsetPx - previous.insetPx;
+    if (isInactiveSplitPane || Math.abs(insetDeltaPx) < 0.5) return;
+
+    const scrollContainer = legendListRef.current?.getScrollableNode?.();
+    if (!(scrollContainer instanceof HTMLElement)) return;
+    const wasNearEndBeforeResize = isScrollContainerNearBottom({
+      scrollTop: scrollContainer.scrollTop,
+      clientHeight: scrollContainer.clientHeight,
+      scrollHeight: scrollContainer.scrollHeight - insetDeltaPx,
+    });
+    if (!wasNearEndBeforeResize) return;
+
+    // Compensate by the exact inset delta rather than asking the list to scroll to its
+    // end: LegendList re-measures the padded viewport on its own schedule, so an
+    // end-scroll issued in this commit would aim at the pre-padding content height and
+    // land a composer-growth short of the tail.
+    programmaticScrollUntilRef.current = performance.now() + 200;
+    scrollContainer.scrollTop += insetDeltaPx;
+  }, [activeThread?.id, composerTranscriptInsetPx, isInactiveSplitPane]);
 
   useEffect(() => {
     isAtEndRef.current = true;
@@ -5761,6 +5864,77 @@ export default function ChatView({
     setLocalDispatch(null);
   }, []);
 
+  // Clears only the setup stepper from the dispatch marker: after "Work
+  // locally" the send continues (composer stays busy, Thinking shimmer takes
+  // over) but the worktree card animates out.
+  const clearLocalDispatchWorktreeSetup = useCallback(() => {
+    setLocalDispatch((current) =>
+      current?.worktreeSetup ? { ...current, worktreeSetup: null } : current,
+    );
+  }, []);
+
+  const onResolveWorktreeSetup = useCallback((action: WorktreeSetupResolutionAction) => {
+    const resolution = worktreeSetupResolutionRef.current;
+    if (!resolution || resolution.action !== null) {
+      return;
+    }
+    resolution.resolve(action);
+    setWorktreeSetupPendingAction(action);
+  }, []);
+
+  // The dispatch marker normally clears when the thread stream echoes the sent
+  // turn. Once the turn RPC has resolved the server owns the turn, so a stream
+  // that never echoes (dead subscription, lost event) must not lock the
+  // composer forever: this fallback force-clears the marker after a bound. The
+  // startedAt match keeps a stale timer from clearing a newer dispatch, and an
+  // already-acknowledged dispatch is left alone — the send spinner has
+  // released, and the awaiting-turn bridge legitimately keeps `localDispatch`
+  // alive until takeover or its own fail-open bound.
+  const localDispatchStartedAtRef = useRef<string | null>(null);
+  useEffect(() => {
+    localDispatchStartedAtRef.current = localDispatch?.startedAt ?? null;
+  }, [localDispatch]);
+  const serverAcknowledgedLocalDispatchRef = useRef(serverAcknowledgedLocalDispatch);
+  useEffect(() => {
+    serverAcknowledgedLocalDispatchRef.current = serverAcknowledgedLocalDispatch;
+  }, [serverAcknowledgedLocalDispatch]);
+  const localDispatchAckFallbackTimeoutRef = useRef<number | null>(null);
+  const armLocalDispatchAckFallback = useCallback((threadIdForSend: ThreadId) => {
+    // The turn RPC has resolved, so the server provably owns a turn. Re-arm
+    // the cross-component watchdog marker here: pre-dispatch work (worktree
+    // creation, attachment uploads) can outlive the marker's age cap, and this
+    // is the moment its clock should restart.
+    markPendingTurnDispatch(threadIdForSend);
+    const armedStartedAt = localDispatchStartedAtRef.current;
+    if (armedStartedAt === null) {
+      return;
+    }
+    if (localDispatchAckFallbackTimeoutRef.current !== null) {
+      window.clearTimeout(localDispatchAckFallbackTimeoutRef.current);
+    }
+    localDispatchAckFallbackTimeoutRef.current = window.setTimeout(() => {
+      localDispatchAckFallbackTimeoutRef.current = null;
+      if (serverAcknowledgedLocalDispatchRef.current) {
+        return;
+      }
+      setLocalDispatch((current) =>
+        current &&
+        current.startedAt === armedStartedAt &&
+        !worktreeSetupHasError(current.worktreeSetup)
+          ? null
+          : current,
+      );
+    }, LOCAL_DISPATCH_ACK_TIMEOUT_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (localDispatchAckFallbackTimeoutRef.current !== null) {
+        window.clearTimeout(localDispatchAckFallbackTimeoutRef.current);
+      }
+    },
+    [],
+  );
+
   // Fallback cleanup for a failed worktree setup: clears the dispatch after the
   // error hold unless a newer dispatch already replaced it.
   const scheduleFailedWorktreeSetupDispatchReset = useCallback(() => {
@@ -5783,11 +5957,11 @@ export default function ChatView({
 
   const localDispatchWorktreeSetupFailed = worktreeSetupHasError(activeWorktreeSetup);
   useEffect(() => {
-    if (!serverAcknowledgedLocalDispatch) {
+    if (!turnTakenOver) {
       return;
     }
     // A failed worktree setup would otherwise reset in the same commit that
-    // painted the error (thread errors count as acknowledgement), so hold the
+    // painted the error (thread errors count as takeover), so hold the
     // row briefly before letting it animate out.
     if (localDispatchWorktreeSetupFailed) {
       const failedDispatchStartedAt = localDispatch?.startedAt;
@@ -5814,8 +5988,29 @@ export default function ChatView({
     localDispatch?.startedAt,
     localDispatchWorktreeSetupFailed,
     resetLocalDispatch,
-    serverAcknowledgedLocalDispatch,
+    turnTakenOver,
   ]);
+
+  // Fail-open: if takeover never arrives, clear the awaiting-turn bridge so
+  // Thinking cannot stick forever. Skipped while worktree setup is active.
+  useEffect(() => {
+    if (!localDispatch || turnTakenOver || localDispatch.worktreeSetup) {
+      return;
+    }
+    const startedAtMs = Date.parse(localDispatch.startedAt);
+    if (!Number.isFinite(startedAtMs)) {
+      return;
+    }
+    const remainingMs = LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS - (Date.now() - startedAtMs);
+    if (remainingMs <= 0) {
+      resetLocalDispatch();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      resetLocalDispatch();
+    }, remainingMs);
+    return () => window.clearTimeout(timer);
+  }, [localDispatch, resetLocalDispatch, turnTakenOver]);
 
   useEffect(() => {
     if (!activeThreadId) return;
@@ -6045,6 +6240,8 @@ export default function ChatView({
       setComposerDraftProviderModelOptions,
     ],
   );
+
+  const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
 
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
@@ -6282,12 +6479,30 @@ export default function ChatView({
         return;
       }
 
+      if (command === "device.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        // Unlike the browser this works in a plain tab, but only against a macOS
+        // server; the surface leaves the handler unwired when it cannot host one.
+        onToggleDevicePanel?.();
+        return;
+      }
+
       if (command === "chat.split") {
         event.preventDefault();
         event.stopPropagation();
         if (surfaceMode === "single" && onSplitSurface) {
           onSplitSurface();
         }
+        return;
+      }
+
+      // The handler already bailed out when no thread is open, so the active thread id
+      // is always the one the user is looking at (the focused pane when split).
+      if (command === "thread.copyId") {
+        event.preventDefault();
+        event.stopPropagation();
+        copyThreadIdToClipboard(activeThreadId);
         return;
       }
 
@@ -6322,6 +6537,7 @@ export default function ChatView({
     terminalWorkspaceOpen,
     terminalWorkspaceTerminalTabActive,
     onToggleBrowser,
+    onToggleDevicePanel,
     onToggleDiff,
     onInterruptFromStopControl,
     onSplitSurface,
@@ -6346,6 +6562,7 @@ export default function ChatView({
     selectedModel,
     modelOptionsByProvider,
     onProviderModelSelect,
+    copyThreadIdToClipboard,
   ]);
 
   // Preserve the original "single mic button" contract:
@@ -7469,6 +7686,49 @@ export default function ChatView({
       });
     }
 
+    const devicePromptAttachment: DevicePromptAttachmentResolution =
+      await maybeResolveDevicePromptAttachment({
+        api,
+        threadId: activeThread.id,
+        prompt: promptForSend,
+      }).catch(
+        (): DevicePromptAttachmentResolution => ({
+          requested: false,
+          image: null,
+        }),
+      );
+    if (devicePromptAttachment.image) {
+      const nextAttachmentCount =
+        composerImagesForSend.length +
+        composerFilesForSend.length +
+        composerAssistantSelectionsForSend.length +
+        1;
+      if (nextAttachmentCount <= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+        composerImagesForSend = [...composerImagesForSend, devicePromptAttachment.image];
+      } else {
+        toastManager.add({
+          type: "warning",
+          title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+          description:
+            "The simulator screenshot was skipped because this message is already at the attachment limit.",
+        });
+      }
+    } else if (devicePromptAttachment.requested) {
+      const description =
+        devicePromptAttachment.reason === "no-attached-device"
+          ? "Open the iOS Simulator panel and choose a device first, then try again."
+          : devicePromptAttachment.reason === "device-not-booted"
+            ? "The selected simulator is still starting up."
+            : devicePromptAttachment.reason === "attachment-processing-failed"
+              ? "The simulator screenshot could not be optimized for attachment."
+              : "The current simulator context could not be attached.";
+      toastManager.add({
+        type: "warning",
+        title: "Couldn’t attach the simulator screen",
+        description,
+      });
+    }
+
     if (hasQueueableLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
       clearComposerInput(activeThread.id);
       scheduleComposerFocus();
@@ -7712,13 +7972,26 @@ export default function ChatView({
       ? setupProjectScript(targetProjectScriptsForSend)
       : null;
     const worktreeSetupScriptName = setupScriptForWorktree?.name ?? null;
+    // Branching off the checkout's current branch also carries its uncommitted
+    // changes into the worktree, which the setup card surfaces as its own step.
+    const worktreeCopiesLocalChanges =
+      Boolean(baseBranchForWorktree) && baseBranchForWorktree === activeRootBranch;
     const messageIdForSend = newMessageId();
+    const worktreeSetupResolution = baseBranchForWorktree ? createWorktreeSetupResolution() : null;
+    worktreeSetupResolutionRef.current = worktreeSetupResolution;
+    if (worktreeSetupResolution) {
+      setWorktreeSetupPendingAction(null);
+    }
 
     sendInFlightRef.current = true;
     beginLocalDispatch({
       expectedUserMessageId: messageIdForSend,
       ...(baseBranchForWorktree
-        ? { worktreeSetupStepId: "create-worktree", setupScriptName: worktreeSetupScriptName }
+        ? {
+            worktreeSetupStepId: "create-branch" as const,
+            setupScriptName: worktreeSetupScriptName,
+            copyLocalChanges: worktreeCopiesLocalChanges,
+          }
         : {}),
     });
 
@@ -7863,51 +8136,144 @@ export default function ChatView({
 
     let createdServerThreadForLocalDraft = false;
     let createdWorktreeForSendPath: string | null = null;
+    let switchedToLocalCheckout = false;
     let turnStartSucceeded = false;
     await (async () => {
-      // On first message: lock in branch + create worktree if needed.
-      if (baseBranchForWorktree) {
-        const result = await createWorktreeMutation.mutateAsync({
-          cwd: targetProjectCwdForSend,
-          ref: baseBranchForWorktree,
-          ...(baseBranchForWorktree === activeRootBranch
-            ? { copyChangesFrom: targetProjectCwdForSend }
-            : {}),
-        });
-        beginLocalDispatch({
-          worktreeSetupStepId: "prepare-thread",
-          setupScriptName: worktreeSetupScriptName,
-        });
-        nextThreadBranch = result.worktree.branch;
-        nextThreadWorktreePath = result.worktree.path;
-        createdWorktreeForSendPath = result.worktree.path;
-        const nextAssociatedWorktree = {
-          associatedWorktreePath: result.worktree.path,
-          associatedWorktreeBranch: null,
-          associatedWorktreeRef: result.worktree.ref,
-        };
-        nextAssociatedWorktreePath = nextAssociatedWorktree.associatedWorktreePath;
-        nextAssociatedWorktreeBranch = nextAssociatedWorktree.associatedWorktreeBranch;
-        nextAssociatedWorktreeRef = nextAssociatedWorktree.associatedWorktreeRef;
-        if (isServerThread) {
+      // "Work locally" from the setup card: drop any prepared worktree and
+      // point the send (and the thread's metadata) back at the project
+      // checkout. Awaited before the turn dispatch so the session resolves the
+      // local cwd instead of the abandoned worktree.
+      const applyWorkLocallySwitch = async () => {
+        switchedToLocalCheckout = true;
+        nextThreadEnvMode = "local";
+        nextThreadBranch = null;
+        nextThreadWorktreePath = null;
+        nextAssociatedWorktreePath = null;
+        nextAssociatedWorktreeBranch = null;
+        nextAssociatedWorktreeRef = null;
+        const worktreePathToRemove = createdWorktreeForSendPath;
+        createdWorktreeForSendPath = null;
+        if (worktreePathToRemove) {
+          // Best-effort: a leftover worktree is inert and reclaimable later.
+          void api.git
+            .removeWorktree({
+              cwd: targetProjectCwdForSend,
+              path: worktreePathToRemove,
+              force: true,
+              reclaimTemporaryBranch: true,
+            })
+            .catch(() => undefined);
+        }
+        if (isServerThread || createdServerThreadForLocalDraft) {
           await api.orchestration.dispatchCommand({
             type: "thread.meta.update",
             commandId: newCommandId(),
             threadId: threadIdForSend,
-            envMode: "worktree",
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
-            associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
-            associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
-            associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            associatedWorktreePath: null,
+            associatedWorktreeBranch: null,
+            associatedWorktreeRef: null,
           });
-          // Keep local thread state in sync immediately so terminal drawer opens
-          // with the worktree cwd/env instead of briefly using the project root.
           setStoreThreadWorkspace(threadIdForSend, {
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
-            ...nextAssociatedWorktree,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+            associatedWorktreePath: null,
+            associatedWorktreeBranch: null,
+            associatedWorktreeRef: null,
           });
+        }
+        clearLocalDispatchWorktreeSetup();
+      };
+
+      // Honors a Cancel / Work locally choice at a step boundary. Cancel
+      // unwinds through the shared send-failure path below; the cancelled
+      // sentinel keeps that path from painting error state.
+      const consumeWorktreeSetupResolution = async () => {
+        const action = worktreeSetupResolution?.action ?? null;
+        if (action === null || switchedToLocalCheckout) {
+          return;
+        }
+        if (action === "cancel") {
+          throw new WorktreeSetupCancelledError();
+        }
+        await applyWorkLocallySwitch();
+      };
+
+      // On first message: lock in branch + create worktree if needed.
+      if (baseBranchForWorktree && worktreeSetupResolution) {
+        // The server streams each real setup phase (branch → worktree → copy
+        // changes); advance the card's rows from those events instead of
+        // letting one row spin through the whole creation.
+        const worktreeProgressId = randomUUID();
+        const creationFlow = await runWorktreeCreationFlow({
+          progressId: worktreeProgressId,
+          subscribeToProgress: (listener) => api.git.onWorktreeSetupProgress(listener),
+          startCreation: () =>
+            createWorktreeMutation.mutateAsync({
+              cwd: targetProjectCwdForSend,
+              ref: baseBranchForWorktree,
+              newBranch: buildTemporaryWorktreeBranchName(),
+              progressId: worktreeProgressId,
+              ...(worktreeCopiesLocalChanges ? { copyChangesFrom: targetProjectCwdForSend } : {}),
+            }),
+          resolution: worktreeSetupResolution,
+          onCreationStep: (stepId) =>
+            beginLocalDispatch({
+              worktreeSetupStepId: stepId,
+              setupScriptName: worktreeSetupScriptName,
+              copyLocalChanges: worktreeCopiesLocalChanges,
+            }),
+          removeWorktree: (worktreePath) =>
+            api.git.removeWorktree({
+              cwd: targetProjectCwdForSend,
+              path: worktreePath,
+              force: true,
+              reclaimTemporaryBranch: true,
+            }),
+        });
+        if (creationFlow.outcome === "resolved") {
+          await consumeWorktreeSetupResolution();
+        } else {
+          const result = creationFlow.result;
+          beginLocalDispatch({
+            worktreeSetupStepId: "prepare-thread",
+            setupScriptName: worktreeSetupScriptName,
+            copyLocalChanges: worktreeCopiesLocalChanges,
+          });
+          nextThreadBranch = result.worktree.branch;
+          nextThreadWorktreePath = result.worktree.path;
+          createdWorktreeForSendPath = result.worktree.path;
+          const nextAssociatedWorktree = {
+            associatedWorktreePath: result.worktree.path,
+            associatedWorktreeBranch: result.worktree.branch,
+            associatedWorktreeRef: result.worktree.ref,
+          };
+          nextAssociatedWorktreePath = nextAssociatedWorktree.associatedWorktreePath;
+          nextAssociatedWorktreeBranch = nextAssociatedWorktree.associatedWorktreeBranch;
+          nextAssociatedWorktreeRef = nextAssociatedWorktree.associatedWorktreeRef;
+          if (isServerThread) {
+            await api.orchestration.dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              envMode: "worktree",
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+              associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
+              associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
+              associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
+            });
+            // Keep local thread state in sync immediately so terminal drawer opens
+            // with the worktree cwd/env instead of briefly using the project root.
+            setStoreThreadWorkspace(threadIdForSend, {
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+              ...nextAssociatedWorktree,
+            });
+          }
         }
       }
 
@@ -7975,7 +8341,7 @@ export default function ChatView({
         createdServerThreadForLocalDraft = true;
       }
 
-      const setupScript = setupScriptForWorktree;
+      const setupScript = switchedToLocalCheckout ? null : setupScriptForWorktree;
       if (setupScript) {
         let shouldRunSetupScript = false;
         if (isServerThread) {
@@ -7989,6 +8355,7 @@ export default function ChatView({
           beginLocalDispatch({
             worktreeSetupStepId: "run-setup-action",
             setupScriptName: setupScript.name,
+            copyLocalChanges: worktreeCopiesLocalChanges,
           });
           const setupScriptOptions: Parameters<typeof runProjectScript>[1] = {
             worktreePath: nextThreadWorktreePath,
@@ -8000,13 +8367,26 @@ export default function ChatView({
           }
           const setupTerminal = await runProjectScript(setupScript, setupScriptOptions);
           if (setupTerminal) {
-            await waitForSetupScriptTerminalActivity({
+            const setupActivityAbortController = new AbortController();
+            const setupActivityWait = waitForSetupScriptTerminalActivity({
               threadId: threadIdForSend,
               terminalId: setupTerminal.terminalId,
+              signal: setupActivityAbortController.signal,
             });
+            // Setup scripts can run for minutes; let Cancel / Work locally win
+            // the wait. The script itself keeps running — a cancelled worktree
+            // is force-removed, a local switch just stops waiting on it.
+            await (
+              worktreeSetupResolution
+                ? Promise.race([setupActivityWait, worktreeSetupResolution.promise])
+                : setupActivityWait
+            ).finally(() => setupActivityAbortController.abort());
           }
         }
       }
+      // Covers a resolution set while the thread was linked or the setup
+      // script ran (the creation-step race above only guards the first step).
+      await consumeWorktreeSetupResolution();
 
       if (isServerThread) {
         await persistThreadSettingsForNextTurn({
@@ -8018,12 +8398,23 @@ export default function ChatView({
         });
       }
 
-      beginLocalDispatch(
-        baseBranchForWorktree
-          ? { worktreeSetupStepId: "start-session", setupScriptName: worktreeSetupScriptName }
-          : undefined,
-      );
       const stagedTurnAttachments = await turnAttachmentsPromise;
+      // Keep setup resolvable while attachment uploads are still preparing the
+      // turn. Once they settle, consume the last possible choice before the
+      // card advances to the non-resolvable "Starting session" step.
+      await consumeWorktreeSetupResolution();
+      // Carry the expected message id so a snapshot rebuilt after an interim
+      // reset (thread switch, ack effect) keeps the message-echo ack signal.
+      beginLocalDispatch({
+        expectedUserMessageId: messageIdForSend,
+        ...(baseBranchForWorktree && !switchedToLocalCheckout
+          ? {
+              worktreeSetupStepId: "start-session" as const,
+              setupScriptName: worktreeSetupScriptName,
+              copyLocalChanges: worktreeCopiesLocalChanges,
+            }
+          : {}),
+      });
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
         provider: selectedModelSelectionForSend.provider,
@@ -8057,6 +8448,7 @@ export default function ChatView({
         }),
       );
       turnStartSucceeded = true;
+      armLocalDispatchAckFallback(threadIdForSend);
       // Steers on providers without native mid-turn steering interrupt the live
       // turn before re-dispatching; hold queued auto-dispatch through that gap
       // so it can't race the steer. The live session provider decides the
@@ -8082,6 +8474,9 @@ export default function ChatView({
         setRestoredQueuedSourceProposedPlan(threadIdForSend, null);
       }
     })().catch(async (err: unknown) => {
+      // A user-cancelled worktree setup unwinds through this same rollback,
+      // but silently: no error styling on the step row, no thread error.
+      const setupCancelled = err instanceof WorktreeSetupCancelledError;
       // Uploads start in parallel with workspace/session preparation. If any
       // earlier step fails, settle that promise and release every staged blob.
       await turnAttachmentsPromise.then(
@@ -8090,7 +8485,14 @@ export default function ChatView({
       );
       // Surface the failure on whichever setup step was active (no-op for
       // sends without a worktree setup in flight).
-      failLocalDispatchWorktreeSetup();
+      if (!setupCancelled) {
+        failLocalDispatchWorktreeSetup();
+      }
+      if (!turnStartSucceeded) {
+        // The turn RPC never resolved, so no server turn exists for the
+        // watchdog to recover — drop the marker armed when the dispatch began.
+        clearPendingTurnDispatch(threadIdForSend);
+      }
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
         // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
         await api.orchestration
@@ -8107,6 +8509,7 @@ export default function ChatView({
             cwd: targetProjectCwdForSend,
             path: createdWorktreeForSendPath,
             force: true,
+            reclaimTemporaryBranch: true,
           })
           .then(
             () => true,
@@ -8183,16 +8586,21 @@ export default function ChatView({
         updateSelectedComposerMentions(composerMentionsSnapshot);
         setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
       }
-      setThreadError(
-        threadIdForSend,
-        err instanceof Error ? err.message : "Failed to send message.",
-      );
+      if (!setupCancelled) {
+        setThreadError(
+          threadIdForSend,
+          err instanceof Error ? err.message : "Failed to send message.",
+        );
+      }
     });
     sendInFlightRef.current = false;
+    worktreeSetupResolutionRef.current = null;
     if (!turnStartSucceeded) {
-      if (baseBranchForWorktree) {
+      if (baseBranchForWorktree && (worktreeSetupResolution?.action ?? null) === null) {
         scheduleFailedWorktreeSetupDispatchReset();
       } else {
+        // A resolved setup (cancelled, or switched to local and then failed)
+        // has no error step to hold on screen — release the marker directly.
         resetLocalDispatch();
       }
     }
@@ -8583,6 +8991,7 @@ export default function ChatView({
 
     try {
       await dispatchPlanFollowUpTurn();
+      armLocalDispatchAckFallback(threadIdForSend);
       sendInFlightRef.current = false;
       return true;
     } catch (err) {
@@ -8594,6 +9003,9 @@ export default function ChatView({
         err instanceof Error ? err.message : "Failed to send plan follow-up.",
       );
       sendInFlightRef.current = false;
+      // The turn RPC failed, so no server turn exists for the watchdog to
+      // recover — drop the marker armed when the dispatch began.
+      clearPendingTurnDispatch(threadIdForSend);
       resetLocalDispatch();
       return false;
     }
@@ -8966,7 +9378,12 @@ export default function ChatView({
           createdAt,
         });
       })
-      .then(() => api.orchestration.getShellSnapshot())
+      .then(() => {
+        // The turn RPC resolved for a thread this view never made active, so
+        // arm the watchdog marker with that exact thread id before navigation.
+        markPendingTurnDispatch(nextThreadId);
+        return api.orchestration.getShellSnapshot();
+      })
       .then((snapshot) => {
         syncServerShellSnapshot(snapshot);
         // Signal that the plan sidebar should open on the new thread.
@@ -8986,6 +9403,7 @@ export default function ChatView({
           .then(() => true)
           .catch(() => false);
         if (deletedOnServer) {
+          clearPendingTurnDispatch(nextThreadId);
           void reconcileDeletedThreadFromClient({
             threadId: nextThreadId,
             removeDeletedThreadFromClientState:
@@ -10379,6 +10797,13 @@ export default function ChatView({
       threadId: activeThread?.id ?? null,
       onUnblocked: clearThreadErrorAfterUnblock,
     });
+  useThreadErrorToast({
+    threadId: activeThread?.id ?? null,
+    error: activeThread?.error ?? null,
+    onDismiss: dismissActiveThreadError,
+    onUnblock: unblockActiveThread,
+    unblocking: unblockingActiveThread,
+  });
   const dismissActiveProviderHealthBanner = useCallback(() => {
     if (!activeProviderHealthBannerDismissalKey) return;
     setDismissedProviderHealthBannerKeys((current) => {
@@ -11261,7 +11686,7 @@ export default function ChatView({
                               ) : (
                                 <ComposerSendArrowIcon
                                   aria-hidden="true"
-                                  className="size-5 shrink-0"
+                                  className="size-5 shrink-0 translate-y-px"
                                 />
                               )}
                             </Button>
@@ -11441,16 +11866,11 @@ export default function ChatView({
         />
       ) : null}
 
-      {/* Error banner */}
+      {/* Thread-level errors render as a toast (see `useThreadErrorToast`) so they
+          never displace the transcript. */}
       <ProviderHealthBanner
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
-      />
-      <ThreadErrorBanner
-        error={activeThread.error}
-        onDismiss={dismissActiveThreadError}
-        onUnblock={unblockActiveThread}
-        unblocking={unblockingActiveThread}
       />
       <RateLimitBanner
         rateLimitStatus={visibleActiveRateLimitStatus}
@@ -11565,8 +11985,11 @@ export default function ChatView({
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
-                    isWorking={hasLiveTurn}
+                    isWorking={isWorking}
+                    workingLabel={resolveWorkingLabel({ isSendBusy, turnTakenOver })}
                     worktreeSetup={activeWorktreeSetup}
+                    worktreeSetupPendingAction={worktreeSetupPendingAction}
+                    onResolveWorktreeSetup={onResolveWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}
@@ -11625,45 +12048,56 @@ export default function ChatView({
                         ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
                         : undefined
                     }
+                    contentInsetBottomPx={composerTranscriptInsetPx}
+                    contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
                   />
                 </div>
 
-                <div
-                  className={cn(
-                    "relative z-10 -mt-5 w-full shrink-0 overflow-visible pt-0 sm:pt-0",
-                    ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-                    CHAT_COLUMN_GUTTER_CLASS_NAME,
-                    // A trailing BranchToolbar only renders for legacy git threads; otherwise the
-                    // composer is the last element, so give it a comfortable bottom margin.
-                    isGitRepo && !environmentEnabled ? "pb-0.5" : "pb-3 sm:pb-4",
-                  )}
-                  // Match the transcript's right inset so the composer stays aligned with chat
-                  // content (and clear of the docked Environment overlay).
-                  style={
-                    environmentAppliesContentInset
-                      ? { paddingRight: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
-                      : undefined
-                  }
-                >
-                  {composerSection}
-                </div>
-                {secondaryChromeReady &&
-                ((isGitRepo && !environmentEnabled) || relocateComposerLeadingControls) ? (
-                  <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
-                    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                      <div className="flex w-full items-center gap-1">
-                        {relocateComposerLeadingControls ? (
-                          <div className="flex shrink-0 items-center gap-1 pl-1">
-                            {renderComposerLeadingControls({ iconOnly: true })}
-                          </div>
-                        ) : null}
-                        {isGitRepo && !environmentEnabled ? (
-                          <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-1" />
-                        ) : null}
+                {/* Trailing block below the transcript: the composer floats on top of it
+                    (`bottom-full`), so the transcript's scroll viewport — and therefore every
+                    row scrolling behind the frosted composer — is clipped at the composer's
+                    bottom edge. Nothing ever shows through this gutter or the BranchToolbar row. */}
+                <div className="relative z-10 w-full shrink-0">
+                  <div
+                    ref={composerOverlayRef}
+                    className={cn(
+                      "pointer-events-none absolute inset-x-0 bottom-full w-full overflow-visible",
+                      ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
+                      CHAT_COLUMN_GUTTER_CLASS_NAME,
+                    )}
+                    // Match the transcript's right inset so the composer stays aligned with chat
+                    // content (and clear of the docked Environment overlay).
+                    style={
+                      environmentAppliesContentInset
+                        ? { paddingRight: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
+                        : undefined
+                    }
+                  >
+                    <div className="pointer-events-auto">{composerSection}</div>
+                  </div>
+                  {/* A trailing BranchToolbar only renders for legacy git threads; otherwise the
+                      composer is the last element, so give it a comfortable bottom margin. */}
+                  <div
+                    className={cn(isGitRepo && !environmentEnabled ? "pt-0.5" : "pt-3 sm:pt-4")}
+                  />
+                  {secondaryChromeReady &&
+                  ((isGitRepo && !environmentEnabled) || relocateComposerLeadingControls) ? (
+                    <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
+                      <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
+                        <div className="flex w-full items-center gap-1">
+                          {relocateComposerLeadingControls ? (
+                            <div className="flex shrink-0 items-center gap-1 pl-1">
+                              {renderComposerLeadingControls({ iconOnly: true })}
+                            </div>
+                          ) : null}
+                          {isGitRepo && !environmentEnabled ? (
+                            <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-1" />
+                          ) : null}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
               </div>
             ) : null}
 

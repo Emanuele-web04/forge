@@ -27,6 +27,7 @@ import {
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
+import { AppIconPicker } from "~/components/settings/AppIconPicker";
 import {
   ArchivedSettingsPanel,
   WorktreesSettingsPanel,
@@ -52,12 +53,12 @@ import {
   SettingsSelectControl,
 } from "../components/settings/SettingControls";
 import {
-  SettingsCard,
   SettingsRow,
   SettingsSection,
   SettingsSectionShell,
 } from "../components/settings/SettingsPanelPrimitives";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
+import { ThemeModePicker } from "../components/settings/ThemeModePicker";
 import { ThemePackEditor } from "../components/ThemePackEditor";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
@@ -84,7 +85,8 @@ import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavi
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
-import { DeviceLaptopIcon, MoonIcon, RotateCcwIcon, SunIcon } from "../lib/icons";
+import { isElectron } from "../env";
+import { RotateCcwIcon } from "../lib/icons";
 import { cn, isMacPlatform } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import { sameProviderOrder } from "../providerOrdering";
@@ -92,6 +94,7 @@ import {
   normalizeSettingsSection,
   SETTINGS_NAV_ITEMS,
   SETTINGS_TARGETS,
+  settingRowAnchorId,
 } from "../settingsNavigation";
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 
@@ -118,27 +121,6 @@ const UI_DENSITY_OPTIONS = [
   label: string;
   description: string;
 }>;
-
-const THEME_OPTIONS = [
-  {
-    value: "light",
-    label: "Light",
-    description: "Always use the light theme.",
-    icon: <SunIcon />,
-  },
-  {
-    value: "dark",
-    label: "Dark",
-    description: "Always use the dark theme.",
-    icon: <MoonIcon />,
-  },
-  {
-    value: "system",
-    label: "System",
-    description: "Match your OS appearance setting.",
-    icon: <DeviceLaptopIcon />,
-  },
-] as const;
 
 const PROVIDER_SELECT_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind);
 
@@ -240,6 +222,7 @@ function SettingsRouteView() {
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
+    ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
     ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
@@ -268,6 +251,9 @@ function SettingsRouteView() {
       ? ["Provider update checks"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
+      ? ["Pull request diff colors"]
+      : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -625,29 +611,21 @@ function SettingsRouteView() {
 
   const renderAppearancePanel = () => (
     <div className="space-y-6">
-      <SettingsSectionShell title="Theme">
-        <SettingsCard>
-          <SettingsRow
-            title="Theme"
-            description="Choose how Synara looks across the app."
-            resetAction={
-              theme !== "system" ? (
-                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-              ) : null
-            }
-            control={
-              <SettingsSegmentedControl
-                value={theme}
-                onValueChange={(value) => {
-                  if (value !== "system" && value !== "light" && value !== "dark") return;
-                  setTheme(value);
-                }}
-                ariaLabel="Theme preference"
-                options={THEME_OPTIONS}
-              />
-            }
-          />
-        </SettingsCard>
+      <SettingsSectionShell
+        title="Theme"
+        action={
+          theme !== "system" ? (
+            <SettingResetButton label="theme" onClick={() => setTheme("system")} />
+          ) : null
+        }
+      >
+        {/* The mode picker is the one settings control that sits directly on the page
+            instead of inside a card — the mockups are the whole UI, so boxing them in
+            a card reads as chrome around chrome. The anchor keeps search deep-links
+            (`?target=setting-theme`) working without the SettingsRow. */}
+        <div id={settingRowAnchorId("Theme")} className="scroll-mt-24 pb-1.5">
+          <ThemeModePicker value={theme} onValueChange={setTheme} ariaLabel="Theme preference" />
+        </div>
 
         <div className="space-y-3">
           {(resolvedTheme === "dark"
@@ -663,6 +641,29 @@ function SettingsRouteView() {
           ))}
         </div>
       </SettingsSectionShell>
+
+      {isElectron ? (
+        <SettingsSection title="App">
+          <SettingsRow
+            title="App icon"
+            description="Choose the icon Synara uses in the dock or taskbar."
+            resetAction={
+              settings.desktopAppIcon !== defaults.desktopAppIcon ? (
+                <SettingResetButton
+                  label="app icon"
+                  onClick={() => updateSettings({ desktopAppIcon: defaults.desktopAppIcon })}
+                />
+              ) : null
+            }
+            control={
+              <AppIconPicker
+                value={settings.desktopAppIcon}
+                onValueChange={(desktopAppIcon) => updateSettings({ desktopAppIcon })}
+              />
+            }
+          />
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection title="Typography and spacing">
         <SettingsRow
@@ -954,6 +955,14 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Review">
+        {renderBooleanSettingRow({
+          settingKey: "showPullRequestDiffColors",
+          title: "Pull request diff colors",
+          description: "Show additions in green and deletions in red in pull request summaries.",
+          resetLabel: "pull request diff colors",
+          ariaLabel: "Show pull request diff colors",
+        })}
+
         {renderBooleanSettingRow({
           settingKey: "diffWordWrap",
           title: "Diff line wrapping",

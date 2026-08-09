@@ -1402,6 +1402,39 @@ describe("deriveWorkLogEntries", () => {
     expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
   });
 
+  it("keeps a named Anti-Gravity command visible before arguments are available", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "antigravity-command-start",
+        createdAt: "2026-05-08T21:00:00.000Z",
+        kind: "tool.started",
+        summary: "run_command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "run_command",
+          data: {
+            toolCallId: "antigravity-tool-1",
+            toolName: "run_command",
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "antigravity-command-start",
+        itemType: "command_execution",
+        toolName: "run_command",
+        toolStatus: "running",
+        liveActivity: {
+          state: "running_tool",
+          startedAt: "2026-05-08T21:00:00.000Z",
+        },
+      },
+    ]);
+  });
+
   it("retains a filtered Codex command start timestamp after lifecycle correlation", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

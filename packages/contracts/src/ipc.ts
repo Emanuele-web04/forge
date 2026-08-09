@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+
 import type {
   AuthBearerBootstrapResult,
   AuthBootstrapInput,
@@ -42,6 +44,7 @@ import type {
 import type {
   GitCheckoutInput,
   GitActionProgressEvent,
+  GitWorktreeSetupProgressEvent,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
@@ -126,6 +129,38 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import type {
+  DeviceAttachInput,
+  DeviceBootInput,
+  DeviceBootResult,
+  DeviceDescribeUiInput,
+  DeviceScrollToElementInput,
+  DeviceScrollToElementResult,
+  DeviceDescribeUiResult,
+  DeviceDetachInput,
+  DeviceEvent,
+  DeviceInstallAppInput,
+  DeviceInstallAppResult,
+  DeviceKeyEventInput,
+  DeviceLaunchAppInput,
+  DeviceLaunchAppResult,
+  DeviceListInput,
+  DeviceListResult,
+  DeviceOpenUrlInput,
+  DevicePressButtonInput,
+  DeviceScreenshotInput,
+  DeviceScreenshotResult,
+  DeviceStartRecordingInput,
+  DeviceStartRecordingResult,
+  DeviceStopRecordingInput,
+  DeviceStopRecordingResult,
+  DeviceShutdownInput,
+  DeviceSwipeInput,
+  DeviceTapInput,
+  DeviceThreadInput,
+  DeviceTypeTextInput,
+  ThreadDeviceState,
+} from "./device";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
@@ -470,6 +505,9 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
+export const DesktopAppIcon = Schema.Literals(["default", "icon"]);
+export type DesktopAppIcon = typeof DesktopAppIcon.Type;
+
 export interface SynaraStorageSnapshot {
   readonly version: 1;
   readonly exportedAt: string;
@@ -491,6 +529,8 @@ export interface DesktopBridge {
   }) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  getAppIcon?: () => Promise<DesktopAppIcon>;
+  setAppIcon: (icon: DesktopAppIcon) => Promise<void>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
@@ -653,6 +693,9 @@ export interface NativeApi {
     summarizeDiff: (input: GitSummarizeDiffInput) => Promise<GitSummarizeDiffResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
+    onWorktreeSetupProgress: (
+      callback: (event: GitWorktreeSetupProgressEvent) => void,
+    ) => () => void;
   };
   pullRequests: {
     list: (input: PullRequestsListInput) => Promise<PullRequestsListResult>;
@@ -757,7 +800,10 @@ export interface NativeApi {
     getFullThreadDiff: (
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
-    replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
+    replayEvents: (
+      fromSequenceExclusive: number,
+      threadId?: ThreadId,
+    ) => Promise<OrchestrationEvent[]>;
     listProviderDeliveryBlockers: (
       input?: OrchestrationListProviderDeliveryBlockersInput,
     ) => Promise<OrchestrationListProviderDeliveryBlockersResult>;
@@ -790,5 +836,30 @@ export interface NativeApi {
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;
     onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
+  };
+  // macOS-only in practice: off darwin the server answers `list`/`getThreadState`
+  // with an `unsupported-platform` availability and refuses the rest, so the pane
+  // renders its blocked state rather than the client guessing at capabilities.
+  device: {
+    list: (input: DeviceListInput) => Promise<DeviceListResult>;
+    boot: (input: DeviceBootInput) => Promise<DeviceBootResult>;
+    shutdown: (input: DeviceShutdownInput) => Promise<void>;
+    attach: (input: DeviceAttachInput) => Promise<ThreadDeviceState>;
+    detach: (input: DeviceDetachInput) => Promise<ThreadDeviceState>;
+    getThreadState: (input: DeviceThreadInput) => Promise<ThreadDeviceState>;
+    tap: (input: DeviceTapInput) => Promise<void>;
+    swipe: (input: DeviceSwipeInput) => Promise<void>;
+    typeText: (input: DeviceTypeTextInput) => Promise<void>;
+    keyEvent: (input: DeviceKeyEventInput) => Promise<void>;
+    pressButton: (input: DevicePressButtonInput) => Promise<void>;
+    installApp: (input: DeviceInstallAppInput) => Promise<DeviceInstallAppResult>;
+    launchApp: (input: DeviceLaunchAppInput) => Promise<DeviceLaunchAppResult>;
+    openUrl: (input: DeviceOpenUrlInput) => Promise<void>;
+    screenshot: (input: DeviceScreenshotInput) => Promise<DeviceScreenshotResult>;
+    startRecording: (input: DeviceStartRecordingInput) => Promise<DeviceStartRecordingResult>;
+    stopRecording: (input: DeviceStopRecordingInput) => Promise<DeviceStopRecordingResult>;
+    describeUi: (input: DeviceDescribeUiInput) => Promise<DeviceDescribeUiResult>;
+    scrollToElement: (input: DeviceScrollToElementInput) => Promise<DeviceScrollToElementResult>;
+    onEvent: (callback: (event: DeviceEvent) => void) => () => void;
   };
 }

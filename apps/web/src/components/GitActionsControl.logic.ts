@@ -108,43 +108,80 @@ export function buildGitActionProgressStages(input: {
 const withDescription = (title: string, description: string | undefined) =>
   description ? { title, description } : { title };
 
-// Shared PR eligibility for explicit menu/CTA paths; the primary quick action ranks separately.
-function canRunCreatePrAction(input: {
+export type CreatePrExecution =
+  | { kind: "run_action"; action: "create_pr" | "commit_push_pr" }
+  | { kind: "open_pr" }
+  | { kind: "unavailable"; hint: string };
+
+/**
+ * Create PR is a "do everything" action: it resolves whichever stacked action
+ * completes the missing steps (commit → push/publish → PR) from the current git
+ * state. Behind/diverged branches stay blocked so a one-click action never has
+ * to auto-resolve merge conflicts; the default branch keeps its confirmation
+ * dialog (handled by the caller) before switching to a feature branch.
+ */
+export function resolveCreatePrExecution(input: {
   gitStatus: GitStatusResult | null;
   isBusy: boolean;
   isDefaultBranch: boolean;
   hasOriginRemote: boolean;
   defaultBranchName?: string | null | undefined;
-}): boolean {
+}): CreatePrExecution {
   const { gitStatus, isBusy, isDefaultBranch, hasOriginRemote, defaultBranchName } = input;
-  if (!gitStatus) return false;
+  if (isBusy) return { kind: "unavailable", hint: "Git action in progress." };
+  if (!gitStatus) return { kind: "unavailable", hint: "Git status is unavailable." };
+  if (gitStatus.pr?.state === "open") return { kind: "open_pr" };
+  if (gitStatus.branch === null) {
+    return { kind: "unavailable", hint: "Detached HEAD: checkout a branch before creating a PR." };
+  }
 
-  const hasBranch = gitStatus.branch !== null;
-  const hasChanges = gitStatus.hasWorkingTreeChanges;
-  const hasOpenPr = gitStatus.pr?.state === "open";
-  const isBehind = gitStatus.behindCount > 0;
-  const canPushWithoutUpstream = hasOriginRemote && !gitStatus.hasUpstream;
+  const isAhead = gitStatus.aheadCount > 0;
+  if (gitStatus.behindCount > 0) {
+    return {
+      kind: "unavailable",
+      hint: isAhead
+        ? "Branch has diverged from upstream. Rebase/merge first."
+        : "Branch is behind upstream. Pull before creating a PR.",
+    };
+  }
+  if (!gitStatus.hasUpstream && !hasOriginRemote) {
+    return { kind: "unavailable", hint: 'Add an "origin" remote before creating a PR.' };
+  }
+
+  if (gitStatus.hasWorkingTreeChanges) {
+    return { kind: "run_action", action: "commit_push_pr" };
+  }
+
   const canCreateCleanPublishedPr =
     !isDefaultBranch &&
     gitStatus.hasUpstream &&
     gitStatus.upstreamBranch !== null &&
     !tracksDefaultUpstream(gitStatus, defaultBranchName);
+  if (isAhead || canCreateCleanPublishedPr) {
+    return { kind: "run_action", action: "create_pr" };
+  }
 
-  return (
-    !isBusy &&
-    hasBranch &&
-    !hasChanges &&
-    !hasOpenPr &&
-    !isBehind &&
-    (canCreateCleanPublishedPr ||
-      (gitStatus.aheadCount > 0 && (gitStatus.hasUpstream || canPushWithoutUpstream)))
-  );
+  return { kind: "unavailable", hint: CREATE_PR_UNAVAILABLE_HINT };
 }
 
 function extractTrackedBranchName(upstreamBranch: string | null | undefined): string | null {
   if (!upstreamBranch) return null;
   const branchName = upstreamBranch.trim();
   return branchName.length > 0 ? branchName : null;
+}
+
+export function resolveCreatePrBaseBranch(
+  gitStatus: GitStatusResult | null,
+  defaultBranchName?: string | null,
+): string {
+  if (gitStatus?.configuredPrBaseBranch) {
+    return gitStatus.configuredPrBaseBranch;
+  }
+  const trackedBranchName = extractTrackedBranchName(gitStatus?.upstreamBranch);
+  if (gitStatus?.hasUpstream && trackedBranchName && trackedBranchName !== gitStatus.branch) {
+    return trackedBranchName;
+  }
+  return defaultBranchName ?? "main";
 }
 
 function tracksDefaultUpstream(
@@ -155,6 +192,122 @@ function tracksDefaultUpstream(
   if (!trackedBranchName) return false;
   if (defaultBranchName) return trackedBranchName === defaultBranchName;
   return FALLBACK_DEFAULT_BRANCH_NAMES.has(trackedBranchName);
+}
+
+export interface CreatePrDialogContext {
+  gitStatus: GitStatusResult | null;
+  isBusy: boolean;
+  isDefaultBranch: boolean;
+  hasOriginRemote: boolean;
+  defaultBranchName?: string | null | undefined;
+}
+
+export interface CreatePrDialogRuntimeStatus {
+  gitStatus: GitStatusResult | null;
+  isDefaultBranch: boolean;
+  statusOverride: GitStatusResult | null;
+}
+
+/**
+ * A post-push toast carries a synthetic status so its CTA can open even when
+ * the query cache still reflects the pre-push branch. Preserve that exact
+ * stale object as a freshness marker: the synthetic snapshot wins while the
+ * cache still returns it, then a newly fetched live object takes over so later
+ * working-tree or branch changes are reflected by the dialog.
+ */
+export function resolveCreatePrDialogRuntimeStatus(input: {
+  liveGitStatus: GitStatusResult | null;
+  statusOverride: GitStatusResult | null;
+  statusOverrideSource: GitStatusResult | null;
+  isDefaultBranch: boolean;
+  isDefaultBranchOverride: boolean | null;
+}): CreatePrDialogRuntimeStatus {
+  const liveStatusIsKnownStale =
+    input.liveGitStatus !== null && input.liveGitStatus === input.statusOverrideSource;
+  if (input.liveGitStatus && !liveStatusIsKnownStale) {
+    return {
+      gitStatus: input.liveGitStatus,
+      isDefaultBranch: input.isDefaultBranch,
+      statusOverride: null,
+    };
+  }
+  return {
+    gitStatus: input.statusOverride,
+    isDefaultBranch: input.isDefaultBranchOverride ?? input.isDefaultBranch,
+    statusOverride: input.statusOverride,
+  };
+}
+
+/**
+ * Execution for the Create PR dialog, honoring the "Commit and push local
+ * changes" toggle: with the toggle off a dirty tree is evaluated as if it were
+ * clean, so the dialog can offer a PR from already-committed work only (and
+ * correctly reports unavailability when nothing is committed).
+ */
+export function resolveCreatePrDialogExecution(
+  context: CreatePrDialogContext,
+  includeLocalChanges: boolean,
+): CreatePrExecution {
+  const { gitStatus } = context;
+  if (!gitStatus || includeLocalChanges || !gitStatus.hasWorkingTreeChanges) {
+    return resolveCreatePrExecution(context);
+  }
+  return resolveCreatePrExecution({
+    ...context,
+    gitStatus: { ...gitStatus, hasWorkingTreeChanges: false },
+  });
+}
+
+export interface CreatePrDialogView {
+  branchName: string | null;
+  baseBranchName: string;
+  // The PR head does not exist on the remote yet: either the current branch is
+  // unpublished or a feature branch will be created off the default branch.
+  isNewBranch: boolean;
+  // Submitting creates an auto-named feature branch first (default-branch flow).
+  willCreateFeatureBranch: boolean;
+  showCommitToggle: boolean;
+  insertions: number;
+  deletions: number;
+}
+
+export function resolveCreatePrDialogView(context: CreatePrDialogContext): CreatePrDialogView {
+  const gitStatus = context.gitStatus;
+  return {
+    branchName: gitStatus?.branch ?? null,
+    baseBranchName: resolveCreatePrBaseBranch(gitStatus, context.defaultBranchName),
+    isNewBranch: context.isDefaultBranch || gitStatus?.hasUpstream !== true,
+    willCreateFeatureBranch: context.isDefaultBranch,
+    showCommitToggle: gitStatus?.hasWorkingTreeChanges === true,
+    insertions: gitStatus?.workingTree.insertions ?? 0,
+    deletions: gitStatus?.workingTree.deletions ?? 0,
+  };
+}
+
+export type CreatePrBrowserPreparation =
+  | { kind: "run_action"; action: "commit_push" | "push" }
+  | { kind: "open_compare" }
+  | { kind: "open_pr" }
+  | { kind: "unavailable"; hint: string };
+
+/**
+ * "Open PR in browser" runs only the missing local steps (commit and/or push)
+ * and then opens the GitHub compare page, leaving PR authoring to the browser.
+ */
+export function resolveCreatePrBrowserPreparation(
+  context: CreatePrDialogContext,
+  includeLocalChanges: boolean,
+): CreatePrBrowserPreparation {
+  const execution = resolveCreatePrDialogExecution(context, includeLocalChanges);
+  if (execution.kind !== "run_action") return execution;
+  if (execution.action === "commit_push_pr") {
+    return { kind: "run_action", action: "commit_push" };
+  }
+  const gitStatus = context.gitStatus;
+  if (!gitStatus?.hasUpstream || gitStatus.aheadCount > 0) {
+    return { kind: "run_action", action: "push" };
+  }
+  return { kind: "open_compare" };
 }
 
 export function summarizeGitResult(result: GitRunStackedActionResult): {
@@ -215,7 +368,7 @@ export function buildMenuItems(
     !isBehind &&
     (hasChanges || gitStatus.aheadCount > 0) &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
-  const canCreatePr = canRunCreatePrAction({
+  const prExecution = resolveCreatePrExecution({
     gitStatus,
     isBusy,
     isDefaultBranch,
@@ -264,7 +417,7 @@ export function buildMenuItems(
       : {
           id: "pr",
           label: "Create PR",
-          disabled: !canCreatePr,
+          disabled: prExecution.kind !== "run_action",
           icon: "pr",
           kind: "open_dialog",
           dialogAction: "create_pr",
@@ -431,23 +584,41 @@ export function resolveQuickAction(
   };
 }
 
+/**
+ * Availability of the literal `create_pr` stacked action (clean tree required).
+ * Guards stale dispatches from surfaces that resolved their action earlier
+ * (quick action, post-push toast CTA); the menu path resolves the full chain
+ * via resolveCreatePrExecution instead.
+ */
 export function resolveCreatePrActionAvailability(input: {
   gitStatus: GitStatusResult | null;
   isDefaultBranch?: boolean;
   hasOriginRemote?: boolean;
   defaultBranchName?: string | null | undefined;
 }): { canRun: boolean; hint: string | null } {
-  const canRun = canRunCreatePrAction({
+  const execution = resolveCreatePrExecution({
     gitStatus: input.gitStatus,
     isBusy: false,
     isDefaultBranch: input.isDefaultBranch ?? false,
     hasOriginRemote: input.hasOriginRemote ?? true,
     defaultBranchName: input.defaultBranchName,
   });
+  const canRun = execution.kind === "run_action" && execution.action === "create_pr";
+  const hint = (() => {
+    if (canRun) return null;
+    if (execution.kind === "unavailable") return execution.hint;
+    if (execution.kind === "open_pr") {
+      return "A pull request is already open for this branch.";
+    }
+    if (execution.kind === "run_action" && execution.action === "commit_push_pr") {
+      return "Commit local changes before creating a PR.";
+    }
+    return CREATE_PR_UNAVAILABLE_HINT;
+  })();
 
   return {
     canRun,
-    hint: canRun ? null : CREATE_PR_UNAVAILABLE_HINT,
+    hint,
   };
 }
 

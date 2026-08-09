@@ -659,11 +659,11 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       ),
     );
 
-  // Profile history counts all work ever done. Retention hides are soft
-  // deletes whose rows keep feeding these queries directly; explicit deletes
-  // purge the thread's rows AFTER snapshotting the aggregates that matter into
-  // the profile_stats_deleted_* tables (see profileStatsArchive.ts), so every
-  // query below merges live projections with those archived aggregates.
+  // Profile history counts all work ever done. Active and archived thread rows
+  // feed these queries directly; explicit deletes purge the thread's rows AFTER
+  // snapshotting the aggregates that matter into the profile_stats_deleted_*
+  // tables (see profileStatsArchive.ts), so every query below merges current
+  // projections with those deleted-thread aggregates.
   // ── SQL helpers ──────────────────────────────────────────────────────
 
   // Activity = days/hours the user actually sent a Synara prompt. One day-hour
@@ -673,9 +673,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       "profileStats.promptActivity",
       sql<PromptActivityRow>`
         WITH prompt_events AS (
-          -- The thread join (no deleted_at filter) keeps retention-hidden rows
-          -- counting while excluding orphan message rows of purged threads,
-          -- which are already counted from the archive tables.
+          -- The thread join (no deleted_at filter) keeps archived and not-yet-
+          -- purged rows counting while excluding orphan message rows of purged
+          -- threads, which are already counted from the archive tables.
           SELECT m.created_at AS created_at
           FROM projection_thread_messages m
           JOIN projection_threads t ON t.thread_id = m.thread_id

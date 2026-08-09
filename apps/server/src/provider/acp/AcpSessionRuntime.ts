@@ -173,6 +173,34 @@ export interface AcpSpawnInput {
   readonly env?: NodeJS.ProcessEnv;
 }
 
+export interface AcpFreshSessionRetryPolicy {
+  readonly shouldRetry: (error: AcpErrors.AcpError) => boolean;
+  readonly delayMs?: number;
+}
+
+/**
+ * Retries one fresh `session/new` request when the provider reports a failure
+ * that is known to occur before a session exists. Resume/load requests must not
+ * use this path because repeating them can make delivery ambiguous.
+ */
+export function runAcpFreshSessionSetup<A>(
+  setup: Effect.Effect<A, AcpErrors.AcpError>,
+  retryPolicy: AcpFreshSessionRetryPolicy | undefined,
+): Effect.Effect<A, AcpErrors.AcpError> {
+  if (retryPolicy === undefined) {
+    return setup;
+  }
+  return setup.pipe(
+    Effect.catch((error) => {
+      if (!retryPolicy.shouldRetry(error)) {
+        return Effect.fail(error);
+      }
+      const delayMs = retryPolicy.delayMs ?? 0;
+      return delayMs > 0 ? Effect.sleep(delayMs).pipe(Effect.andThen(setup)) : setup;
+    }),
+  );
+}
+
 export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
   readonly cwd: string;
@@ -195,6 +223,8 @@ export interface AcpSessionRuntimeOptions {
    */
   readonly buildMcpServers?: (initializeResult: Acp.InitializeResponse) => Array<Acp.McpServer>;
   readonly authenticateMeta?: Record<string, unknown>;
+  /** Optional one-time retry for a fresh session/new failure. Never applies to resume/load. */
+  readonly freshSessionRetry?: AcpFreshSessionRetryPolicy;
   /** Overrides for {@link DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS}. */
   readonly startupTimeouts?: Partial<AcpSessionStartupTimeouts>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
@@ -1144,7 +1174,10 @@ const makeAcpSessionRuntime = (
         const created = yield* withStartupTimeout(
           "session/new",
           startupTimeouts.sessionSetupMs,
-          runLoggedRequest("session/new", createPayload, acp.agent.createSession(createPayload)),
+          runAcpFreshSessionSetup(
+            runLoggedRequest("session/new", createPayload, acp.agent.createSession(createPayload)),
+            options.freshSessionRetry,
+          ),
         );
         sessionId = created.sessionId;
         sessionSetupResult = created;

@@ -28,7 +28,7 @@ import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesFo
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { dispatchKanbanDraftCard } from "../../lib/kanbanDispatch";
-import { KanbanCardView } from "./KanbanCardView";
+import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanColumn, parseKanbanColumnDropId } from "./KanbanColumn";
 import {
   reorderDraftCardIds,
@@ -60,12 +60,14 @@ export function KanbanProjectBoardView({
   onOpenCard,
   onCardContextMenu,
   onNewTask,
+  prByThreadId,
   nowMs,
 }: {
   board: KanbanProjectBoard;
   onOpenCard: (card: KanbanCard) => void;
   onCardContextMenu?: ((card: KanbanCard, event: React.MouseEvent) => void) | undefined;
   onNewTask: () => void;
+  prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
 }) {
   const { settings } = useAppSettings();
@@ -235,6 +237,7 @@ export function KanbanProjectBoardView({
           droppable
           activeCard={activeCard}
           onNewCard={onNewTask}
+          prByThreadId={prByThreadId}
           {...(nowMs !== undefined ? { nowMs } : {})}
         />
         <KanbanColumn
@@ -245,6 +248,7 @@ export function KanbanProjectBoardView({
           onCardContextMenu={onCardContextMenu}
           droppable
           activeCard={activeCard}
+          prByThreadId={prByThreadId}
           {...(nowMs !== undefined ? { nowMs } : {})}
         />
         <KanbanColumn
@@ -255,12 +259,18 @@ export function KanbanProjectBoardView({
           onCardContextMenu={onCardContextMenu}
           droppable
           activeCard={activeCard}
+          prByThreadId={prByThreadId}
           {...(nowMs !== undefined ? { nowMs } : {})}
         />
       </div>
       <DragOverlay dropAnimation={null}>
         {activeCard ? (
-          <KanbanCardView card={activeCard} isOverlay {...(nowMs !== undefined ? { nowMs } : {})} />
+          <KanbanCardView
+            card={activeCard}
+            isOverlay
+            prByThreadId={prByThreadId}
+            {...(nowMs !== undefined ? { nowMs } : {})}
+          />
         ) : null}
       </DragOverlay>
     </DndContext>

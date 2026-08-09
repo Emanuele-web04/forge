@@ -108,6 +108,55 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("retries one matching fresh session setup failure", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+
+      expect(started.sessionId).toBe("mock-session-1");
+      expect(
+        requestEvents.filter(
+          (event) => event.method === "session/new" && event.status === "started",
+        ),
+      ).toHaveLength(2);
+      expect(
+        requestEvents.filter(
+          (event) => event.method === "initialize" && event.status === "started",
+        ),
+      ).toHaveLength(1);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: {
+              VITEST: "true",
+              SYNARA_ACP_FAIL_SESSION_NEW_ONCE: "1",
+            },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          freshSessionRetry: {
+            shouldRetry: (error) =>
+              error._tag === "AcpRequestError" &&
+              typeof error.data === "object" &&
+              error.data !== null &&
+              (error.data as { readonly code?: unknown }).code === "FS_NOT_FOUND",
+          },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("loads a resumed session and still prompts normally", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;

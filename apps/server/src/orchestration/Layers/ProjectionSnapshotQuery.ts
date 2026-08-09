@@ -742,11 +742,10 @@ function computeSnapshotSequence(
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // Thread retention soft-deletes and never purges (see ThreadDeletionReactor), so the
-  // projection tables keep every row of every deleted thread forever. `getSnapshot` is the
-  // only reader that hydrates message/activity bodies for the whole database at once, and
-  // every consumer of its read model drops soft-deleted threads before use. Ranking those
-  // rows was therefore ~95% pure waste on a mature database.
+  // Soft-deleted rows can remain while their purge is fenced or deferred. `getSnapshot` is
+  // the only reader that hydrates message/activity bodies for the whole database at once,
+  // and every consumer of its read model drops soft-deleted threads before use. Ranking
+  // those rows is pure waste.
   //
   // Filtering by thread removes whole `PARTITION BY thread_id` partitions, so the
   // ROW_NUMBER() ranks of the threads that survive are bit-for-bit unchanged.

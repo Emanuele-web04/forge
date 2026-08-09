@@ -22,8 +22,7 @@ export const serverQueryKeys = {
   localServers: () => ["server", "localServers"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
-  allProviderUsage: (provider?: ProviderKind | null) =>
-    ["server", "allProviderUsage", provider ?? null] as const,
+  allProviderUsage: () => ["server", "allProviderUsage"] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
@@ -145,6 +144,22 @@ export function serverAuthSessionQueryOptions() {
       return api.server.getAuthSession();
     },
     staleTime: 15_000,
+  });
+}
+
+/**
+ * The execution environment (OS, arch, server version) is fixed for the life of
+ * a server process, so it caches indefinitely; a restart drops the socket and
+ * remounts the app, which refetches.
+ */
+export function serverEnvironmentQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.environment(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getEnvironment();
+    },
+    staleTime: Infinity,
   });
 }
 
@@ -318,24 +333,24 @@ export function serverProfileTokenStatsQueryOptions(input: { enabled?: boolean }
   });
 }
 
-// Live remaining-usage for every provider in Settings or a single provider in active usage UI.
+// Live remaining-usage for every provider. Always fetches the full batch under a single query
+// key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
+// and one request cycle; the server caches per-provider snapshots, so the batch is cheap.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean
     | {
         enabled?: boolean;
-        provider?: ProviderKind | null;
       } = true,
 ) {
   const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
-  const provider = typeof input === "boolean" ? null : (input.provider ?? null);
   return queryOptions({
-    queryKey: serverQueryKeys.allProviderUsage(provider),
+    queryKey: serverQueryKeys.allProviderUsage(),
     enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: async () => fetchAllProviderUsage(provider ? { provider } : {}),
+    queryFn: async () => fetchAllProviderUsage(),
   });
 }

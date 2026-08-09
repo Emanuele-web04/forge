@@ -69,6 +69,10 @@ import {
   inspectSubprocessActivity,
   type TerminalSubprocessActivity,
 } from "../subprocessActivity";
+import {
+  createWindowsProcessSnapshotObserver,
+  type ProcessChildrenSnapshotObserver,
+} from "../windowsProcessSnapshot";
 
 export type { TerminalSubprocessActivity } from "../subprocessActivity";
 
@@ -743,6 +747,7 @@ interface TerminalManagerOptions {
   ptyAdapter: PtyAdapterShape;
   shellResolver?: () => string;
   subprocessChecker?: TerminalSubprocessChecker;
+  processSnapshotObserver?: ProcessChildrenSnapshotObserver;
   processTreeKiller?: ProcessTreeKiller;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
@@ -780,6 +785,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly subprocessChecker: TerminalSubprocessChecker;
   private readonly processTreeKiller: ProcessTreeKiller;
   private readonly useDefaultSubprocessChecker: boolean;
+  private readonly processSnapshotObserver: ProcessChildrenSnapshotObserver | null;
   private readonly subprocessPollIntervalMs: number;
   private readonly processKillGraceMs: number;
   private readonly maxRetainedInactiveSessions: number;
@@ -809,6 +815,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     // Only the built-in checker can share a single process snapshot across the
     // poll cycle; injected checkers (tests) keep the per-pid path.
     this.useDefaultSubprocessChecker = options.subprocessChecker === undefined;
+    this.processSnapshotObserver =
+      options.processSnapshotObserver ??
+      (this.useDefaultSubprocessChecker && process.platform === "win32"
+        ? createWindowsProcessSnapshotObserver()
+        : null);
     this.subprocessPollIntervalMs =
       options.subprocessPollIntervalMs ?? DEFAULT_SUBPROCESS_POLL_INTERVAL_MS;
     this.processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
@@ -1200,6 +1211,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private disposeInternal(options: { keepEscalationTimers: boolean }): number {
     this.stopSubprocessPolling();
+    this.processSnapshotObserver?.dispose();
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     for (const session of sessions) {
@@ -2045,10 +2057,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     for (const session of this.sessions.values()) {
       if (session.status !== "running" || session.pid === null) continue;
       if (session.hasRunningSubprocess || isProviderSessionBusy(session, now)) {
-        return base;
+        return Math.max(base, this.processSnapshotObserver?.retryDelayMs() ?? 0);
       }
     }
-    return base * SUBPROCESS_IDLE_POLL_MULTIPLIER;
+    return Math.max(
+      base * SUBPROCESS_IDLE_POLL_MULTIPLIER,
+      this.processSnapshotObserver?.retryDelayMs() ?? 0,
+    );
   }
 
   private async runSubprocessPollCycle(): Promise<void> {
@@ -2113,16 +2128,23 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
 
     this.subprocessPollInFlight = true;
-    // Capture the whole process tree once per cycle (built-in POSIX checker
-    // only); every running terminal is then inspected against this shared
-    // snapshot instead of each spawning its own full-system `ps`.
-    const sharedChildrenMap =
-      this.useDefaultSubprocessChecker && process.platform !== "win32"
+    // Capture the whole process tree once per cycle. POSIX uses one `ps`; Windows
+    // uses one persistent observer process. Every running terminal is then
+    // inspected synchronously against the same immutable snapshot.
+    const sharedChildrenMap = this.processSnapshotObserver
+      ? await this.processSnapshotObserver.capture()
+      : this.useDefaultSubprocessChecker && process.platform !== "win32"
         ? await captureProcessChildrenMap()
         : null;
+    const sharedSnapshotUnavailable =
+      this.processSnapshotObserver !== null && sharedChildrenMap === null;
     try {
       await Promise.all(
         runningSessions.map(async (session) => {
+          // A failed Windows snapshot proves nothing. Preserve the last known
+          // activity state while the observer backs off instead of reporting a
+          // false idle transition or falling back to per-terminal processes.
+          if (sharedSnapshotUnavailable) return;
           const terminalPid = session.pid;
           let hasRunningSubprocess = false;
           let shouldClearDetectedCliKind = false;

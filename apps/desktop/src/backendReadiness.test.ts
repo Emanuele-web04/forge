@@ -103,6 +103,33 @@ describe("waitForHttpReady", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps observing a live backend beyond sixty seconds when no deadline is configured", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async () =>
+          Date.now() >= 130_000
+            ? new Response(null, { status: 200 })
+            : new Response(null, { status: 503 }),
+        );
+
+      const readiness = waitForHttpReady("http://127.0.0.1:3773", {
+        fetchImpl,
+        timeoutMs: null,
+        intervalMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(130_000);
+
+      await expect(readiness).resolves.toBeUndefined();
+      expect(fetchImpl).toHaveBeenCalledTimes(131);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("aborts an in-flight readiness wait", async () => {
     const controller = new AbortController();
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(

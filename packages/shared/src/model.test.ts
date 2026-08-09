@@ -28,6 +28,7 @@ import {
   normalizeCodexModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
+  normalizePiModelOptions,
   parseCursorCliReasoningEffort,
   resolveApiModelId,
   resolveSelectableModel,
@@ -866,6 +867,15 @@ describe("normalizeGrokModelOptions", () => {
     expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
     });
+  });
+});
+
+describe("normalizePiModelOptions", () => {
+  it("keeps supported Pi thinking levels including max", () => {
+    expect(normalizePiModelOptions({ thinkingLevel: "high" })).toEqual({ thinkingLevel: "high" });
+    expect(normalizePiModelOptions({ thinkingLevel: "max" })).toEqual({ thinkingLevel: "max" });
+    expect(normalizePiModelOptions({ thinkingLevel: "ultra" as never })).toBeUndefined();
+    expect(normalizePiModelOptions({})).toBeUndefined();
   });
 });
 

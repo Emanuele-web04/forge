@@ -85,7 +85,6 @@ import {
   Queue,
   Random,
   Ref,
-  Semaphore,
   Stream,
 } from "effect";
 
@@ -147,6 +146,7 @@ import {
   MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION,
 } from "../claudeCliVersion.ts";
 import { parseGenericCliVersion } from "../providerMaintenance.ts";
+import { makeKeyedLock } from "../keyedLock.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -774,6 +774,34 @@ function readClaudeModelRefusalFallback(message: unknown): ClaudeModelRefusalFal
     ...(typeof record.content === "string" && record.content.trim().length > 0
       ? { content: record.content }
       : {}),
+  };
+}
+
+// VCS state transitions (commit, checkout, rebase) stream as an untyped system
+// message; match structurally so SDK type drift stays inert.
+interface ClaudeVcsStateChange {
+  readonly kind?: string;
+  readonly cwd?: string;
+}
+
+function readClaudeVcsStateChange(message: unknown): ClaudeVcsStateChange | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const record = message as {
+    type?: unknown;
+    subtype?: unknown;
+    kind?: unknown;
+    cwd?: unknown;
+  };
+  if (record.type !== "system" || record.subtype !== "vcs_state_changed") {
+    return undefined;
+  }
+  const kind = readNonEmptyString(record.kind);
+  const cwd = readNonEmptyString(record.cwd);
+  return {
+    ...(kind !== undefined ? { kind } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
   };
 }
 
@@ -1734,7 +1762,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const sessions = new Map<ThreadId, ClaudeSessionContext>();
     const failedStartupProcessOwners = new Map<ThreadId, ClaudeProcessOwner>();
     const failedDiscoveryProcessOwners = new Set<ClaudeProcessOwner>();
-    const sessionLifecycleLocks = new Map<ThreadId, Semaphore.Semaphore>();
+    const sessionLifecycleLock = makeKeyedLock<ThreadId>();
     let cachedModels: ProviderListModelsResult | null = null;
     let cachedAgents: ProviderListAgentsResult | null = null;
     const verifyClaudeAutoModelSupport = (input: {
@@ -1803,17 +1831,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
-    const withSessionLifecycleLock = <A, E, R>(
-      threadId: ThreadId,
-      effect: Effect.Effect<A, E, R>,
-    ): Effect.Effect<A, E, R> => {
-      let lock = sessionLifecycleLocks.get(threadId);
-      if (lock === undefined) {
-        lock = Semaphore.makeUnsafe(1);
-        sessionLifecycleLocks.set(threadId, lock);
-      }
-      return lock.withPermits(1)(effect);
-    };
+    const withSessionLifecycleLock = sessionLifecycleLock.withLock;
     const resolveClaudeSdkEnv = Effect.sync(() =>
       buildClaudeProcessEnv({ homeDir: serverConfig.homeDir }),
     );
@@ -3979,6 +3997,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               toModel: refusalFallback.fallbackModel,
               reason: refusalFallback.content ?? "Model safeguards rerouted this request.",
             },
+          });
+          return;
+        }
+
+        // VCS transitions let the thread git metadata reactor refresh the durable
+        // branch/PR projection mid-turn instead of waiting for the turn boundary.
+        const vcsStateChange = readClaudeVcsStateChange(message);
+        if (vcsStateChange) {
+          yield* offerRuntimeEvent(context, {
+            ...base,
+            type: "vcs.state.changed",
+            payload: vcsStateChange,
           });
           return;
         }

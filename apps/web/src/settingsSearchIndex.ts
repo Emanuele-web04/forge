@@ -144,6 +144,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Choose how Synara looks across the app. dark light system color",
   },
   {
+    id: "appearance:app-icon",
+    section: "appearance",
+    title: "App icon",
+    keywords: "Choose the icon Synara uses in the dock or taskbar desktop application logo.",
+    target: null,
+  },
+  {
     id: "appearance:system-ui-font",
     section: "appearance",
     title: "Use system UI font",
@@ -283,11 +290,11 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Ask before closing a terminal tab and clearing its history. safety confirm",
   },
 
-  // ── Keyboard Shortcuts ────────────────────────────────────────────────────────
+  // ── Keybindings ───────────────────────────────────────────────────────────────
   {
     id: "shortcuts:keyboard-shortcuts",
     section: "shortcuts",
-    title: "Keyboard Shortcuts",
+    title: "Keybindings",
     keywords:
       "Every keyboard shortcut available in Synara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
     target: null,

@@ -46,6 +46,7 @@ export const PullRequestRow = function PullRequestRow({
   entry,
   selected,
   showProjectTitle: showProjectTitleProp,
+  showDiffColors: showDiffColorsProp,
   onClick,
   onTogglePinned,
 }: {
@@ -53,10 +54,12 @@ export const PullRequestRow = function PullRequestRow({
   selected: boolean;
   /** All-projects view: identifies the preferred local context used when opening the remote PR. */
   showProjectTitle?: boolean;
+  showDiffColors?: boolean;
   onClick: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
   const showProjectTitle = showProjectTitleProp ?? false;
+  const showDiffColors = showDiffColorsProp ?? true;
   const isPinned = entry.isPinned === true;
   const projectContexts = pullRequestListProjectContexts(entry);
   const projectLabel =
@@ -138,7 +141,11 @@ export const PullRequestRow = function PullRequestRow({
           )}
         >
           <span>{formatRelativeTime(entry.updatedAt)}</span>
-          <PullRequestDiffStat additions={entry.additions} deletions={entry.deletions} />
+          <PullRequestDiffStat
+            additions={entry.additions}
+            deletions={entry.deletions}
+            tone={showDiffColors ? "diff" : "muted"}
+          />
         </span>
       </button>
       <Tooltip>

@@ -46,7 +46,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
-import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
+import { NATIVE_SURFACE_OCCLUSION_SYNC_EVENT } from "~/lib/nativeSurfaceOcclusion";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacPlatform } from "~/lib/utils";
 
@@ -67,6 +67,7 @@ import {
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
+  shouldOccludeBrowserWebview,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -613,6 +614,7 @@ export function BrowserPanel({
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
+  const [browserActionsMenuOpen, setBrowserActionsMenuOpen] = useState(false);
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
     threadBrowserState?.tabs.find((tab) => tab.id === threadBrowserState.activeTabId) ??
@@ -1047,7 +1049,11 @@ export function BrowserPanel({
       // While the local-servers home is up, force the browser surface hidden instead of
       // trusting the obscuring-overlay heuristic. The native/inline webview otherwise paints
       // about:blank white over our dark DOM home — the "always white" empty state.
-      const obscuredByOverlay = showLocalServersHome || hasNativeBrowserObscuringOverlay(element);
+      const obscuredByOverlay = shouldOccludeBrowserWebview({
+        showLocalServersHome,
+        browserActionsMenuOpen,
+        hasObscuringOverlay: hasNativeBrowserObscuringOverlay(element),
+      });
       lastOverlayObscuredRef.current = obscuredByOverlay;
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const rect = element.getBoundingClientRect();
@@ -1164,7 +1170,7 @@ export function BrowserPanel({
     // measured rect and would otherwise strand the native view at the old scale.
     const unsubscribeZoom = subscribeDesktopZoomFactor(scheduleSyncBounds);
     window.addEventListener("resize", scheduleSyncBounds);
-    window.addEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
+    window.addEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, scheduleSyncBounds);
     document.addEventListener("transitionrun", handleTransitionBounds, true);
     document.addEventListener("transitionend", handleTransitionBounds, true);
     document.addEventListener("transitioncancel", handleTransitionBounds, true);
@@ -1174,7 +1180,7 @@ export function BrowserPanel({
       observer.disconnect();
       unsubscribeZoom();
       window.removeEventListener("resize", scheduleSyncBounds);
-      window.removeEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
+      window.removeEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, scheduleSyncBounds);
       document.removeEventListener("transitionrun", handleTransitionBounds, true);
       document.removeEventListener("transitionend", handleTransitionBounds, true);
       document.removeEventListener("transitioncancel", handleTransitionBounds, true);
@@ -1189,7 +1195,14 @@ export function BrowserPanel({
       burstFramesRemainingRef.current = 0;
       burstStableFramesRef.current = 0;
     };
-  }, [api, isLiveRuntime, showLocalServersHome, threadId, usesNativeRuntime]);
+  }, [
+    api,
+    browserActionsMenuOpen,
+    isLiveRuntime,
+    showLocalServersHome,
+    threadId,
+    usesNativeRuntime,
+  ]);
 
   const onSubmitAddress = useCallback(() => {
     if (!ensureLiveRuntime()) {
@@ -1689,7 +1702,7 @@ export function BrowserPanel({
           <LinkIcon className="size-3.5" />
           <span className="sr-only">Copy link</span>
         </Button>
-        <Menu modal={false}>
+        <Menu modal={false} open={browserActionsMenuOpen} onOpenChange={setBrowserActionsMenuOpen}>
           <MenuTrigger
             render={
               <Button

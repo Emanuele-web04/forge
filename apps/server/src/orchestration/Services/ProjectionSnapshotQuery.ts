@@ -77,9 +77,9 @@ export interface ProjectionFullThreadDiffContext {
 /**
  * Narrow projection row backing managed-worktree retention.
  *
- * Soft-deleted threads are intentionally included: thread retention soft-deletes
- * and never purges, yet the worktree those threads own still sits on disk and must
- * stay eligible for snapshot + reclaim.
+ * Soft-deleted threads are intentionally included because purge can be deferred
+ * while provider delivery is unresolved; their worktrees must remain eligible
+ * for snapshot and reclaim until the rows are removed.
  */
 export interface ProjectionManagedWorktreeThread {
   readonly id: ThreadId;

@@ -22,6 +22,123 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.7.1",
+    date: "Aug 9",
+    features: [
+      {
+        id: "startup-reconnect-recovery",
+        title: "Large histories start and reconnect without a fixed deadline",
+        description:
+          "Synara now keeps waiting for a healthy backend and recovers late connections instead of giving up while a large history is still loading.",
+        details:
+          "Desktop readiness is cancellable but no longer capped by a fixed timeout, WebSocket reconnects use bounded backoff, and orchestration replay filters irrelevant events before decoding them. Startup, resume, and late-event handling now converge without turning a slow database into a false failure.",
+      },
+      {
+        id: "live-git-and-pr-state",
+        title: "Branches and pull requests stay in sync while agents work",
+        description:
+          "Task metadata now follows branch, worktree, push, and pull-request changes as they happen.",
+        details:
+          "A dedicated Git metadata reactor propagates mid-turn repository changes, recognizes task branches and pull requests more reliably, and repairs stale merged-PR badges. Refresh work is serialized and coalesced so commit, push, and PR actions are not blocked by competing background reads.",
+      },
+      {
+        id: "complete-pr-creation",
+        title: "Create PR can finish the whole publishing flow",
+        description:
+          "The PR dialog can commit the intended changes, push the branch, and open the pull request as one guided action.",
+        details:
+          "The flow has clearer draft and ready-for-review actions, safer branch and upstream handling, progress-aware controls, and refresh behavior that detaches after the terminal Git action succeeds instead of leaving the UI stuck while metadata catches up.",
+      },
+      {
+        id: "editable-explorer",
+        title: "Edit and save files directly from Explorer",
+        description:
+          "Workspace previews are now useful for small code and text edits without leaving Synara.",
+        details:
+          "Explorer file previews support editing, dirty-state tracking, guarded saves, clearer breadcrumbs, and safer path validation. Image overlays and preview layering were also corrected so file inspection remains usable beside the native browser and docked tools.",
+      },
+      {
+        id: "provider-usage-cache",
+        title: "Usage limits load faster and survive transient failures",
+        description:
+          "Provider usage is fetched once on the server and shared consistently across the sidebar and Settings.",
+        details:
+          "Claude and Codex credential refresh, keychain fallback, request joining, identity-scoped caching, throttling, and stale-but-healthy snapshot retention were hardened. A temporary provider or network failure no longer wipes a previously verified usage view.",
+      },
+      {
+        id: "provider-session-reliability",
+        title: "Provider sessions recover from more real-world failures",
+        description:
+          "Codex, Claude, OpenCode, Grok, Kilo, Antigravity, and ACP sessions now settle and resume more predictably.",
+        details:
+          "This release adds focused recovery for transient Grok storage and Kilo credential failures, OpenCode host-policy reinjection and Windows launching, Antigravity cancellation, AskUserQuestion replies, handoff eligibility, inline API keys, model discovery, and late terminal events.",
+      },
+      {
+        id: "calmer-live-transcript",
+        title: "Long and streaming conversations do less unnecessary work",
+        description:
+          "Live output remains visible while background polling, subscriptions, and timeline layout are more selective.",
+        details:
+          "Runtime polling adapts to activity, thread subscriptions are retained only where needed, replay avoids duplicate persistence, and timeline rows guard against painted overlap. Loading and Working labels now follow the real send and stream lifecycle instead of sticking after acknowledgements are lost or a live turn is taken over.",
+      },
+      {
+        id: "worktree-controls-and-forks",
+        title: "Worktree setup is visible, cancellable, and easier to recover",
+        description:
+          "See setup progress, cancel before dispatch, or open a local checkout when that is the better path.",
+        details:
+          "Automatic branch creation and attachment were restored, setup races were closed, worktree activity is easier to identify, and imported Codex history can now create a real fork while preserving the source relationship. The configured Git model is also used when naming new worktree branches.",
+      },
+      {
+        id: "appearance-personalization",
+        title: "Choose the desktop icon and preview themes visually",
+        description:
+          "Settings now includes native-style app icon choices and a compact theme mockup picker.",
+        details:
+          "Desktop icon selection persists through renderer startup and updates the packaged macOS presentation. Theme, shortcut, sidebar, composer glass, and translucent surface layouts were tightened, including production-safe backdrop filtering and better fallbacks where native transparency is unavailable.",
+      },
+      {
+        id: "faster-project-and-keyboard-workflows",
+        title: "Project and keyboard workflows need fewer corrective clicks",
+        description:
+          "Project search focuses immediately, and terminal and side-chat shortcuts behave more predictably.",
+        details:
+          "The shared project picker keeps its existing shell while focusing its search field on open. Conditional shortcut edits, keybinding capture, side-chat terminal exits, and shortcut settings were hardened so platform-specific combinations do not silently replace unrelated bindings.",
+      },
+      {
+        id: "clearer-feedback-and-release-history",
+        title: "Errors, confirmations, and release notes are easier to find",
+        description:
+          "Task errors now appear as toasts, routine notices remain visible longer, and past releases are available from Help.",
+        details:
+          "Shared toast providers now default to a 10-second dismissal while preserving explicitly persistent notices. Error banners moved into the common toast path, copying the active task ID has a dedicated shortcut, and the sidebar Help menu now opens the complete in-app release history.",
+      },
+      {
+        id: "cross-platform-rendering-fixes",
+        title: "Windows, Markdown, images, and pull-request views are sturdier",
+        description:
+          "Several small but disruptive platform and rendering failures have been removed.",
+        details:
+          "Windows OpenCode shim spawning and terminal activity detection were corrected, malformed GitHub-flavored Markdown tables are repaired before rendering, image overlays stack above the browser correctly, PR comments parse more consistently, and diff statistics can use an optional red/green presentation.",
+      },
+    ],
+  },
+  {
+    version: "0.7.0",
+    date: "Aug 5",
+    features: [
+      {
+        id: "analytics-configuration-removed",
+        title:
+          "A review of the Synara codebase found an analytics configuration that came from the original T3 Code codebase when Synara was created as a clone in March.",
+        description:
+          "We did not add it, and we have no access to the PostHog project receiving the events.",
+        details:
+          "The configuration has been removed. Synara no longer sends remote product analytics. The events did not include prompts, source code, filenames, or file contents. We're sorry this wasn't caught earlier",
+      },
+    ],
+  },
+  {
     version: "0.6.7",
     date: "Aug 5",
     features: [

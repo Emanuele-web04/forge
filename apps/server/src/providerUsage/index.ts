@@ -1,8 +1,8 @@
 // FILE: providerUsage/index.ts
 // Purpose: Orchestrate the live provider-usage fetchers — defensive batch fetch (one failure never
-// blocks the others), and enrichment of Codex/Claude live
-// snapshots with the locally-derived token-total usage lines. Exposes both a plain async API
-// (for tests) and an Effect that reads ServerConfig (for the WS RPC handler).
+// blocks the others), per-provider snapshot caching with single-flight coalescing, and enrichment
+// of Codex/Claude live snapshots with the locally-derived token-total usage lines. Exposes both a
+// plain async API (for tests) and an Effect that reads ServerConfig (for the WS RPC handler).
 
 import type {
   ProviderKind,
@@ -14,6 +14,7 @@ import { Effect } from "effect";
 
 import { ServerConfig } from "../config";
 import { buildProviderChildEnvironment, type ProviderChildKind } from "../providerChildEnvironment";
+import { ServerSettingsService } from "../serverSettings";
 import { loadLocalProviderUsageLines } from "../providerUsageSnapshot";
 import { errorSnapshot } from "./parse";
 import { PROVIDER_USAGE_FETCHERS } from "./registry";
@@ -36,25 +37,145 @@ function buildContext(): ProviderUsageContext {
 
 async function fetchProviderUsage(
   provider: ProviderKind,
-  ctx: ProviderUsageContext,
+  providerContext: ProviderUsageContext,
 ): Promise<ServerProviderUsageSnapshot | null> {
   const fetcher = PROVIDER_USAGE_FETCHERS[provider];
   if (!fetcher) {
     return null;
   }
 
-  const providerContext: ProviderUsageContext = {
+  return fetcher
+    .fetch(providerContext)
+    .catch(() =>
+      errorSnapshot(
+        provider,
+        providerContext.nowMs,
+        "live-usage",
+        "Usage fetch failed unexpectedly.",
+      ),
+    );
+}
+
+function buildProviderContext(
+  provider: ProviderKind,
+  ctx: ProviderUsageContext,
+): ProviderUsageContext {
+  return {
     ...ctx,
     env: buildProviderChildEnvironment({
       provider: providerChildKind(provider),
       baseEnv: ctx.env,
     }),
   };
-  return fetcher
-    .fetch(providerContext)
-    .catch(() =>
-      errorSnapshot(provider, ctx.nowMs, "live-usage", "Usage fetch failed unexpectedly."),
-    );
+}
+
+// Every UI surface (header chip, branch toolbar, settings panel) plus their periodic refetches
+// funnels through this cache, so one browser tab doesn't hammer provider endpoints — or spawn
+// `claude auth status` processes — once per surface. Fresh snapshots are served from memory,
+// concurrent requests for the same provider coalesce into a single fetch, and `forceRefresh`
+// (the settings panel's explicit refresh button) bypasses the TTL but still joins an in-flight
+// fetch. Degraded snapshots (errors, re-served last-good data) expire faster so recovery is
+// picked up quickly. Keyed by ProviderKind, so the cache is inherently bounded.
+const SNAPSHOT_CACHE_TTL_MS = 5 * 60 * 1000;
+const SNAPSHOT_CACHE_DEGRADED_TTL_MS = 60 * 1000;
+
+interface CachedSnapshot {
+  snapshot: ServerProviderUsageSnapshot;
+  fetchedAtMs: number;
+  credentialKey: string;
+}
+
+interface InFlightSnapshot {
+  credentialKey: string;
+  promise: Promise<ServerProviderUsageSnapshot | null>;
+}
+
+const snapshotCache = new Map<ProviderKind, CachedSnapshot>();
+const inFlightFetches = new Map<ProviderKind, InFlightSnapshot>();
+
+const snapshotCacheTtlMs = (snapshot: ServerProviderUsageSnapshot): number =>
+  snapshot.stale === true
+    ? 0
+    : (snapshot.status ?? "ok") === "error" || (snapshot.status ?? "ok") === "needs-auth"
+      ? SNAPSHOT_CACHE_DEGRADED_TTL_MS
+      : SNAPSHOT_CACHE_TTL_MS;
+
+async function resolveCredentialKey(
+  provider: ProviderKind,
+  ctx: ProviderUsageContext,
+): Promise<string | null> {
+  const fetcher = PROVIDER_USAGE_FETCHERS[provider];
+  if (!fetcher?.cacheKey) {
+    return provider;
+  }
+  try {
+    return await fetcher.cacheKey(ctx);
+  } catch {
+    return null;
+  }
+}
+
+/** Test-only: drop the snapshot cache and any in-flight coalescing state. */
+export function __resetProviderUsageCacheForTests(): void {
+  snapshotCache.clear();
+  inFlightFetches.clear();
+}
+
+async function getProviderUsageSnapshot(
+  provider: ProviderKind,
+  ctx: ProviderUsageContext,
+  forceRefresh: boolean,
+): Promise<ServerProviderUsageSnapshot | null> {
+  const providerContext = buildProviderContext(provider, ctx);
+  const credentialKey = await resolveCredentialKey(provider, providerContext);
+  const pending = inFlightFetches.get(provider);
+  if (credentialKey !== null && pending?.credentialKey === credentialKey) {
+    return pending.promise;
+  }
+
+  if (!forceRefresh && credentialKey !== null) {
+    const cached = snapshotCache.get(provider);
+    if (
+      cached &&
+      cached.credentialKey === credentialKey &&
+      ctx.nowMs - cached.fetchedAtMs < snapshotCacheTtlMs(cached.snapshot)
+    ) {
+      return cached.snapshot;
+    }
+  }
+
+  const fetchPromise = (async () => {
+    const snapshot = await fetchProviderUsage(provider, providerContext);
+    const enriched = snapshot ? await enrichWithLocalUsage(snapshot, ctx) : null;
+    const refreshedCredentialKey = await resolveCredentialKey(provider, providerContext);
+    if (enriched && credentialKey !== null && refreshedCredentialKey === credentialKey) {
+      const current = snapshotCache.get(provider);
+      const hasFreshHealthySnapshot =
+        current?.credentialKey === credentialKey &&
+        snapshotCacheTtlMs(current.snapshot) === SNAPSHOT_CACHE_TTL_MS &&
+        ctx.nowMs - current.fetchedAtMs < SNAPSHOT_CACHE_TTL_MS;
+      const fetchedFailedSnapshot = (enriched.status ?? "ok") === "error";
+      if (fetchedFailedSnapshot && hasFreshHealthySnapshot && current) {
+        return current.snapshot;
+      }
+      snapshotCache.set(provider, {
+        snapshot: enriched,
+        fetchedAtMs: ctx.nowMs,
+        credentialKey,
+      });
+    }
+    return enriched;
+  })();
+  if (credentialKey !== null) {
+    inFlightFetches.set(provider, { credentialKey, promise: fetchPromise });
+  }
+  try {
+    return await fetchPromise;
+  } finally {
+    if (inFlightFetches.get(provider)?.promise === fetchPromise) {
+      inFlightFetches.delete(provider);
+    }
+  }
 }
 
 async function enrichWithLocalUsage(
@@ -83,10 +204,9 @@ export async function collectProviderUsageSnapshots(
     ? ([options.provider] as ProviderKind[])
     : (Object.keys(PROVIDER_USAGE_FETCHERS) as ProviderKind[]);
   const settled = await Promise.allSettled(
-    providers.map(async (provider) => {
-      const snapshot = await fetchProviderUsage(provider, ctx);
-      return snapshot ? enrichWithLocalUsage(snapshot, ctx) : null;
-    }),
+    providers.map((provider) =>
+      getProviderUsageSnapshot(provider, ctx, options.forceRefresh === true),
+    ),
   );
 
   return settled
@@ -96,12 +216,15 @@ export async function collectProviderUsageSnapshots(
 
 export const listProviderUsage = Effect.fn(function* (input: ServerListProviderUsageInput) {
   const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const settings = yield* serverSettings.getSettings;
   return yield* Effect.tryPromise({
     try: () =>
       collectProviderUsageSnapshots(
         {
           ...buildContext(),
           homeDir: serverConfig.homeDir,
+          claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
         },
         {
           forceRefresh: input.forceRefresh === true,

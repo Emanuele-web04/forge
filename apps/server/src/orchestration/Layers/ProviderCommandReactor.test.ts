@@ -19,6 +19,7 @@ import {
   ApprovalRequestId,
   type ChatAttachment,
   CommandId,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
@@ -42,6 +43,8 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AgentGatewayOperationRepositoryLive } from "../../agentGateway/Layers/AgentGatewayOperationRepository.ts";
+import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import {
@@ -53,6 +56,7 @@ import {
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import {
   OrchestrationEventDeliveryRepository,
   PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -203,6 +207,8 @@ describe("ProviderCommandReactor", () => {
     readonly startReactor?: boolean;
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
     readonly commandEventTimeout?: Duration.Duration;
+    readonly gatewayOperationId?: string;
+    readonly gitWritingModelSelection?: ModelSelection;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -516,10 +522,17 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         } as unknown as TextGenerationShape),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest(
+          input?.gitWritingModelSelection
+            ? { textGenerationModelSelection: input.gitWritingModelSelection }
+            : {},
+        ),
+      ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
+      Layer.provideMerge(AgentGatewayOperationRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const runtime = ManagedRuntime.make(layer);
@@ -556,6 +569,9 @@ describe("ProviderCommandReactor", () => {
     const pendingInteractionRepository = await runtime.runPromise(
       Effect.service(ProjectionPendingInteractionRepository),
     );
+    const gatewayOperations = await runtime.runPromise(
+      Effect.service(AgentGatewayOperationRepository),
+    );
     scope = await Effect.runPromise(Scope.make("sequential"));
     let reactorStarted = false;
     const startReactor = async () => {
@@ -591,6 +607,13 @@ describe("ProviderCommandReactor", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        ...(input?.gatewayOperationId
+          ? {
+              creationSource: "synara_mcp" as const,
+              gatewayOperationId: input.gatewayOperationId,
+              gatewayOperationIndex: 0,
+            }
+          : {}),
         createdAt: now,
       }),
     );
@@ -682,6 +705,30 @@ describe("ProviderCommandReactor", () => {
       startReactor,
       deliveryRepository,
       pendingInteractionRepository,
+      reserveGatewayOperation: (operationId: string) =>
+        runtime.runPromise(
+          gatewayOperations.reserve({
+            operationId,
+            callerThreadId: "caller-thread",
+            callerTurnId: "caller-turn",
+            operationKind: "create_threads",
+            requestId: `request-${operationId}`,
+            fingerprint: `fingerprint-${operationId}`,
+            requestedCount: 1,
+            planJson: "[]",
+            now,
+          }),
+        ),
+      markGatewayOperationDispatching: (operationId: string) =>
+        runtime.runPromise(gatewayOperations.markDispatching({ operationId, now })),
+      completeGatewayOperation: (operationId: string) =>
+        runtime.runPromise(
+          gatewayOperations.complete({
+            operationId,
+            resultJson: "{}",
+            now: new Date().toISOString(),
+          }),
+        ),
       persistWithoutLivePublication: async (
         events: ReadonlyArray<Omit<OrchestrationEvent, "sequence">>,
       ) => {
@@ -896,6 +943,322 @@ describe("ProviderCommandReactor", () => {
     expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
       state: "succeeded",
       attemptCount: 2,
+    });
+  });
+
+  it("REL-01B gate: retries a transient queued-promotion enqueue before advancing", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("message-queued-enqueue-retry");
+    const commandId = CommandId.makeUnsafe("cmd-queued-enqueue-retry");
+    const messageEventId = asEventId("evt-message-queued-enqueue-retry");
+    const persisted = await harness.persistWithoutLivePublication([
+      {
+        eventId: messageEventId,
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: null,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "survive the first enqueue failure",
+          dispatchMode: "queue",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      {
+        eventId: asEventId("evt-turn-queued-enqueue-retry"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: messageEventId,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.turn-queued",
+        payload: {
+          threadId,
+          messageId,
+          dispatchMode: "queue",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      },
+    ]);
+    const queuedEvent = persisted[1]!;
+
+    const repository = harness.queuedTurnPromotionRepository as {
+      enqueue: typeof harness.queuedTurnPromotionRepository.enqueue;
+    };
+    const enqueue = repository.enqueue;
+    let enqueueAttempts = 0;
+    repository.enqueue = (input) => {
+      enqueueAttempts += 1;
+      return enqueueAttempts === 1
+        ? Effect.fail(
+            new PersistenceSqlError({
+              operation: "QueuedTurnPromotion.enqueue",
+              detail: "injected transient enqueue failure",
+            }),
+          )
+        : enqueue(input);
+    };
+
+    await harness.startReactor();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(enqueueAttempts).toBe(2);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "survive the first enqueue failure",
+    });
+    const delivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: queuedEvent.sequence,
+      }),
+    );
+    expect(delivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "succeeded",
+      attemptCount: 2,
+    });
+    const promotion = await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.getBySequence(queuedEvent.sequence),
+    );
+    expect(promotion.pipe(Option.getOrThrow)).toMatchObject({
+      state: "promoted",
+      attemptCount: 1,
+    });
+  });
+
+  it("reconciles and drains a queued-turn delivery without restart or a terminal event", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("message-queued-reconcile");
+    const commandId = CommandId.makeUnsafe("cmd-queued-reconcile");
+    const messageEventId = asEventId("evt-message-queued-reconcile");
+    const persisted = await harness.persistWithoutLivePublication([
+      {
+        eventId: messageEventId,
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: null,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "drain immediately after reconciliation",
+          dispatchMode: "queue",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      {
+        eventId: asEventId("evt-turn-queued-reconcile"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: messageEventId,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.turn-queued",
+        payload: {
+          threadId,
+          messageId,
+          dispatchMode: "queue",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      },
+    ]);
+    const queuedEvent = persisted[1]!;
+
+    const repository = harness.queuedTurnPromotionRepository as {
+      enqueue: typeof harness.queuedTurnPromotionRepository.enqueue;
+    };
+    const enqueue = repository.enqueue;
+    let rejectEnqueue = true;
+    let enqueueAttempts = 0;
+    repository.enqueue = (input) => {
+      enqueueAttempts += 1;
+      return rejectEnqueue
+        ? Effect.fail(
+            new PersistenceSqlError({
+              operation: "QueuedTurnPromotion.enqueue",
+              detail: "injected persistent enqueue failure",
+            }),
+          )
+        : enqueue(input);
+    };
+
+    await harness.startReactor();
+
+    const blockedDelivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: queuedEvent.sequence,
+      }),
+    );
+    expect(blockedDelivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "dead",
+      attemptCount: 3,
+    });
+    expect(enqueueAttempts).toBe(3);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    rejectEnqueue = false;
+    const reconciled = await Effect.runPromise(
+      harness.reactor.reconcileDelivery({
+        eventSequence: queuedEvent.sequence,
+        threadId,
+        expectedState: "dead",
+        outcome: "safe_retry",
+        reconciledBy: "test-operator",
+        note: "SQLite is writable again.",
+      }),
+    );
+
+    expect(reconciled).toMatchObject({
+      eventSequence: queuedEvent.sequence,
+      threadId,
+      outcome: "safe_retry",
+      state: "succeeded",
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(enqueueAttempts).toBe(4);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "drain immediately after reconciliation",
+    });
+    const promotion = await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.getBySequence(queuedEvent.sequence),
+    );
+    expect(promotion.pipe(Option.getOrThrow)).toMatchObject({
+      state: "promoted",
+      attemptCount: 1,
+    });
+  });
+
+  it("cancels a safely retried queued delivery after its thread was deleted", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("message-queued-reconcile-deleted");
+    const commandId = CommandId.makeUnsafe("cmd-queued-reconcile-deleted");
+    const persisted = await harness.persistWithoutLivePublication([
+      {
+        eventId: asEventId("evt-turn-queued-reconcile-deleted"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: null,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.turn-queued",
+        payload: {
+          threadId,
+          messageId,
+          dispatchMode: "queue",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      },
+    ]);
+    const queuedEvent = persisted[0]!;
+
+    const repository = harness.queuedTurnPromotionRepository as {
+      enqueue: typeof harness.queuedTurnPromotionRepository.enqueue;
+    };
+    const enqueue = repository.enqueue;
+    let rejectEnqueue = true;
+    let enqueueAttempts = 0;
+    repository.enqueue = (input) => {
+      enqueueAttempts += 1;
+      return rejectEnqueue
+        ? Effect.fail(
+            new PersistenceSqlError({
+              operation: "QueuedTurnPromotion.enqueue",
+              detail: "injected persistent enqueue failure",
+            }),
+          )
+        : enqueue(input);
+    };
+
+    await harness.startReactor();
+    const blockedDelivery = await Effect.runPromise(
+      harness.deliveryRepository.getDelivery({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: queuedEvent.sequence,
+      }),
+    );
+    expect(blockedDelivery.pipe(Option.getOrThrow)).toMatchObject({
+      state: "dead",
+      attemptCount: 3,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.makeUnsafe("cmd-delete-before-queued-reconcile"),
+        threadId,
+      }),
+    );
+    await harness.drain();
+    expect((await readHarnessThread(harness, threadId))?.deletedAt).not.toBeNull();
+
+    rejectEnqueue = false;
+    const reconciled = await Effect.runPromise(
+      harness.reactor.reconcileDelivery({
+        eventSequence: queuedEvent.sequence,
+        threadId,
+        expectedState: "dead",
+        outcome: "safe_retry",
+        reconciledBy: "test-operator",
+        note: "Retry after thread deletion must not resurrect queued work.",
+      }),
+    );
+
+    expect(reconciled).toMatchObject({
+      eventSequence: queuedEvent.sequence,
+      threadId,
+      outcome: "safe_retry",
+      state: "succeeded",
+    });
+    expect(enqueueAttempts).toBe(4);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const promotion = await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.getBySequence(queuedEvent.sequence),
+    );
+    expect(promotion.pipe(Option.getOrThrow)).toMatchObject({
+      state: "cancelled",
+      attemptCount: 0,
     });
   });
 
@@ -4357,6 +4720,13 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.renameBranch.mock.calls.length === 1);
     await waitFor(() => harness.publishBranch.mock.calls.length === 1);
 
+    expect(harness.generateBranchName.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: {
+        provider: "codex",
+        model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      },
+    });
+
     await waitFor(async () => {
       const thread = await readHarnessThread(harness);
       return (
@@ -4376,9 +4746,108 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("falls back to prompt-based worktree branch names when the provider cannot generate one", async () => {
-    const harness = await createHarness();
+  it("waits for gateway operation completion before renaming its temporary branch", async () => {
+    const operationId = "gateway-operation-worktree-rename";
+    const harness = await createHarness({ gatewayOperationId: operationId });
     const now = new Date().toISOString();
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "gateway-worktree-rename" }),
+    );
+    await harness.reserveGatewayOperation(operationId);
+    await harness.markGatewayOperationDispatching(operationId);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-gateway-worktree-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-gateway-turn-start-worktree-rename"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-gateway-worktree-rename"),
+          role: "user",
+          text: "Rename this gateway worktree",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
+    expect(harness.renameBranch).not.toHaveBeenCalled();
+
+    await harness.completeGatewayOperation(operationId);
+    await waitFor(() => harness.renameBranch.mock.calls.length === 1);
+    await waitFor(() => harness.publishBranch.mock.calls.length === 1);
+  });
+
+  it("does not rename a gateway branch when the operation record is missing", async () => {
+    const harness = await createHarness({ gatewayOperationId: "missing-gateway-operation" });
+    const now = new Date().toISOString();
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "must-not-be-used" }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-missing-gateway-worktree-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-missing-gateway-turn-start-worktree-rename"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-missing-gateway-worktree-rename"),
+          role: "user",
+          text: "Do not rename this worktree",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(harness.renameBranch).not.toHaveBeenCalled();
+    expect(harness.publishBranch).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured Git-writing model when the chat provider cannot generate names", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
+      },
+    });
+    const now = new Date().toISOString();
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "provider-startup-timeouts" }),
+    );
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -4415,17 +4884,83 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
     await waitFor(() => harness.renameBranch.mock.calls.length === 1);
-    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    expect(harness.generateBranchName.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: {
+        provider: "codex",
+        model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      },
+    });
     expect(harness.renameBranch.mock.calls[0]?.[0]).toMatchObject({
       oldBranch: "synara/cb661f0d",
-      newBranch: "synara/fix-provider-startup-timeouts",
+      newBranch: "synara/provider-startup-timeouts",
     });
 
     await waitFor(
-      async () =>
-        (await readHarnessThread(harness))?.branch === "synara/fix-provider-startup-timeouts",
+      async () => (await readHarnessThread(harness))?.branch === "synara/provider-startup-timeouts",
     );
+  });
+
+  it("keeps the temporary worktree branch when no Git-writing generator is available", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
+      },
+      gitWritingModelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-8",
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-worktree-keep-temporary"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-worktree-keep-temporary"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-keep-temporary"),
+          role: "user",
+          text: "This entire message must never become the branch name",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    expect(harness.renameBranch).not.toHaveBeenCalled();
+    expect(harness.publishBranch).not.toHaveBeenCalled();
+
+    const thread = await readHarnessThread(harness);
+    expect(thread).toMatchObject({
+      branch: "synara/cb661f0d",
+      associatedWorktreeBranch: "synara/cb661f0d",
+      associatedWorktreeRef: "synara/cb661f0d",
+    });
   });
 
   it("renames generic OpenCode first-turn thread titles using text generation", async () => {
@@ -8151,6 +8686,158 @@ describe("ProviderCommandReactor", () => {
     expect(Option.getOrUndefined(reclaimedUserInput)).toMatchObject({
       status: "responding",
       responseCommandId: "cmd-user-input-respond-retry",
+    });
+  });
+
+  it("keeps full-context AskUserQuestion rejection retryable across session recovery", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "claudeAgent",
+          method: "item/tool/respondToUserInput",
+          detail:
+            "API Error: 400 input_length and max_tokens exceed context limit; prompt is too long.",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-user-input-requested-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: {
+          id: EventId.makeUnsafe("activity-user-input-requested-full-context"),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "user-input-request-full-context",
+            questions: [],
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-respond-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-full-context"),
+        answers: { continue: "Yes" },
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.user-input.respond.failed",
+        ) === true,
+    );
+    const failureActivity = (await readHarnessThread(harness))?.activities.find(
+      (activity) => activity.kind === "provider.user-input.respond.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      requestId: "user-input-request-full-context",
+      responseCommandId: "cmd-user-input-respond-full-context",
+      settlementStatus: "retryable",
+      detail: expect.stringContaining("context limit"),
+    });
+    const failedResponse = await Effect.runPromise(
+      harness.pendingInteractionRepository.getByIdentity({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionKind: "userInput",
+        requestId: asApprovalRequestId("user-input-request-full-context"),
+      }),
+    );
+    expect(Option.getOrUndefined(failedResponse)).toMatchObject({
+      status: "retryable",
+      responseCommandId: "cmd-user-input-respond-full-context",
+    });
+
+    const stoppedAt = new Date(Date.now() + 1).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-stopped-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "stopped",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: stoppedAt,
+        },
+        createdAt: stoppedAt,
+      }),
+    );
+
+    const recoveredAt = new Date(Date.now() + 2).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-recovered-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: recoveredAt,
+        },
+        createdAt: recoveredAt,
+      }),
+    );
+    harness.respondToUserInput.mockImplementation(() => Effect.void);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.makeUnsafe("cmd-user-input-retry-full-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-full-context"),
+        answers: { continue: "Yes" },
+        createdAt: recoveredAt,
+      }),
+    );
+
+    await waitFor(() => harness.respondToUserInput.mock.calls.length === 2);
+    const retriedResponse = await Effect.runPromise(
+      harness.pendingInteractionRepository.getByIdentity({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        interactionKind: "userInput",
+        requestId: asApprovalRequestId("user-input-request-full-context"),
+      }),
+    );
+    expect(Option.getOrUndefined(retriedResponse)).toMatchObject({
+      status: "responding",
+      responseCommandId: "cmd-user-input-retry-full-context",
     });
   });
 

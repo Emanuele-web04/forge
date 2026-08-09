@@ -36,7 +36,10 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
-import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
+import {
+  SYNARA_HARNESS_POLICY_VERSION,
+  takeSynaraHarnessPolicyForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
@@ -149,8 +152,21 @@ interface OpenCodeTurnSnapshot {
   readonly items: Array<unknown>;
 }
 
+interface OpenCodeHarnessPolicyDelivery {
+  readonly sessionId: string;
+  readonly policyVersion: string;
+  readonly gatewayControlAvailable: boolean;
+}
+
+interface OpenCodeResumeCursor {
+  readonly openCodeSessionId: string;
+  readonly cwd: string;
+  readonly harnessPolicyDelivery?: OpenCodeHarnessPolicyDelivery;
+}
+
 interface OpenCodeSessionContext {
   harnessPolicyDelivered?: boolean;
+  pendingHarnessPolicyTurnId: TurnId | undefined;
   readonly gatewayControlAvailable: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
@@ -734,6 +750,9 @@ const clearActiveTurnState = Effect.fn("clearOpenCodeActiveTurnState")(function*
   if (options?.cancelGatewayTurn !== false) {
     yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
   }
+  if (context.pendingHarnessPolicyTurnId === context.activeTurnId) {
+    context.pendingHarnessPolicyTurnId = undefined;
+  }
   context.activeTurnId = undefined;
   context.activeTurnEventSerial = 0;
   context.activeTurnProviderActivitySerial = 0;
@@ -921,6 +940,88 @@ function extractResumeCwd(resumeCursor: unknown): string | undefined {
     return resumeCursor.cwd.trim();
   }
   return undefined;
+}
+
+function extractHarnessPolicyDelivery(
+  resumeCursor: unknown,
+): OpenCodeHarnessPolicyDelivery | undefined {
+  if (
+    resumeCursor &&
+    typeof resumeCursor === "object" &&
+    "harnessPolicyDelivery" in resumeCursor &&
+    resumeCursor.harnessPolicyDelivery &&
+    typeof resumeCursor.harnessPolicyDelivery === "object"
+  ) {
+    const delivery = resumeCursor.harnessPolicyDelivery;
+    if (
+      "sessionId" in delivery &&
+      typeof delivery.sessionId === "string" &&
+      delivery.sessionId.trim().length > 0 &&
+      "policyVersion" in delivery &&
+      typeof delivery.policyVersion === "string" &&
+      delivery.policyVersion.trim().length > 0 &&
+      "gatewayControlAvailable" in delivery &&
+      typeof delivery.gatewayControlAvailable === "boolean"
+    ) {
+      return {
+        sessionId: delivery.sessionId.trim(),
+        policyVersion: delivery.policyVersion.trim(),
+        gatewayControlAvailable: delivery.gatewayControlAvailable,
+      };
+    }
+  }
+  return undefined;
+}
+
+function isMatchingHarnessPolicyDelivery(
+  delivery: OpenCodeHarnessPolicyDelivery | undefined,
+  input: {
+    readonly sessionId: string;
+    readonly gatewayControlAvailable: boolean;
+  },
+): boolean {
+  return (
+    delivery?.sessionId === input.sessionId &&
+    delivery.policyVersion === SYNARA_HARNESS_POLICY_VERSION &&
+    delivery.gatewayControlAvailable === input.gatewayControlAvailable
+  );
+}
+
+function buildOpenCodeResumeCursor(input: {
+  readonly openCodeSessionId: string;
+  readonly cwd: string;
+  readonly harnessPolicyDelivered?: boolean | undefined;
+  readonly gatewayControlAvailable: boolean;
+}): OpenCodeResumeCursor {
+  return {
+    openCodeSessionId: input.openCodeSessionId,
+    cwd: input.cwd,
+    ...(input.harnessPolicyDelivered
+      ? {
+          harnessPolicyDelivery: {
+            sessionId: input.openCodeSessionId,
+            policyVersion: SYNARA_HARNESS_POLICY_VERSION,
+            gatewayControlAvailable: input.gatewayControlAvailable,
+          },
+        }
+      : {}),
+  };
+}
+
+function markOpenCodeHarnessPolicyDelivered(context: OpenCodeSessionContext, turnId: TurnId): void {
+  if (context.pendingHarnessPolicyTurnId !== turnId) {
+    return;
+  }
+  context.pendingHarnessPolicyTurnId = undefined;
+  context.harnessPolicyDelivered = true;
+  updateProviderSession(context, {
+    resumeCursor: buildOpenCodeResumeCursor({
+      openCodeSessionId: context.openCodeSessionId,
+      cwd: context.directory,
+      harnessPolicyDelivered: true,
+      gatewayControlAvailable: context.gatewayControlAvailable,
+    }),
+  });
 }
 
 function openCodeRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1985,92 +2086,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         );
       });
 
-      const submitOpenCodePrompt = Effect.fn("submitOpenCodePrompt")(function* (
-        context: OpenCodeSessionContext,
-        input: {
-          readonly turnId: TurnId;
-          readonly promptInput: Parameters<OpencodeClient["session"]["prompt"]>[0];
-        },
-      ) {
-        const settled = yield* Deferred.make<ProviderAdapterRequestError | null, never>();
-
-        // Keep the documented prompt request off the command path; SSE streams live
-        // updates, and the final HTTP response lets us recover if events are missed.
-        yield* runOpenCodeSdk("session.prompt", () =>
-          context.client.session.prompt(input.promptInput),
-        ).pipe(
-          Effect.mapError(toAdapterRequestError),
-          Effect.flatMap((response) =>
-            Effect.gen(function* () {
-              if (yield* Ref.get(context.stopped)) {
-                return null;
-              }
-              if (context.activeTurnId !== input.turnId) {
-                return null;
-              }
-              const assistantEntry =
-                response.data && response.data.info.role === "assistant"
-                  ? ({
-                      info: response.data.info,
-                      parts: response.data.parts,
-                    } satisfies OpenCodeMessageSnapshot)
-                  : null;
-              if (assistantEntry && isOpenCodeCompletedAssistantMessage(assistantEntry)) {
-                yield* recoverOpenCodeTurnFromAssistantMessage(context, {
-                  turnId: input.turnId,
-                  assistantEntry,
-                  raw: {
-                    source: "synara.opencode.prompt.response",
-                    message: assistantEntry,
-                  },
-                });
-              }
-              return null;
-            }),
-          ),
-          Effect.catch((requestError) =>
-            Effect.gen(function* () {
-              if (yield* Ref.get(context.stopped)) {
-                return requestError;
-              }
-              if (
-                context.activeTurnId !== input.turnId ||
-                context.activeTurnProviderActivitySerial > 0
-              ) {
-                return requestError;
-              }
-              yield* clearActiveTurnState(context);
-              updateProviderSession(
-                context,
-                {
-                  status: "ready",
-                  model: context.session.model,
-                  lastError: requestError.detail,
-                },
-                { clearActiveTurnId: true },
-              );
-              yield* emit(context, {
-                ...buildEventBase({ threadId: context.session.threadId, turnId: input.turnId }),
-                type: "turn.aborted",
-                payload: {
-                  reason: requestError.detail,
-                },
-              });
-              return requestError;
-            }),
-          ),
-          Effect.flatMap((result) => Deferred.succeed(settled, result)),
-          Effect.forkIn(context.sessionScope),
-        );
-
-        const quickResult = yield* Deferred.await(settled).pipe(
-          Effect.timeoutOption(promptSubmissionInlineWaitMs),
-        );
-        if (quickResult._tag === "Some" && quickResult.value) {
-          return yield* quickResult.value;
-        }
-      });
-
       const submitOpenCodePromptAsync = Effect.fn("submitOpenCodePromptAsync")(function* (
         context: OpenCodeSessionContext,
         input: {
@@ -2083,6 +2098,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           context.client.session.promptAsync(input.promptInput),
         ).pipe(
           Effect.mapError(toAdapterRequestError),
+          Effect.tap(() =>
+            Effect.sync(() => markOpenCodeHarnessPolicyDelivered(context, input.turnId)),
+          ),
           Effect.as(null),
           Effect.catch((requestError) =>
             Effect.gen(function* () {
@@ -2263,6 +2281,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           // User-message echoes should not disable prompt recovery; track provider-side
           // activity separately for the "accepted but nothing started" watchdog.
           if (isOpenCodeTurnProviderActivityEvent(context, event)) {
+            markOpenCodeHarnessPolicyDelivered(context, turnId);
             markOpenCodeTurnProviderActivity(context, turnId);
           }
         }
@@ -3528,13 +3547,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             input.modelSelection?.provider === adapterConfig.provider
               ? input.modelSelection.options?.variant
               : undefined;
+          const resumedSessionId = extractResumeSessionId(input.resumeCursor);
+          const persistedHarnessPolicyDelivery = extractHarnessPolicyDelivery(input.resumeCursor);
           const existing = sessions.get(input.threadId);
           if (existing) {
             yield* stopOpenCodeContext(existing);
             sessions.delete(input.threadId);
           }
 
-          const resumedSessionId = extractResumeSessionId(input.resumeCursor);
           // OpenCode's MCP registry is process/directory scoped, not session
           // scoped. Issue a gateway token only for a managed server isolated to
           // this exact Synara thread.
@@ -3670,6 +3690,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 }
 
                 const started = startedExit.value;
+                // A session id alone is not enough: policy revisions or a changed gateway
+                // capability require a fresh, truthful host-policy delivery.
+                const harnessPolicyDelivered =
+                  resumedSessionId === started.openCodeSessionId &&
+                  isMatchingHarnessPolicyDelivery(persistedHarnessPolicyDelivery, {
+                    sessionId: started.openCodeSessionId,
+                    gatewayControlAvailable: started.gatewayControlAvailable,
+                  });
                 if (options?.beforeSessionInstall) {
                   yield* options.beforeSessionInstall;
                 }
@@ -3695,12 +3723,19 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   cwd: directory,
                   ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
                   threadId: input.threadId,
-                  resumeCursor: { openCodeSessionId: started.openCodeSessionId, cwd: directory },
+                  resumeCursor: buildOpenCodeResumeCursor({
+                    openCodeSessionId: started.openCodeSessionId,
+                    cwd: directory,
+                    harnessPolicyDelivered,
+                    gatewayControlAvailable: started.gatewayControlAvailable,
+                  }),
                   createdAt,
                   updatedAt: createdAt,
                 };
 
                 const context: OpenCodeSessionContext = {
+                  ...(harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
+                  pendingHarnessPolicyTurnId: undefined,
                   session,
                   gatewayControlAvailable: started.gatewayControlAvailable,
                   ...(started.gatewayControlAvailable && agentGatewaySessionLease
@@ -3838,10 +3873,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             issue: `${adapterConfig.displayName} turns require text input or at least one attachment.`,
           });
         }
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        });
+        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(
+          {
+            ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
+          },
+          {
+            provider,
+            scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
+          },
+        );
         const providerText = [harnessPolicy, text].filter(Boolean).join("\n\n");
 
         const requestedAgent =
@@ -3857,6 +3897,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         yield* applyPermissionInteractionMode(context, interactionMode);
 
         context.activeTurnId = turnId;
+        context.pendingHarnessPolicyTurnId = harnessPolicy === null ? undefined : turnId;
         context.activeTurnEventSerial = 0;
         context.activeTurnProviderActivitySerial = 0;
         context.activeTurnCompletionActivitySerial = 0;
@@ -3881,6 +3922,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             status: "running",
             activeTurnId: turnId,
             model: modelSelection?.model ?? context.session.model,
+            resumeCursor: buildOpenCodeResumeCursor({
+              openCodeSessionId: context.openCodeSessionId,
+              cwd: context.directory,
+              ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
+              gatewayControlAvailable: context.gatewayControlAvailable,
+            }),
           },
           { clearLastError: true },
         );
@@ -3903,7 +3950,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             providerActivitySerial,
             excludedMessageIds: recoveryBaselineMessageIds,
           });
-          yield* submitOpenCodePrompt(context, {
+          // Kilo's own editor client uses promptAsync so execution is owned by the
+          // server rather than by one long-lived HTTP request. Keep Synara's event
+          // and message-snapshot recovery as the authoritative completion paths.
+          yield* submitOpenCodePromptAsync(context, {
             turnId,
             promptInput: {
               sessionID: context.openCodeSessionId,
@@ -3911,7 +3961,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               model: parsedModel,
               ...(context.activeAgent ? { agent: context.activeAgent } : {}),
               ...(context.activeVariant ? { variant: context.activeVariant } : {}),
-              noReply: false,
               parts: [
                 ...(providerText ? [{ type: "text" as const, text: providerText }] : []),
                 ...fileParts,
@@ -3953,7 +4002,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         return {
           threadId: input.threadId,
           turnId,
-          resumeCursor: { openCodeSessionId: context.openCodeSessionId, cwd: context.directory },
+          resumeCursor: buildOpenCodeResumeCursor({
+            openCodeSessionId: context.openCodeSessionId,
+            cwd: context.directory,
+            ...(context.harnessPolicyDelivered ? { harnessPolicyDelivered: true } : {}),
+            gatewayControlAvailable: context.gatewayControlAvailable,
+          }),
         };
       });
 
