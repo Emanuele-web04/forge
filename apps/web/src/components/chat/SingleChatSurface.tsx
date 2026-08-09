@@ -42,7 +42,7 @@ import type { FileCommentSelection } from "../../lib/fileComments";
 import { gitBranchesQueryOptions } from "../../lib/gitReactQuery";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
-import { getSidechatCreator } from "../../lib/sidechatCreatorRegistry";
+import { waitForSidechatCreator } from "../../lib/sidechatCreatorRegistry";
 import {
   clearSidechatPaneRetention,
   getSidechatPaneRetentionVersion,
@@ -709,23 +709,28 @@ export function SingleChatSurface(props: {
     if (kind === "sidechat") {
       // Sidechat spawns a thread; reuse the composer's /side flow (correct model
       // selection) published via the registry instead of opening an empty pane.
-      const createSidechat = getSidechatCreator(props.threadId);
-      if (!createSidechat) {
-        toastManager.add({
-          type: "warning",
-          title: "Side is unavailable",
-          description: "Open a server-backed main thread before starting Side.",
+      void waitForSidechatCreator(props.threadId)
+        .then((createSidechat) => {
+          if (!createSidechat) {
+            toastManager.add({
+              type: "warning",
+              title: "Side chat is unavailable",
+              description: "Open a server-backed main thread before starting a Side chat.",
+            });
+            return;
+          }
+          return createSidechat();
+        })
+        .catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not start Side chat",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating Side chat.",
+          });
         });
-        return;
-      }
-      void createSidechat().catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Could not start Side",
-          description:
-            error instanceof Error ? error.message : "An error occurred while creating Side.",
-        });
-      });
       return;
     }
     openPane(props.threadId, { kind });
@@ -794,6 +799,7 @@ export function SingleChatSurface(props: {
               hostThreadId={props.threadId}
               projectId={props.projectId}
               isActive={context.isActive && dockState.open}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
             />
           </Suspense>
         );

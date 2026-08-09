@@ -4,7 +4,7 @@
 // Exports: Vitest suites for opencodeRuntime.ts
 
 import { Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
 import { resolveWindowsComSpec } from "@synara/shared/windowsProcess";
