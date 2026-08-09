@@ -1,9 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeOpenUsageSnapshot, normalizeOpenUsageUsageLines } from "./openUsageRateLimits";
+import type { ProviderKind } from "@synara/contracts";
+
+import {
+  normalizeOpenUsageSnapshot,
+  normalizeOpenUsageUsageLines,
+  openUsageProviderIdForProvider,
+} from "./openUsageRateLimits";
 import { mergeProviderRateLimits } from "./rateLimits";
 
 describe("openUsageRateLimits", () => {
+  it("maps every Synara provider to its compatible OpenUsage id", () => {
+    expect(
+      (
+        [
+          "codex",
+          "claudeAgent",
+          "cursor",
+          "opencode",
+          "antigravity",
+          "grok",
+          "droid",
+          "kilo",
+          "pi",
+        ] satisfies ProviderKind[]
+      ).map((provider) => openUsageProviderIdForProvider(provider)),
+    ).toEqual(["codex", "claude", "cursor", "opencode", null, null, null, null, null]);
+  });
+
   it("normalizes OpenUsage progress lines into shared provider rate limits", () => {
     expect(
       normalizeOpenUsageSnapshot({

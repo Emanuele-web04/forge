@@ -1,6 +1,6 @@
 // FILE: useProviderUsageSummary.ts
-// Purpose: Merge usage signals from thread activities, server-side local archives,
-// and provider-specific snapshots into one UI-friendly summary.
+// Purpose: Merge account usage signals from provider snapshots, runtime thread
+// limits, and optional OpenUsage data into one UI-friendly summary.
 
 import type {
   OrchestrationThread,
@@ -16,7 +16,6 @@ import {
 } from "~/lib/openUsageRateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import {
-  isProviderUsageSnapshotNonOk,
   normalizeServerProviderUsageLines,
   normalizeServerProviderUsageRateLimit,
 } from "~/lib/providerUsageSnapshot";
@@ -27,10 +26,7 @@ import {
   mergeProviderRateLimits,
   type ProviderRateLimit,
 } from "~/lib/rateLimits";
-import {
-  serverAllProviderUsageQueryOptions,
-  serverProviderUsageSnapshotQueryOptions,
-} from "~/lib/serverReactQuery";
+import { serverAllProviderUsageQueryOptions } from "~/lib/serverReactQuery";
 
 export interface ProviderUsageSummaryData {
   readonly learnMoreHref: string | null;
@@ -96,23 +92,14 @@ export function useProviderUsageSummary(input: {
   provider: ProviderKind | null | undefined;
   threads?: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
-  codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   fetchOpenUsageData?: boolean | undefined;
 }) {
   const provider = input.provider ?? null;
   const shouldFetchLiveProviderUsage = provider !== null && input.providerSnapshot === undefined;
-  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
       enabled: shouldFetchLiveProviderUsage,
-    }),
-  );
-  const localUsageSnapshotQuery = useQuery(
-    serverProviderUsageSnapshotQueryOptions({
-      provider,
-      homePath: provider === "codex" ? input.codexHomePath || null : null,
-      enabled: shouldFetchLocalProviderUsage,
     }),
   );
   const openUsageSnapshotQuery = useQuery(
