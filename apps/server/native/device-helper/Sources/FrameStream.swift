@@ -57,8 +57,10 @@ enum FrameEnvelope {
 final class FrameSocketWriter {
   private let descriptor: Int32
   private let queue = DispatchQueue(label: "dev.synara.device-helper.socket")
+  private let stateLock = NSLock()
   private var closed = false
-  private(set) var droppedFrames = 0
+  private var descriptorClosed = false
+  private var droppedFrameCount = 0
   private var pendingBytes = 0
 
   /// Above this backlog the writer sheds frames instead of queueing more. Chosen
@@ -105,23 +107,50 @@ final class FrameSocketWriter {
   }
 
   var isClosed: Bool {
-    queue.sync { closed }
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return closed
   }
 
   func write(_ payload: Data) {
+    // Reserve before enqueueing. Counting inside the serial queue sees zero at
+    // the start of every job and therefore misses the jobs already waiting
+    // behind a blocked socket write, which allows an unbounded Data backlog.
+    stateLock.lock()
+    if closed {
+      stateLock.unlock()
+      return
+    }
+    if pendingBytes + payload.count > maxPendingBytes {
+      droppedFrameCount += 1
+      stateLock.unlock()
+      return
+    }
+    pendingBytes += payload.count
+    stateLock.unlock()
+
     queue.async { [weak self] in
-      guard let self, !self.closed else { return }
-      if self.pendingBytes > self.maxPendingBytes {
-        self.droppedFrames += 1
-        return
+      guard let self else { return }
+      defer {
+        self.stateLock.lock()
+        self.pendingBytes -= payload.count
+        self.stateLock.unlock()
       }
-      self.pendingBytes += payload.count
-      defer { self.pendingBytes -= payload.count }
+
+      self.stateLock.lock()
+      let canWrite = !self.closed
+      self.stateLock.unlock()
+      guard canWrite else { return }
 
       var length = UInt32(payload.count).littleEndian
       let header = withUnsafeBytes(of: &length) { Data($0) }
       if !self.writeAll(header) || !self.writeAll(payload) {
+        self.stateLock.lock()
         self.closed = true
+        let shouldClose = !self.descriptorClosed
+        self.descriptorClosed = true
+        self.stateLock.unlock()
+        if shouldClose { Darwin.close(self.descriptor) }
       }
     }
   }
@@ -145,11 +174,23 @@ final class FrameSocketWriter {
   }
 
   func close() {
+    stateLock.lock()
+    closed = true
+    stateLock.unlock()
+
     queue.sync {
-      guard !closed else { return }
-      closed = true
-      Darwin.close(descriptor)
+      stateLock.lock()
+      let shouldClose = !descriptorClosed
+      descriptorClosed = true
+      stateLock.unlock()
+      if shouldClose { Darwin.close(descriptor) }
     }
+  }
+
+  var droppedFrames: Int {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return droppedFrameCount
   }
 }
 

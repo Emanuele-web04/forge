@@ -17,7 +17,7 @@
  * @module device/IosSimulatorBackend
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import { access, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
@@ -80,6 +80,24 @@ const MAX_RECORDING_STDERR_LENGTH = 64 * 1024;
 const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
 
 export const DEVICE_HELPER_CACHE_ROOT = path.join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS);
+
+/**
+ * Resolve the helper sources in both execution layouts.
+ *
+ * Source modules live under `src/device`, while tsdown collapses the server into
+ * `dist/index.*` and the build copies the helper beside that bundle. Checking
+ * the bundled layout first makes packaged desktop and published CLI builds use
+ * their staged asset without changing the development path.
+ */
+export function resolveDeviceHelperSourceDir(
+  moduleDirectory: string,
+  sourceExists: (candidate: string) => boolean = (candidate) =>
+    existsSync(path.join(candidate, "build.sh")),
+): string {
+  const bundled = path.resolve(moduleDirectory, "device-helper");
+  if (sourceExists(bundled)) return bundled;
+  return path.resolve(moduleDirectory, "..", "..", "native", "device-helper");
+}
 
 export type SpawnRecordingProcess = (
   command: string,
@@ -261,8 +279,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   constructor(options: IosSimulatorBackendOptions = {}) {
     this.osPlatform = options.platform ?? process.platform;
     this.helperSourceDir =
-      options.helperSourceDir ??
-      path.resolve(import.meta.dirname, "..", "..", "native", "device-helper");
+      options.helperSourceDir ?? resolveDeviceHelperSourceDir(import.meta.dirname);
     this.helperCacheRoot = options.helperCacheRoot ?? DEVICE_HELPER_CACHE_ROOT;
     this.run = options.run ?? runProcess;
     this.makeHelperClient =

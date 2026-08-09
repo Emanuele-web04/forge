@@ -2020,6 +2020,24 @@ export function authenticateRpcWebSocketUpgrade(input: {
   return input.serverAuth.authenticateWebSocketUpgrade(input.request);
 }
 
+/**
+ * Apply the feature socket's authentication policy to the separate device
+ * frame socket. The desktop bridge still supplies the loopback-only legacy
+ * `?token=` credential, so this path must share the same compatibility rule as
+ * the RPC socket rather than calling ServerAuth directly.
+ */
+export function authorizeDeviceFrameWebSocketUpgrade(input: {
+  readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">;
+  readonly legacyToken: string | null;
+  readonly request: AuthRequest;
+  readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
+}): Effect.Effect<boolean> {
+  return authenticateRpcWebSocketUpgrade(input).pipe(
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  );
+}
+
 export function makeWebsocketRpcRouteLayer<R>(
   rpcWebSocketHttpEffectSource: Effect.Effect<
     Effect.Effect<
@@ -2218,12 +2236,15 @@ const deviceFrameRouteLayer = makeDeviceFrameRouteLayer({
     Effect.gen(function* () {
       const config = yield* ServerConfig;
       const serverAuth = yield* ServerAuth;
-      if (trustedWebSocketRequestUrl(request, config) === null) return false;
-      if (!requiresWebSocketAuthentication(config)) return true;
-      return (
-        (yield* serverAuth.authenticateWebSocketUpgrade(makeEffectAuthRequest(request))) !== null
-      );
-    }).pipe(Effect.orElseSucceed(() => false)),
+      const url = trustedWebSocketRequestUrl(request, config);
+      if (url === null) return false;
+      return yield* authorizeDeviceFrameWebSocketUpgrade({
+        config,
+        legacyToken: url.searchParams.get("token"),
+        request: makeEffectAuthRequest(request),
+        serverAuth,
+      });
+    }),
 });
 
 export const websocketRpcRouteLayer = Layer.mergeAll(

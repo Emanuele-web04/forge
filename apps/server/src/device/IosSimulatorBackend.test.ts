@@ -14,6 +14,7 @@ import {
   normalizeUiNode,
   parseSimctlDevices,
   readPngDimensions,
+  resolveDeviceHelperSourceDir,
   selectRecordingDirectory,
 } from "./IosSimulatorBackend.ts";
 
@@ -39,6 +40,25 @@ const successfulProcessResult = (stdout = ""): ProcessRunResult => ({
   code: 0,
   signal: null,
   timedOut: false,
+});
+
+describe("device helper source resolution", () => {
+  it("uses the helper copied beside a bundled server entry", () => {
+    const distDir = "/app/apps/server/dist";
+    const bundled = path.join(distDir, "device-helper");
+
+    expect(resolveDeviceHelperSourceDir(distDir, (candidate) => candidate === bundled)).toBe(
+      bundled,
+    );
+  });
+
+  it("falls back to the source-tree helper during development", () => {
+    const sourceModuleDir = "/repo/apps/server/src/device";
+
+    expect(resolveDeviceHelperSourceDir(sourceModuleDir, () => false)).toBe(
+      "/repo/apps/server/native/device-helper",
+    );
+  });
 });
 
 class FakeRecordingProcess extends EventEmitter {
