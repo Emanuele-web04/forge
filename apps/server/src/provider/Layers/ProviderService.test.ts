@@ -702,7 +702,7 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
-  it.effect("does not resume a persisted thread when an external fork is requested", () =>
+  it.effect("fork source overrides explicit and persisted resume cursors", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-external-fork");
@@ -720,6 +720,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         provider: "codex",
         threadId,
         forkSourceResumeCursor,
+        resumeCursor: { threadId: "explicit-thread" },
         runtimeMode: "full-access",
       });
 

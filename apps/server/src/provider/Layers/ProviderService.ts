@@ -1548,6 +1548,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   (persistedBinding?.provider === input.provider
                     ? persistedBinding.resumeCursor
                     : undefined));
+            const adapterStartInput = { ...input };
+            delete adapterStartInput.resumeCursor;
             const effectiveProviderOptions =
               input.providerOptions ??
               (persistedBinding?.provider === input.provider
@@ -1562,7 +1564,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // with text the caller can surface as a session error.
               const started = yield* adapter
                 .startSession({
-                  ...input,
+                  ...adapterStartInput,
                   lifecycleGeneration: lease.generation,
                   ...(effectiveProviderOptions !== undefined
                     ? { providerOptions: effectiveProviderOptions }
