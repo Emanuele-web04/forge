@@ -143,12 +143,12 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
       model: "Gemini 3.5 Flash",
       effort: "high",
     });
-    expect(
-      parseAntigravityCliModelLabel("gemini-3.6-flash-high\tGemini 3.6 Flash (High)"),
-    ).toEqual({
-      model: "Gemini 3.6 Flash",
-      effort: "high",
-    });
+    expect(parseAntigravityCliModelLabel("gemini-3.6-flash-high\tGemini 3.6 Flash (High)")).toEqual(
+      {
+        model: "Gemini 3.6 Flash",
+        effort: "high",
+      },
+    );
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash")).toBe("Gemini 3.5 Flash (Medium)");
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash", { reasoningEffort: "high" })).toBe(
       "Gemini 3.5 Flash (High)",
@@ -156,9 +156,9 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash (Low)")).toBe(
       "Gemini 3.5 Flash (Low)",
     );
-    expect(
-      resolveAntigravityCliModelLabel("gemini-3.6-flash-high\tGemini 3.6 Flash (High)"),
-    ).toBe("Gemini 3.6 Flash (High)");
+    expect(resolveAntigravityCliModelLabel("gemini-3.6-flash-high\tGemini 3.6 Flash (High)")).toBe(
+      "Gemini 3.6 Flash (High)",
+    );
   });
 
   it("accepts bullet-prefixed model output", () => {
