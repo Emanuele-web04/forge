@@ -37,6 +37,7 @@ import type {
 } from "electron";
 import * as Effect from "effect/Effect";
 import type {
+  DesktopAppIcon,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -79,6 +80,7 @@ import {
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import { desktopAppIconResourceName, isDesktopAppIcon } from "./desktopAppIcon";
 import {
   makeUpdateInstallPreparationCoordinator,
   type UpdateInstallPreparationAttempt,
@@ -251,6 +253,7 @@ const BASE_DIR =
   Path.join(OS.homedir(), desktopIdentity.defaultHomeDirectoryName);
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
+const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -1861,23 +1864,57 @@ function configureAppIdentity(): void {
 // The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
 // the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
 // a runtime dock override because it does not apply the modern system mask itself.
-function applyLegacyMacDockIcon(): void {
+function usesLegacyMacDockIcon(): boolean {
+  if (process.platform !== "darwin") return false;
+  const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
+  return Number.isFinite(darwinMajor) && darwinMajor < 25;
+}
+
+function readDesktopAppIcon(): DesktopAppIcon {
+  try {
+    const storedIcon = FS.readFileSync(DESKTOP_APP_ICON_PATH, "utf8").trim();
+    return isDesktopAppIcon(storedIcon) ? storedIcon : "default";
+  } catch {
+    return "default";
+  }
+}
+
+function persistDesktopAppIcon(icon: DesktopAppIcon): void {
+  FS.mkdirSync(Path.dirname(DESKTOP_APP_ICON_PATH), { recursive: true });
+  FS.writeFileSync(DESKTOP_APP_ICON_PATH, icon, "utf8");
+}
+
+function applyDesktopAppIcon(icon: DesktopAppIcon): void {
+  if (process.platform !== "darwin" && process.platform !== "linux" && process.platform !== "win32") {
+    return;
+  }
+  const resourceName = desktopAppIconResourceName({
+    icon,
+    platform: process.platform,
+    useLegacyMacDefault: usesLegacyMacDockIcon(),
+  });
+  const iconPath = resolveResourcePath(resourceName);
+  if (!iconPath) return;
+
+  const image = nativeImage.createFromPath(iconPath);
+  if (image.isEmpty()) return;
+
+  if (process.platform === "darwin") {
+    app.dock?.setIcon(image);
+    return;
+  }
+  mainWindow?.setIcon(image);
+}
+
+function applyInitialMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
     return;
   }
-  const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
-  if (!Number.isFinite(darwinMajor) || darwinMajor >= 25) {
+  const icon = readDesktopAppIcon();
+  if (icon === "default" && !usesLegacyMacDockIcon()) {
     return;
   }
-  const iconPath = resolveResourcePath("dock-icon.png");
-  if (!iconPath) {
-    return;
-  }
-  const image = nativeImage.createFromPath(iconPath);
-  if (image.isEmpty()) {
-    return;
-  }
-  app.dock.setIcon(image);
+  applyDesktopAppIcon(icon);
 }
 
 function readLaunchVersionRecordContents(): string | null {
@@ -3605,6 +3642,13 @@ function registerIpcHandlers(): void {
     nativeTheme.themeSource = theme;
   });
 
+  ipcMain.removeHandler(IPC.setAppIcon);
+  ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
+    if (!isDesktopAppIcon(rawIcon)) return;
+    persistDesktopAppIcon(rawIcon);
+    applyDesktopAppIcon(rawIcon);
+  });
+
   ipcMain.removeHandler(IPC.contextMenu);
   ipcMain.handle(
     IPC.contextMenu,
@@ -3842,8 +3886,13 @@ function registerIpcHandlers(): void {
 
 function getIconOption(): { icon: string } | Record<string, never> {
   if (process.platform === "darwin") return {}; // macOS uses .icns from app bundle
-  const ext = process.platform === "win32" ? "ico" : "png";
-  const iconPath = resolveIconPath(ext);
+  if (process.platform !== "linux" && process.platform !== "win32") return {};
+  const resourceName = desktopAppIconResourceName({
+    icon: readDesktopAppIcon(),
+    platform: process.platform,
+    useLegacyMacDefault: false,
+  });
+  const iconPath = resolveResourcePath(resourceName);
   return iconPath ? { icon: iconPath } : {};
 }
 
@@ -4365,7 +4414,7 @@ if (hasSingleInstanceLock) {
     .then(() => {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
-      applyLegacyMacDockIcon();
+      applyInitialMacDockIcon();
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       initializeDesktopAppSnap();

@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+
 import type {
   AuthBearerBootstrapResult,
   AuthBootstrapInput,
@@ -470,6 +472,9 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
+export const DesktopAppIcon = Schema.Literals(["default", "icon"]);
+export type DesktopAppIcon = typeof DesktopAppIcon.Type;
+
 export interface SynaraStorageSnapshot {
   readonly version: 1;
   readonly exportedAt: string;
@@ -491,6 +496,7 @@ export interface DesktopBridge {
   }) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  setAppIcon: (icon: DesktopAppIcon) => Promise<void>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },

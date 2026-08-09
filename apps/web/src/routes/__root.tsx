@@ -98,6 +98,7 @@ import { hasPendingTurnDispatch } from "../pendingTurnDispatch";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
+import { useDesktopAppIcon } from "../hooks/useDesktopAppIcon";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
 import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
@@ -194,6 +195,7 @@ export const Route = createRootRouteWithContext<{
 function RootRouteView() {
   useAppTypography();
   useAppDensity();
+  useDesktopAppIcon();
   usePreloadRouteChunks();
   useNativeFontSmoothing();
   useSyncDesktopTopBarTrafficLightGutterZoom();

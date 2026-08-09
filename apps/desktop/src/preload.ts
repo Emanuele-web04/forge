@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),
   showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),
   openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url),
   showInFolder: (path: string) => ipcRenderer.invoke(IPC.showInFolder, path),

@@ -144,6 +144,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Choose how Synara looks across the app. dark light system color",
   },
   {
+    id: "appearance:app-icon",
+    section: "appearance",
+    title: "App icon",
+    keywords: "Choose the icon Synara uses in the dock or taskbar desktop application logo.",
+    target: null,
+  },
+  {
     id: "appearance:system-ui-font",
     section: "appearance",
     title: "Use system UI font",
