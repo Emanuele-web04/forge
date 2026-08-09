@@ -80,7 +80,11 @@ import {
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
-import { desktopAppIconResourceName, isDesktopAppIcon } from "./desktopAppIcon";
+import {
+  desktopAppIconResourceName,
+  isDesktopAppIcon,
+  shouldUpdateDesktopAppIcon,
+} from "./desktopAppIcon";
 import {
   makeUpdateInstallPreparationCoordinator,
   type UpdateInstallPreparationAttempt,
@@ -1885,7 +1889,11 @@ function persistDesktopAppIcon(icon: DesktopAppIcon): void {
 }
 
 function applyDesktopAppIcon(icon: DesktopAppIcon): void {
-  if (process.platform !== "darwin" && process.platform !== "linux" && process.platform !== "win32") {
+  if (
+    process.platform !== "darwin" &&
+    process.platform !== "linux" &&
+    process.platform !== "win32"
+  ) {
     return;
   }
   const resourceName = desktopAppIconResourceName({
@@ -3645,6 +3653,9 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.setAppIcon);
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
     if (!isDesktopAppIcon(rawIcon)) return;
+    // Renderer hydration mirrors this native preference. Avoid reapplying the icon selected
+    // during boot, especially the bundled default that modern macOS renders itself.
+    if (!shouldUpdateDesktopAppIcon(readDesktopAppIcon(), rawIcon)) return;
     persistDesktopAppIcon(rawIcon);
     applyDesktopAppIcon(rawIcon);
   });

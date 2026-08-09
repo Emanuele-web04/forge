@@ -11,9 +11,7 @@ import { AppIconPicker } from "./AppIconPicker";
 
 it("labels the new artwork as Icon and selects it", async () => {
   const onValueChange = vi.fn();
-  const mounted = await render(
-    <AppIconPicker value="default" onValueChange={onValueChange} />,
-  );
+  const mounted = await render(<AppIconPicker value="default" onValueChange={onValueChange} />);
 
   await expect.element(mounted.getByRole("button", { name: "Default icon" })).toBeVisible();
   await mounted.getByRole("button", { name: "Icon", exact: true }).click();

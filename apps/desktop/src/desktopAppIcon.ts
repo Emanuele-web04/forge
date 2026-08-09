@@ -30,6 +30,13 @@ const APP_ICON_RESOURCE_NAMES = {
 
 export const isDesktopAppIcon = Schema.is(DesktopAppIcon);
 
+export function shouldUpdateDesktopAppIcon(
+  currentIcon: DesktopAppIcon,
+  requestedIcon: DesktopAppIcon,
+): boolean {
+  return currentIcon !== requestedIcon;
+}
+
 export function desktopAppIconResourceName(input: DesktopAppIconResourceInput): string {
   if (input.platform === "darwin" && input.icon === "default" && input.useLegacyMacDefault) {
     return "dock-icon.png";

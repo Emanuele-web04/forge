@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { desktopAppIconResourceName, isDesktopAppIcon } from "./desktopAppIcon";
+import {
+  desktopAppIconResourceName,
+  isDesktopAppIcon,
+  shouldUpdateDesktopAppIcon,
+} from "./desktopAppIcon";
 
 describe("desktop app icons", () => {
   it("accepts only supported preferences", () => {
@@ -36,5 +40,12 @@ describe("desktop app icons", () => {
         useLegacyMacDefault: false,
       }),
     ).toBe("icon.icns");
+  });
+
+  it("does not reapply the icon when renderer hydration matches native state", () => {
+    expect(shouldUpdateDesktopAppIcon("default", "default")).toBe(false);
+    expect(shouldUpdateDesktopAppIcon("icon", "icon")).toBe(false);
+    expect(shouldUpdateDesktopAppIcon("default", "icon")).toBe(true);
+    expect(shouldUpdateDesktopAppIcon("icon", "default")).toBe(true);
   });
 });
