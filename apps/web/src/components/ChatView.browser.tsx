@@ -72,6 +72,17 @@ import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const OTHER_THREAD_ID = "thread-browser-test-other" as ThreadId;
+
+// Each call to the snapshot factory gets a fresh, monotonically increasing sequence.
+// A generous step between calls guarantees that `recordProjectCreateCommand` and
+// `updateCurrentSnapshot` increments within one test never overlap the next test's
+// base sequence, so a late in-flight shell snapshot from a previous test is always
+// stale and ignored by `isStaleSnapshot`.
+let snapshotSequenceFactory = 0;
+function nextSnapshotSequence(): number {
+  snapshotSequenceFactory += 1000;
+  return snapshotSequenceFactory;
+}
 const THREAD_TITLE = "Browser test thread";
 const UUID_ROUTE_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROJECT_ID = "project-1" as ProjectId;
@@ -286,7 +297,7 @@ function createSnapshotForTargetUser(options: {
   }
 
   return {
-    snapshotSequence: 1,
+    snapshotSequence: nextSnapshotSequence(),
     spaces: [],
     projects: [
       {
@@ -2030,6 +2041,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   beforeEach(async () => {
+    // Reset the shared fixture snapshot to a neutral, low-sequence shell before
+    // disposing the old transport. Any in-flight getShellSnapshot that resolves
+    // after this point will then return sequence 0, which the next test's real
+    // snapshot will supersede.
+    fixture = buildFixture({
+      ...fixture.snapshot,
+      snapshotSequence: 0,
+      spaces: [],
+      projects: [],
+      threads: [],
+      updatedAt: NOW_ISO,
+    });
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
     await resetHomeChatProjectPrewarmStateForTests();

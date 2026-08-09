@@ -1315,7 +1315,9 @@ function EventRouter() {
     }
 
     const loadShellSnapshotOnce = async () => {
+      if (disposed) return;
       const snapshot = await api.orchestration.getShellSnapshot();
+      if (disposed) return;
       if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
@@ -2070,6 +2072,7 @@ function DesktopProjectBootstrap() {
   const attemptedRecoveryRef = useRef(false);
 
   useEffect(() => {
+    let disposed = false;
     const api = readNativeApi();
     if (!api || attemptedRecoveryRef.current || !threadsHydrated) {
       return;
@@ -2088,6 +2091,7 @@ function DesktopProjectBootstrap() {
     void api.orchestration
       .getShellSnapshot()
       .then((snapshot) => {
+        if (disposed) return;
         const needsRepair =
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
@@ -2096,6 +2100,7 @@ function DesktopProjectBootstrap() {
           return snapshot;
         }
         return api.orchestration.repairState().then((repairedSnapshot) => {
+          if (disposed) return;
           syncServerReadModel(repairedSnapshot);
           return repairedSnapshot;
         });
@@ -2103,6 +2108,10 @@ function DesktopProjectBootstrap() {
       .catch(() => {
         attemptedRecoveryRef.current = false;
       });
+
+    return () => {
+      disposed = true;
+    };
   }, [projects, syncServerReadModel, threads, threadsHydrated]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
