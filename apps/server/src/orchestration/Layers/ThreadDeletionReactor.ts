@@ -85,19 +85,18 @@ export const cleanupSucceededUnlessInterrupted = <R, E>({
   );
 
 export const detachThreadDevice = (threadId: ThreadId) =>
-  Effect.serviceOption(DeviceService).pipe(
+  Effect.service(DeviceService).pipe(
     Effect.flatMap((service) =>
-      Option.isNone(service)
-        ? Effect.void
-        : Effect.promise(() => service.value.manager.handleThreadRemoved(threadId)),
-    ),
-    Effect.catchCause((cause) =>
-      Cause.hasInterruptsOnly(cause)
-        ? Effect.failCause(cause)
-        : Effect.logDebug("thread lifecycle cleanup skipped device detach", {
-            threadId,
-            cause: Cause.pretty(cause),
-          }),
+      Effect.promise(() => service.manager.handleThreadRemoved(threadId)).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logDebug("thread lifecycle cleanup skipped device detach", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      ),
     ),
   );
 

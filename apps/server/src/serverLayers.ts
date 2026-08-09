@@ -23,6 +23,7 @@ import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
 import { DevServerManagerLive } from "./devServerManager";
 import { DeviceServiceLive } from "./device/Layers/DeviceService";
+import type { DeviceService } from "./device/Services/DeviceService";
 import { KeybindingsLive } from "./keybindings";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
@@ -56,6 +57,19 @@ import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
+
+export function provideThreadDeletionReactorDeviceService<
+  ReactorServices,
+  ReactorError,
+  ReactorRequirements,
+  DeviceError,
+  DeviceRequirements,
+>(
+  reactorLayer: Layer.Layer<ReactorServices, ReactorError, ReactorRequirements>,
+  deviceServiceLayer: Layer.Layer<DeviceService, DeviceError, DeviceRequirements>,
+) {
+  return reactorLayer.pipe(Layer.provideMerge(deviceServiceLayer));
+}
 
 export function makeServerRuntimeServicesLayer(
   options: {
@@ -114,10 +128,13 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(threadGitMetadataReactorLayer),
   );
-  const threadDeletionReactorLayer = ThreadDeletionReactorLive.pipe(
-    Layer.provideMerge(profileStatsArchiveLayer),
-    Layer.provideMerge(OrchestrationLayerLive),
-    Layer.provideMerge(TerminalLayerLive),
+  const threadDeletionReactorLayer = provideThreadDeletionReactorDeviceService(
+    ThreadDeletionReactorLive.pipe(
+      Layer.provideMerge(profileStatsArchiveLayer),
+      Layer.provideMerge(OrchestrationLayerLive),
+      Layer.provideMerge(TerminalLayerLive),
+    ),
+    DeviceServiceLive,
   );
   // Shares the single memoized TerminalManager with the top-level TerminalLayerLive.
   const devServerManagerLayer = DevServerManagerLive.pipe(Layer.provide(TerminalLayerLive));
