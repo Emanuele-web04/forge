@@ -2539,28 +2539,28 @@ const make = Effect.gen(function* () {
     yield* drainQueuedTurnsForSession(event.threadId);
   });
 
+  const recoverQueuedTurnPromotionsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    // `resolveThread` filters `deleted_at IS NULL`, so a soft-deleted (or fully
+    // missing) thread returns undefined. Cancel instead of dispatching into an
+    // absent thread, including when an operator retries an older dead delivery
+    // after the corresponding thread deletion has already been consumed.
+    const thread = yield* resolveThread(threadId);
+    if (!thread || thread.deletedAt !== null) {
+      yield* queuedTurnPromotions.cancelThread({
+        threadId,
+        updatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+    if (yield* hasLiveProviderTurn(threadId)) {
+      return;
+    }
+    yield* drainQueuedTurnsForThread(threadId);
+  });
+
   const recoverQueuedTurnPromotions = Effect.gen(function* () {
     yield* Effect.forEach(yield* queuedTurnPromotions.listPendingThreadIds, (rawThreadId) =>
-      Effect.gen(function* () {
-        const threadId = ThreadId.makeUnsafe(rawThreadId);
-        // Resolve the projected thread first. `resolveThread` filters
-        // `deleted_at IS NULL`, so a soft-deleted (or fully missing) thread
-        // returns undefined; either way there is nothing to drain into, and the
-        // pending promotions must be cancelled rather than promoted (otherwise a
-        // deletion that raced startup would leave orphan turns to dispatch).
-        const thread = yield* resolveThread(threadId);
-        if (!thread || thread.deletedAt !== null) {
-          yield* queuedTurnPromotions.cancelThread({
-            threadId: rawThreadId,
-            updatedAt: new Date().toISOString(),
-          });
-          return;
-        }
-        if (yield* hasLiveProviderTurn(threadId)) {
-          return;
-        }
-        yield* drainQueuedTurnsForThread(threadId);
-      }),
+      recoverQueuedTurnPromotionsForThread(ThreadId.makeUnsafe(rawThreadId)),
     );
   });
 
@@ -3535,10 +3535,8 @@ const make = Effect.gen(function* () {
       // Recovery drain: if the provider turn settled between the decider's
       // (stale) running check and the durable enqueue, its terminal runtime
       // event has already been consumed and cannot drain this queue. Re-check
-      // live provider state after delivery settlement and promote immediately.
-      if (!(yield* hasLiveProviderTurn(event.payload.threadId))) {
-        yield* drainQueuedTurnsForThread(event.payload.threadId);
-      }
+      // the projected thread and live provider state after delivery settlement.
+      yield* recoverQueuedTurnPromotionsForThread(event.payload.threadId);
     }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
