@@ -123,7 +123,9 @@ export function shouldUseLivePullRequestForSidebarThread(input: {
   return input.threadBranch !== null && input.threadBranch === input.liveBranch;
 }
 
-export function resolveSidebarThreadPullRequest<T extends { readonly headBranch: string }>(input: {
+export function resolveSidebarThreadPullRequest<
+  T extends { readonly headBranch: string; readonly state: "open" | "closed" | "merged" },
+>(input: {
   readonly threadBranch: string | null;
   readonly liveBranch: string | null;
   readonly hasLiveStatus: boolean;
@@ -131,6 +133,14 @@ export function resolveSidebarThreadPullRequest<T extends { readonly headBranch:
   readonly livePullRequest: T | null;
   readonly persistedPullRequest: T | null;
 }): T | null {
+  // A settled (merged/closed) PR is the thread's outcome, not a claim about the current
+  // checkout, so it stays visible after the checkout moves on — e.g. switching back to
+  // main after merging must flip the badge to "merged", not drop it and let stale
+  // metadata elsewhere keep it "open".
+  const settledPersistedPullRequest =
+    input.persistedPullRequest !== null && input.persistedPullRequest.state !== "open"
+      ? input.persistedPullRequest
+      : null;
   const persistedValidationBranch =
     input.hasLiveStatus && input.hasDedicatedWorktree ? input.liveBranch : input.threadBranch;
   const persistedPullRequest =
@@ -138,12 +148,12 @@ export function resolveSidebarThreadPullRequest<T extends { readonly headBranch:
     (persistedValidationBranch === null ||
       input.persistedPullRequest.headBranch === persistedValidationBranch)
       ? input.persistedPullRequest
-      : null;
+      : settledPersistedPullRequest;
   if (!input.hasLiveStatus) {
     return persistedPullRequest;
   }
   if (input.liveBranch === null && input.hasDedicatedWorktree) {
-    return null;
+    return settledPersistedPullRequest;
   }
   if (!shouldUseLivePullRequestForSidebarThread(input)) {
     return persistedPullRequest;
@@ -151,7 +161,9 @@ export function resolveSidebarThreadPullRequest<T extends { readonly headBranch:
   if (input.livePullRequest !== null) {
     return input.livePullRequest;
   }
-  return persistedPullRequest?.headBranch === input.liveBranch ? persistedPullRequest : null;
+  return persistedPullRequest !== null && persistedPullRequest.headBranch === input.liveBranch
+    ? persistedPullRequest
+    : settledPersistedPullRequest;
 }
 
 type SidebarProject = {

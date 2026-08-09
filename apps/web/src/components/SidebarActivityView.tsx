@@ -700,7 +700,13 @@ export function SidebarActivityView({
       isActive={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
-      pr={prByThreadId.get(thread.id) ?? thread.lastKnownPr ?? null}
+      pr={
+        // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+        // checkout moved on); falling back to lastKnownPr would resurrect that stale badge.
+        prByThreadId.has(thread.id)
+          ? (prByThreadId.get(thread.id) ?? null)
+          : (thread.lastKnownPr ?? null)
+      }
       status={resolveThreadStatus(thread)}
       onOpen={() => onOpenThread(thread.id)}
       onSetSettled={(settled) => {

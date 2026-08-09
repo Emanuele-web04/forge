@@ -165,8 +165,24 @@ describe("shouldUseLivePullRequestForSidebarThread", () => {
 });
 
 describe("resolveSidebarThreadPullRequest", () => {
+  type TestPr = {
+    readonly number: number;
+    readonly headBranch: string;
+    readonly state: "open" | "closed" | "merged";
+  };
+  const openPr = (number: number, headBranch: string): TestPr => ({
+    number,
+    headBranch,
+    state: "open",
+  });
+  const mergedPr = (number: number, headBranch: string): TestPr => ({
+    number,
+    headBranch,
+    state: "merged",
+  });
+
   it("keeps persisted PR metadata when the worktree is no longer available", () => {
-    const persisted = { number: 574, headBranch: "feat/provider-usage-snapshot-cache" };
+    const persisted = openPr(574, "feat/provider-usage-snapshot-cache");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/provider-usage-snapshot-cache",
@@ -180,7 +196,7 @@ describe("resolveSidebarThreadPullRequest", () => {
   });
 
   it("prefers live metadata for the worktree's current branch", () => {
-    const live = { number: 575, headBranch: "feat/current-branch" };
+    const live = openPr(575, "feat/current-branch");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "synara/stale-branch",
@@ -188,13 +204,13 @@ describe("resolveSidebarThreadPullRequest", () => {
         hasLiveStatus: true,
         hasDedicatedWorktree: true,
         livePullRequest: live,
-        persistedPullRequest: { number: 574, headBranch: "synara/stale-branch" },
+        persistedPullRequest: openPr(574, "synara/stale-branch"),
       }),
     ).toBe(live);
   });
 
   it("keeps persisted metadata during a transient lookup failure on the same branch", () => {
-    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    const persisted = openPr(574, "feat/current-branch");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/current-branch",
@@ -208,7 +224,7 @@ describe("resolveSidebarThreadPullRequest", () => {
   });
 
   it("uses the live worktree branch to validate persisted metadata while thread branch metadata catches up", () => {
-    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    const persisted = openPr(574, "feat/current-branch");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: null,
@@ -222,7 +238,7 @@ describe("resolveSidebarThreadPullRequest", () => {
   });
 
   it("uses the live worktree branch to validate persisted metadata when the thread branch is stale", () => {
-    const persisted = { number: 574, headBranch: "feat/current-branch" };
+    const persisted = openPr(574, "feat/current-branch");
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/previous-branch",
@@ -235,7 +251,7 @@ describe("resolveSidebarThreadPullRequest", () => {
     ).toBe(persisted);
   });
 
-  it("does not attach a persisted PR from another branch to the current worktree branch", () => {
+  it("does not attach an open persisted PR from another branch to the current worktree branch", () => {
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/previous-branch",
@@ -243,12 +259,54 @@ describe("resolveSidebarThreadPullRequest", () => {
         hasLiveStatus: true,
         hasDedicatedWorktree: true,
         livePullRequest: null,
-        persistedPullRequest: { number: 574, headBranch: "feat/previous-branch" },
+        persistedPullRequest: openPr(574, "feat/previous-branch"),
       }),
     ).toBeNull();
   });
 
-  it("hides a persisted PR when an active dedicated worktree is detached", () => {
+  it("keeps a merged persisted PR visible after the worktree switches to another branch", () => {
+    const merged = mergedPr(574, "feat/previous-branch");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/previous-branch",
+        liveBranch: "main",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: merged,
+      }),
+    ).toBe(merged);
+  });
+
+  it("keeps a merged persisted PR visible on a shared checkout that moved to another branch", () => {
+    const merged = mergedPr(574, "feat/previous-branch");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "main",
+        liveBranch: "main",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: false,
+        livePullRequest: null,
+        persistedPullRequest: merged,
+      }),
+    ).toBe(merged);
+  });
+
+  it("prefers a live PR for the current branch over a merged persisted PR", () => {
+    const live = openPr(600, "feat/current-branch");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/current-branch",
+        liveBranch: "feat/current-branch",
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: live,
+        persistedPullRequest: mergedPr(574, "feat/previous-branch"),
+      }),
+    ).toBe(live);
+  });
+
+  it("hides an open persisted PR when an active dedicated worktree is detached", () => {
     expect(
       resolveSidebarThreadPullRequest({
         threadBranch: "feat/previous-branch",
@@ -256,9 +314,23 @@ describe("resolveSidebarThreadPullRequest", () => {
         hasLiveStatus: true,
         hasDedicatedWorktree: true,
         livePullRequest: null,
-        persistedPullRequest: { number: 574, headBranch: "feat/previous-branch" },
+        persistedPullRequest: openPr(574, "feat/previous-branch"),
       }),
     ).toBeNull();
+  });
+
+  it("keeps a merged persisted PR when an active dedicated worktree is detached", () => {
+    const merged = mergedPr(574, "feat/previous-branch");
+    expect(
+      resolveSidebarThreadPullRequest({
+        threadBranch: "feat/previous-branch",
+        liveBranch: null,
+        hasLiveStatus: true,
+        hasDedicatedWorktree: true,
+        livePullRequest: null,
+        persistedPullRequest: merged,
+      }),
+    ).toBe(merged);
   });
 });
 

@@ -26,6 +26,7 @@ import {
   gitQueryKeys,
   gitStatusQueryOptions,
   invalidateGitQueries,
+  invalidateGitQueriesForCwds,
 } from "../lib/gitReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { parsePullRequestReference } from "../pullRequestReference";
@@ -184,7 +185,7 @@ function handleCheckoutError(
 ): void {
   const retryStashAndCheckout = async (): Promise<void> => {
     await input.api.git.stashAndCheckout({ cwd: input.cwd, branch: input.branch });
-    await invalidateGitQueries(input.queryClient);
+    await invalidateGitQueriesForCwds(input.queryClient, [input.cwd]);
     input.onSuccess();
   };
 
@@ -262,7 +263,7 @@ function handleCheckoutError(
                 return;
               }
               if (isStashConflictError(stashError)) {
-                await invalidateGitQueries(input.queryClient);
+                await invalidateGitQueriesForCwds(input.queryClient, [input.cwd]);
                 input.onSuccess();
                 addBranchRecoveryToast({
                   type: "warning",
@@ -469,10 +470,18 @@ export function BranchToolbarBranchSelector({
     onSetThreadWorkspace,
   ]);
 
-  const runBranchAction = (action: () => Promise<void>) => {
+  const runBranchAction = (
+    action: () => Promise<void>,
+    options?: { readonly refreshCwds?: readonly string[] },
+  ) => {
     startBranchActionTransition(async () => {
       await action().catch(() => undefined);
-      await invalidateGitQueries(queryClient).catch(() => undefined);
+      // Only the acted-on checkout gates re-enabling the selector; the remaining cached
+      // repos (checked-out markers in sibling worktrees) refresh in the background so a
+      // slow unrelated worktree cannot hold the selector disabled.
+      const awaitedCwds = options?.refreshCwds ?? (branchCwd ? [branchCwd] : []);
+      await invalidateGitQueriesForCwds(queryClient, awaitedCwds).catch(() => undefined);
+      void invalidateGitQueries(queryClient, { excludeCwds: awaitedCwds }).catch(() => undefined);
     });
   };
 
@@ -564,45 +573,47 @@ export function BranchToolbarBranchSelector({
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
 
-    runBranchAction(async () => {
-      setOptimisticBranch(selectedBranchName);
-      try {
-        await api.git.checkout({ cwd: selectionTarget.checkoutCwd, branch: branch.name });
-        await invalidateGitQueries(queryClient);
-      } catch (error) {
-        handleCheckoutError(error, {
-          api,
-          branch: branch.name,
-          cwd: selectionTarget.checkoutCwd,
-          fallbackTitle: "Failed to checkout branch.",
-          onSuccess: () => {
-            setOptimisticBranch(selectedBranchName);
-            onSetThreadWorkspace({
-              branch: selectedBranchName,
-              worktreePath: selectionTarget.nextWorktreePath,
-            });
-          },
-          queryClient,
-          runBranchAction,
-          onRequestDiscardStash: openStashDiscardDialog,
-        });
-        return;
-      }
-
-      let nextBranchName = selectedBranchName;
-      if (branch.isRemote) {
-        const status = await api.git.status({ cwd: branchCwd }).catch(() => null);
-        if (status?.branch) {
-          nextBranchName = status.branch;
+    runBranchAction(
+      async () => {
+        setOptimisticBranch(selectedBranchName);
+        try {
+          await api.git.checkout({ cwd: selectionTarget.checkoutCwd, branch: branch.name });
+        } catch (error) {
+          handleCheckoutError(error, {
+            api,
+            branch: branch.name,
+            cwd: selectionTarget.checkoutCwd,
+            fallbackTitle: "Failed to checkout branch.",
+            onSuccess: () => {
+              setOptimisticBranch(selectedBranchName);
+              onSetThreadWorkspace({
+                branch: selectedBranchName,
+                worktreePath: selectionTarget.nextWorktreePath,
+              });
+            },
+            queryClient,
+            runBranchAction,
+            onRequestDiscardStash: openStashDiscardDialog,
+          });
+          return;
         }
-      }
 
-      setOptimisticBranch(nextBranchName);
-      onSetThreadWorkspace({
-        branch: nextBranchName,
-        worktreePath: selectionTarget.nextWorktreePath,
-      });
-    });
+        let nextBranchName = selectedBranchName;
+        if (branch.isRemote) {
+          const status = await api.git.status({ cwd: branchCwd }).catch(() => null);
+          if (status?.branch) {
+            nextBranchName = status.branch;
+          }
+        }
+
+        setOptimisticBranch(nextBranchName);
+        onSetThreadWorkspace({
+          branch: nextBranchName,
+          worktreePath: selectionTarget.nextWorktreePath,
+        });
+      },
+      { refreshCwds: [selectionTarget.checkoutCwd] },
+    );
   };
 
   const createBranch = (rawName: string) => {
