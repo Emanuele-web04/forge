@@ -1,8 +1,9 @@
 import {
-  DEFAULT_PROVIDER_PROFILE_ID,
   CommandId,
+  DEFAULT_PROVIDER_PROFILE_ID,
   OrchestrationCommand,
   ProjectId,
+  ProviderProfileId,
   ThreadId,
   TurnId,
   type OrchestrationSession,
@@ -82,10 +83,12 @@ function threadShell(overrides: Partial<OrchestrationThreadShell> = {}): Orchest
 function binding(
   activeTurnId: string | null = OLD_TURN_ID,
   provider: ProviderRuntimeBinding["provider"] = "codex",
+  profileId: ProviderRuntimeBinding["profileId"] = DEFAULT_PROVIDER_PROFILE_ID,
 ): ProviderRuntimeBinding {
   return {
     threadId: THREAD_ID,
     provider,
+    profileId,
     status: activeTurnId === null ? "stopped" : "running",
     lastSeenAt: "2026-07-23T20:00:00.000Z",
     runtimePayload: { activeTurnId },
@@ -96,10 +99,12 @@ function liveSession(input: {
   readonly status: ProviderSession["status"];
   readonly activeTurnId?: TurnId;
   readonly provider?: ProviderSession["provider"];
+  readonly profileId?: ProviderSession["profileId"];
   readonly lastError?: string;
 }): ProviderSession {
   return {
     provider: input.provider ?? "codex",
+    profileId: input.profileId ?? DEFAULT_PROVIDER_PROFILE_ID,
     status: input.status,
     runtimeMode: "full-access",
     threadId: THREAD_ID,
@@ -207,6 +212,40 @@ describe("planProviderRuntimeReconciliation", () => {
         action: "align-running-turn",
         projectedTurnId: OLD_TURN_ID,
         runtimeTurnId: LIVE_TURN_ID,
+      }),
+    ]);
+  });
+
+  it("does not align a projection to a live session from another profile", () => {
+    const workProfile = ProviderProfileId.makeUnsafe("work");
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          modelSelection: {
+            provider: "codex",
+            profileId: workProfile,
+            model: "gpt-5.6",
+          },
+        }),
+      ],
+      bindings: [binding(LIVE_TURN_ID, "codex", workProfile)],
+      liveSessions: [
+        liveSession({
+          status: "running",
+          activeTurnId: LIVE_TURN_ID,
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        }),
+      ],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        projectedTurnId: OLD_TURN_ID,
+        runtimeTurnId: null,
       }),
     ]);
   });

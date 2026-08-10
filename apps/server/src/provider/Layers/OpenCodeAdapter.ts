@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   EventId,
   type ProviderKind,
   type ProviderComposerCapabilities,
@@ -3837,7 +3838,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const context = ensureAdapterSessionContext(input.threadId);
         const modelSelection =
           input.modelSelection ??
-          (context.session.model ? { provider, model: context.session.model } : undefined);
+          (context.session.model
+            ? {
+                provider,
+                profileId: context.session.profileId ?? DEFAULT_PROVIDER_PROFILE_ID,
+                model: context.session.model,
+              }
+            : undefined);
         const parsedModel = parseOpenCodeModelSlug(modelSelection?.model);
         if (!parsedModel) {
           return yield* new ProviderAdapterValidationError({

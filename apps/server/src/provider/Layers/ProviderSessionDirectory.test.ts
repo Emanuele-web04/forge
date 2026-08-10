@@ -5,10 +5,11 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_PROVIDER_PROFILE_ID,
+  ProviderProfileId,
   ThreadId,
 } from "@synara/contracts";
 import { it, assert } from "@effect/vitest";
-import { assertFailure, assertSome } from "@effect/vitest/utils";
+import { assertFailure } from "@effect/vitest/utils";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -27,14 +28,14 @@ function makeDirectoryLayer<E, R>(persistenceLayer: Layer.Layer<SqlClient.SqlCli
     Layer.provide(persistenceLayer),
   );
   return Layer.mergeAll(
+    persistenceLayer,
     runtimeRepositoryLayer,
     ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
-    NodeServices.layer,
-  );
+  ).pipe(Layer.provideMerge(NodeServices.layer));
 }
 
 it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryLive", (it) => {
-  it("upserts, reads, and removes thread bindings", () =>
+  it.effect("upserts, reads, and removes thread bindings", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
@@ -48,13 +49,16 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       const provider = yield* directory.getProvider(initialThreadId);
       assert.equal(provider, "codex");
-      const resolvedBinding = yield* directory.getBinding(initialThreadId);
-      assertSome(resolvedBinding, {
-        threadId: initialThreadId,
+      assert.deepEqual(yield* directory.getTarget(initialThreadId), {
         provider: "codex",
+        profileId: "default",
       });
+      const resolvedBinding = yield* directory.getBinding(initialThreadId);
+      assert.equal(Option.isSome(resolvedBinding), true);
       if (Option.isSome(resolvedBinding)) {
         assert.equal(resolvedBinding.value.threadId, initialThreadId);
+        assert.equal(resolvedBinding.value.provider, "codex");
+        assert.equal(resolvedBinding.value.profileId, DEFAULT_PROVIDER_PROFILE_ID);
       }
 
       const nextThreadId = ThreadId.makeUnsafe("thread-2");
@@ -78,8 +82,9 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
 
       const threadIds = yield* directory.listThreadIds();
-      assert.deepEqual(threadIds, [nextThreadId]);
+      assert.deepEqual(threadIds, [initialThreadId, nextThreadId]);
 
+      yield* directory.remove(initialThreadId);
       yield* directory.remove(nextThreadId);
       const missingProvider = yield* directory.getProvider(nextThreadId).pipe(Effect.result);
       assertFailure(
@@ -91,7 +96,64 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       );
     }));
 
-  it("persists runtime fields and merges payload updates", () =>
+  it.effect("preserves an explicit profile across partial binding updates", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.makeUnsafe("thread-work-profile");
+      const profileId = ProviderProfileId.makeUnsafe("work");
+
+      yield* directory.upsert({
+        provider: "codex",
+        profileId,
+        threadId,
+        resumeCursor: { threadId: "provider-work-thread" },
+      });
+      yield* directory.upsert({
+        provider: "codex",
+        threadId,
+        status: "running",
+      });
+
+      assert.deepEqual(yield* directory.getTarget(threadId), {
+        provider: "codex",
+        profileId: "work",
+      });
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.profileId, profileId);
+        assert.deepEqual(runtime.value.resumeCursor, { threadId: "provider-work-thread" });
+      }
+    }));
+
+  it.effect("clears incompatible runtime state when the profile changes", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.makeUnsafe("thread-profile-change");
+
+      yield* directory.upsert({
+        provider: "codex",
+        threadId,
+        resumeCursor: { threadId: "provider-personal-thread" },
+        runtimePayload: { model: "gpt-5.6-codex" },
+      });
+      yield* directory.upsert({
+        provider: "codex",
+        profileId: ProviderProfileId.makeUnsafe("work"),
+        threadId,
+      });
+
+      const binding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(binding), true);
+      if (Option.isSome(binding)) {
+        assert.equal(binding.value.profileId, "work");
+        assert.equal(binding.value.resumeCursor, null);
+        assert.equal(binding.value.runtimePayload, null);
+      }
+    }));
+
+  it.effect("persists runtime fields and merges payload updates", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
@@ -136,7 +198,9 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
     }));
 
-  it("resets adapterKey to the new provider when provider changes without an explicit adapter key", () =>
+  it.effect(
+    "resets adapterKey to the new provider when provider changes without an explicit adapter key",
+    () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
@@ -166,9 +230,10 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assert.equal(runtime.value.providerName, "codex");
         assert.equal(runtime.value.adapterKey, "codex");
       }
-    }));
+    }),
+  );
 
-  it("rehydrates persisted mappings across layer restart", () =>
+  it.effect("rehydrates persisted mappings across layer restart", () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-directory-"));
       const dbPath = path.join(tempDir, "orchestration.sqlite");
@@ -191,12 +256,11 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assert.equal(provider, "codex");
 
         const resolvedBinding = yield* directory.getBinding(threadId);
-        assertSome(resolvedBinding, {
-          threadId,
-          provider: "codex",
-        });
+        assert.equal(Option.isSome(resolvedBinding), true);
         if (Option.isSome(resolvedBinding)) {
           assert.equal(resolvedBinding.value.threadId, threadId);
+          assert.equal(resolvedBinding.value.provider, "codex");
+          assert.equal(resolvedBinding.value.profileId, DEFAULT_PROVIDER_PROFILE_ID);
         }
 
         const legacyTableRows = yield* sql<{ readonly name: string }>`
@@ -210,7 +274,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       fs.rmSync(tempDir, { recursive: true, force: true });
     }));
 
-  it("rehydrates persisted OpenCode bindings across layer restart", () =>
+  it.effect("rehydrates persisted OpenCode bindings across layer restart", () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-directory-opencode-"));
       const dbPath = path.join(tempDir, "orchestration.sqlite");
@@ -233,16 +297,18 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assert.equal(provider, "opencode");
 
         const resolvedBinding = yield* directory.getBinding(threadId);
-        assertSome(resolvedBinding, {
-          threadId,
-          provider: "opencode",
-        });
+        assert.equal(Option.isSome(resolvedBinding), true);
+        if (Option.isSome(resolvedBinding)) {
+          assert.equal(resolvedBinding.value.threadId, threadId);
+          assert.equal(resolvedBinding.value.provider, "opencode");
+          assert.equal(resolvedBinding.value.profileId, DEFAULT_PROVIDER_PROFILE_ID);
+        }
       }).pipe(Effect.provide(directoryLayer));
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }));
 
-  it("skips legacy bindings with unknown provider names when listing all bindings", () =>
+  it.effect("skips legacy bindings with unknown provider names when listing all bindings", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
@@ -252,8 +318,9 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       yield* runtimeRepository.upsert({
         threadId: legacyThreadId,
-        providerName: "kilo",
-        adapterKey: "kilo",
+        providerName: "legacyUnknownProvider",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        adapterKey: "legacyUnknownProvider",
         runtimeMode: "full-access",
         status: "running",
         lifecycleGeneration: "legacy-test-kilo",
@@ -267,9 +334,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       });
 
       const bindings = yield* directory.listBindings();
-      assert.deepEqual(
-        bindings.map((binding) => binding.threadId),
-        [codexThreadId],
-      );
+      assert.equal(bindings.some((binding) => binding.threadId === legacyThreadId), false);
+      assert.equal(bindings.some((binding) => binding.threadId === codexThreadId), true);
     }));
 });

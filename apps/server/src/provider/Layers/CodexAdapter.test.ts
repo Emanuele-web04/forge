@@ -5,6 +5,7 @@ import {
   ApprovalRequestId,
   EventId,
   ProviderItemId,
+  ProviderProfileId,
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
@@ -33,6 +34,7 @@ const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
+const asProfileId = (value: string): ProviderProfileId => ProviderProfileId.makeUnsafe(value);
 
 class FakeCodexManager extends CodexAppServerManager {
   public startSessionImpl = vi.fn(
@@ -465,6 +467,30 @@ const lifecycleLayer = it.layer(
 );
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("propagates provider profile identity to canonical runtime events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-profile-runtime"),
+        kind: "session",
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "session/closed",
+        message: "Session stopped",
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag === "Some") {
+        assert.equal(firstEvent.value.profileId, "work");
+      }
+    }),
+  );
+
   it.effect("normalizes whitespace in configuration warnings at the provider boundary", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

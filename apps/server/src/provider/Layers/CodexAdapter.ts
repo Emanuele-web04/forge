@@ -792,6 +792,7 @@ function runtimeEventBase(
   return {
     eventId: event.id,
     provider: event.provider,
+    ...(event.profileId !== undefined ? { profileId: event.profileId } : {}),
     threadId: canonicalThreadId,
     createdAt: event.createdAt,
     ...(event.lifecycleGeneration !== undefined

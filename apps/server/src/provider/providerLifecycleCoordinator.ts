@@ -4,6 +4,8 @@ import type { ThreadId } from "@synara/contracts";
 import { Duration, Effect, Option } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
+import { makeKeyedLock } from "./keyedLock.ts";
+
 export interface ProviderLifecycleLease {
   readonly generation: string;
   readonly isCurrent: () => boolean;
@@ -18,7 +20,15 @@ export interface ProviderLifecycleLease {
    */
   readonly commit: () => void;
   /** Takes lasting ownership of an existing generation instead of this run's. */
-  readonly adopt: (generation: string) => void;
+  readonly adopt: (generation: string) => Effect.Effect<void>;
+  /**
+   * Holds generation ownership stable while coordinating another per-thread
+   * write. The callback adopts without reacquiring the stability fence, which
+   * preserves the global stability -> binding lock order.
+   */
+  readonly withStableGeneration: <A, E, R>(
+    operation: (adopt: (generation: string) => void) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
   /** Takes lasting ownership of "this thread has no provider generation". */
   readonly retire: () => void;
 }
@@ -29,6 +39,14 @@ export interface ProviderLifecycleCoordinator {
     operation: (lease: ProviderLifecycleLease) => Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
   readonly runCurrent: <A, E, R>(
+    threadId: ThreadId,
+    operation: (generation: string | undefined) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
+  /**
+   * Holds the thread's generation stable for the full operation without
+   * excluding current-generation control work.
+   */
+  readonly runStable: <A, E, R>(
     threadId: ThreadId,
     operation: (generation: string | undefined) => Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
@@ -51,10 +69,20 @@ export interface ProviderLifecycleCoordinator {
 const URGENT_LOCK_WAIT = Duration.seconds(5);
 const URGENT_LOCK_POLL = Duration.millis(25);
 
+interface ProviderLifecycleCoordinatorOptions {
+  readonly onGenerationPublished?: (input: {
+    readonly threadId: ThreadId;
+    readonly generation: string;
+  }) => Effect.Effect<void>;
+}
+
 /** Serializes provider lifecycle mutations per thread and gives each mutation a unique epoch. */
-export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator {
+export function makeProviderLifecycleCoordinator(
+  options?: ProviderLifecycleCoordinatorOptions,
+): ProviderLifecycleCoordinator {
   const locks = new Map<ThreadId, { readonly semaphore: Semaphore.Semaphore; users: number }>();
   const currentGenerations = new Map<ThreadId, string>();
+  const generationStabilityLock = makeKeyedLock<ThreadId>();
 
   type LockEntry = { readonly semaphore: Semaphore.Semaphore; users: number };
 
@@ -116,65 +144,129 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
       return attempt.pipe(Effect.ensuring(releaseEntry(threadId, entry)));
     });
 
-  const run: ProviderLifecycleCoordinator["run"] = (threadId, operation) =>
-    withThreadLock(
+  type FinalOwnership =
+    | { readonly _tag: "generation"; readonly generation: string }
+    | { readonly _tag: "retired" };
+  interface PublishedGeneration {
+    readonly generation: string;
+    readonly previousGeneration: string | undefined;
+    ownedGeneration: string;
+    finalOwnership: FinalOwnership | undefined;
+  }
+
+  const publishGeneration = (threadId: ThreadId): Effect.Effect<PublishedGeneration> =>
+    generationStabilityLock.withLock(
       threadId,
-      Effect.suspend(() => {
+      Effect.sync(() => {
         const generation = randomUUID();
         const previousGeneration = currentGenerations.get(threadId);
         currentGenerations.set(threadId, generation);
-        let ownedGeneration: string = generation;
-        // Ownership is opt-in. The eagerly published generation is rewound on
-        // exit unless the run explicitly committed/adopted/retired, so a run
-        // that ends without changing anything — a successful no-op early
-        // return, a failure, an interrupt before the provider was touched —
-        // leaves the still-live session's generation exactly as it found it.
-        // The inverse default is unsafe: an uncommitted generation nobody else
-        // knows about silently invalidates every runtime event and every
-        // generation-checked control call for that thread, forever.
-        let owned = false;
-        const isCurrent = () => currentGenerations.get(threadId) === ownedGeneration;
-        return operation({
+        return {
           generation,
-          isCurrent,
-          commit: () => {
-            if (isCurrent()) owned = true;
-          },
-          adopt: (adoptedGeneration) => {
-            if (isCurrent()) {
-              ownedGeneration = adoptedGeneration;
-              currentGenerations.set(threadId, adoptedGeneration);
-              owned = true;
-            }
-          },
-          retire: () => {
-            if (isCurrent()) {
-              currentGenerations.delete(threadId);
-              owned = true;
-            }
-          },
-        }).pipe(
-          Effect.onExit(() =>
-            // `isCurrent` also guards against clobbering a newer owner: only
-            // rewind while this run's generation is still the published one.
-            owned || !isCurrent()
-              ? Effect.void
-              : Effect.sync(() => {
-                  if (previousGeneration === undefined) {
-                    currentGenerations.delete(threadId);
-                  } else {
-                    currentGenerations.set(threadId, previousGeneration);
-                  }
-                }),
-          ),
-        );
+          previousGeneration,
+          ownedGeneration: generation,
+          finalOwnership: undefined,
+        };
       }),
+    );
+
+  const settleGeneration = (
+    threadId: ThreadId,
+    published: PublishedGeneration,
+  ): Effect.Effect<void> =>
+    // Lock ordering is lifecycle -> generation stability. `runStable` never
+    // takes the lifecycle lock, so event ingestion cannot form a cycle with
+    // control work that waits for runtime task settlement.
+    generationStabilityLock.withLock(
+      threadId,
+      Effect.sync(() => {
+        if (currentGenerations.get(threadId) !== published.ownedGeneration) return;
+        if (published.finalOwnership?._tag === "generation") {
+          currentGenerations.set(threadId, published.finalOwnership.generation);
+        } else if (published.finalOwnership?._tag === "retired") {
+          currentGenerations.delete(threadId);
+        } else if (published.previousGeneration === undefined) {
+          currentGenerations.delete(threadId);
+        } else {
+          currentGenerations.set(threadId, published.previousGeneration);
+        }
+      }),
+    );
+
+  const usePublishedGeneration = <A, E, R>(
+    threadId: ThreadId,
+    published: PublishedGeneration,
+    operation: (lease: ProviderLifecycleLease) => Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> => {
+    const isCurrent = () =>
+      currentGenerations.get(threadId) === published.ownedGeneration;
+    const adoptCurrentGeneration = (adoptedGeneration: string) => {
+      if (!isCurrent()) return;
+      currentGenerations.set(threadId, adoptedGeneration);
+      published.ownedGeneration = adoptedGeneration;
+      published.finalOwnership = {
+        _tag: "generation",
+        generation: adoptedGeneration,
+      };
+    };
+    const withStableGeneration: ProviderLifecycleLease["withStableGeneration"] =
+      (stableOperation) =>
+        generationStabilityLock.withLock(
+          threadId,
+          Effect.suspend(() => stableOperation(adoptCurrentGeneration)),
+        );
+    const lease: ProviderLifecycleLease = {
+      generation: published.generation,
+      isCurrent,
+      commit: () => {
+        if (isCurrent()) {
+          published.finalOwnership = {
+            _tag: "generation",
+            generation: published.generation,
+          };
+        }
+      },
+      adopt: (adoptedGeneration) =>
+        withStableGeneration((adopt) =>
+          Effect.sync(() => {
+            adopt(adoptedGeneration);
+          }),
+        ),
+      withStableGeneration,
+      retire: () => {
+        if (isCurrent()) {
+          published.finalOwnership = { _tag: "retired" };
+        }
+      },
+    };
+    const publicationHook = options?.onGenerationPublished
+      ? options.onGenerationPublished({
+          threadId,
+          generation: published.generation,
+        })
+      : Effect.void;
+    return publicationHook.pipe(Effect.andThen(Effect.suspend(() => operation(lease))));
+  };
+
+  const run: ProviderLifecycleCoordinator["run"] = (threadId, operation) =>
+    withThreadLock(
+      threadId,
+      Effect.acquireUseRelease(
+        publishGeneration(threadId),
+        (published) => usePublishedGeneration(threadId, published, operation),
+        (published) => settleGeneration(threadId, published),
+      ),
     );
 
   return {
     run,
     runCurrent: (threadId, operation) =>
       withThreadLock(
+        threadId,
+        Effect.suspend(() => operation(currentGenerations.get(threadId))),
+      ),
+    runStable: (threadId, operation) =>
+      generationStabilityLock.withLock(
         threadId,
         Effect.suspend(() => operation(currentGenerations.get(threadId))),
       ),
