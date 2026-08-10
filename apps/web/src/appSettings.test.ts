@@ -262,6 +262,20 @@ describe("environment panel defaults", () => {
   });
 });
 
+describe("upstream amnesia preference", () => {
+  it("defaults upstream hiding to off and persists the toggle as a local-only setting", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+    expect(defaults.hideUpstreamRepositoryInfo).toBe(false);
+
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(JSON.stringify({ hideUpstreamRepositoryInfo: true }));
+
+    expect(normalizeStoredAppSettings(decoded)).toMatchObject({
+      hideUpstreamRepositoryInfo: true,
+    });
+  });
+});
+
 describe("resolveAppModelSelection", () => {
   it("preserves saved custom model slugs instead of falling back to the default", () => {
     expect(

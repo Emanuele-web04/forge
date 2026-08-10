@@ -250,6 +250,9 @@ function SettingsRouteView() {
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
+    ...(settings.hideUpstreamRepositoryInfo !== defaults.hideUpstreamRepositoryInfo
+      ? ["Upstream information visibility"]
+      : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
       ? ["Pull request diff colors"]
@@ -542,6 +545,15 @@ function SettingsRouteView() {
               "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
             resetLabel: "repository section",
             ariaLabel: "Show the Repository section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "hideUpstreamRepositoryInfo",
+            title: "Hide upstream information",
+            description:
+              "Hide upstream repository identity in the chat Environment panel while keeping Git behavior unchanged.",
+            resetLabel: "upstream information visibility",
+            ariaLabel: "Hide upstream repository information in the Environment panel",
           })}
 
           {renderBooleanSettingRow({

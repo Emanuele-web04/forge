@@ -92,6 +92,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show the GitHub repository link in the chat Environment panel. git changes worktree",
   },
   {
+    id: "general:environment-hide-upstream",
+    section: "general",
+    title: "Hide upstream information",
+    keywords: "Hide upstream repository identity in the Environment panel. Forkara parody",
+  },
+  {
     id: "general:environment-pull-request",
     section: "general",
     title: "Pull request",
