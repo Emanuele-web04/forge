@@ -12,9 +12,36 @@ read.
 Synara’s typed provider contract has nine providers:
 [Codex, Claude Agent, Cursor, Antigravity, Grok, Droid, Kilo, OpenCode, and
 Pi](../packages/contracts/src/orchestration.ts#L56-L67). All nine are visible in
-the usage panel. Codex, Claude Agent, and Cursor have direct live account
-fetchers; the other six return an explicit unsupported live-limit state while
-Synara activity and runtime-reported limits remain visible.
+the usage panel. Codex, Claude Agent, Cursor, Kilo, and Antigravity have direct
+live account fetchers; Grok, Droid, OpenCode, and Pi return an explicit
+unsupported live-limit state while Synara activity and runtime-reported limits
+remain visible.
+
+Live-fetch verification on 2026-08-10 (local machine, signed-in CLIs):
+
+- **Kilo** (`apps/server/src/providerUsage/providers/kilo.ts`): the Kilo CLI
+  auth file `~/.local/share/kilo/auth.json` (`kilo.access`) authorizes the
+  tRPC batch `user.getCreditBlocks,kiloPass.getState,user.getAutoTopUpPaymentMethod`
+  on `https://app.kilo.ai/api/trpc`. Verified live: the batch returns credit
+  blocks, `totalBalance_mUsd`, pass subscription, renewal, and auto top-up
+  state. No refresh is attempted; the Kilo CLI owns credential rotation.
+- **Antigravity** (`apps/server/src/providerUsage/providers/antigravity.ts`):
+  the running `agy` CLI (or desktop language server) exposes gRPC-web JSON on a
+  loopback port. Verified live on this machine: `GetUserStatus` returns
+  `planName`, `monthlyPromptCredits`, `monthlyFlowCredits`, and per-model
+  `quotaInfo.remainingFraction`; `RetrieveUserQuotaSummary` returns quota
+  groups with weekly/5-hour buckets, `remainingFraction`, and `resetTime`. The
+  fetcher discovers the listening port with `pgrep` + `lsof` (read-only) and
+  pins all requests to `127.0.0.1`, accepting the self-signed loopback cert
+  only there. No credential is read.
+- **Grok** ACP billing (`x.ai/billing`) is compiled into grok 1.0.0 but is not
+  registered on the `grok agent stdio` surface: a live initialize + billing
+  probe returned JSON-RPC `-32601 Method not found` with both unescaped and
+  escaped method names, and after `session/new`. CodexBar's test suite carries
+  the same fixture, confirming the method is version-gated. Synara therefore
+  keeps Grok live limits "unsupported" and adds machine activity from
+  `~/.grok/sessions/**/signals.json` (`totalTokensBeforeCompaction` +
+  `contextTokensUsed`, `primaryModelId`) instead of inventing quota.
 
 “Tokens” below means counts read from a local transcript, hook, or provider
 response. Synara's actual-usage card reads projected user-originated turns and
@@ -122,10 +149,14 @@ grouping. These local totals do not change account-limit state.
 - **OpenUsage:** Antigravity is not in the 19-provider registered set in the
   current [provider contract](https://openusage.sh/docs/concepts/providers/)
   and has no matching provider package in the documented active list.
-- **Tokens/cost/history:** neither project documents a raw-token, invoice-cost,
-  or local-history reader for this surface. Synara therefore keeps the live-
-  limit state explicitly unsupported and reports actual usage only when its own
-  session projection or an optional OpenUsage snapshot has data.
+- **Synara implementation:** the local language server (running `agy` or the
+  desktop app) exposes `GetUserStatus` and `RetrieveUserQuotaSummary` as
+  gRPC-web JSON on a loopback port. Synara discovers the port read-only via
+  `pgrep` + `lsof`, pins requests to `127.0.0.1`, and maps quota groups
+  (weekly/5-hour buckets with `remainingFraction` and `resetTime`) plus
+  `monthlyPromptCredits`/`monthlyFlowCredits` into the account-limit plane.
+  Live-verified on a signed-in machine: plan `Pro`, per-model quota rows, and
+  the quota summary all returned without reading credentials.
 
 ### `grok`
 
@@ -142,6 +173,14 @@ grouping. These local totals do not change account-limit state.
 - **Auth/cost:** CodexBar’s browser fallback is explicit/opt-in and its cookie
   cache is Keychain-backed. No project documents a first-party Grok consumer
   invoice or local dollar-cost source.
+- **Synara implementation:** live probing on grok 1.0.0 shows `x.ai/billing`
+  (and `x.ai/auto-topup-rule`) compile into the binary but are not registered
+  on the `grok agent stdio` surface — initialize + billing probes return
+  JSON-RPC `-32601 Method not found` even after `session/new`, and CodexBar's
+  own test fixtures carry the same error. Synara therefore keeps Grok live
+  limits "unsupported" and reads provider-owned machine activity from
+  `~/.grok/sessions/**/signals.json` (`totalTokensBeforeCompaction` +
+  `contextTokensUsed`, `primaryModelId`) instead of inventing a quota.
 
 ### `droid`
 
@@ -166,6 +205,14 @@ login`. The documented result is Kilo Pass usage/quota; no local token-cost
   and the source tree contains `kilocode`, but the current registered-19
   contract does not list it. Exact reader path, fields, limits, and billing
   semantics remain unresolved.
+- **Synara implementation:** the Kilo CLI auth file (`~/.local/share/kilo/
+auth.json`, `kilo.access`) authorizes the tRPC batch
+  `user.getCreditBlocks,kiloPass.getState,user.getAutoTopUpPaymentMethod` on
+  `https://app.kilo.ai/api/trpc`. Live-verified on a signed-in machine: credit
+  blocks, `totalBalance_mUsd`, pass subscription/renewal, and auto top-up
+  state all returned with the CLI token. No refresh is attempted; the Kilo CLI
+  owns credential rotation. Kilo SQLite machine history remains a separate
+  plane.
 
 ### `opencode`
 

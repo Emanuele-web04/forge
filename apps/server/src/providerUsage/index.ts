@@ -278,6 +278,7 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
           ...buildContext(),
           homeDir: serverConfig.homeDir,
           claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+          antigravityBinaryPath: settings.providers.antigravity.binaryPath,
           ...(settings.providers.codex.homePath
             ? { codexHomePath: settings.providers.codex.homePath }
             : {}),

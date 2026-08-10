@@ -4,7 +4,11 @@ import nodePath from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { __timestampUnitProbeCountForTests, scanLocalProviderActivity } from "./machineActivity.ts";
+import {
+  __timestampUnitProbeCountForTests,
+  scanGrokLocalActivity,
+  scanLocalProviderActivity,
+} from "./machineActivity.ts";
 
 const tempDirs: string[] = [];
 
@@ -365,3 +369,66 @@ describe("scanLocalProviderActivity", () => {
     expect(__timestampUnitProbeCountForTests()).toBe(afterFirst + 1);
   });
 });
+
+describe("scanGrokLocalActivity", () => {
+  it("reads Grok signals.json files into token samples", async () => {
+    const homeDir = await mkdtemp(nodePath.join(tmpdir(), "synara-grok-"));
+    tempDirs.push(homeDir);
+    const sessionRoot = nodePath.join(homeDir, ".grok", "sessions", "encoded-cwd", "session-a");
+    await mkdir(sessionRoot, { recursive: true });
+    await writeFile(
+      nodePath.join(sessionRoot, "signals.json"),
+      JSON.stringify({
+        totalTokensBeforeCompaction: 40_000,
+        contextTokensUsed: 190_244,
+        primaryModelId: "deepseek-v4-flash",
+        turnCount: 1,
+      }),
+      "utf8",
+    );
+    await utimes(
+      nodePath.join(sessionRoot, "signals.json"),
+      new Date(nowMsForGrok - 60_000),
+      new Date(nowMsForGrok - 60_000),
+    );
+
+    const activity = await scanGrokLocalActivity({ homeDir, nowMs: nowMsForGrok });
+    expect(activity?.status).toBe("ok");
+    expect(activity?.source).toBe("grok-session-signals");
+    expect(activity?.periods[2]?.tokens.total).toBe(230_244);
+    expect(activity?.periods[2]?.sessions).toBe(1);
+    expect(activity?.breakdown[0]).toMatchObject({
+      model: "deepseek-v4-flash",
+      tokens: { total: 230_244 },
+    });
+  });
+
+  it("returns null when no signals.json is present", async () => {
+    const homeDir = await mkdtemp(nodePath.join(tmpdir(), "synara-grok-empty-"));
+    tempDirs.push(homeDir);
+    await mkdir(nodePath.join(homeDir, ".grok", "sessions"), { recursive: true });
+    const activity = await scanGrokLocalActivity({ homeDir, nowMs: nowMsForGrok });
+    expect(activity).toBeNull();
+  });
+
+  it("ignores signal files older than the 30-day window", async () => {
+    const homeDir = await mkdtemp(nodePath.join(tmpdir(), "synara-grok-old-"));
+    tempDirs.push(homeDir);
+    const sessionRoot = nodePath.join(homeDir, ".grok", "sessions", "cwd", "old-session");
+    await mkdir(sessionRoot, { recursive: true });
+    await writeFile(
+      nodePath.join(sessionRoot, "signals.json"),
+      JSON.stringify({ contextTokensUsed: 10_000 }),
+      "utf8",
+    );
+    await utimes(
+      nodePath.join(sessionRoot, "signals.json"),
+      new Date(nowMsForGrok - 45 * 24 * 60 * 60 * 1_000),
+      new Date(nowMsForGrok - 45 * 24 * 60 * 60 * 1_000),
+    );
+    const activity = await scanGrokLocalActivity({ homeDir, nowMs: nowMsForGrok });
+    expect(activity).toBeNull();
+  });
+});
+
+const nowMsForGrok = Date.parse("2026-08-09T00:00:00.000Z");

@@ -19,6 +19,10 @@ import { readSqliteRows } from "./sqlite";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_DATABASES = 12;
 const MAX_MESSAGES_PER_DATABASE = 50_000;
+const MAX_SIGNAL_FILE_BYTES = 64 * 1024 * 1024;
+// Grok's signals.json files hold running token totals per session. Bound the
+// walk like the SQLite scans so a huge session tree cannot stall a refresh.
+const MAX_GROK_SIGNAL_FILES = 5_000;
 
 // Detected `time_created` unit per database, keyed by path. The probe (a single
 // `MAX(time_created)` pass) is cached while the file's mtime is unchanged so
@@ -48,6 +52,14 @@ export interface MachineActivitySample {
   readonly upstreamProviderId?: string | null;
   readonly tokens: ServerProviderUsageTokenCounts;
   readonly recordedCostUsd?: number | null;
+}
+
+/** A token sample read from a provider-owned signals file (Grok sessions). */
+interface GrokSignalFile {
+  readonly path: string;
+  readonly mtimeMs: number;
+  readonly tokensTotal: number;
+  readonly model?: string;
 }
 
 function asNonNegativeNumber(value: unknown): number | undefined {
@@ -454,6 +466,13 @@ export async function scanLocalProviderActivity(input: {
   nowMs?: number;
   databasePaths?: ReadonlyArray<string>;
 }): Promise<ServerProviderUsageActivity | null> {
+  if (input.provider === "grok") {
+    return scanGrokLocalActivity({
+      homeDir: input.homeDir,
+      env: input.env ?? process.env,
+      nowMs: input.nowMs ?? Date.now(),
+    });
+  }
   if (input.provider !== "opencode" && input.provider !== "kilo") {
     return null;
   }
@@ -518,5 +537,138 @@ export async function scanLocalProviderActivity(input: {
     partial: databaseSelection.truncated || rowTruncated || (failedCount > 0 && !allFailed),
     ...(effectivePartialDetail ? { partialDetail: effectivePartialDetail } : {}),
     ...(failureDetail ? { failedDetail: failureDetail } : {}),
+  });
+}
+
+async function grokSessionsRoot(homeDir: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const roots = [
+    env.GROK_HOME?.trim(),
+    env.XDG_CONFIG_HOME?.trim()
+      ? nodePath.join(env.XDG_CONFIG_HOME.trim(), "grok")
+      : nodePath.join(homeDir, ".grok"),
+    nodePath.join(homeDir, ".config", "grok"),
+  ].filter((path): path is string => Boolean(path));
+  for (const root of roots) {
+    try {
+      const stats = await fs.stat(nodePath.join(root, "sessions"));
+      if (stats.isDirectory()) {
+        return nodePath.join(root, "sessions");
+      }
+    } catch {
+      // try the next candidate root
+    }
+  }
+  return nodePath.join(homeDir, ".grok", "sessions");
+}
+
+async function walkGrokSignalFiles(
+  root: string,
+  lookbackMs: number,
+): Promise<{ files: GrokSignalFile[]; truncated: boolean }> {
+  const files: GrokSignalFile[] = [];
+  const stack = [root];
+  let truncated = false;
+  while (stack.length > 0 && !truncated) {
+    const directory = stack.pop();
+    if (!directory) {
+      continue;
+    }
+    let entries: ReadonlyArray<import("node:fs").Dirent>;
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (truncated) {
+        break;
+      }
+      const fullPath = nodePath.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || entry.name !== "signals.json") {
+        continue;
+      }
+      let stats: import("node:fs").Stats | null = null;
+      try {
+        stats = await fs.stat(fullPath);
+      } catch {
+        continue;
+      }
+      if (stats.mtimeMs < lookbackMs) {
+        continue;
+      }
+      files.push({ path: fullPath, mtimeMs: stats.mtimeMs, tokensTotal: 0 });
+      if (files.length >= MAX_GROK_SIGNAL_FILES) {
+        truncated = true;
+      }
+    }
+  }
+  return { files, truncated };
+}
+
+async function readGrokSignalFile(file: GrokSignalFile): Promise<GrokSignalFile | null> {
+  try {
+    const raw = await fs.readFile(file.path, "utf8");
+    if (raw.length > MAX_SIGNAL_FILE_BYTES) {
+      return null;
+    }
+    const json = JSON.parse(raw) as unknown;
+    const record = asRecord(json);
+    if (!record) {
+      return null;
+    }
+    const beforeCompaction = asNonNegativeNumber(record.totalTokensBeforeCompaction) ?? 0;
+    const contextUsed = asNonNegativeNumber(record.contextTokensUsed) ?? 0;
+    const total = beforeCompaction + contextUsed;
+    if (total <= 0) {
+      return null;
+    }
+    const model = asString(record.primaryModelId);
+    return {
+      path: file.path,
+      mtimeMs: file.mtimeMs,
+      tokensTotal: Math.trunc(total),
+      ...(model !== undefined ? { model } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function scanGrokLocalActivity(input: {
+  homeDir: string;
+  env?: NodeJS.ProcessEnv;
+  nowMs?: number;
+}): Promise<ServerProviderUsageActivity | null> {
+  const nowMs = input.nowMs ?? Date.now();
+  const startMs = nowMs - 30 * ONE_DAY_MS;
+  const root = await grokSessionsRoot(input.homeDir, input.env ?? process.env);
+  const selection = await walkGrokSignalFiles(root, startMs);
+  if (selection.files.length === 0) {
+    return null;
+  }
+  const files = (await Promise.all(selection.files.map(readGrokSignalFile))).filter(
+    (file): file is GrokSignalFile => file !== null,
+  );
+  const samples: MachineActivitySample[] = files.map((file) => ({
+    sessionId: nodePath.basename(nodePath.dirname(file.path)),
+    timestampMs: file.mtimeMs,
+    ...(file.model !== undefined ? { model: file.model } : {}),
+    tokens: { total: file.tokensTotal },
+  }));
+  return buildMachineUsageActivity({
+    provider: "grok",
+    source: "grok-session-signals",
+    nowMs,
+    samples,
+    ...(selection.truncated
+      ? {
+          partial: true,
+          partialDetail: `The Grok history is partial because the scan is limited to ${MAX_GROK_SIGNAL_FILES.toLocaleString()} recent signal files.`,
+        }
+      : {}),
   });
 }

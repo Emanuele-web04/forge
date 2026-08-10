@@ -33,6 +33,19 @@ export interface ProfileModelUsageSelection {
   readonly metric: "tokens" | "turns";
 }
 
+export interface ProfileTokenProvenance {
+  /** Where the token totals on this page come from. */
+  readonly source: "synara-measured" | "none";
+  /**
+   * How much of the recorded activity carried token telemetry. `none` means
+   * the DB has no token evidence at all.
+   */
+  readonly coverage: "complete" | "partial" | "not-reported" | "none";
+  /** Provider count with partial coverage, for the honest "X of Y providers" note. */
+  readonly providersWithTokens: number;
+  readonly providersWithTurns: number;
+}
+
 // Prefer tokens/day when available; fall back to prompt counts while token stats load.
 export function selectProfileHeatmap(
   stats: ProfileStats,
@@ -75,4 +88,56 @@ export function selectProfileModelUsage(
     return { entries: tokenStats.models, metric: "tokens" };
   }
   return { entries: stats.providerModels, metric: "turns" };
+}
+
+/**
+ * Provenance of the profile token figures: they are measured locally from
+ * Synara's projected context-window updates, never fetched from a provider.
+ * Coverage distinguishes full, partial, and absent token evidence so the page
+ * never presents a partial sum as complete.
+ */
+export function selectProfileTokenProvenance(
+  stats: ProfileStats,
+  tokenStats: ProfileTokenStats | null,
+): ProfileTokenProvenance {
+  const providerUsage = tokenStats?.providerUsage ?? [];
+  const providersWithTurns = providerUsage.filter((entry) => entry.turnCount > 0).length;
+  const providersWithTokens = providerUsage.filter(
+    (entry) => entry.tokensReported || (entry.tokenCoverage ?? "not-reported") !== "not-reported",
+  ).length;
+  if (!tokenStats?.available) {
+    return {
+      source: "none",
+      coverage: "none",
+      providersWithTokens: 0,
+      providersWithTurns,
+    };
+  }
+  if (providersWithTurns > 0 && providersWithTokens === 0) {
+    return {
+      source: "synara-measured",
+      coverage: "not-reported",
+      providersWithTokens,
+      providersWithTurns,
+    };
+  }
+  if (tokenStats.lifetimeTotalTokens === null) {
+    return {
+      source: "none",
+      coverage: "none",
+      providersWithTokens,
+      providersWithTurns,
+    };
+  }
+  const hasPartial = providerUsage.some(
+    (entry) =>
+      entry.turnCount > 0 &&
+      (entry.tokenCoverage ?? (entry.tokensReported ? "complete" : "not-reported")) === "partial",
+  );
+  return {
+    source: "synara-measured",
+    coverage: hasPartial ? "partial" : "complete",
+    providersWithTokens,
+    providersWithTurns,
+  };
 }

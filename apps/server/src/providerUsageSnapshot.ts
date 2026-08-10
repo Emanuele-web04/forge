@@ -940,6 +940,7 @@ async function loadProviderUsageSnapshot(input: {
       });
     case "opencode":
     case "kilo":
+    case "grok":
       return loadMachineActivitySnapshot({
         provider: input.provider,
         homeDir: input.homeDir,

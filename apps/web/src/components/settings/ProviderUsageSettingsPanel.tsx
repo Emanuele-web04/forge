@@ -283,6 +283,34 @@ export function ProviderUsageSettingsPanel() {
 
   const isRefreshing = usageQuery.isFetching || refreshMutation.isPending;
 
+  const liveStatusCounts = cards.reduce(
+    (counts, snapshot) => {
+      const status: NonNullable<ServerProviderUsageSnapshot["status"]> = snapshot.status ?? "ok";
+      counts[status] = (counts[status] ?? 0) + 1;
+      return counts;
+    },
+    {} as Partial<Record<NonNullable<ServerProviderUsageSnapshot["status"]>, number>>,
+  );
+  const providersWithLimits = cards.filter(
+    (snapshot) => (snapshot.status ?? "ok") === "ok" && snapshot.limits.length > 0,
+  ).length;
+  const providersWithMachineActivity = cards.filter(
+    (snapshot) => snapshot.activity?.status === "ok" || snapshot.activity?.status === "partial",
+  ).length;
+  const lastUpdated = cards.reduce((latest, snapshot) => {
+    const time = Date.parse(snapshot.updatedAt);
+    return Number.isNaN(time) || time <= latest ? latest : time;
+  }, 0);
+  const updatedLabel =
+    lastUpdated > 0
+      ? new Intl.DateTimeFormat(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }).format(new Date(lastUpdated))
+      : "—";
+
   return (
     <SettingsSectionShell
       title="Provider usage"
@@ -304,15 +332,30 @@ export function ProviderUsageSettingsPanel() {
           <div className="px-4 py-3.5 text-xs text-muted-foreground">Loading provider usage…</div>
         </SettingsCard>
       ) : (
-        <div className="flex flex-col gap-3">
-          {cards.map((snapshot) => (
-            <ProviderUsageCard
-              key={snapshot.provider}
-              snapshot={snapshot}
-              threadRateLimits={threadRateLimits}
+        <>
+          {/* Coverage strip: how many providers actually report data right now.
+              Mirrors the opencode.ai/data density (totals + freshness in one
+              row) without cloning its leaderboard design. */}
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border/60 bg-border/60 text-xs sm:grid-cols-4">
+            <SummaryCell value={String(providersWithLimits)} label="with account limits" />
+            <SummaryCell
+              value={String(providersWithMachineActivity)}
+              label="with machine history"
             />
-          ))}
-        </div>
+            <SummaryCell value={String(liveStatusCounts.ok ?? 0)} label="sources responding" />
+            <SummaryCell value={updatedLabel} label="last refreshed" />
+          </div>
+
+          <div className="flex flex-col gap-3">
+            {cards.map((snapshot) => (
+              <ProviderUsageCard
+                key={snapshot.provider}
+                snapshot={snapshot}
+                threadRateLimits={threadRateLimits}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       <ProviderUsageActivityCard
@@ -323,11 +366,24 @@ export function ProviderUsageSettingsPanel() {
       />
 
       <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-        Account limits are read from provider credentials when a safe provider source is available.
-        “On this machine” history comes from a provider-owned local archive when Synara has a safe
-        reader; “Actual usage” below is Synara-observed activity. Account limits never include those
-        local totals. If a provider shows “Not signed in”, re-authenticate with its CLI.
+        Account limits come from provider-owned sources: Codex, Claude, and Cursor read the provider
+        backend through stored credentials; Kilo reads the Kilo usage API with the `kilo login`
+        token; Antigravity reads the local Antigravity process quota server when it is running.
+        Providers without a safe source (Grok, Droid, OpenCode, Pi) stay marked “Unsupported” rather
+        than showing invented numbers. “On this machine” history comes from provider-owned local
+        archives (Codex, Claude, OpenCode, Kilo, Grok) when Synara has a safe reader; “Actual usage”
+        below is Synara-observed activity. Account limits never include local totals. If a provider
+        shows “Not signed in”, re-authenticate with its CLI.
       </p>
     </SettingsSectionShell>
+  );
+}
+
+function SummaryCell({ value, label }: { value: string; label: string }) {
+  return (
+    <div className="min-w-0 bg-background px-3 py-2">
+      <div className="truncate text-sm font-semibold tabular-nums text-foreground">{value}</div>
+      <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{label}</div>
+    </div>
   );
 }

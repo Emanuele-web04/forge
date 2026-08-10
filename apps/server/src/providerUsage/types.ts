@@ -23,6 +23,8 @@ export interface ProviderUsageContext {
   readonly codexHomePath?: string;
   /** Claude CLI binary (settings.providers.claudeAgent.binaryPath); defaults to "claude". */
   readonly claudeBinaryPath?: string;
+  /** Antigravity CLI binary (settings.providers.antigravity.binaryPath); defaults to "agy". */
+  readonly antigravityBinaryPath?: string;
 }
 
 export interface ProviderUsageFetcher {
