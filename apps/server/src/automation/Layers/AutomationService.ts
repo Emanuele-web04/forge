@@ -33,6 +33,7 @@ import {
 } from "@synara/shared/automationMode";
 import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
+import { providerTargetFromModelSelection } from "@synara/shared/providerTarget";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
@@ -47,6 +48,7 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { runWorktreeSetupScript } from "../../worktreeSetup.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { resolveDefaultProviderProfile } from "../../provider/providerProfileResolver.ts";
 import { AutomationServiceError } from "../Errors.ts";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import { buildAutomationProposalActivity } from "../proposalActivity.ts";
@@ -797,6 +799,24 @@ export const AutomationServiceLive = Layer.effect(
         : Effect.fail(new AutomationServiceError({ message: issue }));
     };
 
+    const validateProviderProfile = (
+      modelSelection: AutomationDefinition["modelSelection"],
+      operation: string,
+    ) =>
+      resolveDefaultProviderProfile({
+        operation,
+        target: providerTargetFromModelSelection(modelSelection),
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AutomationServiceError({
+              message: cause.issue,
+              cause,
+            }),
+        ),
+        Effect.asVoid,
+      );
+
     // Run-path backstop for the fast-interval policy. validateSchedulePolicy enforces this at
     // create/update; this guards the run path it never covers. Effect.try converts a throwing
     // schedule (invalid cron/timezone in a persisted row) into a typed error so the dispatch
@@ -939,6 +959,10 @@ export const AutomationServiceLive = Layer.effect(
       now: string,
     ): Effect.Effect<AutomationRunNowResult, AutomationServiceError> => {
       return Effect.gen(function* () {
+        yield* validateProviderProfile(
+          definition.modelSelection,
+          "AutomationService.dispatchRun",
+        );
         const plannedIds = deriveAutomationRunIds(run.id);
         // Read the thread from the definition rather than the run: a dedicated automation can
         // claim its thread after this run was planned, and continuing it beats creating a second.
@@ -2377,6 +2401,7 @@ export const AutomationServiceLive = Layer.effect(
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode ?? "approval-required",
         });
+        yield* validateProviderProfile(input.modelSelection, "AutomationService.create");
         yield* validateHeartbeatTarget({
           mode: input.mode ?? "standalone",
           projectId: input.projectId,
@@ -2433,6 +2458,7 @@ export const AutomationServiceLive = Layer.effect(
           acknowledgedRisks: updated.acknowledgedRisks,
         });
         yield* validateAutoRuntimeMode(updated);
+        yield* validateProviderProfile(updated.modelSelection, "AutomationService.update");
         yield* validateHeartbeatTarget(updated);
         const saved = yield* automationRepository
           .saveDefinition(updated)

@@ -1,5 +1,5 @@
-import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
 import { Effect, Layer } from "effect";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProviderProfileId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -335,5 +335,75 @@ describe("ProviderTextGenerationLive", () => {
     );
     expect(codex.evaluateAutomationCompletion).not.toHaveBeenCalled();
     expect(opencode.evaluateAutomationCompletion).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-default profiles before any text-generation implementation runs", async () => {
+    const { layer, codex, cursor, kilo, opencode } = makeProviderTextGenerationTestLayer();
+    const modelSelection = {
+      provider: "codex" as const,
+      profileId: ProviderProfileId.makeUnsafe("work"),
+      model: "gpt-5.4-mini",
+    };
+
+    const failures = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        const calls = [
+          textGeneration.generateCommitMessage({
+            cwd: "/repo",
+            branch: "main",
+            stagedSummary: "summary",
+            stagedPatch: "patch",
+            modelSelection,
+          }),
+          textGeneration.generatePrContent({
+            cwd: "/repo",
+            baseBranch: "main",
+            headBranch: "feature",
+            commitSummary: "summary",
+            diffSummary: "diff",
+            diffPatch: "patch",
+            modelSelection,
+          }),
+          textGeneration.generateDiffSummary({ cwd: "/repo", patch: "patch", modelSelection }),
+          textGeneration.generateBranchName({ cwd: "/repo", message: "message", modelSelection }),
+          textGeneration.generateThreadTitle({ cwd: "/repo", message: "message", modelSelection }),
+          textGeneration.generateThreadRecap({
+            cwd: "/repo",
+            newMaterial: "material",
+            modelSelection,
+          }),
+          textGeneration.generateAutomationIntent({
+            cwd: "/repo",
+            message: "message",
+            nowIso: "2026-08-10T00:00:00.000Z",
+            modelSelection,
+          }),
+          textGeneration.evaluateAutomationCompletion({
+            cwd: "/repo",
+            automationName: "Watch PR",
+            automationPrompt: "Check it",
+            stopWhen: "done",
+            runUserMessage: "Check it",
+            runAssistantText: "Still working",
+            modelSelection,
+          }),
+        ] as const;
+        return yield* Effect.forEach(calls, (call) => Effect.flip(call));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(failures).toHaveLength(8);
+    expect(failures.every((failure) => failure.detail.includes("not configured"))).toBe(true);
+    for (const implementation of [codex, cursor, kilo, opencode]) {
+      expect(implementation.generateCommitMessage).not.toHaveBeenCalled();
+      expect(implementation.generatePrContent).not.toHaveBeenCalled();
+      expect(implementation.generateDiffSummary).not.toHaveBeenCalled();
+      expect(implementation.generateBranchName).not.toHaveBeenCalled();
+      expect(implementation.generateThreadTitle).not.toHaveBeenCalled();
+      expect(implementation.generateThreadRecap).not.toHaveBeenCalled();
+      expect(implementation.generateAutomationIntent).not.toHaveBeenCalled();
+      expect(implementation.evaluateAutomationCompletion).not.toHaveBeenCalled();
+    }
   });
 });

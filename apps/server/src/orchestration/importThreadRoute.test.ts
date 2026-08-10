@@ -4,6 +4,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationThread,
   ProjectId,
+  ProviderProfileId,
   type ProviderSession,
   ThreadId,
 } from "@synara/contracts";
@@ -21,16 +22,18 @@ const threadId = ThreadId.makeUnsafe("thread-import");
 const projectId = ProjectId.makeUnsafe("project-import");
 const importedAt = "2026-08-09T12:00:00.000Z";
 
-function makeCodexThread(): OrchestrationThread {
+function makeCodexThread(
+  modelSelection: OrchestrationThread["modelSelection"] = {
+    provider: "codex",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
+    model: "gpt-5.5",
+  },
+): OrchestrationThread {
   return {
     id: threadId,
     projectId,
     title: "Imported thread",
-    modelSelection: {
-      provider: "codex",
-      profileId: DEFAULT_PROVIDER_PROFILE_ID,
-      model: "gpt-5.5",
-    },
+    modelSelection,
     runtimeMode: "full-access",
     interactionMode: "default",
     envMode: "local",
@@ -138,5 +141,69 @@ it.effect("imports Codex history through a provider-owned fork", () =>
     ]);
     assert.deepEqual(readThread.mock.calls, [[threadId]]);
     assert.equal(dispatchedCommands.at(-1)?.type, "thread.session.set");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rejects a non-default profile before import side effects", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dispatch = vi.fn(() => Effect.succeed({ sequence: 1 }));
+    const getProjectShellById = vi.fn(() => Effect.succeed(Option.none()));
+    const readExternalThread = vi.fn(() => Effect.succeed(null));
+    const readThread = vi.fn(() =>
+      Effect.succeed({
+        threadId: "provider-thread",
+        turns: [],
+      }),
+    );
+    const getByProvider = vi.fn(() =>
+      Effect.succeed({
+        readExternalThread,
+        readThread,
+      } as never),
+    );
+    const startSession = vi.fn(() => Effect.succeed({} as never));
+    const stopSession = vi.fn(() => Effect.void);
+
+    const handler = makeImportThreadHandler({
+      fileSystem,
+      path,
+      platform: process.platform,
+      orchestrationEngine: {
+        dispatch,
+      } as unknown as OrchestrationEngineShape,
+      projectionSnapshotQuery: {
+        getThreadDetailById: () =>
+          Effect.succeed(
+            Option.some(
+              makeCodexThread({
+                provider: "codex",
+                profileId: ProviderProfileId.makeUnsafe("work"),
+                model: "gpt-5.5",
+              }),
+            ),
+          ),
+        getProjectShellById,
+      } as unknown as ProjectionSnapshotQueryShape,
+      providerAdapterRegistry: {
+        getByProvider,
+      } as unknown as ProviderAdapterRegistryShape,
+      providerService: {
+        startSession,
+        stopSession,
+      } as unknown as ProviderServiceShape,
+    });
+
+    const error = yield* handler({ threadId, externalId: "external-thread" }).pipe(Effect.flip);
+
+    assert.match(error.message, /profile 'work' is not configured/);
+    assert.equal(getProjectShellById.mock.calls.length, 0);
+    assert.equal(getByProvider.mock.calls.length, 0);
+    assert.equal(readExternalThread.mock.calls.length, 0);
+    assert.equal(readThread.mock.calls.length, 0);
+    assert.equal(dispatch.mock.calls.length, 0);
+    assert.equal(startSession.mock.calls.length, 0);
+    assert.equal(stopSession.mock.calls.length, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );

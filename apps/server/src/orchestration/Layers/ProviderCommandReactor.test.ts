@@ -16,15 +16,16 @@ import type {
   ProviderSession,
 } from "@synara/contracts";
 import {
-  DEFAULT_PROVIDER_PROFILE_ID,
   ApprovalRequestId,
   type ChatAttachment,
   CommandId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_PROVIDER_PROFILE_ID,
   EventId,
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ProviderProfileId,
   ProjectId,
   ThreadId,
   TurnId,
@@ -7345,7 +7346,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("rejects provider changes after a thread is already bound to a session provider", async () => {
+  it("rejects provider changes at the command boundary after a thread has work", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -7369,20 +7370,65 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await expect(
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-turn-start-provider-switch-2"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-provider-switch-2"),
+            role: "user",
+            text: "second",
+            attachments: [],
+          },
+          modelSelection: {
+            provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            model: "claude-opus-4-6",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      ),
+    ).rejects.toThrow(
+      "already has work on provider target 'codex/default'. Create a new thread or explicit handoff to use 'claudeAgent/default'",
+    );
+    await harness.drain();
+
+    expect(harness.startSession.mock.calls.length).toBe(1);
+    expect(harness.sendTurn.mock.calls.length).toBe(1);
+    expect(harness.stopSession.mock.calls.length).toBe(0);
+
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.threadId).toBe("thread-1");
+    expect(thread?.session?.providerName).toBe("codex");
+    expect(thread?.session?.runtimeMode).toBe("approval-required");
+    expect(thread?.messages.some((message) => message.id === "user-message-provider-switch-2")).toBe(
+      false,
+    );
+  });
+
+  it("rejects a fresh non-default profile before session and text-generation side effects", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-provider-switch-2"),
+        commandId: CommandId.makeUnsafe("cmd-turn-start-profile-fresh"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         message: {
-          messageId: asMessageId("user-message-provider-switch-2"),
+          messageId: asMessageId("user-message-profile-fresh"),
           role: "user",
-          text: "second",
+          text: "start with the work account",
           attachments: [],
         },
         modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-6",
+          provider: "codex",
+          profileId: ProviderProfileId.makeUnsafe("work"),
+          model: "gpt-5.6-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -7398,21 +7444,397 @@ describe("ProviderCommandReactor", () => {
       );
     });
 
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+
+    const thread = await readHarnessThread(harness);
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("profile 'work' is not configured"),
+      },
+    });
+  });
+
+  it("rejects a work-profile edit before destructive replay side effects", async () => {
+    const workSelection: ModelSelection = {
+      provider: "codex",
+      profileId: ProviderProfileId.makeUnsafe("work"),
+      model: "gpt-5.6-codex",
+    };
+    const harness = await createHarness({ threadModelSelection: workSelection });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("user-message-work-profile-edit");
+    const turnId = asTurnId("turn-work-profile-edit");
+    const now = new Date().toISOString();
+
+    await seedRollbackTarget(harness, { messageId, turnId, createdAt: now });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-work-profile-edit-diff-complete"),
+        threadId,
+        turnId,
+        completedAt: now,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        status: "ready",
+        files: [],
+        assistantMessageId: asMessageId("assistant-user-message-work-profile-edit"),
+        checkpointTurnCount: 1,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-work-profile-edit-session-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    const queuedPromotions = harness.queuedTurnPromotionRepository as {
+      cancelMessage: typeof harness.queuedTurnPromotionRepository.cancelMessage;
+      cancelThread: typeof harness.queuedTurnPromotionRepository.cancelThread;
+    };
+    const cancelMessage = vi.fn(queuedPromotions.cancelMessage);
+    const cancelThread = vi.fn(queuedPromotions.cancelThread);
+    queuedPromotions.cancelMessage = cancelMessage;
+    queuedPromotions.cancelThread = cancelThread;
+    const replayCommands: OrchestrationCommand[] = [];
+    harness.interceptEngineDispatch((command) => {
+      if (
+        command.type === "thread.conversation.rollback.complete" ||
+        command.type === "thread.turn.start"
+      ) {
+        replayCommands.push(command);
+      }
+      return undefined;
+    });
+    harness.isGitRepository.mockImplementation(() => Effect.succeed(true));
+    harness.stopRuntimeSession.mockClear();
+    harness.stopSession.mockClear();
+    harness.clearSessionResumeCursor.mockClear();
+    harness.rollbackConversation.mockClear();
+    harness.restoreCheckpoint.mockClear();
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-work-profile-edit-and-resend"),
+        threadId,
+        messageId,
+        text: "edited prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    await harness.drain();
+
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    expect(harness.rollbackConversation).not.toHaveBeenCalled();
+    expect(cancelMessage).not.toHaveBeenCalled();
+    expect(cancelThread).not.toHaveBeenCalled();
+    expect(harness.isGitRepository).not.toHaveBeenCalled();
+    expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
+    expect(replayCommands).toEqual([]);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.lastError).toContain("profile 'work' is not configured");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("profile 'work' is not configured"),
+      },
+    });
+  });
+
+  it("rejects a replayed cross-provider edit before destructive replay side effects", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("user-message-replayed-cross-provider-edit");
+    const turnId = asTurnId("turn-replayed-cross-provider-edit");
+    const now = new Date().toISOString();
+
+    await seedRollbackTarget(harness, { messageId, turnId, createdAt: now });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-replayed-cross-provider-session-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    const queuedPromotions = harness.queuedTurnPromotionRepository as {
+      cancelMessage: typeof harness.queuedTurnPromotionRepository.cancelMessage;
+      cancelThread: typeof harness.queuedTurnPromotionRepository.cancelThread;
+    };
+    const cancelMessage = vi.fn(queuedPromotions.cancelMessage);
+    const cancelThread = vi.fn(queuedPromotions.cancelThread);
+    queuedPromotions.cancelMessage = cancelMessage;
+    queuedPromotions.cancelThread = cancelThread;
+    const replayCommands: OrchestrationCommand[] = [];
+    harness.interceptEngineDispatch((command) => {
+      if (
+        command.type === "thread.conversation.rollback.complete" ||
+        command.type === "thread.turn.start"
+      ) {
+        replayCommands.push(command);
+      }
+      return undefined;
+    });
+    harness.isGitRepository.mockImplementation(() => Effect.succeed(true));
+
+    await harness.persistWithoutLivePublication([
+      {
+        eventId: asEventId("evt-replayed-cross-provider-edit"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-replayed-cross-provider-edit"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-replayed-cross-provider-edit"),
+        metadata: {},
+        type: "thread.message-edit-resend-requested",
+        payload: {
+          threadId,
+          messageId,
+          text: "edited prompt",
+          rollbackTurnCount: 1,
+          removedTurnIds: [turnId],
+          modelSelection: {
+            provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            model: "claude-opus-4-6",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      },
+    ]);
+
+    harness.stopRuntimeSession.mockClear();
+    harness.stopSession.mockClear();
+    harness.clearSessionResumeCursor.mockClear();
+    harness.rollbackConversation.mockClear();
+    harness.restoreCheckpoint.mockClear();
+    harness.sendTurn.mockClear();
+    await harness.startReactor();
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    await harness.drain();
+
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    expect(harness.rollbackConversation).not.toHaveBeenCalled();
+    expect(cancelMessage).not.toHaveBeenCalled();
+    expect(cancelThread).not.toHaveBeenCalled();
+    expect(harness.isGitRepository).not.toHaveBeenCalled();
+    expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
+    expect(replayCommands).toEqual([]);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.lastError).toContain(
+      "bound to 'codex/default' and cannot switch to 'claudeAgent/default'",
+    );
+  });
+
+  it("does not queue behind or dispatch through a live default session for a work profile", async () => {
+    const workSelection: ModelSelection = {
+      provider: "codex",
+      profileId: ProviderProfileId.makeUnsafe("work"),
+      model: "gpt-5.6-codex",
+    };
+    const harness = await createHarness({ threadModelSelection: workSelection });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await harness.drain();
+    const defaultSession = await Effect.runPromise(
+      harness.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "approval-required",
+        modelSelection: {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "gpt-5.6-codex",
+        },
+      }),
+    );
+    const defaultTurnId = asTurnId("turn-live-default-for-work");
+    harness.setRuntimeSessionTurnState({
+      threadId,
+      status: "running",
+      activeTurnId: defaultTurnId,
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-live-default-session-set"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: defaultTurnId,
+          lastError: null,
+          updatedAt: defaultSession.updatedAt,
+        },
+        createdAt: defaultSession.updatedAt,
+      }),
+    );
+    await harness.drain();
+    harness.startSession.mockClear();
+    harness.sendTurn.mockClear();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderValidationError({
+          provider: "codex",
+          operation: "ProviderService.startSession",
+          issue: "Provider profile 'work' is not configured for provider 'codex'.",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-work-with-live-default"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-work-with-live-default"),
+          role: "user",
+          text: "use the work account",
+          attachments: [],
+        },
+        modelSelection: workSelection,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const thread = await readHarnessThread(harness);
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+        false
+      );
+    });
+
+    const liveSessions = await Effect.runPromise(harness.listSessions());
+    expect(liveSessions).toHaveLength(1);
+    expect(liveSessions[0]).toMatchObject({ provider: "codex", threadId });
+    expect(liveSessions[0]).not.toHaveProperty("profileId");
+    expect(harness.startSession).toHaveBeenCalledOnce();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+
+    const thread = await readHarnessThread(harness);
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("profile 'work' is not configured"),
+      },
+    });
+  });
+
+  it("rejects profile changes at the command boundary after a thread has work", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-profile-switch-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-profile-switch-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await expect(
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-turn-start-profile-switch-2"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-profile-switch-2"),
+            role: "user",
+            text: "second",
+            attachments: [],
+          },
+          modelSelection: {
+            provider: "codex",
+            profileId: ProviderProfileId.makeUnsafe("work"),
+            model: "gpt-5.6-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      ),
+    ).rejects.toThrow(
+      "already has work on provider target 'codex/default'. Create a new thread or explicit handoff to use 'codex/work'",
+    );
+    await harness.drain();
+
     expect(harness.startSession.mock.calls.length).toBe(1);
     expect(harness.sendTurn.mock.calls.length).toBe(1);
     expect(harness.stopSession.mock.calls.length).toBe(0);
 
     const thread = await readHarnessThread(harness);
-    expect(thread?.session?.threadId).toBe("thread-1");
-    expect(thread?.session?.providerName).toBe("codex");
-    expect(thread?.session?.runtimeMode).toBe("approval-required");
-    expect(
-      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
-    ).toMatchObject({
-      payload: {
-        detail: expect.stringContaining("cannot switch to 'claudeAgent'"),
-      },
-    });
+    expect(thread?.messages.some((message) => message.id === "user-message-profile-switch-2")).toBe(
+      false,
+    );
   });
 
   it("does not stop the active session when restart fails before rebind", async () => {
