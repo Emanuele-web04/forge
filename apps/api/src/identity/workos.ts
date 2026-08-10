@@ -1,163 +1,28 @@
-// FILE: workos.ts
-// Purpose: WorkOS AuthKit integration — access-token verification against the
-// JWKS, user lookup, and the device authorization grant used by the CLI login.
-// Layer: API identity
-// Depends on: jose (JWKS + JWT verification), WorkOS User Management REST API.
+// FILE: identity/workos.ts
+// Purpose: The WorkOS AuthKit implementation of the identity adapter seam —
+// access-token verification against the JWKS, user lookup, the Magic Auth /
+// email-verification / device grants, and organization membership. Everything
+// WorkOS-specific lives here: wire shapes, refusal spellings, error classes.
+// Nothing outside this module (and config plumbing) may name WorkOS.
+// Layer: API identity (implementation)
+// Depends on: jose (JWKS + JWT verification), WorkOS User Management REST API,
+// interfaces.ts (the seam), orgProvisioning.ts (org resolution + cache).
 
 import type { DeviceAuthorizationResponse } from "@synara/contracts";
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
-import type { ApiConfig } from "./config";
-
-/** The subset of a WorkOS user this service surfaces (see /me). */
-export type WorkosUser = {
-  id: string;
-  email: string;
-  name?: string;
-  avatarUrl?: string;
-};
-
-export type VerifiedAccessToken = {
-  userId: string;
-  sessionId: string;
-  /**
-   * The organization the token is scoped to, when it has one. Absent on every
-   * token the device grant mints — WorkOS only puts `org_id` in a token
-   * obtained by authenticating *into* an organization, which for this service
-   * means the refresh grant carrying an `organization_id`.
-   */
-  orgId?: string;
-};
-
-/** A WorkOS organization the caller belongs to. */
-export type WorkosOrganization = {
-  orgId: string;
-  orgName: string;
-};
-
-/**
- * Why an authentication grant failed, as this service classifies it. WorkOS
- * reports these inconsistently — some as an OAuth `error`, some as a `code`,
- * with the HTTP status not reliably distinguishing them — so the
- * classification happens once here rather than at each call site.
- */
-export type WorkosAuthFailure =
-  | "email_verification_required"
-  | "sso_required"
-  /** The grant refused the emailed code itself; retyping it can help. */
-  | "invalid_verification_code"
-  /** The code (or its pending token) is spent or expired; only a resend recovers. */
-  | "verification_expired";
-
-/**
- * What an `email_verification_required` refusal carries beyond its reason —
- * the exact fields completing verification in-app needs, extracted
- * allowlist-style from the WorkOS body. The pending token is a bearer-ish
- * secret: it may travel to the client, but never into a log or an error
- * message.
- */
-export type WorkosEmailVerificationChallenge = {
-  pendingAuthenticationToken: string;
-  email: string;
-  emailVerificationId: string;
-};
-
-/**
- * An authentication grant this service refused to complete. Carries the
- * classified reason and nothing else: notably not the submitted code, and not
- * WorkOS's raw message, which can echo the submitted credentials back. The
- * one exception is `email_verification_required`, whose refusal names the
- * pending token, email, and verification id — the fields the in-app
- * verification step redeems — and those are carried on {@link verification},
- * allowlisted field by field.
- */
-export class WorkosAuthError extends Error {
-  constructor(
-    readonly reason: WorkosAuthFailure,
-    readonly verification?: WorkosEmailVerificationChallenge,
-  ) {
-    super(reason);
-    this.name = "WorkosAuthError";
-  }
-}
-
-/** The token pair a successful authentication grant yields. */
-export type WorkosAuthTokens = {
-  accessToken: string;
-  refreshToken: string;
-  user: WorkosUser;
-};
-
-/**
- * What the Magic Auth create call reports back to this service's callers.
- * Deliberately NOT the whole WorkOS response: that response contains the
- * 6-digit code itself, which is a credential and must never leave this
- * module — not in a return value, not in a log, not in an error.
- */
-export type WorkosMagicAuth = {
-  email: string;
-  /** When the emailed code stops working, ISO-8601. */
-  expiresAt: string;
-};
-
-export type WorkosAuth = {
-  /** Rejects on any invalid, expired, or unverifiable token; callers answer 401. */
-  verifyAccessToken(token: string): Promise<VerifiedAccessToken>;
-  getUser(userId: string): Promise<WorkosUser>;
-  requestDeviceAuthorization(): Promise<DeviceAuthorizationResponse>;
-  /**
-   * Creates a Magic Auth code: WorkOS mints a 6-digit code and emails it to
-   * `email` itself. The WorkOS response contains the code; this method parses
-   * it allowlist-style and returns ONLY the address echo and expiry — the
-   * code must never leave this module.
-   */
-  createMagicAuth(input: { email: string }): Promise<WorkosMagicAuth>;
-  /**
-   * The Magic Auth grant: redeems the emailed 6-digit code for a token pair,
-   * provisioning the user first when sign-up is allowed and the address is
-   * new. Requires the client secret, which is the whole reason this runs here
-   * rather than in the app: a public client cannot hold it. The code is a
-   * credential and takes the no-leak handling rules. Rejects with
-   * {@link WorkosAuthError} carrying `invalid_verification_code` (retry in
-   * place) or `verification_expired` (only a resend recovers).
-   */
-  authenticateWithMagicAuth(input: { email: string; code: string }): Promise<WorkosAuthTokens>;
-  /**
-   * The email-verification grant: redeems the emailed 6-digit code together
-   * with the pending authentication token an `email_verification_required`
-   * refusal carried. Both inputs are bearer-ish secrets and take the no-leak
-   * handling rules. Rejects with {@link WorkosAuthError} carrying
-   * `invalid_verification_code` (retry in place) or `verification_expired`
-   * (the token or code is spent; only a resend recovers).
-   */
-  verifyEmailCode(input: {
-    code: string;
-    pendingAuthenticationToken: string;
-  }): Promise<WorkosAuthTokens>;
-  /**
-   * Emails the user a fresh verification code, invalidating the old one. The
-   * user is resolved from the verification object server-side — the caller
-   * only ever holds the verification id. Rejects with a 404-status
-   * {@link WorkosApiError} for an unknown or expired id; the route deliberately
-   * flattens that into the same 202 as success.
-   */
-  resendVerificationEmail(emailVerificationId: string): Promise<void>;
-  /** Every organization the user is a member of, oldest page first. */
-  listUserOrganizationMemberships(userId: string): Promise<WorkosOrganization[]>;
-  createOrganization(name: string): Promise<WorkosOrganization>;
-  /** Renames an organization. Callers must have checked membership first. */
-  updateOrganization(orgId: string, name: string): Promise<WorkosOrganization>;
-  createOrganizationMembership(orgId: string, userId: string): Promise<void>;
-};
-
-export class WorkosApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "WorkosApiError";
-  }
-}
+import type { WorkosApiConfig } from "../config";
+import {
+  IdentityAuthError,
+  IdentityProviderError,
+  type AccountIdentityVerifier,
+  type AuthFailureReason,
+  type AuthTokens,
+  type EmailVerificationChallenge,
+  type EnvironmentGrantIssuer,
+  type IdentityUser,
+  type OrganizationRef,
+} from "./interfaces";
+import { ensurePersonalOrg, invalidateOrgCacheForOrganization } from "./orgProvisioning";
 
 type WorkosUserResponse = {
   id: string;
@@ -186,7 +51,7 @@ type OidcMetadata = {
  */
 const DISCOVERY_TIMEOUT_MS = 10_000;
 
-function discoveryUrl(config: ApiConfig): string {
+function discoveryUrl(config: WorkosApiConfig): string {
   return `${config.workosApiUrl}/user_management/${encodeURIComponent(config.workosClientId)}/.well-known/openid-configuration`;
 }
 
@@ -239,13 +104,16 @@ type WorkosDeviceAuthorizationWire = {
  * organization. Failing the request is the recoverable outcome; quietly
  * dropping a row is not.
  */
-function toOrganization(entry: unknown): WorkosOrganization {
+function toOrganization(entry: unknown): OrganizationRef {
   if (typeof entry !== "object" || entry === null) {
-    throw new WorkosApiError(502, "WorkOS returned a membership entry that is not an object");
+    throw new IdentityProviderError(
+      502,
+      "WorkOS returned a membership entry that is not an object",
+    );
   }
   const { organization_id: orgId, organization_name: orgName } = entry as WorkosMembershipWire;
   if (typeof orgId !== "string" || orgId.length === 0) {
-    throw new WorkosApiError(502, "WorkOS returned a membership with no organization id");
+    throw new IdentityProviderError(502, "WorkOS returned a membership with no organization id");
   }
   return {
     orgId,
@@ -275,7 +143,7 @@ function fullName(user: WorkosUserResponse): string | undefined {
  * so the OAuth `invalid_grant` / `invalid_credentials` spellings mean "the
  * code was refused" here — retryable in place, unlike the expired spellings.
  */
-export function classifyMagicAuthFailure(raw: unknown): WorkosAuthFailure | undefined {
+export function classifyMagicAuthFailure(raw: unknown): AuthFailureReason | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const body = raw as Record<string, unknown>;
   const code = typeof body.code === "string" ? body.code : undefined;
@@ -311,9 +179,7 @@ export function classifyMagicAuthFailure(raw: unknown): WorkosAuthFailure | unde
  * allowlist-style — exactly these fields, nothing else off the body — and it
  * exists only for this one failure; every other refusal stays discard-everything.
  */
-export function extractVerificationChallenge(
-  raw: unknown,
-): WorkosEmailVerificationChallenge | undefined {
+export function extractVerificationChallenge(raw: unknown): EmailVerificationChallenge | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const body = raw as Record<string, unknown>;
   const pendingAuthenticationToken = body.pending_authentication_token;
@@ -346,7 +212,7 @@ export function extractVerificationChallenge(
  * dead; offer resend/start-over). An unrecognised body yields `undefined` and
  * becomes an upstream fault, as everywhere else.
  */
-export function classifyVerificationFailure(raw: unknown): WorkosAuthFailure | undefined {
+export function classifyVerificationFailure(raw: unknown): AuthFailureReason | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const body = raw as Record<string, unknown>;
   const code = typeof body.code === "string" ? body.code : undefined;
@@ -376,19 +242,19 @@ export function classifyVerificationFailure(raw: unknown): WorkosAuthFailure | u
  * cast: a shape change must fail loudly here instead of persisting
  * `undefined` as somebody's access token.
  */
-function toAuthTokens(raw: unknown): WorkosAuthTokens {
+function toAuthTokens(raw: unknown): AuthTokens {
   if (typeof raw !== "object" || raw === null) {
-    throw new WorkosApiError(502, "WorkOS authenticate returned a non-object body");
+    throw new IdentityProviderError(502, "WorkOS authenticate returned a non-object body");
   }
   const body = raw as Record<string, unknown>;
   const accessToken = body.access_token;
   const refreshToken = body.refresh_token;
   if (typeof accessToken !== "string" || typeof refreshToken !== "string") {
-    throw new WorkosApiError(502, "WorkOS authenticate returned no token pair");
+    throw new IdentityProviderError(502, "WorkOS authenticate returned no token pair");
   }
   const user = (body.user ?? {}) as WorkosUserResponse;
   if (typeof user.id !== "string" || typeof user.email !== "string") {
-    throw new WorkosApiError(502, "WorkOS authenticate returned no user");
+    throw new IdentityProviderError(502, "WorkOS authenticate returned no user");
   }
   const name = fullName(user);
   return {
@@ -403,7 +269,30 @@ function toAuthTokens(raw: unknown): WorkosAuthTokens {
   };
 }
 
-export function createWorkosAuth(config: ApiConfig): WorkosAuth {
+/**
+ * The raw WorkOS organization calls, exposed alongside the seam adapters so
+ * this implementation's own tests (and cross-checking assertions) can talk to
+ * WorkOS directly. Not part of the seam: nothing outside identity/ may
+ * depend on it.
+ */
+export type WorkosOrganizationsApi = {
+  listUserOrganizationMemberships(userId: string): Promise<OrganizationRef[]>;
+  createOrganization(name: string): Promise<OrganizationRef>;
+  createOrganizationMembership(orgId: string, userId: string): Promise<void>;
+};
+
+/**
+ * Both halves of the WorkOS provider — the verifier and the grant issuer —
+ * built together because they share one HTTP client and one config. The
+ * device-credential store and environment registry are deliberately not
+ * built here: they are database-owned and provider-independent, so the
+ * generic factory constructs them.
+ */
+export function createWorkosIdentityProvider(config: WorkosApiConfig): {
+  verifier: AccountIdentityVerifier;
+  grants: EnvironmentGrantIssuer;
+  organizations: WorkosOrganizationsApi;
+} {
   /**
    * Resolved on first verification and kept for the process lifetime. The
    * promise itself is what is cached, so concurrent first requests share one
@@ -475,7 +364,7 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     });
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new WorkosApiError(
+      throw new IdentityProviderError(
         response.status,
         `WorkOS ${path} failed with ${response.status}${body ? `: ${body}` : ""}`,
       );
@@ -493,8 +382,8 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
    * string, and from there in a log. Nothing thrown from here carries any part
    * of the request or the response.
    *
-   * Returns the parsed body on success; throws {@link WorkosAuthError} for
-   * a classified refusal and a bare {@link WorkosApiError} otherwise.
+   * Returns the parsed body on success; throws {@link IdentityAuthError} for
+   * a classified refusal and a bare {@link IdentityProviderError} otherwise.
    */
   async function sensitiveFetch(
     path: string,
@@ -502,7 +391,7 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     // Each grant brings its own classifier: the same OAuth spellings mean
     // different things per grant, but the no-leak handling of the request
     // and response is identical.
-    classify: (raw: unknown) => WorkosAuthFailure | undefined,
+    classify: (raw: unknown) => AuthFailureReason | undefined,
   ): Promise<unknown> {
     const response = await fetch(`${config.workosApiUrl}${path}`, {
       method: "POST",
@@ -522,9 +411,9 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     const raw = await response.json().catch(() => null);
     const failure = classify(raw);
     if (failure === "email_verification_required") {
-      throw new WorkosAuthError(failure, extractVerificationChallenge(raw));
+      throw new IdentityAuthError(failure, extractVerificationChallenge(raw));
     }
-    if (failure) throw new WorkosAuthError(failure);
+    if (failure) throw new IdentityAuthError(failure);
     // An unclassified refusal becomes an opaque 502 to the caller, so this
     // line is the only place its identity survives. Log the status and the
     // two code fields ONLY — both are WorkOS-chosen enum spellings. Never the
@@ -536,10 +425,52 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         ` code=${typeof refusal.code === "string" ? refusal.code : "-"}` +
         ` error=${typeof refusal.error === "string" ? refusal.error : "-"}`,
     );
-    throw new WorkosApiError(response.status, `WorkOS ${path} failed with ${response.status}`);
+    throw new IdentityProviderError(
+      response.status,
+      `WorkOS ${path} failed with ${response.status}`,
+    );
   }
 
-  return {
+  async function listUserOrganizationMemberships(userId: string): Promise<OrganizationRef[]> {
+    const response = (await workosFetch(
+      `/user_management/organization_memberships?user_id=${encodeURIComponent(userId)}&limit=${MEMBERSHIP_PAGE_LIMIT}`,
+    )) as WorkosMembershipListWire;
+    // A 200 without a `data` array is not an empty membership list, it is an
+    // answer this service does not understand — and reading it as "no
+    // organizations" would both hide the caller's hosts and provision them a
+    // second personal workspace.
+    if (!Array.isArray(response.data)) {
+      throw new IdentityProviderError(502, "WorkOS membership listing returned no data array");
+    }
+    return response.data.map(toOrganization);
+  }
+
+  // Organizations live on the top-level Organizations API, not under
+  // /user_management — the one endpoint here that breaks that pattern.
+  async function createOrganization(name: string): Promise<OrganizationRef> {
+    const response = (await workosFetch("/organizations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    })) as WorkosOrganizationWire;
+    if (typeof response.id !== "string" || response.id.length === 0) {
+      throw new Error("WorkOS organization creation returned no id");
+    }
+    return {
+      orgId: response.id,
+      orgName: typeof response.name === "string" && response.name ? response.name : name,
+    };
+  }
+
+  async function createOrganizationMembership(orgId: string, userId: string): Promise<void> {
+    await workosFetch("/user_management/organization_memberships", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ organization_id: orgId, user_id: userId }),
+    });
+  }
+
+  const verifier: AccountIdentityVerifier = {
     async verifyAccessToken(token) {
       const { issuer, jwks } = await resolveVerificationKeys();
       const { payload } = await jwtVerify(token, jwks, { issuer });
@@ -574,64 +505,10 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         email: user.email,
         ...(name ? { name } : {}),
         ...(user.profile_picture_url ? { avatarUrl: user.profile_picture_url } : {}),
-      };
+      } satisfies IdentityUser;
     },
 
-    async listUserOrganizationMemberships(userId) {
-      const response = (await workosFetch(
-        `/user_management/organization_memberships?user_id=${encodeURIComponent(userId)}&limit=${MEMBERSHIP_PAGE_LIMIT}`,
-      )) as WorkosMembershipListWire;
-      // A 200 without a `data` array is not an empty membership list, it is an
-      // answer this service does not understand — and reading it as "no
-      // organizations" would both hide the caller's hosts and provision them a
-      // second personal workspace.
-      if (!Array.isArray(response.data)) {
-        throw new WorkosApiError(502, "WorkOS membership listing returned no data array");
-      }
-      return response.data.map(toOrganization);
-    },
-
-    // Organizations live on the top-level Organizations API, not under
-    // /user_management — the one endpoint here that breaks that pattern.
-    async createOrganization(name) {
-      const response = (await workosFetch("/organizations", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name }),
-      })) as WorkosOrganizationWire;
-      if (typeof response.id !== "string" || response.id.length === 0) {
-        throw new Error("WorkOS organization creation returned no id");
-      }
-      return {
-        orgId: response.id,
-        orgName: typeof response.name === "string" && response.name ? response.name : name,
-      };
-    },
-
-    async updateOrganization(orgId, name) {
-      const response = (await workosFetch(`/organizations/${encodeURIComponent(orgId)}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name }),
-      })) as WorkosOrganizationWire;
-      if (typeof response.id !== "string" || response.id.length === 0) {
-        throw new WorkosApiError(502, "WorkOS organization update returned no id");
-      }
-      return {
-        orgId: response.id,
-        orgName: typeof response.name === "string" && response.name ? response.name : name,
-      };
-    },
-
-    async createOrganizationMembership(orgId, userId) {
-      await workosFetch("/user_management/organization_memberships", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ organization_id: orgId, user_id: userId }),
-      });
-    },
-
-    async createMagicAuth({ email }) {
+    async createOtpChallenge({ email }) {
       // The response contains the 6-digit code WorkOS just emailed — a
       // credential. It is parsed allowlist-style right here: only the address
       // echo and expiry ever leave this function, and the raw body is never
@@ -642,19 +519,19 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         classifyMagicAuthFailure,
       );
       if (typeof raw !== "object" || raw === null) {
-        throw new WorkosApiError(502, "WorkOS magic auth returned a non-object body");
+        throw new IdentityProviderError(502, "WorkOS magic auth returned a non-object body");
       }
       const body = raw as Record<string, unknown>;
       if (typeof body.email !== "string" || body.email.length === 0) {
-        throw new WorkosApiError(502, "WorkOS magic auth named no email");
+        throw new IdentityProviderError(502, "WorkOS magic auth named no email");
       }
       if (typeof body.expires_at !== "string" || body.expires_at.length === 0) {
-        throw new WorkosApiError(502, "WorkOS magic auth named no expiry");
+        throw new IdentityProviderError(502, "WorkOS magic auth named no expiry");
       }
       return { email: body.email, expiresAt: body.expires_at };
     },
 
-    async authenticateWithMagicAuth({ email, code }) {
+    async authenticateWithOtp({ email, code }) {
       const raw = await sensitiveFetch(
         "/user_management/authenticate",
         {
@@ -698,7 +575,7 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         `/user_management/email_verification/${encodeURIComponent(emailVerificationId)}`,
       )) as { user_id?: unknown };
       if (typeof verification.user_id !== "string" || verification.user_id.length === 0) {
-        throw new WorkosApiError(502, "WorkOS email verification object named no user id");
+        throw new IdentityProviderError(502, "WorkOS email verification object named no user id");
       }
       await workosFetch(
         `/user_management/users/${encodeURIComponent(verification.user_id)}/email_verification/send`,
@@ -713,7 +590,7 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         body: new URLSearchParams({ client_id: config.workosClientId }).toString(),
       })) as WorkosDeviceAuthorizationWire;
 
-      return {
+      const mapped: DeviceAuthorizationResponse = {
         deviceCode: response.device_code,
         userCode: response.user_code,
         verificationUri: response.verification_uri,
@@ -721,6 +598,64 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         expiresIn: response.expires_in,
         interval: response.interval,
       };
+      return mapped;
+    },
+
+    describeInstanceAuth() {
+      // The device-flow poll and token refresh go from the client straight to
+      // WorkOS, which is why the client id and API origin are published.
+      return {
+        authMode: "workos",
+        clientId: config.workosClientId,
+        workosApiUrl: config.workosApiUrl,
+      };
+    },
+  };
+
+  const grants: EnvironmentGrantIssuer = {
+    async resolveEnvironmentScope(session, email) {
+      const memberships = await ensurePersonalOrg(
+        { listUserOrganizationMemberships, createOrganization, createOrganizationMembership },
+        session.userId,
+        email,
+      );
+      if (!session.orgId) {
+        return { kind: "selection_required", why: "unscoped", organizations: memberships };
+      }
+      const active = memberships.find((membership) => membership.orgId === session.orgId);
+      if (!active) {
+        return { kind: "selection_required", why: "not_a_member", organizations: memberships };
+      }
+      return { kind: "scoped", organization: active };
+    },
+
+    async renameOrganization(orgId, name) {
+      // WorkOS models the rename as a full replacement (PUT).
+      const response = (await workosFetch(`/organizations/${encodeURIComponent(orgId)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      })) as WorkosOrganizationWire;
+      if (typeof response.id !== "string" || response.id.length === 0) {
+        throw new IdentityProviderError(502, "WorkOS organization update returned no id");
+      }
+      // Membership lists carry the organization name, so they are stale the
+      // moment the rename lands — including the one this request populated.
+      invalidateOrgCacheForOrganization(orgId);
+      return {
+        orgId: response.id,
+        orgName: typeof response.name === "string" && response.name ? response.name : name,
+      };
+    },
+  };
+
+  return {
+    verifier,
+    grants,
+    organizations: {
+      listUserOrganizationMemberships,
+      createOrganization,
+      createOrganizationMembership,
     },
   };
 }

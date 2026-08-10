@@ -7,7 +7,7 @@ async function main(): Promise<void> {
   const config = loadApiConfig(process.env);
   await runMigrations(config.databaseUrl);
 
-  const { app, pool } = createApp(config);
+  const { app, identity, pool } = await createApp(config);
 
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     console.log(`[api] listening on http://localhost:${info.port}`);
@@ -21,6 +21,7 @@ async function main(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
+    await identity.close();
     await pool.end();
     process.exit(0);
   }

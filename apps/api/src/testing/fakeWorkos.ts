@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import type { ApiConfig } from "../config";
+import type { WorkosApiConfig } from "../config";
 
 const KID = "fake-workos-key";
 
@@ -53,7 +53,7 @@ export type FakeWorkos = {
   /** The `iss` this server mints and advertises through OIDC discovery. */
   issuer: string;
   /** Config pointed at this server; spread overrides on top as needed. */
-  config(overrides?: Partial<ApiConfig>): ApiConfig;
+  config(overrides?: Partial<WorkosApiConfig>): WorkosApiConfig;
   /** Registers a user that `getUser` will return, and returns its id. */
   addUser(user: Partial<FakeWorkosUser> & { id?: string }): FakeWorkosUser;
   /** Registers an organization, as the Organizations API would create it. */
@@ -700,6 +700,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     // metadata document above, which is the path production takes.
     config(overrides = {}) {
       return {
+        identityProvider: "workos",
         databaseUrl: "postgres://unused",
         baseUrl: "http://localhost:8788",
         port: 8788,

@@ -1,15 +1,16 @@
-// FILE: orgProvisioning.ts
+// FILE: identity/orgProvisioning.ts
 // Purpose: Resolve the organizations a user belongs to, provisioning a
 // personal one the first time they sign in. Organizations are the unit of host
 // ownership, so every authorized request needs this answer and most requests
-// need it more than once — hence the short-lived cache.
-// Layer: API identity
-// Depends on: workos.ts (the WorkOS calls, injected as plain functions).
+// need it more than once — hence the short-lived cache. Provider-neutral: the
+// provider's calls arrive as injected functions speaking seam types.
+// Layer: API identity (implementation support)
+// Depends on: interfaces.ts (seam types).
 
-import { WorkosApiError, type WorkosOrganization } from "./workos";
+import { IdentityProviderError, type OrganizationRef } from "./interfaces";
 
 /**
- * How long a membership list is reused before WorkOS is asked again. Long
+ * How long a membership list is reused before the provider is asked again. Long
  * enough that a burst of requests costs one round trip, short enough that
  * being added to or removed from an organization takes effect on its own
  * without anyone restarting the process.
@@ -17,34 +18,34 @@ import { WorkosApiError, type WorkosOrganization } from "./workos";
 const CACHE_TTL_MS = 60_000;
 
 /**
- * The WorkOS surface this module needs, as functions rather than the whole
+ * The provider surface this module needs, as functions rather than the whole
  * client: it makes the three calls it depends on obvious, and lets tests stage
  * a race without standing up HTTP.
  */
 export type OrgProvisioningDeps = {
-  listUserOrganizationMemberships(userId: string): Promise<WorkosOrganization[]>;
-  createOrganization(name: string): Promise<WorkosOrganization>;
+  listUserOrganizationMemberships(userId: string): Promise<OrganizationRef[]>;
+  createOrganization(name: string): Promise<OrganizationRef>;
   createOrganizationMembership(orgId: string, userId: string): Promise<void>;
   /** Injectable clock, so the TTL can be tested without waiting a minute. */
   now?: () => number;
 };
 
 type CacheEntry = {
-  memberships: WorkosOrganization[];
+  memberships: OrganizationRef[];
   fetchedAt: number;
 };
 
 /**
  * Per process, not per request: the point is to survive across the several
  * requests a single CLI command makes. A restart or a deploy simply refills
- * it, and nothing here is authoritative — WorkOS is.
+ * it, and nothing here is authoritative — the identity provider is.
  */
 const cache = new Map<string, CacheEntry>();
 
 /**
  * Provisioning runs in flight per user, so concurrent org-less requests from
  * one user share a single attempt rather than each creating an organization.
- * WorkOS only refuses a duplicate *membership*, never a duplicate
+ * The provider only refuses a duplicate *membership*, never a duplicate
  * organization, so without this the loser of the race leaves a stray empty
  * workspace behind and the user sees two.
  *
@@ -54,7 +55,7 @@ const cache = new Map<string, CacheEntry>();
  * rather than broken. V1 runs single-instance; a durable claim (a unique row
  * keyed by user id) is what a multi-instance deployment would need.
  */
-const provisioningInFlight = new Map<string, Promise<WorkosOrganization[]>>();
+const provisioningInFlight = new Map<string, Promise<OrganizationRef[]>>();
 
 /** Drops every cached membership list. Exported for tests. */
 export function clearOrgCache(): void {
@@ -88,16 +89,16 @@ export function personalOrgName(email: string): string {
 }
 
 function isConflict(error: unknown): boolean {
-  // 409 is the documented duplicate; 422 covers WorkOS answering an
+  // 409 is the documented duplicate; 422 covers the provider answering an
   // already-satisfied membership as unprocessable rather than conflicting.
-  return error instanceof WorkosApiError && (error.status === 409 || error.status === 422);
+  return error instanceof IdentityProviderError && (error.status === 409 || error.status === 422);
 }
 
 async function readMemberships(
   deps: OrgProvisioningDeps,
   userId: string,
   clock: () => number,
-): Promise<WorkosOrganization[]> {
+): Promise<OrganizationRef[]> {
   const memberships = await deps.listUserOrganizationMemberships(userId);
   cache.set(userId, { memberships, fetchedAt: clock() });
   return memberships;
@@ -114,7 +115,7 @@ async function provisionPersonalOrg(
   userId: string,
   email: string,
   clock: () => number,
-): Promise<WorkosOrganization[]> {
+): Promise<OrganizationRef[]> {
   // Read again on the way in, not just before entering the single-flight: it
   // costs one request and it shrinks the cross-process window to the gap
   // between this read and the create.
@@ -132,7 +133,7 @@ async function provisionPersonalOrg(
     return afterRace;
   }
 
-  // Re-read rather than returning the organization just created: WorkOS is the
+  // Re-read rather than returning the organization just created: the provider is the
   // authority on membership, and a create that somehow did not take must not
   // be reported as one that did.
   return readMemberships(deps, userId, clock);
@@ -146,7 +147,7 @@ async function provisionPersonalOrg(
  *
  * Concurrent org-less requests from one user share a single provisioning
  * attempt, so they cannot each create an organization. Across instances the
- * race is still possible; WorkOS refuses the loser's membership with a
+ * race is still possible; the provider refuses the loser's membership with a
  * conflict, which is treated as success-by-someone-else — the list is re-read
  * and whatever is actually there is returned. The cost of that race is a stray
  * empty organization, not a failed request.
@@ -155,7 +156,7 @@ export async function ensurePersonalOrg(
   deps: OrgProvisioningDeps,
   userId: string,
   email: string,
-): Promise<WorkosOrganization[]> {
+): Promise<OrganizationRef[]> {
   const clock = deps.now ?? Date.now;
 
   const cached = cache.get(userId);

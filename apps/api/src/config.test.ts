@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { ApiConfigError, loadApiConfig } from "./config";
+import { ApiConfigError, loadApiConfig, type WorkosApiConfig } from "./config";
+
+/** The default (WorkOS) shape, narrowed so field assertions typecheck. */
+function loadWorkosConfig(env: Record<string, string | undefined>): WorkosApiConfig {
+  const config = loadApiConfig(env);
+  if (config.identityProvider !== "workos") throw new Error("expected the workos provider");
+  return config;
+}
 
 const base = {
   DATABASE_URL: "postgres://u:p@localhost:5432/db",
@@ -31,11 +38,11 @@ describe("loadApiConfig", () => {
   });
 
   it("defaults the WorkOS API url", () => {
-    expect(loadApiConfig(base).workosApiUrl).toBe("https://api.workos.com");
+    expect(loadWorkosConfig(base).workosApiUrl).toBe("https://api.workos.com");
   });
 
   it("accepts an overridden API url", () => {
-    const config = loadApiConfig({ ...base, WORKOS_API_URL: "http://127.0.0.1:4010" });
+    const config = loadWorkosConfig({ ...base, WORKOS_API_URL: "http://127.0.0.1:4010" });
     expect(config.workosApiUrl).toBe("http://127.0.0.1:4010");
   });
 
@@ -43,25 +50,28 @@ describe("loadApiConfig", () => {
   // guessed here. A hand-derived issuer was wrong for every real token: WorkOS
   // scopes `iss` to the environment's client id, which is not WORKOS_CLIENT_ID.
   it("leaves the issuer and JWKS url unset so they are discovered", () => {
-    const config = loadApiConfig(base);
+    const config = loadWorkosConfig(base);
     expect(config.workosIssuer).toBeUndefined();
     expect(config.workosJwksUrl).toBeUndefined();
   });
 
   it("accepts a full JWKS url override", () => {
-    const config = loadApiConfig({ ...base, WORKOS_JWKS_URL: "http://127.0.0.1:4011/keys.json" });
+    const config = loadWorkosConfig({
+      ...base,
+      WORKOS_JWKS_URL: "http://127.0.0.1:4011/keys.json",
+    });
     expect(config.workosJwksUrl).toBe("http://127.0.0.1:4011/keys.json");
   });
 
   // A custom auth domain changes `iss` to that domain, so it must be settable
   // independently of what discovery reports.
   it("accepts an explicit issuer override for a custom auth domain", () => {
-    const config = loadApiConfig({ ...base, WORKOS_ISSUER: "https://auth.example.com" });
+    const config = loadWorkosConfig({ ...base, WORKOS_ISSUER: "https://auth.example.com" });
     expect(config.workosIssuer).toBe("https://auth.example.com");
   });
 
   it("ignores a trailing slash on the API url so derived paths stay single-slashed", () => {
-    const config = loadApiConfig({ ...base, WORKOS_API_URL: "https://api.workos.com/" });
+    const config = loadWorkosConfig({ ...base, WORKOS_API_URL: "https://api.workos.com/" });
     expect(config.workosApiUrl).toBe("https://api.workos.com");
   });
 });

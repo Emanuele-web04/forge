@@ -3,16 +3,28 @@ import { Hono } from "hono";
 import type pg from "pg";
 import type { ApiConfig } from "./config";
 import { createDb } from "./db";
+import { createIdentityAdapters } from "./identity";
+import type { IdentityAdapters } from "./identity/interfaces";
 import { createV1Routes } from "./routes/v1";
-import { createWorkosAuth, type WorkosAuth } from "./workos";
 
-export function createApp(config: ApiConfig): { app: Hono; auth: WorkosAuth; pool: pg.Pool } {
+export async function createApp(
+  config: ApiConfig,
+): Promise<{ app: Hono; identity: IdentityAdapters; pool: pg.Pool }> {
   const { db, pool } = createDb(config.databaseUrl);
-  const auth = createWorkosAuth(config);
+  const identity = await createIdentityAdapters(config, db);
 
   const app = new Hono();
 
-  app.route("/api/v1", createV1Routes({ auth, db, config }));
+  app.route(
+    "/api/v1",
+    createV1Routes({
+      verifier: identity.verifier,
+      grants: identity.grants,
+      deviceCredentials: identity.deviceCredentials,
+      environments: identity.environments,
+      db,
+    }),
+  );
 
   /**
    * Safety net: any unhandled throw under /api/ still answers with an
@@ -31,10 +43,11 @@ export function createApp(config: ApiConfig): { app: Hono; auth: WorkosAuth; poo
   });
 
   /**
-   * This service is an API and nothing else — WorkOS AuthKit hosts every
-   * sign-in page, so there is no UI to serve. A human who reaches the root
-   * (or any other non-API path) gets a sentence telling them where they are
-   * rather than a 404 that reads like an outage.
+   * This service is an API and nothing else — there is no auth ceremony UI to
+   * serve: email-code sign-in happens in the app, and SSO finishes on the
+   * identity provider's own hosted page. A human who reaches the root (or any
+   * other non-API path) gets a sentence telling them where they are rather
+   * than a 404 that reads like an outage.
    */
   app.notFound((c) => {
     if (c.req.path.startsWith("/api/")) {
@@ -42,10 +55,10 @@ export function createApp(config: ApiConfig): { app: Hono; auth: WorkosAuth; poo
       return c.json(body, 404);
     }
     return c.text(
-      "Synara account API. Sign-in is handled by WorkOS AuthKit. See https://github.com/Emanuele-web04/synara",
+      "Synara account API. Sign in from the Synara app. See https://github.com/Emanuele-web04/synara",
       200,
     );
   });
 
-  return { app, auth, pool };
+  return { app, identity, pool };
 }

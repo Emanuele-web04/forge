@@ -5,7 +5,7 @@ import {
   personalOrgName,
   type OrgProvisioningDeps,
 } from "./orgProvisioning";
-import { WorkosApiError, type WorkosOrganization } from "./workos";
+import { IdentityProviderError, type OrganizationRef } from "./interfaces";
 
 /**
  * A WorkOS stand-in narrow enough to stage races and failures directly. The
@@ -17,7 +17,7 @@ function makeDeps(overrides: Partial<OrgProvisioningDeps> = {}): OrgProvisioning
   calls: string[];
 } {
   const calls: string[] = [];
-  const state: WorkosOrganization[] = [];
+  const state: OrganizationRef[] = [];
 
   const defaults: OrgProvisioningDeps = {
     listUserOrganizationMemberships: () => Promise.resolve([...state]),
@@ -61,7 +61,7 @@ afterEach(() => {
 
 describe("ensurePersonalOrg", () => {
   it("returns existing memberships without creating anything", async () => {
-    const existing: WorkosOrganization[] = [{ orgId: "org_a", orgName: "Acme" }];
+    const existing: OrganizationRef[] = [{ orgId: "org_a", orgName: "Acme" }];
     const deps = makeDeps({
       listUserOrganizationMemberships: () => Promise.resolve([...existing]),
     });
@@ -97,14 +97,14 @@ describe("ensurePersonalOrg", () => {
    * already done by the winner.
    */
   it("recovers from a membership conflict by re-reading the list", async () => {
-    const created: WorkosOrganization[] = [];
+    const created: OrganizationRef[] = [];
     const deps = makeDeps({
       listUserOrganizationMemberships: () => Promise.resolve([...created]),
       createOrganization: (name: string) => Promise.resolve({ orgId: "org_race", orgName: name }),
       createOrganizationMembership: () => {
         // The racing request won and already joined this user.
         created.push({ orgId: "org_winner", orgName: "Winner" });
-        return Promise.reject(new WorkosApiError(409, "Membership already exists"));
+        return Promise.reject(new IdentityProviderError(409, "Membership already exists"));
       },
     });
 
@@ -120,7 +120,7 @@ describe("ensurePersonalOrg", () => {
     const deps = makeDeps({
       listUserOrganizationMemberships: () => Promise.resolve([]),
       createOrganizationMembership: () =>
-        Promise.reject(new WorkosApiError(409, "Membership already exists")),
+        Promise.reject(new IdentityProviderError(409, "Membership already exists")),
     });
 
     await expect(ensurePersonalOrg(deps, "user_1", "ada@example.com")).rejects.toMatchObject({
@@ -135,7 +135,7 @@ describe("ensurePersonalOrg", () => {
    * organization behind and hand the loser a workspace nobody asked for.
    */
   it("creates one organization when two requests for the same user race", async () => {
-    const created: WorkosOrganization[] = [];
+    const created: OrganizationRef[] = [];
     let release!: () => void;
     const listGate = new Promise<void>((resolve) => {
       release = resolve;
@@ -174,7 +174,7 @@ describe("ensurePersonalOrg", () => {
       listUserOrganizationMemberships: () => Promise.resolve([]),
       createOrganization: (name: string) => {
         attempt += 1;
-        if (attempt === 1) return Promise.reject(new WorkosApiError(500, "WorkOS is down"));
+        if (attempt === 1) return Promise.reject(new IdentityProviderError(500, "WorkOS is down"));
         return Promise.resolve({ orgId: "org_second", orgName: name });
       },
     });
@@ -189,7 +189,7 @@ describe("ensurePersonalOrg", () => {
 
   it("propagates a failure to create the organization", async () => {
     const deps = makeDeps({
-      createOrganization: () => Promise.reject(new WorkosApiError(500, "WorkOS is down")),
+      createOrganization: () => Promise.reject(new IdentityProviderError(500, "WorkOS is down")),
     });
 
     await expect(ensurePersonalOrg(deps, "user_1", "ada@example.com")).rejects.toMatchObject({
@@ -247,7 +247,7 @@ describe("membership cache", () => {
    * that just created the workspace.
    */
   it("does not serve the pre-provision empty list from cache", async () => {
-    const created: WorkosOrganization[] = [];
+    const created: OrganizationRef[] = [];
     const deps = makeDeps({
       listUserOrganizationMemberships: () => Promise.resolve([...created]),
       createOrganization: (name: string) => {

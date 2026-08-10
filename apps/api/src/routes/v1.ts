@@ -1,7 +1,6 @@
 import {
   type AccountErrorBody,
   type AccountErrorCode,
-  type AccountHost,
   type AccountMe,
   type AccountProfile,
   type AccountProfileAvatarColor,
@@ -9,7 +8,6 @@ import {
   type AuthTokensResponse,
   type DeviceAuthorizationResponse,
   type EmailVerificationRequiredBody,
-  type EnvironmentId,
   type InstanceInfo,
   type ListHostsResponse,
   type OrganizationRequiredBody,
@@ -25,30 +23,31 @@ import {
   UpdateProfileRequest,
   VerifyEmailRequest,
 } from "@synara/contracts";
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { clientIp } from "../clientIp";
-import type { ApiConfig } from "../config";
-import * as schema from "../db/schema";
-import { hosts, hostTokens, profiles } from "../db/schema";
-import { mintHostToken } from "../hostTokens";
-import { ensurePersonalOrg, invalidateOrgCacheForOrganization } from "../orgProvisioning";
-import { createRateLimiter } from "../rateLimit";
+import type * as schema from "../db/schema";
+import { profiles } from "../db/schema";
+import { isUniqueViolation } from "../identity/environmentRegistry";
 import {
-  WorkosApiError,
-  WorkosAuthError,
-  type WorkosAuth,
-  type WorkosAuthFailure,
-  type WorkosAuthTokens,
-  type WorkosOrganization,
-  type WorkosUser,
-} from "../workos";
+  EnvironmentAlreadyLinkedError,
+  IdentityAuthError,
+  IdentityProviderError,
+  type AccountIdentityVerifier,
+  type AuthFailureReason,
+  type AuthTokens,
+  type DeviceCredentialStore,
+  type EnvironmentGrantIssuer,
+  type EnvironmentRegistry,
+  type IdentityUser,
+  type OrganizationRef,
+} from "../identity/interfaces";
+import { createRateLimiter } from "../rateLimit";
 import packageJson from "../../package.json" with { type: "json" };
-import { authenticateHostToken, extractBearerToken, isHostTokenHeader } from "./hostAuth";
 
 const API_VERSION: string = packageJson.version;
 
@@ -67,16 +66,15 @@ export const OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE = 5;
 /**
  * Code-sending requests allowed per client per minute — the OTP send and the
  * verification resend share this posture (each has its own budget instance).
- * Deliberately the tightest: every request makes WorkOS send somebody an
- * email, and one user legitimately needs at most one retry a minute — the UI
- * enforces a 60s countdown of its own.
+ * Deliberately the tightest: every request makes the identity provider send
+ * somebody an email, and one user legitimately needs at most one retry a
+ * minute — the UI enforces a 60s countdown of its own.
  */
 export const OTP_SEND_RATE_LIMIT_PER_MINUTE = 2;
 
 /** Verification-email resends allowed per client per minute. */
 export const RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE = 2;
 
-type HostRow = typeof hosts.$inferSelect;
 type ProfileRow = typeof profiles.$inferSelect;
 
 function errorResponse(
@@ -87,21 +85,6 @@ function errorResponse(
 ) {
   const body: AccountErrorBody = { error, message };
   return c.json(body, status);
-}
-
-function toAccountHost(row: HostRow): AccountHost {
-  return {
-    id: row.id,
-    environmentId: row.environmentId as EnvironmentId,
-    name: row.name,
-    platform: row.platform,
-    kind: row.kind,
-    endpoints: row.endpoints,
-    ...(row.appVersion ? { appVersion: row.appVersion } : {}),
-    registeredByUserId: row.registeredByUserId,
-    createdAt: row.createdAt.toISOString(),
-    lastSeenAt: row.lastSeenAt.toISOString(),
-  };
 }
 
 /**
@@ -118,32 +101,12 @@ function toAccountProfile(row: ProfileRow): AccountProfile {
   };
 }
 
-function toOrganizationSummary(organization: WorkosOrganization): OrganizationSummary {
+function toOrganizationSummary(organization: OrganizationRef): OrganizationSummary {
   return { id: organization.orgId, name: organization.orgName };
 }
 
-/**
- * Whether a failed write was refused by a unique index.
- *
- * The chain is walked rather than the error inspected directly: Drizzle wraps
- * driver errors in a `DrizzleQueryError` that carries no `code` of its own, so
- * reading only the top-level object turns every conflict into an unhandled
- * 500 — which is exactly what a duplicate handle or a re-linked environment
- * would have become.
- */
-function isUniqueViolation(error: unknown): boolean {
-  for (
-    let current = error;
-    current instanceof Object;
-    current = (current as { cause?: unknown }).cause
-  ) {
-    if ("code" in current && current.code === "23505") return true;
-  }
-  return false;
-}
-
 /** The response body every successful authentication grant answers with. */
-function authTokensBody(auth_: WorkosAuthTokens): AuthTokensResponse {
+function authTokensBody(auth_: AuthTokens): AuthTokensResponse {
   return {
     accessToken: auth_.accessToken,
     refreshToken: auth_.refreshToken,
@@ -156,11 +119,13 @@ function authTokensBody(auth_: WorkosAuthTokens): AuthTokensResponse {
 }
 
 export function createV1Routes(deps: {
-  auth: WorkosAuth;
+  verifier: AccountIdentityVerifier;
+  grants: EnvironmentGrantIssuer;
+  deviceCredentials: DeviceCredentialStore;
+  environments: EnvironmentRegistry;
   db: NodePgDatabase<typeof schema>;
-  config: ApiConfig;
 }): Hono {
-  const { auth, db, config } = deps;
+  const { verifier, grants, deviceCredentials, environments, db } = deps;
   const v1 = new Hono();
 
   // Per router instance, not module-global: two routers in one process (tests,
@@ -192,18 +157,20 @@ export function createV1Routes(deps: {
   });
 
   /**
-   * Resolves the caller from a WorkOS access token. Verification is stateless
+   * Resolves the caller from an access token. Verification is stateless
    * (JWKS signature + expiry), so a revoked session stays valid until its short
-   * token lifetime runs out; the client refreshes against WorkOS, which is
-   * where revocation takes effect.
+   * token lifetime runs out; the client refreshes against the identity
+   * provider, which is where revocation takes effect.
    */
   async function getDeviceSession(
     c: Context,
   ): Promise<{ userId: string; sessionId: string; orgId?: string } | null> {
-    const token = extractBearerToken(c.req.header("authorization"));
+    const authorization = c.req.header("authorization");
+    const match = authorization ? /^Bearer\s+(.+)$/i.exec(authorization) : null;
+    const token = match?.[1];
     if (!token) return null;
     try {
-      return await auth.verifyAccessToken(token);
+      return await verifier.verifyAccessToken(token);
     } catch {
       return null;
     }
@@ -223,7 +190,7 @@ export function createV1Routes(deps: {
   function organizationRequired(
     c: Context,
     message: string,
-    organizations: readonly WorkosOrganization[],
+    organizations: readonly OrganizationRef[],
   ) {
     const body: OrganizationRequiredBody = {
       error: "organization_required",
@@ -238,14 +205,14 @@ export function createV1Routes(deps: {
    * token into the organization it may act inside, or the 403 that tells the
    * client how to obtain one.
    *
-   * A device-grant token has no `org_id` at all — WorkOS only mints that claim
-   * when the client authenticates *into* an organization — so the first call
-   * after `synara auth` always lands here, provisions the user's personal
-   * workspace if they have none, and answers 403 with the list to pick from.
-   * The client re-runs the refresh grant with `organization_id` and retries.
-   * A token naming an organization the caller has since left takes the same
-   * path, which is what makes a revoked membership stop granting access
-   * without waiting for anything to be purged.
+   * A device-grant token has no organization claim at all — the provider only
+   * mints one when the client authenticates *into* an organization — so the
+   * first call after `synara auth` always lands here, provisions the user's
+   * personal workspace if they have none, and answers 403 with the list to
+   * pick from. The client re-runs the refresh grant with `organization_id`
+   * and retries. A token naming an organization the caller has since left
+   * takes the same path, which is what makes a revoked membership stop
+   * granting access without waiting for anything to be purged.
    *
    * Returns the session, or a Response that the caller must return as-is.
    */
@@ -253,40 +220,33 @@ export function createV1Routes(deps: {
     const session = await getDeviceSession(c);
     if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
 
-    let user: WorkosUser;
-    let memberships: WorkosOrganization[];
+    let user: IdentityUser;
+    let scope: Awaited<ReturnType<EnvironmentGrantIssuer["resolveEnvironmentScope"]>>;
     try {
-      user = await auth.getUser(session.userId);
-      memberships = await ensurePersonalOrg(auth, session.userId, user.email);
+      user = await verifier.getUser(session.userId);
+      scope = await grants.resolveEnvironmentScope(session, user.email);
     } catch (error) {
-      if (error instanceof WorkosApiError && error.status === 404) {
+      if (error instanceof IdentityProviderError && error.status === 404) {
         return errorResponse(c, 401, "unauthorized", "This account no longer exists");
       }
       console.error("[api] organization resolution failed:", error);
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
     }
 
-    if (!session.orgId) {
+    if (scope.kind === "selection_required") {
       return organizationRequired(
         c,
-        "This token is not scoped to a workspace. Refresh it with an organization_id and retry.",
-        memberships,
-      );
-    }
-
-    const active = memberships.find((membership) => membership.orgId === session.orgId);
-    if (!active) {
-      return organizationRequired(
-        c,
-        "You are not a member of the workspace this token names. Refresh it with one of these and retry.",
-        memberships,
+        scope.why === "unscoped"
+          ? "This token is not scoped to a workspace. Refresh it with an organization_id and retry."
+          : "You are not a member of the workspace this token names. Refresh it with one of these and retry.",
+        scope.organizations,
       );
     }
 
     return {
       userId: session.userId,
-      orgId: active.orgId,
-      organization: toOrganizationSummary(active),
+      orgId: scope.organization.orgId,
+      organization: toOrganizationSummary(scope.organization),
     };
   }
 
@@ -306,7 +266,7 @@ export function createV1Routes(deps: {
    * a different shape from any of them would have to special-case it.
    */
   async function accountMe(
-    user: WorkosUser,
+    user: IdentityUser,
     organization: OrganizationSummary,
   ): Promise<AccountMe> {
     return {
@@ -324,20 +284,20 @@ export function createV1Routes(deps: {
    * account is the caller's authentication problem, anything else is ours.
    * Returns the user, or the Response to return as-is.
    */
-  async function loadSessionUser(c: Context, userId: string): Promise<WorkosUser | Response> {
+  async function loadSessionUser(c: Context, userId: string): Promise<IdentityUser | Response> {
     try {
-      return await auth.getUser(userId);
+      return await verifier.getUser(userId);
     } catch (error) {
-      // The token verified, so the caller held a valid session — but WorkOS
-      // will not describe the user. A 404 means the account was deleted while
-      // the token was still live, which is an authentication failure from the
-      // client's point of view; anything else is an upstream fault and must not
-      // be reported as the caller's error.
-      if (error instanceof WorkosApiError && error.status === 404) {
+      // The token verified, so the caller held a valid session — but the
+      // provider will not describe the user. A 404 means the account was
+      // deleted while the token was still live, which is an authentication
+      // failure from the client's point of view; anything else is an upstream
+      // fault and must not be reported as the caller's error.
+      if (error instanceof IdentityProviderError && error.status === 404) {
         return errorResponse(c, 401, "unauthorized", "This account no longer exists");
       }
       // Logged because the response deliberately says nothing: a rejected API
-      // key, a WorkOS outage, and a mapping bug are one opaque 502 to the
+      // key, a provider outage, and a mapping bug are one opaque 502 to the
       // caller and would otherwise be indistinguishable in production too.
       console.error("[api] user lookup failed:", error);
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
@@ -429,10 +389,10 @@ export function createV1Routes(deps: {
   });
 
   /**
-   * Renames the workspace. The name lives on the WorkOS organization rather
-   * than here, so this is a write-through — and it is gated on membership by
-   * `requireOrgSession`, which is what stops a caller renaming an organization
-   * they merely know the id of.
+   * Renames the workspace. The name lives on the identity provider's
+   * organization rather than here, so this is a write-through — and it is
+   * gated on membership by `requireOrgSession`, which is what stops a caller
+   * renaming an organization they merely know the id of.
    */
   v1.patch("/organization", async (c) => {
     const session = await requireOrgSession(c);
@@ -456,17 +416,13 @@ export function createV1Routes(deps: {
     const user = await loadSessionUser(c, session.userId);
     if (user instanceof Response) return user;
 
-    let renamed: WorkosOrganization;
+    let renamed: OrganizationRef;
     try {
-      renamed = await auth.updateOrganization(session.orgId, parsed.name);
+      renamed = await grants.renameOrganization(session.orgId, parsed.name);
     } catch (error) {
       console.error("[api] organization rename failed:", error);
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
     }
-
-    // Membership lists carry the organization name, so they are stale the
-    // moment the rename lands — including the one this request populated.
-    invalidateOrgCacheForOrganization(session.orgId);
 
     return c.json(await accountMe(user, toOrganizationSummary(renamed)));
   });
@@ -475,8 +431,7 @@ export function createV1Routes(deps: {
     const session = await requireOrgSession(c);
     if (session instanceof Response) return session;
 
-    const rows = await db.select().from(hosts).where(eq(hosts.ownerOrgId, session.orgId));
-    const body: ListHostsResponse = { hosts: rows.map(toAccountHost) };
+    const body: ListHostsResponse = { hosts: await environments.list(session.orgId) };
     return c.json(body);
   });
 
@@ -500,68 +455,17 @@ export function createV1Routes(deps: {
     }
 
     try {
-      const [existing] = await db
-        .select()
-        .from(hosts)
-        .where(
-          and(eq(hosts.ownerOrgId, session.orgId), eq(hosts.environmentId, parsed.environmentId)),
-        )
-        .limit(1);
+      const { host, created } = await environments.register(session.orgId, session.userId, parsed);
+      // Registering is also the (re-)link that rotates the host's credential:
+      // any previously issued token is revoked and the fresh one returned —
+      // shown exactly once.
+      const hostToken = await deviceCredentials.rotate(host.id);
 
-      let hostRow: HostRow;
-      if (existing) {
-        const [updated] = await db
-          .update(hosts)
-          .set({
-            name: parsed.name,
-            platform: parsed.platform,
-            kind: parsed.kind,
-            endpoints: [...parsed.endpoints],
-            appVersion: parsed.appVersion ?? null,
-            lastSeenAt: new Date(),
-          })
-          .where(eq(hosts.id, existing.id))
-          .returning();
-        if (!updated) throw new Error("failed to update host row");
-        hostRow = updated;
-
-        await db
-          .update(hostTokens)
-          .set({ revokedAt: new Date() })
-          .where(and(eq(hostTokens.hostId, hostRow.id), isNull(hostTokens.revokedAt)));
-      } else {
-        const [inserted] = await db
-          .insert(hosts)
-          .values({
-            ownerOrgId: session.orgId,
-            // Audit only. Ownership is the organization's, so this is never
-            // consulted when deciding who may reach the host.
-            registeredByUserId: session.userId,
-            environmentId: parsed.environmentId,
-            name: parsed.name,
-            platform: parsed.platform,
-            kind: parsed.kind,
-            endpoints: [...parsed.endpoints],
-            appVersion: parsed.appVersion ?? null,
-          })
-          .returning();
-        if (!inserted) throw new Error("failed to insert host row");
-        hostRow = inserted;
-      }
-
-      const { token, hash } = mintHostToken();
-      await db.insert(hostTokens).values({ hostId: hostRow.id, tokenHash: hash });
-
-      const body: RegisterHostResponse = { host: toAccountHost(hostRow), hostToken: token };
-      return c.json(body, existing ? 200 : 201);
+      const body: RegisterHostResponse = { host, hostToken };
+      return c.json(body, created ? 201 : 200);
     } catch (error) {
-      if (isUniqueViolation(error)) {
-        return errorResponse(
-          c,
-          409,
-          "environment_already_linked",
-          "This environment is already linked to another host record",
-        );
+      if (error instanceof EnvironmentAlreadyLinkedError) {
+        return errorResponse(c, 409, "environment_already_linked", error.message);
       }
       throw error;
     }
@@ -571,7 +475,7 @@ export function createV1Routes(deps: {
     const id = c.req.param("id");
     const authHeader = c.req.header("authorization");
 
-    const result = await authenticateHostToken(db, authHeader);
+    const result = await deviceCredentials.authenticate(authHeader);
     if (!result.ok) return errorResponse(c, result.status, result.error, "Host token invalid");
     if (result.hostId !== id) {
       return errorResponse(c, 401, "unauthorized", "Host token does not match this host");
@@ -592,46 +496,31 @@ export function createV1Routes(deps: {
       );
     }
 
-    const [row] = await db.select().from(hosts).where(eq(hosts.id, id)).limit(1);
-    if (!row) return errorResponse(c, 404, "host_not_found", "Host not found");
-
-    const [updated] = await db
-      .update(hosts)
-      .set({
-        ...(parsed.name !== undefined ? { name: parsed.name } : {}),
-        ...(parsed.endpoints !== undefined ? { endpoints: [...parsed.endpoints] } : {}),
-        ...(parsed.appVersion !== undefined ? { appVersion: parsed.appVersion } : {}),
-        lastSeenAt: new Date(),
-      })
-      .where(eq(hosts.id, id))
-      .returning();
+    const updated = await environments.update(id, parsed);
     if (!updated) return errorResponse(c, 404, "host_not_found", "Host not found");
 
-    return c.json({ host: toAccountHost(updated) });
+    return c.json({ host: updated });
   });
 
   v1.delete("/hosts/:id", async (c) => {
     const id = c.req.param("id");
     const authHeader = c.req.header("authorization");
 
-    if (isHostTokenHeader(authHeader)) {
-      const result = await authenticateHostToken(db, authHeader);
+    if (deviceCredentials.isDeviceCredential(authHeader)) {
+      const result = await deviceCredentials.authenticate(authHeader);
       if (!result.ok) return errorResponse(c, result.status, result.error, "Host token invalid");
       if (result.hostId !== id) {
         return errorResponse(c, 401, "unauthorized", "Host token does not match this host");
       }
-      await db.delete(hosts).where(eq(hosts.id, id));
+      await environments.deleteById(id);
       return c.body(null, 204);
     }
 
     const session = await requireOrgSession(c);
     if (session instanceof Response) return session;
 
-    const deleted = await db
-      .delete(hosts)
-      .where(and(eq(hosts.id, id), eq(hosts.ownerOrgId, session.orgId)))
-      .returning();
-    if (deleted.length === 0) return errorResponse(c, 404, "host_not_found", "Host not found");
+    const deleted = await environments.deleteForOrg(id, session.orgId);
+    if (!deleted) return errorResponse(c, 404, "host_not_found", "Host not found");
 
     return c.body(null, 204);
   });
@@ -639,9 +528,7 @@ export function createV1Routes(deps: {
   v1.get("/instance", (c) => {
     const body: InstanceInfo = {
       version: API_VERSION,
-      authMode: "workos",
-      clientId: config.workosClientId,
-      workosApiUrl: config.workosApiUrl,
+      ...verifier.describeInstanceAuth(),
     };
     return c.json(body);
   });
@@ -649,21 +536,22 @@ export function createV1Routes(deps: {
   /**
    * The in-app email OTP routes.
    *
-   * These exist because the WorkOS Magic Auth grant is a confidential-client
+   * These exist because the one-time-code grant is a confidential-client
    * grant: it requires the client secret, so the app cannot make the call
    * itself and something holding the secret has to proxy it. The emailed code
    * is a credential and is pass-through at every step here — it is read off
-   * the request, handed to WorkOS, and never written to the database, a log
-   * line, or an error message. Nothing below may start doing so.
+   * the request, handed to the identity provider, and never written to the
+   * database, a log line, or an error message. Nothing below may start doing
+   * so.
    *
    * SSO (Google/GitHub) does not come through here; it takes the device flow.
    */
   const authFailureResponses: Record<
-    WorkosAuthFailure,
+    AuthFailureReason,
     { status: ContentfulStatusCode; code: AccountErrorCode; message: string }
   > = {
-    // Should not arrive on the Magic Auth grant — redeeming the code proves
-    // email ownership — but the verification machinery still serves it.
+    // Should not arrive on the OTP grant — redeeming the code proves email
+    // ownership — but the verification machinery still serves it.
     email_verification_required: {
       status: 403,
       code: "email_verification_required",
@@ -690,15 +578,15 @@ export function createV1Routes(deps: {
     },
   };
 
-  /** Turns a WorkOS authentication outcome into the error contract. */
+  /** Turns an authentication outcome into the error contract. */
   function authErrorResponse(c: Context, error: unknown): Response {
-    if (error instanceof WorkosAuthError) {
+    if (error instanceof IdentityAuthError) {
       const mapped = authFailureResponses[error.reason];
       // The one refusal with a richer body: the refusal's own fields are what
       // completing verification in-app redeems, so they travel to the client
-      // (allowlisted in the classifier — extraction never widens past these
-      // three). Without them the plain body still tells the user to use the
-      // emailed link, so an upstream that omits them degrades, not breaks.
+      // (allowlisted in the implementation — extraction never widens past
+      // these three). Without them the plain body still tells the user to use
+      // the emailed link, so an upstream that omits them degrades, not breaks.
       if (error.reason === "email_verification_required" && error.verification) {
         const body: EmailVerificationRequiredBody = {
           error: "email_verification_required",
@@ -718,13 +606,14 @@ export function createV1Routes(deps: {
   }
 
   /**
-   * Asks WorkOS to mint and email a 6-digit sign-in code. Answers 202 with
-   * the address echo and expiry whether or not the address maps to an
-   * existing account: sign-up happens on redemption, so a send that said
-   * "unknown email" would be an account-existence oracle for no benefit.
+   * Asks the identity provider to mint and email a 6-digit sign-in code.
+   * Answers 202 with the address echo and expiry whether or not the address
+   * maps to an existing account: sign-up happens on redemption, so a send
+   * that said "unknown email" would be an account-existence oracle for no
+   * benefit.
    *
-   * The WorkOS response contains the code itself; `createMagicAuth` parses it
-   * allowlist-style and the code never reaches this function.
+   * The provider's response contains the code itself; the implementation
+   * parses it allowlist-style and the code never reaches this function.
    */
   v1.post("/auth/otp/send", async (c) => {
     if (!otpSendRateLimiter.tryConsume(clientIp(c))) {
@@ -742,8 +631,8 @@ export function createV1Routes(deps: {
     }
 
     try {
-      const magicAuth = await auth.createMagicAuth({ email: parsed.email });
-      const body: OtpSendResponse = { email: magicAuth.email, expiresAt: magicAuth.expiresAt };
+      const challenge = await verifier.createOtpChallenge({ email: parsed.email });
+      const body: OtpSendResponse = { email: challenge.email, expiresAt: challenge.expiresAt };
       return c.json(body, 202);
     } catch (error) {
       return authErrorResponse(c, error);
@@ -752,9 +641,9 @@ export function createV1Routes(deps: {
 
   /**
    * Redeems the emailed 6-digit code for a token pair — the one sign-in AND
-   * sign-up route: WorkOS provisions the user on first successful redemption
-   * when sign-up is allowed. The code is a credential, so the no-echo
-   * validation message and the no-leak error mapping both apply.
+   * sign-up route: the provider provisions the user on first successful
+   * redemption when sign-up is allowed. The code is a credential, so the
+   * no-echo validation message and the no-leak error mapping both apply.
    */
   v1.post("/auth/otp/authenticate", async (c) => {
     if (!otpAuthenticateRateLimiter.tryConsume(clientIp(c))) {
@@ -774,7 +663,7 @@ export function createV1Routes(deps: {
     }
 
     try {
-      return c.json(authTokensBody(await auth.authenticateWithMagicAuth(parsed)));
+      return c.json(authTokensBody(await verifier.authenticateWithOtp(parsed)));
     } catch (error) {
       return authErrorResponse(c, error);
     }
@@ -783,10 +672,10 @@ export function createV1Routes(deps: {
   /**
    * Redeems the emailed 6-digit code plus the pending authentication token an
    * `email_verification_required` refusal carried. Both are bearer-ish
-   * secrets, so `sensitiveFetch` handling, the redemption rate budget, and
-   * the no-echo validation message all apply. Magic Auth implicitly verifies
-   * the email, so this should not trigger on the OTP path — it stays for any
-   * flow WorkOS still answers the challenge on.
+   * secrets, so the no-leak handling, the redemption rate budget, and the
+   * no-echo validation message all apply. Redeeming an OTP implicitly
+   * verifies the email, so this should not trigger on the OTP path — it stays
+   * for any flow the provider still answers the challenge on.
    */
   v1.post("/auth/verify-email", async (c) => {
     if (!otpAuthenticateRateLimiter.tryConsume(clientIp(c))) {
@@ -811,7 +700,7 @@ export function createV1Routes(deps: {
     }
 
     try {
-      return c.json(authTokensBody(await auth.verifyEmailCode(parsed)));
+      return c.json(authTokensBody(await verifier.verifyEmailCode(parsed)));
     } catch (error) {
       return authErrorResponse(c, error);
     }
@@ -839,9 +728,9 @@ export function createV1Routes(deps: {
     }
 
     try {
-      await auth.resendVerificationEmail(parsed.emailVerificationId);
+      await verifier.resendVerificationEmail(parsed.emailVerificationId);
     } catch (error) {
-      if (error instanceof WorkosApiError && error.status === 404) {
+      if (error instanceof IdentityProviderError && error.status === 404) {
         // Indistinguishable from success by design; see the route comment.
         return c.body(null, 202);
       }
@@ -856,10 +745,10 @@ export function createV1Routes(deps: {
    * Starts the SSO device flow, which is how "Continue with Google/GitHub"
    * reaches the provider. Unauthenticated by nature — the caller has no
    * credentials yet — and, alongside the OTP routes above, a reason this
-   * service holds the WorkOS API key: the request WorkOS requires is
-   * authenticated with a secret a public client cannot be trusted with.
-   * Everything after this (polling for the token) goes straight to WorkOS,
-   * which is why /instance publishes the client id and API origin.
+   * service holds the provider's API key: the request the provider requires
+   * is authenticated with a secret a public client cannot be trusted with.
+   * Everything after this (polling for the token) goes straight to the
+   * provider, which is why /instance publishes the client id and API origin.
    */
   v1.post("/auth/device", async (c) => {
     if (!deviceRateLimiter.tryConsume(clientIp(c))) {
@@ -867,13 +756,13 @@ export function createV1Routes(deps: {
     }
 
     try {
-      const body: DeviceAuthorizationResponse = await auth.requestDeviceAuthorization();
+      const body: DeviceAuthorizationResponse = await verifier.requestDeviceAuthorization();
       return c.json(body);
     } catch (error) {
-      // Every failure here is upstream — a rejected API key, a WorkOS outage, a
-      // transport error. None is the caller's fault and none may leak the
-      // upstream message, which can quote the credentials we sent; the operator
-      // still needs to be able to tell them apart, hence the log.
+      // Every failure here is upstream — a rejected API key, a provider
+      // outage, a transport error. None is the caller's fault and none may
+      // leak the upstream message, which can quote the credentials we sent;
+      // the operator still needs to be able to tell them apart, hence the log.
       console.error("[api] device authorization proxy failed:", error);
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
     }

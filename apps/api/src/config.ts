@@ -1,7 +1,17 @@
-export type ApiConfig = {
+export type ApiConfigBase = {
   databaseUrl: string;
   baseUrl: string;
   port: number;
+};
+
+/**
+ * Configuration for the hosted identity provider (WorkOS). The only place
+ * outside `src/identity/workos.ts` where WorkOS is named: config plumbing has
+ * to spell the env vars, the implementation consumes them, and nothing else
+ * in the service knows which provider is behind the seam.
+ */
+export type WorkosApiConfig = ApiConfigBase & {
+  identityProvider: "workos";
   workosApiKey: string;
   workosClientId: string;
   /** WorkOS API origin, no trailing slash. Overridable so tests can point at a local server. */
@@ -22,6 +32,8 @@ export type ApiConfig = {
   workosIssuer?: string;
 };
 
+export type ApiConfig = WorkosApiConfig;
+
 export class ApiConfigError extends Error {}
 
 type Env = Record<string, string | undefined>;
@@ -35,16 +47,21 @@ const REQUIRED_VARS = [
 
 const DEFAULT_WORKOS_API_URL = "https://api.workos.com";
 
-export function loadApiConfig(env: Env): ApiConfig {
-  const missing = REQUIRED_VARS.filter((name) => !env[name]);
+function requireVars(env: Env, names: readonly string[]): void {
+  const missing = names.filter((name) => !env[name]);
   if (missing.length > 0) {
     throw new ApiConfigError(`Missing required environment variables: ${missing.join(", ")}`);
   }
+}
 
+export function loadApiConfig(env: Env): ApiConfig {
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : 8788;
+
+  requireVars(env, REQUIRED_VARS);
   const workosClientId = env.WORKOS_CLIENT_ID as string;
   const workosApiUrl = (env.WORKOS_API_URL ?? DEFAULT_WORKOS_API_URL).replace(/\/+$/, "");
   return {
+    identityProvider: "workos",
     databaseUrl: env.DATABASE_URL as string,
     baseUrl: env.ACCOUNT_BASE_URL as string,
     port,

@@ -26,7 +26,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
   });
 
   it("serves v1 instance info", async () => {
-    const built = createApp(baseConfig);
+    const built = await createApp(baseConfig);
     pool = built.pool;
 
     const res = await built.app.request("/api/v1/instance");
@@ -36,7 +36,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
   });
 
   it("returns a JSON AccountErrorBody for unknown API routes", async () => {
-    const built = createApp(baseConfig);
+    const built = await createApp(baseConfig);
     pool = built.pool;
 
     const res = await built.app.request("/api/v1/nope");
@@ -49,7 +49,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
   // The net under every /api/ route: whatever throws, the client still gets the
   // documented JSON shape instead of Hono's plain-text "Internal Server Error".
   it("maps an unhandled throw under /api/ onto the error contract", async () => {
-    const built = createApp(baseConfig);
+    const built = await createApp(baseConfig);
     pool = built.pool;
 
     built.app.get("/api/v1/boom", () => {
@@ -65,14 +65,14 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
   });
 
   it("points non-API paths at the repo instead of returning the API error body", async () => {
-    const built = createApp(baseConfig);
+    const built = await createApp(baseConfig);
     pool = built.pool;
 
     const res = await built.app.request("/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/plain");
     const body = await res.text();
-    expect(body).toContain("WorkOS AuthKit");
+    expect(body).toContain("Sign in from the Synara app");
     expect(body).toContain("https://github.com/Emanuele-web04/synara");
   });
 });

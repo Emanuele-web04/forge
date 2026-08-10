@@ -1,7 +1,17 @@
 import { generateKeyPair, SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { startFakeWorkos, type FakeWorkos } from "./testing/fakeWorkos";
-import { createWorkosAuth } from "./workos";
+import type { WorkosApiConfig } from "../config";
+import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
+import { createWorkosIdentityProvider } from "./workos";
+
+/**
+ * The flat surface these tests were written against: the verifier plus the
+ * raw organization calls, which the provider now returns as two objects.
+ */
+function createWorkosAuth(config: WorkosApiConfig) {
+  const { verifier, organizations } = createWorkosIdentityProvider(config);
+  return { ...verifier, ...organizations };
+}
 
 let workos: FakeWorkos;
 
@@ -378,7 +388,7 @@ describe("organizations", () => {
     await auth.createOrganizationMembership(org.orgId, user.id);
 
     await expect(auth.createOrganizationMembership(org.orgId, user.id)).rejects.toMatchObject({
-      name: "WorkosApiError",
+      name: "IdentityProviderError",
       status: 409,
     });
   });

@@ -8,12 +8,14 @@ import {
 import { Schema } from "effect";
 import { Hono } from "hono";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ApiConfig } from "../config";
+import type { WorkosApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
-import { clearOrgCache } from "../orgProvisioning";
+import { createDeviceCredentialStore } from "../identity/deviceCredentialStore";
+import { createEnvironmentRegistry } from "../identity/environmentRegistry";
+import { clearOrgCache } from "../identity/orgProvisioning";
+import { createWorkosIdentityProvider } from "../identity/workos";
 import { FAKE_DEVICE_AUTHORIZATION, startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
-import { createWorkosAuth } from "../workos";
 import {
   createV1Routes,
   DEVICE_RATE_LIMIT_PER_MINUTE,
@@ -52,7 +54,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   const databaseUrl = TEST_DATABASE_URL as string;
   let pool: Awaited<ReturnType<typeof createDb>>["pool"];
   let workos: FakeWorkos;
-  let config: ApiConfig;
+  let config: WorkosApiConfig;
 
   /**
    * A signed-in user acting inside their own organization — the state the CLI
@@ -85,11 +87,22 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     return { token, userId: user.id };
   }
 
+  /** Routes wired to a full adapter set built from `config`. */
+  function routesFor(db: ReturnType<typeof createDb>["db"], forConfig: WorkosApiConfig) {
+    const { verifier, grants } = createWorkosIdentityProvider(forConfig);
+    return createV1Routes({
+      verifier,
+      grants,
+      deviceCredentials: createDeviceCredentialStore(db),
+      environments: createEnvironmentRegistry(db),
+      db,
+    });
+  }
+
   function buildApp() {
     const { db } = createDb(databaseUrl);
-    const auth = createWorkosAuth(config);
     const app = new Hono();
-    app.route("/api/v1", createV1Routes({ auth, db, config }));
+    app.route("/api/v1", routesFor(db, config));
     return { app, db };
   }
 
@@ -190,17 +203,14 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     // rather than a 404 — the upstream-fault branch, not the deleted-user one.
     // Issuer and JWKS stay pinned at the live fake so token verification still
     // succeeds; otherwise discovery would fail first and answer 401.
-    const brokenConfig: ApiConfig = {
+    const brokenConfig: WorkosApiConfig = {
       ...config,
       workosApiUrl: "http://127.0.0.1:1",
       workosIssuer: workos.issuer,
       workosJwksUrl: `${workos.origin}/sso/jwks/${workos.clientId}`,
     };
     const app = new Hono();
-    app.route(
-      "/api/v1",
-      createV1Routes({ auth: createWorkosAuth(brokenConfig), db, config: brokenConfig }),
-    );
+    app.route("/api/v1", routesFor(db, brokenConfig));
 
     const user = workos.addUser({});
     const token = await workos.signAccessToken({
@@ -772,10 +782,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         const { db } = buildApp();
         const ssoConfig = ssoWorkos.config({ databaseUrl });
         const app = new Hono();
-        app.route(
-          "/api/v1",
-          createV1Routes({ auth: createWorkosAuth(ssoConfig), db, config: ssoConfig }),
-        );
+        app.route("/api/v1", routesFor(db, ssoConfig));
 
         const res = await postJson(
           app,
@@ -1247,8 +1254,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
       // And it is a real WorkOS organization the user is now a member of, not
       // a value invented for the response.
-      const auth = createWorkosAuth(config);
-      await expect(auth.listUserOrganizationMemberships(userId)).resolves.toEqual([
+      const { organizations } = createWorkosIdentityProvider(config);
+      await expect(organizations.listUserOrganizationMemberships(userId)).resolves.toEqual([
         { orgId: body.organizations[0]?.id, orgName: body.organizations[0]?.name },
       ]);
     });
@@ -1264,8 +1271,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const secondBody = (await second.json()) as { organizations: Array<{ id: string }> };
 
       expect(secondBody.organizations).toEqual(firstBody.organizations);
-      const auth = createWorkosAuth(config);
-      await expect(auth.listUserOrganizationMemberships(userId)).resolves.toHaveLength(1);
+      const { organizations } = createWorkosIdentityProvider(config);
+      await expect(organizations.listUserOrganizationMemberships(userId)).resolves.toHaveLength(1);
     });
 
     // Revoked membership. Verification is stateless, so the old token still
@@ -1389,12 +1396,9 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
     it("answers 502 in the error contract and logs when WorkOS is unreachable", async () => {
       const { db } = buildApp();
-      const brokenConfig: ApiConfig = { ...config, workosApiUrl: "http://127.0.0.1:1" };
+      const brokenConfig: WorkosApiConfig = { ...config, workosApiUrl: "http://127.0.0.1:1" };
       const app = new Hono();
-      app.route(
-        "/api/v1",
-        createV1Routes({ auth: createWorkosAuth(brokenConfig), db, config: brokenConfig }),
-      );
+      app.route("/api/v1", routesFor(db, brokenConfig));
 
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
