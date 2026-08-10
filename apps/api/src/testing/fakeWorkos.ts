@@ -377,6 +377,20 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     return c.json({ object: "organization", ...organization }, 201);
   });
 
+  // Update Organization. PUT, not PATCH: WorkOS models the rename as a full
+  // replacement, and a caller that guessed PATCH would 404 here as it would
+  // there.
+  app.put("/organizations/:id", async (c) => {
+    const organization = organizations.get(c.req.param("id"));
+    if (!organization) return c.json({ message: "Organization not found" }, 404);
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const name = typeof body?.name === "string" ? body.name : "";
+    if (!name) return c.json({ message: "name is required" }, 422);
+    const updated = { ...organization, name };
+    organizations.set(updated.id, updated);
+    return c.json({ object: "organization", ...updated });
+  });
+
   app.post("/user_management/organization_memberships", async (c) => {
     const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
     const orgId = typeof body?.organization_id === "string" ? body.organization_id : "";

@@ -42,6 +42,8 @@ export type WorkosAuth = {
   /** Every organization the user is a member of, oldest page first. */
   listUserOrganizationMemberships(userId: string): Promise<WorkosOrganization[]>;
   createOrganization(name: string): Promise<WorkosOrganization>;
+  /** Renames an organization. Callers must have checked membership first. */
+  updateOrganization(orgId: string, name: string): Promise<WorkosOrganization>;
   createOrganizationMembership(orgId: string, userId: string): Promise<void>;
 };
 
@@ -300,6 +302,21 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
       })) as WorkosOrganizationWire;
       if (typeof response.id !== "string" || response.id.length === 0) {
         throw new Error("WorkOS organization creation returned no id");
+      }
+      return {
+        orgId: response.id,
+        orgName: typeof response.name === "string" && response.name ? response.name : name,
+      };
+    },
+
+    async updateOrganization(orgId, name) {
+      const response = (await workosFetch(`/organizations/${encodeURIComponent(orgId)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      })) as WorkosOrganizationWire;
+      if (typeof response.id !== "string" || response.id.length === 0) {
+        throw new WorkosApiError(502, "WorkOS organization update returned no id");
       }
       return {
         orgId: response.id,

@@ -30,6 +30,28 @@ export const hosts = pgTable(
   ],
 );
 
+/**
+ * The part of a user's identity Synara owns. Keyed by WorkOS user id because
+ * WorkOS is the authority on who someone is — this table only holds what
+ * WorkOS has no opinion about. A row existing is what "onboarding completed"
+ * means; there is deliberately no separate flag to drift from it.
+ *
+ * There is no foreign key to a users table for the same reason `hosts` has
+ * none: identity lives in WorkOS, so orphaned rows are tolerated until webhook
+ * cleanup exists (future work).
+ */
+export const profiles = pgTable("profiles", {
+  userId: text("user_id").primaryKey(),
+  // Lowercase by contract, enforced at the route. The unique index is over the
+  // stored value, so case-folding on write is what makes it a real reservation
+  // rather than one that "Dylan" and "dylan" could both pass.
+  handle: text("handle").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  avatarColor: text("avatar_color").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const hostTokens = pgTable("host_tokens", {
   id: uuid("id").primaryKey().defaultRandom(),
   hostId: uuid("host_id")

@@ -144,6 +144,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       email: "ada@example.com",
       image: "https://cdn.example.com/ada.png",
       organization: { id: organization.id, name: "Analytical Engines" },
+      profile: null,
     });
   });
 
@@ -499,6 +500,193 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       headers: authHeaders(registerBody.hostToken),
     });
     expect(deleteRes.status).toBe(204);
+  });
+
+  describe("profile", () => {
+    function profileBody(overrides: Record<string, unknown> = {}) {
+      return {
+        handle: `user-${randomUUID().slice(0, 8)}`,
+        displayName: "Ada Lovelace",
+        avatarColor: "#22c55e",
+        ...overrides,
+      };
+    }
+
+    it("creates a profile and reports it from /me", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      const body = profileBody();
+
+      const putRes = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify(body),
+      });
+      expect(putRes.status).toBe(200);
+      expect(await putRes.json()).toMatchObject({ profile: body });
+
+      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await meRes.json()).toMatchObject({ profile: body });
+    });
+
+    it("updates the display name and avatar color of an existing profile", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      const created = profileBody();
+
+      await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify(created),
+      });
+
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify({ ...created, displayName: "Ada L.", avatarColor: "#3b82f6" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        profile: { handle: created.handle, displayName: "Ada L.", avatarColor: "#3b82f6" },
+      });
+    });
+
+    // The handle is the closest thing to a public identifier a user has, and
+    // V1 has no redirect story for a rename — so a change is refused loudly
+    // rather than silently ignored.
+    it("refuses to change the handle once it is set", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      const created = profileBody();
+
+      await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify(created),
+      });
+
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify({ ...created, handle: `${created.handle}x` }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+    });
+
+    it("answers 409 handle_taken when another user holds the handle", async () => {
+      const { app } = buildApp();
+      const first = await signIn();
+      const second = await signIn();
+      const body = profileBody();
+
+      const firstRes = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(first.token),
+        body: JSON.stringify(body),
+      });
+      expect(firstRes.status).toBe(200);
+
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(second.token),
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: "handle_taken" });
+    });
+
+    it.each([
+      ["uppercase", "Ada"],
+      ["trailing hyphen", "ada-"],
+      ["leading hyphen", "-ada"],
+      ["too short", "ad"],
+      ["illegal character", "ada_lovelace"],
+    ])("rejects a handle with a %s", async (_label, handle) => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify(profileBody({ handle })),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+    });
+
+    it("rejects an avatar color that is not a hex triplet", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify(profileBody({ avatarColor: "emerald" })),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+    });
+
+    it("requires authentication", async () => {
+      const { app } = buildApp();
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(profileBody()),
+      });
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe("organization rename", () => {
+    it("renames the workspace and reports the new name", async () => {
+      const { app } = buildApp();
+      const { token, orgId } = await signIn();
+
+      const res = await app.request("/api/v1/organization", {
+        method: "PATCH",
+        headers: authHeaders(token),
+        body: JSON.stringify({ name: "Analytical Engines" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        organization: { id: orgId, name: "Analytical Engines" },
+      });
+
+      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await meRes.json()).toMatchObject({
+        organization: { id: orgId, name: "Analytical Engines" },
+      });
+    });
+
+    it("rejects an empty name", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+
+      const res = await app.request("/api/v1/organization", {
+        method: "PATCH",
+        headers: authHeaders(token),
+        body: JSON.stringify({ name: "   " }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+    });
+
+    // Membership, not knowledge of the id, is what authorizes the rename.
+    it("refuses a caller whose token names an organization they have left", async () => {
+      const { app } = buildApp();
+      const { token, userId, orgId } = await signIn();
+      workos.removeMembership(orgId, userId);
+      clearOrgCache();
+
+      const res = await app.request("/api/v1/organization", {
+        method: "PATCH",
+        headers: authHeaders(token),
+        body: JSON.stringify({ name: "Not Mine" }),
+      });
+      expect(res.status).toBe(403);
+    });
   });
 
   describe("organization gate", () => {

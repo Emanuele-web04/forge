@@ -62,9 +62,7 @@ export type AccountProfileHandle = typeof AccountProfileHandle.Type;
  * the account service, and a server that rejected tomorrow's swatch would be
  * the thing standing between a user and their own profile.
  */
-export const AccountProfileAvatarColor = Schema.String.check(
-  Schema.isPattern(/^#[0-9a-fA-F]{6}$/),
-);
+export const AccountProfileAvatarColor = Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/));
 export type AccountProfileAvatarColor = typeof AccountProfileAvatarColor.Type;
 
 /**

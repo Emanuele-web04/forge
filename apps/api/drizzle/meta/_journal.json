@@ -22,6 +22,13 @@
       "when": 1786014657226,
       "tag": "0002_org_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786353588132,
+      "tag": "0003_profiles",
+      "breakpoints": true
     }
   ]
 }

@@ -62,6 +62,26 @@ export function clearOrgCache(): void {
   provisioningInFlight.clear();
 }
 
+/**
+ * Drops every cached membership list that mentions `orgId`.
+ *
+ * Memberships carry the organization *name*, so this cache is also a name
+ * cache — and a rename that did not evict it would keep serving the old
+ * workspace name to every member for the rest of the TTL, including to the
+ * user who just performed the rename and is watching for it to take effect.
+ *
+ * Every member is evicted, not just the caller: the rename is visible to all
+ * of them, and scanning a per-process map of at most a few thousand entries is
+ * cheaper than the confusion of a workspace that is renamed for one person.
+ */
+export function invalidateOrgCacheForOrganization(orgId: string): void {
+  for (const [userId, entry] of cache) {
+    if (entry.memberships.some((membership) => membership.orgId === orgId)) {
+      cache.delete(userId);
+    }
+  }
+}
+
 /** What a user's own workspace is called when this service creates it. */
 export function personalOrgName(email: string): string {
   return `Personal — ${email}`;

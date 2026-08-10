@@ -46,9 +46,7 @@ export interface AccountUrlResolutionInput {
  * silently fell back would tell a user they are not signed in to a service
  * they never meant to use.
  */
-export function resolveConfiguredAccountUrl(
-  input: AccountUrlResolutionInput,
-): string | undefined {
+export function resolveConfiguredAccountUrl(input: AccountUrlResolutionInput): string | undefined {
   const flag = input.flag?.trim();
   if (flag) return flag;
   const fromEnv = (input.env ?? process.env)[ACCOUNT_URL_ENV_NAME]?.trim();

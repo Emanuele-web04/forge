@@ -3,6 +3,9 @@ import {
   type AccountErrorCode,
   type AccountHost,
   type AccountMe,
+  type AccountProfile,
+  type AccountProfileAvatarColor,
+  type AccountProfileHandle,
   type DeviceAuthorizationResponse,
   type EnvironmentId,
   type InstanceInfo,
@@ -12,6 +15,8 @@ import {
   type RegisterHostResponse,
   RegisterHostRequest,
   UpdateHostRequest,
+  UpdateOrganizationRequest,
+  UpdateProfileRequest,
 } from "@synara/contracts";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -22,9 +27,9 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { clientIp } from "../clientIp";
 import type { ApiConfig } from "../config";
 import * as schema from "../db/schema";
-import { hosts, hostTokens } from "../db/schema";
+import { hosts, hostTokens, profiles } from "../db/schema";
 import { mintHostToken } from "../hostTokens";
-import { ensurePersonalOrg } from "../orgProvisioning";
+import { ensurePersonalOrg, invalidateOrgCacheForOrganization } from "../orgProvisioning";
 import { createRateLimiter } from "../rateLimit";
 import {
   WorkosApiError,
@@ -41,6 +46,7 @@ const API_VERSION: string = packageJson.version;
 export const DEVICE_RATE_LIMIT_PER_MINUTE = 10;
 
 type HostRow = typeof hosts.$inferSelect;
+type ProfileRow = typeof profiles.$inferSelect;
 
 function errorResponse(
   c: Context,
@@ -67,12 +73,42 @@ function toAccountHost(row: HostRow): AccountHost {
   };
 }
 
+/**
+ * Widens a stored row to the contract. The two branded strings are asserted
+ * rather than re-validated: the route validates on the way in, so a row that
+ * failed the check here would be a schema drift no read path can repair, and
+ * refusing to serve someone their own profile is the worse answer.
+ */
+function toAccountProfile(row: ProfileRow): AccountProfile {
+  return {
+    handle: row.handle as AccountProfileHandle,
+    displayName: row.displayName,
+    avatarColor: row.avatarColor as AccountProfileAvatarColor,
+  };
+}
+
 function toOrganizationSummary(organization: WorkosOrganization): OrganizationSummary {
   return { id: organization.orgId, name: organization.orgName };
 }
 
+/**
+ * Whether a failed write was refused by a unique index.
+ *
+ * The chain is walked rather than the error inspected directly: Drizzle wraps
+ * driver errors in a `DrizzleQueryError` that carries no `code` of its own, so
+ * reading only the top-level object turns every conflict into an unhandled
+ * 500 — which is exactly what a duplicate handle or a re-linked environment
+ * would have become.
+ */
 function isUniqueViolation(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === "23505");
+  for (
+    let current = error;
+    current instanceof Object;
+    current = (current as { cause?: unknown }).cause
+  ) {
+    if ("code" in current && current.code === "23505") return true;
+  }
+  return false;
 }
 
 export function createV1Routes(deps: {
@@ -189,13 +225,43 @@ export function createV1Routes(deps: {
     };
   }
 
-  v1.get("/me", async (c) => {
-    const session = await requireOrgSession(c);
-    if (session instanceof Response) return session;
+  /**
+   * The caller's profile, or null when they have not onboarded. Read on every
+   * `/me` and after every profile write, so it is one indexed primary-key
+   * lookup by design.
+   */
+  async function readProfile(userId: string): Promise<AccountProfile | null> {
+    const [row] = await db.select().from(profiles).where(eq(profiles.userId, userId)).limit(1);
+    return row ? toAccountProfile(row) : null;
+  }
 
-    let user: WorkosUser;
+  /**
+   * The `/me` body. Built in one place because three routes answer with it —
+   * `/me`, the profile write, and the workspace rename — and a client that saw
+   * a different shape from any of them would have to special-case it.
+   */
+  async function accountMe(
+    user: WorkosUser,
+    organization: OrganizationSummary,
+  ): Promise<AccountMe> {
+    return {
+      id: user.id,
+      name: user.name ?? user.email,
+      email: user.email,
+      ...(user.avatarUrl ? { image: user.avatarUrl } : {}),
+      organization,
+      profile: await readProfile(user.id),
+    };
+  }
+
+  /**
+   * The user behind a session, mapping the two failures that matter: a deleted
+   * account is the caller's authentication problem, anything else is ours.
+   * Returns the user, or the Response to return as-is.
+   */
+  async function loadSessionUser(c: Context, userId: string): Promise<WorkosUser | Response> {
     try {
-      user = await auth.getUser(session.userId);
+      return await auth.getUser(userId);
     } catch (error) {
       // The token verified, so the caller held a valid session — but WorkOS
       // will not describe the user. A 404 means the account was deleted while
@@ -211,15 +277,133 @@ export function createV1Routes(deps: {
       console.error("[api] user lookup failed:", error);
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
     }
+  }
 
-    const me: AccountMe = {
-      id: user.id,
-      name: user.name ?? user.email,
-      email: user.email,
-      ...(user.avatarUrl ? { image: user.avatarUrl } : {}),
-      organization: session.organization,
-    };
-    return c.json(me);
+  v1.get("/me", async (c) => {
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
+
+    const user = await loadSessionUser(c, session.userId);
+    if (user instanceof Response) return user;
+
+    return c.json(await accountMe(user, session.organization));
+  });
+
+  /**
+   * Upserts the caller's profile — the write that completes onboarding.
+   *
+   * The handle is immutable in V1: it is the closest thing to a public
+   * identifier a user has, and a rename needs a redirect story (and a decision
+   * about whether the freed handle is claimable) that V1 does not have. So a
+   * changed handle is refused rather than silently ignored, which is the
+   * failure a client can act on.
+   */
+  v1.put("/profile", async (c) => {
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: UpdateProfileRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(UpdateProfileRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    const user = await loadSessionUser(c, session.userId);
+    if (user instanceof Response) return user;
+
+    const existing = await readProfile(session.userId);
+    if (existing && existing.handle !== parsed.handle) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        "Your handle cannot be changed once it is set",
+      );
+    }
+
+    try {
+      await db
+        .insert(profiles)
+        .values({
+          userId: session.userId,
+          handle: parsed.handle,
+          displayName: parsed.displayName,
+          avatarColor: parsed.avatarColor,
+        })
+        // Only the editable columns are updated. `handle` is excluded rather
+        // than written back identically: the guard above already refused a
+        // change, and leaving it out of the statement means a future guard bug
+        // cannot rewrite someone's handle through this path.
+        .onConflictDoUpdate({
+          target: profiles.userId,
+          set: {
+            displayName: parsed.displayName,
+            avatarColor: parsed.avatarColor,
+            updatedAt: new Date(),
+          },
+        });
+    } catch (error) {
+      // The unique index on `handle` is the reservation; a violation here means
+      // somebody else holds it, including when two first-time writes race.
+      if (isUniqueViolation(error)) {
+        return errorResponse(c, 409, "handle_taken", "That handle is already taken");
+      }
+      throw error;
+    }
+
+    return c.json(await accountMe(user, session.organization));
+  });
+
+  /**
+   * Renames the workspace. The name lives on the WorkOS organization rather
+   * than here, so this is a write-through — and it is gated on membership by
+   * `requireOrgSession`, which is what stops a caller renaming an organization
+   * they merely know the id of.
+   */
+  v1.patch("/organization", async (c) => {
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: UpdateOrganizationRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(UpdateOrganizationRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    const user = await loadSessionUser(c, session.userId);
+    if (user instanceof Response) return user;
+
+    let renamed: WorkosOrganization;
+    try {
+      renamed = await auth.updateOrganization(session.orgId, parsed.name);
+    } catch (error) {
+      console.error("[api] organization rename failed:", error);
+      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+    }
+
+    // Membership lists carry the organization name, so they are stale the
+    // moment the rename lands — including the one this request populated.
+    invalidateOrgCacheForOrganization(session.orgId);
+
+    return c.json(await accountMe(user, toOrganizationSummary(renamed)));
   });
 
   v1.get("/hosts", async (c) => {
