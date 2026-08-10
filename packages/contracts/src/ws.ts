@@ -140,6 +140,10 @@ import {
 } from "./providerDiscovery";
 import { ProviderCompactThreadInput } from "./provider";
 import {
+  ProviderProfileAccountReadInput,
+  ProviderProfileLoginCancelInput,
+  ProviderProfileLoginStartInput,
+  ProviderProfileLogoutInput,
   ProviderProfilesCreateInput,
   ProviderProfilesListInput,
   ProviderProfilesRenameInput,
@@ -270,6 +274,10 @@ export const WS_METHODS = {
   providerProfilesRename: "providerProfiles.rename",
   providerProfilesSetEnabled: "providerProfiles.setEnabled",
   providerProfilesTombstone: "providerProfiles.tombstone",
+  providerProfilesReadAccount: "providerProfiles.readAccount",
+  providerProfilesStartLogin: "providerProfiles.startLogin",
+  providerProfilesCancelLogin: "providerProfiles.cancelLogin",
+  providerProfilesLogout: "providerProfiles.logout",
 
   // Streaming subscriptions
   subscribeTerminalEvents: "terminal.subscribeEvents",
@@ -477,6 +485,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.providerProfilesRename, ProviderProfilesRenameInput),
   tagRequestBody(WS_METHODS.providerProfilesSetEnabled, ProviderProfilesSetEnabledInput),
   tagRequestBody(WS_METHODS.providerProfilesTombstone, ProviderProfilesTombstoneInput),
+  tagRequestBody(WS_METHODS.providerProfilesReadAccount, ProviderProfileAccountReadInput),
+  tagRequestBody(WS_METHODS.providerProfilesStartLogin, ProviderProfileLoginStartInput),
+  tagRequestBody(WS_METHODS.providerProfilesCancelLogin, ProviderProfileLoginCancelInput),
+  tagRequestBody(WS_METHODS.providerProfilesLogout, ProviderProfileLogoutInput),
 
   // Provider discovery
   tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),

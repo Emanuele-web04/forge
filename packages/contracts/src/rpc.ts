@@ -138,6 +138,14 @@ import {
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
+  CodexProviderAccountStatus,
+  ProviderProfileAccountReadInput,
+  ProviderProfileLoginCancelInput,
+  ProviderProfileLoginCancelResult,
+  ProviderProfileLoginStartInput,
+  ProviderProfileLoginStartResult,
+  ProviderProfileLogoutInput,
+  ProviderProfileLogoutResult,
   ProviderProfilesCreateInput,
   ProviderProfilesListInput,
   ProviderProfilesRenameInput,
@@ -954,6 +962,39 @@ export const WsProviderProfilesTombstoneRpc = Rpc.make(WS_METHODS.providerProfil
   error: WsRpcError,
 });
 
+export const WsProviderProfilesReadAccountRpc = Rpc.make(
+  WS_METHODS.providerProfilesReadAccount,
+  {
+    payload: ProviderProfileAccountReadInput,
+    success: CodexProviderAccountStatus,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderProfilesStartLoginRpc = Rpc.make(
+  WS_METHODS.providerProfilesStartLogin,
+  {
+    payload: ProviderProfileLoginStartInput,
+    success: ProviderProfileLoginStartResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderProfilesCancelLoginRpc = Rpc.make(
+  WS_METHODS.providerProfilesCancelLogin,
+  {
+    payload: ProviderProfileLoginCancelInput,
+    success: ProviderProfileLoginCancelResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsProviderProfilesLogoutRpc = Rpc.make(WS_METHODS.providerProfilesLogout, {
+  payload: ProviderProfileLogoutInput,
+  success: ProviderProfileLogoutResult,
+  error: WsRpcError,
+});
+
 export const WsServerListExternalMcpIntegrationsRpc = Rpc.make(
   WS_METHODS.serverListExternalMcpIntegrations,
   {
@@ -1314,6 +1355,10 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderProfilesRenameRpc,
   WsProviderProfilesSetEnabledRpc,
   WsProviderProfilesTombstoneRpc,
+  WsProviderProfilesReadAccountRpc,
+  WsProviderProfilesStartLoginRpc,
+  WsProviderProfilesCancelLoginRpc,
+  WsProviderProfilesLogoutRpc,
   WsServerListExternalMcpIntegrationsRpc,
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,

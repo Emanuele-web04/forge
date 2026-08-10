@@ -57,6 +57,7 @@ import {
   type AgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
+import { buildCodexInitializeParams } from "./codexAppServerInitialize.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
@@ -738,18 +739,7 @@ export function normalizeCodexModelSlug(
   return normalized;
 }
 
-export function buildCodexInitializeParams() {
-  return {
-    clientInfo: {
-      name: "synara_desktop",
-      title: "Synara Desktop",
-      version: "0.1.0",
-    },
-    capabilities: {
-      experimentalApi: true,
-    },
-  } as const;
-}
+export { buildCodexInitializeParams } from "./codexAppServerInitialize.ts";
 
 function buildCodexCollaborationMode(input: {
   readonly interactionMode?: "default" | "plan";
@@ -1114,7 +1104,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // with its own 20-second deadline.
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        log.info("account/read response", { accountReadResponse });
         context.account = readCodexAccountSnapshot(accountReadResponse);
         log.info("subscription status", {
           type: context.account.type,

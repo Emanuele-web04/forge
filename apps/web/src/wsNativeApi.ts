@@ -727,6 +727,10 @@ export function createWsNativeApi(): NativeApi {
       rename: (input) => transport.request(WS_METHODS.providerProfilesRename, input),
       setEnabled: (input) => transport.request(WS_METHODS.providerProfilesSetEnabled, input),
       tombstone: (input) => transport.request(WS_METHODS.providerProfilesTombstone, input),
+      readAccount: (input) => transport.request(WS_METHODS.providerProfilesReadAccount, input),
+      startLogin: (input) => transport.request(WS_METHODS.providerProfilesStartLogin, input),
+      cancelLogin: (input) => transport.request(WS_METHODS.providerProfilesCancelLogin, input),
+      logout: (input) => transport.request(WS_METHODS.providerProfilesLogout, input),
     },
     stats: {
       getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
