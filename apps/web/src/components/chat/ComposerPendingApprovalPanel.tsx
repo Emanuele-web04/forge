@@ -76,6 +76,23 @@ const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   permissions: "Grant these permissions?",
 };
 
+const LICENSE_REFERENCE_URL = "https://github.com/redxzeta/forkara/blob/built-from-scratch/LICENSE";
+
+const LICENSE_RELATED_KEYWORDS = ["license", "copyright", "copyright owner", "license_file", "license file"];
+
+function hasLicenseSignals(input: { detail?: string; permissionProfile?: Record<string, unknown> }): boolean {
+  const detail = input.detail?.toLowerCase() ?? "";
+  const profile = input.permissionProfile;
+  if (!detail && !profile) {
+    return false;
+  }
+  if (detail && LICENSE_RELATED_KEYWORDS.some((keyword) => detail.includes(keyword))) {
+    return true;
+  }
+  const profileText = profile ? JSON.stringify(profile).toLowerCase() : "";
+  return LICENSE_RELATED_KEYWORDS.some((keyword) => profileText.includes(keyword));
+}
+
 export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPanel({
   approval,
   pendingCount,
@@ -83,6 +100,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   onRespond,
 }: ComposerPendingApprovalPanelProps) {
   const parsed = parseApprovalDetail(approval.detail);
+  const licenseProfileHint =
+    approval.requestKind === "permissions" && hasLicenseSignals({ detail: approval.detail, permissionProfile: approval.permissionProfile });
   const requestId = approval.requestId;
   const actions =
     approval.sessionApprovalAvailable === false
@@ -116,7 +135,9 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
-          {KIND_PROMPT[approval.requestKind]}
+          {licenseProfileHint
+            ? "License Changer check: confirm legal ownership before proceeding"
+            : KIND_PROMPT[approval.requestKind]}
           {parsed.tool ? (
             <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">
               {parsed.tool}
@@ -132,6 +153,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       <ApprovalDetail
         parsed={parsed}
         {...(approval.permissionProfile ? { permissionProfile: approval.permissionProfile } : {})}
+        showLicenseChangerCopy={licenseProfileHint}
       />
       <div className="mt-2.5 space-y-0.5">
         {actions.map((action, index) => (
@@ -160,11 +182,38 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
 function ApprovalDetail({
   parsed,
   permissionProfile,
+  showLicenseChangerCopy,
 }: {
   parsed: ParsedApproval;
   permissionProfile?: Record<string, unknown>;
+  showLicenseChangerCopy?: boolean;
 }) {
   if (permissionProfile) {
+    if (showLicenseChangerCopy) {
+      return (
+        <div className="mt-2">
+          <p className="mb-1.5 text-[11.5px] leading-snug text-muted-foreground/70">
+            Changing license terms is not a cosmetic toggle. Verify ownership and repository policy before allowing
+            this, and keep the existing LICENSE as the source of truth.
+          </p>
+          <a
+            href={LICENSE_REFERENCE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="mb-1.5 inline-flex text-xs text-[var(--color-text-primary)] underline"
+          >
+            Read current LICENSE
+          </a>
+          <pre
+            className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground/85"
+            title="Requested permission profile"
+          >
+            <code>{JSON.stringify(permissionProfile, null, 2)}</code>
+          </pre>
+        </div>
+      );
+    }
+
     return (
       <div className="mt-2">
         {parsed.fallback ? (
