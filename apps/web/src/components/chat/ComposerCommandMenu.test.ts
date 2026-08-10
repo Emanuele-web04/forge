@@ -60,7 +60,7 @@ describe("groupCommandItems", () => {
         provider: "codex",
         mention: { name: "Release prep", path: "thread://thread-1" },
         label: "Release prep",
-        description: "Synara",
+        description: "Forkara",
       },
     ];
 

@@ -18,7 +18,7 @@ afterEach(() => {
 function createAssets(): string {
   const root = mkdtempSync(join(tmpdir(), "synara-artifact-provenance-test-"));
   temporaryRoots.push(root);
-  writeFileSync(join(root, "Synara-1.2.3-x64.AppImage"), "app-image-bytes");
+  writeFileSync(join(root, "Forkara-1.2.3-x64.AppImage"), "app-image-bytes");
   writeFileSync(join(root, "latest-linux.yml"), "version: 1.2.3\n");
   return root;
 }
@@ -26,7 +26,7 @@ function createAssets(): string {
 function createWindowsAssets(): string {
   const root = mkdtempSync(join(tmpdir(), "synara-windows-provenance-test-"));
   temporaryRoots.push(root);
-  writeFileSync(join(root, "Synara-1.2.3-x64.exe"), "unsigned-windows-bytes");
+  writeFileSync(join(root, "Forkara-1.2.3-x64.exe"), "unsigned-windows-bytes");
   writeFileSync(join(root, "latest.yml"), "version: 1.2.3\n");
   return root;
 }
@@ -57,11 +57,11 @@ describe("release artifact provenance", () => {
     });
     expect(result.manifest.artifacts.map((artifact) => artifact.fileName)).toEqual([
       "latest-linux.yml",
-      "Synara-1.2.3-x64.AppImage",
+      "Forkara-1.2.3-x64.AppImage",
     ]);
     expect(
       result.manifest.artifacts.find(
-        (artifact) => artifact.fileName === "Synara-1.2.3-x64.AppImage",
+        (artifact) => artifact.fileName === "Forkara-1.2.3-x64.AppImage",
       )?.sha256,
     ).toBe(createHash("sha256").update("app-image-bytes").digest("hex"));
     expect(JSON.parse(readFileSync(result.path, "utf8"))).toEqual(result.manifest);

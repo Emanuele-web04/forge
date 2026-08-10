@@ -11,7 +11,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationsFile = "apps/server/src/persistence/Migrations.ts";
 
 /**
- * Every shipped Synara database records its applied migrations as (id, name)
+ * Every shipped Forkara database records its applied migrations as (id, name)
  * rows in `effect_sql_migrations`, and the runtime reconciler in
  * `Migrations.ts` treats a name that does not match the ID as a foreign
  * lineage: it truncates the tracker and replays the schema. Renumbering or
@@ -59,7 +59,7 @@ const HANDLED_RELEASED_DIVERGENCES: readonly MigrationLineageAllowance[] = [
   // past 16 is idempotent, so replaying 17.. over such a database is safe.
   { id: 17, name: "ProjectionThreadsArchivedAt" },
   { id: 18, name: "ProjectionThreadsArchivedAtIndex" },
-  // Renamed in place (not renumbered) during the Synara identity cutover, so
+  // Renamed in place (not renumbered) during the Forkara identity cutover, so
   // migration 32 is the same migration under a new name. `reconcileMigrationLineage`
   // renames the tracker row back to the canonical name whenever the rows below
   // it are canonical, which is the only way this pair can occur.

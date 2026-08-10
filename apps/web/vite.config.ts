@@ -1,5 +1,5 @@
 // FILE: vite.config.ts
-// Purpose: Builds the Synara web client and controls diagnostic source maps.
+// Purpose: Builds the Forkara web client and controls diagnostic source maps.
 // Layer: Web build config
 // Depends on: Vite, Tailwind, React compiler, TanStack Router.
 

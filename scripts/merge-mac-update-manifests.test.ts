@@ -11,10 +11,10 @@ describe("merge-mac-update-manifests", () => {
     const arm64 = parseMacUpdateManifest(
       `version: 0.0.4
 files:
-  - url: Synara-0.0.4-arm64.zip
+  - url: Forkara-0.0.4-arm64.zip
     sha512: arm64zip
     size: 125621344
-path: Synara-0.0.4-arm64.zip
+path: Forkara-0.0.4-arm64.zip
 sha512: arm64zip
 releaseDate: '2026-03-07T10:32:14.587Z'
 `,
@@ -24,10 +24,10 @@ releaseDate: '2026-03-07T10:32:14.587Z'
     const x64 = parseMacUpdateManifest(
       `version: 0.0.4
 files:
-  - url: Synara-0.0.4-x64.zip
+  - url: Forkara-0.0.4-x64.zip
     sha512: x64zip
     size: 132000112
-path: Synara-0.0.4-x64.zip
+path: Forkara-0.0.4-x64.zip
 sha512: x64zip
 releaseDate: '2026-03-07T10:36:07.540Z'
 `,
@@ -40,7 +40,7 @@ releaseDate: '2026-03-07T10:36:07.540Z'
     assert.equal(merged.releaseDate, "2026-03-07T10:36:07.540Z");
     assert.deepStrictEqual(
       merged.files.map((file) => file.url),
-      ["Synara-0.0.4-arm64.zip", "Synara-0.0.4-x64.zip"],
+      ["Forkara-0.0.4-arm64.zip", "Forkara-0.0.4-x64.zip"],
     );
 
     const serialized = serializeMacUpdateManifest(merged);
@@ -53,7 +53,7 @@ releaseDate: '2026-03-07T10:36:07.540Z'
     const arm64 = parseMacUpdateManifest(
       `version: 0.0.4
 files:
-  - url: Synara-0.0.4-arm64.zip
+  - url: Forkara-0.0.4-arm64.zip
     sha512: arm64zip
     size: 1
 releaseDate: '2026-03-07T10:32:14.587Z'
@@ -64,7 +64,7 @@ releaseDate: '2026-03-07T10:32:14.587Z'
     const x64 = parseMacUpdateManifest(
       `version: 0.0.5
 files:
-  - url: Synara-0.0.5-x64.zip
+  - url: Forkara-0.0.5-x64.zip
     sha512: x64zip
     size: 1
 releaseDate: '2026-03-07T10:36:07.540Z'
@@ -79,7 +79,7 @@ releaseDate: '2026-03-07T10:36:07.540Z'
     const manifest = parseMacUpdateManifest(
       `version: '1.0'
 files:
-  - url: Synara-1.0-x64.zip
+  - url: Forkara-1.0-x64.zip
     sha512: zipsha
     size: 1
 releaseName: 'true'

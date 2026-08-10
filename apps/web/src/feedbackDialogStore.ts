@@ -1,5 +1,5 @@
 // FILE: feedbackDialogStore.ts
-// Purpose: Owns the single global Feedback Synara dialog state.
+// Purpose: Owns the single global Feedback Forkara dialog state.
 // Layer: Web UI state
 // Depends on: The feedback feature context contract and Zustand.
 

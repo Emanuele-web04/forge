@@ -1,5 +1,5 @@
 // FILE: ComposerAutomationSetupBanner.tsx
-// Purpose: Slim control strip shown above the composer while Synara is gathering the
+// Purpose: Slim control strip shown above the composer while Forkara is gathering the
 // missing details (task and/or schedule) for a chat-created automation. The actual
 // back-and-forth renders as message bubbles in the transcript; this strip just marks
 // setup mode and lets the user cancel (which restores their text).

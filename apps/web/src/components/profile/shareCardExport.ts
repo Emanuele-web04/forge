@@ -70,6 +70,6 @@ export function shareIntentUrl(target: ShareTarget): string {
     case "reddit":
       return `https://www.reddit.com/submit?url=${encodeURIComponent(
         SHARE_URL,
-      )}&title=${encodeURIComponent("My Synara dev stats")}`;
+      )}&title=${encodeURIComponent("My Forkara dev stats")}`;
   }
 }

@@ -3,13 +3,13 @@
 // Layer: Marketing util
 // Exports: repo/release URLs plus the latest-release fetch helper.
 
-const REPO = "Emanuele-web04/Synara";
+const REPO = "redxzeta/forkara";
 export const REPO_URL = `https://github.com/${REPO}`;
 
 export const RELEASES_URL = `https://github.com/${REPO}/releases`;
 
 const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
-const CACHE_KEY = "synara-latest-release";
+const CACHE_KEY = "forkara-latest-release";
 
 export interface ReleaseAsset {
   name: string;

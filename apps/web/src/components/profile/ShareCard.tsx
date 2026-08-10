@@ -122,7 +122,7 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
         </div>
         <div className="flex shrink-0 items-center gap-2 text-slate-600">
           <SynaraLogo className="size-6 text-slate-700" />
-          <span className="text-xl font-normal tracking-tight">Synara</span>
+          <span className="text-xl font-normal tracking-tight">Forkara</span>
         </div>
       </div>
 

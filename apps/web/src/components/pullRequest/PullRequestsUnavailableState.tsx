@@ -138,7 +138,7 @@ export function PullRequestsUnavailableState({
         </EmptyTitle>
         <EmptyDescription>
           {notInstalled
-            ? "Synara reads GitHub data only through the gh CLI. Install it, then reopen this view."
+            ? "Forkara reads GitHub data only through the gh CLI. Install it, then reopen this view."
             : notAuthenticated
               ? "Authenticate the GitHub CLI in a terminal, then retry."
               : error instanceof Error

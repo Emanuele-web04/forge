@@ -1253,8 +1253,8 @@ label:has(> select#reasoning-effort) select {
     0 1px 4px -2px color-mix(in srgb, var(--color-black, #000) 16%, transparent);
 }
 
-/* Rounded chip holding the Synara mark in the box header, echoing the source
-   file's row gutter badge so the comment reads as "from Synara". */
+/* Rounded chip holding the Forkara mark in the box header, echoing the source
+   file's row gutter badge so the comment reads as "from Forkara". */
 .editor-file-viewer__comment-badge {
   display: inline-flex;
   align-items: center;
@@ -2812,7 +2812,7 @@ diffs-container {
   --picker-option-py: 0.3125rem;
 }
 
-/* Sidebar Synara/Studio surface switcher: tight shell inset, airy option rows.
+/* Sidebar Forkara/Studio surface switcher: tight shell inset, airy option rows.
    Composer picker tokens otherwise pin option py to ~1px and win over Tailwind. */
 .sidebar-surface-picker-menu {
   --picker-menu-body-p: 0.25rem;

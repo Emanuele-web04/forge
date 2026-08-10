@@ -88,7 +88,7 @@ export function AppSnapShortcutControl({
     const conflictCommand = appSnapShortcutConflictCommand(nextCandidate, keybindings);
     if (conflictCommand) {
       const commandLabel = shortcutSheetCommandLabel(conflictCommand) ?? conflictCommand;
-      reportUnavailable(`Synara already uses this for “${commandLabel}”.`);
+      reportUnavailable(`Forkara already uses this for “${commandLabel}”.`);
       return;
     }
     const systemConflict = appSnapShortcutSystemConflict(nextCandidate);
@@ -98,7 +98,7 @@ export function AppSnapShortcutControl({
     }
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) {
-      reportUnavailable("Requires the Synara desktop app on macOS.");
+      reportUnavailable("Requires the Forkara desktop app on macOS.");
       return;
     }
     setCheckState({ status: "checking", availability: null });

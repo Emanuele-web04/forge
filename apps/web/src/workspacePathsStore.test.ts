@@ -60,11 +60,11 @@ describe("workspacePathsStore", () => {
 
     const { useWorkspacePathsStore } = await import("./workspacePathsStore");
 
-    useWorkspacePathsStore.getState().setChatWorkspaceRoot("/Users/tester/Documents/Synara");
+    useWorkspacePathsStore.getState().setChatWorkspaceRoot("/Users/tester/Documents/Forkara");
     useWorkspacePathsStore.getState().setChatWorkspaceRoot(undefined);
 
     expect(useWorkspacePathsStore.getState().chatWorkspaceRoot).toBe(
-      "/Users/tester/Documents/Synara",
+      "/Users/tester/Documents/Forkara",
     );
   });
 
@@ -76,11 +76,11 @@ describe("workspacePathsStore", () => {
 
     useWorkspacePathsStore
       .getState()
-      .setStudioWorkspaceRoot("/Users/tester/Documents/Synara/Studio");
+      .setStudioWorkspaceRoot("/Users/tester/Documents/Forkara/Studio");
     useWorkspacePathsStore.getState().setStudioWorkspaceRoot(undefined);
 
     expect(useWorkspacePathsStore.getState().studioWorkspaceRoot).toBe(
-      "/Users/tester/Documents/Synara/Studio",
+      "/Users/tester/Documents/Forkara/Studio",
     );
   });
 
@@ -92,16 +92,16 @@ describe("workspacePathsStore", () => {
 
     useWorkspacePathsStore.getState().setServerWorkspacePaths({
       homeDir: "/Users/tester",
-      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
-      studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      chatWorkspaceRoot: "/Users/tester/Documents/Forkara",
+      studioWorkspaceRoot: "/Users/tester/Documents/Forkara/Studio",
     });
 
     expect(useWorkspacePathsStore.getState().homeDir).toBe("/Users/tester");
     expect(useWorkspacePathsStore.getState().chatWorkspaceRoot).toBe(
-      "/Users/tester/Documents/Synara",
+      "/Users/tester/Documents/Forkara",
     );
     expect(useWorkspacePathsStore.getState().studioWorkspaceRoot).toBe(
-      "/Users/tester/Documents/Synara/Studio",
+      "/Users/tester/Documents/Forkara/Studio",
     );
   });
 
@@ -112,8 +112,8 @@ describe("workspacePathsStore", () => {
     let workspaceModule = await import("./workspacePathsStore");
     workspaceModule.useWorkspacePathsStore.getState().setServerWorkspacePaths({
       homeDir: "/Users/tester",
-      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
-      studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      chatWorkspaceRoot: "/Users/tester/Documents/Forkara",
+      studioWorkspaceRoot: "/Users/tester/Documents/Forkara/Studio",
     });
 
     vi.resetModules();
@@ -121,7 +121,7 @@ describe("workspacePathsStore", () => {
 
     expect(workspaceModule.useWorkspacePathsStore.getState().homeDir).toBe("/Users/tester");
     expect(workspaceModule.useWorkspacePathsStore.getState().chatWorkspaceRoot).toBe(
-      "/Users/tester/Documents/Synara",
+      "/Users/tester/Documents/Forkara",
     );
     expect(workspaceModule.useWorkspacePathsStore.getState().studioWorkspaceRoot).toBeNull();
   });
@@ -133,7 +133,7 @@ describe("workspacePathsStore", () => {
       JSON.stringify({
         state: {
           homeDir: "/Users/legacy",
-          chatWorkspaceRoot: "/Users/legacy/Documents/Synara",
+          chatWorkspaceRoot: "/Users/legacy/Documents/Forkara",
           workspacePages: [{ id: "retired-workspace", title: "Workspace 1" }],
         },
         version: 2,
@@ -145,7 +145,7 @@ describe("workspacePathsStore", () => {
 
     expect(useWorkspacePathsStore.getState().homeDir).toBe("/Users/legacy");
     expect(useWorkspacePathsStore.getState().chatWorkspaceRoot).toBe(
-      "/Users/legacy/Documents/Synara",
+      "/Users/legacy/Documents/Forkara",
     );
     expect(useWorkspacePathsStore.getState()).not.toHaveProperty("workspacePages");
 

@@ -97,6 +97,6 @@ describe("SettingsSidebarNav", () => {
     expect(markup).toContain("System tools");
     expect(markup).toContain("Archived threads");
     expect(markup).not.toContain(">App<");
-    expect(markup).not.toContain(">Synara<");
+    expect(markup).not.toContain(">Forkara<");
   });
 });

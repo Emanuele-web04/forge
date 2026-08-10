@@ -10,7 +10,7 @@ import {
 } from "./externalMcpSetup";
 
 const stdio = {
-  command: "/Applications/Synara.app/Contents/MacOS/Synara",
+  command: "/Applications/Forkara.app/Contents/MacOS/Forkara",
   args: [
     "server.js",
     "mcp",
@@ -18,7 +18,7 @@ const stdio = {
     "--integration",
     "mcp_int_example",
     "--home-dir",
-    "/tmp/Synara home",
+    "/tmp/Forkara home",
   ],
   env: { ELECTRON_RUN_AS_NODE: "1" },
 };
@@ -29,10 +29,10 @@ describe("external MCP guided setup", () => {
     const claude = buildExternalMcpClientConfiguration("claudeCode", stdio);
 
     expect(codex.value).toBe(
-      "codex mcp add synara --env ELECTRON_RUN_AS_NODE=1 -- /Applications/Synara.app/Contents/MacOS/Synara server.js mcp serve --integration mcp_int_example --home-dir '/tmp/Synara home'",
+      "codex mcp add synara --env ELECTRON_RUN_AS_NODE=1 -- /Applications/Forkara.app/Contents/MacOS/Forkara server.js mcp serve --integration mcp_int_example --home-dir '/tmp/Forkara home'",
     );
     expect(claude.value).toBe(
-      "claude mcp add --scope user synara -e ELECTRON_RUN_AS_NODE=1 -- /Applications/Synara.app/Contents/MacOS/Synara server.js mcp serve --integration mcp_int_example --home-dir '/tmp/Synara home'",
+      "claude mcp add --scope user synara -e ELECTRON_RUN_AS_NODE=1 -- /Applications/Forkara.app/Contents/MacOS/Forkara server.js mcp serve --integration mcp_int_example --home-dir '/tmp/Forkara home'",
     );
     expect(`${codex.value}${claude.value}`).not.toContain("syn_mcp_v1_");
   });
@@ -50,15 +50,15 @@ describe("external MCP guided setup", () => {
   it("builds terminal commands for PowerShell on Windows", () => {
     const codex = buildExternalMcpClientConfiguration("codex", stdio, "Win32");
     expect(codex.value).toBe(
-      "& 'codex' 'mcp' 'add' 'synara' '--env' 'ELECTRON_RUN_AS_NODE=1' '--' '/Applications/Synara.app/Contents/MacOS/Synara' 'server.js' 'mcp' 'serve' '--integration' 'mcp_int_example' '--home-dir' '/tmp/Synara home'",
+      "& 'codex' 'mcp' 'add' 'synara' '--env' 'ELECTRON_RUN_AS_NODE=1' '--' '/Applications/Forkara.app/Contents/MacOS/Forkara' 'server.js' 'mcp' 'serve' '--integration' 'mcp_int_example' '--home-dir' '/tmp/Forkara home'",
     );
     expect(codex.instruction).toContain("PowerShell");
   });
 
   it("builds a project-specific prompt without exposing implementation identifiers", () => {
-    const prompt = buildExternalMcpExamplePrompt("Synara app");
+    const prompt = buildExternalMcpExamplePrompt("Forkara app");
 
-    expect(prompt).toContain('project named "Synara app"');
+    expect(prompt).toContain('project named "Forkara app"');
     expect(prompt).toContain("managed worktree");
     expect(prompt).toContain("approval-required");
     expect(prompt).not.toContain("projectId");

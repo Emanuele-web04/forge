@@ -47,7 +47,7 @@ export function shouldRefreshIconCache(
   return previousVersion !== currentVersion;
 }
 
-// Resolve the running `.app` bundle (…/Synara.app) from the Electron executable
+// Resolve the running `.app` bundle (…/Forkara.app) from the Electron executable
 // inside Contents/MacOS. Returns null off macOS or when the layout is unexpected.
 export function resolveMacAppBundlePath(
   execPath: string,

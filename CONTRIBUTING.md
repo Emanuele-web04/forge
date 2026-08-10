@@ -4,7 +4,7 @@
 
 We are accepting focused contributions, especially small bug fixes, reliability fixes, performance improvements, and maintenance work.
 
-You can open an issue or PR, but please do so knowing that Synara is still early and we are keeping scope, quality, and direction tight.
+You can open an issue or PR, but please do so knowing that Forkara is still early and we are keeping scope, quality, and direction tight.
 
 Large, unfocused, or direction-changing PRs may still be closed quickly.
 

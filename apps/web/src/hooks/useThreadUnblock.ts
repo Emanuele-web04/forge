@@ -39,7 +39,7 @@ export function useThreadUnblock(input: {
     void (async () => {
       try {
         const api = readNativeApi();
-        if (!api) throw new Error("Not connected to the Synara server.");
+        if (!api) throw new Error("Not connected to the Forkara server.");
         const result = await unblockThreadFromClient(api.orchestration, threadId);
         onUnblocked(threadId);
         toastManager.add(describeThreadUnblockResult(result));

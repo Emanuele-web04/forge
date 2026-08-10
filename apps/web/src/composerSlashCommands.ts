@@ -208,7 +208,7 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   feedback: {
     command: "feedback",
     label: "/feedback",
-    description: "Send feedback to the Synara team",
+    description: "Send feedback to the Forkara team",
     source: "app",
   },
   automation: {
@@ -416,8 +416,8 @@ export function getAvailableComposerSlashCommands(input: {
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
-          // creates a Synara split/context clone before the provider sees the first turn.
-          // /export is app-level too — Synara owns the thread transcript, so the download
+          // creates a Forkara split/context clone before the provider sees the first turn.
+          // /export is app-level too — Forkara owns the thread transcript, so the download
           // happens in the app rather than being forwarded to Claude's native /export.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),

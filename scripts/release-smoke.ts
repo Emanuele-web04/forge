@@ -50,10 +50,10 @@ function writeMacManifestFixtures(targetRoot: string): { arm64Path: string; x64P
     arm64Path,
     `version: 9.9.9-smoke.0
 files:
-  - url: Synara-9.9.9-smoke.0-arm64.zip
+  - url: Forkara-9.9.9-smoke.0-arm64.zip
     sha512: arm64zip
     size: 125621344
-path: Synara-9.9.9-smoke.0-arm64.zip
+path: Forkara-9.9.9-smoke.0-arm64.zip
 sha512: arm64zip
 releaseDate: '2026-03-08T10:32:14.587Z'
 `,
@@ -63,10 +63,10 @@ releaseDate: '2026-03-08T10:32:14.587Z'
     x64Path,
     `version: 9.9.9-smoke.0
 files:
-  - url: Synara-9.9.9-smoke.0-x64.zip
+  - url: Forkara-9.9.9-smoke.0-x64.zip
     sha512: x64zip
     size: 132000112
-path: Synara-9.9.9-smoke.0-x64.zip
+path: Forkara-9.9.9-smoke.0-x64.zip
 sha512: x64zip
 releaseDate: '2026-03-08T10:36:07.540Z'
 `,
@@ -100,7 +100,7 @@ function verifyCanonicalIdentity(): void {
   };
   if (JSON.stringify(serverPackage.bin ?? {}) !== JSON.stringify(expectedBinaries)) {
     throw new Error(
-      "Expected the CLI to expose only the Synara entry point and migration recovery binary.",
+      "Expected the CLI to expose only the Forkara entry point and migration recovery binary.",
     );
   }
   if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
@@ -117,7 +117,7 @@ function verifyCanonicalIdentity(): void {
     !resolvedPolicy.makeLatest ||
     resolvedPolicy.mirrorToStableChannel
   ) {
-    throw new Error("Expected stable clean Synara releases to publish on GitHub Latest.");
+    throw new Error("Expected stable clean Forkara releases to publish on GitHub Latest.");
   }
 }
 
@@ -432,12 +432,12 @@ try {
   const mergedManifest = readFileSync(arm64Path, "utf8");
   assertContains(
     mergedManifest,
-    "Synara-9.9.9-smoke.0-arm64.zip",
+    "Forkara-9.9.9-smoke.0-arm64.zip",
     "Merged manifest is missing the arm64 asset.",
   );
   assertContains(
     mergedManifest,
-    "Synara-9.9.9-smoke.0-x64.zip",
+    "Forkara-9.9.9-smoke.0-x64.zip",
     "Merged manifest is missing the x64 asset.",
   );
   assertNotContains(

@@ -170,10 +170,10 @@ function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): 
   }
   runCommand("7z", ["x", "-y", `-o${applicationRoot}`, applicationArchives[0]!]);
   const executables = findFiles(applicationRoot, (candidate) =>
-    /[/\\]Synara\.exe$/i.test(candidate),
+    /[/\\]Forkara\.exe$/i.test(candidate),
   );
   if (executables.length !== 1) {
-    throw new Error(`Expected one extracted Synara.exe, found ${executables.length}.`);
+    throw new Error(`Expected one extracted Forkara.exe, found ${executables.length}.`);
   }
   return { command: executables[0]!, args: [], cwd: dirname(executables[0]!) };
 }

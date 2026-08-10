@@ -15,7 +15,7 @@ describe("normalizeComposerImageSource", () => {
         appName: "Safari",
         bundleIdentifier: "com.apple.Safari",
         appIconDataUrl: "data:image/png;base64,aWNvbg==",
-        windowTitle: "Synara",
+        windowTitle: "Forkara",
       }),
     ).toEqual({
       kind: "appsnap",
@@ -24,7 +24,7 @@ describe("normalizeComposerImageSource", () => {
       appName: "Safari",
       bundleIdentifier: "com.apple.Safari",
       appIconDataUrl: "data:image/png;base64,aWNvbg==",
-      windowTitle: "Synara",
+      windowTitle: "Forkara",
     });
   });
 
@@ -74,7 +74,7 @@ describe("normalizeComposerImageSource", () => {
         appName: "Safari",
         bundleIdentifier: "com.apple.Safari",
         appIconDataUrl: "data:image/png;base64,aWNvbg==",
-        windowTitle: "Synara",
+        windowTitle: "Forkara",
       }),
     ).toEqual({
       kind: "appsnap",
@@ -82,7 +82,7 @@ describe("normalizeComposerImageSource", () => {
       capturedAt: "2026-07-12T20:00:00.000Z",
       appName: "Safari",
       bundleIdentifier: "com.apple.Safari",
-      windowTitle: "Synara",
+      windowTitle: "Forkara",
     });
   });
 });

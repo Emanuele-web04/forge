@@ -807,7 +807,7 @@ describe("AppSnap helper protocol", () => {
           name: "restart-capture.png",
           sourceAppName: "Safari",
           sourceBundleIdentifier: "com.apple.Safari",
-          sourceWindowTitle: "Synara",
+          sourceWindowTitle: "Forkara",
         })}\n`,
       );
       await vi.waitFor(() => expect(onCaptured).toHaveBeenCalledTimes(1));
@@ -829,7 +829,7 @@ describe("AppSnap helper protocol", () => {
         name: "restart-capture.png",
         sourceAppName: "Safari",
         sourceBundleIdentifier: "com.apple.Safari",
-        sourceWindowTitle: "Synara",
+        sourceWindowTitle: "Forkara",
       });
       expect(Buffer.from(restored[0]!.bytes)).toEqual(captureBytes);
 

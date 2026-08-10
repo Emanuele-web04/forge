@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { appSnapShortcutConflictCommand } from "./appSnapShortcut";
 
 describe("AppSnap renderer shortcut conflicts", () => {
-  it("finds a default Synara shortcut", () => {
+  it("finds a default Forkara shortcut", () => {
     expect(
       appSnapShortcutConflictCommand({ kind: "key-chord", modifier: "command", key: "KeyN" }, []),
     ).toBe("chat.new");

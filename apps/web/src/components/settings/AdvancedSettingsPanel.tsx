@@ -144,7 +144,7 @@ export function AdvancedSettingsPanel(props: {
         <SettingsSection title="Session">
           <SettingsRow
             title="This browser"
-            description="Revoke this browser session and close every live Synara connection it owns. A fresh pairing link is required to reconnect."
+            description="Revoke this browser session and close every live Forkara connection it owns. A fresh pairing link is required to reconnect."
             status={`Authenticated as ${authSessionQuery.data.role ?? "client"}.`}
             control={
               <Button

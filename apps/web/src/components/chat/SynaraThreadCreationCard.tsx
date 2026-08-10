@@ -1,5 +1,5 @@
 // FILE: SynaraThreadCreationCard.tsx
-// Purpose: End-of-turn recap for threads created through the Synara MCP harness.
+// Purpose: End-of-turn recap for threads created through the Forkara MCP harness.
 // Layer: Chat transcript UI
 
 import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
@@ -37,7 +37,7 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
     >
       <div className="flex min-w-0 items-center gap-3 px-3 py-2.5">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-background-elevated-secondary)] text-foreground">
-          <SynaraLogo className="h-[22px] w-auto" aria-label="Synara" />
+          <SynaraLogo className="h-[22px] w-auto" aria-label="Forkara" />
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate font-system-ui text-[length:var(--app-font-size-ui-lg,13px)] font-medium text-foreground/95">

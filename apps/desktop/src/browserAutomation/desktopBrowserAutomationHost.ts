@@ -831,7 +831,7 @@ export class DesktopBrowserAutomationHost {
       reconcile: (timeoutMs, signal) => {
         if (observedEvent) return Promise.resolve(observedEvent);
         // CDP announces link/window activation before Electron reconciles the
-        // denied child into Synara's visible tab model. Only that path waits;
+        // denied child into Forkara's visible tab model. Only that path waits;
         // ordinary clicks return immediately with no fixed grace period.
         if (!pageAnnouncedWindowOpen) {
           return waitOneTurnForWindowOpenEvent(eventPromise, signal);

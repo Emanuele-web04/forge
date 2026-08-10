@@ -434,7 +434,7 @@ interface MessagesTimelineProps {
    * the anchored slide settles; ChatView's auto-follow re-snaps pause while set.
    */
   tailAnchorScrollInFlightRef?: RefObject<boolean> | undefined;
-  /** Provenance for a conversation created from another Synara task. */
+  /** Provenance for a conversation created from another Forkara task. */
   crossTaskOrigin?: CrossTaskOrigin | null;
   /** Marks the transcript as a temporary chat so user bubbles render the dashed primary outline. */
   isTemporaryThread?: boolean;
@@ -1246,7 +1246,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         (() => {
           const groupId = row.id;
           // Creation milestones are reserved for the end-of-turn recap card.
-          // The provider's actual Synara MCP tool rows remain visible here.
+          // The provider's actual Forkara MCP tool rows remain visible here.
           const groupedEntries = row.groupedEntries.filter(
             (workEntry) => !workEntry.synaraThreadCreation,
           );
@@ -1433,7 +1433,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   )}
                 >
                   {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
-                  {/* The cross-task origin label already attributes this turn to another Synara thread,
+                  {/* The cross-task origin label already attributes this turn to another Forkara thread,
                       so suppress the dispatch chip here to avoid a duplicate "Sent by …" marker. */}
                   {showCrossTaskOrigin ? null : (
                     <UserDispatchModeChip

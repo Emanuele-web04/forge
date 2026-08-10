@@ -303,7 +303,7 @@ export function CreateProjectDialog(props: {
       return;
     }
     if (source === "github" && !props.githubProvisioningAvailable) {
-      setFormError("Update the Synara server before adding a project from GitHub.");
+      setFormError("Update the Forkara server before adding a project from GitHub.");
       return;
     }
     if (source === "github" && trimmedDestinationParent.length === 0) {

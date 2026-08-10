@@ -354,7 +354,7 @@ export function browserAddressDisplayValue(
 export const normalizeBrowserAddressInput = normalizeBrowserUrlInput;
 
 // A raw file:// URL must never reach Electron's renderer-owned <webview>. Main translates it
-// to Synara's directory-scoped preview protocol after adopting the guest.
+// to Forkara's directory-scoped preview protocol after adopting the guest.
 export function browserWebviewInitialUrl(url: string): string {
   try {
     return new URL(url).protocol === "file:" ? BROWSER_BLANK_URL : url;

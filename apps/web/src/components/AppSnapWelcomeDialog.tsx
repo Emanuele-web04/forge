@@ -115,7 +115,7 @@ export function AppSnapWelcomeDialog() {
 
           <DialogHeader className="gap-2 p-0">
             <DialogTitle className="text-[19px] leading-tight">
-              Synara AppSnaps are live!
+              Forkara AppSnaps are live!
             </DialogTitle>
             {/* Two lines at 378px wide is the reference sheet's proportion; longer copy
                 wraps to three and throws the whole vertical rhythm off. */}

@@ -42,7 +42,7 @@ export function CreateGitHubProjectFields(props: {
             its GitHub URL.
           </GitHubRequirement>
           <GitHubRequirement index={2} title="Destination">
-            Choose the parent folder where Synara should create the checkout.
+            Choose the parent folder where Forkara should create the checkout.
           </GitHubRequirement>
           <GitHubRequirement index={3} title="Private access">
             Public repositories work immediately. For private repositories, run{" "}

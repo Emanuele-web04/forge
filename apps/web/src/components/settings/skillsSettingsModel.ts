@@ -53,7 +53,7 @@ export const ORIGIN_SECTION_ORDER = [
 export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
   switch (scope) {
     case "synara":
-      return { label: "Synara", provider: null };
+      return { label: "Forkara", provider: null };
     case "codex":
       return { label: PROVIDER_DISPLAY_NAMES.codex, provider: "codex" };
     case "claude":

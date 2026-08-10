@@ -169,12 +169,12 @@ describe("deriveWorkLogEntries", () => {
         id: "automation-created",
         createdAt: "2026-02-23T00:00:05.000Z",
         kind: "automation.created",
-        summary: "Created automation: Watch Synara PR 231 - Every 5m",
+        summary: "Created automation: Watch Forkara PR 231 - Every 5m",
         tone: "info",
         payload: {
           source: "chat-composer",
           automationId: "automation-7",
-          automationName: "Watch Synara PR 231",
+          automationName: "Watch Forkara PR 231",
           cadenceLabel: "Every 5m",
         },
       }),
@@ -188,7 +188,7 @@ describe("deriveWorkLogEntries", () => {
     expect(automationEntry).toBeDefined();
     expect(automationEntry?.automation).toEqual({
       id: "automation-7",
-      name: "Watch Synara PR 231",
+      name: "Watch Forkara PR 231",
       cadenceLabel: "Every 5m",
     });
   });
@@ -219,14 +219,14 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
-  it("exposes a provider-independent Synara thread creation recap", () => {
+  it("exposes a provider-independent Forkara thread creation recap", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "synara-created-threads",
         createdAt: "2026-02-23T00:00:05.000Z",
         turnId: "turn-1",
         kind: "synara.threads.created",
-        summary: "Created 2 Synara threads",
+        summary: "Created 2 Forkara threads",
         tone: "info",
         payload: {
           operationId: "gateway:create:two-workers",
@@ -413,7 +413,7 @@ describe("deriveWorkLogEntries", () => {
         id: "recovery-first",
         createdAt: "2026-02-23T00:00:01.000Z",
         kind: "provider.runtime.reconciled",
-        summary: "Synara recovered a stale running state",
+        summary: "Forkara recovered a stale running state",
         turnId: "turn-stale",
         payload: recoveryPayload,
       }),
@@ -427,7 +427,7 @@ describe("deriveWorkLogEntries", () => {
         id: "recovery-repeat",
         createdAt: "2026-02-23T00:00:03.000Z",
         kind: "provider.runtime.reconciled",
-        summary: "Synara recovered a stale running state",
+        summary: "Forkara recovered a stale running state",
         turnId: "turn-stale",
         payload: recoveryPayload,
       }),
@@ -2213,11 +2213,11 @@ describe("deriveWorkLogEntries", () => {
           id: "cancelled-synara-start",
           createdAt: "2026-02-23T00:00:01.000Z",
           kind: "tool.started",
-          summary: "Synara create thread",
+          summary: "Forkara create thread",
           turnId,
           payload: {
             itemType: "mcp_tool_call",
-            title: "Synara create thread",
+            title: "Forkara create thread",
             data: {
               toolCallId: "cancelled-synara-call",
               toolName: "mcp__synara__synara_create_thread",
@@ -2248,10 +2248,10 @@ describe("deriveWorkLogEntries", () => {
           id: "interrupted-tool",
           createdAt: "2026-02-23T00:00:01.000Z",
           kind: "tool.completed",
-          summary: "Synara create thread",
+          summary: "Forkara create thread",
           payload: {
             itemType: "mcp_tool_call",
-            title: "Synara create thread",
+            title: "Forkara create thread",
             status: "interrupted",
             data: {
               toolCallId: "interrupted-synara-call",
@@ -2515,7 +2515,7 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
-  it("presents Synara MCP activity consistently across provider item shapes", () => {
+  it("presents Forkara MCP activity consistently across provider item shapes", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "synara-mcp-create-thread-progress",
@@ -2559,15 +2559,15 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => [entry.itemType, entry.toolTitle])).toEqual(
       expect.arrayContaining([
-        ["mcp_tool_call", "Synara is creating a thread"],
-        ["dynamic_tool_call", "Synara is sending a message"],
-        ["file_change", "Synara is listing threads"],
+        ["mcp_tool_call", "Forkara is creating a thread"],
+        ["dynamic_tool_call", "Forkara is sending a message"],
+        ["file_change", "Forkara is listing threads"],
       ]),
     );
     expect(entries).toHaveLength(3);
   });
 
-  it("preserves a failed Synara MCP result as a failed activity sentence", () => {
+  it("preserves a failed Forkara MCP result as a failed activity sentence", () => {
     const [entry] = deriveWorkLogEntries(
       [
         makeActivity({
@@ -2593,7 +2593,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(entry).toMatchObject({
       toolStatus: "failed",
-      toolTitle: "Synara couldn't create threads",
+      toolTitle: "Forkara couldn't create threads",
       detail: "Invalid target options",
     });
   });

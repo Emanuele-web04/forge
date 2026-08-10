@@ -277,7 +277,7 @@ const publishCmd = Command.make(
 // ---------------------------------------------------------------------------
 
 const cli = Command.make("cli").pipe(
-  Command.withDescription("Synara server build & publish CLI."),
+  Command.withDescription("Forkara server build & publish CLI."),
   Command.withSubcommands([buildCmd, publishCmd]),
 );
 

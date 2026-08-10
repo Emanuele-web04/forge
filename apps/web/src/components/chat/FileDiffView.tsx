@@ -1,7 +1,7 @@
 // FILE: FileDiffView.tsx
 // Purpose: Shared diff viewer chrome — a virtualized scroll surface plus a themed
 //          per-file card — used by both the turn/repo DiffPanel and the source
-//          control GitPanel so they share font/theme behavior, the Synara file
+//          control GitPanel so they share font/theme behavior, the Forkara file
 //          header, and the @pierre/diffs `unsafeCSS` theming.
 // Layer: Chat/diff UI primitives
 // Depends on: @pierre/diffs FileDiff/Virtualizer, diffRendering (theme + unsafeCSS), FileDiffHeader
@@ -33,7 +33,7 @@ export function FileDiffSurface(props: { className?: string; children: ReactNode
   );
 }
 
-// A single themed file diff with Synara's custom file header. Bakes in the shared
+// A single themed file diff with Forkara's custom file header. Bakes in the shared
 // `unsafeCSS` theming so every surface renders with the chat code font and
 // themed addition/deletion backgrounds.
 export function FileDiffCard(props: {

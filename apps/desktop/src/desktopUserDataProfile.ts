@@ -1,5 +1,5 @@
 // FILE: desktopUserDataProfile.ts
-// Purpose: Resolves Synara's Electron userData paths and completes bridge profile repair.
+// Purpose: Resolves Forkara's Electron userData paths and completes bridge profile repair.
 
 import * as FS from "node:fs";
 import * as OS from "node:os";
@@ -106,7 +106,7 @@ function findBridgeBrowserPartitionPaths(sourceProfilePath: string): string[] {
 /**
  * Finishes any browser-partition copy described by the compatibility bridge.
  *
- * The bridge manifest identifies the exact sibling profile that supplied the Synara profile.
+ * The bridge manifest identifies the exact sibling profile that supplied the Forkara profile.
  * Discovering its `*-browser` partition from that trusted path avoids shipping predecessor names
  * while still repairing cookies or storage entries that were absent during the first bridge run.
  */

@@ -29,8 +29,8 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
   return {
     cwd: "G:\\synara",
     homeDir: "C:\\Users\\tester",
-    chatWorkspaceRoot: "C:\\Users\\tester\\Documents\\Synara",
-    studioWorkspaceRoot: "C:\\Users\\tester\\Documents\\Synara\\Studio",
+    chatWorkspaceRoot: "C:\\Users\\tester\\Documents\\Forkara",
+    studioWorkspaceRoot: "C:\\Users\\tester\\Documents\\Forkara\\Studio",
     worktreesDir: "C:\\SynaraDev\\worktrees",
     keybindingsConfigPath: "C:\\SynaraDev\\keybindings.json",
     keybindings: [],
@@ -166,7 +166,7 @@ describe("serverLocalServersQueryOptions", () => {
     expect(options.refetchOnWindowFocus).toBe(true);
   });
 
-  it("uses visible polling while a Synara-owned project run is active", () => {
+  it("uses visible polling while a Forkara-owned project run is active", () => {
     const options = sidebarLocalServersQueryOptions({
       hasActiveProjectRun: true,
       hasProjects: true,

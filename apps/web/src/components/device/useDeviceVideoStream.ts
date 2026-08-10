@@ -177,7 +177,7 @@ export function useDeviceVideoStream(input: {
     const configureDecoder = (frame: DeviceFrame) => {
       const codec = avcCodecStringFromConfig(frame.payload);
       if (!codec) {
-        failStream("The simulator stream sent parameters Synara could not read.");
+        failStream("The simulator stream sent parameters Forkara could not read.");
         return;
       }
       teardownDecoder();
@@ -283,7 +283,7 @@ export function useDeviceVideoStream(input: {
         kind: "error",
         message:
           reason === "decode-failed"
-            ? "The simulator stream sent a frame Synara could not read."
+            ? "The simulator stream sent a frame Forkara could not read."
             : "The simulator stream disconnected.",
       });
     };

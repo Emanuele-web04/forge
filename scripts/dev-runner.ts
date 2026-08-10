@@ -524,7 +524,7 @@ const devRunnerCli = Command.make("dev-runner", {
     Argument.withDescription("Development mode to run."),
   ),
   synaraHome: Flag.string("home-dir").pipe(
-    Flag.withDescription("Base directory for all Synara data (equivalent to SYNARA_HOME)."),
+    Flag.withDescription("Base directory for all Forkara data (equivalent to SYNARA_HOME)."),
     Flag.withFallbackConfig(HomeConfig),
   ),
   authToken: Flag.string("auth-token").pipe(

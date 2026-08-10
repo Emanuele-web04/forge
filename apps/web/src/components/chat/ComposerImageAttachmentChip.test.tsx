@@ -136,7 +136,7 @@ describe("ComposerImageAttachmentChip", () => {
         captureId: "capture-legacy",
         capturedAt: "2026-07-12T19:59:33.000Z",
         appName: "Safari",
-        windowTitle: "Synara",
+        windowTitle: "Forkara",
       } as unknown as ComposerImageSource,
     };
     const markup = renderToStaticMarkup(
@@ -151,6 +151,6 @@ describe("ComposerImageAttachmentChip", () => {
 
     expect(markup).toContain("w-52");
     expect(markup).toContain("Preview AppSnap from Safari");
-    expect(markup).toContain("Synara / Safari");
+    expect(markup).toContain("Forkara / Safari");
   });
 });
