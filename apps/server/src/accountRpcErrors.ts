@@ -4,7 +4,7 @@
 // Why: `Effect.tryPromise` wraps every rejection in `Cause.UnknownError`, so without
 // unwrapping the AccountApiError underneath, the client would only ever see the
 // generic fallback message — and never the `AccountErrorCode` the UI branches on
-// (`invalid_credentials`, `email_taken`, `handle_taken`, ...).
+// (`invalid_verification_code`, `handle_taken`, ...).
 
 import { AccountEmailVerificationRequiredError, WsRpcError } from "@synara/contracts";
 import { AccountApiError, EmailVerificationRequiredError } from "@synara/shared/account";
@@ -36,7 +36,8 @@ export function toAccountWsRpcError(rawCause: unknown, fallbackMessage: string):
 }
 
 /**
- * The mapping for RPCs whose *request* carried a password. Same classification
+ * The mapping for RPCs whose *request* carried a credential (the emailed OTP
+ * code, or the verification code + pending token pair). Same classification
  * as {@link toAccountWsRpcError}, but nothing derived from the request may ride
  * along: no `cause` is ever attached (a fetch error can quote the request body,
  * and anything attached here is serialized to the client and may be logged on
@@ -44,12 +45,12 @@ export function toAccountWsRpcError(rawCause: unknown, fallbackMessage: string):
  * rather than its own — the account service has already worded every failure
  * that is safe to show.
  */
-export function toPasswordWsRpcError(
+export function toSensitiveWsRpcError(
   rawCause: unknown,
   fallbackMessage: string,
 ): WsRpcError | AccountEmailVerificationRequiredError {
   const cause = unwrapTryPromiseError(rawCause);
-  // The one password refusal that keeps a payload: the pending token, email,
+  // The one refusal that keeps a payload: the pending token, email,
   // and verification id are what the in-app verification step redeems, so
   // they cross the RPC boundary as their own tagged error — field by field,
   // never as an attached `cause`.

@@ -47,8 +47,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
         clientId: CLIENT_ID,
         workosApiUrl: WORKOS_API_URL,
       }),
-    signInWithPassword: unimplemented("signInWithPassword"),
-    signUpWithPassword: unimplemented("signUpWithPassword"),
+    sendOtp: unimplemented("sendOtp"),
+    authenticateOtp: unimplemented("authenticateOtp"),
     verifyEmail: unimplemented("verifyEmail"),
     resendVerificationEmail: unimplemented("resendVerificationEmail"),
     me: unimplemented("me"),
@@ -309,26 +309,23 @@ describe("sign-in", () => {
   });
 });
 
-describe("password sign-in", () => {
-  const CREDENTIALS = { email: "ada@example.com", password: "correct-horse" } as const;
+describe("OTP sign-in", () => {
+  const OTP_INPUT = { email: "ada@example.com", code: "654321" } as const;
 
   /**
-   * A client whose password grant succeeds, returning the org-less pair a real
-   * grant yields. Everything after that is the shared path SSO also takes.
+   * A client whose Magic Auth grant succeeds, returning the org-less pair a
+   * real grant yields. Everything after that is the shared path SSO also
+   * takes.
    */
-  function passwordClient(overrides: Partial<AccountClient> = {}): AccountClient {
+  function otpClient(overrides: Partial<AccountClient> = {}): AccountClient {
     return makeClient({
-      signInWithPassword: () =>
+      sendOtp: (request) =>
+        Promise.resolve({ email: request.email, expiresAt: "2026-08-10T12:10:00.000Z" }),
+      authenticateOtp: () =>
         Promise.resolve({
           accessToken: "access-0",
           refreshToken: "refresh-0",
-          user: { id: "user_1", email: CREDENTIALS.email, name: "Ada Lovelace" },
-        }),
-      signUpWithPassword: () =>
-        Promise.resolve({
-          accessToken: "access-0",
-          refreshToken: "refresh-0",
-          user: { id: "user_1", email: CREDENTIALS.email, name: "Ada Lovelace" },
+          user: { id: "user_1", email: OTP_INPUT.email, name: "Ada Lovelace" },
         }),
       me: (token) =>
         token === "access-0"
@@ -343,17 +340,36 @@ describe("password sign-in", () => {
         Promise.resolve({
           accessToken: "access-1",
           refreshToken: "refresh-1",
-          user: { id: "user_1", email: CREDENTIALS.email },
+          user: { id: "user_1", email: OTP_INPUT.email },
         }),
       ...overrides,
     });
   }
 
+  it("passes a send through to the account service", async () => {
+    const sends: string[] = [];
+    const session = sessionFor(
+      makeBaseDir(),
+      makeClient({
+        sendOtp: (request) => {
+          sends.push(request.email);
+          return Promise.resolve({ email: request.email, expiresAt: "2026-08-10T12:10:00.000Z" });
+        },
+      }),
+    );
+
+    expect(await session.sendOtp({ email: OTP_INPUT.email })).toEqual({
+      email: OTP_INPUT.email,
+      expiresAt: "2026-08-10T12:10:00.000Z",
+    });
+    expect(sends).toEqual([OTP_INPUT.email]);
+  });
+
   it("signs in and persists the scoped session, like the SSO path", async () => {
     const baseDir = makeBaseDir();
-    const session = sessionFor(baseDir, passwordClient());
+    const session = sessionFor(baseDir, otpClient());
 
-    expect(await session.signInWithPassword(CREDENTIALS)).toEqual({
+    expect(await session.authenticateOtp(OTP_INPUT)).toEqual({
       state: "signed-in",
       me: meResponse(),
     });
@@ -364,18 +380,7 @@ describe("password sign-in", () => {
     });
   });
 
-  it("signs up and persists the scoped session", async () => {
-    const baseDir = makeBaseDir();
-    const session = sessionFor(baseDir, passwordClient());
-
-    expect(await session.signUpWithPassword(CREDENTIALS)).toEqual({
-      state: "signed-in",
-      me: meResponse(),
-    });
-    expect(await readAccountFile(baseDir)).toMatchObject({ accessToken: "access-1" });
-  });
-
-  it("keeps an existing host registration across a password sign-in", async () => {
+  it("keeps an existing host registration across an OTP sign-in", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, {
       accountUrl: ACCOUNT_URL,
@@ -384,44 +389,44 @@ describe("password sign-in", () => {
       hostToken: "host-token",
       hostId: "host_1",
     });
-    const session = sessionFor(baseDir, passwordClient());
+    const session = sessionFor(baseDir, otpClient());
 
-    await session.signInWithPassword(CREDENTIALS);
+    await session.authenticateOtp(OTP_INPUT);
     expect(await readAccountFile(baseDir)).toMatchObject({
       hostToken: "host-token",
       hostId: "host_1",
     });
   });
 
-  // The credential file is the one place a password could plausibly end up,
+  // The credential file is the one place the code could plausibly end up,
   // since it is the only thing this module writes to disk.
-  it("never writes the password to the credential file", async () => {
+  it("never writes the code to the credential file", async () => {
     const baseDir = makeBaseDir();
-    const session = sessionFor(baseDir, passwordClient());
+    const session = sessionFor(baseDir, otpClient());
 
-    await session.signInWithPassword(CREDENTIALS);
+    await session.authenticateOtp(OTP_INPUT);
 
     const raw = fs.readFileSync(accountCredentialsPath(baseDir), "utf8");
-    expect(raw).not.toContain(CREDENTIALS.password);
+    expect(raw).not.toContain(OTP_INPUT.code);
   });
 
-  it("surfaces a rejected sign-in as a failure, leaving no session behind", async () => {
+  it("surfaces a refused code as a failure, leaving no session behind", async () => {
     const baseDir = makeBaseDir();
     const session = sessionFor(
       baseDir,
-      passwordClient({
-        signInWithPassword: () =>
+      otpClient({
+        authenticateOtp: () =>
           Promise.reject(
             new AccountApiError({
-              code: "invalid_credentials",
+              code: "invalid_verification_code",
               status: 401,
-              message: "That email and password do not match an account",
+              message: "That code didn't work — check it and try again",
             }),
           ),
       }),
     );
 
-    await expect(session.signInWithPassword(CREDENTIALS)).rejects.toThrow(/do not match/);
+    await expect(session.authenticateOtp(OTP_INPUT)).rejects.toThrow(/didn't work/);
     expect(await session.status()).toEqual({ state: "signed-out" });
   });
 });
@@ -457,9 +462,9 @@ describe("email verification", () => {
     });
   }
 
-  // The verification grant is the third way to a token pair, and it must land
-  // in exactly the same place as the other two: a scoped, persisted session.
-  it("verifies and persists the scoped session, like the password path", async () => {
+  // The verification grant is another way to a token pair, and it must land
+  // in exactly the same place as the others: a scoped, persisted session.
+  it("verifies and persists the scoped session, like the OTP path", async () => {
     const baseDir = makeBaseDir();
     const session = sessionFor(baseDir, verificationClient());
 

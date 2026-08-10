@@ -8,25 +8,27 @@
  * `synara auth` CLI flow and the in-app flow share both, and the only thing
  * this adds is the parts a GUI needs and a terminal does not: a status that
  * reports "signed out" instead of throwing, a device poll the server runs on
- * the client's behalf, and the in-app password grant.
+ * the client's behalf, and the in-app email OTP grant.
  *
- * Two ways in, converging immediately. Password sign-in happens inside the app
- * and the password is pass-through — forwarded to the account service, held
- * nowhere here. SSO ("Continue with Google/GitHub") takes the device grant and
- * the system browser. Both end in `establishSession`, so workspace scoping and
- * credential persistence cannot drift between them.
+ * Two ways in, converging immediately. Email OTP sign-in happens inside the
+ * app and the emailed code is pass-through — forwarded to the account
+ * service, held nowhere here. SSO ("Continue with Google/GitHub") takes the
+ * device grant and the system browser. Both end in `establishSession`, so
+ * workspace scoping and credential persistence cannot drift between them.
  *
  * @module accountSession
  */
 import type {
+  AccountAuthenticateOtpInput,
   AccountBeginSignInResult,
   AccountMe,
   AccountResendVerificationEmailInput,
+  AccountSendOtpInput,
+  AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
   AccountVerifyEmailInput,
   InstanceInfo,
-  PasswordCredentials,
 } from "@synara/contracts";
 import {
   AccountApiError,
@@ -81,14 +83,19 @@ export interface AccountSessionOptions {
 
 export interface AccountSession {
   status(): Promise<AccountStatus>;
-  /** In-app password sign-in. Never log or persist the credentials. */
-  signInWithPassword(credentials: PasswordCredentials): Promise<AccountStatus>;
-  /** In-app sign-up, then sign-in. Never log or persist the credentials. */
-  signUpWithPassword(credentials: PasswordCredentials): Promise<AccountStatus>;
+  /** Asks the account service to email a 6-digit sign-in code. */
+  sendOtp(input: AccountSendOtpInput): Promise<AccountSendOtpResult>;
+  /**
+   * In-app email OTP sign-in: redeems the emailed 6-digit code, provisioning
+   * the account first when the address is new. The code is a credential —
+   * never log or persist the input. Success takes the same
+   * `establishSession` path as every other sign-in.
+   */
+  authenticateOtp(input: AccountAuthenticateOtpInput): Promise<AccountStatus>;
   /**
    * Redeems the emailed 6-digit code plus the pending authentication token an
    * `email_verification_required` refusal carried. The pair is a bearer-ish
-   * secret with the password handling rules: never log or persist the input.
+   * secret with the credential handling rules: never log or persist the input.
    * Success takes the same `establishSession` path as every other sign-in.
    */
   verifyEmail(input: AccountVerifyEmailInput): Promise<AccountStatus>;
@@ -202,7 +209,7 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
    * way it was produced: scope it to a workspace, persist it, and report the
    * resulting session.
    *
-   * Shared by the password and SSO paths deliberately. The two differ only in
+   * Shared by the OTP and SSO paths deliberately. The two differ only in
    * how they obtain the tokens; if workspace selection or credential
    * persistence ever diverged between them, one of the two would quietly stop
    * matching what the rest of the app expects of a signed-in machine.
@@ -322,34 +329,33 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     },
 
     /**
-     * In-app password sign-in. The credentials are forwarded to the account
-     * service, which proxies them to WorkOS, and are referenced nowhere after
+     * Thin pass-through: WorkOS creates and emails the code, and the account
+     * service already reduced its answer to the address echo and expiry —
+     * there is nothing to interpret here.
+     */
+    async sendOtp(input) {
+      const client = clientFor(configuredUrl);
+      return client.sendOtp(input);
+    },
+
+    /**
+     * In-app email OTP sign-in. The emailed code is forwarded to the account
+     * service, which proxies it to WorkOS, and is referenced nowhere after
      * this call returns — not in the credential file, not in a log, not in a
      * retry. What is persisted is the resulting token pair, exactly as for SSO.
      */
-    async signInWithPassword(credentials) {
+    async authenticateOtp(input) {
       const accountUrl = configuredUrl;
       const client = clientFor(accountUrl);
       const [instance, token] = await Promise.all([
         client.instance(),
-        client.signInWithPassword(credentials),
-      ]);
-      return establishSession(token, { accountUrl, client, instance });
-    },
-
-    /** Creates the account, then signs in. Same handling of the password. */
-    async signUpWithPassword(credentials) {
-      const accountUrl = configuredUrl;
-      const client = clientFor(accountUrl);
-      const [instance, token] = await Promise.all([
-        client.instance(),
-        client.signUpWithPassword(credentials),
+        client.authenticateOtp(input),
       ]);
       return establishSession(token, { accountUrl, client, instance });
     },
 
     /**
-     * The third way to a token pair: the verification grant. Converges on
+     * Another way to a token pair: the verification grant. Converges on
      * `establishSession` with the other two, so workspace scoping and
      * credential persistence cannot drift no matter how the user signed in.
      */

@@ -37,7 +37,7 @@ import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream }
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
-import { toAccountWsRpcError, toPasswordWsRpcError } from "./accountRpcErrors";
+import { toAccountWsRpcError, toSensitiveWsRpcError } from "./accountRpcErrors";
 import { createAccountSession } from "./accountSession";
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
@@ -810,20 +810,22 @@ const makeWsRpcHandlersLayer = () =>
         effect.pipe(Effect.mapError((cause) => toAccountWsRpcError(cause, fallbackMessage)));
 
       /**
-       * `accountRpcEffect` for handlers whose request carried a password.
+       * `accountRpcEffect` for handlers whose request carried a credential
+       * (the emailed OTP code, or the verification code + pending token).
        *
        * Same classification, minus the `cause`: the ordinary path attaches the
-       * original error, which for a failed password call is an object graph
-       * built from a request that contained the password — a fetch error can
+       * original error, which for a failed credential call is an object graph
+       * built from a request that contained the secret — a fetch error can
        * quote the request, and anything attached here is serialized to the
        * client and may be logged on the way. The account service has already
-       * turned the real reason into a message and code (`invalid_credentials`,
-       * `email_taken`, ...), so those are all that is worth keeping.
+       * turned the real reason into a message and code
+       * (`invalid_verification_code`, ...), so those are all that is worth
+       * keeping.
        */
-      const passwordRpcEffect = <A, E, R>(
+      const sensitiveRpcEffect = <A, E, R>(
         effect: Effect.Effect<A, E, R>,
         fallbackMessage: string,
-      ) => effect.pipe(Effect.mapError((cause) => toPasswordWsRpcError(cause, fallbackMessage)));
+      ) => effect.pipe(Effect.mapError((cause) => toSensitiveWsRpcError(cause, fallbackMessage)));
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
@@ -1937,29 +1939,31 @@ const makeWsRpcHandlersLayer = () =>
             Effect.promise(() => accountSession.status()),
             "Failed to read the account session",
           ),
-        // The payloads of the next two carry a password, so they go through
-        // passwordRpcEffect rather than rpcEffect: the failure is reduced to a
-        // message and the cause is dropped, so no object graph derived from the
-        // request can reach the wire or a log.
-        [WS_METHODS.accountSignInWithPassword]: (input) =>
-          passwordRpcEffect(
-            Effect.tryPromise(() => accountSession.signInWithPassword(input)),
-            "Could not sign in. Check your email and password, then try again.",
+        // The send carries only the address — no credential — but shares the
+        // sensitive mapping so no upstream cause can ride to the wire.
+        [WS_METHODS.accountSendOtp]: (input) =>
+          sensitiveRpcEffect(
+            Effect.tryPromise(() => accountSession.sendOtp(input)),
+            "Could not send the code. Try again in a minute.",
           ),
-        [WS_METHODS.accountSignUpWithPassword]: (input) =>
-          passwordRpcEffect(
-            Effect.tryPromise(() => accountSession.signUpWithPassword(input)),
-            "Could not create your account. Try again.",
+        // The payload carries the emailed code — a credential — so it goes
+        // through sensitiveRpcEffect rather than rpcEffect: the failure is
+        // reduced to a message and the cause is dropped, so no object graph
+        // derived from the request can reach the wire or a log.
+        [WS_METHODS.accountAuthenticateOtp]: (input) =>
+          sensitiveRpcEffect(
+            Effect.tryPromise(() => accountSession.authenticateOtp(input)),
+            "Could not sign in. Check the code and try again.",
           ),
         // The payload is the emailed code plus the pending token — bearer-ish
-        // secrets, so the password mapping applies to it too.
+        // secrets, so the sensitive mapping applies to it too.
         [WS_METHODS.accountVerifyEmail]: (input) =>
-          passwordRpcEffect(
+          sensitiveRpcEffect(
             Effect.tryPromise(() => accountSession.verifyEmail(input)),
             "Could not verify your email. Try again.",
           ),
         [WS_METHODS.accountResendVerificationEmail]: (input) =>
-          passwordRpcEffect(
+          sensitiveRpcEffect(
             Effect.tryPromise(() => accountSession.resendVerificationEmail(input)),
             "Could not resend the code. Try again in a minute.",
           ),
