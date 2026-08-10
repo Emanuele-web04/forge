@@ -165,6 +165,22 @@ git clone
 
 Because Cloneara sounded too honest.
 
+### Can Forkara help with non-code forks?
+
+Yes. If the fork has a clear owner and a clear next step, we can still model it in our glossary.
+
+### What is the difference between a Git fork and a dinner fork?
+
+A Git fork tracks history and intent; a dinner fork tracks dinner and intent is still optional.
+
+### Do you support pitchforks?
+
+They are useful for discussions that escalate quickly, and not required for code review.
+
+### Are sporks officially supported?
+
+Not yet. Sporks are in the roadmap, and we keep promises in the issue tracker before the kitchen.
+
 ---
 
 ## Origins
