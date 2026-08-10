@@ -99,6 +99,10 @@ import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
+import {
+  ProviderProfileRegistry,
+  ProviderProfileRegistryError,
+} from "./provider/Services/ProviderProfileRegistry";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
@@ -157,6 +161,32 @@ import {
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
   return role === "owner";
+}
+
+export type ProviderProfileRpcOperation =
+  | "list"
+  | "create"
+  | "rename"
+  | "setEnabled"
+  | "tombstone";
+
+export function canAccessProviderProfiles(
+  role: "owner" | "client",
+  operation: ProviderProfileRpcOperation,
+): boolean {
+  return operation === "list" || role === "owner";
+}
+
+export function toProviderProfileWsRpcError(
+  cause: ProviderProfileRegistryError | WsRpcError,
+): WsRpcError {
+  return cause instanceof WsRpcError
+    ? cause
+    : new WsRpcError({
+        message: cause.message,
+        code: cause.code,
+        retryable: false,
+      });
 }
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
@@ -335,6 +365,7 @@ const makeWsRpcHandlersLayer = () =>
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
+      const providerProfiles = yield* ProviderProfileRegistry;
       const providerService = yield* ProviderService;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
@@ -794,6 +825,11 @@ const makeWsRpcHandlersLayer = () =>
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
+      const providerProfileRpcEffect = <A, R>(
+        effect: Effect.Effect<A, ProviderProfileRegistryError | WsRpcError, R>,
+      ) =>
+        effect.pipe(Effect.mapError(toProviderProfileWsRpcError));
+
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
           ? new WsRpcError({
@@ -832,6 +868,16 @@ const makeWsRpcHandlersLayer = () =>
           );
         }
       });
+
+      const requireProviderProfileAccess = (operation: ProviderProfileRpcOperation) =>
+        Effect.gen(function* () {
+          if (canAccessProviderProfiles(yield* CurrentWsSessionRole, operation)) return;
+          return yield* new WsRpcError({
+            message: "Owner authorization is required to manage provider profiles.",
+            code: "PROVIDER_PROFILE_OWNER_REQUIRED",
+            retryable: false,
+          });
+        });
 
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
@@ -1595,6 +1641,36 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to refresh providers",
           ),
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
+        [WS_METHODS.providerProfilesList]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("list").pipe(
+              Effect.andThen(providerProfiles.list(input)),
+            ),
+          ),
+        [WS_METHODS.providerProfilesCreate]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("create").pipe(
+              Effect.andThen(providerProfiles.create(input)),
+            ),
+          ),
+        [WS_METHODS.providerProfilesRename]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("rename").pipe(
+              Effect.andThen(providerProfiles.rename(input)),
+            ),
+          ),
+        [WS_METHODS.providerProfilesSetEnabled]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("setEnabled").pipe(
+              Effect.andThen(providerProfiles.setEnabled(input)),
+            ),
+          ),
+        [WS_METHODS.providerProfilesTombstone]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("tombstone").pipe(
+              Effect.andThen(providerProfiles.tombstone(input)),
+            ),
+          ),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),

@@ -652,6 +652,26 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverGetEnvironment);
   });
 
+  it("forwards provider profile registry requests without adding internal fields", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const target = { provider: "codex" as const, profileId: "codex_work" as const };
+
+    await api.providerProfiles.list({ provider: "codex" });
+    await api.providerProfiles.create({ provider: "codex", displayName: "Work" });
+    await api.providerProfiles.rename({ target, displayName: "Client" });
+    await api.providerProfiles.setEnabled({ target, enabled: true });
+    await api.providerProfiles.tombstone({ target });
+
+    expect(requestMock.mock.calls).toEqual([
+      [WS_METHODS.providerProfilesList, { provider: "codex" }],
+      [WS_METHODS.providerProfilesCreate, { provider: "codex", displayName: "Work" }],
+      [WS_METHODS.providerProfilesRename, { target, displayName: "Client" }],
+      [WS_METHODS.providerProfilesSetEnabled, { target, enabled: true }],
+      [WS_METHODS.providerProfilesTombstone, { target }],
+    ]);
+  });
+
   it("uses websocket RPC for external MCP management in packaged and browser builds", async () => {
     requestMock
       .mockResolvedValueOnce([])

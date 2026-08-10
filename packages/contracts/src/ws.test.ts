@@ -114,6 +114,30 @@ it.effect("accepts automation create requests", () =>
   }),
 );
 
+it.effect("accepts bounded provider profile registry requests", () =>
+  Effect.gen(function* () {
+    const create = yield* decode(WebSocketRequest, {
+      id: "req-provider-profile-create-1",
+      body: {
+        _tag: WS_METHODS.providerProfilesCreate,
+        provider: "codex",
+        displayName: "Work",
+      },
+    });
+    const enable = yield* decode(WebSocketRequest, {
+      id: "req-provider-profile-enable-1",
+      body: {
+        _tag: WS_METHODS.providerProfilesSetEnabled,
+        target: { provider: "codex", profileId: "codex_work" },
+        enabled: true,
+      },
+    });
+
+    assert.strictEqual(create.body._tag, WS_METHODS.providerProfilesCreate);
+    assert.strictEqual(enable.body._tag, WS_METHODS.providerProfilesSetEnabled);
+  }),
+);
+
 it.effect("accepts automation proposal resolution requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {

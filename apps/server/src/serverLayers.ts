@@ -54,6 +54,7 @@ import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosti
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
+import { ProviderProfileRegistryLive } from "./provider/Layers/ProviderProfileRegistry";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
@@ -79,6 +80,9 @@ export function makeServerRuntimeServicesLayer(
   const agentGatewayCredentialsLayer =
     options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
   const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(ServerSettingsLive));
+  const providerProfileRegistryLayer = ProviderProfileRegistryLive.pipe(
+    Layer.provideMerge(ServerSettingsLive),
+  );
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
   const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
@@ -225,6 +229,7 @@ export function makeServerRuntimeServicesLayer(
     externalMcpServiceLayer,
     externalMcpGatewayLayer,
     providerHealthLayer,
+    providerProfileRegistryLayer,
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
     orchestrationReactorLayer,

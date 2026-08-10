@@ -138,6 +138,14 @@ import {
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
+  ProviderProfilesCreateInput,
+  ProviderProfilesListInput,
+  ProviderProfilesRenameInput,
+  ProviderProfilesSetEnabledInput,
+  ProviderProfilesSnapshot,
+  ProviderProfilesTombstoneInput,
+} from "./providerProfileManagement";
+import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
   ProviderListAgentsInput,
@@ -916,6 +924,36 @@ export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvide
   error: ServerProviderUpdateError,
 });
 
+export const WsProviderProfilesListRpc = Rpc.make(WS_METHODS.providerProfilesList, {
+  payload: ProviderProfilesListInput,
+  success: ProviderProfilesSnapshot,
+  error: WsRpcError,
+});
+
+export const WsProviderProfilesCreateRpc = Rpc.make(WS_METHODS.providerProfilesCreate, {
+  payload: ProviderProfilesCreateInput,
+  success: ProviderProfilesSnapshot,
+  error: WsRpcError,
+});
+
+export const WsProviderProfilesRenameRpc = Rpc.make(WS_METHODS.providerProfilesRename, {
+  payload: ProviderProfilesRenameInput,
+  success: ProviderProfilesSnapshot,
+  error: WsRpcError,
+});
+
+export const WsProviderProfilesSetEnabledRpc = Rpc.make(WS_METHODS.providerProfilesSetEnabled, {
+  payload: ProviderProfilesSetEnabledInput,
+  success: ProviderProfilesSnapshot,
+  error: WsRpcError,
+});
+
+export const WsProviderProfilesTombstoneRpc = Rpc.make(WS_METHODS.providerProfilesTombstone, {
+  payload: ProviderProfilesTombstoneInput,
+  success: ProviderProfilesSnapshot,
+  error: WsRpcError,
+});
+
 export const WsServerListExternalMcpIntegrationsRpc = Rpc.make(
   WS_METHODS.serverListExternalMcpIntegrations,
   {
@@ -1271,6 +1309,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
+  WsProviderProfilesListRpc,
+  WsProviderProfilesCreateRpc,
+  WsProviderProfilesRenameRpc,
+  WsProviderProfilesSetEnabledRpc,
+  WsProviderProfilesTombstoneRpc,
   WsServerListExternalMcpIntegrationsRpc,
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,

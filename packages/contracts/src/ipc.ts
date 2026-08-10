@@ -22,6 +22,14 @@ import type {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import type {
+  ProviderProfilesCreateInput,
+  ProviderProfilesListInput,
+  ProviderProfilesRenameInput,
+  ProviderProfilesSetEnabledInput,
+  ProviderProfilesSnapshot,
+  ProviderProfilesTombstoneInput,
+} from "./providerProfileManagement";
+import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -765,6 +773,13 @@ export interface NativeApi {
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+  };
+  providerProfiles: {
+    list: (input: ProviderProfilesListInput) => Promise<ProviderProfilesSnapshot>;
+    create: (input: ProviderProfilesCreateInput) => Promise<ProviderProfilesSnapshot>;
+    rename: (input: ProviderProfilesRenameInput) => Promise<ProviderProfilesSnapshot>;
+    setEnabled: (input: ProviderProfilesSetEnabledInput) => Promise<ProviderProfilesSnapshot>;
+    tombstone: (input: ProviderProfilesTombstoneInput) => Promise<ProviderProfilesSnapshot>;
   };
   stats: {
     getProfileStats: (input: StatsGetProfileStatsInput) => Promise<StatsGetProfileStatsResult>;
