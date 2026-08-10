@@ -705,6 +705,35 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         await verifying.close();
       }
     });
+
+    // WorkOS refuses the password grant outright for a domain governed by an
+    // SSO connection (observed live: its built-in example.com test connection
+    // answers 400 `sso_required`). Surfaced as its own 403 rather than
+    // invalid_credentials — "use your company sign-on" is the only actionable
+    // answer — and identically for sign-in and an existing account, since the
+    // refusal is domain policy, not an account property.
+    it("surfaces an SSO-governed domain as 403 sso_required", async () => {
+      const ssoWorkos = await startFakeWorkos({ ssoRequiredDomains: ["example.com"] });
+      try {
+        const { db } = buildApp();
+        const ssoConfig = ssoWorkos.config({ databaseUrl });
+        const app = new Hono();
+        app.route(
+          "/api/v1",
+          createV1Routes({ auth: createWorkosAuth(ssoConfig), db, config: ssoConfig }),
+        );
+
+        const res = await app.request("/api/v1/auth/password/sign-in", {
+          method: "POST",
+          headers: passwordHeaders(),
+          body: JSON.stringify({ email: `sso-${randomUUID()}@example.com`, password: PASSWORD }),
+        });
+        expect(res.status).toBe(403);
+        expect(await res.json()).toMatchObject({ error: "sso_required" });
+      } finally {
+        await ssoWorkos.close();
+      }
+    });
   });
 
   describe("profile", () => {

@@ -43,7 +43,8 @@ export type WorkosOrganization = {
 export type WorkosPasswordFailure =
   | "invalid_credentials"
   | "email_taken"
-  | "email_verification_required";
+  | "email_verification_required"
+  | "sso_required";
 
 /**
  * A password grant this service refused to complete. Carries the classified
@@ -217,31 +218,25 @@ function fullName(user: WorkosUserResponse): string | undefined {
  * error codes; the `invalid_grant` fallback covers the OAuth-shaped refusal
  * the password grant returns for a bad email/password pair.
  */
-export function classifyPasswordFailure(
-  raw: unknown,
-  status?: number,
-): WorkosPasswordFailure | undefined {
-  // A 404 from the password grant can only mean the user does not exist —
-  // classified by status, not body, because WorkOS's spelling of the refusal
-  // is undocumented and guessing it wrong reopens the account-existence
-  // oracle (observed live: the unrecognised body fell through to the 502
-  // upstream-fault path while a wrong password answered 401). The status is
-  // also the one part of the failure that cannot quote the password back.
-  if (status === 404) return "invalid_credentials";
+export function classifyPasswordFailure(raw: unknown): WorkosPasswordFailure | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const body = raw as Record<string, unknown>;
   const code = typeof body.code === "string" ? body.code : undefined;
   const error = typeof body.error === "string" ? body.error : undefined;
 
   if (code === "email_verification_required") return "email_verification_required";
+  // Domain policy, not a credential outcome: the email's domain has an SSO
+  // connection, so WorkOS refuses the password grant for it categorically.
+  // Observed live (status 400, OAuth-shaped `error` field). Distinct from
+  // invalid_credentials on purpose — "use your company sign-on" is the only
+  // actionable answer, and it reveals domain policy, not account existence.
+  if (error === "sso_required" || code === "sso_required") return "sso_required";
+  if (error === "organization_authentication_methods_required") return "sso_required";
   // WorkOS spells the duplicate-email refusal differently across endpoints;
   // both observed spellings mean the same thing to a user signing up.
   if (code === "email_not_available" || code === "user_creation_error") return "email_taken";
   if (code === "entity_already_exists") return "email_taken";
   if (error === "invalid_grant" || code === "invalid_credentials") return "invalid_credentials";
-  // Belt for the 404 status check above, in case WorkOS ever moves the
-  // refusal to a different status while keeping a recognisable body.
-  if (code === "user_not_found" || error === "user_not_found") return "invalid_credentials";
 
   // Validation errors name the field rather than the problem. An `email` error
   // on a create is a taken address in every case this service can produce,
@@ -396,7 +391,7 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     // Read the failure only to classify it. The parsed value is never
     // returned or attached to an error.
     const raw = await response.json().catch(() => null);
-    const failure = classifyPasswordFailure(raw, response.status);
+    const failure = classifyPasswordFailure(raw);
     if (failure) throw new WorkosPasswordError(failure);
     // An unclassified refusal becomes an opaque 502 to the caller, so this
     // line is the only place its identity survives. Log the status and the

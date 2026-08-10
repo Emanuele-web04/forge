@@ -182,6 +182,12 @@ export const AccountErrorCode = Schema.Literals([
    * address is verified. Not a credential failure — the password was right.
    */
   "email_verification_required",
+  /**
+   * The email's domain is governed by an SSO connection, so the identity
+   * provider refuses password authentication for it outright. Not a
+   * credential failure and not account-specific — it is domain policy.
+   */
+  "sso_required",
   "validation_failed",
   "rate_limited",
   "internal_error",

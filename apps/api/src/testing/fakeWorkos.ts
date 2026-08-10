@@ -139,6 +139,12 @@ export type StartFakeWorkosOptions = {
    * anything this service configures.
    */
   requireEmailVerification?: boolean;
+  /**
+   * Email domains the fake treats as SSO-governed, refusing the password
+   * grant with the OAuth-shaped `sso_required` body WorkOS answers for them
+   * (observed live via its built-in example.com test connection).
+   */
+  ssoRequiredDomains?: readonly string[];
 };
 
 export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Promise<FakeWorkos> {
@@ -171,6 +177,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   /** Users whose email is not verified, so the password grant refuses them. */
   const unverifiedUsers = new Set<string>();
   const requireEmailVerification = options.requireEmailVerification ?? false;
+  const ssoRequiredDomains = new Set(options.ssoRequiredDomains ?? []);
 
   const hasMembership = (orgId: string, userId: string): boolean =>
     memberships.some((entry) => entry.orgId === orgId && entry.userId === userId);
@@ -345,17 +352,23 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       }
       const email = typeof body?.email === "string" ? body.email : "";
       const submitted = typeof body?.password === "string" ? body.password : "";
+      const domain = email.split("@")[1] ?? "";
+      if (ssoRequiredDomains.has(domain)) {
+        // Refused before the user lookup, as WorkOS does: the answer is domain
+        // policy and identical whether or not the account exists.
+        return c.json(
+          {
+            error: "sso_required",
+            error_description: "User must authenticate using one of the matching connections.",
+          },
+          400,
+        );
+      }
       const record = [...users.values()].find((user) => user.email === email);
       const stored = record ? passwords.get(record.id) : undefined;
-      if (!record) {
-        // WorkOS answers an unknown email differently from a wrong password
-        // (observed live: the grant refuses with `user_not_found`). The stub
-        // mirrors the split so the proxy's classifier is what collapses the
-        // two into one client-visible answer — and a classifier regression
-        // that reopens the account-existence oracle fails here.
-        return c.json({ code: "user_not_found", message: "User not found" }, 404);
-      }
-      if (stored === undefined || stored !== submitted) {
+      if (!record || stored === undefined || stored !== submitted) {
+        // One answer for "no such user" and "wrong password", as WorkOS does:
+        // distinguishing them is an account-existence oracle.
         return c.json({ error: "invalid_grant", error_description: "Invalid credentials" }, 401);
       }
       if (unverifiedUsers.has(record.id)) {

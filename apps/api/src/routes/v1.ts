@@ -636,6 +636,13 @@ export function createV1Routes(deps: {
       code: "email_verification_required",
       message: "Check your email to verify your address, then sign in",
     },
+    // Domain policy: the address belongs to a domain with an SSO connection,
+    // so the identity provider refuses password auth for it categorically.
+    sso_required: {
+      status: 403,
+      code: "sso_required",
+      message: "That email's domain uses single sign-on — continue with your provider instead",
+    },
   };
 
   /**
