@@ -8,12 +8,17 @@ nothing in this app runs unless you deploy an instance and point a server at it.
 
 ## Off by default, and no secrets in this repo
 
-- **No instance runs unless you start one.** There is no hosted default, no
-  fallback URL, and no telemetry endpoint baked into the code.
-- **The client is gated on `SYNARA_ACCOUNT_URL`.** `@synara/server` only talks to
-  an account service when that variable (or `synara auth --account-url`) names
-  one. Unset, `synara status` prints "account features are not configured" and
-  the server never opens a socket to anything.
+- **No instance runs unless you start one.** No telemetry endpoint is baked
+  into the code, and nothing contacts an account service on its own.
+- **The CLI is gated on `SYNARA_ACCOUNT_URL`.** `synara auth` and `synara
+status` only talk to an account service when that variable (or `synara auth
+--account-url`) names one. Unset, `synara status` prints "account features
+  are not configured" and the CLI never opens a socket to anything.
+- **The in-app flow defaults to the hosted service.** Signing in from the app's
+  UI is an explicit opt-in by the person clicking the button, so it falls back
+  to `DEFAULT_ACCOUNT_URL` (`packages/shared/src/account.ts`) when the variable
+  is unset. Nothing happens until that button is pressed. Point it elsewhere
+  with the same `SYNARA_ACCOUNT_URL`.
 - **No credentials are committed.** Every secret is read from the environment at
   boot (see `src/config.ts`). `apps/api/.env` is gitignored; `.env.example`
   carries names and comments only, never values. Host and device tokens live on
@@ -23,9 +28,31 @@ nothing in this app runs unless you deploy an instance and point a server at it.
 ## Identity: WorkOS AuthKit
 
 This service does not store users, passwords, sessions, or signing keys.
-WorkOS owns all of that; the database here holds only the host registry
-(`hosts`, `host_tokens`), and every WorkOS id in it is opaque with no foreign
-key behind it.
+WorkOS owns all of that; the database here holds the host registry (`hosts`,
+`host_tokens`) and Synara-owned profiles (`profiles`), and every WorkOS id in
+those tables is opaque with no foreign key behind it.
+
+### Two ways in
+
+The app offers email/password in-app and SSO through the browser, and this
+service backs both:
+
+- **Password** — `POST /api/v1/auth/password/sign-in` and `.../sign-up` proxy
+  the WorkOS password grant. They exist because that grant is a
+  confidential-client grant: it requires the client secret, so the app cannot
+  make the call itself. The password is **pass-through** at every step — read
+  off the request, handed to WorkOS, and never written to the database, a log
+  line, or an error message. `src/workos.ts` deliberately uses a separate
+  request helper for these calls, because the general one puts the upstream
+  response body into the thrown error and WorkOS echoes offending fields.
+  Both routes are rate-limited well below the device route (5/min per client
+  vs 10/min), on their own budget.
+- **SSO** — "Continue with Google/GitHub" takes the device-authorization grant
+  (`POST /api/v1/auth/device`) and finishes on the WorkOS hosted page in a real
+  browser. This is also the flow `synara auth` uses from the CLI.
+
+Both converge on the same token pair, so everything downstream — workspace
+scoping, credential storage, refresh — is one code path.
 
 ## Hosts belong to organizations
 
@@ -60,7 +87,14 @@ own.
 - **Sign-in methods are dashboard toggles, not env vars.** Email/password,
   Google, GitHub, Microsoft and the rest are enabled per-application in the
   WorkOS dashboard. There are no OAuth client ids or secrets to register here,
-  and no provider pairs in the environment.
+  and no provider pairs in the environment. The password routes above will
+  fail against an application that has password auth switched off, which is a
+  dashboard change rather than a deploy.
+- **Email verification is WorkOS's decision, not ours.** With verification
+  required for the environment, a fresh sign-up authenticates only after the
+  user follows WorkOS's mail; the sign-up route surfaces that as 403
+  `email_verification_required` and V1 leaves completing it to WorkOS's own
+  flow. The created user is left in place, since the account is real.
 - **Email delivery is WorkOS's.** Verification and password-reset mail is sent
   by WorkOS, so there is no SMTP or Resend configuration.
 - **The JWKS is WorkOS's, served by WorkOS.** This service only reads it.

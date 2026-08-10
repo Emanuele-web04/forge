@@ -14,7 +14,7 @@ import { runMigrations } from "../db/migrate";
 import { clearOrgCache } from "../orgProvisioning";
 import { FAKE_DEVICE_AUTHORIZATION, startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import { createWorkosAuth } from "../workos";
-import { createV1Routes, DEVICE_RATE_LIMIT_PER_MINUTE } from "./v1";
+import { createV1Routes, DEVICE_RATE_LIMIT_PER_MINUTE, PASSWORD_RATE_LIMIT_PER_MINUTE } from "./v1";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
@@ -500,6 +500,211 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       headers: authHeaders(registerBody.hostToken),
     });
     expect(deleteRes.status).toBe(204);
+  });
+
+  describe("password authentication", () => {
+    const PASSWORD = "correct-horse-battery-staple";
+
+    function passwordHeaders(): Record<string, string> {
+      return { "content-type": "application/json" };
+    }
+
+    async function signInRequest(app: Hono, body: unknown, path = "/api/v1/auth/password/sign-in") {
+      return app.request(path, {
+        method: "POST",
+        headers: passwordHeaders(),
+        body: JSON.stringify(body),
+      });
+    }
+
+    it("signs in with a correct password and returns a usable token pair", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+      const user = workos.addPasswordUser({ email, password: PASSWORD });
+
+      const res = await signInRequest(app, { email, password: PASSWORD });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { accessToken: string; user: { id: string } };
+      expect(body.user.id).toBe(user.id);
+      expect(typeof body.accessToken).toBe("string");
+
+      // The token is real: it reaches an authenticated route, which is what
+      // makes this a sign-in rather than a well-shaped JSON response.
+      const organization = workos.addOrganization({ name: "Analytical Engines" });
+      workos.addMembership(organization.id, user.id);
+      clearOrgCache();
+      const scoped = await workos.signAccessToken({
+        sub: user.id,
+        sid: `session_${randomUUID()}`,
+        orgId: organization.id,
+      });
+      const meRes = await app.request("/api/v1/me", { headers: authHeaders(scoped) });
+      expect(meRes.status).toBe(200);
+    });
+
+    it("answers 401 invalid_credentials for a wrong password", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+      workos.addPasswordUser({ email, password: PASSWORD });
+
+      const res = await signInRequest(app, { email, password: "not-the-password" });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error: "invalid_credentials" });
+    });
+
+    // Same answer as a wrong password: telling them apart would let anyone
+    // enumerate which email addresses have accounts.
+    it("answers the same 401 for an unknown email as for a wrong password", async () => {
+      const { app } = buildApp();
+      const res = await signInRequest(app, {
+        email: `nobody-${randomUUID()}@example.com`,
+        password: PASSWORD,
+      });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error: "invalid_credentials" });
+    });
+
+    it("signs up, creating the user and returning a session", async () => {
+      const { app } = buildApp();
+      const email = `new-${randomUUID()}@example.com`;
+
+      const res = await signInRequest(
+        app,
+        { email, password: PASSWORD },
+        "/api/v1/auth/password/sign-up",
+      );
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { accessToken: string; user: { email: string } };
+      expect(body.user.email).toBe(email);
+      expect(typeof body.accessToken).toBe("string");
+
+      // The account is real afterwards: the same credentials sign in again.
+      const again = await signInRequest(app, { email, password: PASSWORD });
+      expect(again.status).toBe(200);
+    });
+
+    it("answers 409 email_taken when the address is already registered", async () => {
+      const { app } = buildApp();
+      const email = `dup-${randomUUID()}@example.com`;
+      workos.addPasswordUser({ email, password: PASSWORD });
+
+      const res = await signInRequest(
+        app,
+        { email, password: PASSWORD },
+        "/api/v1/auth/password/sign-up",
+      );
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: "email_taken" });
+    });
+
+    it.each([
+      ["a missing password", { email: "ada@example.com" }],
+      ["a missing email", { password: PASSWORD }],
+      ["an empty password", { email: "ada@example.com", password: "" }],
+    ])("answers 400 validation_failed for %s", async (_label, body) => {
+      const { app } = buildApp();
+      const res = await signInRequest(app, body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+    });
+
+    // The whole point of the amendment's "never log or store passwords" rule.
+    // Asserted rather than trusted, because the natural implementations of
+    // both paths (a schema decoder's message, an upstream error body) quote
+    // the offending value.
+    it("never emits the password in a response body or a log line", async () => {
+      const { app } = buildApp();
+      const secret = `pw-${randomUUID()}`;
+      const email = `ada-${randomUUID()}@example.com`;
+      workos.addPasswordUser({ email, password: PASSWORD });
+
+      const logged: string[] = [];
+      const capture = (...args: unknown[]) => {
+        logged.push(args.map((arg) => String(arg)).join(" "));
+      };
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(capture);
+      const logSpy = vi.spyOn(console, "log").mockImplementation(capture);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(capture);
+      try {
+        // A wrong password, a malformed body, and a sign-up conflict: the
+        // three paths that produce an error mentioning the request.
+        const wrong = await signInRequest(app, { email, password: secret });
+        const malformed = await signInRequest(app, { email, password: { nested: secret } });
+        const conflict = await signInRequest(
+          app,
+          { email, password: secret },
+          "/api/v1/auth/password/sign-up",
+        );
+
+        for (const res of [wrong, malformed, conflict]) {
+          expect(await res.text()).not.toContain(secret);
+        }
+        expect(logged.join("\n")).not.toContain(secret);
+      } finally {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("rate limits password attempts well below the device limit", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+      workos.addPasswordUser({ email, password: PASSWORD });
+      const headers = { ...passwordHeaders(), "x-forwarded-for": "203.0.113.9" };
+
+      const attempt = () =>
+        app.request("/api/v1/auth/password/sign-in", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ email, password: "wrong" }),
+        });
+
+      for (let i = 0; i < PASSWORD_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect((await attempt()).status).toBe(401);
+      }
+      const limited = await attempt();
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
+
+      // A different client is unaffected, and the device budget is separate.
+      const other = await app.request("/api/v1/auth/password/sign-in", {
+        method: "POST",
+        headers: { ...passwordHeaders(), "x-forwarded-for": "203.0.113.10" },
+        body: JSON.stringify({ email, password: PASSWORD }),
+      });
+      expect(other.status).toBe(200);
+    });
+
+    it("surfaces email verification as 403 email_verification_required", async () => {
+      const verifying = await startFakeWorkos({ requireEmailVerification: true });
+      try {
+        const { db } = buildApp();
+        const verifyingConfig = verifying.config({ databaseUrl });
+        const app = new Hono();
+        app.route(
+          "/api/v1",
+          createV1Routes({
+            auth: createWorkosAuth(verifyingConfig),
+            db,
+            config: verifyingConfig,
+          }),
+        );
+
+        const res = await app.request("/api/v1/auth/password/sign-up", {
+          method: "POST",
+          headers: passwordHeaders(),
+          body: JSON.stringify({
+            email: `unverified-${randomUUID()}@example.com`,
+            password: PASSWORD,
+          }),
+        });
+        expect(res.status).toBe(403);
+        expect(await res.json()).toMatchObject({ error: "email_verification_required" });
+      } finally {
+        await verifying.close();
+      }
+    });
   });
 
   describe("profile", () => {

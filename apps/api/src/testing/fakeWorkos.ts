@@ -56,6 +56,11 @@ export type FakeWorkos = {
   config(overrides?: Partial<ApiConfig>): ApiConfig;
   /** Registers a user that `getUser` will return, and returns its id. */
   addUser(user: Partial<FakeWorkosUser> & { id?: string }): FakeWorkosUser;
+  /**
+   * Registers a user who can sign in with `password`. The password is held in
+   * clear by this double so the grant can genuinely reject a wrong one.
+   */
+  addPasswordUser(credentials: { email: string; password: string }): FakeWorkosUser;
   /** Registers an organization, as the Organizations API would create it. */
   addOrganization(organization?: { id?: string; name?: string }): FakeWorkosOrganization;
   /** Makes `userId` a member of `orgId`, so membership listing returns it. */
@@ -127,6 +132,13 @@ export type StartFakeWorkosOptions = {
    * to itself.
    */
   onDeviceAuthorization?: (deviceCode: string) => void;
+  /**
+   * Makes newly created users unverified, so the password grant answers
+   * `email_verification_required`. Stands in for a WorkOS environment with
+   * email verification switched on, which is a dashboard toggle rather than
+   * anything this service configures.
+   */
+  requireEmailVerification?: boolean;
 };
 
 export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Promise<FakeWorkos> {
@@ -149,6 +161,16 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   const deviceGrants = new Map<string, { approvedBy?: string }>();
   /** Live refresh tokens → the user they belong to. Single-use, as WorkOS's are. */
   const refreshTokens = new Map<string, string>();
+  /**
+   * Passwords, in clear, by user id. Acceptable only because this is an
+   * in-process double that dies with the test: it exists so the grant can
+   * actually reject a wrong password, which a stub that accepted anything
+   * could not do.
+   */
+  const passwords = new Map<string, string>();
+  /** Users whose email is not verified, so the password grant refuses them. */
+  const unverifiedUsers = new Set<string>();
+  const requireEmailVerification = options.requireEmailVerification ?? false;
 
   const hasMembership = (orgId: string, userId: string): boolean =>
     memberships.some((entry) => entry.orgId === orgId && entry.userId === userId);
@@ -311,6 +333,38 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       return c.json(await issueTokenPair(grant.approvedBy));
     }
 
+    // The password grant. Confidential-client, so the secret is checked here
+    // as WorkOS checks it — a proxy that forgot to send it must fail against
+    // this double too, not just in production.
+    if (grantType === "password") {
+      if (body?.client_secret !== apiKey) {
+        return c.json(
+          { error: "invalid_client", error_description: "Missing or invalid client secret" },
+          401,
+        );
+      }
+      const email = typeof body?.email === "string" ? body.email : "";
+      const submitted = typeof body?.password === "string" ? body.password : "";
+      const record = [...users.values()].find((user) => user.email === email);
+      const stored = record ? passwords.get(record.id) : undefined;
+      if (!record || stored === undefined || stored !== submitted) {
+        // One answer for "no such user" and "wrong password", as WorkOS does:
+        // distinguishing them is an account-existence oracle.
+        return c.json({ error: "invalid_grant", error_description: "Invalid credentials" }, 401);
+      }
+      if (unverifiedUsers.has(record.id)) {
+        return c.json(
+          {
+            code: "email_verification_required",
+            message: "Email ownership must be verified before authentication.",
+            pending_authentication_token: `pat_fake_${record.id}`,
+          },
+          403,
+        );
+      }
+      return c.json(await issueTokenPair(record.id));
+    }
+
     if (grantType === "refresh_token") {
       const refreshToken = typeof body?.refresh_token === "string" ? body.refresh_token : "";
       const userId = refreshTokens.get(refreshToken);
@@ -341,6 +395,34 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       { error: "unsupported_grant_type", error_description: `Unsupported grant: ${grantType}` },
       400,
     );
+  });
+
+  // Create User. Registers the password so the grant above can check it —
+  // stored in memory by this double only; the service under test never sees a
+  // password again after forwarding it.
+  app.post("/user_management/users", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const email = typeof body?.email === "string" ? body.email : "";
+    const password = typeof body?.password === "string" ? body.password : "";
+    if (!email || !password) {
+      return c.json({ message: "email and password are required" }, 422);
+    }
+    if ([...users.values()].some((user) => user.email === email)) {
+      // The shape WorkOS uses for a taken address: a field-level validation
+      // error rather than a top-level code.
+      return c.json(
+        {
+          code: "invalid_request",
+          message: "Validation failed",
+          errors: [{ field: "email", code: "email_not_available" }],
+        },
+        422,
+      );
+    }
+    const record = addUser({ email });
+    passwords.set(record.id, password);
+    if (requireEmailVerification) unverifiedUsers.add(record.id);
+    return c.json({ object: "user", ...record, email_verified: !requireEmailVerification }, 201);
   });
 
   app.get("/user_management/users/:id", (c) => {
@@ -435,6 +517,12 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     addOrganization,
     addMembership,
     signAccessToken,
+
+    addPasswordUser({ email, password }) {
+      const record = addUser({ email });
+      passwords.set(record.id, password);
+      return record;
+    },
 
     removeMembership(orgId, userId) {
       const index = memberships.findIndex(

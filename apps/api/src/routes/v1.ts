@@ -12,6 +12,8 @@ import {
   type ListHostsResponse,
   type OrganizationRequiredBody,
   type OrganizationSummary,
+  type PasswordAuthResponse,
+  PasswordCredentials,
   type RegisterHostResponse,
   RegisterHostRequest,
   UpdateHostRequest,
@@ -33,8 +35,10 @@ import { ensurePersonalOrg, invalidateOrgCacheForOrganization } from "../orgProv
 import { createRateLimiter } from "../rateLimit";
 import {
   WorkosApiError,
+  WorkosPasswordError,
   type WorkosAuth,
   type WorkosOrganization,
+  type WorkosPasswordFailure,
   type WorkosUser,
 } from "../workos";
 import packageJson from "../../package.json" with { type: "json" };
@@ -44,6 +48,15 @@ const API_VERSION: string = packageJson.version;
 
 /** Device authorizations allowed per client per minute. */
 export const DEVICE_RATE_LIMIT_PER_MINUTE = 10;
+
+/**
+ * Password attempts allowed per client per minute. Deliberately far below the
+ * device limit: a device authorization is a harmless request for a code, while
+ * these carry credentials and are the endpoints worth guessing against. Low
+ * enough to make online guessing pointless, high enough to survive a user
+ * mistyping a password a few times.
+ */
+export const PASSWORD_RATE_LIMIT_PER_MINUTE = 5;
 
 type HostRow = typeof hosts.$inferSelect;
 type ProfileRow = typeof profiles.$inferSelect;
@@ -123,6 +136,13 @@ export function createV1Routes(deps: {
   // or a future multi-tenant mount) must not share a budget.
   const deviceRateLimiter = createRateLimiter({
     limit: DEVICE_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
+  // Separate budget from the device routes, so exhausting one cannot lock a
+  // user out of the other.
+  const passwordRateLimiter = createRateLimiter({
+    limit: PASSWORD_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
@@ -582,12 +602,126 @@ export function createV1Routes(deps: {
   });
 
   /**
-   * Starts the CLI device flow. Unauthenticated by nature — the caller has no
-   * credentials yet — and it is the only reason this service holds the WorkOS
-   * API key: the request WorkOS requires is authenticated with a secret a
-   * public client cannot be trusted with. Everything after this (polling for
-   * the token) goes straight to WorkOS, which is why /instance publishes the
-   * client id and API origin.
+   * The two in-app password routes.
+   *
+   * These exist because the WorkOS password grant is a confidential-client
+   * grant: it requires the client secret, so the app cannot make the call
+   * itself and something holding the secret has to proxy it. The password is
+   * pass-through at every step here — it is read off the request, handed to
+   * WorkOS, and never written to the database, a log line, or an error
+   * message. Nothing below may start doing so.
+   *
+   * SSO (Google/GitHub) does not come through here; it takes the device flow.
+   */
+  const passwordFailureResponses: Record<
+    WorkosPasswordFailure,
+    { status: ContentfulStatusCode; code: AccountErrorCode; message: string }
+  > = {
+    // Never says which half was wrong: that difference is an account-existence
+    // oracle, and it is not useful to the honest user either.
+    invalid_credentials: {
+      status: 401,
+      code: "invalid_credentials",
+      message: "That email and password do not match an account",
+    },
+    email_taken: {
+      status: 409,
+      code: "email_taken",
+      message: "An account with that email already exists",
+    },
+    // The credentials were right; the account simply is not usable yet.
+    // Completing verification is the identity provider's own flow in V1.
+    email_verification_required: {
+      status: 403,
+      code: "email_verification_required",
+      message: "Check your email to verify your address, then sign in",
+    },
+  };
+
+  /**
+   * Reads and validates credentials from the request. Returns the credentials,
+   * or the Response to return as-is — never logs the body, and never quotes
+   * the password back in the validation message.
+   */
+  async function readPasswordCredentials(c: Context): Promise<PasswordCredentials | Response> {
+    if (!passwordRateLimiter.tryConsume(clientIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    try {
+      return Schema.decodeUnknownSync(PasswordCredentials)(json);
+    } catch {
+      // Deliberately not the decoder's message: effect/Schema quotes the
+      // offending value, which here is somebody's password.
+      return errorResponse(c, 400, "validation_failed", "An email and password are required");
+    }
+  }
+
+  /** Turns a WorkOS password outcome into the error contract. */
+  function passwordErrorResponse(c: Context, error: unknown): Response {
+    if (error instanceof WorkosPasswordError) {
+      const mapped = passwordFailureResponses[error.reason];
+      return errorResponse(c, mapped.status, mapped.code, mapped.message);
+    }
+    // No body, no cause: whatever went wrong upstream, the log line must not
+    // become the place a password ends up.
+    console.error("[api] password authentication failed upstream");
+    return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+  }
+
+  v1.post("/auth/password/sign-in", async (c) => {
+    const credentials = await readPasswordCredentials(c);
+    if (credentials instanceof Response) return credentials;
+
+    try {
+      const auth_ = await auth.authenticateWithPassword(credentials);
+      const body: PasswordAuthResponse = {
+        accessToken: auth_.accessToken,
+        refreshToken: auth_.refreshToken,
+        user: {
+          id: auth_.user.id,
+          email: auth_.user.email,
+          ...(auth_.user.name ? { name: auth_.user.name } : {}),
+        },
+      };
+      return c.json(body);
+    } catch (error) {
+      return passwordErrorResponse(c, error);
+    }
+  });
+
+  v1.post("/auth/password/sign-up", async (c) => {
+    const credentials = await readPasswordCredentials(c);
+    if (credentials instanceof Response) return credentials;
+
+    try {
+      const auth_ = await auth.createUserWithPassword(credentials);
+      const body: PasswordAuthResponse = {
+        accessToken: auth_.accessToken,
+        refreshToken: auth_.refreshToken,
+        user: {
+          id: auth_.user.id,
+          email: auth_.user.email,
+          ...(auth_.user.name ? { name: auth_.user.name } : {}),
+        },
+      };
+      return c.json(body, 201);
+    } catch (error) {
+      return passwordErrorResponse(c, error);
+    }
+  });
+
+  /**
+   * Starts the SSO device flow, which is how "Continue with Google/GitHub"
+   * reaches the provider. Unauthenticated by nature — the caller has no
+   * credentials yet — and, alongside the password routes above, a reason this
+   * service holds the WorkOS API key: the request WorkOS requires is
+   * authenticated with a secret a public client cannot be trusted with.
+   * Everything after this (polling for the token) goes straight to WorkOS,
+   * which is why /instance publishes the client id and API origin.
    */
   v1.post("/auth/device", async (c) => {
     if (!deviceRateLimiter.tryConsume(clientIp(c))) {

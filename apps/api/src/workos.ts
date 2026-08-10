@@ -34,11 +34,55 @@ export type WorkosOrganization = {
   orgName: string;
 };
 
+/**
+ * Why a password failed, as this service classifies it. WorkOS reports these
+ * inconsistently — some as an OAuth `error`, some as a `code`, with the HTTP
+ * status not reliably distinguishing them — so the classification happens once
+ * here rather than at each call site.
+ */
+export type WorkosPasswordFailure =
+  | "invalid_credentials"
+  | "email_taken"
+  | "email_verification_required";
+
+/**
+ * A password grant this service refused to complete. Carries the classified
+ * reason and nothing else: notably not the password, and not WorkOS's raw
+ * message, which can echo the submitted credentials back.
+ */
+export class WorkosPasswordError extends Error {
+  constructor(readonly reason: WorkosPasswordFailure) {
+    super(reason);
+    this.name = "WorkosPasswordError";
+  }
+}
+
+/** The token pair a successful password grant yields. */
+export type WorkosPasswordAuth = {
+  accessToken: string;
+  refreshToken: string;
+  user: WorkosUser;
+};
+
 export type WorkosAuth = {
   /** Rejects on any invalid, expired, or unverifiable token; callers answer 401. */
   verifyAccessToken(token: string): Promise<VerifiedAccessToken>;
   getUser(userId: string): Promise<WorkosUser>;
   requestDeviceAuthorization(): Promise<DeviceAuthorizationResponse>;
+  /**
+   * The password grant. Requires the client secret, which is the whole reason
+   * this runs here rather than in the app: a public client cannot hold it.
+   * Rejects with {@link WorkosPasswordError} on a classified refusal.
+   */
+  authenticateWithPassword(credentials: {
+    email: string;
+    password: string;
+  }): Promise<WorkosPasswordAuth>;
+  /** Creates a user, then authenticates them. Same rejection contract. */
+  createUserWithPassword(credentials: {
+    email: string;
+    password: string;
+  }): Promise<WorkosPasswordAuth>;
   /** Every organization the user is a member of, oldest page first. */
   listUserOrganizationMemberships(userId: string): Promise<WorkosOrganization[]>;
   createOrganization(name: string): Promise<WorkosOrganization>;
@@ -160,6 +204,78 @@ function fullName(user: WorkosUserResponse): string | undefined {
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
+/**
+ * Which classified failure, if any, a WorkOS error body describes.
+ *
+ * WorkOS is not consistent about where the reason lives: authentication errors
+ * carry a `code`, OAuth-shaped refusals carry an `error`, and validation
+ * failures carry neither at the top level but name the offending field. All
+ * three are checked, and an unrecognised body yields `undefined` so the caller
+ * reports an upstream fault rather than guessing "wrong password".
+ *
+ * The values matched here are drawn from WorkOS's documented authentication
+ * error codes; the `invalid_grant` fallback covers the OAuth-shaped refusal
+ * the password grant returns for a bad email/password pair.
+ */
+export function classifyPasswordFailure(raw: unknown): WorkosPasswordFailure | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const body = raw as Record<string, unknown>;
+  const code = typeof body.code === "string" ? body.code : undefined;
+  const error = typeof body.error === "string" ? body.error : undefined;
+
+  if (code === "email_verification_required") return "email_verification_required";
+  // WorkOS spells the duplicate-email refusal differently across endpoints;
+  // both observed spellings mean the same thing to a user signing up.
+  if (code === "email_not_available" || code === "user_creation_error") return "email_taken";
+  if (code === "entity_already_exists") return "email_taken";
+  if (error === "invalid_grant" || code === "invalid_credentials") return "invalid_credentials";
+
+  // Validation errors name the field rather than the problem. An `email` error
+  // on a create is a taken address in every case this service can produce,
+  // since the address itself was already format-checked at the route.
+  if (Array.isArray(body.errors)) {
+    for (const entry of body.errors) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const field = (entry as Record<string, unknown>).field;
+      const rule = (entry as Record<string, unknown>).code;
+      if (field === "email" && rule === "email_not_available") return "email_taken";
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The token pair, read off the authenticate response. Decoded rather than
+ * cast: a shape change must fail loudly here instead of persisting
+ * `undefined` as somebody's access token.
+ */
+function toPasswordAuth(raw: unknown): WorkosPasswordAuth {
+  if (typeof raw !== "object" || raw === null) {
+    throw new WorkosApiError(502, "WorkOS authenticate returned a non-object body");
+  }
+  const body = raw as Record<string, unknown>;
+  const accessToken = body.access_token;
+  const refreshToken = body.refresh_token;
+  if (typeof accessToken !== "string" || typeof refreshToken !== "string") {
+    throw new WorkosApiError(502, "WorkOS authenticate returned no token pair");
+  }
+  const user = (body.user ?? {}) as WorkosUserResponse;
+  if (typeof user.id !== "string" || typeof user.email !== "string") {
+    throw new WorkosApiError(502, "WorkOS authenticate returned no user");
+  }
+  const name = fullName(user);
+  return {
+    accessToken,
+    refreshToken,
+    user: {
+      id: user.id,
+      email: user.email,
+      ...(name ? { name } : {}),
+      ...(user.profile_picture_url ? { avatarUrl: user.profile_picture_url } : {}),
+    },
+  };
+}
+
 export function createWorkosAuth(config: ApiConfig): WorkosAuth {
   /**
    * Resolved on first verification and kept for the process lifetime. The
@@ -238,6 +354,49 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
       );
     }
     return response.json();
+  }
+
+  /**
+   * A WorkOS call whose request body contains a password.
+   *
+   * Deliberately not `workosFetch`: that helper puts the upstream response
+   * body into the thrown error's message, and WorkOS echoes offending fields
+   * in validation errors — so a mistyped password could end up in an error
+   * string, and from there in a log. Nothing thrown from here carries any part
+   * of the request or the response.
+   *
+   * Returns the parsed body on success; throws {@link WorkosPasswordError} for
+   * a classified refusal and a bare {@link WorkosApiError} otherwise.
+   */
+  async function passwordFetch(path: string, body: Record<string, string>): Promise<unknown> {
+    const response = await fetch(`${config.workosApiUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.workosApiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) return response.json();
+
+    // Read the failure only to classify it. The parsed value is never
+    // returned, logged, or attached to an error.
+    const failure = classifyPasswordFailure(await response.json().catch(() => null));
+    if (failure) throw new WorkosPasswordError(failure);
+    throw new WorkosApiError(response.status, `WorkOS ${path} failed with ${response.status}`);
+  }
+
+  async function passwordGrant(body: Record<string, string>): Promise<WorkosPasswordAuth> {
+    const raw = await passwordFetch("/user_management/authenticate", {
+      ...body,
+      client_id: config.workosClientId,
+      // The password grant is a confidential-client grant: WorkOS requires the
+      // secret, which is precisely why the app cannot make this call itself
+      // and this service proxies it.
+      client_secret: config.workosApiKey,
+    });
+    return toPasswordAuth(raw);
   }
 
   return {
@@ -330,6 +489,21 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ organization_id: orgId, user_id: userId }),
       });
+    },
+
+    async authenticateWithPassword({ email, password }) {
+      return passwordGrant({ grant_type: "password", email, password });
+    },
+
+    async createUserWithPassword({ email, password }) {
+      // Create, then authenticate. Two calls because WorkOS's create-user
+      // endpoint returns a user, not a session — and a session is what the
+      // caller needs. A user created here who then cannot authenticate (an
+      // environment that demands email verification) is left in place
+      // deliberately: the account is real, and deleting it would throw away a
+      // sign-up the user completed.
+      await passwordFetch("/user_management/users", { email, password });
+      return passwordGrant({ grant_type: "password", email, password });
     },
 
     async requestDeviceAuthorization() {
