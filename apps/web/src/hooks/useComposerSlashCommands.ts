@@ -55,6 +55,11 @@ function wasPromptReplacementApplied(result: number | false): boolean {
   return result !== false;
 }
 
+function buildBlameSlashPrompt(args: string): string {
+  const normalizedArgs = args.trim();
+  return normalizedArgs.length > 0 ? `git blame ${normalizedArgs}` : "git blame";
+}
+
 export function useComposerSlashCommands(input: {
   activeProject: Project | undefined;
   activeThread: Thread | undefined;
@@ -667,6 +672,16 @@ export function useComposerSlashCommands(input: {
         setIsSlashStatusDialogOpen(true);
         return true;
       }
+      if (slashInvocation.command === "blame-someone-else") {
+        editorActions.clearComposerSlashDraft();
+        editorActions.setComposerPromptValue(buildBlameSlashPrompt(slashInvocation.args));
+        toastManager.add({
+          type: "info",
+          title: "Blame transfer is unavailable",
+          description: "Unable to transfer blame. Git has receipts.",
+        });
+        return true;
+      }
       if (slashInvocation.command === "subagents") {
         editorActions.setComposerPromptValue(buildSubagentsPrompt(slashInvocation.args));
         return true;
@@ -929,6 +944,27 @@ export function useComposerSlashCommands(input: {
         }
         editorActions.setComposerHighlightedItemId(null);
         openFeedbackDialog();
+        return;
+      }
+
+      if (item.command === "blame-someone-else") {
+        const replacement = buildBlameSlashPrompt("");
+        const applied = editorActions.applyPromptReplacement(
+          trigger.rangeStart,
+          trigger.rangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
+        );
+        if (!wasPromptReplacementApplied(applied)) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        toastManager.add({
+          type: "info",
+          title: "Blame transfer is unavailable",
+          description: "Unable to transfer blame. Git has receipts.",
+        });
+        editorActions.scheduleComposerFocus();
         return;
       }
 

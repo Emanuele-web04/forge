@@ -10,6 +10,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "model",
   "plan",
   "default",
+  "blame-someone-else",
   "review",
   "fork",
   "side",

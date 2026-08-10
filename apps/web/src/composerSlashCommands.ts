@@ -211,6 +211,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Send feedback to the Forkara team",
     source: "app",
   },
+  "blame-someone-else": {
+    command: "blame-someone-else",
+    label: "/blame-someone-else",
+    description: "Transfer blame to someone else (but keep git history honest)",
+    source: "app",
+  },
   automation: {
     command: "automation",
     label: "/automation",
@@ -412,6 +418,7 @@ export function getAvailableComposerSlashCommands(input: {
           "subagents",
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "feedback",
+          "blame-someone-else",
           "automation",
         ]
       : [
@@ -422,6 +429,7 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "feedback",
+          "blame-someone-else",
           "automation",
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));

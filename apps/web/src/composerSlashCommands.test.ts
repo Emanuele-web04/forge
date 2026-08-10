@@ -23,6 +23,7 @@ describe("composerSlashCommands", () => {
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("blame-someone-else")).toBe(true);
     expect(isBuiltInComposerSlashCommand("export")).toBe(true);
     expect(isBuiltInComposerSlashCommand("feedback")).toBe(true);
     expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
@@ -33,6 +34,9 @@ describe("composerSlashCommands", () => {
     expect(filterComposerSlashCommands("fast").map((entry) => entry.command)).toEqual(["fast"]);
     expect(filterComposerSlashCommands("auto").map((entry) => entry.command)).toEqual([
       "automation",
+    ]);
+    expect(filterComposerSlashCommands("blame").map((entry) => entry.command)).toEqual([
+      "blame-someone-else",
     ]);
     expect(filterComposerSlashCommands("feed").map((entry) => entry.command)).toEqual(["feedback"]);
   });
@@ -57,6 +61,10 @@ describe("composerSlashCommands", () => {
     expect(parseComposerSlashInvocation("/side is this safe?")).toEqual({
       command: "side",
       args: "is this safe?",
+    });
+    expect(parseComposerSlashInvocation("/blame-someone-else src/ui/button.tsx")).toEqual({
+      command: "blame-someone-else",
+      args: "src/ui/button.tsx",
     });
     expect(parseComposerSlashInvocation("/automation every 6h check the page")).toEqual({
       command: "automation",
@@ -299,7 +307,7 @@ describe("composerSlashCommands", () => {
         canOfferSideCommand: true,
         canOfferExportCommand: true,
       }),
-    ).toEqual(["side", "export", "feedback", "automation"]);
+    ).toEqual(["side", "export", "feedback", "blame-someone-else", "automation"]);
   });
 
   it("offers the app-level /export command on every provider", () => {
@@ -411,6 +419,7 @@ describe("composerSlashCommands", () => {
       "subagents",
       "export",
       "feedback",
+      "blame-someone-else",
       "automation",
     ]);
   });
