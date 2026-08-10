@@ -166,7 +166,9 @@ async function listRecentFiles(
     .map((entry) => entry.path);
 }
 
-function buildUsageLines(input: {
+// Reused by the OpenCode fetcher to format its 24h/7d/30d token totals with the same
+// compact "N tokens" / "N recent sessions" styling as the Codex and Claude archives.
+export function buildUsageLines(input: {
   tokens24h: number;
   tokens7d: number;
   tokens30d: number;

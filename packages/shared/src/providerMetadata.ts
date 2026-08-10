@@ -85,7 +85,10 @@ export const PROVIDER_DESCRIPTORS = [
     displayName: PROVIDER_DISPLAY_NAMES.opencode,
     available: true,
     supportsNativeTurnSteering: false,
-    usage: null,
+    usage: {
+      signInCommand: "opencode auth login",
+      learnMoreHref: "https://opencode.ai/docs/",
+    },
   },
   {
     kind: "pi",

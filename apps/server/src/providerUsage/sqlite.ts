@@ -1,7 +1,10 @@
 // FILE: providerUsage/sqlite.ts
-// Purpose: Read-only key/value lookups from VS Code-style `ItemTable` SQLite databases
-// (e.g. Cursor's state.vscdb). Mirrors the bun:sqlite / node:sqlite runtime branching used in
-// homeMigration.ts so it works under both runtimes. Defensive: returns {} on any failure.
+// Purpose: Read-only SQLite access for provider usage fetchers — key/value lookups from VS
+// Code-style `ItemTable` databases (e.g. Cursor's state.vscdb) and generic read-only SELECTs
+// (e.g. the OpenCode Go `opencode.db` message archive). Mirrors the bun:sqlite / node:sqlite
+// runtime branching used in homeMigration.ts so it works under both runtimes. Defensive:
+// `readItemTableValues` returns {} on any failure; `readSqliteRows` throws so callers can
+// distinguish "no rows" from "database unreadable".
 
 // Loaded dynamically so bundlers don't try to resolve the runtime-only "bun:sqlite" specifier.
 const importRuntimeModule = (specifier: string): Promise<unknown> =>
@@ -9,6 +12,7 @@ const importRuntimeModule = (specifier: string): Promise<unknown> =>
 
 interface ReadonlyStatement {
   get: (...params: ReadonlyArray<unknown>) => unknown;
+  all: (...params: ReadonlyArray<unknown>) => ReadonlyArray<Record<string, unknown>>;
 }
 
 interface ReadonlyDatabase {
@@ -72,4 +76,32 @@ export async function readItemTableValues(input: {
     }
   }
   return result;
+}
+
+/**
+ * Run a read-only SELECT and return every row as a string-keyed object. Unlike
+ * `readItemTableValues` this propagates failures (missing/malformed DB, bad SQL, a WAL read
+ * error) so callers can tell "query returned no rows" apart from "database unreadable" — the
+ * OpenCode fetcher needs that distinction to report errors instead of blank usage.
+ */
+export async function readSqliteRows(input: {
+  dbPath: string;
+  sql: string;
+  params?: ReadonlyArray<unknown>;
+}): Promise<ReadonlyArray<Record<string, unknown>>> {
+  let database: ReadonlyDatabase | null = null;
+  try {
+    database = await openReadOnlyDatabase(input.dbPath);
+    const statement = database.query?.(input.sql) ?? database.prepare?.(input.sql);
+    if (!statement) {
+      throw new Error(`Unsupported sqlite runtime for ${input.dbPath}`);
+    }
+    return statement.all(...(input.params ?? []));
+  } finally {
+    try {
+      database?.close();
+    } catch {
+      // ignore close failures
+    }
+  }
 }
