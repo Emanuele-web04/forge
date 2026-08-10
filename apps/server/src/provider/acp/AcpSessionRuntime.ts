@@ -310,6 +310,8 @@ export interface AcpSessionRuntimeShape {
   // stream chunk buffering and in-flight handlers, unlike a queue-size probe.
   readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
   readonly supportsSessionFork: Effect.Effect<boolean, AcpErrors.AcpError>;
+  /** Whether a persisted session id can be reopened through resume or load. */
+  readonly supportsSessionRecovery: Effect.Effect<boolean, AcpErrors.AcpError>;
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
   readonly getConfigOptions: Effect.Effect<ReadonlyArray<Acp.SessionConfigOption>>;
   readonly getAvailableCommands: Effect.Effect<ReadonlyArray<Acp.AvailableCommand>>;
@@ -1326,6 +1328,14 @@ const makeAcpSessionRuntime = (
           (started) =>
             started.initializeResult.agentCapabilities?.sessionCapabilities?.fork != null,
         ),
+      ),
+      supportsSessionRecovery: getStartedState.pipe(
+        Effect.map((started) => {
+          const capabilities = started.initializeResult.agentCapabilities;
+          return (
+            capabilities?.sessionCapabilities?.resume != null || capabilities?.loadSession === true
+          );
+        }),
       ),
       setModel: (model) =>
         getStartedState.pipe(

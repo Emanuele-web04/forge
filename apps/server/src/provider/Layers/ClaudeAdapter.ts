@@ -561,7 +561,7 @@ export interface ClaudeAdapterLiveOptions {
   }) => ClaudeQueryRuntime | Promise<ClaudeQueryRuntime>;
   readonly forkNativeSession?: (
     sessionId: string,
-    options?: { readonly upToMessageId?: string },
+    options?: { readonly dir?: string; readonly upToMessageId?: string },
   ) => Promise<{ sessionId: string }>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
@@ -1761,7 +1761,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     };
     const forkNativeSession = async (
       sessionId: string,
-      forkOptions?: { readonly upToMessageId?: string },
+      forkOptions?: { readonly dir?: string; readonly upToMessageId?: string },
     ): Promise<{ sessionId: string }> => {
       const override = options?.forkNativeSession;
       if (override) {
@@ -5959,9 +5959,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           });
         }
         const upToMessageId = liveSource?.lastAssistantUuid ?? sourceState?.resumeSessionAt;
+        const sourceCwd = liveSource?.session.cwd ?? input.sourceCwd;
         const forked = yield* Effect.tryPromise({
           try: () =>
             forkNativeSession(sourceSessionId, {
+              ...(sourceCwd ? { dir: sourceCwd } : {}),
               ...(upToMessageId ? { upToMessageId } : {}),
             }),
           catch: (cause) =>

@@ -10097,7 +10097,7 @@ describe("ClaudeAdapterLive forkThread", () => {
   it.effect("forks natively from the persisted cursor and drops source uuid pins", () => {
     const forkCalls: Array<{
       readonly sessionId: string;
-      readonly options: { readonly upToMessageId?: string } | undefined;
+      readonly options: { readonly dir?: string; readonly upToMessageId?: string } | undefined;
     }> = [];
     const layer = makeForkLayer(async (sessionId, options) => {
       forkCalls.push({ sessionId, options });
@@ -10110,6 +10110,7 @@ describe("ClaudeAdapterLive forkThread", () => {
         sourceThreadId: THREAD_ID,
         threadId: RESUME_THREAD_ID,
         runtimeMode: "full-access",
+        sourceCwd: "/repo/source",
         sourceResumeCursor: {
           threadId: String(THREAD_ID),
           resume: SOURCE_SESSION_ID,
@@ -10119,7 +10120,10 @@ describe("ClaudeAdapterLive forkThread", () => {
       });
 
       assert.deepEqual(forkCalls, [
-        { sessionId: SOURCE_SESSION_ID, options: { upToMessageId: "assistant-uuid-9" } },
+        {
+          sessionId: SOURCE_SESSION_ID,
+          options: { dir: "/repo/source", upToMessageId: "assistant-uuid-9" },
+        },
       ]);
       // The SDK fork remaps message uuids, so the fork cursor must resume the
       // new session id without inheriting `resumeSessionAt` or tracked tasks.
