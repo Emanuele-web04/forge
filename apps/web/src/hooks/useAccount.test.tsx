@@ -36,9 +36,9 @@ afterEach(() => {
 function makeMe(profile: AccountMe["profile"] = null): AccountMe {
   return {
     id: "user_1",
-    name: "Dylan Verbreyt",
-    email: "dylan@example.com",
-    organization: { id: "org_1", name: "Dylan's Workspace" },
+    name: "Ada Lovelace",
+    email: "ada@example.com",
+    organization: { id: "org_1", name: "Ada's Workspace" },
     profile,
   };
 }
@@ -90,7 +90,7 @@ describe("useAccount", () => {
 
     const account = renderUseAccount(queryClient);
     await account.signInWithPassword.mutateAsync({
-      email: "dylan@example.com",
+      email: "ada@example.com",
       password: "secret",
     });
 
@@ -149,13 +149,13 @@ describe("useAccount", () => {
       state: "signed-in",
       me: before,
     });
-    const after = makeMe({ handle: "dylan", displayName: "Dylan", avatarColor: "#22c55e" });
+    const after = makeMe({ handle: "ada-l", displayName: "Ada", avatarColor: "#22c55e" });
     accountApiMock.updateProfile.mockResolvedValue(after);
 
     const account = renderUseAccount(queryClient);
     await account.updateProfile.mutateAsync({
-      handle: "dylan",
-      displayName: "Dylan",
+      handle: "ada-l",
+      displayName: "Ada",
       avatarColor: "#22c55e",
     });
 

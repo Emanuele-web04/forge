@@ -22,9 +22,9 @@ import {
 function makeMe(overrides: Partial<AccountMe> = {}): AccountMe {
   return {
     id: "user_1",
-    name: "Dylan Verbreyt",
-    email: "dylan@example.com",
-    organization: { id: "org_1", name: "Dylan's Workspace" },
+    name: "Ada Lovelace",
+    email: "ada@example.com",
+    organization: { id: "org_1", name: "Ada's Workspace" },
     profile: null,
     ...overrides,
   };
@@ -109,7 +109,7 @@ describe("accountErrorMessage", () => {
 
 describe("sanitizeHandleInput", () => {
   it("strips the @-prefix, uppercases, and disallowed characters", () => {
-    expect(sanitizeHandleInput("@Dylan_Verbreyt!")).toBe("dylanverbreyt");
+    expect(sanitizeHandleInput("@Ada_Lovelace!")).toBe("adalovelace");
     expect(sanitizeHandleInput("my-handle")).toBe("my-handle");
   });
 
@@ -120,7 +120,7 @@ describe("sanitizeHandleInput", () => {
 
 describe("handleFormatError", () => {
   it("accepts handles the contracts schema accepts", () => {
-    expect(handleFormatError("dylan")).toBeNull();
+    expect(handleFormatError("ada")).toBeNull();
     expect(handleFormatError("a-1")).toBeNull();
   });
 
@@ -134,22 +134,22 @@ describe("handleFormatError", () => {
 
 describe("display derivations", () => {
   it("derives the avatar initial from the display name", () => {
-    expect(accountInitial("dylan")).toBe("D");
+    expect(accountInitial("ada")).toBe("A");
     expect(accountInitial("  ")).toBe("?");
   });
 
   it("prefers the profile display name for the footer's first name", () => {
-    expect(accountFirstName(makeMe())).toBe("Dylan");
+    expect(accountFirstName(makeMe())).toBe("Ada");
     expect(
       accountFirstName(
         makeMe({
-          profile: { handle: "ada-l", displayName: "Ada Lovelace", avatarColor: "#22c55e" },
+          profile: { handle: "grace-h", displayName: "Grace Hopper", avatarColor: "#22c55e" },
         }),
       ),
-    ).toBe("Ada");
+    ).toBe("Grace");
   });
 
   it("builds the public profile URL from the handle", () => {
-    expect(publicProfileUrl("dylan")).toBe("https://trysynara.com/profile/@dylan");
+    expect(publicProfileUrl("ada")).toBe("https://trysynara.com/profile/@ada");
   });
 });
