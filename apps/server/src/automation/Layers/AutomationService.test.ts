@@ -7,6 +7,7 @@ import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   DEFAULT_PROVIDER_PROFILE_ID,
   MessageId,
+  ProviderProfileId,
   ProjectId,
   ThreadId,
   TurnId,
@@ -1222,6 +1223,74 @@ layer("AutomationService", (it) => {
         dispatchedCommands.filter((command) => command.type === "thread.create").length,
         0,
       );
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(
+        listed.runs.find((run) => run.automationId === automationId)?.status,
+        "failed",
+      );
+    }),
+  );
+
+  it.effect("rejects a non-default profile before creating a fresh automation thread", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-profile-fresh");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          modelSelection: {
+            provider: "codex",
+            profileId: ProviderProfileId.makeUnsafe("work"),
+            model: "gpt-5-codex",
+          },
+        },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /profile 'work' is not configured/);
+      assert.strictEqual(dispatchedCommands.length, 0);
+      assert.strictEqual(createdWorktrees.length, 0);
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(
+        listed.runs.find((run) => run.automationId === automationId)?.status,
+        "failed",
+      );
+    }),
+  );
+
+  it.effect("rejects a non-default profile before continuing an automation thread", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-profile-continuation");
+      const targetThreadId = ThreadId.makeUnsafe("automation-profile-target");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          modelSelection: {
+            provider: "codex",
+            profileId: ProviderProfileId.makeUnsafe("work"),
+            model: "gpt-5-codex",
+          },
+        },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /profile 'work' is not configured/);
+      assert.strictEqual(dispatchedCommands.length, 0);
+      assert.strictEqual(createdWorktrees.length, 0);
       const listed = yield* service.list({ projectId });
       assert.strictEqual(
         listed.runs.find((run) => run.automationId === automationId)?.status,

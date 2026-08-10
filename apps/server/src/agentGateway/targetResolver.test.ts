@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   DEFAULT_PROVIDER_PROFILE_ID,
+  ProviderProfileId,
   type ModelSelection,
   type ProviderKind,
   type ProviderModelDescriptor,
@@ -58,6 +59,31 @@ function makeVariantDescriptor(slug: string): ProviderModelDescriptor {
 }
 
 describe("agent gateway target resolver", () => {
+  it.effect("rejects a non-default profile before provider discovery", () =>
+    Effect.gen(function* () {
+      let discoveryCalls = 0;
+      const guardedDiscovery = {
+        listModels: () => {
+          discoveryCalls += 1;
+          return Effect.succeed({ source: "test", models: [] });
+        },
+      } as unknown as ProviderDiscoveryServiceShape;
+
+      const error = yield* resolveAgentGatewayTarget({
+        target: {
+          provider: "codex",
+          profileId: ProviderProfileId.makeUnsafe("work"),
+          model: "gpt-5.6-terra",
+        },
+        discovery: guardedDiscovery,
+      }).pipe(Effect.flip);
+
+      assert.equal(error.code, "provider_unavailable");
+      assert.match(error.message, /profile 'work' is not configured/);
+      assert.equal(discoveryCalls, 0);
+    }),
+  );
+
   it.effect("builds examples from the exact model restrictions and preserves option types", () =>
     Effect.gen(function* () {
       const codexCatalog = {

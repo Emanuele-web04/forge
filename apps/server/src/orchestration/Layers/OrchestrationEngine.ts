@@ -8,6 +8,10 @@ import type {
 } from "@synara/contracts";
 import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
 import {
+  providerTargetFromModelSelection,
+  providerTargetsEqual,
+} from "@synara/shared/providerTarget";
+import {
   Cause,
   Deferred,
   Effect,
@@ -450,13 +454,45 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.fork.create":
         return loadThreadDetailForDecider(command, commandReadModel, command.sourceThreadId);
       case "thread.turn.start":
-        return command.sourceProposedPlan
-          ? loadThreadDetailForDecider(
-              command,
-              commandReadModel,
-              command.sourceProposedPlan.threadId,
-            )
+        return Effect.gen(function* () {
+          const readModel = command.sourceProposedPlan
+            ? yield* loadThreadDetailForDecider(
+                command,
+                commandReadModel,
+                command.sourceProposedPlan.threadId,
+              )
+            : commandReadModel;
+          if (command.modelSelection === undefined) {
+            return readModel;
+          }
+          const thread = readModel.threads.find((entry) => entry.id === command.threadId);
+          const targetChanged =
+            thread !== undefined &&
+            !providerTargetsEqual(
+              providerTargetFromModelSelection(thread.modelSelection),
+              providerTargetFromModelSelection(command.modelSelection),
+            );
+          if (
+            !targetChanged ||
+            command.sourceProposedPlan?.threadId === command.threadId
+          ) {
+            return readModel;
+          }
+          return yield* loadThreadDetailForDecider(command, readModel, command.threadId);
+        });
+      case "thread.meta.update": {
+        if (command.modelSelection === undefined) {
+          return Effect.succeed(commandReadModel);
+        }
+        const thread = commandReadModel.threads.find((entry) => entry.id === command.threadId);
+        return thread !== undefined &&
+          !providerTargetsEqual(
+            providerTargetFromModelSelection(thread.modelSelection),
+            providerTargetFromModelSelection(command.modelSelection),
+          )
+          ? loadThreadDetailForDecider(command, commandReadModel, command.threadId)
           : Effect.succeed(commandReadModel);
+      }
       case "thread.conversation.rollback":
       case "thread.message.edit-and-resend":
       case "thread.message.assistant.complete":

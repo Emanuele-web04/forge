@@ -10,6 +10,7 @@ import {
   type ThreadHandoffImportedMessage,
   type ThreadId,
 } from "@synara/contracts";
+import { providerTargetFromModelSelection } from "@synara/shared/providerTarget";
 import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
@@ -23,6 +24,7 @@ import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
 import type { ProviderServiceShape } from "../provider/Services/ProviderService";
+import { resolveDefaultProviderProfile } from "../provider/providerProfileResolver.ts";
 import { parseManagedWorktreeWorkspaceRoot } from "../workspace/managedWorktree";
 import {
   mapClaudeSessionMessages,
@@ -351,6 +353,11 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         importMessagesError(`Thread '${body.threadId}' already has an active provider session.`),
       );
     }
+
+    yield* resolveDefaultProviderProfile({
+      operation: "Orchestration.importThread",
+      target: providerTargetFromModelSelection(thread.modelSelection),
+    }).pipe(Effect.mapError((cause) => importMessagesError(cause.issue)));
 
     const projectOption = yield* options.projectionSnapshotQuery.getProjectShellById(
       thread.projectId,

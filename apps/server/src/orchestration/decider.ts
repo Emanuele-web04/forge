@@ -25,6 +25,10 @@ import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
+  providerTargetFromModelSelection,
+  providerTargetsEqual,
+} from "@synara/shared/providerTarget";
+import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
 } from "@synara/shared/conversationEdit";
@@ -82,6 +86,45 @@ function validateAutoRuntimeMode(
           detail: issue,
         }),
       );
+}
+
+type ThreadTargetSelectionCommand =
+  | Extract<OrchestrationCommand, { type: "thread.meta.update" }>
+  | Extract<OrchestrationCommand, { type: "thread.turn.start" }>
+  | Extract<OrchestrationCommand, { type: "thread.message.edit-and-resend" }>;
+
+function validateThreadTargetSelection(
+  command: ThreadTargetSelectionCommand,
+  thread: OrchestrationThread,
+) {
+  if (command.modelSelection === undefined) {
+    return Effect.void;
+  }
+
+  const currentTarget = providerTargetFromModelSelection(thread.modelSelection);
+  const requestedTarget = providerTargetFromModelSelection(command.modelSelection);
+  const canAdoptInitialTarget =
+    (command.type === "thread.meta.update" || command.type === "thread.turn.start") &&
+    thread.creationSource !== "provider_native" &&
+    thread.latestTurn === null &&
+    thread.session === null &&
+    thread.messages.length === 0;
+  if (
+    providerTargetsEqual(currentTarget, requestedTarget) ||
+    canAdoptInitialTarget
+  ) {
+    return Effect.void;
+  }
+
+  return Effect.fail(
+    new OrchestrationCommandInvariantError({
+      commandType: command.type,
+      detail:
+        `Thread '${thread.id}' already has work on provider target ` +
+        `'${currentTarget.provider}/${currentTarget.profileId}'. Create a new thread or explicit ` +
+        `handoff to use '${requestedTarget.provider}/${requestedTarget.profileId}'.`,
+    }),
+  );
 }
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
@@ -1220,6 +1263,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateThreadTargetSelection(command, thread);
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
       // Provider-native threads: see thread.create — the selection mirrors the
       // provider's own subagent, so the Auto-mode capability check doesn't apply.
@@ -1569,6 +1613,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateThreadTargetSelection(command, targetThread);
       if (threadHasCheckpointRevertInProgress(targetThread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1980,6 +2025,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateThreadTargetSelection(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
