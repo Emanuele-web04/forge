@@ -188,6 +188,13 @@ export const AccountErrorCode = Schema.Literals([
    * credential failure and not account-specific — it is domain policy.
    */
   "sso_required",
+  /**
+   * The email-verification code was refused — wrong, expired, or its pending
+   * authentication token already spent. One code for all three deliberately:
+   * WorkOS does not reliably distinguish them, and the user's recovery is the
+   * same either way (retype the code, or resend and start over).
+   */
+  "invalid_verification_code",
   "validation_failed",
   "rate_limited",
   "internal_error",
@@ -215,6 +222,50 @@ export const OrganizationRequiredBody = Schema.Struct({
   organizations: Schema.Array(OrganizationSummary),
 });
 export type OrganizationRequiredBody = typeof OrganizationRequiredBody.Type;
+
+/**
+ * The 403 a sign-in or sign-up gets when the identity provider refuses to
+ * authenticate until the email address is verified. Like
+ * {@link OrganizationRequiredBody}, a distinct richer body for one code rather
+ * than a widening of the generic one: it is not a dead end, because WorkOS has
+ * already emailed the user a 6-digit code and the fields here are exactly what
+ * completing verification in-app needs.
+ *
+ * `pendingAuthenticationToken` is a bearer-ish secret — redeeming it plus the
+ * emailed code yields a session. It must live only in the client's in-memory
+ * dialog state: never logged, never persisted.
+ */
+export const EmailVerificationRequiredBody = Schema.Struct({
+  error: Schema.Literal("email_verification_required"),
+  message: TrimmedNonEmptyString,
+  /** Redeemed together with the emailed code by the verification grant. */
+  pendingAuthenticationToken: TrimmedNonEmptyString,
+  /** The address the code was sent to, for "We sent a code to {email}". */
+  email: TrimmedNonEmptyString,
+  /** Names the verification server-side; what a resend request carries. */
+  emailVerificationId: TrimmedNonEmptyString,
+});
+export type EmailVerificationRequiredBody = typeof EmailVerificationRequiredBody.Type;
+
+/**
+ * {@link EmailVerificationRequiredBody} as an RPC error, so the fields survive
+ * the WebSocket hop. The password RPCs' error channel is a union of this and
+ * the generic `WsRpcError` (the same shape the pull-request RPCs use for their
+ * unavailable state): the ordinary mapping strips everything but a message and
+ * code off a password failure, and this is the one refusal whose payload the
+ * client genuinely needs — it is what the in-app verification step redeems.
+ *
+ * The same no-persistence rule as the HTTP body applies: dialog state only.
+ */
+export class AccountEmailVerificationRequiredError extends Schema.TaggedErrorClass<AccountEmailVerificationRequiredError>()(
+  "AccountEmailVerificationRequiredError",
+  {
+    message: TrimmedNonEmptyString,
+    pendingAuthenticationToken: TrimmedNonEmptyString,
+    email: TrimmedNonEmptyString,
+    emailVerificationId: TrimmedNonEmptyString,
+  },
+) {}
 
 // ── Password authentication ──────────────────────────────────────────
 //
@@ -249,6 +300,31 @@ export const PasswordCredentials = Schema.Struct({
   password: AccountPassword,
 });
 export type PasswordCredentials = typeof PasswordCredentials.Type;
+
+/**
+ * The 6-digit code WorkOS emails when verification is required. Fixed-format
+ * by the provider, so the format is checkable here — and a malformed code can
+ * be refused before it travels anywhere.
+ */
+export const EmailVerificationCode = Schema.String.check(Schema.isPattern(/^[0-9]{6}$/));
+export type EmailVerificationCode = typeof EmailVerificationCode.Type;
+
+/**
+ * The body of `POST /api/v1/auth/password/verify-email` — the emailed code
+ * plus the pending token the refusal carried. Both are bearer-ish secrets and
+ * take the password-path handling rules: never logged, never echoed back.
+ */
+export const VerifyEmailRequest = Schema.Struct({
+  code: EmailVerificationCode,
+  pendingAuthenticationToken: TrimmedNonEmptyString,
+});
+export type VerifyEmailRequest = typeof VerifyEmailRequest.Type;
+
+/** The body of `POST /api/v1/auth/password/resend-verification`. */
+export const ResendVerificationRequest = Schema.Struct({
+  emailVerificationId: TrimmedNonEmptyString,
+});
+export type ResendVerificationRequest = typeof ResendVerificationRequest.Type;
 
 /**
  * What a successful password grant yields: the same token pair the device
@@ -323,6 +399,19 @@ export type AccountCompleteSignInInput = typeof AccountCompleteSignInInput.Type;
  */
 export const AccountPasswordSignInInput = PasswordCredentials;
 export type AccountPasswordSignInInput = typeof AccountPasswordSignInInput.Type;
+
+/**
+ * In-app email verification: the code the user typed plus the pending token
+ * from the `email_verification_required` refusal. Same handling rules as
+ * {@link PasswordCredentials} — the payload is a secret, so it must never be
+ * logged by transport-level request tracing.
+ */
+export const AccountVerifyEmailInput = VerifyEmailRequest;
+export type AccountVerifyEmailInput = typeof AccountVerifyEmailInput.Type;
+
+/** Asks the identity provider to email a fresh verification code. */
+export const AccountResendVerificationEmailInput = ResendVerificationRequest;
+export type AccountResendVerificationEmailInput = typeof AccountResendVerificationEmailInput.Type;
 
 /**
  * The onboarding write. `workspaceName` renames the WorkOS organization, and

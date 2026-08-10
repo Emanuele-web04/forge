@@ -7,6 +7,7 @@ import {
   AccountMe as AccountMeSchema,
   type DeviceAuthorizationResponse,
   DeviceAuthorizationResponse as DeviceAuthorizationResponseSchema,
+  EmailVerificationRequiredBody,
   type InstanceInfo,
   InstanceInfo as InstanceInfoSchema,
   type ListHostsResponse,
@@ -19,7 +20,9 @@ import {
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
+  type ResendVerificationRequest,
   TrimmedNonEmptyString,
+  type VerifyEmailRequest,
   type UpdateHostRequest,
   type UpdateOrganizationRequest,
   type UpdateProfileRequest,
@@ -102,6 +105,32 @@ export class OrganizationRequiredError extends Error {
     super(params.message);
     this.name = "OrganizationRequiredError";
     this.organizations = params.organizations;
+  }
+}
+
+/**
+ * Thrown when a sign-in or sign-up was refused because the email address is
+ * not verified yet. Recoverable in-app, unlike a plain {@link AccountApiError}:
+ * WorkOS has already emailed a 6-digit code, and redeeming it together with
+ * `pendingAuthenticationToken` completes the sign-in. The token is a
+ * bearer-ish secret — never log or persist an instance of this error.
+ */
+export class EmailVerificationRequiredError extends Error {
+  readonly pendingAuthenticationToken: string;
+  readonly email: string;
+  readonly emailVerificationId: string;
+
+  constructor(params: {
+    message: string;
+    pendingAuthenticationToken: string;
+    email: string;
+    emailVerificationId: string;
+  }) {
+    super(params.message);
+    this.name = "EmailVerificationRequiredError";
+    this.pendingAuthenticationToken = params.pendingAuthenticationToken;
+    this.email = params.email;
+    this.emailVerificationId = params.emailVerificationId;
   }
 }
 
@@ -247,6 +276,19 @@ export interface AccountClient {
   signInWithPassword(credentials: PasswordCredentials): Promise<PasswordAuthResponse>;
   /** Creates the account, then signs in. Same handling rules as above. */
   signUpWithPassword(credentials: PasswordCredentials): Promise<PasswordAuthResponse>;
+  /**
+   * Redeems an emailed verification code against the pending authentication
+   * token an `email_verification_required` refusal carried. The pair is a
+   * bearer-ish secret: do not log the argument, and do not retain it past the
+   * call. A refused code rejects with `invalid_verification_code`.
+   */
+  verifyEmail(request: VerifyEmailRequest): Promise<PasswordAuthResponse>;
+  /**
+   * Asks the identity provider to email a fresh verification code. Resolves
+   * on 2xx whether or not the id named a live verification — the service
+   * deliberately does not say which, so neither can this.
+   */
+  resendVerificationEmail(request: ResendVerificationRequest): Promise<void>;
   me(token: string): Promise<AccountMe>;
   /** Upserts the caller's profile. Rejects a changed handle; V1 handles are immutable. */
   updateProfile(token: string, request: UpdateProfileRequest): Promise<AccountMe>;
@@ -290,7 +332,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
    */
   async function toRequestError(
     response: Response,
-  ): Promise<AccountApiError | OrganizationRequiredError> {
+  ): Promise<AccountApiError | OrganizationRequiredError | EmailVerificationRequiredError> {
     const raw: unknown = await response.json().catch(() => null);
 
     const organizationRequired = Schema.decodeUnknownOption(OrganizationRequiredBody)(raw);
@@ -298,6 +340,19 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       return new OrganizationRequiredError({
         message: organizationRequired.value.message,
         organizations: organizationRequired.value.organizations,
+      });
+    }
+
+    // Like organization_required: the richer body also decodes as the generic
+    // one, so it must be tried first or the recoverable refusal collapses
+    // into an opaque 403.
+    const verificationRequired = Schema.decodeUnknownOption(EmailVerificationRequiredBody)(raw);
+    if (Option.isSome(verificationRequired)) {
+      return new EmailVerificationRequiredError({
+        message: verificationRequired.value.message,
+        pendingAuthenticationToken: verificationRequired.value.pendingAuthenticationToken,
+        email: verificationRequired.value.email,
+        emailVerificationId: verificationRequired.value.emailVerificationId,
       });
     }
 
@@ -383,6 +438,26 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
         },
         PasswordAuthResponseSchema,
       );
+    },
+
+    async verifyEmail(request) {
+      return requestJson(
+        "/api/v1/auth/password/verify-email",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        PasswordAuthResponseSchema,
+      );
+    },
+
+    async resendVerificationEmail(request) {
+      await requestEmpty("/api/v1/auth/password/resend-verification", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      });
     },
 
     async me(token) {

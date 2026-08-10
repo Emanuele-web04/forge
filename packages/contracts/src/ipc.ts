@@ -6,8 +6,10 @@ import type {
   AccountMe,
   AccountOpenVerificationUrlInput,
   AccountPasswordSignInInput,
+  AccountResendVerificationEmailInput,
   AccountStatus,
   AccountUpdateProfileInput,
+  AccountVerifyEmailInput,
 } from "./account";
 import type {
   AuthBearerBootstrapResult,
@@ -847,6 +849,15 @@ export interface NativeApi {
     signInWithPassword: (input: AccountPasswordSignInInput) => Promise<AccountStatus>;
     /** Creates the account, then signs in. Same handling rules as above. */
     signUpWithPassword: (input: AccountPasswordSignInInput) => Promise<AccountStatus>;
+    /**
+     * Redeems the emailed 6-digit verification code against the pending
+     * authentication token an `email_verification_required` refusal carried.
+     * The input is a secret pair — same handling rules as the password calls:
+     * never logged, and kept only in the dialog's in-memory state.
+     */
+    verifyEmail: (input: AccountVerifyEmailInput) => Promise<AccountStatus>;
+    /** Asks the identity provider to email a fresh verification code. */
+    resendVerificationEmail: (input: AccountResendVerificationEmailInput) => Promise<void>;
     /**
      * Starts the SSO path: "Continue with Google/GitHub" opens the identity
      * provider's page in the system browser. Password users never reach this.

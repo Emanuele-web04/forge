@@ -5,7 +5,9 @@ import {
   AccountCompleteSignInInput,
   AccountOpenVerificationUrlInput,
   AccountPasswordSignInInput,
+  AccountResendVerificationEmailInput,
   AccountUpdateProfileInput,
+  AccountVerifyEmailInput,
 } from "./account";
 import {
   AutomationCancelRunInput,
@@ -282,6 +284,8 @@ export const WS_METHODS = {
   accountStatus: "account.status",
   accountSignInWithPassword: "account.signInWithPassword",
   accountSignUpWithPassword: "account.signUpWithPassword",
+  accountVerifyEmail: "account.verifyEmail",
+  accountResendVerificationEmail: "account.resendVerificationEmail",
   accountBeginSignIn: "account.beginSignIn",
   accountCompleteSignIn: "account.completeSignIn",
   accountUpdateProfile: "account.updateProfile",
@@ -488,6 +492,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.accountStatus, Schema.Struct({})),
   tagRequestBody(WS_METHODS.accountSignInWithPassword, AccountPasswordSignInInput),
   tagRequestBody(WS_METHODS.accountSignUpWithPassword, AccountPasswordSignInInput),
+  tagRequestBody(WS_METHODS.accountVerifyEmail, AccountVerifyEmailInput),
+  tagRequestBody(WS_METHODS.accountResendVerificationEmail, AccountResendVerificationEmailInput),
   tagRequestBody(WS_METHODS.accountBeginSignIn, Schema.Struct({})),
   tagRequestBody(WS_METHODS.accountCompleteSignIn, AccountCompleteSignInInput),
   tagRequestBody(WS_METHODS.accountUpdateProfile, AccountUpdateProfileInput),
