@@ -165,6 +165,14 @@ git clone
 
 Because Cloneara sounded too honest.
 
+### How long does a fresh fork lifecycle usually take?
+
+Enough time for exactly one coffee and one suspiciously calm compile.
+
+### Why does that long-running timer mention 42 minutes?
+
+It is only a metaphor for persistence.
+ 
 ### Can Forkara help with non-code forks?
 
 Yes. If the fork has a clear owner and a clear next step, we can still model it in our glossary.
