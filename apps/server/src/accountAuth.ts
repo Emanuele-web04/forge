@@ -659,8 +659,11 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   const scoped = await scopeTokenToWorkspace(token, {
     client,
     instance,
-    stdout,
-    stdin: options.stdin,
+    chooseOrganization: (organizations) =>
+      selectOrganization(organizations, { stdin: options.stdin, stdout }),
+    onOrganizationChosen: (organization) => {
+      stdout(`Workspace: ${organization.name}\n`);
+    },
   });
 
   // A file left behind by an expired session still holds this machine's host
@@ -682,6 +685,29 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   await registerThisHost(options, client, stdout);
 }
 
+/** A scoped session: tokens that name a workspace, and which one. */
+export interface ScopedSessionTokens {
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly organizationId: string;
+}
+
+export interface ScopeTokenToWorkspaceOptions {
+  readonly client: AccountClient;
+  readonly instance: { clientId: string; workosApiUrl: string };
+  /**
+   * Picks the workspace when the account offers several. The CLI prompts; the
+   * in-app flow takes the first. Injected rather than branched on so the
+   * decision is the *only* difference between the two sign-ins — everything
+   * about probing, refreshing, and spending the token stays shared.
+   */
+  readonly chooseOrganization: (
+    organizations: readonly OrganizationSummary[],
+  ) => Promise<OrganizationSummary>;
+  /** Told which workspace was chosen, once, after the scoped token is minted. */
+  readonly onOrganizationChosen?: (organization: OrganizationSummary) => void;
+}
+
 /**
  * Turns the org-less token the device grant returns into one scoped to a
  * workspace.
@@ -693,16 +719,11 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
  * carries a workspace (a self-hoster whose WorkOS is configured to scope the
  * device grant) skips the whole dance.
  */
-async function scopeTokenToWorkspace(
+export async function scopeTokenToWorkspace(
   token: { accessToken: string; refreshToken: string },
-  context: {
-    client: AccountClient;
-    instance: { clientId: string; workosApiUrl: string };
-    stdout: Stdout;
-    stdin?: NodeJS.ReadableStream | undefined;
-  },
-): Promise<{ accessToken: string; refreshToken: string; organizationId: string }> {
-  const { client, instance, stdout, stdin } = context;
+  options: ScopeTokenToWorkspaceOptions,
+): Promise<ScopedSessionTokens> {
+  const { client, instance, chooseOrganization, onOrganizationChosen } = options;
 
   let organizations: readonly OrganizationSummary[];
   try {
@@ -713,7 +734,7 @@ async function scopeTokenToWorkspace(
     organizations = error.organizations;
   }
 
-  const organization = await selectOrganization(organizations, { stdin, stdout });
+  const organization = await chooseOrganization(organizations);
   // Redeeming the refresh token here spends it, so the rotated pair this
   // returns is the only usable one — the caller must persist it, not the
   // device-grant pair it started with.
@@ -724,7 +745,7 @@ async function scopeTokenToWorkspace(
     organizationId: organization.id,
   });
 
-  stdout(`Workspace: ${organization.name}\n`);
+  onOrganizationChosen?.(organization);
   return {
     accessToken: refreshed.accessToken,
     refreshToken: refreshed.refreshToken,

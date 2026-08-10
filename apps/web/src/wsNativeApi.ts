@@ -792,6 +792,22 @@ export function createWsNativeApi(): NativeApi {
       onShellEvent: orchestrationShellEventListeners.subscribe,
       onThreadEvent: orchestrationThreadEventListeners.subscribe,
     },
+    account: {
+      status: () => transport.request(WS_METHODS.accountStatus),
+      beginSignIn: () => transport.request(WS_METHODS.accountBeginSignIn),
+      // No deadline: the server holds this open until the user finishes on the
+      // hosted page. If the socket drops, the sign-in still completed
+      // server-side — re-querying `status` on reconnect recovers it.
+      completeSignIn: (input, options) =>
+        transport.request(WS_METHODS.accountCompleteSignIn, input, {
+          timeoutMs: null,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
+      updateProfile: (input) => transport.request(WS_METHODS.accountUpdateProfile, input),
+      signOut: () => transport.request(WS_METHODS.accountSignOut),
+      openVerificationUrl: (input) =>
+        transport.request(WS_METHODS.accountOpenVerificationUrl, input),
+    },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),
       getMemory: (input) => transport.request(WS_METHODS.automationGetMemory, input),

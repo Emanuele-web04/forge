@@ -114,6 +114,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
   return {
     instance: unimplemented("instance"),
     me: unimplemented("me"),
+    updateProfile: unimplemented("updateProfile"),
+    updateOrganization: unimplemented("updateOrganization"),
     listHosts: unimplemented("listHosts"),
     registerHost: unimplemented("registerHost"),
     updateHost: unimplemented("updateHost"),

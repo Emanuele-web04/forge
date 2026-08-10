@@ -37,6 +37,7 @@ import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream }
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+import { createAccountSession } from "./accountSession";
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import {
@@ -349,6 +350,10 @@ const makeWsRpcHandlersLayer = () =>
       // group without a device engine; the handlers below then refuse cleanly
       // with the same unsupported-platform answer the backend would give.
       const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
+      // One per server, not per connection: it owns the credential file, and
+      // the pending sign-in attempts it tracks have to outlive the WebSocket
+      // that started them so a reconnecting client can still complete one.
+      const accountSession = createAccountSession({ baseDir: config.baseDir });
       const githubProjectProvisioner = yield* makeGitHubProjectProvisioner({
         homeDir: config.homeDir,
         fileSystem,
@@ -1901,6 +1906,56 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
+        [WS_METHODS.accountStatus]: () =>
+          rpcEffect(
+            Effect.promise(() => accountSession.status()),
+            "Failed to read the account session",
+          ),
+        [WS_METHODS.accountBeginSignIn]: () =>
+          rpcEffect(
+            Effect.tryPromise(() => accountSession.beginSignIn()),
+            "Failed to start sign-in",
+          ),
+        // Runs until the user finishes on the hosted page, so it deliberately
+        // has no timeout of its own; the device code's own expiry bounds it,
+        // and the client is told not to time it out either. A client that
+        // disconnects mid-flight loses nothing: the credentials are persisted
+        // here before this answers, and `account.status` recovers them.
+        [WS_METHODS.accountCompleteSignIn]: (input) =>
+          rpcEffect(
+            Effect.tryPromise(() => accountSession.completeSignIn(input)),
+            "Failed to finish signing in",
+          ),
+        [WS_METHODS.accountUpdateProfile]: (input) =>
+          rpcEffect(
+            Effect.tryPromise(() => accountSession.updateProfile(input)),
+            "Failed to save your profile",
+          ),
+        [WS_METHODS.accountSignOut]: () =>
+          rpcEffect(
+            Effect.tryPromise(() => accountSession.signOut()),
+            "Failed to sign out",
+          ),
+        [WS_METHODS.accountOpenVerificationUrl]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              // Only a URL this server issued from a device authorization.
+              // Without this the method would be an arbitrary-URL opener
+              // reachable by anyone who can reach the WebSocket.
+              const allowed = yield* Effect.promise(() =>
+                accountSession.isVerificationUrlAllowed(input.url),
+              );
+              if (!allowed) {
+                return yield* Effect.fail(
+                  new WsRpcError({
+                    message: "That link is not a sign-in verification URL from this server.",
+                  }),
+                );
+              }
+              yield* open.openBrowser(input.url);
+            }),
+            "Failed to open the sign-in page",
+          ),
         [WS_METHODS.automationList]: (input) =>
           rpcEffect(automationService.list(input), "Failed to list automations"),
         [WS_METHODS.automationGetMemory]: ({ automationId }) =>
