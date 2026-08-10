@@ -1,4 +1,10 @@
-import { CommandId, EventId, ProjectId, ThreadId } from "@synara/contracts";
+import {
+  CommandId,
+  DEFAULT_PROVIDER_PROFILE_ID,
+  EventId,
+  ProjectId,
+  ThreadId,
+} from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -334,6 +340,7 @@ layer("OrchestrationEventStore", (it) => {
           : null,
         {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "imported-project-model",
         },
       );
@@ -341,6 +348,7 @@ layer("OrchestrationEventStore", (it) => {
         threadCreated?.type === "thread.created" ? threadCreated.payload.modelSelection : null,
         {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.5",
           options: {
             reasoningEffort: "medium",
@@ -353,6 +361,7 @@ layer("OrchestrationEventStore", (it) => {
           : null,
         {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.5",
           options: {
             reasoningEffort: "medium",

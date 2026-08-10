@@ -10,6 +10,7 @@ import {
   PiModelOptions,
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProviderProfileId } from "./providerProfile";
 import { ProjectKind } from "./project";
 import {
   ApprovalRequestId,
@@ -65,6 +66,14 @@ export const ProviderKind = Schema.Literals([
   "pi",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
+const ProviderProfileIdWithDefault = ProviderProfileId.pipe(
+  Schema.withDecodingDefault(() => DEFAULT_PROVIDER_PROFILE_ID),
+);
+export const ProviderTarget = Schema.Struct({
+  provider: ProviderKind,
+  profileId: ProviderProfileIdWithDefault,
+});
+export type ProviderTarget = typeof ProviderTarget.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
   "on-failure",
@@ -82,6 +91,7 @@ export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
 
 export const CodexModelSelection = Schema.Struct({
   provider: Schema.Literal("codex"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(CodexModelOptions),
 });
@@ -89,6 +99,7 @@ export type CodexModelSelection = typeof CodexModelSelection.Type;
 
 export const ClaudeModelSelection = Schema.Struct({
   provider: Schema.Literal("claudeAgent"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(ClaudeModelOptions),
   supportsAutoMode: Schema.optional(Schema.Boolean),
@@ -97,6 +108,7 @@ export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
 export const CursorModelSelection = Schema.Struct({
   provider: Schema.Literal("cursor"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(CursorModelOptions),
 });
@@ -104,6 +116,7 @@ export type CursorModelSelection = typeof CursorModelSelection.Type;
 
 export const AntigravityModelSelection = Schema.Struct({
   provider: Schema.Literal("antigravity"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(AntigravityModelOptions),
 });
@@ -111,6 +124,7 @@ export type AntigravityModelSelection = typeof AntigravityModelSelection.Type;
 
 export const GrokModelSelection = Schema.Struct({
   provider: Schema.Literal("grok"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(GrokModelOptions),
 });
@@ -118,6 +132,7 @@ export type GrokModelSelection = typeof GrokModelSelection.Type;
 
 export const DroidModelSelection = Schema.Struct({
   provider: Schema.Literal("droid"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(DroidModelOptions),
 });
@@ -125,6 +140,7 @@ export type DroidModelSelection = typeof DroidModelSelection.Type;
 
 export const OpenCodeModelSelection = Schema.Struct({
   provider: Schema.Literal("opencode"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(OpenCodeModelOptions),
 });
@@ -132,6 +148,7 @@ export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
 
 export const KiloModelSelection = Schema.Struct({
   provider: Schema.Literal("kilo"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(OpenCodeModelOptions),
 });
@@ -139,6 +156,7 @@ export type KiloModelSelection = typeof KiloModelSelection.Type;
 
 export const PiModelSelection = Schema.Struct({
   provider: Schema.Literal("pi"),
+  profileId: ProviderProfileIdWithDefault,
   model: TrimmedNonEmptyString,
   options: Schema.optional(PiModelOptions),
 });

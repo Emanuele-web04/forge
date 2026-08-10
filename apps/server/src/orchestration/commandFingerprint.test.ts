@@ -1,7 +1,10 @@
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_PROVIDER_PROFILE_ID,
+  EventId,
   MessageId,
+  ProviderProfileId,
   ThreadId,
   type OrchestrationCommand,
 } from "@synara/contracts";
@@ -68,6 +71,54 @@ describe("fingerprintOrchestrationCommand", () => {
 
     expect(fingerprintOrchestrationCommand(withAttachments("generated-a", "one.png"))).toEqual(
       fingerprintOrchestrationCommand(withAttachments("generated-b", "spoofed.png")),
+    );
+  });
+
+  it("preserves v1 fingerprints for legacy default-profile retries", () => {
+    const legacyCompatible = fingerprintOrchestrationCommand(
+      turnCommand({
+        modelSelection: {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "gpt-5.6-sol",
+        },
+      }),
+    );
+    const workProfile = fingerprintOrchestrationCommand(
+      turnCommand({
+        modelSelection: {
+          provider: "codex",
+          profileId: ProviderProfileId.makeUnsafe("work"),
+          model: "gpt-5.6-sol",
+        },
+      }),
+    );
+
+    expect(legacyCompatible.value).toBe(
+      "f5e81d743fcb1a2a90a68d6b3d52ba8bc2fc7c17b47b250607a6f0f7d9521bda",
+    );
+    expect(workProfile.value).not.toBe(legacyCompatible.value);
+  });
+
+  it("keeps arbitrary activity profileId payloads fingerprint-significant", () => {
+    const activityCommand = (payload: Record<string, unknown>): OrchestrationCommand => ({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("command-activity-profile"),
+      threadId: ThreadId.makeUnsafe("thread-a"),
+      activity: {
+        id: EventId.makeUnsafe("activity-profile"),
+        tone: "info",
+        kind: "profile.observed",
+        summary: "Profile observed",
+        payload,
+        turnId: null,
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+      createdAt: "2026-07-14T00:00:00.000Z",
+    });
+
+    expect(fingerprintOrchestrationCommand(activityCommand({ profileId: "default" })).value).not.toBe(
+      fingerprintOrchestrationCommand(activityCommand({})).value,
     );
   });
 });

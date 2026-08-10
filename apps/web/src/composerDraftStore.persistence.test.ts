@@ -1,4 +1,9 @@
-import { OrchestrationProposedPlanId, ProjectId, ThreadId } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  OrchestrationProposedPlanId,
+  ProjectId,
+  ThreadId,
+} from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { partializeComposerDraftStoreState, useComposerDraftStore } from "./composerDraftStore";
 import { normalizeCurrentPersistedComposerDraftStoreState } from "./composerDraftPersistence";
@@ -117,6 +122,52 @@ describe("composerDraftStore persisted-state hydration", () => {
 
     expect(hydrated.draftsByThreadId[threadId]?.runtimeMode).toBe("auto");
     expect(hydrated.draftThreadsByThreadId[threadId]?.runtimeMode).toBe("auto");
+  });
+
+  it("normalizes current-format provider selections without losing explicit profiles", () => {
+    const threadId = ThreadId.makeUnsafe("thread-provider-profile-hydration");
+
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "Continue this draft",
+          attachments: [],
+          modelSelectionByProvider: {
+            codex: { provider: "codex", model: "gpt-5.6-sol" },
+            claudeAgent: {
+              provider: "claudeAgent",
+              profileId: "work",
+              model: "opus-4.8",
+            },
+            cursor: { provider: "codex", model: "mismatched-key" },
+          },
+          activeProvider: "codex",
+        },
+      },
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: {
+        codex: { provider: "codex", model: "gpt-5.6-sol" },
+        claudeAgent: {
+          provider: "claudeAgent",
+          profileId: "work",
+          model: "opus-4.8",
+        },
+      },
+      stickyActiveProvider: "codex",
+    });
+
+    expect(hydrated.draftsByThreadId[threadId]?.modelSelectionByProvider.codex?.profileId).toBe(
+      DEFAULT_PROVIDER_PROFILE_ID,
+    );
+    expect(
+      hydrated.draftsByThreadId[threadId]?.modelSelectionByProvider.claudeAgent?.profileId,
+    ).toBe("work");
+    expect(hydrated.draftsByThreadId[threadId]?.modelSelectionByProvider.cursor).toBeUndefined();
+    expect(hydrated.stickyModelSelectionByProvider.codex?.profileId).toBe(
+      DEFAULT_PROVIDER_PROFILE_ID,
+    );
+    expect(hydrated.stickyModelSelectionByProvider.claudeAgent?.profileId).toBe("work");
   });
 });
 

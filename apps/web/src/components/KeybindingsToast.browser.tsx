@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
@@ -63,6 +64,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         workspaceRoot: "/repo/project",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -78,6 +80,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         title: "Test thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         interactionMode: "default",

@@ -7,6 +7,7 @@
  */
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER_PROFILE_ID,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
   type ProviderWithDefaultModel,
@@ -151,6 +152,7 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
     ...settings,
     textGenerationModelSelection: {
       provider: fallback,
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: DEFAULT_MODEL_BY_PROVIDER[fallback],
     } as ModelSelection,
   };

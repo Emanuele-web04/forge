@@ -12,8 +12,10 @@ import {
   type ServerProviderAuthStatus,
 } from "@synara/contracts";
 import { Effect } from "effect";
+import { providerTargetFromModelSelection } from "@synara/shared/providerTarget";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
+import { resolveDefaultProviderProfile } from "../provider/providerProfileResolver.ts";
 
 export type AgentGatewayTargetErrorCode =
   | "provider_unavailable"
@@ -610,6 +612,19 @@ export function resolveAgentGatewayTarget(input: {
   readonly cwd?: string;
 }): Effect.Effect<ModelSelection, AgentGatewayTargetError> {
   return Effect.gen(function* () {
+    const target = providerTargetFromModelSelection(input.target);
+    yield* resolveDefaultProviderProfile({
+      operation: "AgentGateway.resolveTarget",
+      target,
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentGatewayTargetError("provider_unavailable", cause.issue, {
+            provider: target.provider,
+            profileId: target.profileId,
+          }),
+      ),
+    );
     const catalog = yield* loadAgentGatewayProviderCatalog({
       provider: input.target.provider,
       discovery: input.discovery,

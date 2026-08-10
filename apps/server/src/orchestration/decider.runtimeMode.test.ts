@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -32,6 +33,7 @@ function makeReadModel(
         title: "Claude Auto",
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
           supportsAutoMode,
         },
@@ -95,6 +97,7 @@ describe("decider Auto model compatibility", () => {
             threadId: THREAD_ID,
             modelSelection: {
               provider: "claudeAgent",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "claude-haiku-4-5",
               supportsAutoMode: false,
             },
@@ -131,6 +134,7 @@ describe("decider Auto model compatibility", () => {
           threadId: THREAD_ID,
           modelSelection: {
             provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "claude-fable-5",
             supportsAutoMode: true,
           },
@@ -156,6 +160,7 @@ describe("decider Auto model compatibility", () => {
             title: "User Auto thread",
             modelSelection: {
               provider: "claudeAgent",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "claude-fable-5",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -188,6 +193,7 @@ describe("decider Auto model compatibility", () => {
           title: "Subagent",
           modelSelection: {
             provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "claude-fable-5",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -218,6 +224,7 @@ describe("decider Auto model compatibility", () => {
           threadId: THREAD_ID,
           modelSelection: {
             provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "claude-fable-5",
           },
         },

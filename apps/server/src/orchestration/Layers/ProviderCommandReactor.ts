@@ -53,6 +53,11 @@ import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@synara/share
 import { claudeSelectionRequiresRestart } from "@synara/shared/model";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
+  providerTargetFromModelSelection,
+  providerTargetFromSource,
+  providerTargetsEqual,
+} from "@synara/shared/providerTarget";
+import {
   formatProviderDeliveryBlockDetail,
   PROVIDER_DELIVERY_BLOCK_SUMMARY,
 } from "@synara/shared/providerDeliveryBlock";
@@ -86,6 +91,7 @@ import {
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
+import { resolveDefaultProviderProfile } from "../../provider/providerProfileResolver.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
 import { QueuedTurnPromotionRepositoryLive } from "../../persistence/Layers/QueuedTurnPromotions.ts";
@@ -786,6 +792,28 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const surfaceProviderProfileTurnStartFailure = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly runtimeMode?: RuntimeMode;
+    readonly detail: string;
+    readonly createdAt: string;
+  }) {
+    yield* appendProviderFailureActivity({
+      threadId: input.threadId,
+      kind: "provider.turn.start.failed",
+      summary: "Provider turn start failed",
+      detail: input.detail,
+      turnId: null,
+      createdAt: input.createdAt,
+    });
+    yield* setThreadSessionError({
+      threadId: input.threadId,
+      runtimeMode: input.runtimeMode,
+      detail: input.detail,
+      createdAt: input.createdAt,
+    });
+  });
+
   /**
    * Finalizes a turn the provider will never settle on its own. `Stop` is only
    * trustworthy if every dead-end branch clears the projected active turn:
@@ -872,10 +900,22 @@ const make = Effect.gen(function* () {
   // would always miss and drain queued child messages into a live turn.
   const resolveLiveProviderTurnId = Effect.fnUntraced(function* (threadId: ThreadId) {
     const providerThread = yield* resolveProviderSessionThread(threadId);
+    if (!providerThread) {
+      return undefined;
+    }
     const sessionThreadId = providerThread?.id ?? threadId;
+    const expectedTarget = providerTargetFromModelSelection(providerThread.modelSelection);
     const session = yield* providerService
       .listSessions()
-      .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)));
+      .pipe(
+        Effect.map((sessions) =>
+          sessions.find(
+            (entry) =>
+              entry.threadId === sessionThreadId &&
+              providerTargetsEqual(providerTargetFromSource(entry), expectedTarget),
+          ),
+        ),
+      );
     return session?.status === "running" ? session.activeTurnId : undefined;
   });
   const hasLiveProviderTurn = (threadId: ThreadId) =>
@@ -1111,18 +1151,22 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : undefined;
     const requestedModelSelection = options?.modelSelection;
-    const threadProvider: ProviderKind = currentProvider ?? thread.modelSelection.provider;
+    const persistedTarget = providerTargetFromModelSelection(thread.modelSelection);
+    const threadTarget = persistedTarget;
     if (
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== threadProvider
+      !providerTargetsEqual(providerTargetFromModelSelection(requestedModelSelection), threadTarget)
     ) {
+      const requestedTarget = providerTargetFromModelSelection(requestedModelSelection);
       return yield* new ProviderAdapterValidationError({
-        provider: threadProvider,
+        provider: threadTarget.provider,
         operation: "thread.turn.start",
-        issue: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+        issue:
+          `Thread '${threadId}' is bound to '${threadTarget.provider}/${threadTarget.profileId}' ` +
+          `and cannot switch to '${requestedTarget.provider}/${requestedTarget.profileId}'.`,
       });
     }
-    const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
+    const preferredProvider: ProviderKind = threadTarget.provider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const settingsSnapshot = yield* serverSettings.getSnapshot;
     if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
@@ -1142,7 +1186,7 @@ const make = Effect.gen(function* () {
     });
     if (workspaceState === "worktree-pending") {
       return yield* new ProviderAdapterValidationError({
-        provider: threadProvider,
+        provider: threadTarget.provider,
         operation: "thread.turn.start",
         issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });
@@ -1195,9 +1239,10 @@ const make = Effect.gen(function* () {
     if (reusableSession) {
       const existingSessionThreadId = thread.id;
       const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
-      const providerChanged =
-        requestedModelSelection !== undefined &&
-        requestedModelSelection.provider !== currentProvider;
+      const activeTarget = providerTargetFromSource(activeSessionBeforeEnsure);
+      const desiredTarget = providerTargetFromModelSelection(desiredModelSelection);
+      const targetChanged = !providerTargetsEqual(activeTarget, desiredTarget);
+      const providerChanged = activeTarget.provider !== desiredTarget.provider;
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
@@ -1226,7 +1271,7 @@ const make = Effect.gen(function* () {
 
       if (
         !runtimeModeChanged &&
-        !providerChanged &&
+        !targetChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
       ) {
@@ -1237,7 +1282,7 @@ const make = Effect.gen(function* () {
       }
 
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange || runtimeModeChanged
+        targetChanged || shouldRestartForModelChange || runtimeModeChanged
           ? undefined
           : (activeSessionBeforeEnsure?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
@@ -1248,6 +1293,7 @@ const make = Effect.gen(function* () {
         currentRuntimeMode: thread.session?.runtimeMode,
         desiredRuntimeMode,
         runtimeModeChanged,
+        targetChanged,
         providerChanged,
         modelChanged,
         shouldRestartForModelChange,
@@ -2205,6 +2251,28 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      if (thread.latestTurn === null) {
+        const requestedTarget = providerTargetFromModelSelection(
+          event.payload.modelSelection ?? thread.modelSelection,
+        );
+        const profileIssue = yield* resolveDefaultProviderProfile({
+          operation: "ProviderCommandReactor.turnStart",
+          target: requestedTarget,
+        }).pipe(
+          Effect.as<string | null>(null),
+          Effect.catch((cause) => Effect.succeed(cause.issue)),
+        );
+        if (profileIssue !== null) {
+          yield* surfaceProviderProfileTurnStartFailure({
+            threadId: event.payload.threadId,
+            detail: profileIssue,
+            runtimeMode: event.payload.runtimeMode,
+            createdAt: event.payload.createdAt,
+          });
+          return;
+        }
+      }
+
       // The decider routes turn starts from the projected session, which can lag
       // the runtime: a message dispatched right as another turn begins (e.g. the
       // gap between a steer interrupt and the steered turn's start) would race a
@@ -3114,6 +3182,40 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.message-edit-resend-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
+    if (thread) {
+      const requestedTarget = providerTargetFromModelSelection(
+        event.payload.modelSelection ?? thread.modelSelection,
+      );
+      const threadTarget = providerTargetFromModelSelection(thread.modelSelection);
+      if (!providerTargetsEqual(requestedTarget, threadTarget)) {
+        yield* surfaceProviderProfileTurnStartFailure({
+          threadId: event.payload.threadId,
+          runtimeMode: event.payload.runtimeMode,
+          detail:
+            `Thread '${event.payload.threadId}' is bound to ` +
+            `'${threadTarget.provider}/${threadTarget.profileId}' and cannot switch to ` +
+            `'${requestedTarget.provider}/${requestedTarget.profileId}'.`,
+          createdAt: event.payload.createdAt,
+        });
+        return;
+      }
+      const profileIssue = yield* resolveDefaultProviderProfile({
+        operation: "ProviderCommandReactor.messageEditResend",
+        target: requestedTarget,
+      }).pipe(
+        Effect.as<string | null>(null),
+        Effect.catch((cause) => Effect.succeed(cause.issue)),
+      );
+      if (profileIssue !== null) {
+        yield* surfaceProviderProfileTurnStartFailure({
+          threadId: event.payload.threadId,
+          runtimeMode: event.payload.runtimeMode,
+          detail: profileIssue,
+          createdAt: event.payload.createdAt,
+        });
+        return;
+      }
+    }
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     const activeTurnId =
       providerThread?.session?.status === "running"

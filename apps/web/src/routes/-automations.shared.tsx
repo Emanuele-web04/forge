@@ -100,7 +100,8 @@ import { findProviderStatus } from "~/lib/providerAvailability";
 import { cn } from "~/lib/utils";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
-import { buildModelSelection } from "~/providerModelOptions";
+import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
+import { buildModelSelectionForTarget } from "~/providerModelOptions";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useStore } from "~/store";
@@ -863,6 +864,7 @@ export function AutomationModelPicker({
     selectedRuntimeModel,
   } = useProviderModelCatalog({
     selectedProvider: value.provider,
+    targetExecutable: value.profileId === DEFAULT_PROVIDER_PROFILE_ID,
     discoveryEnabled: open,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider,
@@ -904,7 +906,19 @@ export function AutomationModelPicker({
           model,
           runtimeModels: runtimeModelsByProvider[provider],
         });
-        onChange(buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode));
+        onChange(
+          buildModelSelectionForTarget({
+            target: {
+              provider,
+              profileId:
+                provider === value.provider
+                  ? value.profileId
+                  : DEFAULT_PROVIDER_PROFILE_ID,
+            },
+            model,
+            supportsAutoMode: runtimeModel?.supportsAutoMode,
+          }),
+        );
       }}
     />
   );

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -185,6 +186,7 @@ describe("decider project scripts", () => {
           title: "Saved chat",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -375,6 +377,7 @@ describe("decider project scripts", () => {
           title: "Thread",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -402,6 +405,7 @@ describe("decider project scripts", () => {
           },
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5.3-codex",
             options: {
               reasoningEffort: "high",
@@ -486,6 +490,7 @@ describe("decider project scripts", () => {
           title: "Thread",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -569,6 +574,7 @@ describe("decider project scripts", () => {
           title: "Thread",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -652,6 +658,7 @@ describe("decider project scripts", () => {
           title: "Handoff",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -707,6 +714,7 @@ describe("decider project scripts", () => {
             title: "Handoff Copy",
             modelSelection: {
               provider: "claudeAgent",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "sonnet",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -774,6 +782,7 @@ describe("decider project scripts", () => {
           title: "Handoff",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -853,6 +862,7 @@ describe("decider project scripts", () => {
           title: "Handoff Copy",
           modelSelection: {
             provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "sonnet",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

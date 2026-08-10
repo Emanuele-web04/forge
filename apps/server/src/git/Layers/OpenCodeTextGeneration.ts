@@ -6,12 +6,13 @@
 import { Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
-import type {
-  ChatAttachment,
-  KiloModelSelection,
-  OpenCodeModelSelection,
-  OpenCodeModelOptions,
-  ProviderStartOptions,
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  type ChatAttachment,
+  type KiloModelSelection,
+  type OpenCodeModelSelection,
+  type OpenCodeModelOptions,
+  type ProviderStartOptions,
 } from "@synara/contracts";
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
@@ -146,6 +147,7 @@ function resolveOpenCodeCompatibleModelSelection(
 
   return {
     provider: "opencode",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model,
   };
 }

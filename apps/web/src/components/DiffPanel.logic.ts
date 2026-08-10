@@ -5,6 +5,7 @@
 
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER_PROFILE_ID,
   type ModelSelection,
   type ThreadId,
   type TurnId,
@@ -61,6 +62,7 @@ export function resolveDiffPanelThread(input: {
     input.draftThread,
     input.fallbackModelSelection ?? {
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: DEFAULT_MODEL_BY_PROVIDER.codex,
     },
     null,

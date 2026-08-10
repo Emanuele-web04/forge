@@ -3,16 +3,17 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanTaskSubmit
 
-import type {
-  AssistantDeliveryMode,
-  ModelSlug,
-  ProjectId,
-  ProviderInteractionMode,
-  ProviderKind,
-  ProviderStartOptions,
-  RuntimeMode,
-  ServerProviderStatus,
-  ThreadId,
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  type AssistantDeliveryMode,
+  type ModelSlug,
+  type ProjectId,
+  type ProviderInteractionMode,
+  type ProviderKind,
+  type ProviderStartOptions,
+  type RuntimeMode,
+  type ServerProviderStatus,
+  type ThreadId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
@@ -23,7 +24,8 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { createAndSendKanbanTask, createKanbanDraftTask } from "~/lib/kanbanTaskCreate";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
-import { buildModelSelection } from "~/providerModelOptions";
+import { unsupportedProviderProfileIssue } from "~/lib/providerProfileAvailability";
+import { buildModelSelectionForTarget } from "~/providerModelOptions";
 import { truncateKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
 
 interface UseKanbanTaskSubmitInput {
@@ -96,24 +98,44 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     isCreatingRef.current = true;
-    await waitForPendingImages();
-    const truncatedPrompt = truncateKanbanTaskPreview(taskPreview);
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.
     const scratchState = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
     const storedModelSelection = scratchState?.modelSelectionByProvider[selectedProvider];
+    const profileId = storedModelSelection?.profileId ?? DEFAULT_PROVIDER_PROFILE_ID;
+    if (!sendAsDraft) {
+      const profileIssue = unsupportedProviderProfileIssue({
+        provider: selectedProvider,
+        profileId,
+      });
+      if (profileIssue !== null) {
+        toastManager.add({
+          type: "error",
+          title: profileIssue,
+        });
+        isCreatingRef.current = false;
+        return;
+      }
+    }
+
+    await waitForPendingImages();
+    const truncatedPrompt = truncateKanbanTaskPreview(taskPreview);
     const storedModelSupportsAutoMode =
       storedModelSelection?.provider === "claudeAgent"
         ? storedModelSelection.supportsAutoMode
         : undefined;
-    const modelSelection = buildModelSelection(
-      selectedProvider,
-      selectedModel,
-      storedModelSelection?.options,
-      selectedProvider === "claudeAgent"
-        ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
-        : undefined,
-    );
+    const modelSelection = buildModelSelectionForTarget({
+      target: {
+        provider: selectedProvider,
+        profileId,
+      },
+      model: selectedModel,
+      options: storedModelSelection?.options,
+      supportsAutoMode:
+        selectedProvider === "claudeAgent"
+          ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
+          : undefined,
+    });
     const taskInput = {
       projectId: selectedProjectId,
       prompt: trimmedPrompt,

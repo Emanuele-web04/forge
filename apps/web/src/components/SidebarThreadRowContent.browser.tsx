@@ -4,7 +4,7 @@
 
 import "../index.css";
 
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProjectId, ThreadId } from "@synara/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -16,7 +16,7 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
     id: ThreadId.makeUnsafe("thread-row-content"),
     projectId: ProjectId.makeUnsafe("project-row-content"),
     title: "Shared thread row",
-    modelSelection: { provider: "codex", model: "gpt-5.4" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.4" },
     interactionMode: DEFAULT_INTERACTION_MODE,
     branch: null,
     worktreePath: null,

@@ -3,7 +3,7 @@
 // Layer: Route utility unit tests
 // Depends on: rootEventInvalidation predicates and Vitest assertions.
 
-import { ProjectId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProjectId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -161,7 +161,7 @@ function makeThread(overrides: Partial<Thread>): Thread {
     codexThreadId: null,
     projectId: ProjectId.makeUnsafe("project"),
     title: "Thread",
-    modelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.4-mini" },
     runtimeMode: "full-access",
     interactionMode: "default",
     session: null,

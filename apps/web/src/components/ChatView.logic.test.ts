@@ -1,16 +1,21 @@
 import {
   CheckpointRef,
+  DEFAULT_PROVIDER_PROFILE_ID,
   EventId,
   MessageId,
+  ProviderProfileId,
   ThreadId,
   TurnId,
   type GitWorktreeSetupProgressEvent,
   type ModelSlug,
+  type ProviderComposerCapabilities,
   type RuntimeMode,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkLogEntry } from "../session-logic";
+import { deriveEffectiveComposerModelState } from "../composerDraftModels";
+import { supportsThreadCompaction } from "../lib/providerDiscoveryReactQuery";
 
 import {
   appendVoiceTranscriptToPrompt,
@@ -39,7 +44,9 @@ import {
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
+  isProviderDiscoveryPending,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
+  modelSelectionsEqual,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
@@ -69,7 +76,52 @@ import {
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
+  visibleProviderDiscoveryData,
 } from "./ChatView.logic";
+
+describe("provider-profile discovery presentation", () => {
+  it("masks cached capabilities, commands, skills, plugins, compaction, and loading", () => {
+    const capabilities = {
+      provider: "codex",
+      supportsSkillMentions: true,
+      supportsSkillDiscovery: true,
+      supportsNativeSlashCommandDiscovery: true,
+      supportsPluginMentions: true,
+      supportsPluginDiscovery: true,
+      supportsRuntimeModelList: true,
+      supportsThreadCompaction: true,
+    } satisfies ProviderComposerCapabilities;
+    const commands = [{ name: "cached-command" }];
+    const skills = [{ name: "cached-skill" }];
+    const plugins = [{ name: "cached-plugin" }];
+
+    expect(visibleProviderDiscoveryData(false, capabilities)).toBeUndefined();
+    expect(visibleProviderDiscoveryData(false, commands)).toBeUndefined();
+    expect(visibleProviderDiscoveryData(false, skills)).toBeUndefined();
+    expect(visibleProviderDiscoveryData(false, plugins)).toBeUndefined();
+    expect(
+      supportsThreadCompaction(visibleProviderDiscoveryData(false, capabilities)),
+    ).toBe(false);
+    expect(
+      isProviderDiscoveryPending(false, {
+        isLoading: true,
+        isFetching: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves executable-target discovery data and pending state", () => {
+    const cached = { value: "cached" };
+    expect(visibleProviderDiscoveryData(true, cached)).toBe(cached);
+    expect(
+      isProviderDiscoveryPending(
+        true,
+        { isLoading: false, isFetching: false },
+        { isLoading: false, isFetching: true },
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("composer strip work-log derivation", () => {
   it("reuses the active derivation unless a subagent view needs its parent source", () => {
@@ -339,6 +391,64 @@ describe("composer menu selection", () => {
         items,
       }),
     ).toBeNull();
+  });
+});
+
+describe("composer provider target", () => {
+  const threadModelSelection = {
+    provider: "codex" as const,
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
+    model: "gpt-5.6-sol",
+  };
+  const workProfileId = ProviderProfileId.makeUnsafe("work");
+
+  it("ignores another profile's stale draft model and options for a locked thread", () => {
+    const canonicalSelection = {
+      ...threadModelSelection,
+      options: { reasoningEffort: "high" as const },
+    };
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: "codex",
+        modelSelectionByProvider: {
+          codex: {
+            provider: "codex",
+            profileId: workProfileId,
+            model: "gpt-5.4",
+            options: { reasoningEffort: "low" },
+          },
+        },
+      },
+      selectedProvider: "codex",
+      selectedTarget: {
+        provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      },
+      threadModelSelection: canonicalSelection,
+      projectModelSelection: null,
+      customModelsByProvider: {
+        codex: [],
+        claudeAgent: [],
+        cursor: [],
+        antigravity: [],
+        grok: [],
+        droid: [],
+        kilo: [],
+        opencode: [],
+        pi: [],
+      },
+      availableModelOptionsByProvider: {
+        codex: [
+          { slug: "gpt-5.4", name: "GPT-5.4" },
+          { slug: threadModelSelection.model, name: "GPT-5.6 Sol" },
+        ],
+      },
+    });
+
+    expect(state).toEqual({
+      selectedModel: threadModelSelection.model,
+      modelOptions: { codex: canonicalSelection.options },
+    });
   });
 });
 
@@ -1306,6 +1416,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedModel: "openai/gpt-5-codex",
         persistedModelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,
@@ -1321,6 +1432,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedModel: "openai/gpt-5.4",
         persistedModelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,
@@ -1337,6 +1449,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedModel: "auto",
         persistedModelSelection: {
           provider: "cursor",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "auto",
         },
         draftModelSelection: null,
@@ -1353,10 +1466,12 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedModel: "opencode/minimax-m2.5-free",
         persistedModelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "openai/gpt-5.4",
         },
         draftModelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "opencode/minimax-m2.5-free",
         },
         providerModelsLoading: true,
@@ -1371,6 +1486,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedModel: "gpt-5.4",
         persistedModelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,
@@ -2558,10 +2674,12 @@ describe("createRuntimeModePersistenceQueue", () => {
 describe("persistModelSelectionBeforeRuntimeMode", () => {
   const previousModel = {
     provider: "droid",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model: "claude-opus-4-8",
   } as const;
   const autoCapableModel = {
     provider: "codex",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model: "gpt-5.6-sol",
   } as const;
 
@@ -2623,6 +2741,22 @@ describe("persistModelSelectionBeforeRuntimeMode", () => {
     });
 
     expect(calls).toEqual(["runtime", "model"]);
+  });
+});
+
+describe("modelSelectionsEqual", () => {
+  it("treats a provider-profile-only change as a different selection", () => {
+    const defaultProfileSelection = {
+      provider: "codex" as const,
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      model: "gpt-5.6-sol",
+    };
+    const workProfileSelection = {
+      ...defaultProfileSelection,
+      profileId: ProviderProfileId.makeUnsafe("work"),
+    };
+
+    expect(modelSelectionsEqual(defaultProfileSelection, workProfileSelection)).toBe(false);
   });
 });
 

@@ -3,7 +3,11 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanTaskScratchDraft
 
-import type { ModelSlug, ProviderKind } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  type ModelSlug,
+  type ProviderKind,
+} from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -21,7 +25,7 @@ import {
   useComposerDraftStore,
   useComposerThreadDraft,
 } from "../../composerDraftStore";
-import { buildModelSelection } from "../../providerModelOptions";
+import { buildModelSelectionForTarget } from "../../providerModelOptions";
 import { toastManager } from "../ui/toast";
 
 export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: ProviderKind }) {
@@ -58,6 +62,8 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
   const draftModelSelection =
     scratchDraft.modelSelectionByProvider[selectedProvider] ??
     stickyModelSelectionByProvider[selectedProvider];
+  const selectedProfileId =
+    draftModelSelection?.profileId ?? DEFAULT_PROVIDER_PROFILE_ID;
   const selectedModel: ModelSlug | null =
     draftModelSelection?.model ?? getDefaultModel(selectedProvider);
   const selectedProviderModelOptions = draftModelSelection?.options;
@@ -108,7 +114,17 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     supportsAutoMode?: boolean,
   ) => {
     const store = useComposerDraftStore.getState();
-    const nextSelection = buildModelSelection(provider, model, undefined, supportsAutoMode);
+    const currentSelection =
+      store.draftsByThreadId[scratchThreadId]?.modelSelectionByProvider[provider] ??
+      store.stickyModelSelectionByProvider[provider];
+    const nextSelection = buildModelSelectionForTarget({
+      target: {
+        provider,
+        profileId: currentSelection?.profileId ?? DEFAULT_PROVIDER_PROFILE_ID,
+      },
+      model,
+      supportsAutoMode,
+    });
     // Mirrors the composer: update the scratch draft and persist the sticky selection.
     store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
   };
@@ -176,6 +192,7 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     pendingImageCount,
     waitForPendingImages,
     selectedProvider,
+    selectedProfileId,
     selectedModel,
     selectedModelSupportsAutoMode,
     selectedProviderModelOptions,

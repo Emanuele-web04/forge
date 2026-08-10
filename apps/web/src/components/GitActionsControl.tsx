@@ -370,9 +370,14 @@ export default function GitActionsControl({
   const gitTextGenerationModelSelection = useMemo(
     (): ModelSelection => ({
       provider: settings.textGenerationProvider ?? "codex",
+      profileId: settings.textGenerationProfileId,
       model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
     }),
-    [settings.textGenerationModel, settings.textGenerationProvider],
+    [
+      settings.textGenerationModel,
+      settings.textGenerationProfileId,
+      settings.textGenerationProvider,
+    ],
   );
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),

@@ -1,9 +1,84 @@
-import { DEFAULT_SERVER_SETTINGS, ProviderSessionStartInput } from "@synara/contracts";
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER_PROFILE_ID,
+  DEFAULT_SERVER_SETTINGS,
+  ProviderProfileId,
+  ProviderSessionStartInput,
+} from "@synara/contracts";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { providerStartOptionsFromServerSettings } from "./serverSettings";
+import { applyServerSettingsPatch, providerStartOptionsFromServerSettings } from "./serverSettings";
 
 const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSessionStartInput);
+
+describe("applyServerSettingsPatch", () => {
+  const workProfileId = ProviderProfileId.makeUnsafe("work");
+  const settingsWithWorkProfile = {
+    ...DEFAULT_SERVER_SETTINGS,
+    textGenerationModelSelection: {
+      provider: "codex" as const,
+      profileId: workProfileId,
+      model: "gpt-5.6-codex",
+      options: { reasoningEffort: "high" as const },
+    },
+  };
+
+  it("preserves the profile when the model changes", () => {
+    const next = applyServerSettingsPatch(settingsWithWorkProfile, {
+      textGenerationModelSelection: {
+        provider: "codex",
+        model: "gpt-5.5",
+      },
+    });
+
+    expect(next.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      profileId: workProfileId,
+      model: "gpt-5.5",
+    });
+  });
+
+  it("resets the profile when the provider changes without an explicit profile", () => {
+    const next = applyServerSettingsPatch(settingsWithWorkProfile, {
+      textGenerationModelSelection: { provider: "claudeAgent" },
+    });
+
+    expect(next.textGenerationModelSelection).toEqual({
+      provider: "claudeAgent",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
+    });
+  });
+
+  it("changes profiles without carrying model options between accounts", () => {
+    const personalProfileId = ProviderProfileId.makeUnsafe("personal");
+    const next = applyServerSettingsPatch(settingsWithWorkProfile, {
+      textGenerationModelSelection: { profileId: personalProfileId },
+    });
+
+    expect(next.textGenerationModelSelection).toEqual({
+      provider: "codex",
+      profileId: personalProfileId,
+      model: "gpt-5.6-codex",
+    });
+  });
+
+  it("preserves an explicit profile when changing providers", () => {
+    const claudeWorkProfileId = ProviderProfileId.makeUnsafe("claude_work");
+    const next = applyServerSettingsPatch(settingsWithWorkProfile, {
+      textGenerationModelSelection: {
+        provider: "claudeAgent",
+        profileId: claudeWorkProfileId,
+      },
+    });
+
+    expect(next.textGenerationModelSelection).toEqual({
+      provider: "claudeAgent",
+      profileId: claudeWorkProfileId,
+      model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
+    });
+  });
+});
 
 describe("providerStartOptionsFromServerSettings", () => {
   it("omits blank launch settings from provider session input", () => {

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   AutomationId,
   AutomationRunId,
   ProjectId,
@@ -35,7 +36,7 @@ function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
     scheduledFor: "2026-07-23T09:00:00.000Z",
     permissionSnapshot: {
       provider: "codex",
-      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
       runtimeMode: "approval-required",
       interactionMode: "default",
       worktreeMode: "local",

@@ -1,6 +1,10 @@
 import * as Crypto from "node:crypto";
 
-import { OrchestrationCommand, type OrchestrationCommand as Command } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  OrchestrationCommand,
+  type OrchestrationCommand as Command,
+} from "@synara/contracts";
 import { Schema } from "effect";
 
 export const ORCHESTRATION_COMMAND_FINGERPRINT_VERSION = 1;
@@ -26,14 +30,32 @@ function canonicalizeJson(value: unknown): unknown {
   return value;
 }
 
+// Fingerprint v1 predates provider profiles. Only schema-owned model-selection
+// fields omit the reserved default; arbitrary JSON payloads remain untouched.
+function preserveV1ModelSelectionFingerprint(intent: Record<string, unknown>) {
+  const compatibleIntent = { ...intent };
+  for (const key of ["modelSelection", "defaultModelSelection"] as const) {
+    const selection = compatibleIntent[key];
+    if (
+      selection !== null &&
+      typeof selection === "object" &&
+      (selection as Record<string, unknown>).profileId === DEFAULT_PROVIDER_PROFILE_ID
+    ) {
+      const { profileId: _profileId, ...legacySelection } = selection as Record<string, unknown>;
+      compatibleIntent[key] = legacySelection;
+    }
+  }
+  return compatibleIntent;
+}
+
 function commandIntent(command: Command): Record<string, unknown> {
   const decoded = Schema.decodeUnknownSync(OrchestrationCommand)(command);
   const { commandId: _commandId, ...intent } = decoded;
   if (intent.type !== "thread.turn.start") {
-    return intent;
+    return preserveV1ModelSelectionFingerprint(intent);
   }
 
-  return {
+  return preserveV1ModelSelectionFingerprint({
     ...intent,
     message: {
       ...intent.message,
@@ -53,7 +75,7 @@ function commandIntent(command: Command): Record<string, unknown> {
         }
       }),
     },
-  };
+  });
 }
 
 export function fingerprintOrchestrationCommand(command: Command): OrchestrationCommandFingerprint {

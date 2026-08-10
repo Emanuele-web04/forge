@@ -4,7 +4,7 @@
 // Layer: Web chat composer tests
 // Depends on: deriveComposerSubagentStripItems
 
-import { EventId, ThreadId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, EventId, ThreadId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -426,7 +426,7 @@ describe("deriveComposerSubagentStripItems", () => {
         codexThreadId: null,
         projectId: "project-1" as Thread["projectId"],
         title: "Subagent task",
-        modelSelection: { provider: "claudeAgent", model: "sonnet" },
+        modelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "sonnet" },
         runtimeMode: "full-access",
         interactionMode: "default",
         session: {
@@ -559,7 +559,7 @@ describe("deriveComposerSubagentStripItems", () => {
       codexThreadId: null,
       projectId: "project-1" as Thread["projectId"],
       title: "Subagent task",
-      modelSelection: { provider: "claudeAgent", model: "sonnet" },
+      modelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "sonnet" },
       runtimeMode: "full-access",
       interactionMode: "default",
       session: {

@@ -9,6 +9,8 @@ import path from "node:path";
 
 import type {
   ProviderApprovalDecision,
+  ProviderForkThreadInput,
+  ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -18,8 +20,10 @@ import type {
 } from "@synara/contracts";
 import {
   ApprovalRequestId,
+  DEFAULT_PROVIDER_PROFILE_ID,
   EventId,
   type ProviderKind,
+  ProviderProfileId,
   ProviderSessionStartInput,
   ThreadId,
   TurnId,
@@ -73,6 +77,7 @@ const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
+const asProfileId = (value: string): ProviderProfileId => ProviderProfileId.makeUnsafe(value);
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
@@ -132,6 +137,7 @@ function makeFakeCodexAdapter(
         const now = new Date().toISOString();
         const session: ProviderSession = {
           provider,
+          profileId: input.profileId ?? DEFAULT_PROVIDER_PROFILE_ID,
           status: "ready",
           runtimeMode: input.runtimeMode,
           threadId: input.threadId,
@@ -163,6 +169,30 @@ function makeFakeCodexAdapter(
         turnId: TurnId.makeUnsafe(`turn-${String(input.threadId)}`),
       });
     },
+  );
+
+  const forkThread = vi.fn(
+    (
+      input: ProviderForkThreadInput,
+    ): Effect.Effect<ProviderForkThreadResult, ProviderAdapterError> =>
+      Effect.sync(() => {
+        const now = new Date().toISOString();
+        sessions.set(input.threadId, {
+          provider,
+          profileId: input.profileId ?? DEFAULT_PROVIDER_PROFILE_ID,
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          threadId: input.threadId,
+          resumeCursor: { opaque: `fork-${String(input.threadId)}` },
+          cwd: input.cwd ?? process.cwd(),
+          createdAt: now,
+          updatedAt: now,
+        });
+        return {
+          threadId: input.threadId,
+          resumeCursor: { opaque: `fork-${String(input.threadId)}` },
+        };
+      }),
   );
 
   const steerTurn = vi.fn(
@@ -268,6 +298,7 @@ function makeFakeCodexAdapter(
         : {}),
     },
     startSession,
+    forkThread,
     sendTurn,
     steerTurn,
     startReview,
@@ -313,6 +344,7 @@ function makeFakeCodexAdapter(
     waitForRuntimeSubscribers,
     updateSession,
     startSession,
+    forkThread,
     sendTurn,
     steerTurn,
     startReview,
@@ -430,6 +462,30 @@ function makeProviderServiceLayer(
 }
 
 const routing = makeProviderServiceLayer();
+const profileRouting = makeProviderServiceLayer({
+  resolveProviderProfile: ({ target }) => Effect.succeed(target),
+});
+const profileAdmissionJournal: ProviderRuntimeEvent[] = [];
+let profileAdmissionPersistenceGate:
+  | {
+      readonly eventId: EventId;
+      readonly entered: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+    }
+  | undefined;
+const profileEventAdmission = makeProviderServiceLayer({
+  resolveProviderProfile: ({ target }) => Effect.succeed(target),
+  persistRuntimeEvent: (event) =>
+    Effect.gen(function* () {
+      const gate = profileAdmissionPersistenceGate;
+      if (gate !== undefined && gate.eventId === event.eventId) {
+        yield* Deferred.succeed(gate.entered, undefined);
+        yield* Deferred.await(gate.release);
+      }
+      profileAdmissionJournal.push(event);
+      return { sequence: profileAdmissionJournal.length, event };
+    }),
+});
 const rotationRetryPersistAttempts = new Map<string, number>();
 const ROTATION_RETRY_FAILURE_EVENT_ID = "terminal-rotation-settlement-retry";
 const rotationRetry = makeProviderServiceLayer({
@@ -589,6 +645,97 @@ it.effect(
 );
 
 it.effect(
+  "ProviderServiceLive preserves persisted profiles when stopAll sees ambiguous live targets",
+  () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "synara-provider-service-stopall-profile-"),
+      );
+      const dbPath = path.join(tempDir, "orchestration.sqlite");
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(persistenceLayer),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const codex = makeFakeCodexAdapter();
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed(codex.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["codex"]),
+      };
+      const providerLayer = makeProviderServiceLive({
+        resolveProviderProfile: ({ target }) => Effect.succeed(target),
+      }).pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+      );
+
+      const startedSessions = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const legacyThreadId = asThreadId("thread-stopall-profile-legacy");
+        const mismatchedThreadId = asThreadId("thread-stopall-profile-mismatch");
+        const legacySession = yield* provider.startSession(legacyThreadId, {
+          provider: "codex",
+          profileId: asProfileId("work"),
+          threadId: legacyThreadId,
+          runtimeMode: "full-access",
+        });
+        const mismatchedSession = yield* provider.startSession(mismatchedThreadId, {
+          provider: "codex",
+          profileId: asProfileId("work"),
+          threadId: mismatchedThreadId,
+          runtimeMode: "full-access",
+        });
+
+        codex.updateSession(legacyThreadId, (existing) => {
+          const { profileId: _profileId, ...legacySessionWithoutProfile } = existing;
+          return {
+            ...legacySessionWithoutProfile,
+            resumeCursor: { opaque: "legacy-adapter-cursor" },
+          };
+        });
+        codex.updateSession(mismatchedThreadId, (existing) => ({
+          ...existing,
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          resumeCursor: { opaque: "mismatched-adapter-cursor" },
+        }));
+
+        const observedSessions = yield* provider.listSessions();
+        const observedLegacySession = observedSessions.find(
+          (session) => session.threadId === legacyThreadId,
+        );
+        const observedMismatchedSession = observedSessions.find(
+          (session) => session.threadId === mismatchedThreadId,
+        );
+        assert.equal(observedLegacySession?.profileId, undefined);
+        assert.equal(observedMismatchedSession?.profileId, DEFAULT_PROVIDER_PROFILE_ID);
+
+        return [legacySession, mismatchedSession] as const;
+      }).pipe(Effect.provide(providerLayer));
+
+      for (const session of startedSessions) {
+        const persisted = yield* Effect.gen(function* () {
+          const repository = yield* ProviderSessionRuntimeRepository;
+          return yield* repository.getByThreadId({ threadId: session.threadId });
+        }).pipe(Effect.provide(runtimeRepositoryLayer));
+
+        assert.equal(Option.isSome(persisted), true);
+        if (Option.isSome(persisted)) {
+          assert.equal(persisted.value.profileId, "work");
+          assert.equal(persisted.value.status, "stopped");
+          assert.deepEqual(persisted.value.resumeCursor, session.resumeCursor);
+        }
+      }
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
   "ProviderServiceLive restores rollback routing after restart using persisted thread mapping",
   () =>
     Effect.gen(function* () {
@@ -702,6 +849,63 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("rejects non-default profiles before launching an adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-unsupported-profile");
+      const startCallCount = routing.codex.startSession.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "codex",
+          profileId: asProfileId("work"),
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.startSession",
+          issue: "Provider profile 'work' is not configured for provider 'codex'.",
+        }),
+      );
+      assert.equal(routing.codex.startSession.mock.calls.length, startCallCount);
+    }),
+  );
+
+  it.effect("rejects persisted non-default profiles before recovery", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-unsupported-profile-recovery");
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        profileId: asProfileId("work"),
+        runtimeMode: "full-access",
+        status: "stopped",
+        resumeCursor: { opaque: "work-profile-cursor" },
+      });
+      const startCallCount = routing.codex.startSession.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider.sendTurn({ threadId, input: "do not recover", attachments: [] }),
+      );
+
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.sendTurn",
+          issue: "Provider profile 'work' is not configured for provider 'codex'.",
+        }),
+      );
+      assert.equal(routing.codex.startSession.mock.calls.length, startCallCount);
+      yield* directory.remove(threadId);
+    }),
+  );
+
   it.effect("fork source overrides explicit and persisted resume cursors", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1926,9 +2130,67 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("normalizes legacy persisted model selection during rollback recovery", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-legacy-model-selection-recovery");
+      const providerOptions = {
+        claudeAgent: {
+          binaryPath: "/usr/local/bin/claude",
+          permissionMode: "acceptEdits",
+        },
+      };
+
+      const initial = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        threadId,
+        cwd: "/tmp/project-legacy-model-selection",
+        runtimeMode: "full-access",
+      });
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.notEqual(binding, undefined);
+      yield* directory.upsert({
+        threadId,
+        provider: "claudeAgent",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        runtimePayload: {
+          ...asRuntimePayloadRecord(binding?.runtimePayload),
+          // Raw legacy persistence fixture: old rows predate profileId.
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-opus-4-6",
+            options: { effort: "max" },
+          },
+          providerOptions,
+        },
+      });
+      yield* routing.claude.stopSession(threadId);
+      routing.claude.startSession.mockClear();
+      routing.claude.rollbackThread.mockClear();
+
+      yield* provider.rollbackConversation({ threadId, numTurns: 1 });
+
+      assert.equal(routing.claude.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.claude.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(resumedStartInput?.modelSelection, {
+        provider: "claudeAgent",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "claude-opus-4-6",
+        options: { effort: "max" },
+      });
+      assert.deepEqual(resumedStartInput?.providerOptions, providerOptions);
+      assert.deepEqual(resumedStartInput?.resumeCursor, initial.resumeCursor);
+      assert.equal(routing.claude.rollbackThread.mock.calls.length, 1);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("routes explicit claudeAgent provider session starts to the claude adapter", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
+      routing.claude.startSession.mockClear();
 
       const session = yield* provider.startSession(asThreadId("thread-claude"), {
         provider: "claudeAgent",
@@ -1999,6 +2261,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         cwd: "/tmp/project-claude-send-turn",
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
           options: {
             effort: "max",
@@ -2032,6 +2295,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.cwd, "/tmp/project-claude-send-turn");
         assert.deepEqual(startPayload.modelSelection, {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
           options: {
             effort: "max",
@@ -2125,8 +2389,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
         input: "hello",
         attachments: [],
         modelSelection: {
-          provider: "opencode",
-          model: "opencode/minimax-m2.5-free",
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "gpt-5-codex",
         },
       });
       yield* sleep(50);
@@ -2159,8 +2424,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.activeTurnId, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "turn.completed");
           assert.deepEqual(runtimePayload.modelSelection, {
-            provider: "opencode",
-            model: "opencode/minimax-m2.5-free",
+            provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            model: "gpt-5-codex",
           });
         }
       }
@@ -2176,10 +2442,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const newerTurnId = asTurnId("turn-overlapping-newer");
       const olderResumeCursor = { cursor: "older-resume" };
       const newerResumeCursor = { cursor: "newer-resume" };
-      const olderModelSelection = { provider: "codex" as const, model: "gpt-5.1-codex-mini" };
+      const olderModelSelection = {
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5.1-codex-mini",
+      };
       const newerModelSelection = {
-        provider: "opencode" as const,
-        model: "opencode/minimax-m2.5-free",
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5.2-codex",
       };
       let olderDispatchStarted = false;
       let releaseOlderDispatch: ((result: ProviderTurnStartResult) => void) | undefined;
@@ -2305,7 +2576,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const threadId = asThreadId("thread-promote-older-success");
       const olderTurnId = asTurnId("turn-promoted-older");
       const olderCursor = { cursor: "promoted-older" };
-      const olderModelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+      const olderModelSelection = {
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5-codex",
+      };
       const newerFailure = new ProviderAdapterSessionNotFoundError({
         provider: "codex",
         threadId,
@@ -2486,8 +2761,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const turnId = asTurnId("turn-steer-persistence");
       const resumeCursor = { cursor: "steer-resume" };
       const modelSelection = {
-        provider: "opencode" as const,
-        model: "opencode/minimax-m2.5-free",
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5.2-codex",
       };
 
       yield* provider.startSession(threadId, {
@@ -2525,10 +2801,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const reviewTurnId = asTurnId("turn-newer-review");
       const staleSteerCursor = { cursor: "stale-steer-resume" };
       const reviewCursor = { cursor: "newer-review-resume" };
-      const initialModelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+      const initialModelSelection = {
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5-codex",
+      };
       const staleSteerModelSelection = {
-        provider: "opencode" as const,
-        model: "opencode/minimax-m2.5-free",
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5.1-codex-mini",
       };
       let steerStarted = false;
       let releaseSteer: ((result: ProviderTurnStartResult) => void) | undefined;
@@ -3017,6 +3298,87 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("clears a resume cursor without deadlocking a concurrent runtime event", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-clear-resume-runtime-event-race");
+      const eventId = asEventId("runtime-clear-resume-runtime-event-race");
+      const clearWriteEntered = yield* Deferred.make<void>();
+      const releaseClearWrite = yield* Deferred.make<void>();
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.waitForRuntimeSubscribers();
+      const originalUpsert = directory.upsert;
+      let clearWriteGated = false;
+      const upsertSpy = vi.spyOn(directory, "upsert").mockImplementation((input) => {
+        if (
+          !clearWriteGated &&
+          input.threadId === threadId &&
+          input.resumeCursor === null
+        ) {
+          clearWriteGated = true;
+          return Deferred.succeed(clearWriteEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseClearWrite)),
+            Effect.andThen(originalUpsert(input)),
+          );
+        }
+        return originalUpsert(input);
+      });
+
+      return yield* Effect.gen(function* () {
+        assert.equal(typeof provider.clearSessionResumeCursor, "function");
+        if (!provider.clearSessionResumeCursor) {
+          return assert.fail("Expected clearSessionResumeCursor");
+        }
+        const clearFiber = yield* provider
+          .clearSessionResumeCursor({ threadId })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(clearWriteEntered);
+
+        const observedEvent = yield* provider.streamEvents.pipe(
+          Stream.filter((event) => event.eventId === eventId),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* sleep(10);
+        routing.codex.emit({
+          type: "session.state.changed",
+          eventId,
+          provider: "codex",
+          createdAt: "2026-08-10T00:00:00.000Z",
+          threadId,
+          payload: { state: "ready" },
+        });
+        yield* sleep(25);
+        yield* Deferred.succeed(releaseClearWrite, undefined);
+
+        assert.equal(
+          Option.isSome(yield* Fiber.join(clearFiber).pipe(Effect.timeoutOption("1 second"))),
+          true,
+        );
+        const observed = yield* Fiber.join(observedEvent).pipe(
+          Effect.timeoutOption("1 second"),
+        );
+        assert.equal(Option.isSome(observed), true);
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(binding?.resumeCursor, null);
+        assert.equal(yield* routing.codex.hasSession(threadId), false);
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(releaseClearWrite, undefined).pipe(Effect.asVoid)),
+        Effect.ensuring(
+          Effect.sync(() => {
+            upsertSpy.mockRestore();
+          }),
+        ),
+      );
+    }),
+  );
+
   it.effect("stops the live runtime while preserving resume cursor and provider options", () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(
@@ -3108,6 +3470,1680 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects a non-default live session that has no persisted binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-unbound-work-profile");
+      const sendCallCount = routing.codex.sendTurn.mock.calls.length;
+
+      yield* routing.codex.adapter.startSession({
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* Effect.result(
+        provider.sendTurn({ threadId, input: "do not route this", attachments: [] }),
+      );
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.sendTurn",
+          issue: "Provider profile 'work' is not configured for provider 'codex'.",
+        }),
+      );
+      assert.equal(routing.codex.sendTurn.mock.calls.length, sendCallCount);
+
+      yield* routing.codex.stopSession(threadId);
+    }),
+  );
+
+  it.effect("retires an adapter session that reports the wrong target", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-adapter-target-mismatch");
+      const stopCallCount = routing.codex.stopSession.mock.calls.length;
+      const startImplementation = routing.codex.startSession.getMockImplementation();
+      if (!startImplementation) assert.fail("Expected fake start implementation");
+      routing.codex.startSession.mockImplementationOnce((input) =>
+        startImplementation(input).pipe(
+          Effect.map((session) => {
+            const mismatched = { ...session, profileId: asProfileId("work") };
+            routing.codex.updateSession(threadId, () => mismatched);
+            return mismatched;
+          }),
+        ),
+      );
+
+      const result = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.startSession",
+          issue: "Adapter target mismatch: expected 'codex/default', received 'codex/work'.",
+        }),
+      );
+      assert.equal(routing.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.equal(yield* routing.codex.hasSession(threadId), false);
+    }),
+  );
+
+  it.effect("allows cleanup of a persisted profile that is no longer configured", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-unconfigured-profile-cleanup");
+
+      yield* routing.codex.adapter.startSession({
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        profileId: asProfileId("work"),
+        status: "running",
+      });
+
+      yield* provider.stopSession({ threadId });
+
+      assert.equal(yield* routing.codex.hasSession(threadId), false);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+});
+
+profileRouting.layer("ProviderServiceLive profile routing", (it) => {
+  it.effect("preserves a profile cursor when runtime stop sees another profile", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-stop-mismatch");
+      const workCursor = { opaque: "work-profile-stop-cursor" };
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId,
+        resumeCursor: workCursor,
+        runtimeMode: "full-access",
+      });
+      profileRouting.codex.updateSession(threadId, (session) => ({
+        ...session,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        resumeCursor: { opaque: "default-profile-stop-cursor" },
+      }));
+
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
+      yield* provider.stopRuntimeSession({ threadId });
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.profileId, "work");
+      assert.deepEqual(binding?.resumeCursor, workCursor);
+      assert.equal(binding?.status, "stopped");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("persists the exact live-session target when the first turn creates the binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-live-work-profile-first-binding");
+      const turnId = asTurnId("turn-live-work-profile-first-binding");
+      const liveCursor = { opaque: "work-profile-live-cursor" };
+      const turnCursor = { opaque: "work-profile-turn-cursor" };
+      const modelSelection = {
+        provider: "codex" as const,
+        profileId: asProfileId("work"),
+        model: "gpt-5.6-codex",
+      };
+
+      yield* profileRouting.codex.adapter.startSession({
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId,
+        resumeCursor: liveCursor,
+        runtimeMode: "full-access",
+      });
+      profileRouting.codex.sendTurn.mockImplementationOnce(() =>
+        Effect.succeed({ threadId, turnId, resumeCursor: turnCursor }),
+      );
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+
+      yield* provider.sendTurn({
+        threadId,
+        input: "preserve the live work target",
+        modelSelection,
+      });
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.provider, "codex");
+      assert.equal(binding?.profileId, "work");
+      assert.deepEqual(binding?.resumeCursor, turnCursor);
+      assert.deepEqual(
+        asRuntimePayloadRecord(binding?.runtimePayload).modelSelection,
+        modelSelection,
+      );
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("accepts generation-less runtime events for the legacy default profile", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-default-profile-legacy-event");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* profileRouting.codex.waitForRuntimeSubscribers();
+      const observed = yield* provider.streamEvents.pipe(
+        Stream.filter(
+          (event) => event.eventId === asEventId("runtime-default-profile-generationless"),
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* sleep(10);
+      profileRouting.codex.emit({
+        type: "session.state.changed",
+        eventId: asEventId("runtime-default-profile-generationless"),
+        provider: "codex",
+        createdAt: "2026-08-10T00:00:03.000Z",
+        threadId,
+        payload: { state: "error", reason: "legacy default runtime" },
+      });
+      assert.equal(Option.isSome(yield* Fiber.join(observed)), true);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.profileId, DEFAULT_PROVIDER_PROFILE_ID);
+      assert.equal(binding?.status, "error");
+      assert.equal(
+        asRuntimePayloadRecord(binding?.runtimePayload).lastError,
+        "legacy default runtime",
+      );
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("replaces same-provider profiles without reusing continuation state", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-replacement");
+      const defaultCursor = { opaque: "default-profile-cursor" };
+      const defaultOptions = { codex: { homePath: "/tmp/default-profile" } };
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        resumeCursor: defaultCursor,
+        providerOptions: defaultOptions,
+        runtimeMode: "full-access",
+      });
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+      const stopCallCount = profileRouting.codex.stopSession.mock.calls.length;
+
+      const replacement = yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const replacementCall = profileRouting.codex.startSession.mock.calls[startCallCount]?.[0];
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(replacement.profileId, "work");
+      assert.equal(replacementCall?.profileId, "work");
+      assert.equal(replacementCall?.resumeCursor, undefined);
+      assert.equal(replacementCall?.providerOptions, undefined);
+      assert.equal(binding?.profileId, "work");
+      assert.equal(profileRouting.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.ok(
+        (profileRouting.codex.stopSession.mock.invocationCallOrder.at(-1) ?? 0) <
+          (profileRouting.codex.startSession.mock.invocationCallOrder.at(-1) ?? 0),
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("retires a partially spawned runtime when explicit start fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-explicit-partial-start-failure");
+      const startFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "codex",
+        threadId,
+      });
+      const startImplementation = profileRouting.codex.startSession.getMockImplementation();
+      if (!startImplementation) assert.fail("Expected adapter start implementation");
+      profileRouting.codex.startSession.mockImplementationOnce((input) =>
+        startImplementation(input).pipe(Effect.andThen(Effect.fail(startFailure))),
+      );
+      const stopCallCount = profileRouting.codex.stopSession.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "codex",
+          profileId: asProfileId("work"),
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assertFailure(result, startFailure);
+      assert.equal(profileRouting.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
+  it.effect("retires an active same-target replacement when its binding commit fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-active-same-target-commit-failure");
+      const workProfile = asProfileId("work");
+      const persistenceFailure = new ProviderSessionDirectoryPersistenceError({
+        operation: "test.active-same-target-replacement",
+        detail: "injected active replacement binding failure",
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const originalUpsert = directory.upsert;
+      const upsertSpy = vi.spyOn(directory, "upsert").mockImplementation((input) =>
+        input.threadId === threadId &&
+        asRuntimePayloadRecord(input.runtimePayload)
+          .agentGatewayCredentialRotationRequired === false
+          ? Effect.fail(persistenceFailure)
+          : originalUpsert(input),
+      );
+      const stopCallCount = profileRouting.codex.stopSession.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider
+          .startSession(threadId, {
+            provider: "codex",
+            profileId: workProfile,
+            threadId,
+            runtimeMode: "full-access",
+          })
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                upsertSpy.mockRestore();
+              }),
+            ),
+          ),
+      );
+
+      assertFailure(result, persistenceFailure);
+      assert.equal(profileRouting.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.deepEqual(
+        Option.getOrUndefined(yield* directory.getBinding(threadId)),
+        originalBinding,
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("atomically preserves the old binding when replacement persistence fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-replacement-persistence-failure");
+      const workProfile = asProfileId("work");
+      const originalCursor = { opaque: "work-profile-inactive-cursor" };
+      const persistenceFailure = new ProviderSessionDirectoryPersistenceError({
+        operation: "test.profile-replacement",
+        detail: "injected replacement binding failure",
+      });
+
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        profileId: workProfile,
+        lifecycleGeneration: "work-profile-generation",
+        status: "stopped",
+        resumeCursor: originalCursor,
+        runtimePayload: { preserved: "work-profile-runtime" },
+      });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+      const stopCallCount = profileRouting.codex.stopSession.mock.calls.length;
+      const originalUpsert = directory.upsert;
+      let atomicCommitRejected = false;
+      const upsertSpy = vi.spyOn(directory, "upsert").mockImplementation((input) => {
+        if (
+          input.threadId === threadId &&
+          asRuntimePayloadRecord(input.runtimePayload)
+            .agentGatewayCredentialRotationRequired === false
+        ) {
+          atomicCommitRejected = true;
+          return Effect.fail(persistenceFailure);
+        }
+        return originalUpsert(input);
+      });
+
+      const result = yield* Effect.result(
+        provider
+          .startSession(threadId, {
+            provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            threadId,
+            runtimeMode: "full-access",
+          })
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                upsertSpy.mockRestore();
+              }),
+            ),
+          ),
+      );
+
+      assertFailure(result, persistenceFailure);
+      assert.equal(atomicCommitRejected, true);
+      assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+      assert.equal(profileRouting.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.deepEqual(binding, originalBinding);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("blocks recovery until a failed replacement retirement is retried explicitly", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-replacement-retirement-failure");
+      const workProfile = asProfileId("work");
+      const persistenceFailure = new ProviderSessionDirectoryPersistenceError({
+        operation: "test.profile-replacement",
+        detail: "injected replacement binding failure",
+      });
+      const cleanupFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "codex",
+        threadId,
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const defaultStop = profileRouting.codex.stopSession.getMockImplementation();
+      if (defaultStop === undefined) {
+        return assert.fail("Expected default stop implementation");
+      }
+      profileRouting.codex.stopSession
+        .mockImplementationOnce(defaultStop)
+        .mockImplementationOnce(() => Effect.fail(cleanupFailure));
+      const upsertSpy = vi
+        .spyOn(directory, "upsert")
+        .mockImplementationOnce(() => Effect.fail(persistenceFailure));
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+
+      const replacementResult = yield* Effect.result(
+        provider
+          .startSession(threadId, {
+            provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            threadId,
+            runtimeMode: "full-access",
+          })
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                upsertSpy.mockRestore();
+              }),
+            ),
+          ),
+      );
+      assertFailure(replacementResult, persistenceFailure);
+      assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), true);
+      assert.equal(
+        (yield* profileRouting.codex.listSessions()).find(
+          (session) => session.threadId === threadId,
+        )?.profileId,
+        DEFAULT_PROVIDER_PROFILE_ID,
+      );
+      const bindingAfterFailure = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(bindingAfterFailure?.profileId, workProfile);
+      assert.equal(
+        bindingAfterFailure?.lifecycleGeneration,
+        originalBinding?.lifecycleGeneration,
+      );
+
+      const blockedStart = yield* provider
+        .startSession(threadId, {
+          provider: "codex",
+          profileId: workProfile,
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+      assert.match(blockedStart.message, /could not be retired safely/);
+      assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+
+      const sendCallCount = profileRouting.codex.sendTurn.mock.calls.length;
+      const blockedSend = yield* provider
+        .sendTurn({ threadId, input: "must remain fenced", attachments: [] })
+        .pipe(Effect.flip);
+      assert.match(blockedSend.message, /could not be retired safely/);
+      assert.equal(profileRouting.codex.sendTurn.mock.calls.length, sendCallCount);
+
+      yield* provider.stopSession({ threadId });
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
+  it.effect("rechecks retirement poison after queued lifecycle work acquires the lock", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-retirement-poison-lock-race");
+      const workProfile = asProfileId("work");
+      const persistenceFailure = new ProviderSessionDirectoryPersistenceError({
+        operation: "test.retirement-poison-race",
+        detail: "injected replacement binding failure",
+      });
+      const cleanupFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "codex",
+        threadId,
+      });
+      const cleanupEntered = yield* Deferred.make<void>();
+      const releaseCleanup = yield* Deferred.make<void>();
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const originalUpsert = directory.upsert;
+      const upsertSpy = vi.spyOn(directory, "upsert").mockImplementation((input) =>
+        input.threadId === threadId &&
+        asRuntimePayloadRecord(input.runtimePayload)
+          .agentGatewayCredentialRotationRequired === false
+          ? Effect.fail(persistenceFailure)
+          : originalUpsert(input),
+      );
+      profileRouting.codex.stopSession.mockImplementationOnce(() =>
+        Deferred.succeed(cleanupEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseCleanup)),
+          Effect.andThen(Effect.fail(cleanupFailure)),
+        ),
+      );
+
+      return yield* Effect.gen(function* () {
+        const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+        const sendCallCount = profileRouting.codex.sendTurn.mock.calls.length;
+        const failingReplacement = yield* provider
+          .startSession(threadId, {
+            provider: "codex",
+            profileId: workProfile,
+            threadId,
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(cleanupEntered);
+
+        const queuedStart = yield* provider
+          .startSession(threadId, {
+            provider: "codex",
+            profileId: workProfile,
+            threadId,
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.result, Effect.forkChild);
+        const queuedSend = yield* provider
+          .sendTurn({ threadId, input: "must wait for retirement", attachments: [] })
+          .pipe(Effect.result, Effect.forkChild);
+        yield* sleep(25);
+
+        assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+        assert.equal(profileRouting.codex.sendTurn.mock.calls.length, sendCallCount);
+        yield* Deferred.succeed(releaseCleanup, undefined);
+
+        assertFailure(yield* Fiber.join(failingReplacement), persistenceFailure);
+        const blockedStart = yield* Fiber.join(queuedStart);
+        const blockedSend = yield* Fiber.join(queuedSend);
+        assert.equal(blockedStart._tag, "Failure");
+        assert.equal(blockedSend._tag, "Failure");
+        if (blockedStart._tag === "Failure") {
+          assert.match(blockedStart.failure.message, /could not be retired safely/);
+        }
+        if (blockedSend._tag === "Failure") {
+          assert.match(blockedSend.failure.message, /could not be retired safely/);
+        }
+        assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+        assert.equal(profileRouting.codex.sendTurn.mock.calls.length, sendCallCount);
+        assert.deepEqual(
+          Option.getOrUndefined(yield* directory.getBinding(threadId)),
+          originalBinding,
+        );
+
+        yield* provider.stopSession({ threadId });
+        assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+        assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(releaseCleanup, undefined).pipe(Effect.asVoid)),
+        Effect.ensuring(
+          Effect.sync(() => {
+            upsertSpy.mockRestore();
+          }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("restores the exact previous profile when replacement fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-rollback");
+      const workCursor = { opaque: "work-profile-cursor" };
+      const workOptions = { codex: { homePath: "/tmp/work-profile" } };
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId,
+        resumeCursor: workCursor,
+        providerOptions: workOptions,
+        runtimeMode: "full-access",
+      });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const replacementFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "codex",
+        threadId,
+      });
+      profileRouting.codex.startSession.mockImplementationOnce(() =>
+        Effect.fail(replacementFailure),
+      );
+
+      const result = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+      assertFailure(result, replacementFailure);
+
+      const restoredBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const restoredSession = (yield* profileRouting.codex.listSessions()).find(
+        (session) => session.threadId === threadId,
+      );
+      const restoreCall = profileRouting.codex.startSession.mock.calls.at(-1)?.[0];
+      assert.equal(restoredBinding?.profileId, "work");
+      assert.equal(
+        restoredBinding?.lifecycleGeneration,
+        originalBinding?.lifecycleGeneration,
+      );
+      assert.equal(restoredSession?.profileId, "work");
+      assert.equal(restoreCall?.profileId, "work");
+      assert.deepEqual(restoreCall?.resumeCursor, workCursor);
+      assert.deepEqual(restoreCall?.providerOptions, workOptions);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("retires a partially spawned restoration without masking replacement failure", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-restoration-start-timeout");
+      const workProfile = asProfileId("work");
+      const replacementFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "codex",
+        threadId,
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const startImplementation = profileRouting.codex.startSession.getMockImplementation();
+      if (!startImplementation) assert.fail("Expected adapter start implementation");
+      profileRouting.codex.startSession
+        .mockImplementationOnce(() => Effect.fail(replacementFailure))
+        .mockImplementationOnce((input) =>
+          startImplementation(input).pipe(Effect.andThen(Effect.never)),
+        );
+
+      const replacement = yield* provider
+        .startSession(threadId, {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* waitUntilEffect(
+        () => profileRouting.codex.hasSession(threadId),
+        500,
+        10,
+        "partially spawned previous-profile restoration",
+      );
+      yield* TestClock.adjust("60 seconds");
+
+      assertFailure(yield* Fiber.join(replacement), replacementFailure);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.deepEqual(
+        Option.getOrUndefined(yield* directory.getBinding(threadId)),
+        originalBinding,
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("recovers only the exact persisted profile", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-profile-recovery");
+      const initial = yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
+      yield* provider.stopRuntimeSession({ threadId });
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+
+      yield* provider.sendTurn({ threadId, input: "recover work profile", attachments: [] });
+
+      const recoveryCall = profileRouting.codex.startSession.mock.calls[startCallCount]?.[0];
+      assert.equal(recoveryCall?.profileId, "work");
+      assert.deepEqual(recoveryCall?.resumeCursor, initial.resumeCursor);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("retires a partially spawned runtime when recovery start fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-recovery-partial-start-failure");
+      const workProfile = asProfileId("work");
+      const startFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "codex",
+        threadId,
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
+      yield* provider.stopRuntimeSession({ threadId });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const startImplementation = profileRouting.codex.startSession.getMockImplementation();
+      if (!startImplementation) assert.fail("Expected adapter start implementation");
+      profileRouting.codex.startSession.mockImplementationOnce((input) =>
+        startImplementation(input).pipe(Effect.andThen(Effect.fail(startFailure))),
+      );
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+      const stopCallCount = profileRouting.codex.stopSession.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider.sendTurn({ threadId, input: "reject partial recovery", attachments: [] }),
+      );
+
+      assertFailure(result, startFailure);
+      assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+      assert.equal(profileRouting.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.deepEqual(
+        Option.getOrUndefined(yield* directory.getBinding(threadId)),
+        originalBinding,
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("times out and retires a partially spawned recovery runtime", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-recovery-start-timeout");
+      const workProfile = asProfileId("work");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
+      yield* provider.stopRuntimeSession({ threadId });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const startImplementation = profileRouting.codex.startSession.getMockImplementation();
+      if (!startImplementation) assert.fail("Expected adapter start implementation");
+      profileRouting.codex.startSession.mockImplementationOnce((input) =>
+        startImplementation(input).pipe(Effect.andThen(Effect.never)),
+      );
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+      const stopCallCount = profileRouting.codex.stopSession.mock.calls.length;
+
+      const recoveryFiber = yield* provider
+        .sendTurn({ threadId, input: "timeout partial recovery", attachments: [] })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* waitUntilEffect(
+        () => profileRouting.codex.hasSession(threadId),
+        500,
+        10,
+        "partially spawned recovery runtime",
+      );
+      yield* TestClock.adjust("60 seconds");
+      const result = yield* Fiber.join(recoveryFiber);
+
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.sendTurn",
+          issue:
+            "Provider 'codex' did not finish recovering within 60000ms for thread 'thread-profile-recovery-start-timeout'.",
+        }),
+      );
+      assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+      assert.equal(profileRouting.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.deepEqual(
+        Option.getOrUndefined(yield* directory.getBinding(threadId)),
+        originalBinding,
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("retires a recovered runtime that reports the wrong target", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-recovery-returned-target-mismatch");
+      const workProfile = asProfileId("work");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
+      yield* provider.stopRuntimeSession({ threadId });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const startImplementation = profileRouting.codex.startSession.getMockImplementation();
+      if (!startImplementation) assert.fail("Expected adapter start implementation");
+      profileRouting.codex.startSession.mockImplementationOnce((input) =>
+        startImplementation(input).pipe(
+          Effect.map((session) => {
+            const mismatched = {
+              ...session,
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            };
+            profileRouting.codex.updateSession(threadId, () => mismatched);
+            return mismatched;
+          }),
+        ),
+      );
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+      const stopCallCount = profileRouting.codex.stopSession.mock.calls.length;
+      const sendCallCount = profileRouting.codex.sendTurn.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider.sendTurn({ threadId, input: "reject the mismatched recovery", attachments: [] }),
+      );
+
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.sendTurn",
+          issue: "Adapter target mismatch: expected 'codex/work', received 'codex/default'.",
+        }),
+      );
+      assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+      assert.equal(profileRouting.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.equal(profileRouting.codex.sendTurn.mock.calls.length, sendCallCount);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.deepEqual(
+        Option.getOrUndefined(yield* directory.getBinding(threadId)),
+        originalBinding,
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("atomically preserves the old binding when recovery persistence fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-recovery-persistence-failure");
+      const workProfile = asProfileId("work");
+      const persistenceFailure = new ProviderSessionDirectoryPersistenceError({
+        operation: "test.profile-recovery",
+        detail: "injected recovery binding failure",
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
+      yield* provider.stopRuntimeSession({ threadId });
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        profileId: workProfile,
+        runtimePayload: { agentGatewayCredentialRotationRequired: true },
+      });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const originalUpsert = directory.upsert;
+      let atomicCommitRejected = false;
+      const upsertSpy = vi.spyOn(directory, "upsert").mockImplementation((input) => {
+        if (
+          input.threadId === threadId &&
+          asRuntimePayloadRecord(input.runtimePayload)
+            .agentGatewayCredentialRotationRequired === false
+        ) {
+          atomicCommitRejected = true;
+          return Effect.fail(persistenceFailure);
+        }
+        return originalUpsert(input);
+      });
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+      const stopCallCount = profileRouting.codex.stopSession.mock.calls.length;
+      const sendCallCount = profileRouting.codex.sendTurn.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider
+          .sendTurn({ threadId, input: "reject the failed recovery commit", attachments: [] })
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                upsertSpy.mockRestore();
+              }),
+            ),
+          ),
+      );
+
+      assertFailure(result, persistenceFailure);
+      assert.equal(atomicCommitRejected, true);
+      assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+      assert.equal(profileRouting.codex.stopSession.mock.calls.length, stopCallCount + 1);
+      assert.equal(profileRouting.codex.sendTurn.mock.calls.length, sendCallCount);
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.deepEqual(
+        Option.getOrUndefined(yield* directory.getBinding(threadId)),
+        originalBinding,
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("fences future work when failed recovery cleanup cannot retire the runtime", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-recovery-cleanup-failure");
+      const workProfile = asProfileId("work");
+      const cleanupFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "codex",
+        threadId,
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
+      yield* provider.stopRuntimeSession({ threadId });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const startImplementation = profileRouting.codex.startSession.getMockImplementation();
+      if (!startImplementation) assert.fail("Expected adapter start implementation");
+      profileRouting.codex.startSession.mockImplementationOnce((input) =>
+        startImplementation(input).pipe(
+          Effect.map((session) => {
+            const mismatched = {
+              ...session,
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            };
+            profileRouting.codex.updateSession(threadId, () => mismatched);
+            return mismatched;
+          }),
+        ),
+      );
+      profileRouting.codex.stopSession.mockImplementationOnce(() => Effect.fail(cleanupFailure));
+      const startCallCount = profileRouting.codex.startSession.mock.calls.length;
+      const sendCallCount = profileRouting.codex.sendTurn.mock.calls.length;
+
+      const recoveryResult = yield* Effect.result(
+        provider.sendTurn({ threadId, input: "poison failed recovery", attachments: [] }),
+      );
+      assertFailure(
+        recoveryResult,
+        new ProviderValidationError({
+          operation: "ProviderService.sendTurn",
+          issue: "Adapter target mismatch: expected 'codex/work', received 'codex/default'.",
+        }),
+      );
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), true);
+      assert.deepEqual(
+        Option.getOrUndefined(yield* directory.getBinding(threadId)),
+        originalBinding,
+      );
+
+      const blockedSend = yield* provider
+        .sendTurn({ threadId, input: "must remain fenced", attachments: [] })
+        .pipe(Effect.flip);
+      assert.match(blockedSend.message, /could not be retired safely/);
+      const blockedStart = yield* provider
+        .startSession(threadId, {
+          provider: "codex",
+          profileId: workProfile,
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+      assert.match(blockedStart.message, /could not be retired safely/);
+      assert.equal(profileRouting.codex.startSession.mock.calls.length, startCallCount + 1);
+      assert.equal(profileRouting.codex.sendTurn.mock.calls.length, sendCallCount);
+
+      yield* provider.stopSession({ threadId });
+      assert.equal(yield* profileRouting.codex.hasSession(threadId), false);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("refuses to adopt an active session from another profile", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-profile-recovery-mismatch");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      profileRouting.codex.updateSession(threadId, (session) => ({
+        ...session,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      }));
+      const sendCallCount = profileRouting.codex.sendTurn.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider.sendTurn({ threadId, input: "must not cross profiles", attachments: [] }),
+      );
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.sendTurn",
+          issue:
+            "Cannot recover thread 'thread-profile-recovery-mismatch' because its active provider target does not match 'codex/work'.",
+        }),
+      );
+      assert.equal(profileRouting.codex.sendTurn.mock.calls.length, sendCallCount);
+
+      profileRouting.codex.updateSession(threadId, (session) => ({
+        ...session,
+        profileId: asProfileId("work"),
+      }));
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("allows native forks only within the exact source profile", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const sourceThreadId = asThreadId("thread-profile-fork-source");
+      const targetThreadId = asThreadId("thread-profile-fork-target");
+      const rejectedThreadId = asThreadId("thread-profile-fork-rejected");
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: "codex",
+        profileId: asProfileId("work"),
+        threadId: sourceThreadId,
+        runtimeMode: "full-access",
+      });
+      const forkCallCount = profileRouting.codex.forkThread.mock.calls.length;
+      if (!provider.forkThread) assert.fail("Expected forkThread");
+
+      const forked = yield* provider.forkThread({
+        sourceThreadId,
+        threadId: targetThreadId,
+        profileId: asProfileId("work"),
+        runtimeMode: "full-access",
+      });
+      const rejected = yield* provider.forkThread({
+        sourceThreadId,
+        threadId: rejectedThreadId,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        runtimeMode: "full-access",
+      });
+
+      const targetBinding = Option.getOrUndefined(yield* directory.getBinding(targetThreadId));
+      assert.equal(forked?.threadId, targetThreadId);
+      assert.equal(targetBinding?.profileId, "work");
+      assert.equal(rejected, null);
+      assert.equal(profileRouting.codex.forkThread.mock.calls.length, forkCallCount + 1);
+
+      yield* provider.stopSession({ threadId: targetThreadId });
+      yield* provider.stopSession({ threadId: sourceThreadId });
+    }),
+  );
+
+  it.effect("rejects send and steer selections from another profile", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-profile-turn-mismatch");
+      const modelSelection = {
+        provider: "codex" as const,
+        profileId: asProfileId("work"),
+        model: "gpt-5-codex",
+      };
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sendCallCount = profileRouting.codex.sendTurn.mock.calls.length;
+      const steerCallCount = profileRouting.codex.steerTurn.mock.calls.length;
+
+      const sendResult = yield* Effect.result(
+        provider.sendTurn({
+          threadId,
+          input: "wrong account",
+          attachments: [],
+          modelSelection,
+        }),
+      );
+      const steerResult = yield* Effect.result(
+        provider.steerTurn({
+          threadId,
+          input: "wrong account",
+          attachments: [],
+          modelSelection,
+        }),
+      );
+      const expected = (operation: string) =>
+        new ProviderValidationError({
+          operation,
+          issue: "Model selection target does not match 'codex/default'.",
+        });
+      assertFailure(sendResult, expected("ProviderService.sendTurn"));
+      assertFailure(steerResult, expected("ProviderService.steerTurn"));
+      assert.equal(profileRouting.codex.sendTurn.mock.calls.length, sendCallCount);
+      assert.equal(profileRouting.codex.steerTurn.mock.calls.length, steerCallCount);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+});
+
+profileEventAdmission.layer("ProviderServiceLive runtime event target admission", (it) => {
+  it.effect("rejects generation-less work-profile events without a binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-unbound-generationless-event");
+      const workProfile = asProfileId("work");
+      const observedEvents = yield* Ref.make<ProviderRuntimeEvent[]>([]);
+      profileAdmissionJournal.length = 0;
+
+      yield* profileEventAdmission.codex.adapter.startSession({
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* profileEventAdmission.codex.waitForRuntimeSubscribers();
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+
+      const consumer = yield* provider.streamEvents.pipe(
+        Stream.runForEach((event) =>
+          Ref.update(observedEvents, (current) => [...current, event]),
+        ),
+        Effect.forkChild,
+      );
+      yield* sleep(10);
+
+      return yield* Effect.gen(function* () {
+        profileEventAdmission.codex.emit({
+          type: "session.state.changed",
+          eventId: asEventId("runtime-profile-unbound-generationless-event"),
+          provider: "codex",
+          profileId: workProfile,
+          createdAt: "2026-08-10T00:00:00.000Z",
+          threadId,
+          payload: { state: "error", reason: "unbound work runtime" },
+        });
+        yield* sleep(25);
+
+        assert.deepEqual(profileAdmissionJournal, []);
+        assert.deepEqual(yield* Ref.get(observedEvents), []);
+        assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+      }).pipe(
+        Effect.ensuring(Fiber.interrupt(consumer)),
+        Effect.ensuring(profileEventAdmission.codex.adapter.stopSession(threadId)),
+      );
+    }),
+  );
+
+  it.effect("keeps stale targets out of the journal, ingestion stream, and turn bookkeeping", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-event-admission");
+      const workProfile = asProfileId("work");
+      const validTurnId = asTurnId("turn-profile-event-admission");
+      profileAdmissionJournal.length = 0;
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const lifecycleGeneration = initialBinding?.lifecycleGeneration;
+      assert.equal(typeof lifecycleGeneration, "string");
+      if (lifecycleGeneration === undefined) assert.fail("Expected lifecycle generation");
+      yield* profileEventAdmission.codex.waitForRuntimeSubscribers();
+
+      // ProviderRuntimeIngestion consumes this exact stream. A stale event that
+      // appears here can cross-contaminate projections even if binding writes reject it.
+      const ingestionVisibleEvents: ProviderRuntimeEvent[] = [];
+      const ingestionConsumer = yield* provider.streamEvents.pipe(
+        Stream.take(2),
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            ingestionVisibleEvents.push(event);
+          }),
+        ),
+        Effect.forkChild,
+      );
+      yield* sleep(10);
+
+      const rejectedEvents: ReadonlyArray<LegacyProviderRuntimeEvent> = [
+        {
+          type: "session.state.changed",
+          eventId: asEventId("runtime-provider-mismatch"),
+          provider: "claudeAgent",
+          profileId: workProfile,
+          lifecycleGeneration,
+          createdAt: "2026-08-10T00:00:00.000Z",
+          threadId,
+          payload: { state: "error", reason: "wrong provider" },
+        },
+        {
+          type: "turn.started",
+          eventId: asEventId("runtime-profile-mismatched-turn-started"),
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          lifecycleGeneration,
+          createdAt: "2026-08-10T00:00:01.000Z",
+          threadId,
+          turnId: asTurnId("turn-profile-mismatch-stale"),
+          payload: {},
+        },
+        {
+          type: "session.state.changed",
+          eventId: asEventId("runtime-work-generation-missing"),
+          provider: "codex",
+          profileId: workProfile,
+          createdAt: "2026-08-10T00:00:02.000Z",
+          threadId,
+          payload: { state: "error", reason: "generation missing" },
+        },
+        {
+          type: "session.state.changed",
+          eventId: asEventId("runtime-late-default-generationless"),
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          createdAt: "2026-08-10T00:00:03.000Z",
+          threadId,
+          payload: { state: "error", reason: "late default runtime" },
+        },
+        {
+          type: "session.state.changed",
+          eventId: asEventId("runtime-generation-mismatch"),
+          provider: "codex",
+          profileId: workProfile,
+          lifecycleGeneration: `${lifecycleGeneration}-stale`,
+          createdAt: "2026-08-10T00:00:04.000Z",
+          threadId,
+          payload: { state: "error", reason: "stale generation" },
+        },
+      ];
+      for (const event of rejectedEvents) {
+        profileEventAdmission.codex.emit(event);
+      }
+      profileEventAdmission.codex.emit({
+        type: "turn.started",
+        eventId: asEventId("runtime-profile-valid-turn-started"),
+        provider: "codex",
+        profileId: workProfile,
+        lifecycleGeneration,
+        createdAt: "2026-08-10T00:00:05.000Z",
+        threadId,
+        turnId: validTurnId,
+        payload: {},
+      });
+      profileEventAdmission.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-profile-valid-turn-completed"),
+        provider: "codex",
+        profileId: workProfile,
+        lifecycleGeneration,
+        createdAt: "2026-08-10T00:00:06.000Z",
+        threadId,
+        payload: { state: "completed" },
+      });
+
+      yield* Fiber.join(ingestionConsumer);
+      const acceptedEventIds = [
+        asEventId("runtime-profile-valid-turn-started"),
+        asEventId("runtime-profile-valid-turn-completed"),
+      ];
+      assert.deepEqual(
+        ingestionVisibleEvents.map((event) => event.eventId),
+        acceptedEventIds,
+      );
+      assert.deepEqual(
+        profileAdmissionJournal.map((event) => event.eventId),
+        acceptedEventIds,
+      );
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
+      assert.equal(binding?.profileId, workProfile);
+      assert.equal(binding?.status, "stopped");
+      assert.equal(runtimePayload.activeTurnId, null);
+      assert.equal(runtimePayload.lastRuntimeEvent, "turn.completed");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("serializes event admission through journal and publish with target replacement", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-event-admission-replacement-race");
+      const workProfile = asProfileId("work");
+      const eventId = asEventId("runtime-profile-event-admission-replacement-race");
+      const persistenceEntered = yield* Deferred.make<void>();
+      const releasePersistence = yield* Deferred.make<void>();
+      profileAdmissionJournal.length = 0;
+      profileAdmissionPersistenceGate = {
+        eventId,
+        entered: persistenceEntered,
+        release: releasePersistence,
+      };
+
+      return yield* Effect.gen(function* () {
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          profileId: workProfile,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const lifecycleGeneration = initialBinding?.lifecycleGeneration;
+        assert.equal(typeof lifecycleGeneration, "string");
+        if (lifecycleGeneration === undefined) assert.fail("Expected lifecycle generation");
+        yield* profileEventAdmission.codex.waitForRuntimeSubscribers();
+
+        const observed = yield* provider.streamEvents.pipe(
+          Stream.filter((event) => event.eventId === eventId),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* sleep(10);
+        profileEventAdmission.codex.emit({
+          type: "session.state.changed",
+          eventId,
+          provider: "codex",
+          profileId: workProfile,
+          lifecycleGeneration,
+          createdAt: "2026-08-10T00:00:07.000Z",
+          threadId,
+          payload: { state: "ready" },
+        });
+        yield* Deferred.await(persistenceEntered);
+
+        const startsBeforeReplacement =
+          profileEventAdmission.codex.startSession.mock.calls.length;
+        const stopsBeforeReplacement = profileEventAdmission.codex.stopSession.mock.calls.length;
+        const replacement = yield* provider
+          .startSession(threadId, {
+            provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            threadId,
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.forkChild);
+        yield* sleep(25);
+
+        // Once admission accepts an owner, replacement must wait until that
+        // event is durable and published. Otherwise the old profile can become
+        // stale between the ownership check and journal insertion.
+        assert.equal(
+          profileEventAdmission.codex.startSession.mock.calls.length,
+          startsBeforeReplacement,
+        );
+        assert.equal(
+          profileEventAdmission.codex.stopSession.mock.calls.length,
+          stopsBeforeReplacement,
+        );
+        assert.deepEqual(profileAdmissionJournal, []);
+        assert.equal(
+          Option.getOrUndefined(yield* directory.getBinding(threadId))?.profileId,
+          workProfile,
+        );
+
+        yield* Deferred.succeed(releasePersistence, undefined);
+        const observedEvent = yield* Fiber.join(observed);
+        assert.equal(Option.getOrUndefined(observedEvent)?.eventId, eventId);
+        assert.equal(Option.getOrUndefined(observedEvent)?.profileId, workProfile);
+        yield* Fiber.join(replacement);
+
+        assert.deepEqual(
+          profileAdmissionJournal.map((event) => event.eventId),
+          [eventId],
+        );
+        assert.equal(
+          Option.getOrUndefined(yield* directory.getBinding(threadId))?.profileId,
+          DEFAULT_PROVIDER_PROFILE_ID,
+        );
+        yield* provider.stopSession({ threadId });
+      }).pipe(
+        Effect.ensuring(
+          Deferred.succeed(releasePersistence, undefined).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                if (profileAdmissionPersistenceGate?.eventId === eventId) {
+                  profileAdmissionPersistenceGate = undefined;
+                }
+              }),
+            ),
+            Effect.asVoid,
+          ),
+        ),
+      );
+    }),
+  );
+
+  it.effect("admits the new generation's startup event before replacement binding upsert", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-startup-event-transition");
+      const workProfile = asProfileId("work");
+      const startupEventId = asEventId("runtime-profile-startup-event-transition");
+      const staleEventId = asEventId("runtime-profile-stale-event-transition");
+      const wrongProfileEventId = asEventId("runtime-profile-wrong-target-after-transition");
+      const replacementStarted = yield* Deferred.make<string>();
+      const releaseReplacement = yield* Deferred.make<void>();
+      profileAdmissionJournal.length = 0;
+
+      return yield* Effect.gen(function* () {
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          profileId: workProfile,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const initialGeneration = initialBinding?.lifecycleGeneration;
+        assert.equal(typeof initialGeneration, "string");
+        if (initialGeneration === undefined) assert.fail("Expected lifecycle generation");
+        yield* profileEventAdmission.codex.waitForRuntimeSubscribers();
+
+        const defaultStart = profileEventAdmission.codex.startSession.getMockImplementation();
+        if (defaultStart === undefined) assert.fail("Expected adapter start implementation");
+        profileEventAdmission.codex.startSession.mockImplementationOnce((input) =>
+          Effect.gen(function* () {
+            assert.equal(typeof input.lifecycleGeneration, "string");
+            if (input.lifecycleGeneration === undefined) {
+              return yield* Effect.die("Expected replacement lifecycle generation");
+            }
+            yield* Deferred.succeed(replacementStarted, input.lifecycleGeneration);
+            yield* Deferred.await(releaseReplacement);
+            return yield* defaultStart(input);
+          }),
+        );
+        const replacement = yield* provider
+          .startSession(threadId, {
+            provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            threadId,
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.forkChild);
+        const replacementGeneration = yield* Deferred.await(replacementStarted);
+        assert.equal(
+          Option.getOrUndefined(yield* directory.getBinding(threadId))?.profileId,
+          workProfile,
+        );
+
+        const observed = yield* provider.streamEvents.pipe(
+          Stream.filter((event) => event.eventId === startupEventId),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* sleep(10);
+        profileEventAdmission.codex.emit({
+          type: "session.state.changed",
+          eventId: staleEventId,
+          provider: "codex",
+          profileId: workProfile,
+          lifecycleGeneration: initialGeneration,
+          createdAt: "2026-08-10T00:00:08.000Z",
+          threadId,
+          payload: { state: "error", reason: "stale replaced runtime" },
+        });
+        profileEventAdmission.codex.emit({
+          type: "session.started",
+          eventId: startupEventId,
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          lifecycleGeneration: replacementGeneration,
+          createdAt: "2026-08-10T00:00:09.000Z",
+          threadId,
+          payload: {},
+        });
+
+        assert.equal(Option.getOrUndefined(yield* Fiber.join(observed))?.eventId, startupEventId);
+        assert.deepEqual(
+          profileAdmissionJournal.map((event) => event.eventId),
+          [startupEventId],
+        );
+        const transitionBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(transitionBinding?.status, "running");
+        assert.equal(
+          asRuntimePayloadRecord(transitionBinding?.runtimePayload).lastRuntimeEvent,
+          "session.started",
+        );
+        yield* Deferred.succeed(releaseReplacement, undefined);
+        yield* Fiber.join(replacement);
+        assert.equal(
+          Option.getOrUndefined(yield* directory.getBinding(threadId))?.profileId,
+          DEFAULT_PROVIDER_PROFILE_ID,
+        );
+
+        profileEventAdmission.codex.emit({
+          type: "session.state.changed",
+          eventId: wrongProfileEventId,
+          provider: "codex",
+          profileId: workProfile,
+          lifecycleGeneration: replacementGeneration,
+          createdAt: "2026-08-10T00:00:10.000Z",
+          threadId,
+          payload: { state: "error", reason: "wrong profile on current generation" },
+        });
+        yield* sleep(25);
+        assert.deepEqual(
+          profileAdmissionJournal.map((event) => event.eventId),
+          [startupEventId],
+        );
+        assert.notEqual(
+          Option.getOrUndefined(yield* directory.getBinding(threadId))?.status,
+          "error",
+        );
+        yield* provider.stopSession({ threadId });
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(releaseReplacement, undefined).pipe(Effect.asVoid)),
+      );
+    }),
+  );
+
+  it.effect("admits restored-generation startup events before rollback binding upsert", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-profile-restore-startup-event-transition");
+      const workProfile = asProfileId("work");
+      const restoredEventId = asEventId("runtime-profile-restored-startup-event-transition");
+      profileAdmissionJournal.length = 0;
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        profileId: workProfile,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const initialBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const initialGeneration = initialBinding?.lifecycleGeneration;
+      assert.equal(typeof initialGeneration, "string");
+      if (initialGeneration === undefined) assert.fail("Expected lifecycle generation");
+      yield* profileEventAdmission.codex.waitForRuntimeSubscribers();
+
+      const defaultCodexStart = profileEventAdmission.codex.startSession.getMockImplementation();
+      if (defaultCodexStart === undefined) assert.fail("Expected adapter start implementation");
+      profileEventAdmission.codex.startSession.mockImplementationOnce((input) =>
+        Effect.gen(function* () {
+          profileEventAdmission.codex.emit({
+            type: "session.started",
+            eventId: restoredEventId,
+            provider: "codex",
+            profileId: workProfile,
+            lifecycleGeneration: initialGeneration,
+            createdAt: "2026-08-10T00:00:11.000Z",
+            threadId,
+            payload: {},
+          });
+          yield* waitUntil(
+            () => profileAdmissionJournal.some((event) => event.eventId === restoredEventId),
+            500,
+            10,
+            "restored-generation startup event admission",
+          );
+          return yield* defaultCodexStart(input);
+        }),
+      );
+      const replacementFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "claudeAgent",
+        threadId,
+      });
+      profileEventAdmission.claude.startSession.mockImplementationOnce(() =>
+        Effect.fail(replacementFailure),
+      );
+      const observed = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.eventId === restoredEventId),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* sleep(10);
+
+      const replacement = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assertFailure(replacement, replacementFailure);
+      assert.equal(Option.getOrUndefined(yield* Fiber.join(observed))?.eventId, restoredEventId);
+      assert.deepEqual(
+        profileAdmissionJournal.map((event) => event.eventId),
+        [restoredEventId],
+      );
+      const restoredBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(restoredBinding?.profileId, workProfile);
+      assert.equal(restoredBinding?.lifecycleGeneration, initialGeneration);
+      yield* provider.stopSession({ threadId });
+    }),
   );
 });
 

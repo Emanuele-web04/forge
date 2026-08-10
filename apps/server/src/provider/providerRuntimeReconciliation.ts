@@ -14,6 +14,11 @@ import {
   type ProviderSession,
   type ThreadId,
 } from "@synara/contracts";
+import {
+  providerTargetFromModelSelection,
+  providerTargetFromSource,
+  providerTargetsEqual,
+} from "@synara/shared/providerTarget";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
 import type { ProviderRuntimeEventPumpHealth } from "./Services/ProviderService.ts";
@@ -205,9 +210,12 @@ export function planProviderRuntimeReconciliation(input: {
     input.maxTurnAgeMs ?? RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS,
   );
   const bindingByThreadId = new Map(input.bindings.map((binding) => [binding.threadId, binding]));
-  const liveSessionByThreadId = new Map(
-    input.liveSessions.map((session) => [session.threadId, session]),
-  );
+  const liveSessionsByThreadId = new Map<ThreadId, ProviderSession[]>();
+  for (const session of input.liveSessions) {
+    const sessions = liveSessionsByThreadId.get(session.threadId) ?? [];
+    sessions.push(session);
+    liveSessionsByThreadId.set(session.threadId, sessions);
+  }
   const healthByProvider = new Map(input.pumpHealth.map((health) => [health.provider, health]));
   const plans: ProviderRuntimeReconciliationPlan[] = [];
 
@@ -216,7 +224,14 @@ export function planProviderRuntimeReconciliation(input: {
     if (lifecycleAgeMs < staleAfterMs) continue;
 
     const binding = bindingByThreadId.get(thread.id);
-    const liveSession = liveSessionByThreadId.get(thread.id);
+    const expectedTarget = binding
+      ? providerTargetFromSource(binding)
+      : providerTargetFromModelSelection(thread.modelSelection);
+    const liveSession = liveSessionsByThreadId
+      .get(thread.id)
+      ?.find((session) =>
+        providerTargetsEqual(providerTargetFromSource(session), expectedTarget),
+      );
     // The binding row can be gone entirely (a stop that removed it, a crashed
     // start) - which is precisely the thread most likely to be stuck with
     // nothing left that could ever settle it - so fall back to the thread's own

@@ -1,5 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ProjectId, ThreadId, TurnId, type OrchestrationThreadShell } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  ProjectId,
+  ThreadId,
+  TurnId,
+  type OrchestrationThreadShell,
+} from "@synara/contracts";
 import { Deferred, Effect, Fiber, Option } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -19,7 +25,11 @@ function makeThread(threadId: string): OrchestrationThreadShell {
     id: ThreadId.makeUnsafe(threadId),
     projectId: ProjectId.makeUnsafe("project-mcp-cancellation"),
     title: threadId,
-    modelSelection: { provider: "codex", model: "gpt-5.6-sol" },
+    modelSelection: {
+      provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      model: "gpt-5.6-sol",
+    },
     runtimeMode: "full-access",
     interactionMode: "default",
     envMode: "local",

@@ -42,6 +42,7 @@ import {
   sendSidechatPrompt,
   type SidechatCreationFlight,
 } from "../lib/sidechatCreation";
+import { unsupportedProviderProfileIssue } from "../lib/providerProfileAvailability";
 
 type ComposerSnapshot = {
   value: string;
@@ -68,6 +69,7 @@ export function useComposerSlashCommands(input: {
   fastModeEnabled: boolean;
   providerNativeCommands: readonly ProviderNativeCommandDescriptor[];
   providerCommandDiscoveryCwd: string | null;
+  targetExecutable: boolean;
   selectedProvider: ProviderKind;
   currentProviderModelOptions: ProviderModelOptions[ProviderKind] | undefined;
   selectedModelSelection: ModelSelection;
@@ -119,6 +121,7 @@ export function useComposerSlashCommands(input: {
     fastModeEnabled,
     providerNativeCommands,
     providerCommandDiscoveryCwd,
+    targetExecutable,
     selectedProvider,
     currentProviderModelOptions,
     selectedModelSelection,
@@ -411,6 +414,16 @@ export function useComposerSlashCommands(input: {
         return false;
       }
 
+      const profileIssue = unsupportedProviderProfileIssue(selectedModelSelection);
+      if (profileIssue) {
+        toastManager.add({
+          type: "warning",
+          title: "Review is unavailable",
+          description: profileIssue,
+        });
+        return false;
+      }
+
       const messageText =
         target === "base-branch" && activeRootBranch
           ? `Review against base branch ${activeRootBranch}`
@@ -531,6 +544,18 @@ export function useComposerSlashCommands(input: {
   );
 
   const checkClaudeFastSlashCommandAvailability = useCallback(async (): Promise<boolean> => {
+    if (!targetExecutable) {
+      editorActions.clearComposerSlashDraft();
+      toastManager.add({
+        type: "warning",
+        title: "Fast mode is unavailable",
+        description:
+          unsupportedProviderProfileIssue(selectedModelSelection) ??
+          "The selected provider profile is unavailable.",
+      });
+      return false;
+    }
+
     const api = readNativeApi();
     if (!api || !providerCommandDiscoveryCwd) {
       editorActions.clearComposerSlashDraft();
@@ -575,7 +600,13 @@ export function useComposerSlashCommands(input: {
       description: "Claude did not expose /fast for this account or environment.",
     });
     return false;
-  }, [editorActions, providerCommandDiscoveryCwd, threadId]);
+  }, [
+    editorActions,
+    providerCommandDiscoveryCwd,
+    selectedModelSelection,
+    targetExecutable,
+    threadId,
+  ]);
 
   const runExportSlashCommand = useCallback(() => {
     // Re-validate at call time (mirrors /compact): menu selections and stale

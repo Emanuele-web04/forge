@@ -133,6 +133,7 @@ describe("useProviderModelCatalog", () => {
   it("keeps aggregate identities stable when inputs and query data are unchanged", () => {
     const [first, second] = readCatalogRenders({
       selectedProvider: "cursor",
+      targetExecutable: true,
       discoveryEnabled: true,
       modelHintByProvider: MODEL_HINTS,
     });
@@ -146,18 +147,91 @@ describe("useProviderModelCatalog", () => {
   });
 
   it("discovers core agents only when selected unless eager-core is requested", () => {
-    readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: false });
+    readCatalogRenders({
+      selectedProvider: "cursor",
+      targetExecutable: true,
+      discoveryEnabled: false,
+    });
     expect(readAgentQueryEnabled("claudeAgent")).toBe(false);
     expect(readAgentQueryEnabled("codex")).toBe(false);
 
     mocks.useQuery.mockClear();
     readCatalogRenders({
       selectedProvider: "cursor",
+      targetExecutable: true,
       discoveryEnabled: false,
       agentDiscoveryPolicy: "eager-core",
     });
     expect(readAgentQueryEnabled("claudeAgent")).toBe(true);
     expect(readAgentQueryEnabled("codex")).toBe(true);
+  });
+
+  it("suppresses all provider discovery for an unsupported account target", () => {
+    readCatalogRenders({
+      selectedProvider: "codex",
+      targetExecutable: false,
+      discoveryEnabled: true,
+      agentDiscoveryPolicy: "eager-core",
+    });
+
+    for (const provider of [
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "antigravity",
+      "grok",
+      "droid",
+      "kilo",
+      "opencode",
+      "pi",
+    ] as const) {
+      expect(readModelQueryEnabled(provider)).toBe(false);
+    }
+    expect(readAgentQueryEnabled("codex")).toBe(false);
+    expect(readAgentQueryEnabled("claudeAgent")).toBe(false);
+    expect(readAgentQueryEnabled("kilo")).toBe(false);
+    expect(readAgentQueryEnabled("opencode")).toBe(false);
+  });
+
+  it("does not expose cached default-account discovery for an unsupported target", () => {
+    modelQueries.set("codex", {
+      data: {
+        models: [
+          { slug: "cached-selected-model", name: "Cached selected model" },
+          { slug: "cached-default-only", name: "Cached default only" },
+        ],
+        source: "codex.app-server",
+        cached: true,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+    agentQueries.set("codex", {
+      data: {
+        agents: [{ name: "cached-default-agent", displayName: "Cached default agent" }],
+        cached: true,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "codex",
+      targetExecutable: false,
+      discoveryEnabled: true,
+      modelHintByProvider: { codex: "cached-selected-model" },
+      agentDiscoveryPolicy: "eager-core",
+    }).at(-1);
+
+    expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).not.toContain(
+      "cached-default-only",
+    );
+    expect(catalog?.runtimeModelsByProvider.codex).toEqual([]);
+    expect(catalog?.selectedRuntimeModel).toBeUndefined();
+    expect(catalog?.selectedRuntimeAgents).toEqual([]);
+    expect(catalog?.selectedProviderModelsLoading).toBe(false);
   });
 
   it("does not prefetch providers hidden from picker surfaces", () => {
@@ -166,7 +240,11 @@ describe("useProviderModelCatalog", () => {
       serverSettings: DEFAULT_SERVER_SETTINGS,
     });
 
-    readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+    readCatalogRenders({
+      selectedProvider: "codex",
+      targetExecutable: true,
+      discoveryEnabled: true,
+    });
 
     expect(readModelQueryEnabled("codex")).toBe(true);
     expect(readModelQueryEnabled("cursor")).toBe(false);
@@ -179,7 +257,11 @@ describe("useProviderModelCatalog", () => {
       serverSettings: DEFAULT_SERVER_SETTINGS,
     });
 
-    readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: false });
+    readCatalogRenders({
+      selectedProvider: "cursor",
+      targetExecutable: true,
+      discoveryEnabled: false,
+    });
 
     expect(readModelQueryEnabled("cursor")).toBe(true);
   });
@@ -199,7 +281,11 @@ describe("useProviderModelCatalog", () => {
       },
     });
 
-    readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: true });
+    readCatalogRenders({
+      selectedProvider: "cursor",
+      targetExecutable: true,
+      discoveryEnabled: true,
+    });
 
     expect(readModelQueryEnabled("cursor")).toBe(false);
   });
@@ -210,7 +296,11 @@ describe("useProviderModelCatalog", () => {
     // closed here would blank every provider's model list, selected one included.
     mocks.useAppSettings.mockReturnValue({ settings: SETTINGS, serverSettings: undefined });
 
-    readCatalogRenders({ selectedProvider: "claudeAgent", discoveryEnabled: true });
+    readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      targetExecutable: true,
+      discoveryEnabled: true,
+    });
 
     expect(readModelQueryEnabled("claudeAgent")).toBe(true);
     expect(readModelQueryEnabled("codex")).toBe(true);
@@ -225,7 +315,11 @@ describe("useProviderModelCatalog", () => {
       serverSettings: { ...DEFAULT_SERVER_SETTINGS, providers: providersWithoutCursor },
     });
 
-    readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: false });
+    readCatalogRenders({
+      selectedProvider: "cursor",
+      targetExecutable: true,
+      discoveryEnabled: false,
+    });
 
     expect(readModelQueryEnabled("cursor")).toBe(true);
   });
@@ -233,6 +327,7 @@ describe("useProviderModelCatalog", () => {
   it("restricts non-picker prefetch to the requested providers", () => {
     readCatalogRenders({
       selectedProvider: "codex",
+      targetExecutable: true,
       discoveryEnabled: true,
       prefetchProviders: ["codex", "kilo", "opencode"],
     });
@@ -258,6 +353,7 @@ describe("useProviderModelCatalog", () => {
 
     const catalog = readCatalogRenders({
       selectedProvider: "cursor",
+      targetExecutable: true,
       discoveryEnabled: true,
       modelHintByProvider: MODEL_HINTS,
     }).at(-1);

@@ -4,16 +4,31 @@ import type {
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
+import {
+  providerTargetFromModelSelection,
+  providerTargetsEqual,
+} from "@synara/shared/providerTarget";
+
+export function canAdoptFirstTurnTarget(input: {
+  readonly hasLatestTurn: boolean;
+  readonly hasSession: boolean;
+  readonly messageCount: number;
+}): boolean {
+  return !input.hasLatestTurn && !input.hasSession && input.messageCount <= 1;
+}
 
 export function deriveTurnStartModelSelection(input: {
   readonly currentModelSelection: ModelSelection;
   readonly requestedModelSelection: ModelSelection | undefined;
-  readonly canAdoptRequestedProvider: boolean;
+  readonly canAdoptRequestedTarget: boolean;
 }): ModelSelection {
   const requestedModelSelection = input.requestedModelSelection;
   return requestedModelSelection !== undefined &&
-    (requestedModelSelection.provider === input.currentModelSelection.provider ||
-      input.canAdoptRequestedProvider)
+    (providerTargetsEqual(
+      providerTargetFromModelSelection(requestedModelSelection),
+      providerTargetFromModelSelection(input.currentModelSelection),
+    ) ||
+      input.canAdoptRequestedTarget)
     ? requestedModelSelection
     : input.currentModelSelection;
 }

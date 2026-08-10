@@ -3,7 +3,12 @@
 // Layer: Web lib test
 // Depends on: composerAutomation resolver and automation form helpers.
 
-import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  type ModelSelection,
+  type ProjectId,
+  type ThreadId,
+} from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -16,6 +21,7 @@ const PROJECT_ID = "project-composer-automation" as ProjectId;
 const THREAD_ID = "thread-composer-automation" as ThreadId;
 const MODEL_SELECTION: ModelSelection = {
   provider: "codex",
+  profileId: DEFAULT_PROVIDER_PROFILE_ID,
   model: "gpt-5",
 };
 const NOW_ISO = "2026-06-22T08:00:00.000Z";

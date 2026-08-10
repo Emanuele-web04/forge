@@ -1,4 +1,4 @@
-import { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { resolveChatIndexRestoreRoute } from "../routes/-chatIndexRoute.logic";
@@ -41,7 +41,7 @@ function thread(input: { id: string; projectId: string }): SidebarThreadSummary 
     id: ThreadId.makeUnsafe(input.id),
     projectId: ProjectId.makeUnsafe(input.projectId),
     title: input.id,
-    modelSelection: { provider: "codex", model: "gpt-5" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5" },
     interactionMode: "default",
     branch: null,
     worktreePath: null,

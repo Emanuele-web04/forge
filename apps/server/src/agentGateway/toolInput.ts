@@ -1,5 +1,6 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER_PROFILE_ID,
   SynaraCreateThreadsInput,
   SynaraWaitForThreadsInput,
   type ModelSelection,
@@ -141,7 +142,11 @@ export function buildModelSelection(
       `Provider "${provider}" has no default model; pass an explicit "model" argument.`,
     );
   }
-  return { provider, model: effectiveModel } as ModelSelection;
+  return {
+    provider,
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
+    model: effectiveModel,
+  } as ModelSelection;
 }
 
 export function decodeCreateThreadsInput(value: unknown) {

@@ -1,4 +1,4 @@
-import { type ProjectId, ThreadId } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, type ProjectId, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { startTransition } from "react";
@@ -69,6 +69,7 @@ export function useHandleNewThread() {
       }
       setModelSelection(threadId, {
         provider: options.provider,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: defaultModel,
       });
     };

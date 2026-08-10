@@ -18,6 +18,7 @@ import {
   resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
 import { resolveProviderSendAvailabilityWithRefresh } from "../lib/providerAvailability";
+import { unsupportedProviderProfileIssue } from "../lib/providerProfileAvailability";
 import { serverSettingsQueryOptions } from "../lib/serverReactQuery";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
@@ -49,6 +50,19 @@ export function useThreadHandoff() {
     if (!canCreateThreadHandoff({ thread })) {
       throw new Error("This thread cannot be handed off yet.");
     }
+    const { copyTransferableComposerState, stickyModelSelectionByProvider } =
+      useComposerDraftStore.getState();
+    const modelSelection = resolveThreadHandoffModelSelection({
+      sourceThread: thread,
+      targetProvider,
+      projectDefaultModelSelection: project.defaultModelSelection,
+      stickyModelSelectionByProvider,
+    });
+    const profileIssue = unsupportedProviderProfileIssue(modelSelection);
+    if (profileIssue !== null) {
+      throw new Error(profileIssue);
+    }
+
     const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: targetProvider,
       statuses: providerStatuses,
@@ -73,8 +87,6 @@ export function useThreadHandoff() {
     const createdAt = new Date().toISOString();
     const importedMessages = buildThreadHandoffImportedMessages(thread);
     const importedActivities = buildThreadHandoffImportedActivities(thread);
-    const { copyTransferableComposerState, stickyModelSelectionByProvider } =
-      useComposerDraftStore.getState();
 
     await api.orchestration.dispatchCommand({
       type: "thread.handoff.create",
@@ -83,12 +95,7 @@ export function useThreadHandoff() {
       sourceThreadId: thread.id,
       projectId: thread.projectId,
       title: resolveThreadHandoffTitle(thread),
-      modelSelection: resolveThreadHandoffModelSelection({
-        sourceThread: thread,
-        targetProvider,
-        projectDefaultModelSelection: project.defaultModelSelection,
-        stickyModelSelectionByProvider,
-      }),
+      modelSelection,
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
       envMode: thread.envMode ?? (thread.worktreePath ? "worktree" : "local"),

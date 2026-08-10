@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 
-import { CommandId, MessageId, ThreadId } from "@synara/contracts";
+import {
+  CommandId,
+  DEFAULT_PROVIDER_PROFILE_ID,
+  MessageId,
+  ThreadId,
+  type SynaraCreateThreadsInput,
+} from "@synara/contracts";
 
 export function slugifyAgentTask(value: string): string {
   return (
@@ -29,6 +35,23 @@ export function canonicalJson(value: unknown): string {
 
 export function stableGatewayDigest(value: unknown, length = 32): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex").slice(0, length);
+}
+
+/** Preserves pre-profile hashes for retries of already-reserved create operations. */
+export function fingerprintGatewayCreateThreadsInput(input: SynaraCreateThreadsInput): string {
+  return stableGatewayDigest(
+    {
+      ...input,
+      threads: input.threads.map(({ target, ...thread }) => {
+        if (target.profileId !== DEFAULT_PROVIDER_PROFILE_ID) {
+          return { ...thread, target };
+        }
+        const { profileId: _profileId, ...legacyTarget } = target;
+        return { ...thread, target: legacyTarget };
+      }),
+    },
+    64,
+  );
 }
 
 export function makeAgentCreationIds(operationId: string, index: number) {

@@ -2,7 +2,7 @@
 // Purpose: Characterizes Sidebar pin races, archive serialization/undo, and batch deletion.
 // Layer: Web hook tests
 
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProjectId, ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const reactHarness = vi.hoisted(() => {
@@ -207,7 +207,7 @@ function makeThread(id: ThreadId, overrides: Partial<SidebarThreadSummary> = {})
     id,
     projectId: PROJECT_ID,
     title: String(id),
-    modelSelection: { provider: "codex", model: "gpt-5.6" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.6" },
     interactionMode: "default",
     branch: null,
     worktreePath: null,

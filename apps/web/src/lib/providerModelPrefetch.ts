@@ -6,7 +6,11 @@
 // Layer: Web lib
 // Exports: resolve + prefetch helpers that mirror ChatView's listModels query keys.
 
-import type { ProviderKind } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  type ModelSelection,
+  type ProviderKind,
+} from "@synara/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
 import type { AppSettings } from "../appSettings";
@@ -44,6 +48,42 @@ export function resolveNewThreadModelPrefetchProvider(input: {
     input.defaultProvider ??
     "codex"
   );
+}
+
+export function resolveNewThreadModelPrefetchTarget(input: {
+  draftActiveProvider?: ProviderKind | null | undefined;
+  stickyActiveProvider?: ProviderKind | null | undefined;
+  projectDefaultModelSelection?: ModelSelection | null | undefined;
+  defaultProvider: ProviderKind;
+  draftModelSelectionByProvider?: Partial<Record<ProviderKind, ModelSelection>> | undefined;
+  stickyModelSelectionByProvider?: Partial<Record<ProviderKind, ModelSelection>> | undefined;
+}): {
+  readonly provider: ProviderKind;
+  readonly modelSelection: ModelSelection | null;
+  readonly targetExecutable: boolean;
+} {
+  const provider = resolveNewThreadModelPrefetchProvider({
+    draftActiveProvider: input.draftActiveProvider,
+    stickyActiveProvider: input.stickyActiveProvider,
+    projectDefaultProvider: input.projectDefaultModelSelection?.provider ?? null,
+    defaultProvider: input.defaultProvider,
+  });
+  const draftSelection = input.draftModelSelectionByProvider?.[provider];
+  const stickySelection = input.stickyModelSelectionByProvider?.[provider];
+  const modelSelection =
+    (draftSelection?.provider === provider ? draftSelection : null) ??
+    (stickySelection?.provider === provider ? stickySelection : null) ??
+    (input.projectDefaultModelSelection?.provider === provider
+      ? input.projectDefaultModelSelection
+      : null);
+
+  return {
+    provider,
+    modelSelection,
+    targetExecutable:
+      (modelSelection?.profileId ?? DEFAULT_PROVIDER_PROFILE_ID) ===
+      DEFAULT_PROVIDER_PROFILE_ID,
+  };
 }
 
 export function resolveNewThreadModelPrefetchCwd(input: {
@@ -154,10 +194,14 @@ export function prefetchProviderModelsForNewThread(
   queryClient: QueryClient,
   input: {
     provider: ProviderKind;
+    targetExecutable: boolean;
     settings: ProviderModelPrefetchSettings;
     cwd?: string | null;
   },
 ): void {
+  if (!input.targetExecutable) {
+    return;
+  }
   const cwd = input.cwd ?? null;
   void queryClient.prefetchQuery(
     providerModelsPrefetchQueryOptions({

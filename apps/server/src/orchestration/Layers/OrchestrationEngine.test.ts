@@ -2,8 +2,10 @@ import {
   CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_PROVIDER_PROFILE_ID,
   MessageId,
   ProjectId,
+  ProviderProfileId,
   ThreadId,
   TurnId,
   type OrchestrationCommand,
@@ -161,6 +163,7 @@ describe("OrchestrationEngine", () => {
         title: "Engine quiesce thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -289,6 +292,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-1",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -303,6 +307,7 @@ describe("OrchestrationEngine", () => {
         title: "Thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -378,7 +383,7 @@ describe("OrchestrationEngine", () => {
         projectId: asProjectId("project-managed-attachment"),
         title: "Managed attachment project",
         workspaceRoot: "/tmp/project-managed-attachment",
-        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+        defaultModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
         createdAt,
       }),
     );
@@ -389,7 +394,7 @@ describe("OrchestrationEngine", () => {
         threadId,
         projectId: asProjectId("project-managed-attachment"),
         title: "Managed attachment thread",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
@@ -510,6 +515,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-replay",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -524,6 +530,7 @@ describe("OrchestrationEngine", () => {
         title: "replay",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -568,6 +575,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-stream",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -592,6 +600,7 @@ describe("OrchestrationEngine", () => {
           title: "domain-stream",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -629,6 +638,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-turn-diff",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -643,6 +653,7 @@ describe("OrchestrationEngine", () => {
         title: "Turn diff thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -747,12 +758,12 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-flaky",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
       }),
     );
-
     await expect(
       runtime.runPromise(
         engine.dispatch({
@@ -763,6 +774,7 @@ describe("OrchestrationEngine", () => {
           title: "flaky-fail",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -783,6 +795,7 @@ describe("OrchestrationEngine", () => {
         title: "flaky-ok",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -846,6 +859,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-atomic",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -860,6 +874,7 @@ describe("OrchestrationEngine", () => {
         title: "atomic",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -993,6 +1008,7 @@ describe("OrchestrationEngine", () => {
           workspaceRoot: "/tmp/project-defect-1",
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt,
@@ -1010,6 +1026,7 @@ describe("OrchestrationEngine", () => {
           workspaceRoot: "/tmp/project-defect-2",
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt,
@@ -1111,6 +1128,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-sync",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1125,6 +1143,7 @@ describe("OrchestrationEngine", () => {
         title: "sync-before",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1179,6 +1198,186 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("Thread 'thread-missing' does not exist");
 
+    await system.dispose();
+  });
+
+  it("hydrates message history before deciding a provider target change", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-target-lock");
+    const threadId = ThreadId.makeUnsafe("thread-target-lock");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-target-lock-project"),
+        projectId,
+        title: "Target lock",
+        workspaceRoot: "/tmp/target-lock",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-target-lock-thread"),
+        threadId,
+        projectId,
+        title: "Target lock",
+        modelSelection: {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "gpt-5.6-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-target-lock-import"),
+        threadId,
+        messages: [
+          {
+            messageId: MessageId.makeUnsafe("message-target-lock"),
+            role: "user",
+            text: "Existing work",
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        createdAt,
+      }),
+    );
+    const commandModel = await system.run(engine.refreshCommandReadModel());
+    expect(commandModel.threads.find((thread) => thread.id === threadId)).toMatchObject({
+      latestTurn: null,
+      messages: [],
+      session: null,
+    });
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-target-lock-update"),
+          threadId,
+          modelSelection: {
+            provider: "codex",
+            profileId: ProviderProfileId.makeUnsafe("work"),
+            model: "gpt-5.6-codex",
+          },
+        }),
+      ),
+    ).rejects.toThrow("already has work on provider target 'codex/default'");
+
+    const readModel = await system.run(engine.getReadModel());
+    expect(readModel.threads.find((thread) => thread.id === threadId)?.modelSelection).toMatchObject({
+      provider: "codex",
+      profileId: "default",
+    });
+    await system.dispose();
+  });
+
+  it("rejects a cross-profile turn before appending its message after command-model refresh", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-turn-target-lock");
+    const threadId = ThreadId.makeUnsafe("thread-turn-target-lock");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-turn-target-lock-project"),
+        projectId,
+        title: "Turn target lock",
+        workspaceRoot: "/tmp/turn-target-lock",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-turn-target-lock-thread"),
+        threadId,
+        projectId,
+        title: "Turn target lock",
+        modelSelection: {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "gpt-5.6-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-turn-target-lock-import"),
+        threadId,
+        messages: [
+          {
+            messageId: MessageId.makeUnsafe("message-turn-target-lock-existing"),
+            role: "user",
+            text: "Existing work",
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        createdAt,
+      }),
+    );
+    const commandModel = await system.run(engine.refreshCommandReadModel());
+    expect(commandModel.threads.find((thread) => thread.id === threadId)).toMatchObject({
+      latestTurn: null,
+      messages: [],
+      session: null,
+    });
+    const sequenceBeforeRejectedTurn = (await system.run(engine.getReadModel())).snapshotSequence;
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-turn-target-lock-start"),
+          threadId,
+          message: {
+            messageId: MessageId.makeUnsafe("message-turn-target-lock-rejected"),
+            role: "user",
+            text: "Wrong account",
+            attachments: [],
+          },
+          modelSelection: {
+            provider: "codex",
+            profileId: ProviderProfileId.makeUnsafe("work"),
+            model: "gpt-5.6-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("already has work on provider target 'codex/default'");
+
+    const readModel = await system.run(engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(readModel.snapshotSequence).toBe(sequenceBeforeRejectedTurn);
+    expect(thread?.modelSelection).toMatchObject({
+      provider: "codex",
+      profileId: "default",
+    });
     await system.dispose();
   });
 
@@ -1246,6 +1445,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-deferred-recovery",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1260,6 +1460,7 @@ describe("OrchestrationEngine", () => {
         title: "deferred-recovery",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1363,6 +1564,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/readd-project",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1379,6 +1581,7 @@ describe("OrchestrationEngine", () => {
           workspaceRoot: "/tmp/readd-project",
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt,
@@ -1411,6 +1614,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/active-project",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1425,6 +1629,7 @@ describe("OrchestrationEngine", () => {
         title: "active",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1445,6 +1650,7 @@ describe("OrchestrationEngine", () => {
           workspaceRoot: "/tmp/active-project",
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt,
@@ -1673,6 +1879,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-duplicate",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1688,6 +1895,7 @@ describe("OrchestrationEngine", () => {
         title: "duplicate",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1708,6 +1916,7 @@ describe("OrchestrationEngine", () => {
           title: "duplicate",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

@@ -2,6 +2,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   AutomationId,
   type AutomationCreateInput,
   type AutomationDefinition,
@@ -19,6 +20,7 @@ import {
   type WsWelcomePayload,
   WS_METHODS,
   OrchestrationSessionStatus,
+  ProviderProfileId,
 } from "@synara/contracts";
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
@@ -310,6 +312,7 @@ function createSnapshotForTargetUser(options: {
         workspaceRoot: "/repo/project",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -325,6 +328,7 @@ function createSnapshotForTargetUser(options: {
         title: THREAD_TITLE,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         interactionMode: "default",
@@ -525,6 +529,7 @@ function addThreadToSnapshot(
         title: "New thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         interactionMode: "default",
@@ -617,6 +622,7 @@ function withOpenProjectPickerFixtures(snapshot: OrchestrationReadModel): Orches
         workspaceRoot: "/repo/other",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -640,6 +646,7 @@ function withHomeChatProject(snapshot: OrchestrationReadModel): OrchestrationRea
         workspaceRoot: "/Users/tester",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -673,6 +680,7 @@ function withStudioProject(snapshot: OrchestrationReadModel): OrchestrationReadM
         workspaceRoot: "/Users/tester/Documents/Synara/Studio",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -984,6 +992,26 @@ function createSnapshotWithSettledPlanAwaitingFollowUp(): OrchestrationReadModel
   };
 }
 
+function createSnapshotWithUnsupportedProfilePlan(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithSettledPlanAwaitingFollowUp();
+  const profileId = ProviderProfileId.makeUnsafe("work");
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            modelSelection: {
+              ...thread.modelSelection,
+              profileId,
+            },
+          }
+        : thread,
+    ),
+  };
+}
+
 function createSnapshotWithInlineToolOverflow(options: {
   active: boolean;
 }): OrchestrationReadModel {
@@ -1144,6 +1172,7 @@ function recordProjectCreateCommand(command: unknown): boolean {
               ? (command.defaultModelSelection as OrchestrationReadModel["projects"][number]["defaultModelSelection"])
               : {
                   provider: "codex" as const,
+                  profileId: DEFAULT_PROVIDER_PROFILE_ID,
                   model: "gpt-5",
                 },
           scripts: [],
@@ -3867,6 +3896,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
     useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.4",
       options: {
         reasoningEffort: "low",
@@ -4972,6 +5002,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedPromptEffort: null,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -4998,6 +5029,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedPromptEffort: null,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -5091,6 +5123,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedPromptEffort: null,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -5129,6 +5162,56 @@ describe("ChatView timeline estimator parity (full app)", () => {
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
+    }
+  });
+
+  it("rejects an unsupported queued plan follow-up before optimistic or durable dispatch", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-unsupported-queued-plan" as MessageId,
+        targetText: "unsupported queued plan target",
+        sessionStatus: "ready",
+      }),
+    });
+
+    try {
+      const initialMessageIds = useStore.getState().messageIdsByThreadId[THREAD_ID] ?? [];
+      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
+        id: "queued-plan-unsupported-profile",
+        kind: "plan-follow-up",
+        createdAt: NOW_ISO,
+        previewText: "Implement the queued plan",
+        text: "Implement the queued plan",
+        interactionMode: "default",
+        selectedProvider: "codex",
+        selectedModel: "gpt-5",
+        selectedPromptEffort: null,
+        modelSelection: {
+          provider: "codex",
+          profileId: ProviderProfileId.makeUnsafe("work"),
+          model: "gpt-5",
+        },
+        runtimeMode: "full-access",
+      });
+
+      await vi.waitFor(() => {
+        expect(useStore.getState().threadShellById[THREAD_ID]?.error).toBe(
+          "Provider profile 'work' is not configured for provider 'codex'.",
+        );
+      });
+
+      expect(useStore.getState().messageIdsByThreadId[THREAD_ID]).toEqual(initialMessageIds);
+      expect(
+        wsRequests.filter(
+          (request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand,
+        ),
+      ).toHaveLength(0);
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns,
+      ).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
     }
   });
 
@@ -5175,6 +5258,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedPromptEffort: null,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -6213,6 +6297,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyModelSelectionByProvider: {
         codex: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
           options: {
             reasoningEffort: "medium",
@@ -6678,6 +6763,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyModelSelectionByProvider: {
         claudeAgent: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
           options: {
             effort: "max",
@@ -6760,6 +6846,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyModelSelectionByProvider: {
         codex: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
           options: {
             reasoningEffort: "medium",
@@ -6806,6 +6893,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       useComposerDraftStore.getState().setModelSelection(threadId, {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5.4",
         options: {
           reasoningEffort: "low",
@@ -6996,6 +7084,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           modelSelectionByProvider: {
             claudeAgent: {
               provider: "claudeAgent",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "claude-opus-4-6",
               options: {
                 effort: "max",
@@ -7153,6 +7242,35 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .element(page.getByTitle("Plan mode — click to return to normal build mode"))
         .toBeInTheDocument();
       await expect.element(page.getByLabelText("Show plan details sidebar")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("rejects implementing a plan in a new thread before creation for an unsupported profile", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithUnsupportedProfilePlan(),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      await page.getByLabelText("Implementation actions").click();
+      await page.getByText("Implement in a new thread").click();
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Implementation is unavailable");
+      });
+      expect(
+        wsRequests.filter(
+          (request) =>
+            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            typeof request.command === "object" &&
+            request.command !== null &&
+            "type" in request.command &&
+            request.command.type === "thread.create",
+        ),
+      ).toHaveLength(0);
     } finally {
       await mounted.cleanup();
     }

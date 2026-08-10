@@ -50,7 +50,7 @@ import {
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import {
-  buildModelSelection,
+  buildModelSelectionForTarget,
   buildNextProviderOptions,
   buildProviderOptionPatch,
   type ProviderOptions,
@@ -1023,12 +1023,18 @@ function ModelOptionRows({
       optionPatch,
     );
     onChange(
-      buildModelSelection(
-        provider,
+      buildModelSelectionForTarget({
+        target: {
+          provider,
+          profileId: modelSelection.profileId,
+        },
         model,
-        nextOptions,
-        modelSelection.provider === "claudeAgent" ? modelSelection.supportsAutoMode : undefined,
-      ),
+        options: nextOptions,
+        supportsAutoMode:
+          modelSelection.provider === "claudeAgent"
+            ? modelSelection.supportsAutoMode
+            : undefined,
+      }),
     );
   };
 

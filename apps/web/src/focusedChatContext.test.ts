@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { type DraftThreadState } from "./composerDraftStore";
@@ -19,7 +19,7 @@ function makeProject(): Project {
     folderName: "project",
     localName: null,
     cwd: "/tmp/project",
-    defaultModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    defaultModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.4-mini" },
     expanded: true,
     spaceId: null,
     scripts: [],
@@ -32,7 +32,7 @@ function makeThread(threadId: ThreadId, overrides: Partial<Thread> = {}): Thread
     codexThreadId: null,
     projectId: PROJECT_ID,
     title: `Thread ${threadId}`,
-    modelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.4-mini" },
     runtimeMode: "full-access",
     interactionMode: "default",
     session: null,

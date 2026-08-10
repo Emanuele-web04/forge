@@ -4,6 +4,7 @@
 
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_PROVIDER_PROFILE_ID,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
 } from "@synara/contracts";
@@ -103,6 +104,7 @@ export function ModelsSettingsPanel({
     customKiloModels,
     customOpenCodeModels,
     textGenerationModel,
+    textGenerationProfileId,
     textGenerationProvider,
   } = settings;
   const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
@@ -118,6 +120,7 @@ export function ModelsSettingsPanel({
   });
   const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider } = useProviderModelCatalog({
     selectedProvider: currentGitTextGenerationProvider,
+    targetExecutable: textGenerationProfileId === DEFAULT_PROVIDER_PROFILE_ID,
     discoveryEnabled: active,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: gitWritingModelHintByProvider,
@@ -268,6 +271,7 @@ export function ModelsSettingsPanel({
                 onClick={() =>
                   updateSettings({
                     textGenerationProvider: defaults.textGenerationProvider,
+                    textGenerationProfileId: defaults.textGenerationProfileId,
                     textGenerationModel: defaults.textGenerationModel,
                   })
                 }

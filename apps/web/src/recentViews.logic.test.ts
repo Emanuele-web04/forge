@@ -3,7 +3,7 @@
 // Layer: UI state logic test
 
 import { describe, expect, it } from "vitest";
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProjectId, ThreadId } from "@synara/contracts";
 import type { ResolvedTerminalVisualIdentity } from "@synara/shared/terminalThreads";
 import {
   buildRecentViewDisplayEntries,
@@ -138,7 +138,7 @@ describe("recent view MRU logic", () => {
       id: terminalThreadId,
       projectId: project.id,
       title: "Dev server",
-      modelSelection: { provider: "codex", model: "gpt-5" },
+      modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5" },
     } as SidebarThreadSummary;
 
     const entries = buildRecentViewDisplayEntries({

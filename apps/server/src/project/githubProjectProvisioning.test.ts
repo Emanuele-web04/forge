@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { CommandId, ProjectId, type GitHubProjectProvisionInput } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, CommandId, ProjectId, type GitHubProjectProvisionInput } from "@synara/contracts";
 import { Deferred, Effect, Fiber, FileSystem, Path, PlatformError } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -20,7 +20,7 @@ function makeInput(destinationParent: string): GitHubProjectProvisionInput {
     commandId: CommandId.makeUnsafe("command-1"),
     projectId: ProjectId.makeUnsafe("project-1"),
     newProjectSpaceId: null,
-    defaultModelSelection: { provider: "codex", model: "gpt-5" },
+    defaultModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5" },
     createdAt: "2026-08-04T00:00:00.000Z",
   };
 }

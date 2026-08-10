@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   MessageId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -34,6 +35,7 @@ const readModel: OrchestrationReadModel = {
       workspaceRoot: "/tmp/project-a",
       defaultModelSelection: {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5-codex",
       },
       scripts: [],
@@ -47,6 +49,7 @@ const readModel: OrchestrationReadModel = {
       workspaceRoot: "/tmp/project-b",
       defaultModelSelection: {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5-codex",
       },
       scripts: [],
@@ -62,6 +65,7 @@ const readModel: OrchestrationReadModel = {
       title: "Thread A",
       modelSelection: {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -85,6 +89,7 @@ const readModel: OrchestrationReadModel = {
       title: "Thread B",
       modelSelection: {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -108,6 +113,7 @@ const readModel: OrchestrationReadModel = {
       title: "Archived Thread",
       modelSelection: {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -132,6 +138,7 @@ const readModel: OrchestrationReadModel = {
       title: "Deleted Thread",
       modelSelection: {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -221,6 +228,7 @@ describe("commandInvariants", () => {
           title: "new",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -245,6 +253,7 @@ describe("commandInvariants", () => {
             title: "dup",
             modelSelection: {
               provider: "codex",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "gpt-5-codex",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
