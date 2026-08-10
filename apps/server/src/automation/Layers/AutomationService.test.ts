@@ -5,6 +5,7 @@ import {
   AutomationRunId,
   CommandId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  DEFAULT_PROVIDER_PROFILE_ID,
   MessageId,
   ProjectId,
   ThreadId,
@@ -47,6 +48,7 @@ const project: OrchestrationProjectShell = {
   workspaceRoot: "/tmp/automation-project",
   defaultModelSelection: {
     provider: "codex",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model: "gpt-5-codex",
   },
   scripts: [],
@@ -332,6 +334,7 @@ const createInput = (
   schedule: { type: "manual" },
   modelSelection: {
     provider: "codex",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model: "gpt-5-codex",
   },
   worktreeMode,
@@ -1902,7 +1905,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2000-01-01T00:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -1967,7 +1970,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2000-01-01T00:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -2973,6 +2976,7 @@ layer("AutomationService", (it) => {
         targetThreadId,
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-8",
         },
         completionPolicy: aiCompletionPolicy("the PR is ready"),
@@ -2995,6 +2999,7 @@ layer("AutomationService", (it) => {
 
       assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
         provider: "cursor",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "composer-2",
       });
     }),
@@ -4755,7 +4760,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2026-06-16T10:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -4813,7 +4818,7 @@ layer("AutomationService", (it) => {
             scheduledFor: now,
             permissionSnapshot: {
               provider: "codex",
-              modelSelection: { provider: "codex", model: "gpt-5-codex" },
+              modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
               runtimeMode: "approval-required",
               interactionMode: "default",
               worktreeMode: "local",
@@ -4863,7 +4868,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2026-06-16T10:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -5008,7 +5013,7 @@ layer("AutomationService", (it) => {
           scheduledFor,
           permissionSnapshot: {
             provider: "codex",
-            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
             runtimeMode: "approval-required",
             interactionMode: "default",
             worktreeMode: "local",

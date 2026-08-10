@@ -1,4 +1,8 @@
-import { ThreadId, type OrchestrationSession } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  ThreadId,
+  type OrchestrationSession,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
@@ -32,21 +36,45 @@ describe("deriveTurnStartSession", () => {
   it("keeps an established provider when a later turn requests another provider", () => {
     expect(
       deriveTurnStartModelSelection({
-        currentModelSelection: { provider: "codex", model: "gpt-5-codex" },
-        requestedModelSelection: { provider: "pi", model: "openai/gpt-5" },
+        currentModelSelection: {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "gpt-5-codex",
+        },
+        requestedModelSelection: {
+          provider: "pi",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "openai/gpt-5",
+        },
         canAdoptRequestedProvider: false,
       }),
-    ).toEqual({ provider: "codex", model: "gpt-5-codex" });
+    ).toEqual({
+      provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      model: "gpt-5-codex",
+    });
   });
 
   it("allows an empty thread to adopt its first requested provider", () => {
     expect(
       deriveTurnStartModelSelection({
-        currentModelSelection: { provider: "codex", model: "gpt-5-codex" },
-        requestedModelSelection: { provider: "pi", model: "openai/gpt-5" },
+        currentModelSelection: {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "gpt-5-codex",
+        },
+        requestedModelSelection: {
+          provider: "pi",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "openai/gpt-5",
+        },
         canAdoptRequestedProvider: true,
       }),
-    ).toEqual({ provider: "pi", model: "openai/gpt-5" });
+    ).toEqual({
+      provider: "pi",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      model: "openai/gpt-5",
+    });
   });
 
   it("creates a starting session when no session exists", () => {

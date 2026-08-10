@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -157,6 +158,7 @@ describe("ProviderTextGenerationLive", () => {
           patch: "diff --git a/file.ts b/file.ts",
           modelSelection: {
             provider: "kilo",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "kilo/kilo-auto/free",
           },
         });
@@ -179,6 +181,7 @@ describe("ProviderTextGenerationLive", () => {
           message: "Plan the deployment work",
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5",
             options: {
               agent: "plan",
@@ -200,6 +203,7 @@ describe("ProviderTextGenerationLive", () => {
       expect.objectContaining({
         modelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "openai/gpt-5",
           options: {
             agent: "plan",
@@ -229,6 +233,7 @@ describe("ProviderTextGenerationLive", () => {
           message: "Plan the Cursor integration work",
           modelSelection: {
             provider: "cursor",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "composer-2",
             options: {
               reasoningEffort: "high",
@@ -250,6 +255,7 @@ describe("ProviderTextGenerationLive", () => {
       expect.objectContaining({
         modelSelection: {
           provider: "cursor",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "composer-2",
           options: {
             reasoningEffort: "high",
@@ -281,6 +287,7 @@ describe("ProviderTextGenerationLive", () => {
           nowIso: "2026-06-19T10:00:00.000Z",
           modelSelection: {
             provider: "cursor",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "composer-2",
           },
         });
@@ -313,6 +320,7 @@ describe("ProviderTextGenerationLive", () => {
           runAssistantText: "Still working.",
           modelSelection: {
             provider: "cursor",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "composer-2",
           },
         });

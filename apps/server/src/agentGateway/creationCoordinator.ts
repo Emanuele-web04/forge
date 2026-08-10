@@ -38,6 +38,7 @@ import type {
 import { resolveExternalMcpRuntimePolicy } from "../externalMcp/runtimePolicy.ts";
 import {
   canonicalJson,
+  fingerprintGatewayCreateThreadsInput,
   gatewayIsoNow,
   makeAgentCreationIds,
   stableGatewayDigest,
@@ -333,7 +334,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         ...(callerTurnId ? { callerTurnId } : {}),
         requestId: input.requestId,
       })}`;
-      const fingerprint = stableGatewayDigest(input, 64);
+      const fingerprint = fingerprintGatewayCreateThreadsInput(input);
       const externalOperationRepository =
         context.kind === "external-client" ? externalMcpRepository : undefined;
       if (context.kind === "external-client" && externalOperationRepository === undefined) {

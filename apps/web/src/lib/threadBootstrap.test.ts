@@ -1,4 +1,9 @@
-import { ProjectId, type ModelSelection, ThreadId } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  ProjectId,
+  type ModelSelection,
+  ThreadId,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { type ComposerThreadDraftState, type DraftThreadState } from "../composerDraftStore";
 import {
@@ -23,6 +28,7 @@ function modelSelection(
 ): ModelSelection {
   return {
     provider,
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model,
     ...(options ? { options } : {}),
   } as ModelSelection;

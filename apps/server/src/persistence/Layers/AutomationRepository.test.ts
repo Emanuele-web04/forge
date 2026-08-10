@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   AutomationId,
   AutomationRunId,
   CommandId,
@@ -27,6 +28,7 @@ const createInput = {
   schedule: { type: "manual" },
   modelSelection: {
     provider: "codex",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model: "gpt-5-codex",
   },
 } satisfies AutomationCreateInput;

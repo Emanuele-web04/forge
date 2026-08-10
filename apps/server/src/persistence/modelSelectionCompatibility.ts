@@ -3,7 +3,7 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
 
 type ModelProviderKind =
   | "codex"
@@ -174,6 +174,7 @@ function migrateLegacyGeminiModel(model: string): string {
 
 export function normalizeLegacyModelSelection(input: {
   readonly provider: unknown;
+  readonly profileId?: unknown;
   readonly model: string;
   readonly options: unknown;
 }): Record<string, unknown> {
@@ -196,8 +197,11 @@ export function normalizeLegacyModelSelection(input: {
           reasoningEffort: antigravityModel.reasoningEffort,
         }
       : normalizedOptions;
+  const profileId =
+    input.profileId === undefined ? DEFAULT_PROVIDER_PROFILE_ID : input.profileId;
   return {
     provider,
+    profileId,
     model: antigravityModel?.model ?? input.model,
     ...(options === undefined ? {} : { options }),
   };
@@ -217,6 +221,7 @@ export function normalizePersistedModelSelection(input: unknown): unknown {
   // option rows as [{ id, value }]; Synara stores canonical provider/options objects.
   return normalizeLegacyModelSelection({
     provider: input.provider ?? input.instanceId,
+    profileId: input.profileId,
     model,
     options: input.options,
   });

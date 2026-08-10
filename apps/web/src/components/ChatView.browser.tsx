@@ -2,6 +2,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   AutomationId,
   type AutomationCreateInput,
   type AutomationDefinition,
@@ -310,6 +311,7 @@ function createSnapshotForTargetUser(options: {
         workspaceRoot: "/repo/project",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -325,6 +327,7 @@ function createSnapshotForTargetUser(options: {
         title: THREAD_TITLE,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         interactionMode: "default",
@@ -525,6 +528,7 @@ function addThreadToSnapshot(
         title: "New thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         interactionMode: "default",
@@ -617,6 +621,7 @@ function withOpenProjectPickerFixtures(snapshot: OrchestrationReadModel): Orches
         workspaceRoot: "/repo/other",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -640,6 +645,7 @@ function withHomeChatProject(snapshot: OrchestrationReadModel): OrchestrationRea
         workspaceRoot: "/Users/tester",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -673,6 +679,7 @@ function withStudioProject(snapshot: OrchestrationReadModel): OrchestrationReadM
         workspaceRoot: "/Users/tester/Documents/Synara/Studio",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         scripts: [],
@@ -1144,6 +1151,7 @@ function recordProjectCreateCommand(command: unknown): boolean {
               ? (command.defaultModelSelection as OrchestrationReadModel["projects"][number]["defaultModelSelection"])
               : {
                   provider: "codex" as const,
+                  profileId: DEFAULT_PROVIDER_PROFILE_ID,
                   model: "gpt-5",
                 },
           scripts: [],
@@ -3867,6 +3875,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
     useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.4",
       options: {
         reasoningEffort: "low",
@@ -4972,6 +4981,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedPromptEffort: null,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -4998,6 +5008,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedPromptEffort: null,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -5091,6 +5102,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedPromptEffort: null,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -5175,6 +5187,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedPromptEffort: null,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -6213,6 +6226,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyModelSelectionByProvider: {
         codex: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
           options: {
             reasoningEffort: "medium",
@@ -6678,6 +6692,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyModelSelectionByProvider: {
         claudeAgent: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
           options: {
             effort: "max",
@@ -6760,6 +6775,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyModelSelectionByProvider: {
         codex: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
           options: {
             reasoningEffort: "medium",
@@ -6806,6 +6822,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       useComposerDraftStore.getState().setModelSelection(threadId, {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5.4",
         options: {
           reasoningEffort: "low",
@@ -6996,6 +7013,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           modelSelectionByProvider: {
             claudeAgent: {
               provider: "claudeAgent",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "claude-opus-4-6",
               options: {
                 effort: "max",

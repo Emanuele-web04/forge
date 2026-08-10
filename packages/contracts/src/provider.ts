@@ -25,6 +25,7 @@ import {
   RuntimeMode,
 } from "./orchestration";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
+import { ProviderProfileId } from "./providerProfile";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -36,6 +37,7 @@ const ProviderSessionStatus = Schema.Literals([
 
 export const ProviderSession = Schema.Struct({
   provider: ProviderKind,
+  profileId: Schema.optional(ProviderProfileId),
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
@@ -52,6 +54,7 @@ export type ProviderSession = typeof ProviderSession.Type;
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
   provider: Schema.optional(ProviderKind),
+  profileId: Schema.optional(ProviderProfileId),
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
@@ -84,6 +87,7 @@ export type ProviderSteerTurnInput = typeof ProviderSteerTurnInput.Type;
 export const ProviderForkThreadInput = Schema.Struct({
   sourceThreadId: ThreadId,
   threadId: ThreadId,
+  profileId: Schema.optional(ProviderProfileId),
   sourceResumeCursor: Schema.optional(Schema.Unknown),
   sourceCwd: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
@@ -177,6 +181,7 @@ export const ProviderEvent = Schema.Struct({
   id: EventId,
   kind: ProviderEventKind,
   provider: ProviderKind,
+  profileId: Schema.optional(ProviderProfileId),
   threadId: ThreadId,
   createdAt: IsoDateTime,
   method: TrimmedNonEmptyString,

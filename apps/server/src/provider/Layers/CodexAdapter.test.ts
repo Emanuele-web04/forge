@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   ApprovalRequestId,
   EventId,
   ProviderItemId,
@@ -209,6 +210,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         lifecycleGeneration: "generation-start-a",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
           options: {
             reasoningEffort: "high",
@@ -302,6 +304,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
           input: "hello",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5.3-codex",
             options: {
               reasoningEffort: "high",

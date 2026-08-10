@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { resolveThreadModelSummary } from "./threadModelSummary";
@@ -11,6 +12,7 @@ describe("resolveThreadModelSummary", () => {
   it("summarizes a codex selection with its reasoning effort", () => {
     const summary = resolveThreadModelSummary({
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.5",
       options: { reasoningEffort: "high" },
     });
@@ -23,11 +25,13 @@ describe("resolveThreadModelSummary", () => {
   it("falls back to the model's default effort when none is stored", () => {
     const withEffort = resolveThreadModelSummary({
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.5",
       options: { reasoningEffort: "low" },
     });
     const withoutOptions = resolveThreadModelSummary({
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.5",
     });
 
@@ -39,6 +43,7 @@ describe("resolveThreadModelSummary", () => {
   it("summarizes a claude selection", () => {
     const summary = resolveThreadModelSummary({
       provider: "claudeAgent",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "claude-sonnet-5",
       options: { effort: "high" },
     });

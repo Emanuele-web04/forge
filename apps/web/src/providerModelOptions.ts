@@ -4,6 +4,7 @@ import {
   normalizeModelSlug,
 } from "@synara/shared/model";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   PROVIDER_DISPLAY_NAMES,
   type AntigravityModelOptions,
   type AntigravityModelSelection,
@@ -25,6 +26,7 @@ import {
   type PiModelSelection,
   type ProviderKind,
   type ProviderModelOptions,
+  type ProviderTarget,
 } from "@synara/contracts";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 
@@ -403,21 +405,24 @@ export function buildModelSelection(
       return options
         ? {
             provider,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model,
             options: options as AntigravityModelOptions,
           }
-        : { provider, model };
+        : { provider, profileId: DEFAULT_PROVIDER_PROFILE_ID, model };
     case "codex":
       return options
         ? {
             provider,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model,
             options: options as CodexModelOptions,
           }
-        : { provider, model };
+        : { provider, profileId: DEFAULT_PROVIDER_PROFILE_ID, model };
     case "claudeAgent":
       return {
         provider,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model,
         ...(options ? { options: options as ClaudeModelOptions } : {}),
         ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
@@ -426,49 +431,72 @@ export function buildModelSelection(
       return options
         ? {
             provider,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model,
             options: options as CursorModelOptions,
           }
-        : { provider, model };
+        : { provider, profileId: DEFAULT_PROVIDER_PROFILE_ID, model };
     case "grok":
       return options
         ? {
             provider,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model,
             options: options as GrokModelOptions,
           }
-        : { provider, model };
+        : { provider, profileId: DEFAULT_PROVIDER_PROFILE_ID, model };
     case "droid":
       return options
         ? {
             provider,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model,
             options: options as DroidModelOptions,
           }
-        : { provider, model };
+        : { provider, profileId: DEFAULT_PROVIDER_PROFILE_ID, model };
     case "kilo":
       return options
         ? {
             provider,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model,
             options: options as OpenCodeModelOptions,
           }
-        : { provider, model };
+        : { provider, profileId: DEFAULT_PROVIDER_PROFILE_ID, model };
     case "opencode":
       return options
         ? {
             provider,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model,
             options: options as OpenCodeModelOptions,
           }
-        : { provider, model };
+        : { provider, profileId: DEFAULT_PROVIDER_PROFILE_ID, model };
     case "pi":
       return options
         ? {
             provider,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model,
             options: options as PiModelOptions,
           }
-        : { provider, model };
+        : { provider, profileId: DEFAULT_PROVIDER_PROFILE_ID, model };
   }
+}
+
+export function buildModelSelectionForTarget(input: {
+  target: ProviderTarget;
+  model: string;
+  options?: ProviderOptions | null | undefined;
+  supportsAutoMode?: boolean | undefined;
+}): ModelSelection {
+  return {
+    ...buildModelSelection(
+      input.target.provider,
+      input.model,
+      input.options,
+      input.supportsAutoMode,
+    ),
+    profileId: input.target.profileId,
+  };
 }

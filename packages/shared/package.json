@@ -228,6 +228,10 @@
       "types": "./src/providerMetadata.ts",
       "import": "./src/providerMetadata.ts"
     },
+    "./providerTarget": {
+      "types": "./src/providerTarget.ts",
+      "import": "./src/providerTarget.ts"
+    },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"

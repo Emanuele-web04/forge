@@ -16,6 +16,7 @@ import type {
   ProviderSession,
 } from "@synara/contracts";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   ApprovalRequestId,
   type ChatAttachment,
   CommandId,
@@ -223,6 +224,7 @@ describe("ProviderCommandReactor", () => {
     );
     const modelSelection = input?.threadModelSelection ?? {
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5-codex",
     };
     const startSession = vi.fn((_: unknown, input: unknown) => {
@@ -1365,6 +1367,7 @@ describe("ProviderCommandReactor", () => {
         title: "Unrelated thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -2119,6 +2122,7 @@ describe("ProviderCommandReactor", () => {
         title: "Sidechat: Thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         runtimeMode: "approval-required",
@@ -2218,6 +2222,7 @@ describe("ProviderCommandReactor", () => {
         title: "Native Droid sidechat",
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
         },
         runtimeMode: "approval-required",
@@ -2346,6 +2351,7 @@ describe("ProviderCommandReactor", () => {
         title: "Review sidechat",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         runtimeMode: "approval-required",
@@ -2440,6 +2446,7 @@ describe("ProviderCommandReactor", () => {
         title: "Restarted Droid sidechat",
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
         },
         runtimeMode: "approval-required",
@@ -2500,6 +2507,7 @@ describe("ProviderCommandReactor", () => {
         reviewTarget: { type: "uncommittedChanges" },
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
         },
         runtimeMode: "approval-required",
@@ -2549,6 +2557,7 @@ describe("ProviderCommandReactor", () => {
         title: "Droid fork",
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
         },
         runtimeMode: "approval-required",
@@ -2643,6 +2652,7 @@ describe("ProviderCommandReactor", () => {
         title: "Empty Droid fork",
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
         },
         runtimeMode: "approval-required",
@@ -2722,6 +2732,7 @@ describe("ProviderCommandReactor", () => {
         title: "Retry Droid fork",
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
         },
         runtimeMode: "approval-required",
@@ -2799,6 +2810,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "droid",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "claude-sonnet-4-6",
       },
     });
@@ -2819,6 +2831,7 @@ describe("ProviderCommandReactor", () => {
         title: "Droid async bootstrap failure",
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
         },
         runtimeMode: "approval-required",
@@ -3168,7 +3181,7 @@ describe("ProviderCommandReactor", () => {
 
   it("restarts Droid edits and bootstraps only the retained transcript", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "droid", model: "claude-opus-4-8" },
+      threadModelSelection: { provider: "droid", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-8" },
       conversationRollback: "restart-session",
     });
     const now = new Date().toISOString();
@@ -3697,7 +3710,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("subagent:thread-1:tool-steer-1"),
         projectId: asProjectId("project-1"),
         title: "Subagent",
-        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+        modelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-sonnet-4-5" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         parentThreadId: ThreadId.makeUnsafe("thread-1"),
@@ -4155,7 +4168,7 @@ describe("ProviderCommandReactor", () => {
 
   it("clears stale Claude resume state and retries the turn with transcript context", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-8" },
     });
     const now = new Date().toISOString();
     const staleResumeFailure = () =>
@@ -4209,7 +4222,7 @@ describe("ProviderCommandReactor", () => {
           text: "nice but bring it on the left.",
           attachments: [],
         },
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        modelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-8" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
@@ -4243,7 +4256,7 @@ describe("ProviderCommandReactor", () => {
 
   it("retries a stale Claude resume natively before paying the transcript bootstrap", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-8" },
     });
     const now = new Date().toISOString();
     harness.sendTurn.mockImplementationOnce(() =>
@@ -4268,7 +4281,7 @@ describe("ProviderCommandReactor", () => {
           text: "keep going.",
           attachments: [],
         },
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        modelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-8" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
@@ -4291,7 +4304,7 @@ describe("ProviderCommandReactor", () => {
 
   it("skips the native resume retry when background tasks keep the runtime alive", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-8" },
     });
     const now = new Date().toISOString();
     harness.hasLiveRuntimeTasks.mockImplementation(() => Effect.succeed(true));
@@ -4317,7 +4330,7 @@ describe("ProviderCommandReactor", () => {
           text: "keep going.",
           attachments: [],
         },
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        modelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-8" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
@@ -4479,6 +4492,7 @@ describe("ProviderCommandReactor", () => {
         workspaceRoot: "/Users/tester",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt: now,
@@ -4494,6 +4508,7 @@ describe("ProviderCommandReactor", () => {
         title: "Home thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -4577,6 +4592,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "antigravity",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "Gemini 3.5 Flash",
       },
     });
@@ -4609,6 +4625,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "antigravity",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -4633,6 +4650,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "antigravity",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "Gemini 3.5 Flash",
       },
     });
@@ -4660,6 +4678,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "antigravity",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -4841,6 +4860,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "antigravity",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "Gemini 3.5 Flash",
       },
     });
@@ -4876,6 +4896,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "antigravity",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -4906,10 +4927,12 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "antigravity",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "Gemini 3.5 Flash",
       },
       gitWritingModelSelection: {
         provider: "claudeAgent",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "claude-opus-4-8",
       },
     });
@@ -4942,6 +4965,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "antigravity",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -4967,6 +4991,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "opencode",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "openai/gpt-5",
         options: {
           agent: "plan",
@@ -5003,6 +5028,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "openai/gpt-5",
           options: {
             agent: "plan",
@@ -5657,7 +5683,7 @@ describe("ProviderCommandReactor", () => {
         projectId: asProjectId("project-1"),
         parentThreadId: ThreadId.makeUnsafe("thread-1"),
         title: "Child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
@@ -5729,7 +5755,7 @@ describe("ProviderCommandReactor", () => {
         projectId: asProjectId("project-1"),
         parentThreadId: ThreadId.makeUnsafe("thread-1"),
         title: "Queued child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
@@ -5820,7 +5846,7 @@ describe("ProviderCommandReactor", () => {
           projectId: asProjectId("project-1"),
           parentThreadId: ThreadId.makeUnsafe("thread-1"),
           title: childId,
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: null,
@@ -5904,7 +5930,7 @@ describe("ProviderCommandReactor", () => {
         projectId: asProjectId("project-1"),
         parentThreadId: ThreadId.makeUnsafe("thread-1"),
         title: "Queued child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
@@ -6240,6 +6266,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "claudeAgent",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "claude-opus-4-6",
       },
     });
@@ -6304,6 +6331,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "cursor",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "composer-1",
       },
     });
@@ -6397,6 +6425,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
           options: {
             reasoningEffort: "high",
@@ -6436,7 +6465,7 @@ describe("ProviderCommandReactor", () => {
 
   it("forwards claude effort options through session start and turn send", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-sonnet-4-6" },
     });
     const now = new Date().toISOString();
 
@@ -6453,6 +6482,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
           options: {
             effort: "max",
@@ -6489,7 +6519,7 @@ describe("ProviderCommandReactor", () => {
 
   it("forwards codex effort options through session start and turn send", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "codex", model: "gpt-5-codex" },
+      threadModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
     });
     const now = new Date().toISOString();
 
@@ -6506,6 +6536,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
           options: {
             reasoningEffort: "high",
@@ -6542,7 +6573,7 @@ describe("ProviderCommandReactor", () => {
 
   it("restarts an idle Claude session only for spawn-fixed model selection changes", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-7" },
     });
     const now = new Date().toISOString();
 
@@ -6583,6 +6614,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-7",
           options: {
             contextWindow: "1m",
@@ -6599,6 +6631,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-7",
           options: {
             effort: "max",
@@ -6622,6 +6655,7 @@ describe("ProviderCommandReactor", () => {
   it("restarts a directly started Claude session when spawn-fixed options change", async () => {
     const initialSelection: ModelSelection = {
       provider: "claudeAgent",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "claude-opus-4-7",
     };
     const harness = await createHarness({ threadModelSelection: initialSelection });
@@ -6664,6 +6698,7 @@ describe("ProviderCommandReactor", () => {
         threadId,
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-7",
           options: { effort: "max" },
         },
@@ -6682,7 +6717,7 @@ describe("ProviderCommandReactor", () => {
 
   it("keeps the applied Claude spawn profile while metadata changes mid-turn", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-7" },
     });
     const threadId = ThreadId.makeUnsafe("thread-1");
     const turnId = asTurnId("turn-active-selection-change");
@@ -6733,6 +6768,7 @@ describe("ProviderCommandReactor", () => {
         threadId,
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-7",
           options: { effort: "max" },
         },
@@ -6769,6 +6805,7 @@ describe("ProviderCommandReactor", () => {
         threadId,
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-7",
           options: { effort: "max", contextWindow: "1m" },
         },
@@ -6789,6 +6826,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "droid",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "claude-sonnet-4-6",
         options: { reasoningEffort: "medium" },
       },
@@ -6822,6 +6860,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
           options: { reasoningEffort: "medium" },
         },
@@ -6837,6 +6876,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
           options: { reasoningEffort: "high" },
         },
@@ -6856,7 +6896,7 @@ describe("ProviderCommandReactor", () => {
 
   it("forwards claude fast mode options through session start and turn send", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-6" },
     });
     const now = new Date().toISOString();
 
@@ -6873,6 +6913,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
           options: {
             fastMode: true,
@@ -6947,7 +6988,7 @@ describe("ProviderCommandReactor", () => {
 
   it("adopts the requested provider on a first turn before binding a session", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "codex", model: "gpt-5-codex" },
+      threadModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
     });
     const now = new Date().toISOString();
 
@@ -6964,6 +7005,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -6991,6 +7033,7 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.modelSelection).toEqual({
       provider: "claudeAgent",
+      profileId: "default",
       model: "claude-opus-4-6",
     });
     expect(thread?.session?.providerName).toBe("claudeAgent");
@@ -7098,7 +7141,7 @@ describe("ProviderCommandReactor", () => {
 
   it("restarts claude sessions when claude effort changes", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-sonnet-4-6" },
     });
     const now = new Date().toISOString();
 
@@ -7115,6 +7158,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
           options: {
             effort: "medium",
@@ -7142,6 +7186,7 @@ describe("ProviderCommandReactor", () => {
         },
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
           options: {
             effort: "max",
@@ -7257,7 +7302,7 @@ describe("ProviderCommandReactor", () => {
 
   it("does not inject derived model options when restarting claude on runtime mode changes", async () => {
     const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+      threadModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-6" },
     });
     const now = new Date().toISOString();
 
@@ -7615,6 +7660,7 @@ describe("ProviderCommandReactor", () => {
         title: "Halley [explorer]",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -7692,6 +7738,7 @@ describe("ProviderCommandReactor", () => {
         title: "Halley [explorer]",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -7750,6 +7797,7 @@ describe("ProviderCommandReactor", () => {
         title: "Agent",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -7830,7 +7878,7 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
         projectId: asProjectId("project-1"),
         title: "Synthetic child",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
@@ -9032,6 +9080,7 @@ describe("ProviderCommandReactor", () => {
         title: "Stopped Droid sidechat",
         modelSelection: {
           provider: "droid",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-sonnet-4-6",
         },
         runtimeMode: "approval-required",
@@ -9147,6 +9196,7 @@ describe("ProviderCommandReactor", () => {
         title: "Agent",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

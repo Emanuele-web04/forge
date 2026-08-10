@@ -10,10 +10,12 @@ import {
   type AssistantDeliveryMode,
   DesktopAppIcon,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_PROVIDER_PROFILE_ID,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
   TrimmedNonEmptyString,
   ProviderKind,
+  ProviderProfileId,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -265,6 +267,9 @@ export const AppSettingsSchema = Schema.Struct({
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
+  textGenerationProfileId: ProviderProfileId.pipe(
+    withDefaults(() => DEFAULT_PROVIDER_PROFILE_ID),
+  ),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
@@ -302,6 +307,7 @@ export function isGitTextGenerationSettingsDirty(
 ): boolean {
   return (
     (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
+    settings.textGenerationProfileId !== defaults.textGenerationProfileId ||
     (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
       (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
   );
@@ -587,6 +593,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
+    textGenerationProfileId: settings.textGenerationModelSelection.profileId,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
 }
@@ -619,7 +626,9 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
   );
 }
 
-function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): ServerSettingsPatch {
+export function appSettingsPatchToServerSettingsPatch(
+  patch: Partial<AppSettings>,
+): ServerSettingsPatch {
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
 
@@ -632,16 +641,26 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
-  if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
-    const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+  if (
+    hasOwn(patch, "textGenerationModel") ||
+    hasOwn(patch, "textGenerationProvider") ||
+    hasOwn(patch, "textGenerationProfileId")
+  ) {
     serverPatch.textGenerationModelSelection = {
-      provider: resolveTextGenerationProvider({
-        ...(patch.textGenerationProvider !== undefined
-          ? { provider: patch.textGenerationProvider }
-          : {}),
-        model,
-      }),
-      model,
+      ...(hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")
+        ? {
+            provider: resolveTextGenerationProvider({
+              ...(patch.textGenerationProvider !== undefined
+                ? { provider: patch.textGenerationProvider }
+                : {}),
+              model: patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+            }),
+            model: patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+          }
+        : {}),
+      ...(hasOwn(patch, "textGenerationProfileId")
+        ? { profileId: patch.textGenerationProfileId }
+        : {}),
     };
   }
 
@@ -790,6 +809,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "piAgentDir",
     "piBinaryPath",
     "textGenerationModel",
+    "textGenerationProfileId",
     "textGenerationProvider",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {

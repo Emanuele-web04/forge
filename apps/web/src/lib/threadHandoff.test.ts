@@ -1,7 +1,9 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   DEFAULT_SERVER_SETTINGS_VIEW,
   EventId,
   MessageId,
+  ProviderProfileId,
   type ModelSelection,
   type OrchestrationThreadActivity,
   type ProviderKind,
@@ -155,6 +157,7 @@ describe("threadHandoff", () => {
   it("prefers sticky model selection for the chosen handoff target", () => {
     const stickySelection = {
       provider: "antigravity",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "Gemini 3.5 Flash",
     } satisfies ModelSelection;
 
@@ -163,12 +166,14 @@ describe("threadHandoff", () => {
         sourceThread: {
           modelSelection: {
             provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "claude-sonnet-4-6",
           },
         },
         targetProvider: "antigravity",
         projectDefaultModelSelection: {
           provider: "antigravity",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "Claude Sonnet 4.6",
         },
         stickyModelSelectionByProvider: {
@@ -178,12 +183,38 @@ describe("threadHandoff", () => {
     ).toEqual(stickySelection);
   });
 
+  it("preserves a sticky non-default target so handoff dispatch can fail closed", () => {
+    const workProfileId = ProviderProfileId.makeUnsafe("work");
+
+    expect(
+      resolveThreadHandoffModelSelection({
+        sourceThread: {
+          modelSelection: {
+            provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            model: "claude-sonnet-4-6",
+          },
+        },
+        targetProvider: "codex",
+        projectDefaultModelSelection: null,
+        stickyModelSelectionByProvider: {
+          codex: {
+            provider: "codex",
+            profileId: workProfileId,
+            model: "gpt-5.6-sol",
+          },
+        },
+      }),
+    ).toMatchObject({ profileId: workProfileId });
+  });
+
   it("falls back to the resolved provider default model when no sticky or project default exists", () => {
     expect(
       resolveThreadHandoffModelSelection({
         sourceThread: {
           modelSelection: {
             provider: "antigravity",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "Gemini 3.5 Flash",
           },
         },
@@ -193,6 +224,7 @@ describe("threadHandoff", () => {
       }),
     ).toEqual({
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.5",
     });
   });

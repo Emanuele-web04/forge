@@ -2,6 +2,7 @@
 // Purpose: Exercises snapshot normalization and normalized projection ownership.
 
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   EventId,
   MessageId,
   ProjectId,
@@ -197,6 +198,7 @@ describe("store projection", () => {
         title: "Stale project thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -403,6 +405,7 @@ describe("store projection", () => {
         title: "Thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -509,6 +512,7 @@ describe("store projection", () => {
         title: "Thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -677,6 +681,7 @@ describe("store projection", () => {
       makeReadModelThread({
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
         },
       }),
@@ -693,6 +698,7 @@ describe("store projection", () => {
       makeReadModelThread({
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "sonnet",
         },
         session: {
@@ -718,6 +724,7 @@ describe("store projection", () => {
       makeReadModelThread({
         modelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "openrouter/gpt-oss-120b:free",
         },
         session: {
@@ -744,6 +751,7 @@ describe("store projection", () => {
       makeReadModelThread({
         modelSelection: {
           provider: "pi",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "anthropic/claude-sonnet-4-5",
         },
         session: {
@@ -770,6 +778,7 @@ describe("store projection", () => {
       makeReadModelThread({
         modelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "openai/gpt-5.4",
         },
       }),
@@ -788,6 +797,7 @@ describe("store projection", () => {
         makeReadModelProject({
           defaultModelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         }),
@@ -822,6 +832,7 @@ describe("store projection", () => {
         id: threadId,
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-7",
         },
         session: {
@@ -868,6 +879,7 @@ describe("store projection", () => {
         id: threadId,
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-7",
         },
         latestTurn: {
@@ -974,6 +986,7 @@ describe("store projection", () => {
         id: threadId,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         session: {
@@ -1021,6 +1034,7 @@ describe("store projection", () => {
         id: threadId,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         latestTurn: {
@@ -1084,6 +1098,7 @@ describe("store projection", () => {
         id: threadId,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         session: {
@@ -1123,6 +1138,7 @@ describe("store projection", () => {
         id: threadId,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         latestTurn: {
@@ -1167,6 +1183,7 @@ describe("store projection", () => {
         id: threadId,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         session: {
@@ -1205,6 +1222,7 @@ describe("store projection", () => {
         id: threadId,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         latestTurn: {
@@ -1504,6 +1522,7 @@ describe("store projection", () => {
         title: "Stale resurrected thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -1553,6 +1572,7 @@ describe("store projection", () => {
         title: "Rehydrated shell removed thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -1585,6 +1605,7 @@ describe("store projection", () => {
         makeReadModelProject({
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           updatedAt: "2026-02-27T00:00:00.000Z",
@@ -1594,6 +1615,7 @@ describe("store projection", () => {
         makeReadModelThread({
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt: "2026-02-13T00:00:00.000Z",
@@ -1694,7 +1716,7 @@ describe("deletion tombstone retirement", () => {
         id: deletedThreadId,
         projectId,
         title,
-        modelSelection: { provider: "codex", model: "gpt-5.3-codex" },
+        modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.3-codex" },
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: DEFAULT_INTERACTION_MODE,
         envMode: "local",
@@ -1901,7 +1923,7 @@ describe("deletion tombstone retirement", () => {
       id: deletedThreadId,
       projectId,
       title: "Base",
-      modelSelection: { provider: "codex", model: "gpt-5.3-codex" },
+      modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.3-codex" },
       runtimeMode: DEFAULT_RUNTIME_MODE,
       interactionMode: DEFAULT_INTERACTION_MODE,
       envMode: "local",
@@ -2009,6 +2031,7 @@ describe("deletion tombstone retirement", () => {
         title: "Thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,

@@ -4,7 +4,7 @@
 
 import "../index.css";
 
-import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -41,7 +41,7 @@ function makeThread(
     id: ThreadId.makeUnsafe(`activity-thread-${index}`),
     projectId: PROJECT_A,
     title: `Activity thread ${index}`,
-    modelSelection: { provider: "codex", model: "gpt-5" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5" },
     interactionMode: "default",
     branch: null,
     worktreePath: null,

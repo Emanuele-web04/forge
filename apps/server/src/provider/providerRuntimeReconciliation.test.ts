@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   CommandId,
   OrchestrationCommand,
   ProjectId,
@@ -27,7 +28,11 @@ function threadShell(overrides: Partial<OrchestrationThreadShell> = {}): Orchest
     id: THREAD_ID,
     projectId: ProjectId.makeUnsafe("project-reconcile"),
     title: "Runtime reconciliation",
-    modelSelection: { provider: "codex", model: "gpt-5.6" },
+    modelSelection: {
+      provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      model: "gpt-5.6",
+    },
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: null,
@@ -131,7 +136,7 @@ describe("planProviderRuntimeReconciliation", () => {
       planProviderRuntimeReconciliation({
         threads: [
           threadShell({
-            modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+            modelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-opus-4-8" },
             session: {
               ...threadShell().session!,
               providerName: "claudeAgent",

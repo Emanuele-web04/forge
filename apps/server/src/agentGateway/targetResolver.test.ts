@@ -1,5 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { ModelSelection, ProviderKind, ProviderModelDescriptor } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  type ModelSelection,
+  type ProviderKind,
+  type ProviderModelDescriptor,
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -79,10 +84,16 @@ describe("agent gateway target resolver", () => {
       });
       assert.deepEqual(
         yield* resolveAgentGatewayTarget({
-          target: codexGuidance.exampleTarget!,
+          target: {
+            ...codexGuidance.exampleTarget!,
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          },
           discovery,
         }),
-        codexGuidance.exampleTarget,
+        {
+          ...codexGuidance.exampleTarget,
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        },
       );
 
       const antigravityGuidance = agentGatewayTargetOptionGuidance({
@@ -155,7 +166,7 @@ describe("agent gateway target resolver", () => {
   it.effect("rejects a guessed model slug before creation", () =>
     Effect.gen(function* () {
       const result = yield* resolveAgentGatewayTarget({
-        target: { provider: "codex", model: "gpt-5.6-terra-low" },
+        target: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.6-terra-low" },
         discovery,
       }).pipe(
         Effect.map(() => ({ code: "unexpected-success" })),
@@ -170,6 +181,7 @@ describe("agent gateway target resolver", () => {
       const result = yield* resolveAgentGatewayTarget({
         target: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.6-terra",
           options: { reasoningEffort: "ultra" },
         },
@@ -432,7 +444,7 @@ describe("agent gateway target resolver", () => {
           listModels: () => Effect.succeed({ source: "test", models: [unavailableDescriptor] }),
         } as unknown as ProviderDiscoveryServiceShape;
         const result = yield* resolveAgentGatewayTarget({
-          target: { provider: "cursor", model: descriptor.slug, options },
+          target: { provider: "cursor", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: descriptor.slug, options },
           discovery: unavailableDiscovery,
         }).pipe(
           Effect.map(() => ({ code: "unexpected-success" })),
@@ -529,7 +541,7 @@ describe("agent gateway target resolver", () => {
         },
       } as unknown as ProviderDiscoveryServiceShape;
       const result = yield* resolveAgentGatewayTarget({
-        target: { provider: "codex", model: "gpt-5.5" },
+        target: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.5" },
         discovery: trackedDiscovery,
         availability: { enabled: false },
       }).pipe(
@@ -544,7 +556,7 @@ describe("agent gateway target resolver", () => {
   it.effect("rejects a known unavailable or unauthenticated provider", () =>
     Effect.gen(function* () {
       const result = yield* resolveAgentGatewayTarget({
-        target: { provider: "codex", model: "gpt-5.5" },
+        target: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.5" },
         discovery,
         availability: {
           enabled: true,
@@ -579,7 +591,7 @@ describe("agent gateway target resolver", () => {
       );
 
       const customResult = yield* resolveAgentGatewayTarget({
-        target: { provider: "codex", model: "gpt-5.6-terra" },
+        target: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.6-terra" },
         discovery: unavailableDiscovery,
         availability: { enabled: true, available: true, authStatus: "authenticated" },
       }).pipe(
@@ -591,6 +603,7 @@ describe("agent gateway target resolver", () => {
       const invalidOption = yield* resolveAgentGatewayTarget({
         target: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.5",
           options: { reasoningEffort: "invented" },
         },

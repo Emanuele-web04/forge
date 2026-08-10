@@ -2,6 +2,7 @@
 // Purpose: Verify compact recap inputs only advance on real transcript messages.
 // Layer: Unit test
 
+import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { MessageId, ThreadId } from "@synara/contracts";
@@ -59,7 +60,7 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     codexThreadId: null,
     projectId: "project-1" as Thread["projectId"],
     title: "Environment panel",
-    modelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.4-mini" },
     runtimeMode: "full-access",
     interactionMode: "default",
     session: null,

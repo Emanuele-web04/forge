@@ -14,6 +14,7 @@ export * from "./browserAnnotations";
 export * from "./ipc";
 export * from "./terminal";
 export * from "./provider";
+export * from "./providerProfile";
 export * from "./providerDiscovery";
 export * from "./providerRuntime";
 export * from "./model";

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -41,6 +42,7 @@ function makeReadModel(input: {
         title: "Checkpoint revert",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

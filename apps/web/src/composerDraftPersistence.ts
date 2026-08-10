@@ -678,6 +678,24 @@ function normalizePersistedQueuedTurns(
   return normalizedTurns.length > 0 ? normalizedTurns : undefined;
 }
 
+function normalizeModelSelectionByProviderMap(
+  value: unknown,
+): Partial<Record<ProviderKind, ModelSelection>> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const normalized: Partial<Record<ProviderKind, ModelSelection>> = {};
+  for (const [rawProvider, rawSelection] of Object.entries(value)) {
+    const provider = normalizeProviderKind(rawProvider);
+    const selection = normalizeModelSelection(rawSelection);
+    if (provider !== null && selection?.provider === provider) {
+      normalized[provider] = selection;
+    }
+  }
+  return normalized;
+}
+
 function normalizeDraftThreadEnvMode(
   value: unknown,
   fallbackWorktreePath: string | null,
@@ -890,9 +908,9 @@ function normalizePersistedDraftsByThreadId(
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
       // v3 format
-      modelSelectionByProvider = draftCandidate.modelSelectionByProvider as Partial<
-        Record<ProviderKind, ModelSelection>
-      >;
+      modelSelectionByProvider = normalizeModelSelectionByProviderMap(
+        draftCandidate.modelSelectionByProvider,
+      );
       activeProvider = normalizeProviderKind(draftCandidate.activeProvider);
     } else {
       // v2 or legacy format: migrate
@@ -1276,10 +1294,9 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     normalizedPersistedState.stickyModelSelectionByProvider &&
     typeof normalizedPersistedState.stickyModelSelectionByProvider === "object"
   ) {
-    stickyModelSelectionByProvider =
-      normalizedPersistedState.stickyModelSelectionByProvider as Partial<
-        Record<ProviderKind, ModelSelection>
-      >;
+    stickyModelSelectionByProvider = normalizeModelSelectionByProviderMap(
+      normalizedPersistedState.stickyModelSelectionByProvider,
+    );
     stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyActiveProvider);
   } else {
     // Legacy migration path

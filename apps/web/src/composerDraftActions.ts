@@ -77,7 +77,6 @@ import {
   composerImageConsumesAttachmentSlot,
   effectiveComposerAttachmentCount,
 } from "./lib/composerAttachmentCapacity";
-import { buildModelSelection } from "./providerModelOptions";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 function removeDraftThreadIfUnmapped(input: {
@@ -528,7 +527,10 @@ export const createComposerDraftStoreState =
           if (selection) {
             const current = nextMap[provider as ProviderKind];
             nextMap[provider as ProviderKind] =
-              current && current.model !== selection.model ? current : selection;
+              current &&
+              (current.model !== selection.model || current.profileId !== selection.profileId)
+                ? current
+                : selection;
           }
         }
         if (
@@ -843,14 +845,16 @@ export const createComposerDraftStoreState =
               model,
               opts,
               current?.provider === "claudeAgent" ? current.supportsAutoMode : undefined,
+              current?.profileId,
             );
           } else if (current?.options) {
             // Remove options but keep the selection
-            nextMap[provider] = buildModelSelection(
+            nextMap[provider] = makeModelSelection(
               provider,
               current.model,
               undefined,
               current.provider === "claudeAgent" ? current.supportsAutoMode : undefined,
+              current.profileId,
             );
           }
         }
@@ -907,15 +911,17 @@ export const createComposerDraftStoreState =
             currentForProvider?.provider === "claudeAgent"
               ? currentForProvider.supportsAutoMode
               : undefined,
+            currentForProvider?.profileId,
           );
         } else if (currentForProvider?.options) {
-          nextMap[normalizedProvider] = buildModelSelection(
+          nextMap[normalizedProvider] = makeModelSelection(
             normalizedProvider,
             currentForProvider.model,
             undefined,
             currentForProvider.provider === "claudeAgent"
               ? currentForProvider.supportsAutoMode
               : undefined,
+            currentForProvider.profileId,
           );
         }
 
@@ -938,14 +944,16 @@ export const createComposerDraftStoreState =
                 stickyBase.model,
                 providerOpts,
                 stickyBase.provider === "claudeAgent" ? stickyBase.supportsAutoMode : undefined,
+                stickyBase.profileId,
               ),
             );
           } else if (stickyBase.options) {
-            nextStickyMap[normalizedProvider] = buildModelSelection(
+            nextStickyMap[normalizedProvider] = makeModelSelection(
               normalizedProvider,
               stickyBase.model,
               undefined,
               stickyBase.provider === "claudeAgent" ? stickyBase.supportsAutoMode : undefined,
+              stickyBase.profileId,
             );
           }
           nextStickyActiveProvider = base.activeProvider ?? normalizedProvider;

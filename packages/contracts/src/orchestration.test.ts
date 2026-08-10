@@ -21,6 +21,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderStartOptions,
+  ProviderTarget,
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
   THREAD_MARKER_LABEL_MAX_CHARS,
@@ -31,6 +32,7 @@ import {
   ThreadTurnStartRequestedPayload,
   RuntimeMode,
 } from "./orchestration";
+import { DEFAULT_PROVIDER_PROFILE_ID } from "./providerProfile";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
@@ -56,6 +58,7 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const decodeProviderStartOptions = Schema.decodeUnknownEffect(ProviderStartOptions);
+const decodeProviderTarget = Schema.decodeUnknownEffect(ProviderTarget);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
@@ -176,7 +179,7 @@ it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
   }),
 );
 
-it.effect("preserves Pi model selections when decoding model selections", () =>
+it.effect("defaults legacy model selections to the default provider profile", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeModelSelection({
       provider: "pi",
@@ -185,8 +188,48 @@ it.effect("preserves Pi model selections when decoding model selections", () =>
 
     assert.deepStrictEqual(parsed, {
       provider: "pi",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "openai/gpt-5.5",
     });
+  }),
+);
+
+it.effect("defaults legacy provider targets to the default profile", () =>
+  Effect.gen(function* () {
+    assert.deepStrictEqual(yield* decodeProviderTarget({ provider: "codex" }), {
+      provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
+    });
+  }),
+);
+
+it.effect("preserves explicit provider profile routing on model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "codex",
+      profileId: "work",
+      model: "gpt-5.6-codex",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      provider: "codex",
+      profileId: "work",
+      model: "gpt-5.6-codex",
+    });
+  }),
+);
+
+it.effect("rejects an invalid explicit model-selection profile", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeModelSelection({
+        provider: "codex",
+        profileId: "../work",
+        model: "gpt-5.6-codex",
+      }),
+    );
+
+    assert.equal(result._tag, "Failure");
   }),
 );
 
@@ -200,6 +243,7 @@ it.effect("preserves Antigravity effort options separately from the model", () =
 
     assert.deepStrictEqual(parsed, {
       provider: "antigravity",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "Gemini 3.5 Flash",
       options: { reasoningEffort: "high" },
     });
@@ -218,6 +262,7 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
 
     assert.deepStrictEqual(parsed, {
       provider: "pi",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "openai/gpt-5.5",
     });
   }),
@@ -344,6 +389,7 @@ it.effect("trims branded ids and command string fields at decode boundaries", ()
     assert.strictEqual(parsed.workspaceRoot, "/tmp/workspace");
     assert.deepStrictEqual(parsed.defaultModelSelection, {
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.2",
     });
   }),

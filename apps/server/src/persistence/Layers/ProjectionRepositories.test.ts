@@ -1,4 +1,10 @@
-import { ProjectId, SpaceId, ThreadId, TurnId } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  ProjectId,
+  SpaceId,
+  ThreadId,
+  TurnId,
+} from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -90,6 +96,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         workspaceRoot: "/tmp/project-null-options",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.4",
         },
         scripts: [],
@@ -116,6 +123,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         row.defaultModelSelection,
         JSON.stringify({
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.4",
         }),
       );
@@ -125,6 +133,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.defaultModelSelection, {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5.4",
       });
     }),
@@ -141,6 +150,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         title: "Null options thread",
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
         },
         runtimeMode: "full-access",
@@ -183,6 +193,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         row.modelSelection,
         JSON.stringify({
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
         }),
       );
@@ -192,6 +203,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.modelSelection, {
         provider: "claudeAgent",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "claude-opus-4-6",
       });
     }),
