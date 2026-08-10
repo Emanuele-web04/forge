@@ -18,8 +18,47 @@ import {
   RegisterHostResponse as RegisterHostResponseSchema,
   TrimmedNonEmptyString,
   type UpdateHostRequest,
+  type UpdateOrganizationRequest,
+  type UpdateProfileRequest,
 } from "@synara/contracts";
 import { Option, Schema } from "effect";
+
+/** Environment variable that points every client at a different account service. */
+export const ACCOUNT_URL_ENV_NAME = "SYNARA_ACCOUNT_URL";
+
+/**
+ * The hosted Synara account service. Declared here, once, because both callers
+ * — the `synara auth` CLI flow and the server's in-app account session — must
+ * agree on which service the stored credentials belong to; a second copy would
+ * eventually point one of them somewhere else.
+ */
+export const DEFAULT_ACCOUNT_URL = "https://api.synara.vrbty.dev";
+
+export interface AccountUrlResolutionInput {
+  readonly flag?: string | undefined;
+  readonly env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * The account service the operator explicitly chose, or `undefined` when they
+ * chose none. Distinct from {@link resolveAccountUrl} because the CLI has to
+ * be able to tell "unconfigured" from "configured to the default": a flow that
+ * silently fell back would tell a user they are not signed in to a service
+ * they never meant to use.
+ */
+export function resolveConfiguredAccountUrl(
+  input: AccountUrlResolutionInput,
+): string | undefined {
+  const flag = input.flag?.trim();
+  if (flag) return flag;
+  const fromEnv = (input.env ?? process.env)[ACCOUNT_URL_ENV_NAME]?.trim();
+  return fromEnv || undefined;
+}
+
+/** The account service to talk to, falling back to the hosted one. */
+export function resolveAccountUrl(input: AccountUrlResolutionInput = {}): string {
+  return resolveConfiguredAccountUrl(input) ?? DEFAULT_ACCOUNT_URL;
+}
 
 const DEFAULT_DEVICE_POLL_INTERVAL_SECONDS = 5;
 // RFC 8628 section 3.5: on `slow_down`, the client must increase its polling
@@ -200,6 +239,10 @@ export interface RefreshAccessTokenOptions extends WorkosClientOptions {
 export interface AccountClient {
   instance(): Promise<InstanceInfo>;
   me(token: string): Promise<AccountMe>;
+  /** Upserts the caller's profile. Rejects a changed handle; V1 handles are immutable. */
+  updateProfile(token: string, request: UpdateProfileRequest): Promise<AccountMe>;
+  /** Renames the workspace — the WorkOS organization the token is scoped to. */
+  updateOrganization(token: string, request: UpdateOrganizationRequest): Promise<AccountMe>;
   listHosts(token: string): Promise<ListHostsResponse>;
   registerHost(token: string, request: RegisterHostRequest): Promise<RegisterHostResponse>;
   updateHost(hostToken: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
@@ -313,6 +356,30 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       return requestJson(
         "/api/v1/me",
         { method: "GET", headers: authHeaders(token) },
+        AccountMeSchema,
+      );
+    },
+
+    async updateProfile(token, request) {
+      return requestJson(
+        "/api/v1/profile",
+        {
+          method: "PUT",
+          headers: { ...authHeaders(token), "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        AccountMeSchema,
+      );
+    },
+
+    async updateOrganization(token, request) {
+      return requestJson(
+        "/api/v1/organization",
+        {
+          method: "PATCH",
+          headers: { ...authHeaders(token), "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
         AccountMeSchema,
       );
     },

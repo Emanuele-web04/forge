@@ -22,8 +22,10 @@ import {
 } from "@synara/contracts";
 import {
   AccountApiError,
+  ACCOUNT_URL_ENV_NAME,
   createAccountClient,
   OrganizationRequiredError,
+  resolveConfiguredAccountUrl,
   type AccountClient,
 } from "@synara/shared/account";
 import { Effect, Path } from "effect";
@@ -34,7 +36,10 @@ import { PRIVATE_FILE_MODE } from "./privatePathPermissions";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess";
 import serverPackageJson from "../package.json" with { type: "json" };
 
-export const ACCOUNT_URL_ENV_NAME = "SYNARA_ACCOUNT_URL";
+// Re-exported so CLI wiring keeps naming the variable through the module that
+// owns the auth flows; the value itself lives with the client that reads it.
+export { ACCOUNT_URL_ENV_NAME };
+
 const CREDENTIALS_FILE_NAME = "account-credentials.json";
 
 /** What the user sees when a rotated refresh token can no longer be redeemed. */
@@ -183,14 +188,19 @@ async function deleteAccountCredentialsIfPresent(baseDir: string): Promise<boole
   }
 }
 
+/**
+ * The account service the CLI was pointed at, or `undefined` when it was
+ * pointed at none. The CLI deliberately does not fall back to
+ * `DEFAULT_ACCOUNT_URL`: `synara status` must be able to say "account features
+ * are not configured" rather than report on a hosted service the operator
+ * never opted into. The in-app flow, which the user reaches by clicking sign
+ * in, does take the default.
+ */
 export function resolveAccountUrl(input: {
   readonly flag?: string | undefined;
   readonly env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const flag = input.flag?.trim();
-  if (flag) return flag;
-  const fromEnv = (input.env ?? process.env)[ACCOUNT_URL_ENV_NAME]?.trim();
-  return fromEnv || undefined;
+  return resolveConfiguredAccountUrl(input);
 }
 
 /**

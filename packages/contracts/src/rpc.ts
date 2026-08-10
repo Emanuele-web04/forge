@@ -3,6 +3,14 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import {
+  AccountBeginSignInResult,
+  AccountCompleteSignInInput,
+  AccountMe,
+  AccountOpenVerificationUrlInput,
+  AccountStatus,
+  AccountUpdateProfileInput,
+} from "./account";
+import {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -1124,6 +1132,47 @@ export const WsProviderListAgentsRpc = Rpc.make(WS_METHODS.providerListAgents, {
   error: WsRpcError,
 });
 
+export const WsAccountStatusRpc = Rpc.make(WS_METHODS.accountStatus, {
+  payload: Schema.Struct({}),
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+export const WsAccountBeginSignInRpc = Rpc.make(WS_METHODS.accountBeginSignIn, {
+  payload: Schema.Struct({}),
+  success: AccountBeginSignInResult,
+  error: WsRpcError,
+});
+
+/**
+ * Long-running by design: the server polls WorkOS until the user finishes on
+ * the hosted page, so this request stays open for as long as the device code
+ * lives. Clients must not impose their usual RPC timeout on it.
+ */
+export const WsAccountCompleteSignInRpc = Rpc.make(WS_METHODS.accountCompleteSignIn, {
+  payload: AccountCompleteSignInInput,
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+export const WsAccountUpdateProfileRpc = Rpc.make(WS_METHODS.accountUpdateProfile, {
+  payload: AccountUpdateProfileInput,
+  success: AccountMe,
+  error: WsRpcError,
+});
+
+export const WsAccountSignOutRpc = Rpc.make(WS_METHODS.accountSignOut, {
+  payload: Schema.Struct({}),
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAccountOpenVerificationUrlRpc = Rpc.make(WS_METHODS.accountOpenVerificationUrl, {
+  payload: AccountOpenVerificationUrlInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
   payload: AutomationListInput,
   success: AutomationListResult,
@@ -1301,6 +1350,12 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderReadPluginRpc,
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
+  WsAccountStatusRpc,
+  WsAccountBeginSignInRpc,
+  WsAccountCompleteSignInRpc,
+  WsAccountUpdateProfileRpc,
+  WsAccountSignOutRpc,
+  WsAccountOpenVerificationUrlRpc,
   WsAutomationListRpc,
   WsAutomationGetMemoryRpc,
   WsAutomationCreateRpc,

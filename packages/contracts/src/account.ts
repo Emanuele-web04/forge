@@ -44,6 +44,41 @@ export const AccountHost = Schema.Struct({
 });
 export type AccountHost = typeof AccountHost.Type;
 
+/**
+ * The handle a profile is known by. Lowercase so it reads the same everywhere
+ * it is shown and compares the same everywhere it is stored, and bounded at
+ * both ends by the pattern: it must start on an alphanumeric and may not end
+ * on a hyphen, which is what keeps `-`, `a-`, and `--` out.
+ */
+export const AccountProfileHandle = Schema.String.check(
+  Schema.isPattern(/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/),
+);
+export type AccountProfileHandle = typeof AccountProfileHandle.Type;
+
+/**
+ * An avatar accent, as the web app's `PROFILE_AVATAR_COLORS` palette writes
+ * them. Checked as a hex triplet rather than against the palette itself: the
+ * palette is a web-side design decision that will change without a deploy of
+ * the account service, and a server that rejected tomorrow's swatch would be
+ * the thing standing between a user and their own profile.
+ */
+export const AccountProfileAvatarColor = Schema.String.check(
+  Schema.isPattern(/^#[0-9a-fA-F]{6}$/),
+);
+export type AccountProfileAvatarColor = typeof AccountProfileAvatarColor.Type;
+
+/**
+ * The part of a user's identity Synara owns, as opposed to what WorkOS knows.
+ * Its existence is what "onboarding is finished" means — there is no separate
+ * flag, so a profile row and a completed onboarding are the same fact.
+ */
+export const AccountProfile = Schema.Struct({
+  handle: AccountProfileHandle,
+  displayName: TrimmedNonEmptyString,
+  avatarColor: AccountProfileAvatarColor,
+});
+export type AccountProfile = typeof AccountProfile.Type;
+
 export const AccountMe = Schema.Struct({
   id: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
@@ -51,8 +86,33 @@ export const AccountMe = Schema.Struct({
   image: Schema.optional(TrimmedNonEmptyString),
   /** The organization the caller's token is scoped to; hosts belong to it. */
   organization: OrganizationSummary,
+  /**
+   * The caller's Synara profile, or `null` when they have not onboarded.
+   * Optional rather than required so a client built before profiles existed
+   * still decodes a response from a server that sends them.
+   */
+  profile: Schema.optional(Schema.NullOr(AccountProfile)),
 });
 export type AccountMe = typeof AccountMe.Type;
+
+/**
+ * The body of `PUT /api/v1/profile`. `handle` is sent on every update even
+ * though V1 refuses to change it: the client always knows the handle it is
+ * writing, and accepting it lets the server answer a mismatch explicitly
+ * rather than silently ignoring the field.
+ */
+export const UpdateProfileRequest = Schema.Struct({
+  handle: AccountProfileHandle,
+  displayName: TrimmedNonEmptyString,
+  avatarColor: AccountProfileAvatarColor,
+});
+export type UpdateProfileRequest = typeof UpdateProfileRequest.Type;
+
+/** The body of `PATCH /api/v1/organization` — the workspace rename. */
+export const UpdateOrganizationRequest = Schema.Struct({
+  name: TrimmedNonEmptyString,
+});
+export type UpdateOrganizationRequest = typeof UpdateOrganizationRequest.Type;
 
 export const RegisterHostRequest = Schema.Struct({
   environmentId: EnvironmentId,
@@ -114,6 +174,7 @@ export const AccountErrorCode = Schema.Literals([
   "signup_restricted",
   "organization_required",
   "environment_already_linked",
+  "handle_taken",
   "validation_failed",
   "rate_limited",
   "internal_error",
@@ -141,3 +202,62 @@ export const OrganizationRequiredBody = Schema.Struct({
   organizations: Schema.Array(OrganizationSummary),
 });
 export type OrganizationRequiredBody = typeof OrganizationRequiredBody.Type;
+
+// ── In-app account session (server-brokered, not the CLI) ────────────
+//
+// The app never holds account credentials itself: the server owns the stored
+// credential file and every WorkOS round trip, and the schemas below are what
+// it reports over the WebSocket RPC. That is why sign-in is two calls rather
+// than a polling loop in the browser — the server does the waiting.
+
+/**
+ * Whether this machine currently has a usable account session, and who it
+ * belongs to. Deliberately not a boolean plus a nullable user: a signed-in
+ * state without an identity is not representable.
+ */
+export const AccountStatus = Schema.Union([
+  Schema.Struct({ state: Schema.Literal("signed-out") }),
+  Schema.Struct({ state: Schema.Literal("signed-in"), me: AccountMe }),
+]);
+export type AccountStatus = typeof AccountStatus.Type;
+
+/**
+ * What the sign-in modal needs to show. `verificationUriComplete` embeds the
+ * user code, so the browser hand-off is one click; `userCode` is still shown
+ * because the user must be able to confirm the code on the page matches, and
+ * to type it in if the hand-off lands somewhere unexpected.
+ */
+export const AccountBeginSignInResult = Schema.Struct({
+  deviceCode: TrimmedNonEmptyString,
+  userCode: TrimmedNonEmptyString,
+  verificationUriComplete: TrimmedNonEmptyString,
+  expiresIn: Schema.Number,
+  interval: Schema.Number,
+});
+export type AccountBeginSignInResult = typeof AccountBeginSignInResult.Type;
+
+export const AccountCompleteSignInInput = Schema.Struct({
+  deviceCode: TrimmedNonEmptyString,
+});
+export type AccountCompleteSignInInput = typeof AccountCompleteSignInInput.Type;
+
+/**
+ * The onboarding write. `workspaceName` renames the WorkOS organization, and
+ * travels with the profile because onboarding presents them as one step; it is
+ * optional so later edits to the profile alone do not have to restate it.
+ */
+export const AccountUpdateProfileInput = Schema.Struct({
+  ...UpdateProfileRequest.fields,
+  workspaceName: Schema.optional(TrimmedNonEmptyString),
+});
+export type AccountUpdateProfileInput = typeof AccountUpdateProfileInput.Type;
+
+/**
+ * The URL to hand to the system browser. Constrained to the verification URL
+ * the account service just issued: the server refuses anything else, so this
+ * method can never become a general "open any URL for me" primitive.
+ */
+export const AccountOpenVerificationUrlInput = Schema.Struct({
+  url: TrimmedNonEmptyString,
+});
+export type AccountOpenVerificationUrlInput = typeof AccountOpenVerificationUrlInput.Type;
