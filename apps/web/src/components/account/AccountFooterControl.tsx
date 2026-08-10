@@ -22,7 +22,7 @@ import {
 } from "~/components/sidebarContextMenuStyles";
 import { SidebarMenuButton } from "~/components/ui/sidebar";
 import { ProfileAvatar } from "~/components/profile/ProfileAvatar";
-import { CheckIcon, ChevronUpIcon, ExternalLinkIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronUpIcon, ExternalLinkIcon, SettingsIcon } from "~/lib/icons";
 import { openExternalLink } from "~/lib/linkChips";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { useAccount } from "~/hooks/useAccount";
@@ -109,10 +109,10 @@ function SignedInFooter() {
               {profile ? `@${profile.handle} · ${me.email}` : me.email}
             </span>
           </div>
-          <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} closeOnClick={false}>
-            <span className="min-w-0 flex-1 truncate">{me.organization.name}</span>
-            <CheckIcon className="size-3 shrink-0" />
-          </MenuItem>
+          {/* The workspace row is deliberately absent: host ownership is
+              org-keyed server-side, but workspace switching is not a shipped
+              surface yet — a single always-checked row reads as a selector
+              that goes nowhere. Reintroduce it when multi-workspace ships. */}
         </MenuGroup>
         <MenuSeparator />
         <MenuGroup>
