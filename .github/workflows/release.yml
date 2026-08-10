@@ -141,7 +141,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Verify Synara identity
+      - name: Verify Forkara upstream attribution
         run: bun run brand:check
 
       - name: Lint
@@ -533,7 +533,7 @@ jobs:
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ needs.preflight.outputs.ref }}
-          name: Synara v${{ needs.preflight.outputs.version }}
+          name: Forkara v${{ needs.preflight.outputs.version }}
           generate_release_notes: true
           prerelease: ${{ needs.preflight.outputs.is_prerelease }}
           make_latest: ${{ needs.preflight.outputs.make_latest }}
@@ -547,7 +547,7 @@ jobs:
             release-assets/*.provenance.json
           fail_on_unmatched_files: true
 
-      - name: Mirror Synara artifacts onto the pinned updater feed
+      - name: Mirror Forkara artifacts onto the pinned updater feed
         if: ${{ needs.preflight.outputs.mirror_to_stable_channel == 'true' }}
         shell: bash
         env:
