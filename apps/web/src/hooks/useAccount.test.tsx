@@ -14,8 +14,8 @@ import { useAccount } from "./useAccount";
 
 const accountApiMock = {
   status: vi.fn<() => Promise<AccountStatus>>(),
-  signInWithPassword: vi.fn(),
-  signUpWithPassword: vi.fn(),
+  sendOtp: vi.fn(),
+  authenticateOtp: vi.fn(),
   verifyEmail: vi.fn(),
   resendVerificationEmail: vi.fn(),
   beginSignIn: vi.fn(),
@@ -82,18 +82,40 @@ describe("useAccount", () => {
     expect(account.me).toBeNull();
   });
 
-  it("writes the fresh status into the cache after password sign-in", async () => {
+  it("passes a code send through without touching the status cache", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), { state: "signed-out" });
+    accountApiMock.sendOtp.mockResolvedValue({
+      email: "ada@example.com",
+      expiresAt: "2026-08-10T12:10:00.000Z",
+    });
+
+    const account = renderUseAccount(queryClient);
+    const sent = await account.sendOtp.mutateAsync({ email: "ada@example.com" });
+
+    expect(accountApiMock.sendOtp).toHaveBeenCalledWith({ email: "ada@example.com" });
+    expect(sent).toEqual({ email: "ada@example.com", expiresAt: "2026-08-10T12:10:00.000Z" });
+    expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
+      state: "signed-out",
+    });
+  });
+
+  it("writes the fresh status into the cache after OTP sign-in", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), { state: "signed-out" });
     const me = makeMe();
-    accountApiMock.signInWithPassword.mockResolvedValue({ state: "signed-in", me });
+    accountApiMock.authenticateOtp.mockResolvedValue({ state: "signed-in", me });
 
     const account = renderUseAccount(queryClient);
-    await account.signInWithPassword.mutateAsync({
+    await account.authenticateOtp.mutateAsync({
       email: "ada@example.com",
-      password: "secret",
+      code: "654321",
     });
 
+    expect(accountApiMock.authenticateOtp).toHaveBeenCalledWith({
+      email: "ada@example.com",
+      code: "654321",
+    });
     expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
       state: "signed-in",
       me,
@@ -101,7 +123,7 @@ describe("useAccount", () => {
   });
 
   // Verification is a sign-in: its success must settle the status cache the
-  // same way the password grant's does.
+  // same way the OTP grant's does.
   it("writes the fresh status into the cache after verifyEmail", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), { state: "signed-out" });

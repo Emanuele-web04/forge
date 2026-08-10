@@ -794,10 +794,11 @@ export function createWsNativeApi(): NativeApi {
     },
     account: {
       status: () => transport.request(WS_METHODS.accountStatus),
-      // These two carry a password. Pass the input straight through — do not
-      // wrap, retry, or log it, and do not keep it after the promise settles.
-      signInWithPassword: (input) => transport.request(WS_METHODS.accountSignInWithPassword, input),
-      signUpWithPassword: (input) => transport.request(WS_METHODS.accountSignUpWithPassword, input),
+      sendOtp: (input) => transport.request(WS_METHODS.accountSendOtp, input),
+      // The input carries the emailed code — a credential. Pass it straight
+      // through: do not wrap, retry, or log it, and do not keep it after the
+      // promise settles.
+      authenticateOtp: (input) => transport.request(WS_METHODS.accountAuthenticateOtp, input),
       // Same rule again: the code + pending token pair is a bearer-ish secret.
       verifyEmail: (input) => transport.request(WS_METHODS.accountVerifyEmail, input),
       resendVerificationEmail: (input) =>

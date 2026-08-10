@@ -4,9 +4,10 @@
 // Layer: Web account feature hook.
 
 import type {
+  AccountAuthenticateOtpInput,
   AccountMe,
-  AccountPasswordSignInInput,
   AccountResendVerificationEmailInput,
+  AccountSendOtpInput,
   AccountStatus,
   AccountUpdateProfileInput,
   AccountVerifyEmailInput,
@@ -23,18 +24,20 @@ export function useAccount() {
     queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), status);
   };
 
-  const signInWithPassword = useMutation({
-    mutationFn: async (input: AccountPasswordSignInInput) => {
+  const sendOtp = useMutation({
+    mutationFn: async (input: AccountSendOtpInput) => {
       const api = ensureNativeApi();
-      return api.account.signInWithPassword(input);
+      return api.account.sendOtp(input);
     },
-    onSuccess: setStatus,
   });
 
-  const signUpWithPassword = useMutation({
-    mutationFn: async (input: AccountPasswordSignInInput) => {
+  // The input carries the emailed code — a credential with the same handling
+  // rules as a password: pass it straight through and keep it nowhere past
+  // the call.
+  const authenticateOtp = useMutation({
+    mutationFn: async (input: AccountAuthenticateOtpInput) => {
       const api = ensureNativeApi();
-      return api.account.signUpWithPassword(input);
+      return api.account.authenticateOtp(input);
     },
     onSuccess: setStatus,
   });
@@ -111,8 +114,8 @@ export function useAccount() {
     status,
     me: status?.state === "signed-in" ? status.me : null,
     statusQuery,
-    signInWithPassword,
-    signUpWithPassword,
+    sendOtp,
+    authenticateOtp,
     verifyEmail,
     resendVerificationEmail,
     beginSignIn,

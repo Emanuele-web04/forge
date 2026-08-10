@@ -32,8 +32,8 @@ function makeMe(overrides: Partial<AccountMe> = {}): AccountMe {
 
 describe("readAccountErrorCode", () => {
   it("reads the code off a WsRpcError-shaped failure", () => {
-    expect(readAccountErrorCode({ message: "nope", code: "invalid_credentials" })).toBe(
-      "invalid_credentials",
+    expect(readAccountErrorCode({ message: "nope", code: "invalid_verification_code" })).toBe(
+      "invalid_verification_code",
     );
   });
 

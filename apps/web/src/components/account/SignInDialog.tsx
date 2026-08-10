@@ -1,8 +1,9 @@
 // FILE: SignInDialog.tsx
 // Purpose: "Welcome to Synara" sign-in modal — Google/GitHub SSO through the
-// system browser (device grant, server-brokered) and in-app email/password
-// sign-in with an inline sign-up mode. Dismissable; a successful sign-in with
-// no profile hands off to the onboarding modal.
+// system browser (device grant, server-brokered) and in-app email OTP: the
+// user enters their email, receives a 6-digit code, and enters it in the same
+// dialog. Sign-in and sign-up are one path. Dismissable; a successful sign-in
+// with no profile hands off to the onboarding modal.
 // Layer: Web account feature.
 
 import type { AccountStatus } from "@synara/contracts";
@@ -20,11 +21,9 @@ import {
   accountErrorMessage,
   formatResendCountdown,
   readAccountErrorCode,
-  readEmailVerificationChallenge,
   RESEND_COOLDOWN_SECONDS,
   sanitizeVerificationCodeInput,
   VERIFICATION_CODE_LENGTH,
-  type EmailVerificationChallenge,
 } from "~/lib/accountLogic";
 import { cn } from "~/lib/utils";
 
@@ -51,30 +50,17 @@ type SsoWait = { readonly userCode: string };
 
 function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProps, "open">) {
   const account = useAccount();
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [ssoWait, setSsoWait] = useState<SsoWait | null>(null);
-  // The email-verification step, entered when sign-in or sign-up answers
-  // `email_verification_required`. The challenge lives here and nowhere else —
-  // the pending token is a bearer-ish secret, and this state unmounts (and is
-  // gone) with the dialog.
-  const [verification, setVerification] = useState<EmailVerificationChallenge | null>(null);
+  // The OTP code-entry step, entered once a code was sent. Only the address
+  // is held — the code lives in the step's own state and dies with it.
+  const [otpEmail, setOtpEmail] = useState<string | null>(null);
   // Abandoning the dialog mid-SSO aborts the pending completeSignIn RPC so it
   // does not resolve into a closed dialog later.
   const ssoAbortRef = useRef<AbortController | null>(null);
 
-  const busy =
-    account.signInWithPassword.isPending ||
-    account.signUpWithPassword.isPending ||
-    account.beginSignIn.isPending ||
-    ssoWait !== null;
-
-  const finishAuth = (status: AccountStatus) => {
-    setPassword("");
-    onSignedIn(status);
-  };
+  const busy = account.sendOtp.isPending || account.beginSignIn.isPending || ssoWait !== null;
 
   const handleSso = async () => {
     setError(null);
@@ -88,7 +74,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
         deviceCode: begin.deviceCode,
         signal: controller.signal,
       });
-      finishAuth(status);
+      onSignedIn(status);
     } catch (cause) {
       if (ssoAbortRef.current?.signal.aborted) return;
       setSsoWait(null);
@@ -98,56 +84,36 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
     }
   };
 
-  const handlePasswordSubmit = async () => {
+  const handleEmailSubmit = async () => {
     setError(null);
-    const credentials = { email: email.trim(), password };
-    if (credentials.email.length === 0 || password.length === 0) {
-      setError("Enter your email and password.");
+    const trimmed = email.trim();
+    if (trimmed.length === 0) {
+      setError("Enter your email.");
       return;
     }
     try {
-      const status =
-        mode === "sign-in"
-          ? await account.signInWithPassword.mutateAsync(credentials)
-          : await account.signUpWithPassword.mutateAsync(credentials);
-      finishAuth(status);
+      const sent = await account.sendOtp.mutateAsync({ email: trimmed });
+      setOtpEmail(sent.email);
     } catch (cause) {
-      // The credentials were right but the address is unverified: WorkOS has
-      // already emailed a 6-digit code, and the refusal carries what redeeming
-      // it needs. Swap the card body to the verification step.
-      const challenge = readEmailVerificationChallenge(cause);
-      if (challenge) {
-        setPassword("");
-        setVerification(challenge);
-        return;
-      }
-      const code = readAccountErrorCode(cause);
-      if (code === "email_taken") {
-        setMode("sign-in");
-        setError("An account with that email already exists — sign in instead.");
-        return;
-      }
-      setError(
-        accountErrorMessage(
-          cause,
-          mode === "sign-in" ? "Could not sign in. Try again." : "Could not create your account.",
-        ),
-      );
+      setError(accountErrorMessage(cause, "Could not send the code. Try again."));
     }
   };
 
-  const showCreateToggle =
-    mode === "sign-in" &&
-    readAccountErrorCode(account.signInWithPassword.error) === "invalid_credentials";
-
-  if (verification) {
+  if (otpEmail) {
     return (
-      <VerifyEmailStep
-        challenge={verification}
-        onVerified={finishAuth}
+      <CodeEntryStep
+        email={otpEmail}
+        submitting={account.authenticateOtp.isPending}
+        resending={account.sendOtp.isPending}
+        onSubmit={async (code) => {
+          const status = await account.authenticateOtp.mutateAsync({ email: otpEmail, code });
+          onSignedIn(status);
+        }}
+        onResend={async () => {
+          await account.sendOtp.mutateAsync({ email: otpEmail });
+        }}
         onUseDifferentEmail={() => {
-          // Back to the form with the challenge (and its secret) dropped.
-          setVerification(null);
+          setOtpEmail(null);
           setError(null);
         }}
       />
@@ -162,7 +128,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
           Welcome to Synara
         </DialogTitle>
         <p className="text-[length:var(--app-font-size-ui,12px)] leading-snug text-muted-foreground">
-          Sign in to sync your profile and workspace across devices.
+          Sign in or create your account to sync your profile and workspace across devices.
         </p>
       </div>
 
@@ -225,7 +191,7 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
             className="flex flex-col gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              void handlePasswordSubmit();
+              void handleEmailSubmit();
             }}
           >
             <Input
@@ -236,49 +202,15 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               disabled={busy}
               onChange={(event) => setEmail(event.target.value)}
             />
-            <Input
-              type="password"
-              autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
-              placeholder="Password"
-              value={password}
-              disabled={busy}
-              onChange={(event) => setPassword(event.target.value)}
-            />
             {error ? (
               <p className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive">
                 {error}
               </p>
             ) : null}
-            {showCreateToggle ? (
-              <button
-                type="button"
-                className="self-start text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                onClick={() => {
-                  setMode("sign-up");
-                  setError(null);
-                }}
-              >
-                Create an account instead?
-              </button>
-            ) : null}
             <Button type="submit" className="mt-1 w-full" disabled={busy}>
-              {account.signInWithPassword.isPending || account.signUpWithPassword.isPending ? (
-                <Spinner className="size-3.5" />
-              ) : null}
-              {mode === "sign-in" ? "Continue" : "Create account"}
+              {account.sendOtp.isPending ? <Spinner className="size-3.5" /> : null}
+              Continue
             </Button>
-            {mode === "sign-up" ? (
-              <button
-                type="button"
-                className="self-center text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                onClick={() => {
-                  setMode("sign-in");
-                  setError(null);
-                }}
-              >
-                Already have an account? Sign in
-              </button>
-            ) : null}
           </form>
         </>
       )}
@@ -294,20 +226,35 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
   );
 }
 
-interface VerifyEmailStepProps {
-  readonly challenge: EmailVerificationChallenge;
-  readonly onVerified: (status: AccountStatus) => void;
+interface CodeEntryStepProps {
+  /** The address the code was sent to, shown in the subtitle. */
+  readonly email: string;
+  readonly submitting: boolean;
+  readonly resending: boolean;
+  /** Redeems the 6 digits. Throws to keep the step open with an inline error. */
+  readonly onSubmit: (code: string) => Promise<void>;
+  /** Emails a fresh code, invalidating the old one. */
+  readonly onResend: () => Promise<void>;
   readonly onUseDifferentEmail: () => void;
 }
 
 /**
- * The code-entry step ("01b · Verify email"). One visually hidden input holds
- * the whole code — the six boxes only render its value — so focus, caret,
- * paste, and `autocomplete="one-time-code"` all behave like the single text
- * field they really are.
+ * The six-box code-entry step ("Check your email"), shared by every emailed
+ * 6-digit code — the OTP sign-in drives it today, and it is parameterized by
+ * callbacks so any other code flow reuses it rather than forking the boxes.
+ *
+ * One visually hidden input holds the whole code — the six boxes only render
+ * its value — so focus, caret, paste, and `autocomplete="one-time-code"` all
+ * behave like the single text field they really are.
  */
-function VerifyEmailStep({ challenge, onVerified, onUseDifferentEmail }: VerifyEmailStepProps) {
-  const account = useAccount();
+function CodeEntryStep({
+  email,
+  submitting,
+  resending,
+  onSubmit,
+  onResend,
+  onUseDifferentEmail,
+}: CodeEntryStepProps) {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   // Flipped by a successful resend, back off on the next countdown render
@@ -323,23 +270,18 @@ function VerifyEmailStep({ challenge, onVerified, onUseDifferentEmail }: VerifyE
 
   const nowMs = useNowMs(true);
   const cooldownSecondsLeft = Math.max(0, (resendAvailableAtMs - nowMs) / 1000);
-  const resendDisabled = cooldownSecondsLeft > 0 || account.resendVerificationEmail.isPending;
-  const verifying = account.verifyEmail.isPending;
+  const resendDisabled = cooldownSecondsLeft > 0 || resending;
   const complete = code.length === VERIFICATION_CODE_LENGTH;
   // The active box is where the next digit lands; while full, the last box.
   const activeIndex = Math.min(code.length, VERIFICATION_CODE_LENGTH - 1);
 
   const submit = async (candidate: string) => {
-    if (candidate.length !== VERIFICATION_CODE_LENGTH || verifying) return;
+    if (candidate.length !== VERIFICATION_CODE_LENGTH || submitting) return;
     if (submittedCodeRef.current === candidate) return;
     submittedCodeRef.current = candidate;
     setError(null);
     try {
-      const status = await account.verifyEmail.mutateAsync({
-        code: candidate,
-        pendingAuthenticationToken: challenge.pendingAuthenticationToken,
-      });
-      onVerified(status);
+      await onSubmit(candidate);
     } catch (cause) {
       submittedCodeRef.current = null;
       setCode("");
@@ -347,7 +289,7 @@ function VerifyEmailStep({ challenge, onVerified, onUseDifferentEmail }: VerifyE
       setError(
         readAccountErrorCode(cause) === "invalid_verification_code"
           ? "That code didn't work — try again or resend"
-          : accountErrorMessage(cause, "Could not verify your email. Try again."),
+          : accountErrorMessage(cause, "Could not sign you in. Try again."),
       );
     }
   };
@@ -361,9 +303,7 @@ function VerifyEmailStep({ challenge, onVerified, onUseDifferentEmail }: VerifyE
   const handleResend = async () => {
     setError(null);
     try {
-      await account.resendVerificationEmail.mutateAsync({
-        emailVerificationId: challenge.emailVerificationId,
-      });
+      await onResend();
       // The old code is dead upstream; a fresh entry avoids submitting it.
       setCode("");
       submittedCodeRef.current = null;
@@ -393,7 +333,7 @@ function VerifyEmailStep({ challenge, onVerified, onUseDifferentEmail }: VerifyE
             "New code sent"
           ) : (
             <>
-              We sent a 6-digit code to <span className="text-foreground">{challenge.email}</span>
+              We sent a 6-digit code to <span className="text-foreground">{email}</span>
             </>
           )}
         </p>
@@ -416,8 +356,8 @@ function VerifyEmailStep({ challenge, onVerified, onUseDifferentEmail }: VerifyE
             autoComplete="one-time-code"
             maxLength={VERIFICATION_CODE_LENGTH}
             value={code}
-            disabled={verifying}
-            aria-label="Verification code"
+            disabled={submitting}
+            aria-label="Sign-in code"
             // The code field is the only thing to type into on this step.
             autoFocus
             onChange={(event) => handleCodeChange(event.target.value)}
@@ -429,10 +369,10 @@ function VerifyEmailStep({ challenge, onVerified, onUseDifferentEmail }: VerifyE
               aria-hidden
               className={cn(
                 "flex h-[46px] w-10 items-center justify-center rounded-[10px] border bg-background font-mono text-lg font-medium",
-                index === activeIndex && !verifying
+                index === activeIndex && !submitting
                   ? "border-foreground/30"
                   : "border-foreground/12",
-                verifying && "opacity-64",
+                submitting && "opacity-64",
               )}
             >
               {code[index] ?? ""}
@@ -446,8 +386,8 @@ function VerifyEmailStep({ challenge, onVerified, onUseDifferentEmail }: VerifyE
           </p>
         ) : null}
 
-        <Button type="submit" className="mt-1 w-full" disabled={!complete || verifying}>
-          {verifying ? <Spinner className="size-3.5" /> : null}
+        <Button type="submit" className="mt-1 w-full" disabled={!complete || submitting}>
+          {submitting ? <Spinner className="size-3.5" /> : null}
           Verify
         </Button>
       </form>
