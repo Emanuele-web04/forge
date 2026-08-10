@@ -798,6 +798,10 @@ export function createWsNativeApi(): NativeApi {
       // wrap, retry, or log it, and do not keep it after the promise settles.
       signInWithPassword: (input) => transport.request(WS_METHODS.accountSignInWithPassword, input),
       signUpWithPassword: (input) => transport.request(WS_METHODS.accountSignUpWithPassword, input),
+      // Same rule again: the code + pending token pair is a bearer-ish secret.
+      verifyEmail: (input) => transport.request(WS_METHODS.accountVerifyEmail, input),
+      resendVerificationEmail: (input) =>
+        transport.request(WS_METHODS.accountResendVerificationEmail, input),
       beginSignIn: () => transport.request(WS_METHODS.accountBeginSignIn),
       // No deadline: the server holds this open until the user finishes on the
       // hosted page. If the socket drops, the sign-in still completed

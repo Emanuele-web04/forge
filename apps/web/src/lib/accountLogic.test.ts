@@ -10,10 +10,13 @@ import {
   accountErrorMessage,
   accountFirstName,
   accountInitial,
+  formatResendCountdown,
   handleFormatError,
   publicProfileUrl,
   readAccountErrorCode,
+  readEmailVerificationChallenge,
   sanitizeHandleInput,
+  sanitizeVerificationCodeInput,
 } from "./accountLogic";
 
 function makeMe(overrides: Partial<AccountMe> = {}): AccountMe {
@@ -38,6 +41,61 @@ describe("readAccountErrorCode", () => {
     expect(readAccountErrorCode(new Error("boom"))).toBeNull();
     expect(readAccountErrorCode(null)).toBeNull();
     expect(readAccountErrorCode({ message: "x", code: 42 })).toBeNull();
+  });
+});
+
+describe("readEmailVerificationChallenge", () => {
+  const fields = {
+    pendingAuthenticationToken: "pat_123",
+    email: "ada@example.com",
+    emailVerificationId: "email_verification_123",
+  };
+
+  it("reads the challenge off the server's tagged RPC error", () => {
+    expect(
+      readEmailVerificationChallenge({
+        _tag: "AccountEmailVerificationRequiredError",
+        message: "Enter the code",
+        ...fields,
+      }),
+    ).toEqual(fields);
+  });
+
+  it("returns null for anything without the tag or the full field set", () => {
+    // A bare code with no payload cannot be completed in-app.
+    expect(
+      readEmailVerificationChallenge({ message: "x", code: "email_verification_required" }),
+    ).toBeNull();
+    expect(
+      readEmailVerificationChallenge({
+        _tag: "AccountEmailVerificationRequiredError",
+        message: "x",
+        email: "ada@example.com",
+      }),
+    ).toBeNull();
+    expect(readEmailVerificationChallenge(new Error("boom"))).toBeNull();
+    expect(readEmailVerificationChallenge(null)).toBeNull();
+  });
+});
+
+describe("sanitizeVerificationCodeInput", () => {
+  it("keeps digits only and caps at the code length", () => {
+    expect(sanitizeVerificationCodeInput("123456")).toBe("123456");
+    expect(sanitizeVerificationCodeInput("12 34 56")).toBe("123456");
+    expect(sanitizeVerificationCodeInput("code: 987654!")).toBe("987654");
+    expect(sanitizeVerificationCodeInput("12345678")).toBe("123456");
+    expect(sanitizeVerificationCodeInput("abc")).toBe("");
+  });
+});
+
+describe("formatResendCountdown", () => {
+  it("formats m:ss, rounding partial seconds up", () => {
+    expect(formatResendCountdown(47)).toBe("0:47");
+    expect(formatResendCountdown(60)).toBe("1:00");
+    expect(formatResendCountdown(59.2)).toBe("1:00");
+    expect(formatResendCountdown(5)).toBe("0:05");
+    expect(formatResendCountdown(0)).toBe("0:00");
+    expect(formatResendCountdown(-3)).toBe("0:00");
   });
 });
 

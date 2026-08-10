@@ -6,8 +6,10 @@
 import type {
   AccountMe,
   AccountPasswordSignInInput,
+  AccountResendVerificationEmailInput,
   AccountStatus,
   AccountUpdateProfileInput,
+  AccountVerifyEmailInput,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accountQueryKeys, accountStatusQueryOptions } from "~/lib/accountReactQuery";
@@ -35,6 +37,24 @@ export function useAccount() {
       return api.account.signUpWithPassword(input);
     },
     onSuccess: setStatus,
+  });
+
+  // The input pairs the emailed code with the pending authentication token —
+  // bearer-ish secrets with the same handling rules as a password: pass them
+  // straight through and keep them nowhere past the call.
+  const verifyEmail = useMutation({
+    mutationFn: async (input: AccountVerifyEmailInput) => {
+      const api = ensureNativeApi();
+      return api.account.verifyEmail(input);
+    },
+    onSuccess: setStatus,
+  });
+
+  const resendVerificationEmail = useMutation({
+    mutationFn: async (input: AccountResendVerificationEmailInput) => {
+      const api = ensureNativeApi();
+      await api.account.resendVerificationEmail(input);
+    },
   });
 
   const beginSignIn = useMutation({
@@ -93,6 +113,8 @@ export function useAccount() {
     statusQuery,
     signInWithPassword,
     signUpWithPassword,
+    verifyEmail,
+    resendVerificationEmail,
     beginSignIn,
     completeSignIn,
     updateProfile,
