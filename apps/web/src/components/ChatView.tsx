@@ -586,6 +586,7 @@ import {
   type QueuedSteerGate,
   resolveQueuedSteerGateTransition,
   shouldRenderProviderHealthBanner,
+  isProviderDiscoveryPending,
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -600,11 +601,15 @@ import {
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
+import { unsupportedProviderProfileIssue } from "../lib/providerProfileAvailability";
 import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
+import {
+  buildModelSelectionForTarget,
+  buildNextProviderOptions,
+} from "../providerModelOptions";
 import {
   isDuplicateProjectCreateError,
   waitForRecoverableProjectForDuplicateCreate,
@@ -2197,21 +2202,42 @@ export default function ChatView({
     markThreadVisited,
   ]);
 
-  const sessionProvider = activeThread?.session?.provider ?? null;
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
-  const threadProvider =
-    activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
   const hasThreadStarted = Boolean(
     activeThread &&
     (activeThread.latestTurn !== null ||
       activeThread.messages.length > 0 ||
       activeThread.session !== null),
   );
+  const threadModelSelection = activeThread?.modelSelection ?? null;
+  const projectModelSelection = activeProject?.defaultModelSelection ?? null;
   const lockedProvider: ProviderKind | null = hasThreadStarted
-    ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
+    ? (threadModelSelection?.provider ?? null)
     : null;
   const selectedProvider: ProviderKind =
-    lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+    lockedProvider ??
+    selectedProviderByThreadId ??
+    threadModelSelection?.provider ??
+    projectModelSelection?.provider ??
+    settings.defaultProvider;
+  const draftModelSelectionCandidate =
+    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
+  const selectedProfileId =
+    hasThreadStarted && threadModelSelection?.provider === selectedProvider
+      ? threadModelSelection.profileId
+      : draftModelSelectionCandidate?.provider === selectedProvider
+        ? draftModelSelectionCandidate.profileId
+        : threadModelSelection?.provider === selectedProvider
+          ? threadModelSelection.profileId
+          : projectModelSelection?.provider === selectedProvider
+            ? projectModelSelection.profileId
+            : DEFAULT_PROVIDER_PROFILE_ID;
+  const draftModelSelectionForSelectedProvider =
+    draftModelSelectionCandidate?.provider === selectedProvider &&
+    draftModelSelectionCandidate.profileId === selectedProfileId
+      ? draftModelSelectionCandidate
+      : null;
+  const selectedTargetExecutable = selectedProfileId === DEFAULT_PROVIDER_PROFILE_ID;
   const previousSelectedProviderRef = useRef<{
     threadId: ThreadId;
     provider: ProviderKind;
@@ -2225,10 +2251,19 @@ export default function ChatView({
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
     const draftSelections = composerDraft.modelSelectionByProvider;
 
-    const resolveHint = (provider: ProviderKind): string | null =>
-      draftSelections[provider]?.model ??
-      (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
-      (projectModelSelection?.provider === provider ? projectModelSelection.model : null);
+    const resolveHint = (provider: ProviderKind): string | null => {
+      const draftSelection = draftSelections[provider];
+      const draftModel =
+        draftSelection?.provider === provider &&
+        (provider !== selectedProvider || draftSelection.profileId === selectedProfileId)
+          ? draftSelection.model
+          : null;
+      return (
+        draftModel ??
+        (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
+        (projectModelSelection?.provider === provider ? projectModelSelection.model : null)
+      );
+    };
 
     return {
       codex: resolveHint("codex"),
@@ -2245,6 +2280,8 @@ export default function ChatView({
     activeProject?.defaultModelSelection,
     activeThread?.modelSelection,
     composerDraft.modelSelectionByProvider,
+    selectedProfileId,
+    selectedProvider,
   ]);
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: resolvedThreadWorktreePath,
@@ -2261,6 +2298,7 @@ export default function ChatView({
     selectedProviderRuntimeModelDiscoveryPending,
   } = useProviderModelCatalog({
     selectedProvider,
+    targetExecutable: selectedTargetExecutable,
     discoveryEnabled: isModelPickerOpen,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: composerModelHintByProvider,
@@ -2271,11 +2309,10 @@ export default function ChatView({
     selectedProvider,
     threadModelSelection: activeThread?.modelSelection,
     projectModelSelection: activeProject?.defaultModelSelection,
+    selectedTarget: { provider: selectedProvider, profileId: selectedProfileId },
     customModelsByProvider,
     availableModelOptionsByProvider: modelOptionsByProvider,
   });
-  const draftModelSelectionForSelectedProvider =
-    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
   const persistedClaudeSupportsAutoMode =
     selectedProvider === "claudeAgent"
       ? draftModelSelectionForSelectedProvider?.provider === "claudeAgent" &&
@@ -2319,22 +2356,24 @@ export default function ChatView({
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(() => {
     if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
-      return buildModelSelection(
-        selectedProvider,
-        draftModelSelectionForSelectedProvider.model,
-        selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
-      );
+      return buildModelSelectionForTarget({
+        target: { provider: selectedProvider, profileId: selectedProfileId },
+        model: draftModelSelectionForSelectedProvider.model,
+        options: selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
+      });
     }
-    return buildModelSelection(
-      selectedProvider,
-      selectedModel,
-      selectedModelOptionsForDispatch,
-      selectedProvider === "claudeAgent" ? selectedRuntimeModel?.supportsAutoMode : undefined,
-    );
+    return buildModelSelectionForTarget({
+      target: { provider: selectedProvider, profileId: selectedProfileId },
+      model: selectedModel,
+      options: selectedModelOptionsForDispatch,
+      supportsAutoMode:
+        selectedProvider === "claudeAgent" ? selectedRuntimeModel?.supportsAutoMode : undefined,
+    });
   }, [
     draftModelSelectionForSelectedProvider,
     selectedModel,
     selectedModelOptionsForDispatch,
+    selectedProfileId,
     selectedProvider,
     selectedRuntimeModel,
   ]);
@@ -2350,11 +2389,7 @@ export default function ChatView({
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
   }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
   const persistedComposerModelSelection =
-    sessionProvider && activeThread?.modelSelection.provider !== sessionProvider
-      ? activeProject?.defaultModelSelection?.provider === selectedProvider
-        ? activeProject.defaultModelSelection
-        : null
-      : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
+    activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null;
   const providerModelsLoading = selectedProviderModelsLoading;
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
@@ -3602,8 +3637,11 @@ export default function ChatView({
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const composerSkillCwd = providerModelDiscoveryCwd;
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, selectedTargetExecutable),
   );
+  const providerComposerCapabilities = selectedTargetExecutable
+    ? providerComposerCapabilitiesQuery.data
+    : undefined;
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
@@ -3627,13 +3665,14 @@ export default function ChatView({
           : undefined,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
       enabled:
+        selectedTargetExecutable &&
         (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
-        supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
+        supportsNativeSlashCommandDiscovery(providerComposerCapabilities) &&
         composerSkillCwd !== null,
     }),
   );
   const canDiscoverProviderSkills =
-    selectedProvider === "pi" || supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
+    selectedProvider === "pi" || supportsSkillDiscovery(providerComposerCapabilities);
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
@@ -3641,6 +3680,7 @@ export default function ChatView({
       threadId,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
       enabled:
+        selectedTargetExecutable &&
         (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
         canDiscoverProviderSkills &&
         composerSkillCwd !== null,
@@ -3652,7 +3692,8 @@ export default function ChatView({
       cwd: composerSkillCwd,
       threadId,
       enabled:
-        supportsPluginDiscovery(providerComposerCapabilitiesQuery.data) &&
+        selectedTargetExecutable &&
+        supportsPluginDiscovery(providerComposerCapabilities) &&
         composerSkillCwd !== null,
     }),
   );
@@ -3677,19 +3718,22 @@ export default function ChatView({
   // Keep plugin suggestions referentially stable so prompt-sync effects do not loop on rerender.
   const providerPlugins = useMemo(
     () =>
-      providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
-        marketplace.plugins.map((plugin) => ({
-          plugin,
-          mention: {
-            name: plugin.name,
-            path: `plugin://${plugin.name}@${marketplace.name}`,
-          } satisfies ProviderMentionReference,
-        })),
-      ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS,
-    [providerPluginsQuery.data],
+      selectedTargetExecutable
+        ? (providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
+            marketplace.plugins.map((plugin) => ({
+              plugin,
+              mention: {
+                name: plugin.name,
+                path: `plugin://${plugin.name}@${marketplace.name}`,
+              } satisfies ProviderMentionReference,
+            })),
+          ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS)
+        : EMPTY_COMPOSER_PLUGIN_SUGGESTIONS,
+    [providerPluginsQuery.data, selectedTargetExecutable],
   );
-  const providerNativeCommands =
-    providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
+  const providerNativeCommands = selectedTargetExecutable
+    ? (providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS)
+    : EMPTY_PROVIDER_NATIVE_COMMANDS;
   const providerNativeCommandNames = useMemo(
     () => providerNativeCommands.map((command) => command.name),
     [providerNativeCommands],
@@ -3712,7 +3756,9 @@ export default function ChatView({
     () => providerSupportsTextNativeReviewCommand(selectedProvider, providerNativeCommands),
     [providerNativeCommands, selectedProvider],
   );
-  const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
+  const providerSkills = selectedTargetExecutable
+    ? (providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS)
+    : EMPTY_PROVIDER_SKILLS;
   const selectedModelCaps = useMemo(
     () => getModelCapabilities(selectedProvider, selectedModel),
     [selectedModel, selectedProvider],
@@ -3775,7 +3821,7 @@ export default function ChatView({
     searchableModelOptions,
     supportsFastSlashCommand,
     canOfferCompactCommand:
-      supportsThreadCompaction(providerComposerCapabilitiesQuery.data) &&
+      supportsThreadCompaction(providerComposerCapabilities) &&
       isServerThread &&
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
@@ -6194,12 +6240,16 @@ export default function ChatView({
         model: resolvedModel,
         runtimeModels: runtimeModelsByProvider[provider],
       });
-      const nextModelSelection = buildModelSelection(
-        provider,
-        resolvedModel,
-        undefined,
-        provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
-      );
+      const nextModelSelection = buildModelSelectionForTarget({
+        target: {
+          provider,
+          profileId:
+            provider === selectedProvider ? selectedProfileId : DEFAULT_PROVIDER_PROFILE_ID,
+        },
+        model: resolvedModel,
+        supportsAutoMode:
+          provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
+      });
       const providerStatus = findProviderStatus(providerStatuses, provider);
       const nextRuntimeMode =
         runtimeMode === "auto" &&
@@ -6238,6 +6288,8 @@ export default function ChatView({
       runtimeMode,
       runtimeModelsByProvider,
       scheduleComposerFocus,
+      selectedProfileId,
+      selectedProvider,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
     ],
@@ -7369,6 +7421,11 @@ export default function ChatView({
     const selectedPromptEffortForSend =
       queuedChatTurn?.selectedPromptEffort ?? selectedPromptEffort;
     const selectedModelSelectionForSend = queuedChatTurn?.modelSelection ?? selectedModelSelection;
+    const profileIssue = unsupportedProviderProfileIssue(selectedModelSelectionForSend);
+    if (profileIssue !== null) {
+      setStoreThreadError(activeThread.id, profileIssue);
+      return false;
+    }
     const providerOptionsForDispatchForSend =
       queuedChatTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
     const runtimeModeForSend = queuedChatTurn?.runtimeMode ?? runtimeMode;
@@ -8279,17 +8336,22 @@ export default function ChatView({
         }
       }
 
-      const threadCreateModelSelection: ModelSelection = buildModelSelection(
-        selectedModelSelectionForSend.provider,
-        selectedModelSelectionForSend.model ||
+      const threadCreateModelSelection: ModelSelection = buildModelSelectionForTarget({
+        target: {
+          provider: selectedModelSelectionForSend.provider,
+          profileId: selectedModelSelectionForSend.profileId,
+        },
+        model:
+          selectedModelSelectionForSend.model ||
           selectedModelForSend ||
           targetProjectDefaultModelSelectionForSend?.model ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
-        selectedModelSelectionForSend.options,
-        selectedModelSelectionForSend.provider === "claudeAgent"
-          ? selectedModelSelectionForSend.supportsAutoMode
-          : undefined,
-      );
+        options: selectedModelSelectionForSend.options,
+        supportsAutoMode:
+          selectedModelSelectionForSend.provider === "claudeAgent"
+            ? selectedModelSelectionForSend.supportsAutoMode
+            : undefined,
+      });
 
       if (isLocalDraftThread) {
         const inheritedProjectInstructions =
@@ -8883,6 +8945,13 @@ export default function ChatView({
       return false;
     }
 
+    const modelSelectionForPlanDispatch = queuedTurn?.modelSelection ?? selectedModelSelection;
+    const profileIssue = unsupportedProviderProfileIssue(modelSelectionForPlanDispatch);
+    if (profileIssue) {
+      setThreadError(activeThread.id, profileIssue);
+      return false;
+    }
+
     const threadIdForSend = activeThread.id;
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
@@ -8918,7 +8987,7 @@ export default function ChatView({
       await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
-        modelSelection: queuedTurn?.modelSelection ?? selectedModelSelection,
+        modelSelection: modelSelectionForPlanDispatch,
         runtimeMode: queuedTurn?.runtimeMode ?? runtimeMode,
         interactionMode: nextInteractionMode,
       });
@@ -8929,7 +8998,6 @@ export default function ChatView({
 
       const providerOptionsForPlanDispatch =
         queuedTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
-      const modelSelectionForPlanDispatch = queuedTurn?.modelSelection ?? selectedModelSelection;
       const sourceProposedPlan =
         nextInteractionMode === "default"
           ? buildSourceProposedPlanReference({
@@ -9038,6 +9106,12 @@ export default function ChatView({
       }
       if (isSendBusy || isConnecting || sendInFlightRef.current) {
         setThreadError(activeThread.id, "Wait for the current send to start before editing.");
+        return false;
+      }
+
+      const profileIssue = unsupportedProviderProfileIssue(selectedModelSelection);
+      if (profileIssue) {
+        setThreadError(activeThread.id, profileIssue);
         return false;
       }
 
@@ -9307,6 +9381,16 @@ export default function ChatView({
       isConnecting ||
       sendInFlightRef.current
     ) {
+      return;
+    }
+
+    const profileIssue = unsupportedProviderProfileIssue(selectedModelSelection);
+    if (profileIssue) {
+      toastManager.add({
+        type: "warning",
+        title: "Implementation is unavailable",
+        description: profileIssue,
+      });
       return;
     }
 
@@ -10161,7 +10245,7 @@ export default function ChatView({
     isServerThread,
     supportsFastSlashCommand,
     canOfferCompactCommand:
-      supportsThreadCompaction(providerComposerCapabilitiesQuery.data) &&
+      supportsThreadCompaction(providerComposerCapabilities) &&
       isServerThread &&
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
@@ -10171,6 +10255,7 @@ export default function ChatView({
     fastModeEnabled,
     providerNativeCommands,
     providerCommandDiscoveryCwd: composerSkillCwd,
+    targetExecutable: selectedTargetExecutable,
     selectedProvider,
     currentProviderModelOptions,
     selectedModelSelection,
@@ -10367,18 +10452,19 @@ export default function ChatView({
       ((mentionTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
         workspaceEntriesQuery.isLoading ||
         workspaceEntriesQuery.isFetching ||
-        providerPluginsQuery.isLoading ||
-        providerPluginsQuery.isFetching)) ||
+        isProviderDiscoveryPending(selectedTargetExecutable, providerPluginsQuery))) ||
     (composerTriggerKind === "slash-command" &&
-      (providerCommandsQuery.isLoading ||
-        providerCommandsQuery.isFetching ||
-        providerSkillsQuery.isLoading ||
-        providerSkillsQuery.isFetching)) ||
+      isProviderDiscoveryPending(
+        selectedTargetExecutable,
+        providerCommandsQuery,
+        providerSkillsQuery,
+      )) ||
     (composerTriggerKind === "skill" &&
-      (providerComposerCapabilitiesQuery.isLoading ||
-        providerComposerCapabilitiesQuery.isFetching ||
-        providerSkillsQuery.isLoading ||
-        providerSkillsQuery.isFetching));
+      isProviderDiscoveryPending(
+        selectedTargetExecutable,
+        providerComposerCapabilitiesQuery,
+        providerSkillsQuery,
+      ));
 
   const onPromptChange = useCallback(
     (

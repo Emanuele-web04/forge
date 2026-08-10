@@ -144,7 +144,7 @@ import {
 import {
   prefetchProviderModelsForNewThread,
   resolveNewThreadModelPrefetchCwd,
-  resolveNewThreadModelPrefetchProvider,
+  resolveNewThreadModelPrefetchTarget,
 } from "../lib/providerModelPrefetch";
 import { serverConfigQueryOptions, serverSettingsQueryOptions } from "../lib/serverReactQuery";
 import {
@@ -2602,12 +2602,15 @@ export default function Sidebar() {
       const draftComposer = draftThread
         ? (draftStore.draftsByThreadId[draftThread.threadId] ?? null)
         : null;
-      const provider = resolveNewThreadModelPrefetchProvider({
+      const prefetchTarget = resolveNewThreadModelPrefetchTarget({
         draftActiveProvider: draftComposer?.activeProvider ?? null,
         stickyActiveProvider: draftStore.stickyActiveProvider,
-        projectDefaultProvider: project.defaultModelSelection?.provider ?? null,
+        projectDefaultModelSelection: project.defaultModelSelection,
         defaultProvider: appSettings.defaultProvider,
+        draftModelSelectionByProvider: draftComposer?.modelSelectionByProvider,
+        stickyModelSelectionByProvider: draftStore.stickyModelSelectionByProvider,
       });
+      const provider = prefetchTarget.provider;
       // Droid discovery spins a disposable ACP session per model — only warm it
       // from explicit new-thread intent (hover/click), not idle project focus.
       if (provider === "droid" && options?.includeDroid !== true) {
@@ -2621,6 +2624,7 @@ export default function Sidebar() {
 
       prefetchProviderModelsForNewThread(queryClient, {
         provider,
+        targetExecutable: prefetchTarget.targetExecutable,
         settings: appSettings,
         cwd,
       });

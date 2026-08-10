@@ -8,11 +8,12 @@
 // Layer: Kanban UI component
 // Exports: KanbanNewTaskDialog
 
-import type {
-  ProjectId,
-  ProviderInteractionMode,
-  ProviderKind,
-  RuntimeMode,
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  type ProjectId,
+  type ProviderInteractionMode,
+  type ProviderKind,
+  type RuntimeMode,
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -146,6 +147,7 @@ export function KanbanNewTaskDialog({
     pendingImageCount,
     waitForPendingImages,
     selectedProvider,
+    selectedProfileId,
     selectedModel,
     selectedModelSupportsAutoMode,
     selectedProviderModelOptions,
@@ -204,6 +206,7 @@ export function KanbanNewTaskDialog({
     selectedRuntimeAgents,
   } = useProviderModelCatalog({
     selectedProvider,
+    targetExecutable: selectedProfileId === DEFAULT_PROVIDER_PROFILE_ID,
     // Keep discovery warm whenever either picker can open so cursor/codex effort
     // and fast-mode controls are populated, not just the model list.
     discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
@@ -311,6 +314,7 @@ export function KanbanNewTaskDialog({
     composerMentions,
     scratchThreadId,
     selectedProvider,
+    targetExecutable: selectedProfileId === DEFAULT_PROVIDER_PROFILE_ID,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd: selectedProject?.cwd ?? null,

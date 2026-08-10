@@ -82,13 +82,17 @@ export const providerDiscoveryQueryKeys = {
     [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
 };
 
-export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
+export function providerComposerCapabilitiesQueryOptions(
+  provider: ProviderKind,
+  enabled = true,
+) {
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider),
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.provider.getComposerCapabilities({ provider });
     },
+    enabled,
     staleTime: Infinity,
   });
 }

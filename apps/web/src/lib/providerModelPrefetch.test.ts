@@ -3,7 +3,12 @@
 //          the same React Query keys ChatView uses for listModels.
 // Layer: Web lib tests
 
-import type { ProviderKind } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  ProviderProfileId,
+  type ModelSlug,
+  type ProviderKind,
+} from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +17,7 @@ import {
   providerModelsPrefetchQueryOptions,
   resolveNewThreadModelPrefetchCwd,
   resolveNewThreadModelPrefetchProvider,
+  resolveNewThreadModelPrefetchTarget,
   type ProviderModelPrefetchSettings,
 } from "./providerModelPrefetch";
 import { providerDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
@@ -72,6 +78,92 @@ describe("resolveNewThreadModelPrefetchProvider", () => {
         defaultProvider: "claudeAgent",
       }),
     ).toBe("claudeAgent");
+  });
+});
+
+describe("resolveNewThreadModelPrefetchTarget", () => {
+  const projectSelection = {
+    provider: "codex",
+    profileId: ProviderProfileId.makeUnsafe("project"),
+    model: "project-model" as ModelSlug,
+  } as const;
+  const stickySelection = {
+    provider: "codex",
+    profileId: ProviderProfileId.makeUnsafe("sticky"),
+    model: "sticky-model" as ModelSlug,
+  } as const;
+  const draftSelection = {
+    provider: "codex",
+    profileId: ProviderProfileId.makeUnsafe("draft"),
+    model: "draft-model" as ModelSlug,
+  } as const;
+
+  it("resolves the selected provider profile with draft, sticky, then project precedence", () => {
+    const common = {
+      draftActiveProvider: "codex" as const,
+      stickyActiveProvider: "codex" as const,
+      projectDefaultModelSelection: projectSelection,
+      defaultProvider: "claudeAgent" as const,
+    };
+
+    expect(
+      resolveNewThreadModelPrefetchTarget({
+        ...common,
+        draftModelSelectionByProvider: { codex: draftSelection },
+        stickyModelSelectionByProvider: { codex: stickySelection },
+      }),
+    ).toEqual({
+      provider: "codex",
+      modelSelection: draftSelection,
+      targetExecutable: false,
+    });
+    expect(
+      resolveNewThreadModelPrefetchTarget({
+        ...common,
+        stickyModelSelectionByProvider: { codex: stickySelection },
+      }).modelSelection,
+    ).toEqual(stickySelection);
+    expect(resolveNewThreadModelPrefetchTarget(common).modelSelection).toEqual(projectSelection);
+  });
+
+  it("feeds an unsupported resolved profile into the prefetch fail-closed gate", () => {
+    const queryClient = new QueryClient();
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+    const target = resolveNewThreadModelPrefetchTarget({
+      draftActiveProvider: "codex",
+      defaultProvider: "claudeAgent",
+      draftModelSelectionByProvider: { codex: draftSelection },
+    });
+
+    prefetchProviderModelsForNewThread(queryClient, {
+      provider: target.provider,
+      targetExecutable: target.targetExecutable,
+      settings: makeSettings(),
+      cwd: "/repo",
+    });
+
+    expect(prefetchQuery).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing or default selection as executable", () => {
+    expect(
+      resolveNewThreadModelPrefetchTarget({
+        defaultProvider: "codex",
+      }).targetExecutable,
+    ).toBe(true);
+    expect(
+      resolveNewThreadModelPrefetchTarget({
+        draftActiveProvider: "codex",
+        defaultProvider: "claudeAgent",
+        draftModelSelectionByProvider: {
+          codex: {
+            provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            model: "gpt-5.6-sol" as ModelSlug,
+          },
+        },
+      }).targetExecutable,
+    ).toBe(true);
   });
 });
 
@@ -171,6 +263,7 @@ describe("prefetchProviderModelsForNewThread", () => {
 
     prefetchProviderModelsForNewThread(queryClient, {
       provider: "kilo" satisfies ProviderKind,
+      targetExecutable: true,
       settings: makeSettings({
         kiloBinaryPath: "/bin/kilo",
       }),
@@ -195,6 +288,7 @@ describe("prefetchProviderModelsForNewThread", () => {
 
     prefetchProviderModelsForNewThread(queryClient, {
       provider: "cursor",
+      targetExecutable: true,
       settings: makeSettings({ cursorBinaryPath: "/bin/agent" }),
     });
 
@@ -205,5 +299,18 @@ describe("prefetchProviderModelsForNewThread", () => {
     expect(prefetchQuery.mock.calls[1]?.[0].queryKey).toEqual(
       providerDiscoveryQueryKeys.composerCapabilities("cursor"),
     );
+  });
+
+  it("does not prefetch through the default account for an unavailable target", () => {
+    const queryClient = new QueryClient();
+    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+
+    prefetchProviderModelsForNewThread(queryClient, {
+      provider: "codex",
+      targetExecutable: false,
+      settings: makeSettings(),
+    });
+
+    expect(prefetchQuery).not.toHaveBeenCalled();
   });
 });

@@ -51,6 +51,8 @@ const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
 
 export function useProviderModelCatalog(input: {
   selectedProvider: ProviderKind;
+  /** False when the selected account target cannot be executed safely. */
+  targetExecutable: boolean;
   /**
    * Enables discovery for the on-demand providers (cursor/grok/droid/kilo/opencode/pi)
    * even when they are not selected — pass the picker's open state so their lists
@@ -70,6 +72,7 @@ export function useProviderModelCatalog(input: {
   agentDiscoveryPolicy?: "selected" | "eager-core";
 }): ProviderModelCatalog {
   const { selectedProvider, discoveryEnabled, modelHintByProvider } = input;
+  const targetExecutable = input.targetExecutable === true;
   const agentDiscoveryPolicy = input.agentDiscoveryPolicy ?? "selected";
   const discoveryCwd = input.cwd ?? null;
   const { settings, serverSettings } = useAppSettings();
@@ -87,6 +90,9 @@ export function useProviderModelCatalog(input: {
     provider: ProviderKind,
     prefetchRequested = discoveryEnabled,
   ): boolean => {
+    if (!targetExecutable) {
+      return false;
+    }
     // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
     // undefined while the settings query is in flight and stays undefined if it
     // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
@@ -301,18 +307,18 @@ export function useProviderModelCatalog(input: {
       ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
     > = { ...staticOptions };
     const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
-      claudeAgent: claudeDynamicModelsQuery.data,
-      codex: codexDynamicModelsQuery.data,
+      claudeAgent: targetExecutable ? claudeDynamicModelsQuery.data : undefined,
+      codex: targetExecutable ? codexDynamicModelsQuery.data : undefined,
       cursor:
-        cursorDynamicModelsQuery.data === undefined
+        !targetExecutable || cursorDynamicModelsQuery.data === undefined
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
-      antigravity: antigravityModelsQuery.data,
-      grok: grokDynamicModelsQuery.data,
-      droid: droidDynamicModelsQuery.data,
-      kilo: kiloDynamicModelsQuery.data,
-      opencode: openCodeDynamicModelsQuery.data,
-      pi: piDynamicModelsQuery.data,
+      antigravity: targetExecutable ? antigravityModelsQuery.data : undefined,
+      grok: targetExecutable ? grokDynamicModelsQuery.data : undefined,
+      droid: targetExecutable ? droidDynamicModelsQuery.data : undefined,
+      kilo: targetExecutable ? kiloDynamicModelsQuery.data : undefined,
+      opencode: targetExecutable ? openCodeDynamicModelsQuery.data : undefined,
+      pi: targetExecutable ? piDynamicModelsQuery.data : undefined,
     };
     for (const provider of [
       "claudeAgent",
@@ -348,6 +354,7 @@ export function useProviderModelCatalog(input: {
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
+    targetExecutable,
   ]);
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
@@ -372,17 +379,30 @@ export function useProviderModelCatalog(input: {
   const runtimeModelsByProvider = useMemo<
     Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>
   >(
-    () => ({
-      claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
-      codex: codexDynamicModelsQuery.data?.models ?? [],
-      cursor: cursorRuntimeModels,
-      antigravity: antigravityModelsQuery.data?.models ?? [],
-      grok: grokDynamicModelsQuery.data?.models ?? [],
-      droid: droidDynamicModelsQuery.data?.models ?? [],
-      kilo: kiloDynamicModelsQuery.data?.models ?? [],
-      opencode: openCodeDynamicModelsQuery.data?.models ?? [],
-      pi: piDynamicModelsQuery.data?.models ?? [],
-    }),
+    () =>
+      targetExecutable
+        ? {
+            claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
+            codex: codexDynamicModelsQuery.data?.models ?? [],
+            cursor: cursorRuntimeModels,
+            antigravity: antigravityModelsQuery.data?.models ?? [],
+            grok: grokDynamicModelsQuery.data?.models ?? [],
+            droid: droidDynamicModelsQuery.data?.models ?? [],
+            kilo: kiloDynamicModelsQuery.data?.models ?? [],
+            opencode: openCodeDynamicModelsQuery.data?.models ?? [],
+            pi: piDynamicModelsQuery.data?.models ?? [],
+          }
+        : {
+            claudeAgent: [],
+            codex: [],
+            cursor: [],
+            antigravity: [],
+            grok: [],
+            droid: [],
+            kilo: [],
+            opencode: [],
+            pi: [],
+          },
     [
       antigravityModelsQuery.data?.models,
       claudeDynamicModelsQuery.data?.models,
@@ -393,6 +413,7 @@ export function useProviderModelCatalog(input: {
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
+      targetExecutable,
     ],
   );
 
@@ -406,8 +427,9 @@ export function useProviderModelCatalog(input: {
     [modelHintByProvider, runtimeModelsByProvider, selectedProvider],
   );
 
-  const selectedDynamicAgents =
-    selectedProvider === "claudeAgent"
+  const selectedDynamicAgents = !targetExecutable
+    ? EMPTY_PROVIDER_AGENTS
+    : selectedProvider === "claudeAgent"
       ? (claudeDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
       : selectedProvider === "kilo"
         ? (kiloDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
@@ -445,11 +467,12 @@ export function useProviderModelCatalog(input: {
                     ? openCodeDynamicModelsQuery
                     : piDynamicModelsQuery;
   const selectedProviderModelsLoading =
-    selectedProviderRuntimeModelDiscoveryPending ||
-    (loadingModelProviders[selectedProvider] === undefined &&
-      (selectedProviderModelsQuery.isLoading ||
-        (selectedProviderModelsQuery.isFetching &&
-          selectedProviderModelsQuery.data === undefined)));
+    targetExecutable &&
+    (selectedProviderRuntimeModelDiscoveryPending ||
+      (loadingModelProviders[selectedProvider] === undefined &&
+        (selectedProviderModelsQuery.isLoading ||
+          (selectedProviderModelsQuery.isFetching &&
+            selectedProviderModelsQuery.data === undefined))));
 
   return useMemo(
     () => ({
