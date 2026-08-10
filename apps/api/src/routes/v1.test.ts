@@ -17,7 +17,8 @@ import { createWorkosAuth } from "../workos";
 import {
   createV1Routes,
   DEVICE_RATE_LIMIT_PER_MINUTE,
-  PASSWORD_RATE_LIMIT_PER_MINUTE,
+  OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
+  OTP_SEND_RATE_LIMIT_PER_MINUTE,
   RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
 } from "./v1";
 
@@ -25,6 +26,15 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
 function authHeaders(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}`, "content-type": "application/json" };
+}
+
+/** JSON POST with a per-test client IP, so rate budgets never couple tests. */
+function postJson(app: Hono, path: string, body: unknown, clientIp: string) {
+  return app.request(path, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": clientIp },
+    body: JSON.stringify(body),
+  });
 }
 
 function registerHostBody(environmentId: string, overrides: Record<string, unknown> = {}) {
@@ -507,39 +517,74 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     expect(deleteRes.status).toBe(204);
   });
 
-  describe("password authentication", () => {
-    const PASSWORD = "correct-horse-battery-staple";
-
-    function passwordHeaders(): Record<string, string> {
-      return { "content-type": "application/json" };
+  describe("email OTP authentication", () => {
+    /** Sends the code and reads it from the fake, as a human reads their inbox. */
+    async function sendCode(app: Hono, email: string, clientIp: string) {
+      const res = await postJson(app, "/api/v1/auth/otp/send", { email }, clientIp);
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as { email: string; expiresAt: string };
+      expect(body.email).toBe(email);
+      expect(typeof body.expiresAt).toBe("string");
+      const live = workos.currentMagicAuth(email);
+      if (!live) throw new Error("fake WorkOS minted no magic auth code");
+      return { body, code: live.code };
     }
 
-    async function signInRequest(app: Hono, body: unknown, path = "/api/v1/auth/password/sign-in") {
-      return app.request(path, {
-        method: "POST",
-        headers: passwordHeaders(),
-        body: JSON.stringify(body),
-      });
-    }
-
-    it("signs in with a correct password and returns a usable token pair", async () => {
+    it("signs in a brand-new email — send, redeem, usable token pair", async () => {
       const { app } = buildApp();
-      const email = `ada-${randomUUID()}@example.com`;
-      const user = workos.addPasswordUser({ email, password: PASSWORD });
+      const email = `new-${randomUUID()}@example.com`;
 
-      const res = await signInRequest(app, { email, password: PASSWORD });
+      const { code } = await sendCode(app, email, "203.0.113.20");
+      const res = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code },
+        "203.0.113.20",
+      );
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { accessToken: string; user: { id: string } };
-      expect(body.user.id).toBe(user.id);
-      expect(typeof body.accessToken).toBe("string");
+      const auth = (await res.json()) as {
+        accessToken: string;
+        user: { id: string; email: string };
+      };
+      expect(auth.user.email).toBe(email);
+      expect(typeof auth.accessToken).toBe("string");
 
-      // The token is real: it reaches an authenticated route, which is what
-      // makes this a sign-in rather than a well-shaped JSON response.
+      // The account is real afterwards: a second send-and-redeem signs the
+      // same user in again rather than provisioning a duplicate.
+      const { code: secondCode } = await sendCode(app, email, "203.0.113.20");
+      const again = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code: secondCode },
+        "203.0.113.20",
+      );
+      expect(again.status).toBe(200);
+      const secondAuth = (await again.json()) as { user: { id: string } };
+      expect(secondAuth.user.id).toBe(auth.user.id);
+    });
+
+    it("signs in an existing user with the same flow", async () => {
+      const { app } = buildApp();
+      const existing = workos.addUser({ email: `ada-${randomUUID()}@example.com` });
+
+      const { code } = await sendCode(app, existing.email, "203.0.113.21");
+      const res = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email: existing.email, code },
+        "203.0.113.21",
+      );
+      expect(res.status).toBe(200);
+      const auth = (await res.json()) as { accessToken: string; user: { id: string } };
+      // The existing account, not a duplicate.
+      expect(auth.user.id).toBe(existing.id);
+
+      // And the token reaches an authenticated route once scoped.
       const organization = workos.addOrganization({ name: "Analytical Engines" });
-      workos.addMembership(organization.id, user.id);
+      workos.addMembership(organization.id, existing.id);
       clearOrgCache();
       const scoped = await workos.signAccessToken({
-        sub: user.id,
+        sub: existing.id,
         sid: `session_${randomUUID()}`,
         orgId: organization.id,
       });
@@ -547,177 +592,181 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(meRes.status).toBe(200);
     });
 
-    it("answers 401 invalid_credentials for a wrong password", async () => {
+    it("answers 401 invalid_verification_code for a wrong code", async () => {
       const { app } = buildApp();
       const email = `ada-${randomUUID()}@example.com`;
-      workos.addPasswordUser({ email, password: PASSWORD });
+      const { code } = await sendCode(app, email, "203.0.113.22");
+      const wrongCode = code === "999999" ? "999998" : "999999";
 
-      const res = await signInRequest(app, { email, password: "not-the-password" });
-      expect(res.status).toBe(401);
-      expect(await res.json()).toMatchObject({ error: "invalid_credentials" });
-    });
-
-    // Same answer as a wrong password: telling them apart would let anyone
-    // enumerate which email addresses have accounts.
-    it("answers the same 401 for an unknown email as for a wrong password", async () => {
-      const { app } = buildApp();
-      const res = await signInRequest(app, {
-        email: `nobody-${randomUUID()}@example.com`,
-        password: PASSWORD,
-      });
-      expect(res.status).toBe(401);
-      expect(await res.json()).toMatchObject({ error: "invalid_credentials" });
-    });
-
-    it("signs up, creating the user and returning a session", async () => {
-      const { app } = buildApp();
-      const email = `new-${randomUUID()}@example.com`;
-
-      const res = await signInRequest(
+      const res = await postJson(
         app,
-        { email, password: PASSWORD },
-        "/api/v1/auth/password/sign-up",
+        "/api/v1/auth/otp/authenticate",
+        { email, code: wrongCode },
+        "203.0.113.22",
       );
-      expect(res.status).toBe(201);
-      const body = (await res.json()) as { accessToken: string; user: { email: string } };
-      expect(body.user.email).toBe(email);
-      expect(typeof body.accessToken).toBe("string");
-
-      // The account is real afterwards: the same credentials sign in again.
-      const again = await signInRequest(app, { email, password: PASSWORD });
-      expect(again.status).toBe(200);
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error: "invalid_verification_code" });
     });
 
-    it("answers 409 email_taken when the address is already registered", async () => {
+    it("answers 401 invalid_verification_code for an expired code", async () => {
       const { app } = buildApp();
-      const email = `dup-${randomUUID()}@example.com`;
-      workos.addPasswordUser({ email, password: PASSWORD });
+      const email = `ada-${randomUUID()}@example.com`;
+      const { code } = await sendCode(app, email, "203.0.113.23");
+      workos.expireMagicAuth(email);
 
-      const res = await signInRequest(
+      const res = await postJson(
         app,
-        { email, password: PASSWORD },
-        "/api/v1/auth/password/sign-up",
+        "/api/v1/auth/otp/authenticate",
+        { email, code },
+        "203.0.113.23",
       );
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({ error: "email_taken" });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error: "invalid_verification_code" });
+    });
+
+    it("invalidates the old code when a new one is sent", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+      const { code: oldCode } = await sendCode(app, email, "203.0.113.24");
+      const { code: newCode } = await sendCode(app, email, "203.0.113.24");
+      expect(newCode).not.toBe(oldCode);
+
+      const stale = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code: oldCode },
+        "203.0.113.24",
+      );
+      expect(stale.status).toBe(401);
+
+      const current = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code: newCode },
+        "203.0.113.24",
+      );
+      expect(current.status).toBe(200);
+    });
+
+    // A send that said "unknown email" would let anyone enumerate which
+    // addresses have accounts; existing and new addresses answer identically.
+    it("answers the same 202 shape whether or not the address has an account", async () => {
+      const { app } = buildApp();
+      const existing = workos.addUser({ email: `known-${randomUUID()}@example.com` });
+      const unknown = `unknown-${randomUUID()}@example.com`;
+
+      const knownRes = await postJson(
+        app,
+        "/api/v1/auth/otp/send",
+        { email: existing.email },
+        "203.0.113.25",
+      );
+      const unknownRes = await postJson(
+        app,
+        "/api/v1/auth/otp/send",
+        { email: unknown },
+        "203.0.113.26",
+      );
+      expect(knownRes.status).toBe(202);
+      expect(unknownRes.status).toBe(202);
+      const knownBody = (await knownRes.json()) as Record<string, unknown>;
+      const unknownBody = (await unknownRes.json()) as Record<string, unknown>;
+      expect(Object.keys(knownBody).toSorted()).toEqual(Object.keys(unknownBody).toSorted());
     });
 
     it.each([
-      ["a missing password", { email: "ada@example.com" }],
-      ["a missing email", { password: PASSWORD }],
-      ["an empty password", { email: "ada@example.com", password: "" }],
-    ])("answers 400 validation_failed for %s", async (_label, body) => {
+      ["a missing email", {}],
+      ["a blank email", { email: "  " }],
+    ])("answers 400 validation_failed for %s on send", async (_label, body) => {
       const { app } = buildApp();
-      const res = await signInRequest(app, body);
+      const res = await postJson(app, "/api/v1/auth/otp/send", body, "203.0.113.27");
       expect(res.status).toBe(400);
       expect(await res.json()).toMatchObject({ error: "validation_failed" });
     });
 
-    // The whole point of the amendment's "never log or store passwords" rule.
-    // Asserted rather than trusted, because the natural implementations of
-    // both paths (a schema decoder's message, an upstream error body) quote
-    // the offending value.
-    it("never emits the password in a response body or a log line", async () => {
+    it.each([
+      ["a missing code", { email: "ada@example.com" }],
+      ["a non-numeric code", { email: "ada@example.com", code: "abc123" }],
+      ["a short code", { email: "ada@example.com", code: "12345" }],
+    ])("answers 400 validation_failed for %s on authenticate", async (_label, body) => {
       const { app } = buildApp();
-      const secret = `pw-${randomUUID()}`;
-      const email = `ada-${randomUUID()}@example.com`;
-      workos.addPasswordUser({ email, password: PASSWORD });
-
-      const logged: string[] = [];
-      const capture = (...args: unknown[]) => {
-        logged.push(args.map((arg) => String(arg)).join(" "));
-      };
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(capture);
-      const logSpy = vi.spyOn(console, "log").mockImplementation(capture);
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(capture);
-      try {
-        // A wrong password, a malformed body, and a sign-up conflict: the
-        // three paths that produce an error mentioning the request.
-        const wrong = await signInRequest(app, { email, password: secret });
-        const malformed = await signInRequest(app, { email, password: { nested: secret } });
-        const conflict = await signInRequest(
-          app,
-          { email, password: secret },
-          "/api/v1/auth/password/sign-up",
-        );
-
-        for (const res of [wrong, malformed, conflict]) {
-          expect(await res.text()).not.toContain(secret);
-        }
-        expect(logged.join("\n")).not.toContain(secret);
-      } finally {
-        errorSpy.mockRestore();
-        logSpy.mockRestore();
-        warnSpy.mockRestore();
-      }
+      const res = await postJson(app, "/api/v1/auth/otp/authenticate", body, "203.0.113.28");
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
     });
 
-    it("rate limits password attempts well below the device limit", async () => {
+    it("rate limits sends on the email-sending budget", async () => {
       const { app } = buildApp();
       const email = `ada-${randomUUID()}@example.com`;
-      workos.addPasswordUser({ email, password: PASSWORD });
-      const headers = { ...passwordHeaders(), "x-forwarded-for": "203.0.113.9" };
+      const clientIp = "203.0.113.29";
 
-      const attempt = () =>
-        app.request("/api/v1/auth/password/sign-in", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ email, password: "wrong" }),
-        });
-
-      for (let i = 0; i < PASSWORD_RATE_LIMIT_PER_MINUTE; i += 1) {
-        expect((await attempt()).status).toBe(401);
+      for (let i = 0; i < OTP_SEND_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect((await postJson(app, "/api/v1/auth/otp/send", { email }, clientIp)).status).toBe(
+          202,
+        );
       }
-      const limited = await attempt();
+      const limited = await postJson(app, "/api/v1/auth/otp/send", { email }, clientIp);
       expect(limited.status).toBe(429);
       expect(await limited.json()).toMatchObject({ error: "rate_limited" });
 
-      // A different client is unaffected, and the device budget is separate.
-      const other = await app.request("/api/v1/auth/password/sign-in", {
-        method: "POST",
-        headers: { ...passwordHeaders(), "x-forwarded-for": "203.0.113.10" },
-        body: JSON.stringify({ email, password: PASSWORD }),
-      });
-      expect(other.status).toBe(200);
+      // The redemption budget is separate: authenticate is still reachable
+      // from the same client, and another client can still send.
+      const live = workos.currentMagicAuth(email);
+      if (!live) throw new Error("fake WorkOS minted no magic auth code");
+      const auth = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code: live.code },
+        clientIp,
+      );
+      expect(auth.status).toBe(200);
+      const other = await postJson(
+        app,
+        "/api/v1/auth/otp/send",
+        { email: `other-${randomUUID()}@example.com` },
+        "203.0.113.30",
+      );
+      expect(other.status).toBe(202);
     });
 
-    it("surfaces email verification as 403 email_verification_required", async () => {
-      const verifying = await startFakeWorkos({ requireEmailVerification: true });
-      try {
-        const { db } = buildApp();
-        const verifyingConfig = verifying.config({ databaseUrl });
-        const app = new Hono();
-        app.route(
-          "/api/v1",
-          createV1Routes({
-            auth: createWorkosAuth(verifyingConfig),
-            db,
-            config: verifyingConfig,
-          }),
+    it("rate limits redemption attempts well below the device limit", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+      const clientIp = "203.0.113.31";
+
+      for (let i = 0; i < OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE; i += 1) {
+        const res = await postJson(
+          app,
+          "/api/v1/auth/otp/authenticate",
+          { email, code: "000000" },
+          clientIp,
         );
-
-        const res = await app.request("/api/v1/auth/password/sign-up", {
-          method: "POST",
-          headers: passwordHeaders(),
-          body: JSON.stringify({
-            email: `unverified-${randomUUID()}@example.com`,
-            password: PASSWORD,
-          }),
-        });
-        expect(res.status).toBe(403);
-        expect(await res.json()).toMatchObject({ error: "email_verification_required" });
-      } finally {
-        await verifying.close();
+        expect(res.status).toBe(401);
       }
+      const limited = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code: "000000" },
+        clientIp,
+      );
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
+
+      // A different client is unaffected.
+      const other = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code: "000000" },
+        "203.0.113.32",
+      );
+      expect(other.status).toBe(401);
     });
 
-    // WorkOS refuses the password grant outright for a domain governed by an
-    // SSO connection (observed live: its built-in example.com test connection
-    // answers 400 `sso_required`). Surfaced as its own 403 rather than
-    // invalid_credentials — "use your company sign-on" is the only actionable
-    // answer — and identically for sign-in and an existing account, since the
-    // refusal is domain policy, not an account property.
-    it("surfaces an SSO-governed domain as 403 sso_required", async () => {
+    // WorkOS refuses Magic Auth outright for a domain governed by an SSO
+    // connection. Surfaced as its own 403 — "use your company sign-on" is the
+    // only actionable answer — identically whether or not an account exists,
+    // since the refusal is domain policy, not an account property.
+    it("surfaces an SSO-governed domain as 403 sso_required on send", async () => {
       const ssoWorkos = await startFakeWorkos({ ssoRequiredDomains: ["example.com"] });
       try {
         const { db } = buildApp();
@@ -728,41 +777,79 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
           createV1Routes({ auth: createWorkosAuth(ssoConfig), db, config: ssoConfig }),
         );
 
-        const res = await app.request("/api/v1/auth/password/sign-in", {
-          method: "POST",
-          headers: passwordHeaders(),
-          body: JSON.stringify({ email: `sso-${randomUUID()}@example.com`, password: PASSWORD }),
-        });
+        const res = await postJson(
+          app,
+          "/api/v1/auth/otp/send",
+          { email: `sso-${randomUUID()}@example.com` },
+          "203.0.113.33",
+        );
         expect(res.status).toBe(403);
         expect(await res.json()).toMatchObject({ error: "sso_required" });
       } finally {
         await ssoWorkos.close();
       }
     });
+
+    // The OTP code is a credential — and the WorkOS create-magic-auth
+    // response literally contains it. Asserted rather than trusted, because
+    // the natural implementations of the send route (return the upstream
+    // body) and of every refusal (schema decoder message, upstream echo)
+    // leak it.
+    it("never emits the code in a response body or a log line", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+
+      const logged: string[] = [];
+      const capture = (...args: unknown[]) => {
+        logged.push(args.map((arg) => String(arg)).join(" "));
+      };
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(capture);
+      const logSpy = vi.spyOn(console, "log").mockImplementation(capture);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(capture);
+      try {
+        // The send response is where the code most plausibly leaks: the
+        // WorkOS body carries it, and only allowlist parsing keeps it out.
+        const sendRes = await postJson(app, "/api/v1/auth/otp/send", { email }, "203.0.113.34");
+        expect(sendRes.status).toBe(202);
+        const live = workos.currentMagicAuth(email);
+        if (!live) throw new Error("fake WorkOS minted no magic auth code");
+        expect(await sendRes.text()).not.toContain(live.code);
+
+        // A wrong code and a malformed body: the refusals whose natural
+        // implementations (upstream echo, schema decoder message) quote the
+        // submitted value.
+        const wrongCode = live.code === "999999" ? "999998" : "999999";
+        const wrong = await postJson(
+          app,
+          "/api/v1/auth/otp/authenticate",
+          { email, code: wrongCode },
+          "203.0.113.34",
+        );
+        const malformed = await postJson(
+          app,
+          "/api/v1/auth/otp/authenticate",
+          { email, code: { nested: wrongCode } },
+          "203.0.113.34",
+        );
+        for (const res of [wrong, malformed]) {
+          expect(await res.text()).not.toContain(wrongCode);
+        }
+
+        const joined = logged.join("\n");
+        expect(joined).not.toContain(live.code);
+        expect(joined).not.toContain(wrongCode);
+      } finally {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
+    });
   });
 
   describe("email verification", () => {
-    const PASSWORD = "correct-horse-battery-staple";
-    let verifyingWorkos: FakeWorkos;
-    let verifyingApp: Hono;
-
-    beforeAll(async () => {
-      verifyingWorkos = await startFakeWorkos({ requireEmailVerification: true });
-      const verifyingConfig = verifyingWorkos.config({ databaseUrl });
-      const { db } = createDb(databaseUrl);
-      verifyingApp = new Hono();
-      verifyingApp.route(
-        "/api/v1",
-        createV1Routes({ auth: createWorkosAuth(verifyingConfig), db, config: verifyingConfig }),
-      );
-    });
-
-    afterAll(async () => {
-      await verifyingWorkos.close();
-    });
-
     function post(path: string, body: unknown, headers: Record<string, string> = {}) {
-      return verifyingApp.request(path, {
+      const { app } = buildApp();
+      return app.request(path, {
         method: "POST",
         headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify(body),
@@ -770,67 +857,40 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     }
 
     /**
-     * Signs up an unverified user and returns the refusal's verification
-     * fields plus the code "the email" carried, read from the fake as a human
-     * would read their inbox. Each call uses a distinct client IP so the
-     * shared password rate budget never couples the tests.
+     * Mints a verification challenge directly on the fake — the Magic Auth
+     * grant verifies the email itself and never answers the challenge, so
+     * the fake stands in for whichever flow produced it. The code is read
+     * from the fake as a human reads their inbox.
      */
-    async function signUpUnverified(clientIp: string) {
+    function issueChallenge() {
       const email = `unverified-${randomUUID()}@example.com`;
-      const res = await post(
-        "/api/v1/auth/password/sign-up",
-        { email, password: PASSWORD },
-        { "x-forwarded-for": clientIp },
-      );
-      expect(res.status).toBe(403);
-      const body = (await res.json()) as {
-        error: string;
-        pendingAuthenticationToken: string;
-        email: string;
-        emailVerificationId: string;
-      };
-      expect(body.error).toBe("email_verification_required");
-      const verification = verifyingWorkos.currentVerification(email);
+      const challenge = workos.issueEmailVerificationChallenge(email);
+      const verification = workos.currentVerification(email);
       if (!verification) throw new Error("fake WorkOS minted no verification");
-      return { email, body, code: verification.code };
+      return { email, challenge, code: verification.code };
     }
 
-    it("carries the pending token, email, and verification id on the 403", async () => {
-      const { email, body } = await signUpUnverified("198.51.100.1");
-      expect(body.email).toBe(email);
-      expect(body.pendingAuthenticationToken).toMatch(/^pat_fake_/);
-      expect(body.emailVerificationId).toMatch(/^email_verification_fake_/);
-    });
-
     it("redeems the emailed code for a usable token pair", async () => {
-      const { email, body, code } = await signUpUnverified("198.51.100.2");
+      const { email, challenge, code } = issueChallenge();
 
       const res = await post(
-        "/api/v1/auth/password/verify-email",
-        { code, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        "/api/v1/auth/verify-email",
+        { code, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
         { "x-forwarded-for": "198.51.100.2" },
       );
       expect(res.status).toBe(200);
       const auth = (await res.json()) as { accessToken: string; user: { email: string } };
       expect(auth.user.email).toBe(email);
       expect(auth.accessToken.length).toBeGreaterThan(0);
-
-      // Verified for good: the password grant now succeeds outright.
-      const signIn = await post(
-        "/api/v1/auth/password/sign-in",
-        { email, password: PASSWORD },
-        { "x-forwarded-for": "198.51.100.2" },
-      );
-      expect(signIn.status).toBe(200);
     });
 
     it("answers 401 invalid_verification_code for a wrong code, leaving the token retryable", async () => {
-      const { body, code } = await signUpUnverified("198.51.100.3");
+      const { challenge, code } = issueChallenge();
       const wrongCode = code === "999999" ? "999998" : "999999";
 
       const wrong = await post(
-        "/api/v1/auth/password/verify-email",
-        { code: wrongCode, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        "/api/v1/auth/verify-email",
+        { code: wrongCode, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
         { "x-forwarded-for": "198.51.100.3" },
       );
       expect(wrong.status).toBe(401);
@@ -838,19 +898,19 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
       // The pending token survived the wrong code; the right one still works.
       const right = await post(
-        "/api/v1/auth/password/verify-email",
-        { code, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        "/api/v1/auth/verify-email",
+        { code, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
         { "x-forwarded-for": "198.51.100.3" },
       );
       expect(right.status).toBe(200);
     });
 
     it("answers 401 invalid_verification_code for a spent pending token", async () => {
-      const { body, code } = await signUpUnverified("198.51.100.4");
+      const { challenge, code } = issueChallenge();
       const redeem = () =>
         post(
-          "/api/v1/auth/password/verify-email",
-          { code, pendingAuthenticationToken: body.pendingAuthenticationToken },
+          "/api/v1/auth/verify-email",
+          { code, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
           { "x-forwarded-for": "198.51.100.4" },
         );
 
@@ -863,30 +923,30 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     });
 
     it("resends a fresh code that works while the old one stops", async () => {
-      const { email, body, code: oldCode } = await signUpUnverified("198.51.100.5");
+      const { email, challenge, code: oldCode } = issueChallenge();
 
       const resend = await post(
-        "/api/v1/auth/password/resend-verification",
-        { emailVerificationId: body.emailVerificationId },
+        "/api/v1/auth/resend-verification",
+        { emailVerificationId: challenge.emailVerificationId },
         { "x-forwarded-for": "198.51.100.5" },
       );
       expect(resend.status).toBe(202);
       expect(await resend.text()).toBe("");
 
-      const fresh = verifyingWorkos.currentVerification(email);
+      const fresh = workos.currentVerification(email);
       if (!fresh) throw new Error("resend left no live verification");
       expect(fresh.code).not.toBe(oldCode);
 
       const stale = await post(
-        "/api/v1/auth/password/verify-email",
-        { code: oldCode, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        "/api/v1/auth/verify-email",
+        { code: oldCode, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
         { "x-forwarded-for": "198.51.100.5" },
       );
       expect(stale.status).toBe(401);
 
       const current = await post(
-        "/api/v1/auth/password/verify-email",
-        { code: fresh.code, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        "/api/v1/auth/verify-email",
+        { code: fresh.code, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
         { "x-forwarded-for": "198.51.100.5" },
       );
       expect(current.status).toBe(200);
@@ -896,7 +956,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     // anyone probe them; unknown ids answer exactly like real ones.
     it("answers the same 202 for an unknown verification id", async () => {
       const res = await post(
-        "/api/v1/auth/password/resend-verification",
+        "/api/v1/auth/resend-verification",
         { emailVerificationId: `email_verification_fake_${randomUUID()}` },
         { "x-forwarded-for": "198.51.100.6" },
       );
@@ -907,31 +967,34 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     it("rate limits resends on their own tight budget", async () => {
       const headers = { "x-forwarded-for": "198.51.100.7" };
       const body = { emailVerificationId: `email_verification_fake_${randomUUID()}` };
+      const { app } = buildApp();
+      const request = (path: string, requestBody: unknown) =>
+        app.request(path, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify(requestBody),
+        });
 
       for (let i = 0; i < RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE; i += 1) {
-        expect(
-          (await post("/api/v1/auth/password/resend-verification", body, headers)).status,
-        ).toBe(202);
+        expect((await request("/api/v1/auth/resend-verification", body)).status).toBe(202);
       }
-      const limited = await post("/api/v1/auth/password/resend-verification", body, headers);
+      const limited = await request("/api/v1/auth/resend-verification", body);
       expect(limited.status).toBe(429);
       expect(await limited.json()).toMatchObject({ error: "rate_limited" });
 
-      // The password budget is separate: verify-email is still reachable from
-      // the same client after the resend budget is spent.
-      const verify = await post(
-        "/api/v1/auth/password/verify-email",
-        { code: "123456", pendingAuthenticationToken: `pat_fake_${randomUUID()}` },
-        headers,
-      );
+      // The redemption budget is separate: verify-email is still reachable
+      // from the same client after the resend budget is spent.
+      const verify = await request("/api/v1/auth/verify-email", {
+        code: "123456",
+        pendingAuthenticationToken: `pat_fake_${randomUUID()}`,
+      });
       expect(verify.status).toBe(401);
     });
 
-    // The code and pending token are bearer-ish secrets on the password path:
-    // asserted out of every response body and every log line, exactly as the
-    // password itself is.
+    // The code and pending token are bearer-ish secrets: asserted out of
+    // every response body and every log line.
     it("never emits the code or pending token in a response body or a log line", async () => {
-      const { body, code } = await signUpUnverified("198.51.100.8");
+      const { challenge, code } = issueChallenge();
 
       const logged: string[] = [];
       const capture = (...args: unknown[]) => {
@@ -946,26 +1009,26 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         // submitted secrets.
         const wrongCode = code === "999999" ? "999998" : "999999";
         const wrong = await post(
-          "/api/v1/auth/password/verify-email",
-          { code: wrongCode, pendingAuthenticationToken: body.pendingAuthenticationToken },
+          "/api/v1/auth/verify-email",
+          { code: wrongCode, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
           { "x-forwarded-for": "198.51.100.8" },
         );
         const malformed = await post(
-          "/api/v1/auth/password/verify-email",
+          "/api/v1/auth/verify-email",
           {
             code: { nested: wrongCode },
-            pendingAuthenticationToken: body.pendingAuthenticationToken,
+            pendingAuthenticationToken: challenge.pendingAuthenticationToken,
           },
           { "x-forwarded-for": "198.51.100.8" },
         );
 
         for (const res of [wrong, malformed]) {
           const text = await res.text();
-          expect(text).not.toContain(body.pendingAuthenticationToken);
+          expect(text).not.toContain(challenge.pendingAuthenticationToken);
           expect(text).not.toContain(wrongCode);
         }
         const joined = logged.join("\n");
-        expect(joined).not.toContain(body.pendingAuthenticationToken);
+        expect(joined).not.toContain(challenge.pendingAuthenticationToken);
         expect(joined).not.toContain(code);
       } finally {
         errorSpy.mockRestore();

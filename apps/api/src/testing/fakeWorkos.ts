@@ -56,11 +56,6 @@ export type FakeWorkos = {
   config(overrides?: Partial<ApiConfig>): ApiConfig;
   /** Registers a user that `getUser` will return, and returns its id. */
   addUser(user: Partial<FakeWorkosUser> & { id?: string }): FakeWorkosUser;
-  /**
-   * Registers a user who can sign in with `password`. The password is held in
-   * clear by this double so the grant can genuinely reject a wrong one.
-   */
-  addPasswordUser(credentials: { email: string; password: string }): FakeWorkosUser;
   /** Registers an organization, as the Organizations API would create it. */
   addOrganization(organization?: { id?: string; name?: string }): FakeWorkosOrganization;
   /** Makes `userId` a member of `orgId`, so membership listing returns it. */
@@ -105,6 +100,27 @@ export type FakeWorkos = {
    * the test types it back in.
    */
   currentVerification(email: string): { emailVerificationId: string; code: string } | undefined;
+  /**
+   * The live Magic Auth for `email`, if one exists — the 6-digit code a real
+   * user would read out of their inbox, and when it expires. Same rule as
+   * {@link currentVerification}: the code reaches a test only through this
+   * accessor, never through the service under test.
+   */
+  currentMagicAuth(email: string): { code: string; expiresAt: string } | undefined;
+  /** Forces the live Magic Auth for `email` past its expiry. */
+  expireMagicAuth(email: string): void;
+  /**
+   * Mints an email-verification challenge for `email` — the pending token and
+   * verification id an `email_verification_required` refusal would carry —
+   * registering the user if needed. Stands in for whichever flow produced the
+   * challenge; the Magic Auth grant itself verifies the email and so never
+   * answers it.
+   */
+  issueEmailVerificationChallenge(email: string): {
+    pendingAuthenticationToken: string;
+    emailVerificationId: string;
+    email: string;
+  };
   /** Every request the server has seen, oldest first. */
   requests: FakeWorkosRequest[];
   close(): Promise<void>;
@@ -140,19 +156,15 @@ export type StartFakeWorkosOptions = {
    */
   onDeviceAuthorization?: (deviceCode: string) => void;
   /**
-   * Makes newly created users unverified, so the password grant answers
-   * `email_verification_required`. Stands in for a WorkOS environment with
-   * email verification switched on, which is a dashboard toggle rather than
-   * anything this service configures.
-   */
-  requireEmailVerification?: boolean;
-  /**
-   * Email domains the fake treats as SSO-governed, refusing the password
-   * grant with the OAuth-shaped `sso_required` body WorkOS answers for them
-   * (observed live via its built-in example.com test connection).
+   * Email domains the fake treats as SSO-governed, refusing Magic Auth with
+   * the OAuth-shaped `sso_required` body WorkOS answers for them (observed
+   * live via its built-in example.com test connection).
    */
   ssoRequiredDomains?: readonly string[];
 };
+
+/** How long a fake Magic Auth code lives — WorkOS's documented 10 minutes. */
+const MAGIC_AUTH_TTL_MS = 10 * 60 * 1000;
 
 export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Promise<FakeWorkos> {
   const apiKey = options.apiKey ?? "sk_test_fake";
@@ -175,14 +187,13 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   /** Live refresh tokens → the user they belong to. Single-use, as WorkOS's are. */
   const refreshTokens = new Map<string, string>();
   /**
-   * Passwords, in clear, by user id. Acceptable only because this is an
-   * in-process double that dies with the test: it exists so the grant can
-   * actually reject a wrong password, which a stub that accepted anything
-   * could not do.
+   * Live Magic Auth codes by email — what WorkOS would have emailed, and when
+   * it stops working. Held in clear only because this is an in-process double
+   * that dies with the test: it exists so the grant can actually reject a
+   * wrong or expired code, which a stub that accepted anything could not do.
+   * A re-send replaces the entry in place, invalidating the old code.
    */
-  const passwords = new Map<string, string>();
-  /** Users whose email is not verified, so the password grant refuses them. */
-  const unverifiedUsers = new Set<string>();
+  const magicAuths = new Map<string, { code: string; expiresAtMs: number }>();
   /**
    * Live email verifications by id — the code WorkOS would have emailed, and
    * who it verifies. A resend replaces the code in place, which is what makes
@@ -204,12 +215,12 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   }
 
   /**
-   * The refusal the password grant answers for an unverified user, minting
-   * the verification (with its emailed code) and pending token the real one
-   * creates as a side effect. Re-refusing reuses the live verification but
-   * always mints a fresh pending token, as WorkOS does per refusal.
+   * Mints the challenge an `email_verification_required` refusal carries —
+   * the verification (with its emailed code) and a fresh pending token.
+   * Reuses a live verification for the same user but always mints a new
+   * pending token, as WorkOS does per refusal.
    */
-  function emailVerificationRefusal(user: FakeWorkosUser) {
+  function mintEmailVerificationChallenge(user: FakeWorkosUser) {
     let verificationId = [...emailVerifications.entries()].find(
       ([, entry]) => entry.userId === user.id,
     )?.[0];
@@ -219,15 +230,8 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     }
     const pendingToken = `pat_fake_${randomUUID()}`;
     pendingAuthTokens.set(pendingToken, { userId: user.id, verificationId });
-    return {
-      code: "email_verification_required",
-      message: "Email ownership must be verified before authentication.",
-      pending_authentication_token: pendingToken,
-      email: user.email,
-      email_verification_id: verificationId,
-    };
+    return { pendingToken, verificationId, email: user.email };
   }
-  const requireEmailVerification = options.requireEmailVerification ?? false;
   const ssoRequiredDomains = new Set(options.ssoRequiredDomains ?? []);
 
   const hasMembership = (orgId: string, userId: string): boolean =>
@@ -391,10 +395,10 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       return c.json(await issueTokenPair(grant.approvedBy));
     }
 
-    // The password grant. Confidential-client, so the secret is checked here
-    // as WorkOS checks it — a proxy that forgot to send it must fail against
-    // this double too, not just in production.
-    if (grantType === "password") {
+    // The Magic Auth grant. Confidential-client, so the secret is checked
+    // here as WorkOS checks it — a proxy that forgot to send it must fail
+    // against this double too, not just in production.
+    if (grantType === "urn:workos:oauth:grant-type:magic-auth:code") {
       if (body?.client_secret !== apiKey) {
         return c.json(
           { error: "invalid_client", error_description: "Missing or invalid client secret" },
@@ -402,34 +406,27 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
         );
       }
       const email = typeof body?.email === "string" ? body.email : "";
-      const submitted = typeof body?.password === "string" ? body.password : "";
-      const domain = email.split("@")[1] ?? "";
-      if (ssoRequiredDomains.has(domain)) {
-        // Refused before the user lookup, as WorkOS does: the answer is domain
-        // policy and identical whether or not the account exists.
-        return c.json(
-          {
-            error: "sso_required",
-            error_description: "User must authenticate using one of the matching connections.",
-          },
-          400,
-        );
+      const submitted = typeof body?.code === "string" ? body.code : "";
+      const live = magicAuths.get(email);
+      if (!live || live.code !== submitted) {
+        // One OAuth-shaped answer for "no live code for that address" and
+        // "wrong code", as WorkOS answers a refused one-time code.
+        return c.json({ error: "invalid_grant", error_description: "Invalid code" }, 401);
       }
-      const record = [...users.values()].find((user) => user.email === email);
-      const stored = record ? passwords.get(record.id) : undefined;
-      if (!record || stored === undefined || stored !== submitted) {
-        // One answer for "no such user" and "wrong password", as WorkOS does:
-        // distinguishing them is an account-existence oracle.
-        return c.json({ error: "invalid_grant", error_description: "Invalid credentials" }, 401);
+      if (live.expiresAtMs <= Date.now()) {
+        magicAuths.delete(email);
+        return c.json({ error: "invalid_grant", error_description: "The code has expired" }, 401);
       }
-      if (unverifiedUsers.has(record.id)) {
-        return c.json(emailVerificationRefusal(record), 403);
-      }
+      // Redeemed: the code is single-use, and the user is provisioned on
+      // first successful redemption — WorkOS's create-on-redeem behavior when
+      // sign-up is allowed.
+      magicAuths.delete(email);
+      const record = [...users.values()].find((user) => user.email === email) ?? addUser({ email });
       return c.json(await issueTokenPair(record.id));
     }
 
     // The email-verification grant: the emailed code plus the pending token
-    // from the refusal above. Confidential-client, like the password grant.
+    // from a challenge. Confidential-client, like the Magic Auth grant.
     if (grantType === "urn:workos:oauth:grant-type:email-verification:code") {
       if (body?.client_secret !== apiKey) {
         return c.json(
@@ -465,11 +462,9 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
           400,
         );
       }
-      // Redeemed: the token and the verification are both single-use, and the
-      // user is verified from here on.
+      // Redeemed: the token and the verification are both single-use.
       pendingAuthTokens.delete(pendingToken);
       emailVerifications.delete(pending.verificationId);
-      unverifiedUsers.delete(pending.userId);
       return c.json(await issueTokenPair(pending.userId));
     }
 
@@ -505,32 +500,40 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     );
   });
 
-  // Create User. Registers the password so the grant above can check it —
-  // stored in memory by this double only; the service under test never sees a
-  // password again after forwarding it.
-  app.post("/user_management/users", async (c) => {
+  // Create Magic Auth. Mints (and "emails") the 6-digit code; the response
+  // contains the code itself, exactly as WorkOS's does — which is what makes
+  // the service's allowlist parsing testable. Refuses SSO-governed domains
+  // before anything else, as WorkOS refuses them by domain policy.
+  app.post("/user_management/magic_auth", async (c) => {
     const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
     const email = typeof body?.email === "string" ? body.email : "";
-    const password = typeof body?.password === "string" ? body.password : "";
-    if (!email || !password) {
-      return c.json({ message: "email and password are required" }, 422);
-    }
-    if ([...users.values()].some((user) => user.email === email)) {
-      // The shape WorkOS uses for a taken address: a field-level validation
-      // error rather than a top-level code.
+    if (!email) return c.json({ message: "email is required" }, 422);
+    const domain = email.split("@")[1] ?? "";
+    if (ssoRequiredDomains.has(domain)) {
       return c.json(
         {
-          code: "invalid_request",
-          message: "Validation failed",
-          errors: [{ field: "email", code: "email_not_available" }],
+          error: "sso_required",
+          error_description: "User must authenticate using one of the matching connections.",
         },
-        422,
+        400,
       );
     }
-    const record = addUser({ email });
-    passwords.set(record.id, password);
-    if (requireEmailVerification) unverifiedUsers.add(record.id);
-    return c.json({ object: "user", ...record, email_verified: !requireEmailVerification }, 201);
+    // A new code replaces any live one, so an earlier emailed code stops
+    // working — exactly the invalidation a resend must cause.
+    const code = mintVerificationCode();
+    const expiresAtMs = Date.now() + MAGIC_AUTH_TTL_MS;
+    magicAuths.set(email, { code, expiresAtMs });
+    return c.json(
+      {
+        object: "magic_auth",
+        id: `magic_auth_fake_${randomUUID()}`,
+        user_id: [...users.values()].find((user) => user.email === email)?.id ?? null,
+        email,
+        expires_at: new Date(expiresAtMs).toISOString(),
+        code,
+      },
+      201,
+    );
   });
 
   // The email-verification object, named by id. Serves the user id, which is
@@ -664,10 +667,26 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       return entry ? { emailVerificationId: entry[0], code: entry[1].code } : undefined;
     },
 
-    addPasswordUser({ email, password }) {
-      const record = addUser({ email });
-      passwords.set(record.id, password);
-      return record;
+    currentMagicAuth(email) {
+      const live = magicAuths.get(email);
+      return live
+        ? { code: live.code, expiresAt: new Date(live.expiresAtMs).toISOString() }
+        : undefined;
+    },
+
+    expireMagicAuth(email) {
+      const live = magicAuths.get(email);
+      if (live) magicAuths.set(email, { ...live, expiresAtMs: Date.now() - 1 });
+    },
+
+    issueEmailVerificationChallenge(email) {
+      const record = [...users.values()].find((user) => user.email === email) ?? addUser({ email });
+      const challenge = mintEmailVerificationChallenge(record);
+      return {
+        pendingAuthenticationToken: challenge.pendingToken,
+        emailVerificationId: challenge.verificationId,
+        email: challenge.email,
+      };
     },
 
     removeMembership(orgId, userId) {

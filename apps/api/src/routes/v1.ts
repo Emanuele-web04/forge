@@ -6,6 +6,7 @@ import {
   type AccountProfile,
   type AccountProfileAvatarColor,
   type AccountProfileHandle,
+  type AuthTokensResponse,
   type DeviceAuthorizationResponse,
   type EmailVerificationRequiredBody,
   type EnvironmentId,
@@ -13,8 +14,9 @@ import {
   type ListHostsResponse,
   type OrganizationRequiredBody,
   type OrganizationSummary,
-  type PasswordAuthResponse,
-  PasswordCredentials,
+  type OtpSendResponse,
+  OtpAuthenticateRequest,
+  OtpSendRequest,
   type RegisterHostResponse,
   RegisterHostRequest,
   ResendVerificationRequest,
@@ -38,11 +40,11 @@ import { ensurePersonalOrg, invalidateOrgCacheForOrganization } from "../orgProv
 import { createRateLimiter } from "../rateLimit";
 import {
   WorkosApiError,
-  WorkosPasswordError,
+  WorkosAuthError,
   type WorkosAuth,
+  type WorkosAuthFailure,
+  type WorkosAuthTokens,
   type WorkosOrganization,
-  type WorkosPasswordAuth,
-  type WorkosPasswordFailure,
   type WorkosUser,
 } from "../workos";
 import packageJson from "../../package.json" with { type: "json" };
@@ -54,20 +56,24 @@ const API_VERSION: string = packageJson.version;
 export const DEVICE_RATE_LIMIT_PER_MINUTE = 10;
 
 /**
- * Password attempts allowed per client per minute. Deliberately far below the
- * device limit: a device authorization is a harmless request for a code, while
- * these carry credentials and are the endpoints worth guessing against. Low
- * enough to make online guessing pointless, high enough to survive a user
- * mistyping a password a few times.
+ * Code-redemption attempts allowed per client per minute. Deliberately far
+ * below the device limit: a device authorization is a harmless request for a
+ * code, while these carry credentials and are the endpoints worth guessing
+ * against. Low enough to make online guessing pointless, high enough to
+ * survive a user mistyping a code a few times.
  */
-export const PASSWORD_RATE_LIMIT_PER_MINUTE = 5;
+export const OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE = 5;
 
 /**
- * Verification-email resends allowed per client per minute, on top of the
- * password budget. Deliberately the tightest of the three: every request
- * makes WorkOS send somebody an email, and one user legitimately needs at
- * most one retry a minute — the UI enforces a 60s countdown of its own.
+ * Code-sending requests allowed per client per minute — the OTP send and the
+ * verification resend share this posture (each has its own budget instance).
+ * Deliberately the tightest: every request makes WorkOS send somebody an
+ * email, and one user legitimately needs at most one retry a minute — the UI
+ * enforces a 60s countdown of its own.
  */
+export const OTP_SEND_RATE_LIMIT_PER_MINUTE = 2;
+
+/** Verification-email resends allowed per client per minute. */
 export const RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE = 2;
 
 type HostRow = typeof hosts.$inferSelect;
@@ -137,7 +143,7 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 /** The response body every successful authentication grant answers with. */
-function passwordAuthBody(auth_: WorkosPasswordAuth): PasswordAuthResponse {
+function authTokensBody(auth_: WorkosAuthTokens): AuthTokensResponse {
   return {
     accessToken: auth_.accessToken,
     refreshToken: auth_.refreshToken,
@@ -166,14 +172,20 @@ export function createV1Routes(deps: {
 
   // Separate budget from the device routes, so exhausting one cannot lock a
   // user out of the other.
-  const passwordRateLimiter = createRateLimiter({
-    limit: PASSWORD_RATE_LIMIT_PER_MINUTE,
+  const otpAuthenticateRateLimiter = createRateLimiter({
+    limit: OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
-  // Its own budget again: resends trigger outbound email, and exhausting the
-  // password budget must not stop a user from asking for a fresh code (or
+  // Its own budget: sends trigger outbound email, and exhausting the
+  // redemption budget must not stop a user from asking for a fresh code (or
   // vice versa).
+  const otpSendRateLimiter = createRateLimiter({
+    limit: OTP_SEND_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
+  // And again for verification resends, for the same reason.
   const resendVerificationRateLimiter = createRateLimiter({
     limit: RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
@@ -635,42 +647,30 @@ export function createV1Routes(deps: {
   });
 
   /**
-   * The two in-app password routes.
+   * The in-app email OTP routes.
    *
-   * These exist because the WorkOS password grant is a confidential-client
+   * These exist because the WorkOS Magic Auth grant is a confidential-client
    * grant: it requires the client secret, so the app cannot make the call
-   * itself and something holding the secret has to proxy it. The password is
-   * pass-through at every step here — it is read off the request, handed to
-   * WorkOS, and never written to the database, a log line, or an error
-   * message. Nothing below may start doing so.
+   * itself and something holding the secret has to proxy it. The emailed code
+   * is a credential and is pass-through at every step here — it is read off
+   * the request, handed to WorkOS, and never written to the database, a log
+   * line, or an error message. Nothing below may start doing so.
    *
    * SSO (Google/GitHub) does not come through here; it takes the device flow.
    */
-  const passwordFailureResponses: Record<
-    WorkosPasswordFailure,
+  const authFailureResponses: Record<
+    WorkosAuthFailure,
     { status: ContentfulStatusCode; code: AccountErrorCode; message: string }
   > = {
-    // Never says which half was wrong: that difference is an account-existence
-    // oracle, and it is not useful to the honest user either.
-    invalid_credentials: {
-      status: 401,
-      code: "invalid_credentials",
-      message: "That email and password do not match an account",
-    },
-    email_taken: {
-      status: 409,
-      code: "email_taken",
-      message: "An account with that email already exists",
-    },
-    // The credentials were right; the account simply is not usable yet.
-    // Completing verification is the identity provider's own flow in V1.
+    // Should not arrive on the Magic Auth grant — redeeming the code proves
+    // email ownership — but the verification machinery still serves it.
     email_verification_required: {
       status: 403,
       code: "email_verification_required",
       message: "Check your email to verify your address, then sign in",
     },
     // Domain policy: the address belongs to a domain with an SSO connection,
-    // so the identity provider refuses password auth for it categorically.
+    // so the identity provider refuses email-code auth for it categorically.
     sso_required: {
       status: 403,
       code: "sso_required",
@@ -690,32 +690,10 @@ export function createV1Routes(deps: {
     },
   };
 
-  /**
-   * Reads and validates credentials from the request. Returns the credentials,
-   * or the Response to return as-is — never logs the body, and never quotes
-   * the password back in the validation message.
-   */
-  async function readPasswordCredentials(c: Context): Promise<PasswordCredentials | Response> {
-    if (!passwordRateLimiter.tryConsume(clientIp(c))) {
-      return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
-    }
-
-    const json = await c.req.json().catch(() => null);
-    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
-
-    try {
-      return Schema.decodeUnknownSync(PasswordCredentials)(json);
-    } catch {
-      // Deliberately not the decoder's message: effect/Schema quotes the
-      // offending value, which here is somebody's password.
-      return errorResponse(c, 400, "validation_failed", "An email and password are required");
-    }
-  }
-
-  /** Turns a WorkOS password outcome into the error contract. */
-  function passwordErrorResponse(c: Context, error: unknown): Response {
-    if (error instanceof WorkosPasswordError) {
-      const mapped = passwordFailureResponses[error.reason];
+  /** Turns a WorkOS authentication outcome into the error contract. */
+  function authErrorResponse(c: Context, error: unknown): Response {
+    if (error instanceof WorkosAuthError) {
+      const mapped = authFailureResponses[error.reason];
       // The one refusal with a richer body: the refusal's own fields are what
       // completing verification in-app redeems, so they travel to the client
       // (allowlisted in the classifier — extraction never widens past these
@@ -734,42 +712,84 @@ export function createV1Routes(deps: {
       return errorResponse(c, mapped.status, mapped.code, mapped.message);
     }
     // No body, no cause: whatever went wrong upstream, the log line must not
-    // become the place a password ends up.
-    console.error("[api] password authentication failed upstream");
+    // become the place a credential ends up.
+    console.error("[api] authentication failed upstream");
     return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
   }
 
-  v1.post("/auth/password/sign-in", async (c) => {
-    const credentials = await readPasswordCredentials(c);
-    if (credentials instanceof Response) return credentials;
+  /**
+   * Asks WorkOS to mint and email a 6-digit sign-in code. Answers 202 with
+   * the address echo and expiry whether or not the address maps to an
+   * existing account: sign-up happens on redemption, so a send that said
+   * "unknown email" would be an account-existence oracle for no benefit.
+   *
+   * The WorkOS response contains the code itself; `createMagicAuth` parses it
+   * allowlist-style and the code never reaches this function.
+   */
+  v1.post("/auth/otp/send", async (c) => {
+    if (!otpSendRateLimiter.tryConsume(clientIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many code requests — wait a minute");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: OtpSendRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(OtpSendRequest)(json);
+    } catch {
+      return errorResponse(c, 400, "validation_failed", "An email address is required");
+    }
 
     try {
-      return c.json(passwordAuthBody(await auth.authenticateWithPassword(credentials)));
+      const magicAuth = await auth.createMagicAuth({ email: parsed.email });
+      const body: OtpSendResponse = { email: magicAuth.email, expiresAt: magicAuth.expiresAt };
+      return c.json(body, 202);
     } catch (error) {
-      return passwordErrorResponse(c, error);
+      return authErrorResponse(c, error);
     }
   });
 
-  v1.post("/auth/password/sign-up", async (c) => {
-    const credentials = await readPasswordCredentials(c);
-    if (credentials instanceof Response) return credentials;
+  /**
+   * Redeems the emailed 6-digit code for a token pair — the one sign-in AND
+   * sign-up route: WorkOS provisions the user on first successful redemption
+   * when sign-up is allowed. The code is a credential, so the no-echo
+   * validation message and the no-leak error mapping both apply.
+   */
+  v1.post("/auth/otp/authenticate", async (c) => {
+    if (!otpAuthenticateRateLimiter.tryConsume(clientIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: OtpAuthenticateRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(OtpAuthenticateRequest)(json);
+    } catch {
+      // Deliberately not the decoder's message: effect/Schema quotes the
+      // offending value, which here is the emailed code.
+      return errorResponse(c, 400, "validation_failed", "An email and 6-digit code are required");
+    }
 
     try {
-      return c.json(passwordAuthBody(await auth.createUserWithPassword(credentials)), 201);
+      return c.json(authTokensBody(await auth.authenticateWithMagicAuth(parsed)));
     } catch (error) {
-      return passwordErrorResponse(c, error);
+      return authErrorResponse(c, error);
     }
   });
 
   /**
    * Redeems the emailed 6-digit code plus the pending authentication token an
-   * `email_verification_required` refusal carried. The pair is not a password
-   * but stays on the password-path discipline — both are bearer-ish secrets,
-   * so `passwordFetch` handling, the shared rate budget, and the no-echo
-   * validation message all apply.
+   * `email_verification_required` refusal carried. Both are bearer-ish
+   * secrets, so `sensitiveFetch` handling, the redemption rate budget, and
+   * the no-echo validation message all apply. Magic Auth implicitly verifies
+   * the email, so this should not trigger on the OTP path — it stays for any
+   * flow WorkOS still answers the challenge on.
    */
-  v1.post("/auth/password/verify-email", async (c) => {
-    if (!passwordRateLimiter.tryConsume(clientIp(c))) {
+  v1.post("/auth/verify-email", async (c) => {
+    if (!otpAuthenticateRateLimiter.tryConsume(clientIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
     }
 
@@ -791,9 +811,9 @@ export function createV1Routes(deps: {
     }
 
     try {
-      return c.json(passwordAuthBody(await auth.verifyEmailCode(parsed)));
+      return c.json(authTokensBody(await auth.verifyEmailCode(parsed)));
     } catch (error) {
-      return passwordErrorResponse(c, error);
+      return authErrorResponse(c, error);
     }
   });
 
@@ -803,7 +823,7 @@ export function createV1Routes(deps: {
    * endpoint that confirmed which ids exist would be an oracle, and the
    * caller's next step — wait for the email — is the same either way.
    */
-  v1.post("/auth/password/resend-verification", async (c) => {
+  v1.post("/auth/resend-verification", async (c) => {
     if (!resendVerificationRateLimiter.tryConsume(clientIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many resend requests — wait a minute");
     }
@@ -825,7 +845,7 @@ export function createV1Routes(deps: {
         // Indistinguishable from success by design; see the route comment.
         return c.body(null, 202);
       }
-      // No body and no cause in the log, as on every password-path failure.
+      // No body and no cause in the log, as on every credential-path failure.
       console.error("[api] verification resend failed upstream");
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
     }
@@ -835,7 +855,7 @@ export function createV1Routes(deps: {
   /**
    * Starts the SSO device flow, which is how "Continue with Google/GitHub"
    * reaches the provider. Unauthenticated by nature — the caller has no
-   * credentials yet — and, alongside the password routes above, a reason this
+   * credentials yet — and, alongside the OTP routes above, a reason this
    * service holds the WorkOS API key: the request WorkOS requires is
    * authenticated with a secret a public client cannot be trusted with.
    * Everything after this (polling for the token) goes straight to WorkOS,

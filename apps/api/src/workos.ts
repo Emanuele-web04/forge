@@ -35,19 +35,17 @@ export type WorkosOrganization = {
 };
 
 /**
- * Why a password failed, as this service classifies it. WorkOS reports these
- * inconsistently — some as an OAuth `error`, some as a `code`, with the HTTP
- * status not reliably distinguishing them — so the classification happens once
- * here rather than at each call site.
+ * Why an authentication grant failed, as this service classifies it. WorkOS
+ * reports these inconsistently — some as an OAuth `error`, some as a `code`,
+ * with the HTTP status not reliably distinguishing them — so the
+ * classification happens once here rather than at each call site.
  */
-export type WorkosPasswordFailure =
-  | "invalid_credentials"
-  | "email_taken"
+export type WorkosAuthFailure =
   | "email_verification_required"
   | "sso_required"
-  /** The verification grant refused the code itself; the pending token may still be usable. */
+  /** The grant refused the emailed code itself; retyping it can help. */
   | "invalid_verification_code"
-  /** The pending authentication token (or the code) is spent or expired; only a resend recovers. */
+  /** The code (or its pending token) is spent or expired; only a resend recovers. */
   | "verification_expired";
 
 /**
@@ -64,28 +62,41 @@ export type WorkosEmailVerificationChallenge = {
 };
 
 /**
- * A password grant this service refused to complete. Carries the classified
- * reason and nothing else: notably not the password, and not WorkOS's raw
- * message, which can echo the submitted credentials back. The one exception is
- * `email_verification_required`, whose refusal names the pending token, email,
- * and verification id — the fields the in-app verification step redeems — and
- * those are carried on {@link verification}, allowlisted field by field.
+ * An authentication grant this service refused to complete. Carries the
+ * classified reason and nothing else: notably not the submitted code, and not
+ * WorkOS's raw message, which can echo the submitted credentials back. The
+ * one exception is `email_verification_required`, whose refusal names the
+ * pending token, email, and verification id — the fields the in-app
+ * verification step redeems — and those are carried on {@link verification},
+ * allowlisted field by field.
  */
-export class WorkosPasswordError extends Error {
+export class WorkosAuthError extends Error {
   constructor(
-    readonly reason: WorkosPasswordFailure,
+    readonly reason: WorkosAuthFailure,
     readonly verification?: WorkosEmailVerificationChallenge,
   ) {
     super(reason);
-    this.name = "WorkosPasswordError";
+    this.name = "WorkosAuthError";
   }
 }
 
-/** The token pair a successful password grant yields. */
-export type WorkosPasswordAuth = {
+/** The token pair a successful authentication grant yields. */
+export type WorkosAuthTokens = {
   accessToken: string;
   refreshToken: string;
   user: WorkosUser;
+};
+
+/**
+ * What the Magic Auth create call reports back to this service's callers.
+ * Deliberately NOT the whole WorkOS response: that response contains the
+ * 6-digit code itself, which is a credential and must never leave this
+ * module — not in a return value, not in a log, not in an error.
+ */
+export type WorkosMagicAuth = {
+  email: string;
+  /** When the emailed code stops working, ISO-8601. */
+  expiresAt: string;
 };
 
 export type WorkosAuth = {
@@ -94,31 +105,34 @@ export type WorkosAuth = {
   getUser(userId: string): Promise<WorkosUser>;
   requestDeviceAuthorization(): Promise<DeviceAuthorizationResponse>;
   /**
-   * The password grant. Requires the client secret, which is the whole reason
-   * this runs here rather than in the app: a public client cannot hold it.
-   * Rejects with {@link WorkosPasswordError} on a classified refusal.
+   * Creates a Magic Auth code: WorkOS mints a 6-digit code and emails it to
+   * `email` itself. The WorkOS response contains the code; this method parses
+   * it allowlist-style and returns ONLY the address echo and expiry — the
+   * code must never leave this module.
    */
-  authenticateWithPassword(credentials: {
-    email: string;
-    password: string;
-  }): Promise<WorkosPasswordAuth>;
-  /** Creates a user, then authenticates them. Same rejection contract. */
-  createUserWithPassword(credentials: {
-    email: string;
-    password: string;
-  }): Promise<WorkosPasswordAuth>;
+  createMagicAuth(input: { email: string }): Promise<WorkosMagicAuth>;
+  /**
+   * The Magic Auth grant: redeems the emailed 6-digit code for a token pair,
+   * provisioning the user first when sign-up is allowed and the address is
+   * new. Requires the client secret, which is the whole reason this runs here
+   * rather than in the app: a public client cannot hold it. The code is a
+   * credential and takes the no-leak handling rules. Rejects with
+   * {@link WorkosAuthError} carrying `invalid_verification_code` (retry in
+   * place) or `verification_expired` (only a resend recovers).
+   */
+  authenticateWithMagicAuth(input: { email: string; code: string }): Promise<WorkosAuthTokens>;
   /**
    * The email-verification grant: redeems the emailed 6-digit code together
    * with the pending authentication token an `email_verification_required`
-   * refusal carried. Both inputs are bearer-ish secrets and take the password
-   * handling rules. Rejects with {@link WorkosPasswordError} carrying
+   * refusal carried. Both inputs are bearer-ish secrets and take the no-leak
+   * handling rules. Rejects with {@link WorkosAuthError} carrying
    * `invalid_verification_code` (retry in place) or `verification_expired`
    * (the token or code is spent; only a resend recovers).
    */
   verifyEmailCode(input: {
     code: string;
     pendingAuthenticationToken: string;
-  }): Promise<WorkosPasswordAuth>;
+  }): Promise<WorkosAuthTokens>;
   /**
    * Emails the user a fresh verification code, invalidating the old one. The
    * user is resolved from the verification object server-side — the caller
@@ -249,48 +263,44 @@ function fullName(user: WorkosUserResponse): string | undefined {
 }
 
 /**
- * Which classified failure, if any, a WorkOS error body describes.
+ * Which classified failure, if any, a Magic Auth grant refusal describes.
  *
- * WorkOS is not consistent about where the reason lives: authentication errors
- * carry a `code`, OAuth-shaped refusals carry an `error`, and validation
- * failures carry neither at the top level but name the offending field. All
- * three are checked, and an unrecognised body yields `undefined` so the caller
- * reports an upstream fault rather than guessing "wrong password".
+ * WorkOS is not consistent about where the reason lives: authentication
+ * errors carry a `code` while OAuth-shaped refusals carry an `error`, with
+ * the HTTP status not reliably distinguishing them. Both are checked, and an
+ * unrecognised body yields `undefined` so the caller reports an upstream
+ * fault rather than guessing "wrong code".
  *
- * The values matched here are drawn from WorkOS's documented authentication
- * error codes; the `invalid_grant` fallback covers the OAuth-shaped refusal
- * the password grant returns for a bad email/password pair.
+ * The credential this grant authenticates with is the emailed one-time code,
+ * so the OAuth `invalid_grant` / `invalid_credentials` spellings mean "the
+ * code was refused" here — retryable in place, unlike the expired spellings.
  */
-export function classifyPasswordFailure(raw: unknown): WorkosPasswordFailure | undefined {
+export function classifyMagicAuthFailure(raw: unknown): WorkosAuthFailure | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const body = raw as Record<string, unknown>;
   const code = typeof body.code === "string" ? body.code : undefined;
   const error = typeof body.error === "string" ? body.error : undefined;
 
+  // Defensive: Magic Auth implicitly verifies the email, so this challenge
+  // should never arrive on this grant — but if WorkOS answers it anyway, the
+  // existing verification machinery can complete it.
   if (code === "email_verification_required") return "email_verification_required";
   // Domain policy, not a credential outcome: the email's domain has an SSO
-  // connection, so WorkOS refuses the password grant for it categorically.
-  // Observed live (status 400, OAuth-shaped `error` field). Distinct from
-  // invalid_credentials on purpose — "use your company sign-on" is the only
-  // actionable answer, and it reveals domain policy, not account existence.
+  // connection, so WorkOS refuses non-SSO authentication for it
+  // categorically. "Use your company sign-on" is the only actionable answer,
+  // and it reveals domain policy, not account existence.
   if (error === "sso_required" || code === "sso_required") return "sso_required";
   if (error === "organization_authentication_methods_required") return "sso_required";
-  // WorkOS spells the duplicate-email refusal differently across endpoints;
-  // both observed spellings mean the same thing to a user signing up.
-  if (code === "email_not_available" || code === "user_creation_error") return "email_taken";
-  if (code === "entity_already_exists") return "email_taken";
-  if (error === "invalid_grant" || code === "invalid_credentials") return "invalid_credentials";
-
-  // Validation errors name the field rather than the problem. An `email` error
-  // on a create is a taken address in every case this service can produce,
-  // since the address itself was already format-checked at the route.
-  if (Array.isArray(body.errors)) {
-    for (const entry of body.errors) {
-      if (typeof entry !== "object" || entry === null) continue;
-      const field = (entry as Record<string, unknown>).field;
-      const rule = (entry as Record<string, unknown>).code;
-      if (field === "email" && rule === "email_not_available") return "email_taken";
-    }
+  // A refused code that may be retried in place.
+  if (code === "invalid_one_time_code" || code === "invalid_code") {
+    return "invalid_verification_code";
+  }
+  if (error === "invalid_grant" || code === "invalid_credentials") {
+    return "invalid_verification_code";
+  }
+  // Spent or expired; only a resend recovers.
+  if (code === "one_time_code_expired" || code === "magic_auth_expired") {
+    return "verification_expired";
   }
   return undefined;
 }
@@ -324,9 +334,9 @@ export function extractVerificationChallenge(
 
 /**
  * Which classified failure a refusal of the *email-verification grant*
- * describes. Separate from {@link classifyPasswordFailure} because the same
+ * describes. Separate from {@link classifyMagicAuthFailure} because the same
  * OAuth spelling means different things per grant: `invalid_grant` on the
- * password grant is a bad email/password pair, while on the verification
+ * Magic Auth grant is a refused code (retryable), while on the verification
  * grant the credential being refused is the pending token — spent, expired,
  * or never ours — which only a resend or a fresh sign-in recovers.
  *
@@ -336,7 +346,7 @@ export function extractVerificationChallenge(
  * dead; offer resend/start-over). An unrecognised body yields `undefined` and
  * becomes an upstream fault, as everywhere else.
  */
-export function classifyVerificationFailure(raw: unknown): WorkosPasswordFailure | undefined {
+export function classifyVerificationFailure(raw: unknown): WorkosAuthFailure | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const body = raw as Record<string, unknown>;
   const code = typeof body.code === "string" ? body.code : undefined;
@@ -366,7 +376,7 @@ export function classifyVerificationFailure(raw: unknown): WorkosPasswordFailure
  * cast: a shape change must fail loudly here instead of persisting
  * `undefined` as somebody's access token.
  */
-function toPasswordAuth(raw: unknown): WorkosPasswordAuth {
+function toAuthTokens(raw: unknown): WorkosAuthTokens {
   if (typeof raw !== "object" || raw === null) {
     throw new WorkosApiError(502, "WorkOS authenticate returned a non-object body");
   }
@@ -474,24 +484,25 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
   }
 
   /**
-   * A WorkOS call whose request body contains a password.
+   * A WorkOS call whose request or response contains a credential (the
+   * emailed one-time code, or the pending authentication token).
    *
    * Deliberately not `workosFetch`: that helper puts the upstream response
    * body into the thrown error's message, and WorkOS echoes offending fields
-   * in validation errors — so a mistyped password could end up in an error
+   * in validation errors — so a mistyped code could end up in an error
    * string, and from there in a log. Nothing thrown from here carries any part
    * of the request or the response.
    *
-   * Returns the parsed body on success; throws {@link WorkosPasswordError} for
+   * Returns the parsed body on success; throws {@link WorkosAuthError} for
    * a classified refusal and a bare {@link WorkosApiError} otherwise.
    */
-  async function passwordFetch(
+  async function sensitiveFetch(
     path: string,
     body: Record<string, string>,
-    // The verification grant reuses this helper with its own classifier: the
-    // same OAuth spellings mean different things per grant, but the no-leak
-    // handling of the request and response is identical.
-    classify: (raw: unknown) => WorkosPasswordFailure | undefined = classifyPasswordFailure,
+    // Each grant brings its own classifier: the same OAuth spellings mean
+    // different things per grant, but the no-leak handling of the request
+    // and response is identical.
+    classify: (raw: unknown) => WorkosAuthFailure | undefined,
   ): Promise<unknown> {
     const response = await fetch(`${config.workosApiUrl}${path}`, {
       method: "POST",
@@ -511,33 +522,21 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     const raw = await response.json().catch(() => null);
     const failure = classify(raw);
     if (failure === "email_verification_required") {
-      throw new WorkosPasswordError(failure, extractVerificationChallenge(raw));
+      throw new WorkosAuthError(failure, extractVerificationChallenge(raw));
     }
-    if (failure) throw new WorkosPasswordError(failure);
+    if (failure) throw new WorkosAuthError(failure);
     // An unclassified refusal becomes an opaque 502 to the caller, so this
     // line is the only place its identity survives. Log the status and the
     // two code fields ONLY — both are WorkOS-chosen enum spellings. Never the
     // description or the body: those echo request fields, and this is a
-    // password route.
+    // credential route.
     const refusal = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
     console.error(
-      `[api] unclassified WorkOS password failure: status=${response.status}` +
+      `[api] unclassified WorkOS auth failure: status=${response.status}` +
         ` code=${typeof refusal.code === "string" ? refusal.code : "-"}` +
         ` error=${typeof refusal.error === "string" ? refusal.error : "-"}`,
     );
     throw new WorkosApiError(response.status, `WorkOS ${path} failed with ${response.status}`);
-  }
-
-  async function passwordGrant(body: Record<string, string>): Promise<WorkosPasswordAuth> {
-    const raw = await passwordFetch("/user_management/authenticate", {
-      ...body,
-      client_id: config.workosClientId,
-      // The password grant is a confidential-client grant: WorkOS requires the
-      // secret, which is precisely why the app cannot make this call itself
-      // and this service proxies it.
-      client_secret: config.workosApiKey,
-    });
-    return toPasswordAuth(raw);
   }
 
   return {
@@ -632,36 +631,62 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
       });
     },
 
-    async authenticateWithPassword({ email, password }) {
-      return passwordGrant({ grant_type: "password", email, password });
+    async createMagicAuth({ email }) {
+      // The response contains the 6-digit code WorkOS just emailed — a
+      // credential. It is parsed allowlist-style right here: only the address
+      // echo and expiry ever leave this function, and the raw body is never
+      // logged, thrown, or returned.
+      const raw = await sensitiveFetch(
+        "/user_management/magic_auth",
+        { email },
+        classifyMagicAuthFailure,
+      );
+      if (typeof raw !== "object" || raw === null) {
+        throw new WorkosApiError(502, "WorkOS magic auth returned a non-object body");
+      }
+      const body = raw as Record<string, unknown>;
+      if (typeof body.email !== "string" || body.email.length === 0) {
+        throw new WorkosApiError(502, "WorkOS magic auth named no email");
+      }
+      if (typeof body.expires_at !== "string" || body.expires_at.length === 0) {
+        throw new WorkosApiError(502, "WorkOS magic auth named no expiry");
+      }
+      return { email: body.email, expiresAt: body.expires_at };
     },
 
-    async createUserWithPassword({ email, password }) {
-      // Create, then authenticate. Two calls because WorkOS's create-user
-      // endpoint returns a user, not a session — and a session is what the
-      // caller needs. A user created here who then cannot authenticate (an
-      // environment that demands email verification) is left in place
-      // deliberately: the account is real, and deleting it would throw away a
-      // sign-up the user completed.
-      await passwordFetch("/user_management/users", { email, password });
-      return passwordGrant({ grant_type: "password", email, password });
+    async authenticateWithMagicAuth({ email, code }) {
+      const raw = await sensitiveFetch(
+        "/user_management/authenticate",
+        {
+          grant_type: "urn:workos:oauth:grant-type:magic-auth:code",
+          code,
+          email,
+          client_id: config.workosClientId,
+          // Confidential-client: WorkOS requires the secret, which is why
+          // this call runs here rather than in the app.
+          client_secret: config.workosApiKey,
+        },
+        classifyMagicAuthFailure,
+      );
+      return toAuthTokens(raw);
     },
 
     async verifyEmailCode({ code, pendingAuthenticationToken }) {
-      const raw = await passwordFetch(
+      const raw = await sensitiveFetch(
         "/user_management/authenticate",
         {
           grant_type: "urn:workos:oauth:grant-type:email-verification:code",
           code,
           pending_authentication_token: pendingAuthenticationToken,
           client_id: config.workosClientId,
-          // Confidential-client, like the password grant: WorkOS requires the
-          // secret, which is why this call runs here rather than in the app.
+          // Confidential-client, like the Magic Auth grant: WorkOS requires
+          // the secret, which is why this call runs here rather than in the
+          // app.
           client_secret: config.workosApiKey,
         },
         classifyVerificationFailure,
       );
-      return toPasswordAuth(raw);
+      return toAuthTokens(raw);
     },
 
     async resendVerificationEmail(emailVerificationId) {
