@@ -10,13 +10,16 @@ import {
   EmailVerificationRequiredBody,
   type InstanceInfo,
   InstanceInfo as InstanceInfoSchema,
+  type AuthTokensResponse,
+  AuthTokensResponse as AuthTokensResponseSchema,
   type ListHostsResponse,
   ListHostsResponse as ListHostsResponseSchema,
   OrganizationRequiredBody,
   type OrganizationSummary,
-  type PasswordAuthResponse,
-  PasswordAuthResponse as PasswordAuthResponseSchema,
-  type PasswordCredentials,
+  type OtpAuthenticateRequest,
+  type OtpSendRequest,
+  type OtpSendResponse,
+  OtpSendResponse as OtpSendResponseSchema,
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
@@ -269,20 +272,25 @@ export interface RefreshAccessTokenOptions extends WorkosClientOptions {
 export interface AccountClient {
   instance(): Promise<InstanceInfo>;
   /**
-   * In-app password sign-in. The credentials are forwarded to the account
-   * service and held nowhere: do not log the argument, and do not retain it
-   * past the call.
+   * Asks the account service to email a 6-digit sign-in code. Resolves with
+   * the address echo and code expiry — deliberately the same answer whether
+   * or not the address has an account.
    */
-  signInWithPassword(credentials: PasswordCredentials): Promise<PasswordAuthResponse>;
-  /** Creates the account, then signs in. Same handling rules as above. */
-  signUpWithPassword(credentials: PasswordCredentials): Promise<PasswordAuthResponse>;
+  sendOtp(request: OtpSendRequest): Promise<OtpSendResponse>;
+  /**
+   * In-app OTP sign-in: redeems the emailed 6-digit code. The code is a
+   * credential forwarded to the account service and held nowhere: do not log
+   * the argument, and do not retain it past the call. A refused code rejects
+   * with `invalid_verification_code`.
+   */
+  authenticateOtp(request: OtpAuthenticateRequest): Promise<AuthTokensResponse>;
   /**
    * Redeems an emailed verification code against the pending authentication
    * token an `email_verification_required` refusal carried. The pair is a
    * bearer-ish secret: do not log the argument, and do not retain it past the
    * call. A refused code rejects with `invalid_verification_code`.
    */
-  verifyEmail(request: VerifyEmailRequest): Promise<PasswordAuthResponse>;
+  verifyEmail(request: VerifyEmailRequest): Promise<AuthTokensResponse>;
   /**
    * Asks the identity provider to email a fresh verification code. Resolves
    * on 2xx whether or not the id named a live verification — the service
@@ -416,44 +424,44 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       return requestJson("/api/v1/instance", { method: "GET" }, InstanceInfoSchema);
     },
 
-    async signInWithPassword(credentials) {
+    async sendOtp(request) {
       return requestJson(
-        "/api/v1/auth/password/sign-in",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(credentials),
-        },
-        PasswordAuthResponseSchema,
-      );
-    },
-
-    async signUpWithPassword(credentials) {
-      return requestJson(
-        "/api/v1/auth/password/sign-up",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(credentials),
-        },
-        PasswordAuthResponseSchema,
-      );
-    },
-
-    async verifyEmail(request) {
-      return requestJson(
-        "/api/v1/auth/password/verify-email",
+        "/api/v1/auth/otp/send",
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(request),
         },
-        PasswordAuthResponseSchema,
+        OtpSendResponseSchema,
+      );
+    },
+
+    async authenticateOtp(request) {
+      return requestJson(
+        "/api/v1/auth/otp/authenticate",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        AuthTokensResponseSchema,
+      );
+    },
+
+    async verifyEmail(request) {
+      return requestJson(
+        "/api/v1/auth/verify-email",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        AuthTokensResponseSchema,
       );
     },
 
     async resendVerificationEmail(request) {
-      await requestEmpty("/api/v1/auth/password/resend-verification", {
+      await requestEmpty("/api/v1/auth/resend-verification", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(request),

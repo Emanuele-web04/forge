@@ -1,12 +1,14 @@
 import { Schema } from "effect";
 
 import type {
+  AccountAuthenticateOtpInput,
   AccountBeginSignInResult,
   AccountCompleteSignInInput,
   AccountMe,
   AccountOpenVerificationUrlInput,
-  AccountPasswordSignInInput,
   AccountResendVerificationEmailInput,
+  AccountSendOtpInput,
+  AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
   AccountVerifyEmailInput,
@@ -841,18 +843,23 @@ export interface NativeApi {
      */
     status: () => Promise<AccountStatus>;
     /**
-     * Email/password sign-in, entirely in-app. The password is forwarded to
-     * WorkOS through the server and account service and is stored nowhere
-     * along the way — do not log the input, and do not retain it in component
-     * state longer than the form lives.
+     * Asks WorkOS to email a 6-digit sign-in code to `email`. Answers the
+     * same shape whether or not the address has an account — signing up and
+     * signing in are one path, decided when the code is redeemed.
      */
-    signInWithPassword: (input: AccountPasswordSignInInput) => Promise<AccountStatus>;
-    /** Creates the account, then signs in. Same handling rules as above. */
-    signUpWithPassword: (input: AccountPasswordSignInInput) => Promise<AccountStatus>;
+    sendOtp: (input: AccountSendOtpInput) => Promise<AccountSendOtpResult>;
+    /**
+     * Email OTP sign-in, entirely in-app: redeems the emailed 6-digit code.
+     * The code is a credential forwarded to WorkOS through the server and
+     * account service and stored nowhere along the way — do not log the
+     * input, and do not retain it in component state longer than the form
+     * lives.
+     */
+    authenticateOtp: (input: AccountAuthenticateOtpInput) => Promise<AccountStatus>;
     /**
      * Redeems the emailed 6-digit verification code against the pending
      * authentication token an `email_verification_required` refusal carried.
-     * The input is a secret pair — same handling rules as the password calls:
+     * The input is a secret pair — same handling rules as the OTP call:
      * never logged, and kept only in the dialog's in-memory state.
      */
     verifyEmail: (input: AccountVerifyEmailInput) => Promise<AccountStatus>;
@@ -860,7 +867,7 @@ export interface NativeApi {
     resendVerificationEmail: (input: AccountResendVerificationEmailInput) => Promise<void>;
     /**
      * Starts the SSO path: "Continue with Google/GitHub" opens the identity
-     * provider's page in the system browser. Password users never reach this.
+     * provider's page in the system browser. Email OTP users never reach this.
      */
     beginSignIn: () => Promise<AccountBeginSignInResult>;
     /**

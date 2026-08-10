@@ -3,13 +3,15 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import {
+  AccountAuthenticateOtpInput,
   AccountBeginSignInResult,
   AccountCompleteSignInInput,
   AccountEmailVerificationRequiredError,
   AccountMe,
   AccountOpenVerificationUrlInput,
-  AccountPasswordSignInInput,
   AccountResendVerificationEmailInput,
+  AccountSendOtpInput,
+  AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
   AccountVerifyEmailInput,
@@ -1143,45 +1145,52 @@ export const WsAccountStatusRpc = Rpc.make(WS_METHODS.accountStatus, {
 });
 
 /**
- * The password RPCs' error channel. A union rather than plain `WsRpcError`
- * (the same shape `PullRequestsRpcError` takes for its unavailable state):
- * `email_verification_required` is the one password refusal whose payload the
- * client genuinely needs — the pending token, email, and verification id are
- * what the in-app verification step redeems — and the ordinary password
- * mapping deliberately strips a failure down to a message and code.
+ * The sensitive account RPCs' error channel. A union rather than plain
+ * `WsRpcError` (the same shape `PullRequestsRpcError` takes for its
+ * unavailable state): `email_verification_required` is the one refusal whose
+ * payload the client genuinely needs — the pending token, email, and
+ * verification id are what the in-app verification step redeems — and the
+ * ordinary sensitive-path mapping deliberately strips a failure down to a
+ * message and code.
  */
-const AccountPasswordRpcError = Schema.Union([AccountEmailVerificationRequiredError, WsRpcError]);
+const AccountSensitiveRpcError = Schema.Union([AccountEmailVerificationRequiredError, WsRpcError]);
 
 /**
- * In-app password sign-in. The payload carries a password, so it must never be
- * logged by transport-level request tracing; see the note on
- * {@link PasswordCredentials}.
+ * Asks WorkOS to email the caller a 6-digit sign-in code. Deliberately
+ * answers the same shape whether or not the address has an account.
  */
-export const WsAccountSignInWithPasswordRpc = Rpc.make(WS_METHODS.accountSignInWithPassword, {
-  payload: AccountPasswordSignInInput,
-  success: AccountStatus,
-  error: AccountPasswordRpcError,
+export const WsAccountSendOtpRpc = Rpc.make(WS_METHODS.accountSendOtp, {
+  payload: AccountSendOtpInput,
+  success: AccountSendOtpResult,
+  // The union only because the handler shares the sensitive error mapping;
+  // a send itself never produces the verification-required refusal.
+  error: AccountSensitiveRpcError,
 });
 
-export const WsAccountSignUpWithPasswordRpc = Rpc.make(WS_METHODS.accountSignUpWithPassword, {
-  payload: AccountPasswordSignInInput,
+/**
+ * In-app OTP sign-in — redeems the emailed 6-digit code. The payload is a
+ * credential, so it must never be logged by transport-level request tracing;
+ * see the note on {@link OtpAuthenticateRequest}.
+ */
+export const WsAccountAuthenticateOtpRpc = Rpc.make(WS_METHODS.accountAuthenticateOtp, {
+  payload: AccountAuthenticateOtpInput,
   success: AccountStatus,
-  error: AccountPasswordRpcError,
+  error: AccountSensitiveRpcError,
 });
 
 /**
  * In-app email verification — redeems the emailed 6-digit code plus the
  * pending token from an `email_verification_required` refusal. The payload is
- * a bearer-ish secret pair, so it takes the same no-logging rule as the
- * password RPCs above.
+ * a bearer-ish secret pair, so it takes the same no-logging rule as the OTP
+ * RPC above.
  */
 export const WsAccountVerifyEmailRpc = Rpc.make(WS_METHODS.accountVerifyEmail, {
   payload: AccountVerifyEmailInput,
   success: AccountStatus,
-  // The union, like the password RPCs: WorkOS can re-answer the original
-  // refusal (with a fresh pending token) instead of a terminal failure, and
-  // the handler shares their error mapping either way.
-  error: AccountPasswordRpcError,
+  // The union, like the OTP RPC: WorkOS can re-answer the original refusal
+  // (with a fresh pending token) instead of a terminal failure, and the
+  // handler shares their error mapping either way.
+  error: AccountSensitiveRpcError,
 });
 
 export const WsAccountResendVerificationEmailRpc = Rpc.make(
@@ -1189,9 +1198,9 @@ export const WsAccountResendVerificationEmailRpc = Rpc.make(
   {
     payload: AccountResendVerificationEmailInput,
     success: Schema.Void,
-    // The union only because the handler shares the password error mapping;
+    // The union only because the handler shares the sensitive error mapping;
     // a resend itself never produces the verification-required refusal.
-    error: AccountPasswordRpcError,
+    error: AccountSensitiveRpcError,
   },
 );
 
@@ -1408,8 +1417,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
   WsAccountStatusRpc,
-  WsAccountSignInWithPasswordRpc,
-  WsAccountSignUpWithPasswordRpc,
+  WsAccountSendOtpRpc,
+  WsAccountAuthenticateOtpRpc,
   WsAccountVerifyEmailRpc,
   WsAccountResendVerificationEmailRpc,
   WsAccountBeginSignInRpc,

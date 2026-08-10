@@ -173,26 +173,24 @@ export const AccountErrorCode = Schema.Literals([
   "organization_required",
   "environment_already_linked",
   "handle_taken",
-  /** Wrong email or password. Deliberately does not say which. */
-  "invalid_credentials",
-  /** Sign-up refused: somebody already has that email address. */
-  "email_taken",
   /**
    * The identity provider will not authenticate this account until its email
-   * address is verified. Not a credential failure — the password was right.
+   * address is verified. Not expected on the OTP path — redeeming a Magic
+   * Auth code proves email ownership — but kept because the challenge
+   * machinery below still serves it, defensively, should WorkOS answer it.
    */
   "email_verification_required",
   /**
    * The email's domain is governed by an SSO connection, so the identity
-   * provider refuses password authentication for it outright. Not a
+   * provider refuses email-code authentication for it outright. Not a
    * credential failure and not account-specific — it is domain policy.
    */
   "sso_required",
   /**
-   * The email-verification code was refused — wrong, expired, or its pending
-   * authentication token already spent. One code for all three deliberately:
-   * WorkOS does not reliably distinguish them, and the user's recovery is the
-   * same either way (retype the code, or resend and start over).
+   * The emailed code was refused — wrong, expired, or already spent. One code
+   * for all three deliberately: WorkOS does not reliably distinguish them,
+   * and the user's recovery is the same either way (retype the code, or
+   * resend and start over).
    */
   "invalid_verification_code",
   "validation_failed",
@@ -249,11 +247,12 @@ export type EmailVerificationRequiredBody = typeof EmailVerificationRequiredBody
 
 /**
  * {@link EmailVerificationRequiredBody} as an RPC error, so the fields survive
- * the WebSocket hop. The password RPCs' error channel is a union of this and
+ * the WebSocket hop. The sensitive RPCs' error channel is a union of this and
  * the generic `WsRpcError` (the same shape the pull-request RPCs use for their
  * unavailable state): the ordinary mapping strips everything but a message and
- * code off a password failure, and this is the one refusal whose payload the
- * client genuinely needs — it is what the in-app verification step redeems.
+ * code off a credential-carrying failure, and this is the one refusal whose
+ * payload the client genuinely needs — it is what the in-app verification
+ * step redeems.
  *
  * The same no-persistence rule as the HTTP body applies: dialog state only.
  */
@@ -267,52 +266,63 @@ export class AccountEmailVerificationRequiredError extends Schema.TaggedErrorCla
   },
 ) {}
 
-// ── Password authentication ──────────────────────────────────────────
+// ── Email OTP authentication (WorkOS Magic Auth) ─────────────────────
 //
-// Email/password sign-in happens inside the app, so these credentials travel
-// from the app to the server to the account service and on to WorkOS. They are
+// Email sign-in happens inside the app: the user types their address, WorkOS
+// emails them a 6-digit code, and redeeming it yields a session. Sign-in and
+// sign-up are one path — WorkOS provisions the user on first successful
+// redemption when sign-up is allowed. The code is a credential and travels
 // pass-through at every hop: never persisted, never logged, and never echoed
 // back in an error. The account service must proxy rather than let the client
-// call WorkOS directly, because the password grant requires the client secret.
+// call WorkOS directly, because the Magic Auth grant requires the client
+// secret.
 //
 // SSO (Google/GitHub) does not use these — it takes the device-grant flow
 // below, which hands the user to the provider's page in a real browser.
 
 /**
- * A password, bounded but otherwise unconstrained. Composition rules are the
- * identity provider's to enforce and its to word the failure for: a second,
- * stricter opinion here would reject passwords WorkOS would have accepted, and
- * would drift the moment the provider's policy changed. The maximum only stops
- * an unbounded body — bcrypt-style hashes ignore the tail anyway.
- */
-export const AccountPassword = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512));
-export type AccountPassword = typeof AccountPassword.Type;
-
-/**
- * Credentials for in-app sign-in or sign-up.
- *
- * Note for anyone logging or serializing a value of this type: don't. The
- * password field is the reason this schema exists as a named type rather than
- * an inline struct — it should be greppable.
- */
-export const PasswordCredentials = Schema.Struct({
-  email: TrimmedNonEmptyString,
-  password: AccountPassword,
-});
-export type PasswordCredentials = typeof PasswordCredentials.Type;
-
-/**
- * The 6-digit code WorkOS emails when verification is required. Fixed-format
- * by the provider, so the format is checkable here — and a malformed code can
- * be refused before it travels anywhere.
+ * The 6-digit code WorkOS emails — the Magic Auth OTP and the email
+ * verification code share the format. Fixed-format by the provider, so it is
+ * checkable here — and a malformed code can be refused before it travels
+ * anywhere.
  */
 export const EmailVerificationCode = Schema.String.check(Schema.isPattern(/^[0-9]{6}$/));
 export type EmailVerificationCode = typeof EmailVerificationCode.Type;
 
+/** The body of `POST /api/v1/auth/otp/send` — just the address to email. */
+export const OtpSendRequest = Schema.Struct({
+  email: TrimmedNonEmptyString,
+});
+export type OtpSendRequest = typeof OtpSendRequest.Type;
+
 /**
- * The body of `POST /api/v1/auth/password/verify-email` — the emailed code
- * plus the pending token the refusal carried. Both are bearer-ish secrets and
- * take the password-path handling rules: never logged, never echoed back.
+ * The 202 the send route answers. Deliberately identical whether or not the
+ * address maps to an existing account — the pair of fields here is everything
+ * the client may learn, and the emailed code itself must never appear.
+ */
+export const OtpSendResponse = Schema.Struct({
+  /** Echo of the address the code was sent to. */
+  email: TrimmedNonEmptyString,
+  /** When the emailed code stops working, ISO-8601. */
+  expiresAt: TrimmedNonEmptyString,
+});
+export type OtpSendResponse = typeof OtpSendResponse.Type;
+
+/**
+ * The body of `POST /api/v1/auth/otp/authenticate`. The code is a credential
+ * — never logged, never echoed back in an error.
+ */
+export const OtpAuthenticateRequest = Schema.Struct({
+  email: TrimmedNonEmptyString,
+  code: EmailVerificationCode,
+});
+export type OtpAuthenticateRequest = typeof OtpAuthenticateRequest.Type;
+
+/**
+ * The body of `POST /api/v1/auth/verify-email` — the emailed code plus the
+ * pending token an `email_verification_required` refusal carried. Both are
+ * bearer-ish secrets and take the credential handling rules: never logged,
+ * never echoed back.
  */
 export const VerifyEmailRequest = Schema.Struct({
   code: EmailVerificationCode,
@@ -320,19 +330,19 @@ export const VerifyEmailRequest = Schema.Struct({
 });
 export type VerifyEmailRequest = typeof VerifyEmailRequest.Type;
 
-/** The body of `POST /api/v1/auth/password/resend-verification`. */
+/** The body of `POST /api/v1/auth/resend-verification`. */
 export const ResendVerificationRequest = Schema.Struct({
   emailVerificationId: TrimmedNonEmptyString,
 });
 export type ResendVerificationRequest = typeof ResendVerificationRequest.Type;
 
 /**
- * What a successful password grant yields: the same token pair the device
- * grant produces, so everything downstream — workspace scoping, credential
- * persistence, refresh — is one code path regardless of how the user signed
- * in.
+ * What a successful authentication grant yields: the same token pair the
+ * device grant produces, so everything downstream — workspace scoping,
+ * credential persistence, refresh — is one code path regardless of how the
+ * user signed in.
  */
-export const PasswordAuthResponse = Schema.Struct({
+export const AuthTokensResponse = Schema.Struct({
   accessToken: TrimmedNonEmptyString,
   refreshToken: TrimmedNonEmptyString,
   user: Schema.Struct({
@@ -341,7 +351,7 @@ export const PasswordAuthResponse = Schema.Struct({
     name: Schema.optional(TrimmedNonEmptyString),
   }),
 });
-export type PasswordAuthResponse = typeof PasswordAuthResponse.Type;
+export type AuthTokensResponse = typeof AuthTokensResponse.Type;
 
 // ── In-app account session (server-brokered, not the CLI) ────────────
 //
@@ -351,9 +361,11 @@ export type PasswordAuthResponse = typeof PasswordAuthResponse.Type;
 //
 // There are two ways in, and they differ only in how the tokens are obtained:
 //
-//   password  — the user types their email and password in the app and never
-//               leaves it. The password passes through server and account
-//               service to WorkOS and is stored nowhere along the way.
+//   email OTP — the user types their email in the app, WorkOS emails a
+//               6-digit code, and redeeming it in the same dialog signs them
+//               in (provisioning the account first if it is new). The code
+//               passes through server and account service to WorkOS and is
+//               stored nowhere along the way.
 //   SSO       — "Continue with Google/GitHub" takes the device grant below,
 //               which opens the provider's page in a real browser. Sign-in is
 //               two calls rather than a polling loop in the app because the
@@ -393,18 +405,27 @@ export const AccountCompleteSignInInput = Schema.Struct({
 });
 export type AccountCompleteSignInInput = typeof AccountCompleteSignInInput.Type;
 
+/** Asks WorkOS to email the 6-digit sign-in code to `email`. */
+export const AccountSendOtpInput = OtpSendRequest;
+export type AccountSendOtpInput = typeof AccountSendOtpInput.Type;
+
+/** What a successful send reports back — never the code itself. */
+export const AccountSendOtpResult = OtpSendResponse;
+export type AccountSendOtpResult = typeof AccountSendOtpResult.Type;
+
 /**
- * In-app password sign-in or sign-up. The same shape serves both so the two
- * RPCs cannot drift; which one a client calls is the whole difference.
+ * In-app OTP sign-in: the emailed 6-digit code plus the address it was sent
+ * to. The code is a credential with the same handling rules as a password —
+ * it must never be logged by transport-level request tracing.
  */
-export const AccountPasswordSignInInput = PasswordCredentials;
-export type AccountPasswordSignInInput = typeof AccountPasswordSignInInput.Type;
+export const AccountAuthenticateOtpInput = OtpAuthenticateRequest;
+export type AccountAuthenticateOtpInput = typeof AccountAuthenticateOtpInput.Type;
 
 /**
  * In-app email verification: the code the user typed plus the pending token
  * from the `email_verification_required` refusal. Same handling rules as
- * {@link PasswordCredentials} — the payload is a secret, so it must never be
- * logged by transport-level request tracing.
+ * {@link OtpAuthenticateRequest} — the payload is a secret, so it must never
+ * be logged by transport-level request tracing.
  */
 export const AccountVerifyEmailInput = VerifyEmailRequest;
 export type AccountVerifyEmailInput = typeof AccountVerifyEmailInput.Type;
