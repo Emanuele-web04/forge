@@ -13,6 +13,9 @@ import {
   ListHostsResponse as ListHostsResponseSchema,
   OrganizationRequiredBody,
   type OrganizationSummary,
+  type PasswordAuthResponse,
+  PasswordAuthResponse as PasswordAuthResponseSchema,
+  type PasswordCredentials,
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
@@ -236,6 +239,14 @@ export interface RefreshAccessTokenOptions extends WorkosClientOptions {
 
 export interface AccountClient {
   instance(): Promise<InstanceInfo>;
+  /**
+   * In-app password sign-in. The credentials are forwarded to the account
+   * service and held nowhere: do not log the argument, and do not retain it
+   * past the call.
+   */
+  signInWithPassword(credentials: PasswordCredentials): Promise<PasswordAuthResponse>;
+  /** Creates the account, then signs in. Same handling rules as above. */
+  signUpWithPassword(credentials: PasswordCredentials): Promise<PasswordAuthResponse>;
   me(token: string): Promise<AccountMe>;
   /** Upserts the caller's profile. Rejects a changed handle; V1 handles are immutable. */
   updateProfile(token: string, request: UpdateProfileRequest): Promise<AccountMe>;
@@ -348,6 +359,30 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
   return {
     async instance() {
       return requestJson("/api/v1/instance", { method: "GET" }, InstanceInfoSchema);
+    },
+
+    async signInWithPassword(credentials) {
+      return requestJson(
+        "/api/v1/auth/password/sign-in",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(credentials),
+        },
+        PasswordAuthResponseSchema,
+      );
+    },
+
+    async signUpWithPassword(credentials) {
+      return requestJson(
+        "/api/v1/auth/password/sign-up",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(credentials),
+        },
+        PasswordAuthResponseSchema,
+      );
     },
 
     async me(token) {

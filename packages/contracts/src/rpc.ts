@@ -7,6 +7,7 @@ import {
   AccountCompleteSignInInput,
   AccountMe,
   AccountOpenVerificationUrlInput,
+  AccountPasswordSignInInput,
   AccountStatus,
   AccountUpdateProfileInput,
 } from "./account";
@@ -1138,6 +1139,23 @@ export const WsAccountStatusRpc = Rpc.make(WS_METHODS.accountStatus, {
   error: WsRpcError,
 });
 
+/**
+ * In-app password sign-in. The payload carries a password, so it must never be
+ * logged by transport-level request tracing; see the note on
+ * {@link PasswordCredentials}.
+ */
+export const WsAccountSignInWithPasswordRpc = Rpc.make(WS_METHODS.accountSignInWithPassword, {
+  payload: AccountPasswordSignInInput,
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+export const WsAccountSignUpWithPasswordRpc = Rpc.make(WS_METHODS.accountSignUpWithPassword, {
+  payload: AccountPasswordSignInInput,
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
 export const WsAccountBeginSignInRpc = Rpc.make(WS_METHODS.accountBeginSignIn, {
   payload: Schema.Struct({}),
   success: AccountBeginSignInResult,
@@ -1351,6 +1369,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
   WsAccountStatusRpc,
+  WsAccountSignInWithPasswordRpc,
+  WsAccountSignUpWithPasswordRpc,
   WsAccountBeginSignInRpc,
   WsAccountCompleteSignInRpc,
   WsAccountUpdateProfileRpc,

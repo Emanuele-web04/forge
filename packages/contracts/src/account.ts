@@ -173,6 +173,15 @@ export const AccountErrorCode = Schema.Literals([
   "organization_required",
   "environment_already_linked",
   "handle_taken",
+  /** Wrong email or password. Deliberately does not say which. */
+  "invalid_credentials",
+  /** Sign-up refused: somebody already has that email address. */
+  "email_taken",
+  /**
+   * The identity provider will not authenticate this account until its email
+   * address is verified. Not a credential failure — the password was right.
+   */
+  "email_verification_required",
   "validation_failed",
   "rate_limited",
   "internal_error",
@@ -201,12 +210,75 @@ export const OrganizationRequiredBody = Schema.Struct({
 });
 export type OrganizationRequiredBody = typeof OrganizationRequiredBody.Type;
 
+// ── Password authentication ──────────────────────────────────────────
+//
+// Email/password sign-in happens inside the app, so these credentials travel
+// from the app to the server to the account service and on to WorkOS. They are
+// pass-through at every hop: never persisted, never logged, and never echoed
+// back in an error. The account service must proxy rather than let the client
+// call WorkOS directly, because the password grant requires the client secret.
+//
+// SSO (Google/GitHub) does not use these — it takes the device-grant flow
+// below, which hands the user to the provider's page in a real browser.
+
+/**
+ * A password, bounded but otherwise unconstrained. Composition rules are the
+ * identity provider's to enforce and its to word the failure for: a second,
+ * stricter opinion here would reject passwords WorkOS would have accepted, and
+ * would drift the moment the provider's policy changed. The maximum only stops
+ * an unbounded body — bcrypt-style hashes ignore the tail anyway.
+ */
+export const AccountPassword = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512));
+export type AccountPassword = typeof AccountPassword.Type;
+
+/**
+ * Credentials for in-app sign-in or sign-up.
+ *
+ * Note for anyone logging or serializing a value of this type: don't. The
+ * password field is the reason this schema exists as a named type rather than
+ * an inline struct — it should be greppable.
+ */
+export const PasswordCredentials = Schema.Struct({
+  email: TrimmedNonEmptyString,
+  password: AccountPassword,
+});
+export type PasswordCredentials = typeof PasswordCredentials.Type;
+
+/**
+ * What a successful password grant yields: the same token pair the device
+ * grant produces, so everything downstream — workspace scoping, credential
+ * persistence, refresh — is one code path regardless of how the user signed
+ * in.
+ */
+export const PasswordAuthResponse = Schema.Struct({
+  accessToken: TrimmedNonEmptyString,
+  refreshToken: TrimmedNonEmptyString,
+  user: Schema.Struct({
+    id: TrimmedNonEmptyString,
+    email: TrimmedNonEmptyString,
+    name: Schema.optional(TrimmedNonEmptyString),
+  }),
+});
+export type PasswordAuthResponse = typeof PasswordAuthResponse.Type;
+
 // ── In-app account session (server-brokered, not the CLI) ────────────
 //
-// The app never holds account credentials itself: the server owns the stored
-// credential file and every WorkOS round trip, and the schemas below are what
-// it reports over the WebSocket RPC. That is why sign-in is two calls rather
-// than a polling loop in the browser — the server does the waiting.
+// The app never holds account *session* credentials: the server owns the
+// stored credential file and every WorkOS round trip, and the schemas below
+// are what it reports over the WebSocket RPC.
+//
+// There are two ways in, and they differ only in how the tokens are obtained:
+//
+//   password  — the user types their email and password in the app and never
+//               leaves it. The password passes through server and account
+//               service to WorkOS and is stored nowhere along the way.
+//   SSO       — "Continue with Google/GitHub" takes the device grant below,
+//               which opens the provider's page in a real browser. Sign-in is
+//               two calls rather than a polling loop in the app because the
+//               server does the waiting.
+//
+// Both end in the same place: a scoped token pair persisted server-side, and
+// an {@link AccountStatus} describing it.
 
 /**
  * Whether this machine currently has a usable account session, and who it
@@ -238,6 +310,13 @@ export const AccountCompleteSignInInput = Schema.Struct({
   deviceCode: TrimmedNonEmptyString,
 });
 export type AccountCompleteSignInInput = typeof AccountCompleteSignInInput.Type;
+
+/**
+ * In-app password sign-in or sign-up. The same shape serves both so the two
+ * RPCs cannot drift; which one a client calls is the whole difference.
+ */
+export const AccountPasswordSignInInput = PasswordCredentials;
+export type AccountPasswordSignInInput = typeof AccountPasswordSignInInput.Type;
 
 /**
  * The onboarding write. `workspaceName` renames the WorkOS organization, and

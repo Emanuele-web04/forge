@@ -5,6 +5,7 @@ import type {
   AccountCompleteSignInInput,
   AccountMe,
   AccountOpenVerificationUrlInput,
+  AccountPasswordSignInInput,
   AccountStatus,
   AccountUpdateProfileInput,
 } from "./account";
@@ -837,6 +838,19 @@ export interface NativeApi {
      * than failing — an expired session is a state, not an error.
      */
     status: () => Promise<AccountStatus>;
+    /**
+     * Email/password sign-in, entirely in-app. The password is forwarded to
+     * WorkOS through the server and account service and is stored nowhere
+     * along the way — do not log the input, and do not retain it in component
+     * state longer than the form lives.
+     */
+    signInWithPassword: (input: AccountPasswordSignInInput) => Promise<AccountStatus>;
+    /** Creates the account, then signs in. Same handling rules as above. */
+    signUpWithPassword: (input: AccountPasswordSignInInput) => Promise<AccountStatus>;
+    /**
+     * Starts the SSO path: "Continue with Google/GitHub" opens the identity
+     * provider's page in the system browser. Password users never reach this.
+     */
     beginSignIn: () => Promise<AccountBeginSignInResult>;
     /**
      * Waits for the user to finish on the hosted page, then persists the
