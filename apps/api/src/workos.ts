@@ -229,6 +229,12 @@ export function classifyPasswordFailure(raw: unknown): WorkosPasswordFailure | u
   if (code === "email_not_available" || code === "user_creation_error") return "email_taken";
   if (code === "entity_already_exists") return "email_taken";
   if (error === "invalid_grant" || code === "invalid_credentials") return "invalid_credentials";
+  // An unknown email must answer as a plain wrong-password would. Before this
+  // case existed it fell through to the 502 upstream-fault path (observed live
+  // against production WorkOS), which split the responses and turned the route
+  // into an account-existence oracle. WorkOS does not document the refusal's
+  // exact spelling, so both field positions are accepted.
+  if (code === "user_not_found" || error === "user_not_found") return "invalid_credentials";
 
   // Validation errors name the field rather than the problem. An `email` error
   // on a create is a taken address in every case this service can produce,

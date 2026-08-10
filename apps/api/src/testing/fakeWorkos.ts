@@ -347,9 +347,15 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       const submitted = typeof body?.password === "string" ? body.password : "";
       const record = [...users.values()].find((user) => user.email === email);
       const stored = record ? passwords.get(record.id) : undefined;
-      if (!record || stored === undefined || stored !== submitted) {
-        // One answer for "no such user" and "wrong password", as WorkOS does:
-        // distinguishing them is an account-existence oracle.
+      if (!record) {
+        // WorkOS answers an unknown email differently from a wrong password
+        // (observed live: the grant refuses with `user_not_found`). The stub
+        // mirrors the split so the proxy's classifier is what collapses the
+        // two into one client-visible answer — and a classifier regression
+        // that reopens the account-existence oracle fails here.
+        return c.json({ code: "user_not_found", message: "User not found" }, 404);
+      }
+      if (stored === undefined || stored !== submitted) {
         return c.json({ error: "invalid_grant", error_description: "Invalid credentials" }, 401);
       }
       if (unverifiedUsers.has(record.id)) {
