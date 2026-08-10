@@ -217,7 +217,17 @@ function fullName(user: WorkosUserResponse): string | undefined {
  * error codes; the `invalid_grant` fallback covers the OAuth-shaped refusal
  * the password grant returns for a bad email/password pair.
  */
-export function classifyPasswordFailure(raw: unknown): WorkosPasswordFailure | undefined {
+export function classifyPasswordFailure(
+  raw: unknown,
+  status?: number,
+): WorkosPasswordFailure | undefined {
+  // A 404 from the password grant can only mean the user does not exist —
+  // classified by status, not body, because WorkOS's spelling of the refusal
+  // is undocumented and guessing it wrong reopens the account-existence
+  // oracle (observed live: the unrecognised body fell through to the 502
+  // upstream-fault path while a wrong password answered 401). The status is
+  // also the one part of the failure that cannot quote the password back.
+  if (status === 404) return "invalid_credentials";
   if (typeof raw !== "object" || raw === null) return undefined;
   const body = raw as Record<string, unknown>;
   const code = typeof body.code === "string" ? body.code : undefined;
@@ -229,11 +239,8 @@ export function classifyPasswordFailure(raw: unknown): WorkosPasswordFailure | u
   if (code === "email_not_available" || code === "user_creation_error") return "email_taken";
   if (code === "entity_already_exists") return "email_taken";
   if (error === "invalid_grant" || code === "invalid_credentials") return "invalid_credentials";
-  // An unknown email must answer as a plain wrong-password would. Before this
-  // case existed it fell through to the 502 upstream-fault path (observed live
-  // against production WorkOS), which split the responses and turned the route
-  // into an account-existence oracle. WorkOS does not document the refusal's
-  // exact spelling, so both field positions are accepted.
+  // Belt for the 404 status check above, in case WorkOS ever moves the
+  // refusal to a different status while keeping a recognisable body.
   if (code === "user_not_found" || error === "user_not_found") return "invalid_credentials";
 
   // Validation errors name the field rather than the problem. An `email` error
@@ -388,7 +395,10 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
 
     // Read the failure only to classify it. The parsed value is never
     // returned, logged, or attached to an error.
-    const failure = classifyPasswordFailure(await response.json().catch(() => null));
+    const failure = classifyPasswordFailure(
+      await response.json().catch(() => null),
+      response.status,
+    );
     if (failure) throw new WorkosPasswordError(failure);
     throw new WorkosApiError(response.status, `WorkOS ${path} failed with ${response.status}`);
   }
