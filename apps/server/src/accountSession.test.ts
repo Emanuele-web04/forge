@@ -49,6 +49,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
       }),
     signInWithPassword: unimplemented("signInWithPassword"),
     signUpWithPassword: unimplemented("signUpWithPassword"),
+    verifyEmail: unimplemented("verifyEmail"),
+    resendVerificationEmail: unimplemented("resendVerificationEmail"),
     me: unimplemented("me"),
     updateProfile: unimplemented("updateProfile"),
     updateOrganization: unimplemented("updateOrganization"),
@@ -421,6 +423,123 @@ describe("password sign-in", () => {
 
     await expect(session.signInWithPassword(CREDENTIALS)).rejects.toThrow(/do not match/);
     expect(await session.status()).toEqual({ state: "signed-out" });
+  });
+});
+
+describe("email verification", () => {
+  const VERIFY_INPUT = { code: "123456", pendingAuthenticationToken: "pat_123" } as const;
+
+  /** A client whose verification grant succeeds with the usual org-less pair. */
+  function verificationClient(overrides: Partial<AccountClient> = {}): AccountClient {
+    return makeClient({
+      verifyEmail: () =>
+        Promise.resolve({
+          accessToken: "access-0",
+          refreshToken: "refresh-0",
+          user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
+        }),
+      me: (token) =>
+        token === "access-0"
+          ? Promise.reject(
+              new OrganizationRequiredError({
+                message: "Pick a workspace",
+                organizations: [ORGANIZATION],
+              }),
+            )
+          : Promise.resolve(meResponse()),
+      refreshAccessToken: () =>
+        Promise.resolve({
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+          user: { id: "user_1", email: "ada@example.com" },
+        }),
+      ...overrides,
+    });
+  }
+
+  // The verification grant is the third way to a token pair, and it must land
+  // in exactly the same place as the other two: a scoped, persisted session.
+  it("verifies and persists the scoped session, like the password path", async () => {
+    const baseDir = makeBaseDir();
+    const session = sessionFor(baseDir, verificationClient());
+
+    expect(await session.verifyEmail(VERIFY_INPUT)).toEqual({
+      state: "signed-in",
+      me: meResponse(),
+    });
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      organizationId: ORGANIZATION.id,
+      accessToken: "access-1",
+      refreshToken: "refresh-1",
+    });
+  });
+
+  it("keeps an existing host registration across a verification sign-in", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, {
+      accountUrl: ACCOUNT_URL,
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+    const session = sessionFor(baseDir, verificationClient());
+
+    await session.verifyEmail(VERIFY_INPUT);
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      hostToken: "host-token",
+      hostId: "host_1",
+      accessToken: "access-1",
+    });
+  });
+
+  // The credential file is the only thing this module writes to disk, so it
+  // is the one place the code or pending token could end up.
+  it("never writes the code or pending token to the credential file", async () => {
+    const baseDir = makeBaseDir();
+    const session = sessionFor(baseDir, verificationClient());
+
+    await session.verifyEmail(VERIFY_INPUT);
+
+    const raw = fs.readFileSync(accountCredentialsPath(baseDir), "utf8");
+    expect(raw).not.toContain(VERIFY_INPUT.pendingAuthenticationToken);
+    expect(raw).not.toContain(VERIFY_INPUT.code);
+  });
+
+  it("surfaces a refused code as a failure, leaving no session behind", async () => {
+    const baseDir = makeBaseDir();
+    const session = sessionFor(
+      baseDir,
+      verificationClient({
+        verifyEmail: () =>
+          Promise.reject(
+            new AccountApiError({
+              code: "invalid_verification_code",
+              status: 401,
+              message: "That code didn't work — check it and try again",
+            }),
+          ),
+      }),
+    );
+
+    await expect(session.verifyEmail(VERIFY_INPUT)).rejects.toThrow(/didn't work/);
+    expect(await session.status()).toEqual({ state: "signed-out" });
+  });
+
+  it("passes a resend through to the account service", async () => {
+    const resends: string[] = [];
+    const session = sessionFor(
+      makeBaseDir(),
+      makeClient({
+        resendVerificationEmail: (request) => {
+          resends.push(request.emailVerificationId);
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    await session.resendVerificationEmail({ emailVerificationId: "email_verification_123" });
+    expect(resends).toEqual(["email_verification_123"]);
   });
 });
 

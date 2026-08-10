@@ -3,12 +3,18 @@
 // client, tryPromise wrapping is unwrapped, and the password path never
 // attaches a cause.
 
-import { WsRpcError } from "@synara/contracts";
-import { AccountApiError } from "@synara/shared/account";
+import { AccountEmailVerificationRequiredError, WsRpcError } from "@synara/contracts";
+import { AccountApiError, EmailVerificationRequiredError } from "@synara/shared/account";
 import { Cause } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { toAccountWsRpcError, toPasswordWsRpcError } from "./accountRpcErrors";
+
+/** Narrows the password mapping's union; everything but one case is a WsRpcError. */
+function asWsRpcError(mapped: WsRpcError | AccountEmailVerificationRequiredError): WsRpcError {
+  if (!(mapped instanceof WsRpcError)) throw new Error("expected a WsRpcError");
+  return mapped;
+}
 
 const apiError = new AccountApiError({
   code: "handle_taken",
@@ -42,7 +48,7 @@ describe("toAccountWsRpcError", () => {
 
 describe("toPasswordWsRpcError", () => {
   it("keeps the account service's code and message but never a cause", () => {
-    const mapped = toPasswordWsRpcError(new Cause.UnknownError(apiError), "fallback");
+    const mapped = asWsRpcError(toPasswordWsRpcError(new Cause.UnknownError(apiError), "fallback"));
     expect(mapped.code).toBe("handle_taken");
     expect(mapped.message).toBe("That handle is already taken");
     expect(mapped.cause).toBeUndefined();
@@ -52,7 +58,7 @@ describe("toPasswordWsRpcError", () => {
     // A fetch error can quote the request body, which contained the password —
     // neither its message nor the object itself may survive.
     const leaky = new Error('fetch failed for body {"password":"hunter2"}');
-    const mapped = toPasswordWsRpcError(new Cause.UnknownError(leaky), "fallback");
+    const mapped = asWsRpcError(toPasswordWsRpcError(new Cause.UnknownError(leaky), "fallback"));
     expect(mapped.message).toBe("fallback");
     expect(mapped.cause).toBeUndefined();
     expect(JSON.stringify(mapped)).not.toContain("hunter2");
@@ -64,9 +70,27 @@ describe("toPasswordWsRpcError", () => {
       code: "invalid_credentials",
       cause: new Error("carrier"),
     });
-    const mapped = toPasswordWsRpcError(original, "fallback");
+    const mapped = asWsRpcError(toPasswordWsRpcError(original, "fallback"));
     expect(mapped.message).toBe("mapped");
     expect(mapped.code).toBe("invalid_credentials");
     expect(mapped.cause).toBeUndefined();
+  });
+
+  // The one refusal that keeps a payload: the fields the in-app verification
+  // step redeems cross the RPC boundary as their own tagged error.
+  it("maps a verification-required refusal to the tagged error with its fields", () => {
+    const refusal = new EmailVerificationRequiredError({
+      message: "Enter the 6-digit code we sent to your email",
+      pendingAuthenticationToken: "pat_123",
+      email: "ada@example.com",
+      emailVerificationId: "email_verification_123",
+    });
+    const mapped = toPasswordWsRpcError(new Cause.UnknownError(refusal), "fallback");
+    expect(mapped).toBeInstanceOf(AccountEmailVerificationRequiredError);
+    expect(mapped).toMatchObject({
+      pendingAuthenticationToken: "pat_123",
+      email: "ada@example.com",
+      emailVerificationId: "email_verification_123",
+    });
   });
 });

@@ -21,8 +21,10 @@
 import type {
   AccountBeginSignInResult,
   AccountMe,
+  AccountResendVerificationEmailInput,
   AccountStatus,
   AccountUpdateProfileInput,
+  AccountVerifyEmailInput,
   InstanceInfo,
   PasswordCredentials,
 } from "@synara/contracts";
@@ -83,6 +85,15 @@ export interface AccountSession {
   signInWithPassword(credentials: PasswordCredentials): Promise<AccountStatus>;
   /** In-app sign-up, then sign-in. Never log or persist the credentials. */
   signUpWithPassword(credentials: PasswordCredentials): Promise<AccountStatus>;
+  /**
+   * Redeems the emailed 6-digit code plus the pending authentication token an
+   * `email_verification_required` refusal carried. The pair is a bearer-ish
+   * secret with the password handling rules: never log or persist the input.
+   * Success takes the same `establishSession` path as every other sign-in.
+   */
+  verifyEmail(input: AccountVerifyEmailInput): Promise<AccountStatus>;
+  /** Asks the identity provider to email a fresh verification code. */
+  resendVerificationEmail(input: AccountResendVerificationEmailInput): Promise<void>;
   /** Starts the SSO path — the browser hand-off for Google/GitHub. */
   beginSignIn(): Promise<AccountBeginSignInResult>;
   completeSignIn(input: { readonly deviceCode: string }): Promise<AccountStatus>;
@@ -335,6 +346,28 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         client.signUpWithPassword(credentials),
       ]);
       return establishSession(token, { accountUrl, client, instance });
+    },
+
+    /**
+     * The third way to a token pair: the verification grant. Converges on
+     * `establishSession` with the other two, so workspace scoping and
+     * credential persistence cannot drift no matter how the user signed in.
+     */
+    async verifyEmail(input) {
+      const accountUrl = configuredUrl;
+      const client = clientFor(accountUrl);
+      const [instance, token] = await Promise.all([client.instance(), client.verifyEmail(input)]);
+      return establishSession(token, { accountUrl, client, instance });
+    },
+
+    /**
+     * Thin pass-through: the account service resolves the user behind the
+     * verification id and answers 202 whether or not the id was live, so
+     * there is nothing to interpret here.
+     */
+    async resendVerificationEmail(input) {
+      const client = clientFor(configuredUrl);
+      await client.resendVerificationEmail(input);
     },
 
     /**

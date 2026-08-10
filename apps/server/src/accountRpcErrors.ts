@@ -6,8 +6,8 @@
 // generic fallback message — and never the `AccountErrorCode` the UI branches on
 // (`invalid_credentials`, `email_taken`, `handle_taken`, ...).
 
-import { WsRpcError } from "@synara/contracts";
-import { AccountApiError } from "@synara/shared/account";
+import { AccountEmailVerificationRequiredError, WsRpcError } from "@synara/contracts";
+import { AccountApiError, EmailVerificationRequiredError } from "@synara/shared/account";
 import { Cause, Schema } from "effect";
 
 /** The original rejection from an `Effect.tryPromise`d account-session call. */
@@ -44,8 +44,23 @@ export function toAccountWsRpcError(rawCause: unknown, fallbackMessage: string):
  * rather than its own — the account service has already worded every failure
  * that is safe to show.
  */
-export function toPasswordWsRpcError(rawCause: unknown, fallbackMessage: string): WsRpcError {
+export function toPasswordWsRpcError(
+  rawCause: unknown,
+  fallbackMessage: string,
+): WsRpcError | AccountEmailVerificationRequiredError {
   const cause = unwrapTryPromiseError(rawCause);
+  // The one password refusal that keeps a payload: the pending token, email,
+  // and verification id are what the in-app verification step redeems, so
+  // they cross the RPC boundary as their own tagged error — field by field,
+  // never as an attached `cause`.
+  if (cause instanceof EmailVerificationRequiredError) {
+    return new AccountEmailVerificationRequiredError({
+      message: cause.message,
+      pendingAuthenticationToken: cause.pendingAuthenticationToken,
+      email: cause.email,
+      emailVerificationId: cause.emailVerificationId,
+    });
+  }
   if (Schema.is(WsRpcError)(cause)) {
     return new WsRpcError({ message: cause.message, code: cause.code });
   }

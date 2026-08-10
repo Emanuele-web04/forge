@@ -1951,6 +1951,18 @@ const makeWsRpcHandlersLayer = () =>
             Effect.tryPromise(() => accountSession.signUpWithPassword(input)),
             "Could not create your account. Try again.",
           ),
+        // The payload is the emailed code plus the pending token — bearer-ish
+        // secrets, so the password mapping applies to it too.
+        [WS_METHODS.accountVerifyEmail]: (input) =>
+          passwordRpcEffect(
+            Effect.tryPromise(() => accountSession.verifyEmail(input)),
+            "Could not verify your email. Try again.",
+          ),
+        [WS_METHODS.accountResendVerificationEmail]: (input) =>
+          passwordRpcEffect(
+            Effect.tryPromise(() => accountSession.resendVerificationEmail(input)),
+            "Could not resend the code. Try again in a minute.",
+          ),
         [WS_METHODS.accountBeginSignIn]: () =>
           accountRpcEffect(
             Effect.tryPromise(() => accountSession.beginSignIn()),

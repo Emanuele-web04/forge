@@ -115,6 +115,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     instance: unimplemented("instance"),
     signInWithPassword: unimplemented("signInWithPassword"),
     signUpWithPassword: unimplemented("signUpWithPassword"),
+    verifyEmail: unimplemented("verifyEmail"),
+    resendVerificationEmail: unimplemented("resendVerificationEmail"),
     me: unimplemented("me"),
     updateProfile: unimplemented("updateProfile"),
     updateOrganization: unimplemented("updateOrganization"),
