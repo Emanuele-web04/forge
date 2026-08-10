@@ -78,9 +78,18 @@ const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
 
 const LICENSE_REFERENCE_URL = "https://github.com/redxzeta/forkara/blob/built-from-scratch/LICENSE";
 
-const LICENSE_RELATED_KEYWORDS = ["license", "copyright", "copyright owner", "license_file", "license file"];
+const LICENSE_RELATED_KEYWORDS = [
+  "license",
+  "copyright",
+  "copyright owner",
+  "license_file",
+  "license file",
+];
 
-function hasLicenseSignals(input: { detail?: string; permissionProfile?: Record<string, unknown> }): boolean {
+function hasLicenseSignals(input: {
+  detail?: string;
+  permissionProfile?: Record<string, unknown>;
+}): boolean {
   const detail = input.detail?.toLowerCase() ?? "";
   const profile = input.permissionProfile;
   if (!detail && !profile) {
@@ -101,7 +110,11 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
 }: ComposerPendingApprovalPanelProps) {
   const parsed = parseApprovalDetail(approval.detail);
   const licenseProfileHint =
-    approval.requestKind === "permissions" && hasLicenseSignals({ detail: approval.detail, permissionProfile: approval.permissionProfile });
+    approval.requestKind === "permissions" &&
+    hasLicenseSignals({
+      ...(approval.detail ? { detail: approval.detail } : {}),
+      ...(approval.permissionProfile ? { permissionProfile: approval.permissionProfile } : {}),
+    });
   const requestId = approval.requestId;
   const actions =
     approval.sessionApprovalAvailable === false
@@ -193,8 +206,8 @@ function ApprovalDetail({
       return (
         <div className="mt-2">
           <p className="mb-1.5 text-[11.5px] leading-snug text-muted-foreground/70">
-            Changing license terms is not a cosmetic toggle. Verify ownership and repository policy before allowing
-            this, and keep the existing LICENSE as the source of truth.
+            Changing license terms is not a cosmetic toggle. Verify ownership and repository policy
+            before allowing this, and keep the existing LICENSE as the source of truth.
           </p>
           <a
             href={LICENSE_REFERENCE_URL}

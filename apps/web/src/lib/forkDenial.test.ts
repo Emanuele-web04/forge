@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { FORK_DENIAL_FINAL_STAGE, FORK_DENIAL_STAGES, getForkDenialStages, isFinalForkDenialStage } from "./forkDenial";
+import {
+  FORK_DENIAL_FINAL_STAGE,
+  FORK_DENIAL_STAGES,
+  getForkDenialStages,
+  isFinalForkDenialStage,
+} from "./forkDenial";
 
 describe("forkDenial", () => {
   it("defines the escalation order for fork-denial copy", () => {

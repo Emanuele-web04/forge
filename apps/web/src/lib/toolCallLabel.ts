@@ -287,6 +287,10 @@ const SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION = new Map<string, SynaraBrowserTo
   ]),
 );
 
+const SYNARA_TOOL_NAME_STEMS = new Set<string>(
+  Object.keys(SYNARA_MCP_TOOL_PRESENTATIONS).map((toolName) => toolName.replace(/^synara_/, "")),
+);
+
 const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRESENTATIONS).map(
   ([toolName, presentation]) => ({
     toolName,
@@ -299,6 +303,9 @@ const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRES
 
 function extractSynaraMcpToolName(normalizedCandidate: string): string | null {
   if (BROWSER_TOOL_NAME_SET.has(normalizedCandidate)) {
+    return `synara_${normalizedCandidate}`;
+  }
+  if (SYNARA_TOOL_NAME_STEMS.has(normalizedCandidate)) {
     return `synara_${normalizedCandidate}`;
   }
   if (normalizedCandidate.startsWith("mcp_synara_synara_")) {
@@ -316,19 +323,42 @@ function extractSynaraMcpToolName(normalizedCandidate: string): string | null {
   return null;
 }
 
+function expandSynaraMcpCandidateInputs(
+  candidate: string | null | undefined,
+): ReadonlyArray<string> {
+  if (!candidate) {
+    return [];
+  }
+  const trimmed = candidate.trim().replace(/\s+/g, " ");
+  if (!trimmed) {
+    return [];
+  }
+  const variants = new Set<string>([trimmed]);
+  const withPrefixedRemoved = trimmed.replace(/^forkara:\s*/i, "").trim();
+  if (withPrefixedRemoved && withPrefixedRemoved !== trimmed) {
+    variants.add(withPrefixedRemoved);
+  }
+  const withRepeatedPrefixRemoved = trimmed.replace(/^forkara:\s*forkara\s+/i, "").trim();
+  if (withRepeatedPrefixRemoved) {
+    variants.add(withRepeatedPrefixRemoved);
+  }
+  return [...variants];
+}
+
 function resolveSynaraBrowserToolName(
   candidates: ReadonlyArray<string | null | undefined>,
 ): SynaraBrowserToolName | null {
   for (const candidate of candidates) {
-    if (!candidate) continue;
-    const normalizedCandidate = normalizeSynaraMcpIdentifier(candidate);
-    const extractedToolName = extractSynaraMcpToolName(normalizedCandidate);
-    const candidateToolName =
-      extractedToolName ??
-      SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION.get(normalizedCandidate) ??
-      normalizedCandidate;
-    if (candidateToolName in SYNARA_BROWSER_TOOL_PRESENTATIONS) {
-      return candidateToolName as SynaraBrowserToolName;
+    for (const expandedCandidate of expandSynaraMcpCandidateInputs(candidate)) {
+      const normalizedCandidate = normalizeSynaraMcpIdentifier(expandedCandidate);
+      const extractedToolName = extractSynaraMcpToolName(normalizedCandidate);
+      const candidateToolName =
+        extractedToolName ??
+        SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION.get(normalizedCandidate) ??
+        normalizedCandidate;
+      if (candidateToolName in SYNARA_BROWSER_TOOL_PRESENTATIONS) {
+        return candidateToolName as SynaraBrowserToolName;
+      }
     }
   }
   return null;
@@ -351,53 +381,52 @@ function resolveSynaraMcpToolPresentation(
   candidates: ReadonlyArray<string | null | undefined>,
 ): SynaraMcpToolPresentation | null {
   for (const candidate of candidates) {
-    if (!candidate) {
-      continue;
-    }
-    const normalizedCandidate = normalizeSynaraMcpIdentifier(candidate);
-    for (const entry of SYNARA_MCP_TOOL_PRESENTATION_ENTRIES) {
-      if (
-        normalizedCandidate === entry.normalizedRunning ||
-        normalizedCandidate === entry.normalizedCompleted ||
-        normalizedCandidate === entry.normalizedFailed
-      ) {
-        return entry.presentation;
+    for (const expandedCandidate of expandSynaraMcpCandidateInputs(candidate)) {
+      const normalizedCandidate = normalizeSynaraMcpIdentifier(expandedCandidate);
+      for (const entry of SYNARA_MCP_TOOL_PRESENTATION_ENTRIES) {
+        if (
+          normalizedCandidate === entry.normalizedRunning ||
+          normalizedCandidate === entry.normalizedCompleted ||
+          normalizedCandidate === entry.normalizedFailed
+        ) {
+          return entry.presentation;
+        }
       }
+      const toolName = extractSynaraMcpToolName(normalizedCandidate);
+      const knownPresentation = toolName
+        ? (SYNARA_MCP_TOOL_PRESENTATIONS[toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS] as
+            | SynaraMcpToolPresentation
+            | undefined)
+        : undefined;
+      if (knownPresentation) {
+        return knownPresentation;
+      }
+      // Free-text summaries (e.g. reconciler activity lines) can begin with the
+      // word "Forkara" and normalize into a fake tool identifier; only
+      // identifier-shaped candidates may take an invented fallback presentation.
+      if (/\s/.test(expandedCandidate.trim())) {
+        continue;
+      }
+      if (normalizedCandidate.startsWith("synara_is_handling_")) {
+        return fallbackSynaraMcpToolPresentation(
+          `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
+        );
+      }
+      if (normalizedCandidate.startsWith("synara_handled_")) {
+        return fallbackSynaraMcpToolPresentation(
+          `synara_${normalizedCandidate.slice("synara_handled_".length)}`,
+        );
+      }
+      if (normalizedCandidate.startsWith("synara_couldn_t_handle_")) {
+        return fallbackSynaraMcpToolPresentation(
+          `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
+        );
+      }
+      if (!toolName) {
+        continue;
+      }
+      return fallbackSynaraMcpToolPresentation(toolName);
     }
-    const toolName = extractSynaraMcpToolName(normalizedCandidate);
-    const knownPresentation = toolName
-      ? (SYNARA_MCP_TOOL_PRESENTATIONS[toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS] as
-          | SynaraMcpToolPresentation
-          | undefined)
-      : undefined;
-    if (knownPresentation) {
-      return knownPresentation;
-    }
-    // Free-text summaries (e.g. reconciler activity lines) can begin with the
-    // word "Forkara" and normalize into a fake tool identifier; only
-    // identifier-shaped candidates may take an invented fallback presentation.
-    if (/\s/.test(candidate.trim())) {
-      continue;
-    }
-    if (normalizedCandidate.startsWith("synara_is_handling_")) {
-      return fallbackSynaraMcpToolPresentation(
-        `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
-      );
-    }
-    if (normalizedCandidate.startsWith("synara_handled_")) {
-      return fallbackSynaraMcpToolPresentation(
-        `synara_${normalizedCandidate.slice("synara_handled_".length)}`,
-      );
-    }
-    if (normalizedCandidate.startsWith("synara_couldn_t_handle_")) {
-      return fallbackSynaraMcpToolPresentation(
-        `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
-      );
-    }
-    if (!toolName) {
-      continue;
-    }
-    return fallbackSynaraMcpToolPresentation(toolName);
   }
   return null;
 }

@@ -8,7 +8,11 @@ describe("ForkDenialStage", () => {
   it("renders every stage label in provided order", () => {
     const stages = getForkDenialStages({ includeFinalForkState: true });
     const markup = renderToStaticMarkup(<ForkDenialStageList stages={stages} />);
-    const indexes = stages.map((stage) => markup.indexOf(stage.label));
+    const normalizedMarkup = markup
+      .replace(/&#39;|&#x27;|&apos;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&");
+    const indexes = stages.map((stage) => normalizedMarkup.indexOf(stage.label));
 
     for (const index of indexes) {
       expect(index).toBeGreaterThanOrEqual(0);

@@ -86,7 +86,9 @@ export function getRepositoryLabel(input: {
 }): ReactNode {
   if (!input.hideUpstreamRepositoryInfo) {
     return (
-      <span className="truncate">{input.githubRepository?.nameWithOwner ?? "Unknown repository"}</span>
+      <span className="truncate">
+        {input.githubRepository?.nameWithOwner ?? "Unknown repository"}
+      </span>
     );
   }
 

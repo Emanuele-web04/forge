@@ -13,9 +13,9 @@ const credentials = {
 
 describe("macOS DMG finalization", () => {
   it("requires exactly one DMG artifact", () => {
-    expect(resolveSingleMacDmgFileName(["Forkara-0.6.0-arm64.zip", "Forkara-0.6.0-arm64.dmg"])).toBe(
-      "Forkara-0.6.0-arm64.dmg",
-    );
+    expect(
+      resolveSingleMacDmgFileName(["Forkara-0.6.0-arm64.zip", "Forkara-0.6.0-arm64.dmg"]),
+    ).toBe("Forkara-0.6.0-arm64.dmg");
     expect(() => resolveSingleMacDmgFileName([])).toThrow("found 0");
     expect(() => resolveSingleMacDmgFileName(["a.dmg", "b.dmg"])).toThrow("found 2");
   });

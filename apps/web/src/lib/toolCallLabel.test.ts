@@ -96,7 +96,11 @@ describe("deriveSynaraMcpToolTitle", () => {
         "Forkara is reading thread activity",
         "Forkara read thread activity",
       ],
-      ["synara_read_thread_events", "Forkara is reading thread events", "Forkara read thread events"],
+      [
+        "synara_read_thread_events",
+        "Forkara is reading thread events",
+        "Forkara read thread events",
+      ],
       [
         "synara_read_thread_runtime_events",
         "Forkara is reading thread runtime events",
@@ -111,7 +115,11 @@ describe("deriveSynaraMcpToolTitle", () => {
         "Forkara finished waiting for threads",
       ],
       ["synara_send_message", "Forkara is sending a message", "Forkara sent a message"],
-      ["synara_interrupt_thread", "Forkara is interrupting a thread", "Forkara interrupted a thread"],
+      [
+        "synara_interrupt_thread",
+        "Forkara is interrupting a thread",
+        "Forkara interrupted a thread",
+      ],
       ["synara_set_thread_title", "Forkara is renaming a thread", "Forkara renamed a thread"],
       ["synara_set_thread_archived", "Forkara is updating a thread", "Forkara updated a thread"],
       [

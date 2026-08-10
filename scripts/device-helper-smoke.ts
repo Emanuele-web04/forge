@@ -36,7 +36,13 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const helperDir = join(repoRoot, "apps/server/native/device-helper");
 
 /** Minimum frames the stream must deliver before the run is considered healthy. */
-const REQUIRED_FRAMES = 30;
+const REQUIRED_FRAMES = (() => {
+  const envFrames = process.env.DEVICE_HELPER_REQUIRED_FRAMES;
+  if (!envFrames) return 30;
+  const parsed = Number.parseInt(envFrames, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 30;
+  return parsed;
+})();
 /** Preferred simulator device types, most modern first. */
 const PREFERRED_DEVICE_TYPES = ["iPhone 17 Pro", "iPhone 16 Pro", "iPhone 15 Pro", "iPhone"];
 

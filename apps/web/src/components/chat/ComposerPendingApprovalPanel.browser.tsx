@@ -98,17 +98,20 @@ describe("ComposerPendingApprovalPanel", () => {
       approval: makeApproval({
         requestKind: "permissions",
         detail: "Request to adjust LICENSE terms",
-        permissionProfile: { license: { file: "LICENSE", readable: true }, copyrightOwner: "forkara-team" },
+        permissionProfile: {
+          license: { file: "LICENSE", readable: true },
+          copyrightOwner: "forkara-team",
+        },
       }),
     });
 
     try {
-      await expect.element(
-        page.getByText(
-          "License Changer check: confirm legal ownership before proceeding",
-        ),
-      ).toBeInTheDocument();
-      await expect.element(page.getByRole("link", { name: /Read current LICENSE/u })).toBeInTheDocument();
+      await expect
+        .element(page.getByText("License Changer check: confirm legal ownership before proceeding"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("link", { name: /Read current LICENSE/u }))
+        .toBeInTheDocument();
       await expect
         .element(
           page.getByText(

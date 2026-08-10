@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { getRepositoryLabel, UPSTREAM_AMNESIA_HINT, UPSTREAM_AMNESIA_LABEL } from "./EnvironmentPanel";
+import {
+  getRepositoryLabel,
+  UPSTREAM_AMNESIA_HINT,
+  UPSTREAM_AMNESIA_LABEL,
+} from "./EnvironmentPanel";
 import { shouldShowStudioFolderRow } from "./EnvironmentPanel.logic";
 
 describe("shouldShowStudioFolderRow", () => {

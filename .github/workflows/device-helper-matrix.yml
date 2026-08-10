@@ -162,6 +162,7 @@ jobs:
         timeout-minutes: 15
         env:
           DEVELOPER_DIR: ${{ steps.toolchain.outputs.developer_dir }}
+          DEVICE_HELPER_REQUIRED_FRAMES: 4
         run: bun run test:device
 
       # Uploaded even when the probe failed: that JSON names the capability and

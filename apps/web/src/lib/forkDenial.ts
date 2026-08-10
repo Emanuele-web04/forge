@@ -10,11 +10,16 @@ export const FORK_DENIAL_STAGES = [
   { id: "fork-isnt-that-bad", label: "The fork isn't that bad" },
 ] as const;
 
-export const FORK_DENIAL_FINAL_STAGE = { id: "okay-its-a-fork", label: "Okay, it's a fork" } as const;
+export const FORK_DENIAL_FINAL_STAGE = {
+  id: "okay-its-a-fork",
+  label: "Okay, it's a fork",
+} as const;
 
 export type ForkDenialStage = (typeof FORK_DENIAL_STAGES)[number] | typeof FORK_DENIAL_FINAL_STAGE;
 
-export function getForkDenialStages(input: { includeFinalForkState?: boolean } = {}): readonly ForkDenialStage[] {
+export function getForkDenialStages(
+  input: { includeFinalForkState?: boolean } = {},
+): readonly ForkDenialStage[] {
   return input.includeFinalForkState
     ? [...FORK_DENIAL_STAGES, FORK_DENIAL_FINAL_STAGE]
     : [...FORK_DENIAL_STAGES];

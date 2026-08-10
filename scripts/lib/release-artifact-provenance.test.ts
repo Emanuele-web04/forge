@@ -56,8 +56,8 @@ describe("release artifact provenance", () => {
       checks: ["AppImage payload present"],
     });
     expect(result.manifest.artifacts.map((artifact) => artifact.fileName)).toEqual([
-      "latest-linux.yml",
       "Forkara-1.2.3-x64.AppImage",
+      "latest-linux.yml",
     ]);
     expect(
       result.manifest.artifacts.find(
