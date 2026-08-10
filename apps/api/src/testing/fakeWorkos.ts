@@ -161,6 +161,13 @@ export type StartFakeWorkosOptions = {
    * live via its built-in example.com test connection).
    */
   ssoRequiredDomains?: readonly string[];
+  /**
+   * Called whenever a Magic Auth code is minted — the seam the dev identity
+   * provider uses to print the code that real WorkOS would have emailed.
+   * Deliberately an observation hook, like `onDeviceAuthorization`: the
+   * double never delivers codes itself.
+   */
+  onMagicAuth?: (email: string, code: string) => void;
 };
 
 /** How long a fake Magic Auth code lives — WorkOS's documented 10 minutes. */
@@ -523,6 +530,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     const code = mintVerificationCode();
     const expiresAtMs = Date.now() + MAGIC_AUTH_TTL_MS;
     magicAuths.set(email, { code, expiresAtMs });
+    options.onMagicAuth?.(email, code);
     return c.json(
       {
         object: "magic_auth",

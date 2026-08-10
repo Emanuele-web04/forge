@@ -32,7 +32,18 @@ export type WorkosApiConfig = ApiConfigBase & {
   workosIssuer?: string;
 };
 
-export type ApiConfig = WorkosApiConfig;
+/**
+ * Configuration for the offline dev identity provider: an in-process identity
+ * endpoint with codes printed to stdout, for hacking on Synara accounts with
+ * no hosted-provider tenancy. Selected with IDENTITY_PROVIDER=dev and refused
+ * outright in anything that looks like a deployment — see
+ * {@link assertDevIdentityAllowed}.
+ */
+export type DevApiConfig = ApiConfigBase & {
+  identityProvider: "dev";
+};
+
+export type ApiConfig = WorkosApiConfig | DevApiConfig;
 
 export class ApiConfigError extends Error {}
 
@@ -45,7 +56,41 @@ const REQUIRED_VARS = [
   "ACCOUNT_BASE_URL",
 ] as const;
 
+/** The dev provider stores rows and serves clients, so these it still needs. */
+const REQUIRED_DEV_VARS = ["DATABASE_URL", "ACCOUNT_BASE_URL"] as const;
+
 const DEFAULT_WORKOS_API_URL = "https://api.workos.com";
+
+/**
+ * The hard safety gate on the dev identity provider. It accepts any email,
+ * prints one-time codes to stdout, and must therefore be impossible to enable
+ * accidentally in a deployed environment — so it refuses to start (the thrown
+ * ApiConfigError exits the process from `main`) when the environment says
+ * production, or when a WorkOS API key is present: a machine holding a real
+ * identity-provider secret is configured to serve real users, and "dev" there
+ * is a misconfiguration, not a choice.
+ *
+ * Called from {@link loadApiConfig} AND from the dev provider's own factory,
+ * so hand-built configs cannot bypass it.
+ */
+export function assertDevIdentityAllowed(env: Env): void {
+  if (env.NODE_ENV === "production") {
+    throw new ApiConfigError(
+      "IDENTITY_PROVIDER=dev refuses to start with NODE_ENV=production. " +
+        "The dev identity provider accepts any email and prints sign-in codes " +
+        "to stdout; it is for local development only. Unset IDENTITY_PROVIDER " +
+        "to use the real identity provider.",
+    );
+  }
+  if (env.WORKOS_API_KEY) {
+    throw new ApiConfigError(
+      "IDENTITY_PROVIDER=dev refuses to start while WORKOS_API_KEY is set. " +
+        "A real identity-provider secret means this environment serves real " +
+        "users; unset IDENTITY_PROVIDER to use it, or unset WORKOS_API_KEY " +
+        "for offline development.",
+    );
+  }
+}
 
 function requireVars(env: Env, names: readonly string[]): void {
   const missing = names.filter((name) => !env[name]);
@@ -55,13 +100,31 @@ function requireVars(env: Env, names: readonly string[]): void {
 }
 
 export function loadApiConfig(env: Env): ApiConfig {
+  const identityProvider = env.IDENTITY_PROVIDER ?? "workos";
+  if (identityProvider !== "workos" && identityProvider !== "dev") {
+    throw new ApiConfigError(
+      `Unknown IDENTITY_PROVIDER "${identityProvider}" — expected "workos" or "dev"`,
+    );
+  }
+
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : 8788;
+
+  if (identityProvider === "dev") {
+    assertDevIdentityAllowed(env);
+    requireVars(env, REQUIRED_DEV_VARS);
+    return {
+      identityProvider,
+      databaseUrl: env.DATABASE_URL as string,
+      baseUrl: env.ACCOUNT_BASE_URL as string,
+      port,
+    };
+  }
 
   requireVars(env, REQUIRED_VARS);
   const workosClientId = env.WORKOS_CLIENT_ID as string;
   const workosApiUrl = (env.WORKOS_API_URL ?? DEFAULT_WORKOS_API_URL).replace(/\/+$/, "");
   return {
-    identityProvider: "workos",
+    identityProvider,
     databaseUrl: env.DATABASE_URL as string,
     baseUrl: env.ACCOUNT_BASE_URL as string,
     port,

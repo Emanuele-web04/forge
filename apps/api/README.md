@@ -10,6 +10,9 @@ nothing in this app runs unless you deploy an instance and point a server at it.
 
 - **No instance runs unless you start one.** No telemetry endpoint is baked
   into the code, and nothing contacts an account service on its own.
+- **With `IDENTITY_PROVIDER=workos` (the default), `WORKOS_API_KEY` and
+  `WORKOS_CLIENT_ID` are required**; the dev provider needs neither and refuses
+  to coexist with a real key.
 - **The CLI is gated on `SYNARA_ACCOUNT_URL`.** `synara auth` and `synara
 status` only talk to an account service when that variable (or `synara auth
 --account-url`) names one. Unset, `synara status` prints "account features
@@ -25,31 +28,42 @@ status` only talk to an account service when that variable (or `synara auth
   the operator's machine under `<synara home>/account-credentials.json` at mode
   `0600`, never in the repository.
 
-## Identity: WorkOS AuthKit
+## Identity: WorkOS AuthKit behind an adapter seam
 
 This service does not store users, passwords, sessions, or signing keys.
 WorkOS owns all of that; the database here holds the host registry (`hosts`,
 `host_tokens`) and Synara-owned profiles (`profiles`), and every WorkOS id in
 those tables is opaque with no foreign key behind it.
 
+The domain never talks to WorkOS directly: routes depend on four internal
+adapters defined in `src/identity/interfaces.ts` — `AccountIdentityVerifier`,
+`EnvironmentGrantIssuer`, `DeviceCredentialStore`, `EnvironmentRegistry` —
+and WorkOS is one implementation of the first two (`src/identity/workos.ts`),
+selected by `src/identity/index.ts`. The dev provider below is a second, and
+a generic OIDC or BetterAuth implementation for self-hosters slots in the
+same way.
+
 ### Two ways in
 
-The app offers email/password in-app and SSO through the browser, and this
-service backs both:
+The app offers email OTP in-app and SSO through the browser, and this service
+backs both:
 
-- **Password** — `POST /api/v1/auth/password/sign-in` and `.../sign-up` proxy
-  the WorkOS password grant. They exist because that grant is a
-  confidential-client grant: it requires the client secret, so the app cannot
-  make the call itself. The password is **pass-through** at every step — read
-  off the request, handed to WorkOS, and never written to the database, a log
-  line, or an error message. `src/workos.ts` deliberately uses a separate
-  request helper for these calls, because the general one puts the upstream
-  response body into the thrown error and WorkOS echoes offending fields.
-  Both routes are rate-limited well below the device route (5/min per client
-  vs 10/min), on their own budget.
+- **Email OTP** — `POST /api/v1/auth/otp/send` asks WorkOS to email a 6-digit
+  Magic Auth code; `POST /api/v1/auth/otp/authenticate` redeems it, signing up
+  the user on first redemption. The proxy exists because the Magic Auth grant
+  is a confidential-client grant: it requires the client secret, so the app
+  cannot make the call itself. The code is **pass-through** at every step —
+  read off the request, handed to WorkOS, and never written to the database, a
+  log line, or an error message. `src/identity/workos.ts` deliberately uses a
+  separate request helper for these calls, because the general one puts the
+  upstream response body into the thrown error and WorkOS echoes offending
+  fields. Send is limited to 2/min per client, redemption to 5/min, each on
+  its own budget below the device route's 10/min. There is **no password
+  auth**.
 - **SSO** — "Continue with Google/GitHub" takes the device-authorization grant
   (`POST /api/v1/auth/device`) and finishes on the WorkOS hosted page in a real
-  browser. This is also the flow `synara auth` uses from the CLI.
+  browser — the only auth step that leaves the app. This is also the flow
+  `synara auth` uses from the CLI.
 
 Both converge on the same token pair, so everything downstream — workspace
 scoping, credential storage, refresh — is one code path.
@@ -84,19 +98,20 @@ own.
 
 ## What WorkOS owning identity means in practice
 
-- **Sign-in methods are dashboard toggles, not env vars.** Email/password,
-  Google, GitHub, Microsoft and the rest are enabled per-application in the
-  WorkOS dashboard. There are no OAuth client ids or secrets to register here,
-  and no provider pairs in the environment. The password routes above will
-  fail against an application that has password auth switched off, which is a
+- **Sign-in methods are dashboard toggles, not env vars.** Magic Auth (email
+  OTP), Google, GitHub, Microsoft and the rest are enabled per-application in
+  the WorkOS dashboard. There are no OAuth client ids or secrets to register
+  here, and no provider pairs in the environment. The OTP routes above will
+  fail against an application that has Magic Auth switched off, which is a
   dashboard change rather than a deploy.
-- **Email verification is WorkOS's decision, not ours.** With verification
-  required for the environment, a fresh sign-up authenticates only after the
-  user follows WorkOS's mail; the sign-up route surfaces that as 403
-  `email_verification_required` and V1 leaves completing it to WorkOS's own
-  flow. The created user is left in place, since the account is real.
-- **Email delivery is WorkOS's.** Verification and password-reset mail is sent
-  by WorkOS, so there is no SMTP or Resend configuration.
+- **Email verification is WorkOS's decision, not ours.** Redeeming an OTP
+  implicitly verifies the address, so the challenge should not fire on the
+  OTP path — but if WorkOS answers `email_verification_required` anyway, the
+  service surfaces the challenge fields and `/api/v1/auth/verify-email` plus
+  `/api/v1/auth/resend-verification` complete it in-app (defense-in-depth,
+  kept deliberately).
+- **Email delivery is WorkOS's.** OTP and verification mail is sent by WorkOS,
+  so there is no SMTP or Resend configuration.
 - **The JWKS is WorkOS's, served by WorkOS.** This service only reads it.
   Nothing is generated or stored locally, so there is no key material to rotate
   or lose.
@@ -148,11 +163,40 @@ SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts 
 
 ## Developing without a WorkOS account
 
-`scripts/fake-workos.ts` runs the same in-process double the test suite uses as
-a standalone server, so the full `synara auth` flow works with no WorkOS
-tenancy and no network. It auto-approves device authorizations on a timer,
-standing in for a human clicking through the hosted page — which is what makes
-the flow headless.
+### The dev identity provider (recommended)
+
+Set `IDENTITY_PROVIDER=dev` and the service swaps the whole identity seam for
+an offline implementation — no WorkOS tenancy, no network, no extra process:
+
+```sh
+IDENTITY_PROVIDER=dev DATABASE_URL=postgres://synara:synara@localhost:5432/synara_accounts \
+  ACCOUNT_BASE_URL=http://localhost:8788 bun run --cwd apps/api dev
+```
+
+- Any email signs in. The 6-digit OTP code is **printed to the API's stdout**
+  (`[dev-identity] OTP for you@example.com: 000001`) instead of emailed — type
+  it into the app's sign-in dialog.
+- SSO device authorizations self-approve after a few seconds, standing in for
+  the browser hop.
+- Users, organizations, and codes are in-memory and die with the process; the
+  host registry and profiles still live in Postgres as usual.
+
+It refuses to start — by design, with a process exit — when `NODE_ENV` is
+`production` or when `WORKOS_API_KEY` is set: printing sign-in codes to stdout
+is only acceptable on a machine where the operator at the terminal is the only
+user, and a real WorkOS secret means the environment is meant to serve real
+users. Internally it runs the same in-process double the test suite uses
+behind the same WorkOS adapter that runs in production, so the code path you
+exercise is the deployed one.
+
+### The standalone stub (CLI device-flow testing)
+
+`scripts/fake-workos.ts` runs that same double as a standalone server, so the
+full `synara auth` flow works against a _normally configured_ API with no
+WorkOS tenancy. It auto-approves device authorizations on a timer, standing in
+for a human clicking through the hosted page — which is what makes the flow
+headless. Prefer this over `IDENTITY_PROVIDER=dev` when you specifically want
+to exercise the env-var wiring of the WorkOS configuration itself.
 
 ```sh
 bun run --cwd apps/api scripts/fake-workos.ts        # :8790, approves after 5s
@@ -239,17 +283,18 @@ trusting an instance against real WorkOS, confirm by hand:
 
 ## Environment variables
 
-| Variable            | Required | Default                  | Purpose                                                  |
-| ------------------- | -------- | ------------------------ | -------------------------------------------------------- |
-| `DATABASE_URL`      | yes      | —                        | Postgres connection string for the host registry.        |
-| `WORKOS_API_KEY`    | yes      | —                        | WorkOS secret key (`sk_…`). Server-side only.            |
-| `WORKOS_CLIENT_ID`  | yes      | —                        | WorkOS AuthKit client id (`client_…`).                   |
-| `ACCOUNT_BASE_URL`  | yes      | —                        | Public origin of this instance.                          |
-| `PORT`              | no       | `8788`                   | HTTP listen port.                                        |
-| `WORKOS_API_URL`    | no       | `https://api.workos.com` | WorkOS API origin. Override only to point at a stand-in. |
-| `WORKOS_JWKS_URL`   | no       | discovered (`jwks_uri`)  | Full JWKS URL. Override only to point at a stand-in.     |
-| `WORKOS_ISSUER`     | no       | discovered (`issuer`)    | Expected `iss` claim. Set only for a custom auth domain. |
-| `TEST_DATABASE_URL` | tests    | —                        | Database the Vitest suites use. Without it they skip.    |
+| Variable            | Required | Default                  | Purpose                                                                                                        |
+| ------------------- | -------- | ------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`      | yes      | —                        | Postgres connection string for the host registry.                                                              |
+| `WORKOS_API_KEY`    | yes      | —                        | WorkOS secret key (`sk_…`). Server-side only.                                                                  |
+| `WORKOS_CLIENT_ID`  | yes      | —                        | WorkOS AuthKit client id (`client_…`).                                                                         |
+| `ACCOUNT_BASE_URL`  | yes      | —                        | Public origin of this instance.                                                                                |
+| `PORT`              | no       | `8788`                   | HTTP listen port.                                                                                              |
+| `WORKOS_API_URL`    | no       | `https://api.workos.com` | WorkOS API origin. Override only to point at a stand-in.                                                       |
+| `WORKOS_JWKS_URL`   | no       | discovered (`jwks_uri`)  | Full JWKS URL. Override only to point at a stand-in.                                                           |
+| `WORKOS_ISSUER`     | no       | discovered (`issuer`)    | Expected `iss` claim. Set only for a custom auth domain.                                                       |
+| `IDENTITY_PROVIDER` | no       | `workos`                 | `dev` selects the offline dev identity provider. Refused with `NODE_ENV=production` or a set `WORKOS_API_KEY`. |
+| `TEST_DATABASE_URL` | tests    | —                        | Database the Vitest suites use. Without it they skip.                                                          |
 
 A missing required variable fails the boot with an explicit
 `Missing required environment variables: …` rather than starting half-configured.

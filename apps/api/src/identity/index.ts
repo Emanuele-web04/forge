@@ -9,6 +9,7 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { ApiConfig } from "../config";
 import type * as schema from "../db/schema";
+import { createDevIdentityProvider } from "./devProvider";
 import { createDeviceCredentialStore } from "./deviceCredentialStore";
 import { createEnvironmentRegistry } from "./environmentRegistry";
 import type { IdentityAdapters } from "./interfaces";
@@ -23,6 +24,11 @@ export async function createIdentityAdapters(
   // not the identity provider's.
   const deviceCredentials = createDeviceCredentialStore(db);
   const environments = createEnvironmentRegistry(db);
+
+  if (config.identityProvider === "dev") {
+    const { verifier, grants, close } = await createDevIdentityProvider();
+    return { verifier, grants, deviceCredentials, environments, close };
+  }
 
   const { verifier, grants } = createWorkosIdentityProvider(config);
   return { verifier, grants, deviceCredentials, environments, close: async () => {} };
