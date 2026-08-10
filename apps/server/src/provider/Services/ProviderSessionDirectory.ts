@@ -1,5 +1,7 @@
 import type {
   ProviderKind,
+  ProviderProfileId,
+  ProviderTarget,
   ProviderSessionRuntimeStatus,
   RuntimeMode,
   ThreadId,
@@ -15,6 +17,7 @@ import type {
 export interface ProviderRuntimeBinding {
   readonly threadId: ThreadId;
   readonly provider: ProviderKind;
+  readonly profileId: ProviderProfileId;
   readonly adapterKey?: string;
   readonly status?: ProviderSessionRuntimeStatus;
   readonly lifecycleGeneration?: string;
@@ -24,6 +27,10 @@ export interface ProviderRuntimeBinding {
   readonly runtimeMode?: RuntimeMode;
 }
 
+export type ProviderRuntimeBindingUpdate = Omit<ProviderRuntimeBinding, "profileId"> & {
+  readonly profileId?: ProviderProfileId;
+};
+
 export type ProviderSessionDirectoryReadError = ProviderSessionDirectoryPersistenceError;
 
 export type ProviderSessionDirectoryWriteError =
@@ -32,12 +39,16 @@ export type ProviderSessionDirectoryWriteError =
 
 export interface ProviderSessionDirectoryShape {
   readonly upsert: (
-    binding: ProviderRuntimeBinding,
+    binding: ProviderRuntimeBindingUpdate,
   ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
 
   readonly getProvider: (
     threadId: ThreadId,
   ) => Effect.Effect<ProviderKind, ProviderSessionDirectoryReadError>;
+
+  readonly getTarget: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderTarget, ProviderSessionDirectoryReadError>;
 
   readonly getBinding: (
     threadId: ThreadId,

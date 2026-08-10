@@ -68,6 +68,33 @@ describe("makeProviderLifecycleCoordinator", () => {
     );
   });
 
+  it("clears a provisional generation when interrupted at publication", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const published = yield* Deferred.make<string>();
+        let operationEntered = false;
+        const coordinator = makeProviderLifecycleCoordinator({
+          onGenerationPublished: ({ generation }) =>
+            Deferred.succeed(published, generation).pipe(Effect.andThen(Effect.never)),
+        });
+        const fiber = yield* coordinator
+          .run(threadId, () =>
+            Effect.sync(() => {
+              operationEntered = true;
+            }),
+          )
+          .pipe(Effect.forkChild);
+
+        const generation = yield* Deferred.await(published);
+        expect(coordinator.currentGeneration(threadId)).toBe(generation);
+        yield* Fiber.interrupt(fiber);
+
+        expect(operationEntered).toBe(false);
+        expect(coordinator.currentGeneration(threadId)).toBeUndefined();
+      }),
+    );
+  });
+
   it("restores the previous generation when a run fails before taking ownership", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -118,8 +145,8 @@ describe("makeProviderLifecycleCoordinator", () => {
       Effect.gen(function* () {
         const coordinator = makeProviderLifecycleCoordinator();
         yield* coordinator.run(threadId, (lease) =>
-          Effect.sync(() => {
-            lease.adopt("legacy");
+          Effect.gen(function* () {
+            yield* lease.adopt("legacy");
             expect(lease.isCurrent()).toBe(true);
           }),
         );
@@ -180,6 +207,48 @@ describe("makeProviderLifecycleCoordinator", () => {
 
         expect(order).toEqual(["first", "second"]);
         expect(coordinator.currentGeneration(threadId)).toBe(secondGeneration);
+      }),
+    );
+  });
+
+  it("keeps generation mutation outside a stable admission without blocking current work", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const coordinator = makeProviderLifecycleCoordinator();
+        const live = yield* coordinator.run(threadId, (lease) =>
+          Effect.sync(() => {
+            lease.commit();
+            return lease.generation;
+          }),
+        );
+        const stableEntered = yield* Deferred.make<void>();
+        const releaseStable = yield* Deferred.make<void>();
+        const stable = yield* coordinator
+          .runStable(threadId, (generation) =>
+            Deferred.succeed(stableEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseStable)),
+              Effect.as(generation),
+            ),
+          )
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(stableEntered);
+        expect(yield* coordinator.runCurrent(threadId, Effect.succeed)).toBe(live);
+        const replacement = yield* coordinator
+          .run(threadId, (lease) =>
+            Effect.sync(() => {
+              lease.commit();
+              return lease.generation;
+            }),
+          )
+          .pipe(Effect.forkChild);
+        yield* Effect.sleep("10 millis");
+        expect(coordinator.currentGeneration(threadId)).toBe(live);
+
+        yield* Deferred.succeed(releaseStable, undefined);
+        expect(yield* Fiber.join(stable)).toBe(live);
+        const replacementGeneration = yield* Fiber.join(replacement);
+        expect(coordinator.currentGeneration(threadId)).toBe(replacementGeneration);
       }),
     );
   });

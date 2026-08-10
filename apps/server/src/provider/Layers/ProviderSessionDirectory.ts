@@ -1,4 +1,9 @@
-import { ProviderKind, type ThreadId } from "@synara/contracts";
+import {
+  DEFAULT_PROVIDER_PROFILE_ID,
+  ProviderKind,
+  type ProviderTarget,
+  type ThreadId,
+} from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
@@ -65,6 +70,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
                 Option.some({
                   threadId: value.threadId,
                   provider,
+                  profileId: value.profileId,
                   adapterKey: value.adapterKey,
                   runtimeMode: value.runtimeMode,
                   status: value.status,
@@ -94,16 +100,23 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     }
 
     const now = new Date().toISOString();
-    const providerChanged =
-      existingRuntime !== undefined && existingRuntime.providerName !== binding.provider;
-    const compatibleRuntime = providerChanged ? undefined : existingRuntime;
+    const profileId =
+      binding.profileId ??
+      (existingRuntime?.providerName === binding.provider
+        ? existingRuntime.profileId
+        : DEFAULT_PROVIDER_PROFILE_ID);
+    const targetChanged =
+      existingRuntime !== undefined &&
+      (existingRuntime.providerName !== binding.provider || existingRuntime.profileId !== profileId);
+    const compatibleRuntime = targetChanged ? undefined : existingRuntime;
     yield* repository
       .upsert({
         threadId: resolvedThreadId,
         providerName: binding.provider,
+        profileId,
         adapterKey:
           binding.adapterKey ??
-          (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
+          (targetChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
         runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
         status: binding.status ?? compatibleRuntime?.status ?? "running",
         lifecycleGeneration:
@@ -137,6 +150,23 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       ),
     );
 
+  const getTarget: ProviderSessionDirectoryShape["getTarget"] = (threadId) =>
+    getBinding(threadId).pipe(
+      Effect.flatMap((binding) =>
+        Option.match(binding, {
+          onSome: ({ provider, profileId }) =>
+            Effect.succeed({ provider, profileId } satisfies ProviderTarget),
+          onNone: () =>
+            Effect.fail(
+              new ProviderSessionDirectoryPersistenceError({
+                operation: "ProviderSessionDirectory.getTarget",
+                detail: `No persisted provider binding found for thread '${threadId}'.`,
+              }),
+            ),
+        }),
+      ),
+    );
+
   const remove: ProviderSessionDirectoryShape["remove"] = (threadId) =>
     repository
       .deleteByThreadId({ threadId })
@@ -160,6 +190,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
               Option.some({
                 threadId: row.threadId,
                 provider,
+                profileId: row.profileId,
                 adapterKey: row.adapterKey,
                 runtimeMode: row.runtimeMode,
                 status: row.status,
@@ -185,6 +216,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
   return {
     upsert,
     getProvider,
+    getTarget,
     getBinding,
     remove,
     listThreadIds,

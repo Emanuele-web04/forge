@@ -1801,6 +1801,7 @@ const make = Effect.gen(function* () {
                 ? parentThread.modelSelection
                 : {
                     provider: parentThread.modelSelection.provider,
+                    profileId: parentThread.modelSelection.profileId,
                     model: identity.model,
                   }
               : undefined;
