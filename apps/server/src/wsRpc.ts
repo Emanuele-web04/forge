@@ -37,8 +37,8 @@ import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream }
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
+import { toAccountWsRpcError, toPasswordWsRpcError } from "./accountRpcErrors";
 import { createAccountSession } from "./accountSession";
-import { AccountApiError } from "@synara/shared/account";
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import {
@@ -801,32 +801,29 @@ const makeWsRpcHandlersLayer = () =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
       /**
-       * `rpcEffect` for handlers whose request carried a password.
+       * `rpcEffect` for the account handlers: an `AccountApiError` keeps its
+       * message and carries its `AccountErrorCode` as `code`, which the web UI
+       * branches on (`handle_taken` under the handle field, an expired device
+       * code offering a retry, ...).
+       */
+      const accountRpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
+        effect.pipe(Effect.mapError((cause) => toAccountWsRpcError(cause, fallbackMessage)));
+
+      /**
+       * `accountRpcEffect` for handlers whose request carried a password.
        *
-       * Same shape, minus the `cause`: the ordinary path attaches the original
-       * error, which for a failed password call is an object graph built from a
-       * request that contained the password — a fetch error can quote the
-       * request, and anything attached here is serialized to the client and may
-       * be logged on the way. The account service has already turned the real
-       * reason into a message (`invalid_credentials`, `email_taken`, ...), so
-       * that message is all that is worth keeping.
+       * Same classification, minus the `cause`: the ordinary path attaches the
+       * original error, which for a failed password call is an object graph
+       * built from a request that contained the password — a fetch error can
+       * quote the request, and anything attached here is serialized to the
+       * client and may be logged on the way. The account service has already
+       * turned the real reason into a message and code (`invalid_credentials`,
+       * `email_taken`, ...), so those are all that is worth keeping.
        */
       const passwordRpcEffect = <A, E, R>(
         effect: Effect.Effect<A, E, R>,
         fallbackMessage: string,
-      ) =>
-        effect.pipe(
-          Effect.mapError((cause) => {
-            if (Schema.is(WsRpcError)(cause)) {
-              return new WsRpcError({ message: cause.message });
-            }
-            const message =
-              cause instanceof AccountApiError && cause.message.length > 0
-                ? cause.message
-                : fallbackMessage;
-            return new WsRpcError({ message });
-          }),
-        );
+      ) => effect.pipe(Effect.mapError((cause) => toPasswordWsRpcError(cause, fallbackMessage)));
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
@@ -1936,7 +1933,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
         [WS_METHODS.accountStatus]: () =>
-          rpcEffect(
+          accountRpcEffect(
             Effect.promise(() => accountSession.status()),
             "Failed to read the account session",
           ),
@@ -1955,7 +1952,7 @@ const makeWsRpcHandlersLayer = () =>
             "Could not create your account. Try again.",
           ),
         [WS_METHODS.accountBeginSignIn]: () =>
-          rpcEffect(
+          accountRpcEffect(
             Effect.tryPromise(() => accountSession.beginSignIn()),
             "Failed to start sign-in",
           ),
@@ -1965,22 +1962,22 @@ const makeWsRpcHandlersLayer = () =>
         // disconnects mid-flight loses nothing: the credentials are persisted
         // here before this answers, and `account.status` recovers them.
         [WS_METHODS.accountCompleteSignIn]: (input) =>
-          rpcEffect(
+          accountRpcEffect(
             Effect.tryPromise(() => accountSession.completeSignIn(input)),
             "Failed to finish signing in",
           ),
         [WS_METHODS.accountUpdateProfile]: (input) =>
-          rpcEffect(
+          accountRpcEffect(
             Effect.tryPromise(() => accountSession.updateProfile(input)),
             "Failed to save your profile",
           ),
         [WS_METHODS.accountSignOut]: () =>
-          rpcEffect(
+          accountRpcEffect(
             Effect.tryPromise(() => accountSession.signOut()),
             "Failed to sign out",
           ),
         [WS_METHODS.accountOpenVerificationUrl]: (input) =>
-          rpcEffect(
+          accountRpcEffect(
             Effect.gen(function* () {
               // Only a URL this server issued from a device authorization.
               // Without this the method would be an arbitrary-URL opener
