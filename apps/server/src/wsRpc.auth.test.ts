@@ -6,12 +6,38 @@ import { AuthError } from "./auth/Services/ServerAuth";
 import {
   authenticateRpcWebSocketUpgrade,
   authorizeDeviceFrameWebSocketUpgrade,
+  canAccessProviderProfiles,
   canManageExternalMcp,
+  toProviderProfileWsRpcError,
 } from "./wsRpc";
+import { ProviderProfileRegistryError } from "./provider/Services/ProviderProfileRegistry";
 
 it("reserves external MCP management for owner sessions", () => {
   assert.isTrue(canManageExternalMcp("owner"));
   assert.isFalse(canManageExternalMcp("client"));
+});
+
+it("allows clients to list provider profiles but reserves every mutation for owners", () => {
+  assert.isTrue(canAccessProviderProfiles("client", "list"));
+  for (const operation of ["create", "rename", "setEnabled", "tombstone"] as const) {
+    assert.isTrue(canAccessProviderProfiles("owner", operation));
+    assert.isFalse(canAccessProviderProfiles("client", operation));
+  }
+});
+
+it("redacts registry error causes before they cross RPC", () => {
+  const privatePath = "/private/state/provider-profiles/index.json";
+  const rpcError = toProviderProfileWsRpcError(
+    new ProviderProfileRegistryError({
+      code: "PROVIDER_PROFILE_STORAGE_ERROR",
+      message: "Could not save the Codex provider profile registry.",
+      cause: new Error(`EACCES: ${privatePath}`),
+    }),
+  );
+
+  assert.equal(rpcError.code, "PROVIDER_PROFILE_STORAGE_ERROR");
+  assert.equal(rpcError.cause, undefined);
+  assert.isFalse(JSON.stringify(rpcError).includes(privatePath));
 });
 
 it.effect("rejects an unauthorized websocket upgrade on a non-loopback bind", () =>

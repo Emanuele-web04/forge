@@ -140,6 +140,13 @@ import {
 } from "./providerDiscovery";
 import { ProviderCompactThreadInput } from "./provider";
 import {
+  ProviderProfilesCreateInput,
+  ProviderProfilesListInput,
+  ProviderProfilesRenameInput,
+  ProviderProfilesSetEnabledInput,
+  ProviderProfilesTombstoneInput,
+} from "./providerProfileManagement";
+import {
   PullRequestActionInput,
   PullRequestCommentInput,
   PullRequestDetailInput,
@@ -256,6 +263,13 @@ export const WS_METHODS = {
   subscribeServerConfig: "server.subscribeConfig",
   subscribeServerProviderStatuses: "server.subscribeProviderStatuses",
   subscribeServerSettings: "server.subscribeSettings",
+
+  // Server-owned provider profile registry
+  providerProfilesList: "providerProfiles.list",
+  providerProfilesCreate: "providerProfiles.create",
+  providerProfilesRename: "providerProfiles.rename",
+  providerProfilesSetEnabled: "providerProfiles.setEnabled",
+  providerProfilesTombstone: "providerProfiles.tombstone",
 
   // Streaming subscriptions
   subscribeTerminalEvents: "terminal.subscribeEvents",
@@ -456,6 +470,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGenerateThreadRecap, ServerGenerateThreadRecapInput),
   tagRequestBody(WS_METHODS.serverGenerateAutomationIntent, ServerGenerateAutomationIntentInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+
+  // Server-owned provider profile registry
+  tagRequestBody(WS_METHODS.providerProfilesList, ProviderProfilesListInput),
+  tagRequestBody(WS_METHODS.providerProfilesCreate, ProviderProfilesCreateInput),
+  tagRequestBody(WS_METHODS.providerProfilesRename, ProviderProfilesRenameInput),
+  tagRequestBody(WS_METHODS.providerProfilesSetEnabled, ProviderProfilesSetEnabledInput),
+  tagRequestBody(WS_METHODS.providerProfilesTombstone, ProviderProfilesTombstoneInput),
 
   // Provider discovery
   tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),

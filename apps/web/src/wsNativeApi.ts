@@ -721,6 +721,13 @@ export function createWsNativeApi(): NativeApi {
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
+    providerProfiles: {
+      list: (input) => transport.request(WS_METHODS.providerProfilesList, input),
+      create: (input) => transport.request(WS_METHODS.providerProfilesCreate, input),
+      rename: (input) => transport.request(WS_METHODS.providerProfilesRename, input),
+      setEnabled: (input) => transport.request(WS_METHODS.providerProfilesSetEnabled, input),
+      tombstone: (input) => transport.request(WS_METHODS.providerProfilesTombstone, input),
+    },
     stats: {
       getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
       getProfileTokenStats: (input) =>

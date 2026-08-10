@@ -8,6 +8,8 @@ import {
   WsFeatureRpcGroup,
   WsProjectsDiscoverScriptsRpc,
   WsProjectsProvisionFromGitHubRpc,
+  WsProviderProfilesCreateRpc,
+  WsProviderProfilesListRpc,
   WsPullRequestsReviewRequestCountRpc,
   WsRpcError,
   WsRpcGroup,
@@ -41,6 +43,13 @@ describe("WS RPC contracts", () => {
     expect(WsAutomationCreateRpc).toBeDefined();
     expect(WsAutomationGetMemoryRpc).toBeDefined();
     expect(WsAutomationResolveProposalRpc).toBeDefined();
+  });
+
+  it("exports the provider profile registry RPCs", () => {
+    expect(WsProviderProfilesListRpc).toBeDefined();
+    expect(WsProviderProfilesCreateRpc).toBeDefined();
+    expect(WsFeatureRpcGroup.requests.has("providerProfiles.list")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("providerProfiles.tombstone")).toBe(true);
   });
 
   it("exports the count-only pull request review RPC", () => {
