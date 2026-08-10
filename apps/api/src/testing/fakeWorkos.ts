@@ -98,6 +98,13 @@ export type FakeWorkos = {
     deviceCode: string,
     user?: Partial<FakeWorkosUser> & { id?: string },
   ): FakeWorkosUser;
+  /**
+   * The live email verification for `email`, if one exists — its id and the
+   * 6-digit code a real user would read out of their inbox. How a test plays
+   * the human: the code never travels through the service under test until
+   * the test types it back in.
+   */
+  currentVerification(email: string): { emailVerificationId: string; code: string } | undefined;
   /** Every request the server has seen, oldest first. */
   requests: FakeWorkosRequest[];
   close(): Promise<void>;
@@ -176,6 +183,50 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   const passwords = new Map<string, string>();
   /** Users whose email is not verified, so the password grant refuses them. */
   const unverifiedUsers = new Set<string>();
+  /**
+   * Live email verifications by id — the code WorkOS would have emailed, and
+   * who it verifies. A resend replaces the code in place, which is what makes
+   * "the old code stops working" testable.
+   */
+  const emailVerifications = new Map<string, { userId: string; code: string }>();
+  /** Pending authentication tokens → the verification they redeem against. */
+  const pendingAuthTokens = new Map<string, { userId: string; verificationId: string }>();
+  /**
+   * Deterministic, sequential 6-digit codes. Sequential rather than random so
+   * a test that needs "a wrong code" can rely on any other six digits being
+   * wrong, and so a resend visibly changes the code.
+   */
+  let nextVerificationCode = 0;
+
+  function mintVerificationCode(): string {
+    nextVerificationCode += 1;
+    return String(nextVerificationCode).padStart(6, "0");
+  }
+
+  /**
+   * The refusal the password grant answers for an unverified user, minting
+   * the verification (with its emailed code) and pending token the real one
+   * creates as a side effect. Re-refusing reuses the live verification but
+   * always mints a fresh pending token, as WorkOS does per refusal.
+   */
+  function emailVerificationRefusal(user: FakeWorkosUser) {
+    let verificationId = [...emailVerifications.entries()].find(
+      ([, entry]) => entry.userId === user.id,
+    )?.[0];
+    if (!verificationId) {
+      verificationId = `email_verification_fake_${randomUUID()}`;
+      emailVerifications.set(verificationId, { userId: user.id, code: mintVerificationCode() });
+    }
+    const pendingToken = `pat_fake_${randomUUID()}`;
+    pendingAuthTokens.set(pendingToken, { userId: user.id, verificationId });
+    return {
+      code: "email_verification_required",
+      message: "Email ownership must be verified before authentication.",
+      pending_authentication_token: pendingToken,
+      email: user.email,
+      email_verification_id: verificationId,
+    };
+  }
   const requireEmailVerification = options.requireEmailVerification ?? false;
   const ssoRequiredDomains = new Set(options.ssoRequiredDomains ?? []);
 
@@ -372,16 +423,54 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
         return c.json({ error: "invalid_grant", error_description: "Invalid credentials" }, 401);
       }
       if (unverifiedUsers.has(record.id)) {
-        return c.json(
-          {
-            code: "email_verification_required",
-            message: "Email ownership must be verified before authentication.",
-            pending_authentication_token: `pat_fake_${record.id}`,
-          },
-          403,
-        );
+        return c.json(emailVerificationRefusal(record), 403);
       }
       return c.json(await issueTokenPair(record.id));
+    }
+
+    // The email-verification grant: the emailed code plus the pending token
+    // from the refusal above. Confidential-client, like the password grant.
+    if (grantType === "urn:workos:oauth:grant-type:email-verification:code") {
+      if (body?.client_secret !== apiKey) {
+        return c.json(
+          { error: "invalid_client", error_description: "Missing or invalid client secret" },
+          401,
+        );
+      }
+      const pendingToken =
+        typeof body?.pending_authentication_token === "string"
+          ? body.pending_authentication_token
+          : "";
+      const submittedCode = typeof body?.code === "string" ? body.code : "";
+      const pending = pendingAuthTokens.get(pendingToken);
+      if (!pending) {
+        // Spent or never issued: the OAuth-shaped refusal, since the token is
+        // the credential this grant authenticates with.
+        return c.json(
+          {
+            error: "invalid_grant",
+            error_description: "Pending authentication token is invalid or expired",
+          },
+          400,
+        );
+      }
+      const verification = emailVerifications.get(pending.verificationId);
+      if (!verification || verification.code !== submittedCode) {
+        // A wrong code does NOT spend the pending token here — the user
+        // retries in place. (Real WorkOS behavior is undocumented; the
+        // service under test must survive either, and the spent-token path is
+        // exercised separately by redeeming a token twice.)
+        return c.json(
+          { code: "email_verification_code_incorrect", message: "The code is incorrect." },
+          400,
+        );
+      }
+      // Redeemed: the token and the verification are both single-use, and the
+      // user is verified from here on.
+      pendingAuthTokens.delete(pendingToken);
+      emailVerifications.delete(pending.verificationId);
+      unverifiedUsers.delete(pending.userId);
+      return c.json(await issueTokenPair(pending.userId));
     }
 
     if (grantType === "refresh_token") {
@@ -442,6 +531,35 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     passwords.set(record.id, password);
     if (requireEmailVerification) unverifiedUsers.add(record.id);
     return c.json({ object: "user", ...record, email_verified: !requireEmailVerification }, 201);
+  });
+
+  // The email-verification object, named by id. Serves the user id, which is
+  // what lets the resend proxy resolve who to email without a by-email lookup.
+  app.get("/user_management/email_verification/:id", (c) => {
+    const id = c.req.param("id");
+    const verification = emailVerifications.get(id);
+    if (!verification) return c.json({ message: "Email verification not found" }, 404);
+    const user = users.get(verification.userId);
+    return c.json({
+      object: "email_verification",
+      id,
+      user_id: verification.userId,
+      email: user?.email ?? null,
+    });
+  });
+
+  // Resend: mints a new code in place, so the old one stops working — a
+  // caller that cached the first emailed code must fail after a resend here
+  // exactly as it would in production.
+  app.post("/user_management/users/:id/email_verification/send", (c) => {
+    const user = users.get(c.req.param("id"));
+    if (!user) return c.json({ message: "User not found" }, 404);
+    const existing = [...emailVerifications.entries()].find(
+      ([, entry]) => entry.userId === user.id,
+    );
+    const verificationId = existing?.[0] ?? `email_verification_fake_${randomUUID()}`;
+    emailVerifications.set(verificationId, { userId: user.id, code: mintVerificationCode() });
+    return c.json({ object: "email_verification", id: verificationId, user_id: user.id }, 201);
   });
 
   app.get("/user_management/users/:id", (c) => {
@@ -536,6 +654,15 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     addOrganization,
     addMembership,
     signAccessToken,
+
+    currentVerification(email) {
+      const user = [...users.values()].find((entry) => entry.email === email);
+      if (!user) return undefined;
+      const entry = [...emailVerifications.entries()].find(
+        ([, verification]) => verification.userId === user.id,
+      );
+      return entry ? { emailVerificationId: entry[0], code: entry[1].code } : undefined;
+    },
 
     addPasswordUser({ email, password }) {
       const record = addUser({ email });

@@ -7,6 +7,7 @@ import {
   type AccountProfileAvatarColor,
   type AccountProfileHandle,
   type DeviceAuthorizationResponse,
+  type EmailVerificationRequiredBody,
   type EnvironmentId,
   type InstanceInfo,
   type ListHostsResponse,
@@ -16,9 +17,11 @@ import {
   PasswordCredentials,
   type RegisterHostResponse,
   RegisterHostRequest,
+  ResendVerificationRequest,
   UpdateHostRequest,
   UpdateOrganizationRequest,
   UpdateProfileRequest,
+  VerifyEmailRequest,
 } from "@synara/contracts";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -38,6 +41,7 @@ import {
   WorkosPasswordError,
   type WorkosAuth,
   type WorkosOrganization,
+  type WorkosPasswordAuth,
   type WorkosPasswordFailure,
   type WorkosUser,
 } from "../workos";
@@ -57,6 +61,14 @@ export const DEVICE_RATE_LIMIT_PER_MINUTE = 10;
  * mistyping a password a few times.
  */
 export const PASSWORD_RATE_LIMIT_PER_MINUTE = 5;
+
+/**
+ * Verification-email resends allowed per client per minute, on top of the
+ * password budget. Deliberately the tightest of the three: every request
+ * makes WorkOS send somebody an email, and one user legitimately needs at
+ * most one retry a minute — the UI enforces a 60s countdown of its own.
+ */
+export const RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE = 2;
 
 type HostRow = typeof hosts.$inferSelect;
 type ProfileRow = typeof profiles.$inferSelect;
@@ -124,6 +136,19 @@ function isUniqueViolation(error: unknown): boolean {
   return false;
 }
 
+/** The response body every successful authentication grant answers with. */
+function passwordAuthBody(auth_: WorkosPasswordAuth): PasswordAuthResponse {
+  return {
+    accessToken: auth_.accessToken,
+    refreshToken: auth_.refreshToken,
+    user: {
+      id: auth_.user.id,
+      email: auth_.user.email,
+      ...(auth_.user.name ? { name: auth_.user.name } : {}),
+    },
+  };
+}
+
 export function createV1Routes(deps: {
   auth: WorkosAuth;
   db: NodePgDatabase<typeof schema>;
@@ -143,6 +168,14 @@ export function createV1Routes(deps: {
   // user out of the other.
   const passwordRateLimiter = createRateLimiter({
     limit: PASSWORD_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
+  // Its own budget again: resends trigger outbound email, and exhausting the
+  // password budget must not stop a user from asking for a fresh code (or
+  // vice versa).
+  const resendVerificationRateLimiter = createRateLimiter({
+    limit: RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
@@ -643,6 +676,18 @@ export function createV1Routes(deps: {
       code: "sso_required",
       message: "That email's domain uses single sign-on — continue with your provider instead",
     },
+    // The next two share one contract code: the recovery the client offers is
+    // what differs, and the message is what tells the user which they hit.
+    invalid_verification_code: {
+      status: 401,
+      code: "invalid_verification_code",
+      message: "That code didn't work — check it and try again",
+    },
+    verification_expired: {
+      status: 401,
+      code: "invalid_verification_code",
+      message: "That code has expired — request a new one and try again",
+    },
   };
 
   /**
@@ -671,6 +716,21 @@ export function createV1Routes(deps: {
   function passwordErrorResponse(c: Context, error: unknown): Response {
     if (error instanceof WorkosPasswordError) {
       const mapped = passwordFailureResponses[error.reason];
+      // The one refusal with a richer body: the refusal's own fields are what
+      // completing verification in-app redeems, so they travel to the client
+      // (allowlisted in the classifier — extraction never widens past these
+      // three). Without them the plain body still tells the user to use the
+      // emailed link, so an upstream that omits them degrades, not breaks.
+      if (error.reason === "email_verification_required" && error.verification) {
+        const body: EmailVerificationRequiredBody = {
+          error: "email_verification_required",
+          message: "Enter the 6-digit code we sent to your email",
+          pendingAuthenticationToken: error.verification.pendingAuthenticationToken,
+          email: error.verification.email,
+          emailVerificationId: error.verification.emailVerificationId,
+        };
+        return c.json(body, 403);
+      }
       return errorResponse(c, mapped.status, mapped.code, mapped.message);
     }
     // No body, no cause: whatever went wrong upstream, the log line must not
@@ -684,17 +744,7 @@ export function createV1Routes(deps: {
     if (credentials instanceof Response) return credentials;
 
     try {
-      const auth_ = await auth.authenticateWithPassword(credentials);
-      const body: PasswordAuthResponse = {
-        accessToken: auth_.accessToken,
-        refreshToken: auth_.refreshToken,
-        user: {
-          id: auth_.user.id,
-          email: auth_.user.email,
-          ...(auth_.user.name ? { name: auth_.user.name } : {}),
-        },
-      };
-      return c.json(body);
+      return c.json(passwordAuthBody(await auth.authenticateWithPassword(credentials)));
     } catch (error) {
       return passwordErrorResponse(c, error);
     }
@@ -705,20 +755,81 @@ export function createV1Routes(deps: {
     if (credentials instanceof Response) return credentials;
 
     try {
-      const auth_ = await auth.createUserWithPassword(credentials);
-      const body: PasswordAuthResponse = {
-        accessToken: auth_.accessToken,
-        refreshToken: auth_.refreshToken,
-        user: {
-          id: auth_.user.id,
-          email: auth_.user.email,
-          ...(auth_.user.name ? { name: auth_.user.name } : {}),
-        },
-      };
-      return c.json(body, 201);
+      return c.json(passwordAuthBody(await auth.createUserWithPassword(credentials)), 201);
     } catch (error) {
       return passwordErrorResponse(c, error);
     }
+  });
+
+  /**
+   * Redeems the emailed 6-digit code plus the pending authentication token an
+   * `email_verification_required` refusal carried. The pair is not a password
+   * but stays on the password-path discipline — both are bearer-ish secrets,
+   * so `passwordFetch` handling, the shared rate budget, and the no-echo
+   * validation message all apply.
+   */
+  v1.post("/auth/password/verify-email", async (c) => {
+    if (!passwordRateLimiter.tryConsume(clientIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: VerifyEmailRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(VerifyEmailRequest)(json);
+    } catch {
+      // Not the decoder's message: it quotes the offending value, which here
+      // is a code and a pending token.
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        "A 6-digit code and its pending authentication token are required",
+      );
+    }
+
+    try {
+      return c.json(passwordAuthBody(await auth.verifyEmailCode(parsed)));
+    } catch (error) {
+      return passwordErrorResponse(c, error);
+    }
+  });
+
+  /**
+   * Emails the user a fresh verification code. Answers 202 with an empty body
+   * on success AND on an unknown or expired verification id: a resend
+   * endpoint that confirmed which ids exist would be an oracle, and the
+   * caller's next step — wait for the email — is the same either way.
+   */
+  v1.post("/auth/password/resend-verification", async (c) => {
+    if (!resendVerificationRateLimiter.tryConsume(clientIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many resend requests — wait a minute");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: ResendVerificationRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(ResendVerificationRequest)(json);
+    } catch {
+      return errorResponse(c, 400, "validation_failed", "A verification id is required");
+    }
+
+    try {
+      await auth.resendVerificationEmail(parsed.emailVerificationId);
+    } catch (error) {
+      if (error instanceof WorkosApiError && error.status === 404) {
+        // Indistinguishable from success by design; see the route comment.
+        return c.body(null, 202);
+      }
+      // No body and no cause in the log, as on every password-path failure.
+      console.error("[api] verification resend failed upstream");
+      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+    }
+    return c.body(null, 202);
   });
 
   /**

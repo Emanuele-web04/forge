@@ -14,7 +14,12 @@ import { runMigrations } from "../db/migrate";
 import { clearOrgCache } from "../orgProvisioning";
 import { FAKE_DEVICE_AUTHORIZATION, startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import { createWorkosAuth } from "../workos";
-import { createV1Routes, DEVICE_RATE_LIMIT_PER_MINUTE, PASSWORD_RATE_LIMIT_PER_MINUTE } from "./v1";
+import {
+  createV1Routes,
+  DEVICE_RATE_LIMIT_PER_MINUTE,
+  PASSWORD_RATE_LIMIT_PER_MINUTE,
+  RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
+} from "./v1";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
@@ -732,6 +737,240 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         expect(await res.json()).toMatchObject({ error: "sso_required" });
       } finally {
         await ssoWorkos.close();
+      }
+    });
+  });
+
+  describe("email verification", () => {
+    const PASSWORD = "correct-horse-battery-staple";
+    let verifyingWorkos: FakeWorkos;
+    let verifyingApp: Hono;
+
+    beforeAll(async () => {
+      verifyingWorkos = await startFakeWorkos({ requireEmailVerification: true });
+      const verifyingConfig = verifyingWorkos.config({ databaseUrl });
+      const { db } = createDb(databaseUrl);
+      verifyingApp = new Hono();
+      verifyingApp.route(
+        "/api/v1",
+        createV1Routes({ auth: createWorkosAuth(verifyingConfig), db, config: verifyingConfig }),
+      );
+    });
+
+    afterAll(async () => {
+      await verifyingWorkos.close();
+    });
+
+    function post(path: string, body: unknown, headers: Record<string, string> = {}) {
+      return verifyingApp.request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+    }
+
+    /**
+     * Signs up an unverified user and returns the refusal's verification
+     * fields plus the code "the email" carried, read from the fake as a human
+     * would read their inbox. Each call uses a distinct client IP so the
+     * shared password rate budget never couples the tests.
+     */
+    async function signUpUnverified(clientIp: string) {
+      const email = `unverified-${randomUUID()}@example.com`;
+      const res = await post(
+        "/api/v1/auth/password/sign-up",
+        { email, password: PASSWORD },
+        { "x-forwarded-for": clientIp },
+      );
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as {
+        error: string;
+        pendingAuthenticationToken: string;
+        email: string;
+        emailVerificationId: string;
+      };
+      expect(body.error).toBe("email_verification_required");
+      const verification = verifyingWorkos.currentVerification(email);
+      if (!verification) throw new Error("fake WorkOS minted no verification");
+      return { email, body, code: verification.code };
+    }
+
+    it("carries the pending token, email, and verification id on the 403", async () => {
+      const { email, body } = await signUpUnverified("198.51.100.1");
+      expect(body.email).toBe(email);
+      expect(body.pendingAuthenticationToken).toMatch(/^pat_fake_/);
+      expect(body.emailVerificationId).toMatch(/^email_verification_fake_/);
+    });
+
+    it("redeems the emailed code for a usable token pair", async () => {
+      const { email, body, code } = await signUpUnverified("198.51.100.2");
+
+      const res = await post(
+        "/api/v1/auth/password/verify-email",
+        { code, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        { "x-forwarded-for": "198.51.100.2" },
+      );
+      expect(res.status).toBe(200);
+      const auth = (await res.json()) as { accessToken: string; user: { email: string } };
+      expect(auth.user.email).toBe(email);
+      expect(auth.accessToken.length).toBeGreaterThan(0);
+
+      // Verified for good: the password grant now succeeds outright.
+      const signIn = await post(
+        "/api/v1/auth/password/sign-in",
+        { email, password: PASSWORD },
+        { "x-forwarded-for": "198.51.100.2" },
+      );
+      expect(signIn.status).toBe(200);
+    });
+
+    it("answers 401 invalid_verification_code for a wrong code, leaving the token retryable", async () => {
+      const { body, code } = await signUpUnverified("198.51.100.3");
+      const wrongCode = code === "999999" ? "999998" : "999999";
+
+      const wrong = await post(
+        "/api/v1/auth/password/verify-email",
+        { code: wrongCode, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        { "x-forwarded-for": "198.51.100.3" },
+      );
+      expect(wrong.status).toBe(401);
+      expect(await wrong.json()).toMatchObject({ error: "invalid_verification_code" });
+
+      // The pending token survived the wrong code; the right one still works.
+      const right = await post(
+        "/api/v1/auth/password/verify-email",
+        { code, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        { "x-forwarded-for": "198.51.100.3" },
+      );
+      expect(right.status).toBe(200);
+    });
+
+    it("answers 401 invalid_verification_code for a spent pending token", async () => {
+      const { body, code } = await signUpUnverified("198.51.100.4");
+      const redeem = () =>
+        post(
+          "/api/v1/auth/password/verify-email",
+          { code, pendingAuthenticationToken: body.pendingAuthenticationToken },
+          { "x-forwarded-for": "198.51.100.4" },
+        );
+
+      expect((await redeem()).status).toBe(200);
+      // Replay: the token was consumed by the successful redemption. One
+      // contract code for spent and wrong — the message is what differs.
+      const replay = await redeem();
+      expect(replay.status).toBe(401);
+      expect(await replay.json()).toMatchObject({ error: "invalid_verification_code" });
+    });
+
+    it("resends a fresh code that works while the old one stops", async () => {
+      const { email, body, code: oldCode } = await signUpUnverified("198.51.100.5");
+
+      const resend = await post(
+        "/api/v1/auth/password/resend-verification",
+        { emailVerificationId: body.emailVerificationId },
+        { "x-forwarded-for": "198.51.100.5" },
+      );
+      expect(resend.status).toBe(202);
+      expect(await resend.text()).toBe("");
+
+      const fresh = verifyingWorkos.currentVerification(email);
+      if (!fresh) throw new Error("resend left no live verification");
+      expect(fresh.code).not.toBe(oldCode);
+
+      const stale = await post(
+        "/api/v1/auth/password/verify-email",
+        { code: oldCode, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        { "x-forwarded-for": "198.51.100.5" },
+      );
+      expect(stale.status).toBe(401);
+
+      const current = await post(
+        "/api/v1/auth/password/verify-email",
+        { code: fresh.code, pendingAuthenticationToken: body.pendingAuthenticationToken },
+        { "x-forwarded-for": "198.51.100.5" },
+      );
+      expect(current.status).toBe(200);
+    });
+
+    // A resend endpoint that confirmed which verification ids exist would let
+    // anyone probe them; unknown ids answer exactly like real ones.
+    it("answers the same 202 for an unknown verification id", async () => {
+      const res = await post(
+        "/api/v1/auth/password/resend-verification",
+        { emailVerificationId: `email_verification_fake_${randomUUID()}` },
+        { "x-forwarded-for": "198.51.100.6" },
+      );
+      expect(res.status).toBe(202);
+      expect(await res.text()).toBe("");
+    });
+
+    it("rate limits resends on their own tight budget", async () => {
+      const headers = { "x-forwarded-for": "198.51.100.7" };
+      const body = { emailVerificationId: `email_verification_fake_${randomUUID()}` };
+
+      for (let i = 0; i < RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect(
+          (await post("/api/v1/auth/password/resend-verification", body, headers)).status,
+        ).toBe(202);
+      }
+      const limited = await post("/api/v1/auth/password/resend-verification", body, headers);
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
+
+      // The password budget is separate: verify-email is still reachable from
+      // the same client after the resend budget is spent.
+      const verify = await post(
+        "/api/v1/auth/password/verify-email",
+        { code: "123456", pendingAuthenticationToken: `pat_fake_${randomUUID()}` },
+        headers,
+      );
+      expect(verify.status).toBe(401);
+    });
+
+    // The code and pending token are bearer-ish secrets on the password path:
+    // asserted out of every response body and every log line, exactly as the
+    // password itself is.
+    it("never emits the code or pending token in a response body or a log line", async () => {
+      const { body, code } = await signUpUnverified("198.51.100.8");
+
+      const logged: string[] = [];
+      const capture = (...args: unknown[]) => {
+        logged.push(args.map((arg) => String(arg)).join(" "));
+      };
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(capture);
+      const logSpy = vi.spyOn(console, "log").mockImplementation(capture);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(capture);
+      try {
+        // A wrong code and a malformed body: the two refusals whose natural
+        // implementations (upstream echo, schema decoder message) quote the
+        // submitted secrets.
+        const wrongCode = code === "999999" ? "999998" : "999999";
+        const wrong = await post(
+          "/api/v1/auth/password/verify-email",
+          { code: wrongCode, pendingAuthenticationToken: body.pendingAuthenticationToken },
+          { "x-forwarded-for": "198.51.100.8" },
+        );
+        const malformed = await post(
+          "/api/v1/auth/password/verify-email",
+          {
+            code: { nested: wrongCode },
+            pendingAuthenticationToken: body.pendingAuthenticationToken,
+          },
+          { "x-forwarded-for": "198.51.100.8" },
+        );
+
+        for (const res of [wrong, malformed]) {
+          const text = await res.text();
+          expect(text).not.toContain(body.pendingAuthenticationToken);
+          expect(text).not.toContain(wrongCode);
+        }
+        const joined = logged.join("\n");
+        expect(joined).not.toContain(body.pendingAuthenticationToken);
+        expect(joined).not.toContain(code);
+      } finally {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
       }
     });
   });

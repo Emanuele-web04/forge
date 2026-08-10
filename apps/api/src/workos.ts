@@ -44,15 +44,38 @@ export type WorkosPasswordFailure =
   | "invalid_credentials"
   | "email_taken"
   | "email_verification_required"
-  | "sso_required";
+  | "sso_required"
+  /** The verification grant refused the code itself; the pending token may still be usable. */
+  | "invalid_verification_code"
+  /** The pending authentication token (or the code) is spent or expired; only a resend recovers. */
+  | "verification_expired";
+
+/**
+ * What an `email_verification_required` refusal carries beyond its reason —
+ * the exact fields completing verification in-app needs, extracted
+ * allowlist-style from the WorkOS body. The pending token is a bearer-ish
+ * secret: it may travel to the client, but never into a log or an error
+ * message.
+ */
+export type WorkosEmailVerificationChallenge = {
+  pendingAuthenticationToken: string;
+  email: string;
+  emailVerificationId: string;
+};
 
 /**
  * A password grant this service refused to complete. Carries the classified
  * reason and nothing else: notably not the password, and not WorkOS's raw
- * message, which can echo the submitted credentials back.
+ * message, which can echo the submitted credentials back. The one exception is
+ * `email_verification_required`, whose refusal names the pending token, email,
+ * and verification id — the fields the in-app verification step redeems — and
+ * those are carried on {@link verification}, allowlisted field by field.
  */
 export class WorkosPasswordError extends Error {
-  constructor(readonly reason: WorkosPasswordFailure) {
+  constructor(
+    readonly reason: WorkosPasswordFailure,
+    readonly verification?: WorkosEmailVerificationChallenge,
+  ) {
     super(reason);
     this.name = "WorkosPasswordError";
   }
@@ -84,6 +107,26 @@ export type WorkosAuth = {
     email: string;
     password: string;
   }): Promise<WorkosPasswordAuth>;
+  /**
+   * The email-verification grant: redeems the emailed 6-digit code together
+   * with the pending authentication token an `email_verification_required`
+   * refusal carried. Both inputs are bearer-ish secrets and take the password
+   * handling rules. Rejects with {@link WorkosPasswordError} carrying
+   * `invalid_verification_code` (retry in place) or `verification_expired`
+   * (the token or code is spent; only a resend recovers).
+   */
+  verifyEmailCode(input: {
+    code: string;
+    pendingAuthenticationToken: string;
+  }): Promise<WorkosPasswordAuth>;
+  /**
+   * Emails the user a fresh verification code, invalidating the old one. The
+   * user is resolved from the verification object server-side — the caller
+   * only ever holds the verification id. Rejects with a 404-status
+   * {@link WorkosApiError} for an unknown or expired id; the route deliberately
+   * flattens that into the same 202 as success.
+   */
+  resendVerificationEmail(emailVerificationId: string): Promise<void>;
   /** Every organization the user is a member of, oldest page first. */
   listUserOrganizationMemberships(userId: string): Promise<WorkosOrganization[]>;
   createOrganization(name: string): Promise<WorkosOrganization>;
@@ -253,6 +296,72 @@ export function classifyPasswordFailure(raw: unknown): WorkosPasswordFailure | u
 }
 
 /**
+ * The verification challenge an `email_verification_required` refusal names,
+ * or `undefined` when the body does not carry all three fields. Extraction is
+ * allowlist-style — exactly these fields, nothing else off the body — and it
+ * exists only for this one failure; every other refusal stays discard-everything.
+ */
+export function extractVerificationChallenge(
+  raw: unknown,
+): WorkosEmailVerificationChallenge | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const body = raw as Record<string, unknown>;
+  const pendingAuthenticationToken = body.pending_authentication_token;
+  const email = body.email;
+  const emailVerificationId = body.email_verification_id;
+  if (
+    typeof pendingAuthenticationToken !== "string" ||
+    pendingAuthenticationToken.length === 0 ||
+    typeof email !== "string" ||
+    email.length === 0 ||
+    typeof emailVerificationId !== "string" ||
+    emailVerificationId.length === 0
+  ) {
+    return undefined;
+  }
+  return { pendingAuthenticationToken, email, emailVerificationId };
+}
+
+/**
+ * Which classified failure a refusal of the *email-verification grant*
+ * describes. Separate from {@link classifyPasswordFailure} because the same
+ * OAuth spelling means different things per grant: `invalid_grant` on the
+ * password grant is a bad email/password pair, while on the verification
+ * grant the credential being refused is the pending token — spent, expired,
+ * or never ours — which only a resend or a fresh sign-in recovers.
+ *
+ * WorkOS does not document whether a wrong code spends the pending token, so
+ * both outcomes are represented: `invalid_verification_code` (the code was
+ * refused; retry in place) and `verification_expired` (the token or code is
+ * dead; offer resend/start-over). An unrecognised body yields `undefined` and
+ * becomes an upstream fault, as everywhere else.
+ */
+export function classifyVerificationFailure(raw: unknown): WorkosPasswordFailure | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const body = raw as Record<string, unknown>;
+  const code = typeof body.code === "string" ? body.code : undefined;
+  const error = typeof body.error === "string" ? body.error : undefined;
+
+  // The code itself was wrong but the attempt may be retried in place.
+  if (code === "invalid_one_time_code" || code === "invalid_code") {
+    return "invalid_verification_code";
+  }
+  if (code === "email_verification_code_incorrect") return "invalid_verification_code";
+  // The code or the pending token is spent or expired; retyping cannot help.
+  if (code === "email_verification_code_expired" || code === "one_time_code_expired") {
+    return "verification_expired";
+  }
+  if (code === "pending_authentication_token_expired") return "verification_expired";
+  if (error === "invalid_grant" || code === "invalid_pending_authentication_token") {
+    return "verification_expired";
+  }
+  // WorkOS re-answers the original refusal when the token is still pending
+  // but the code was not accepted — treat it as a wrong code.
+  if (code === "email_verification_required") return "invalid_verification_code";
+  return undefined;
+}
+
+/**
  * The token pair, read off the authenticate response. Decoded rather than
  * cast: a shape change must fail loudly here instead of persisting
  * `undefined` as somebody's access token.
@@ -376,7 +485,14 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
    * Returns the parsed body on success; throws {@link WorkosPasswordError} for
    * a classified refusal and a bare {@link WorkosApiError} otherwise.
    */
-  async function passwordFetch(path: string, body: Record<string, string>): Promise<unknown> {
+  async function passwordFetch(
+    path: string,
+    body: Record<string, string>,
+    // The verification grant reuses this helper with its own classifier: the
+    // same OAuth spellings mean different things per grant, but the no-leak
+    // handling of the request and response is identical.
+    classify: (raw: unknown) => WorkosPasswordFailure | undefined = classifyPasswordFailure,
+  ): Promise<unknown> {
     const response = await fetch(`${config.workosApiUrl}${path}`, {
       method: "POST",
       headers: {
@@ -389,9 +505,14 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     if (response.ok) return response.json();
 
     // Read the failure only to classify it. The parsed value is never
-    // returned or attached to an error.
+    // returned or attached to an error — except the verification challenge,
+    // whose three fields are extracted allowlist-style below because they are
+    // exactly what completing verification in-app redeems.
     const raw = await response.json().catch(() => null);
-    const failure = classifyPasswordFailure(raw);
+    const failure = classify(raw);
+    if (failure === "email_verification_required") {
+      throw new WorkosPasswordError(failure, extractVerificationChallenge(raw));
+    }
     if (failure) throw new WorkosPasswordError(failure);
     // An unclassified refusal becomes an opaque 502 to the caller, so this
     // line is the only place its identity survives. Log the status and the
@@ -524,6 +645,40 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
       // sign-up the user completed.
       await passwordFetch("/user_management/users", { email, password });
       return passwordGrant({ grant_type: "password", email, password });
+    },
+
+    async verifyEmailCode({ code, pendingAuthenticationToken }) {
+      const raw = await passwordFetch(
+        "/user_management/authenticate",
+        {
+          grant_type: "urn:workos:oauth:grant-type:email-verification:code",
+          code,
+          pending_authentication_token: pendingAuthenticationToken,
+          client_id: config.workosClientId,
+          // Confidential-client, like the password grant: WorkOS requires the
+          // secret, which is why this call runs here rather than in the app.
+          client_secret: config.workosApiKey,
+        },
+        classifyVerificationFailure,
+      );
+      return toPasswordAuth(raw);
+    },
+
+    async resendVerificationEmail(emailVerificationId) {
+      // The caller holds only the verification id; the user id it belongs to
+      // is read from the verification object here, server-side. Chosen over a
+      // user-by-email lookup because the id names exactly one verification —
+      // an email search could match a user the id was never issued for.
+      const verification = (await workosFetch(
+        `/user_management/email_verification/${encodeURIComponent(emailVerificationId)}`,
+      )) as { user_id?: unknown };
+      if (typeof verification.user_id !== "string" || verification.user_id.length === 0) {
+        throw new WorkosApiError(502, "WorkOS email verification object named no user id");
+      }
+      await workosFetch(
+        `/user_management/users/${encodeURIComponent(verification.user_id)}/email_verification/send`,
+        { method: "POST" },
+      );
     },
 
     async requestDeviceAuthorization() {
