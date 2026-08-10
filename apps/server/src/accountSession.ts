@@ -7,8 +7,14 @@
  * refresh, workspace scoping) and `AccountClient` (the HTTP surface) — the
  * `synara auth` CLI flow and the in-app flow share both, and the only thing
  * this adds is the parts a GUI needs and a terminal does not: a status that
- * reports "signed out" instead of throwing, and a device poll the server runs
- * on the client's behalf.
+ * reports "signed out" instead of throwing, a device poll the server runs on
+ * the client's behalf, and the in-app password grant.
+ *
+ * Two ways in, converging immediately. Password sign-in happens inside the app
+ * and the password is pass-through — forwarded to the account service, held
+ * nowhere here. SSO ("Continue with Google/GitHub") takes the device grant and
+ * the system browser. Both end in `establishSession`, so workspace scoping and
+ * credential persistence cannot drift between them.
  *
  * @module accountSession
  */
@@ -17,6 +23,8 @@ import type {
   AccountMe,
   AccountStatus,
   AccountUpdateProfileInput,
+  InstanceInfo,
+  PasswordCredentials,
 } from "@synara/contracts";
 import {
   AccountApiError,
@@ -71,6 +79,11 @@ export interface AccountSessionOptions {
 
 export interface AccountSession {
   status(): Promise<AccountStatus>;
+  /** In-app password sign-in. Never log or persist the credentials. */
+  signInWithPassword(credentials: PasswordCredentials): Promise<AccountStatus>;
+  /** In-app sign-up, then sign-in. Never log or persist the credentials. */
+  signUpWithPassword(credentials: PasswordCredentials): Promise<AccountStatus>;
+  /** Starts the SSO path — the browser hand-off for Google/GitHub. */
   beginSignIn(): Promise<AccountBeginSignInResult>;
   completeSignIn(input: { readonly deviceCode: string }): Promise<AccountStatus>;
   updateProfile(input: AccountUpdateProfileInput): Promise<AccountMe>;
@@ -173,6 +186,59 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     return { state: "signed-in", me };
   }
 
+  /**
+   * Everything that happens after a sign-in produces a token pair, whichever
+   * way it was produced: scope it to a workspace, persist it, and report the
+   * resulting session.
+   *
+   * Shared by the password and SSO paths deliberately. The two differ only in
+   * how they obtain the tokens; if workspace selection or credential
+   * persistence ever diverged between them, one of the two would quietly stop
+   * matching what the rest of the app expects of a signed-in machine.
+   */
+  async function establishSession(
+    token: { accessToken: string; refreshToken: string },
+    context: { accountUrl: string; client: AccountClient; instance: InstanceInfo },
+  ): Promise<AccountStatus> {
+    const { accountUrl, client, instance } = context;
+
+    const scoped = await scopeTokenToWorkspace(token, {
+      client,
+      instance,
+      // V1 takes the first workspace rather than asking. Lazy personal-org
+      // provisioning guarantees there is at least one, so this is only ever
+      // a real choice for a user who already belongs to a team — and the
+      // workspace picker that would let them choose is deliberately deferred
+      // rather than guessed at here. They can still reach the others once it
+      // exists; nothing about this choice is persisted beyond the session.
+      chooseOrganization: async (organizations) => {
+        const first = organizations[0];
+        if (!first) {
+          throw new Error(
+            "Your account has no workspace to sign in to. Contact your administrator, or create one in the WorkOS dashboard.",
+          );
+        }
+        return first;
+      },
+    });
+
+    // A file left behind by an expired session still holds this machine's
+    // host registration; carrying it forward keeps the link intact.
+    const previous = await readAccountFile(baseDir);
+    await writeAccountCredentials(baseDir, {
+      accountUrl,
+      workosClientId: instance.clientId,
+      workosApiUrl: instance.workosApiUrl,
+      organizationId: scoped.organizationId,
+      accessToken: scoped.accessToken,
+      refreshToken: scoped.refreshToken,
+      ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
+      ...(previous?.hostId ? { hostId: previous.hostId } : {}),
+    });
+
+    return signedInStatus(await withSession((accessToken, c) => c.me(accessToken)));
+  }
+
   return {
     async status() {
       // Cheap and common: no credential file means signed out without a single
@@ -241,41 +307,34 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
       // a stale entry that can never complete again.
       pendingAuthorizations.delete(input.deviceCode);
 
-      const scoped = await scopeTokenToWorkspace(token, {
-        client,
-        instance,
-        // V1 takes the first workspace rather than asking. Lazy personal-org
-        // provisioning guarantees there is at least one, so this is only ever
-        // a real choice for a user who already belongs to a team — and the
-        // workspace picker that would let them choose is deliberately deferred
-        // rather than guessed at here. They can still reach the others once it
-        // exists; nothing about this choice is persisted beyond the session.
-        chooseOrganization: async (organizations) => {
-          const first = organizations[0];
-          if (!first) {
-            throw new Error(
-              "Your account has no workspace to sign in to. Contact your administrator, or create one in the WorkOS dashboard.",
-            );
-          }
-          return first;
-        },
-      });
+      return establishSession(token, { accountUrl, client, instance });
+    },
 
-      // A file left behind by an expired session still holds this machine's
-      // host registration; carrying it forward keeps the link intact.
-      const previous = await readAccountFile(baseDir);
-      await writeAccountCredentials(baseDir, {
-        accountUrl,
-        workosClientId: instance.clientId,
-        workosApiUrl: instance.workosApiUrl,
-        organizationId: scoped.organizationId,
-        accessToken: scoped.accessToken,
-        refreshToken: scoped.refreshToken,
-        ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
-        ...(previous?.hostId ? { hostId: previous.hostId } : {}),
-      });
+    /**
+     * In-app password sign-in. The credentials are forwarded to the account
+     * service, which proxies them to WorkOS, and are referenced nowhere after
+     * this call returns — not in the credential file, not in a log, not in a
+     * retry. What is persisted is the resulting token pair, exactly as for SSO.
+     */
+    async signInWithPassword(credentials) {
+      const accountUrl = configuredUrl;
+      const client = clientFor(accountUrl);
+      const [instance, token] = await Promise.all([
+        client.instance(),
+        client.signInWithPassword(credentials),
+      ]);
+      return establishSession(token, { accountUrl, client, instance });
+    },
 
-      return signedInStatus(await withSession((accessToken, c) => c.me(accessToken)));
+    /** Creates the account, then signs in. Same handling of the password. */
+    async signUpWithPassword(credentials) {
+      const accountUrl = configuredUrl;
+      const client = clientFor(accountUrl);
+      const [instance, token] = await Promise.all([
+        client.instance(),
+        client.signUpWithPassword(credentials),
+      ]);
+      return establishSession(token, { accountUrl, client, instance });
     },
 
     /**

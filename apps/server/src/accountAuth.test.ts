@@ -113,6 +113,8 @@ function credentials(overrides: Record<string, unknown> = {}) {
 function makeClient(overrides: Partial<AccountClient>): AccountClient {
   return {
     instance: unimplemented("instance"),
+    signInWithPassword: unimplemented("signInWithPassword"),
+    signUpWithPassword: unimplemented("signUpWithPassword"),
     me: unimplemented("me"),
     updateProfile: unimplemented("updateProfile"),
     updateOrganization: unimplemented("updateOrganization"),

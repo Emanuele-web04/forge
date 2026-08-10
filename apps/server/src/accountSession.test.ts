@@ -11,7 +11,7 @@ import {
   type AccountClient,
 } from "@synara/shared/account";
 
-import { readAccountFile, writeAccountCredentials } from "./accountAuth.ts";
+import { accountCredentialsPath, readAccountFile, writeAccountCredentials } from "./accountAuth.ts";
 import { createAccountSession } from "./accountSession.ts";
 
 const temporaryDirectories: string[] = [];
@@ -47,6 +47,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
         clientId: CLIENT_ID,
         workosApiUrl: WORKOS_API_URL,
       }),
+    signInWithPassword: unimplemented("signInWithPassword"),
+    signUpWithPassword: unimplemented("signUpWithPassword"),
     me: unimplemented("me"),
     updateProfile: unimplemented("updateProfile"),
     updateOrganization: unimplemented("updateOrganization"),
@@ -302,6 +304,123 @@ describe("sign-in", () => {
     await session.completeSignIn({ deviceCode: begun.deviceCode });
 
     expect(await readAccountFile(baseDir)).toMatchObject({ organizationId: ORGANIZATION.id });
+  });
+});
+
+describe("password sign-in", () => {
+  const CREDENTIALS = { email: "ada@example.com", password: "correct-horse" } as const;
+
+  /**
+   * A client whose password grant succeeds, returning the org-less pair a real
+   * grant yields. Everything after that is the shared path SSO also takes.
+   */
+  function passwordClient(overrides: Partial<AccountClient> = {}): AccountClient {
+    return makeClient({
+      signInWithPassword: () =>
+        Promise.resolve({
+          accessToken: "access-0",
+          refreshToken: "refresh-0",
+          user: { id: "user_1", email: CREDENTIALS.email, name: "Ada Lovelace" },
+        }),
+      signUpWithPassword: () =>
+        Promise.resolve({
+          accessToken: "access-0",
+          refreshToken: "refresh-0",
+          user: { id: "user_1", email: CREDENTIALS.email, name: "Ada Lovelace" },
+        }),
+      me: (token) =>
+        token === "access-0"
+          ? Promise.reject(
+              new OrganizationRequiredError({
+                message: "Pick a workspace",
+                organizations: [ORGANIZATION],
+              }),
+            )
+          : Promise.resolve(meResponse()),
+      refreshAccessToken: () =>
+        Promise.resolve({
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+          user: { id: "user_1", email: CREDENTIALS.email },
+        }),
+      ...overrides,
+    });
+  }
+
+  it("signs in and persists the scoped session, like the SSO path", async () => {
+    const baseDir = makeBaseDir();
+    const session = sessionFor(baseDir, passwordClient());
+
+    expect(await session.signInWithPassword(CREDENTIALS)).toEqual({
+      state: "signed-in",
+      me: meResponse(),
+    });
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      organizationId: ORGANIZATION.id,
+      accessToken: "access-1",
+      refreshToken: "refresh-1",
+    });
+  });
+
+  it("signs up and persists the scoped session", async () => {
+    const baseDir = makeBaseDir();
+    const session = sessionFor(baseDir, passwordClient());
+
+    expect(await session.signUpWithPassword(CREDENTIALS)).toEqual({
+      state: "signed-in",
+      me: meResponse(),
+    });
+    expect(await readAccountFile(baseDir)).toMatchObject({ accessToken: "access-1" });
+  });
+
+  it("keeps an existing host registration across a password sign-in", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, {
+      accountUrl: ACCOUNT_URL,
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+    const session = sessionFor(baseDir, passwordClient());
+
+    await session.signInWithPassword(CREDENTIALS);
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+  });
+
+  // The credential file is the one place a password could plausibly end up,
+  // since it is the only thing this module writes to disk.
+  it("never writes the password to the credential file", async () => {
+    const baseDir = makeBaseDir();
+    const session = sessionFor(baseDir, passwordClient());
+
+    await session.signInWithPassword(CREDENTIALS);
+
+    const raw = fs.readFileSync(accountCredentialsPath(baseDir), "utf8");
+    expect(raw).not.toContain(CREDENTIALS.password);
+  });
+
+  it("surfaces a rejected sign-in as a failure, leaving no session behind", async () => {
+    const baseDir = makeBaseDir();
+    const session = sessionFor(
+      baseDir,
+      passwordClient({
+        signInWithPassword: () =>
+          Promise.reject(
+            new AccountApiError({
+              code: "invalid_credentials",
+              status: 401,
+              message: "That email and password do not match an account",
+            }),
+          ),
+      }),
+    );
+
+    await expect(session.signInWithPassword(CREDENTIALS)).rejects.toThrow(/do not match/);
+    expect(await session.status()).toEqual({ state: "signed-out" });
   });
 });
 

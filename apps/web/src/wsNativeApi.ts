@@ -794,6 +794,10 @@ export function createWsNativeApi(): NativeApi {
     },
     account: {
       status: () => transport.request(WS_METHODS.accountStatus),
+      // These two carry a password. Pass the input straight through — do not
+      // wrap, retry, or log it, and do not keep it after the promise settles.
+      signInWithPassword: (input) => transport.request(WS_METHODS.accountSignInWithPassword, input),
+      signUpWithPassword: (input) => transport.request(WS_METHODS.accountSignUpWithPassword, input),
       beginSignIn: () => transport.request(WS_METHODS.accountBeginSignIn),
       // No deadline: the server holds this open until the user finishes on the
       // hosted page. If the socket drops, the sign-in still completed
