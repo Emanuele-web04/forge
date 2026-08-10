@@ -662,6 +662,10 @@ describe("wsNativeApi", () => {
     await api.providerProfiles.rename({ target, displayName: "Client" });
     await api.providerProfiles.setEnabled({ target, enabled: true });
     await api.providerProfiles.tombstone({ target });
+    await api.providerProfiles.readAccount({ target });
+    await api.providerProfiles.startLogin({ target, method: "device-code" });
+    await api.providerProfiles.cancelLogin({ target });
+    await api.providerProfiles.logout({ target });
 
     expect(requestMock.mock.calls).toEqual([
       [WS_METHODS.providerProfilesList, { provider: "codex" }],
@@ -669,6 +673,10 @@ describe("wsNativeApi", () => {
       [WS_METHODS.providerProfilesRename, { target, displayName: "Client" }],
       [WS_METHODS.providerProfilesSetEnabled, { target, enabled: true }],
       [WS_METHODS.providerProfilesTombstone, { target }],
+      [WS_METHODS.providerProfilesReadAccount, { target }],
+      [WS_METHODS.providerProfilesStartLogin, { target, method: "device-code" }],
+      [WS_METHODS.providerProfilesCancelLogin, { target }],
+      [WS_METHODS.providerProfilesLogout, { target }],
     ]);
   });
 

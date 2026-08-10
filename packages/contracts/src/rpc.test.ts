@@ -9,7 +9,11 @@ import {
   WsProjectsDiscoverScriptsRpc,
   WsProjectsProvisionFromGitHubRpc,
   WsProviderProfilesCreateRpc,
+  WsProviderProfilesCancelLoginRpc,
   WsProviderProfilesListRpc,
+  WsProviderProfilesLogoutRpc,
+  WsProviderProfilesReadAccountRpc,
+  WsProviderProfilesStartLoginRpc,
   WsPullRequestsReviewRequestCountRpc,
   WsRpcError,
   WsRpcGroup,
@@ -48,8 +52,16 @@ describe("WS RPC contracts", () => {
   it("exports the provider profile registry RPCs", () => {
     expect(WsProviderProfilesListRpc).toBeDefined();
     expect(WsProviderProfilesCreateRpc).toBeDefined();
+    expect(WsProviderProfilesReadAccountRpc).toBeDefined();
+    expect(WsProviderProfilesStartLoginRpc).toBeDefined();
+    expect(WsProviderProfilesCancelLoginRpc).toBeDefined();
+    expect(WsProviderProfilesLogoutRpc).toBeDefined();
     expect(WsFeatureRpcGroup.requests.has("providerProfiles.list")).toBe(true);
     expect(WsFeatureRpcGroup.requests.has("providerProfiles.tombstone")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("providerProfiles.readAccount")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("providerProfiles.startLogin")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("providerProfiles.cancelLogin")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("providerProfiles.logout")).toBe(true);
   });
 
   it("exports the count-only pull request review RPC", () => {

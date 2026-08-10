@@ -15,6 +15,8 @@ export interface LegacyCodexLaunchContext extends CodexLaunchContextBase {
 }
 
 export interface ManagedCodexLaunchContext extends CodexLaunchContextBase {
+  readonly authenticationBoundAt: string | null;
+  readonly continuationNamespaceId: string;
   readonly home: Readonly<{
     readonly strategy: "managed-direct";
     readonly codexHomePath: string;
@@ -56,6 +58,8 @@ export function makeManagedCodexLaunchContext(
   input: LaunchContextCommonInput & {
     readonly codexHomePath: string;
     readonly codexSqliteHomePath: string;
+    readonly authenticationBoundAt: string | null;
+    readonly continuationNamespaceId: string;
   },
 ): ManagedCodexLaunchContext {
   return Object.freeze({
@@ -63,6 +67,8 @@ export function makeManagedCodexLaunchContext(
     binaryPath: input.binaryPath,
     settingsRevision: input.settingsRevision,
     registryRevision: input.registryRevision,
+    authenticationBoundAt: input.authenticationBoundAt,
+    continuationNamespaceId: input.continuationNamespaceId,
     home: Object.freeze({
       strategy: "managed-direct" as const,
       codexHomePath: input.codexHomePath,

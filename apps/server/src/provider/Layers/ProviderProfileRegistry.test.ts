@@ -153,6 +153,7 @@ describe("ProviderProfileRegistryLive", () => {
         const disabledRuntimeCreatedStorage = fs.existsSync(
           managementResolution.launchContext.home.codexSqliteHomePath,
         );
+        yield* registry.sealManagedAuthentication(managed.target);
         const enabled = yield* registry.setEnabled({ target: managed.target, enabled: true });
         const runtimeResolution = yield* registry.resolveForRuntime(managed.target);
         return {
@@ -189,7 +190,7 @@ describe("ProviderProfileRegistryLive", () => {
 
     expect(result.managementResolution.summary.enabled).toBe(false);
     expect(result.managementResolution.launchContext.registryRevision).toBe(1);
-    expect(result.runtimeResolution.launchContext.registryRevision).toBe(2);
+    expect(result.runtimeResolution.launchContext.registryRevision).toBe(3);
     expect(result.managementResolution.launchContext.home).toEqual(
       result.runtimeResolution.launchContext.home,
     );
@@ -203,7 +204,9 @@ describe("ProviderProfileRegistryLive", () => {
     expect(fs.readdirSync(launchContext.home.codexHomePath)).toEqual(["config.toml"]);
     expect(
       fs.readFileSync(path.join(launchContext.home.codexHomePath, "config.toml"), "utf8"),
-    ).toBe('model = "managed"\n');
+    ).toBe(
+      'project_root_markers = [".synara-provider-profile-root"]\nmodel_provider = "openai"\nforced_login_method = "chatgpt"\ncli_auth_credentials_store = "file"\nmcp_oauth_credentials_store = "file"\n',
+    );
     expect(fs.readdirSync(launchContext.home.codexSqliteHomePath)).toEqual([]);
     expect(fs.readFileSync(path.join(sourceHome, "auth.json"), "utf8")).toBe("source-secret");
     expect(fs.existsSync(path.join(launchContext.home.codexHomePath, "auth.json"))).toBe(false);
@@ -247,6 +250,7 @@ describe("ProviderProfileRegistryLive", () => {
         expect(conflict.code).toBe("PROVIDER_PROFILE_NAME_CONFLICT");
         expect((yield* registry.list({ provider: "codex" })).profiles).toHaveLength(2);
         yield* registry.rename({ target, displayName: "Client" });
+        yield* registry.sealManagedAuthentication(target);
         yield* registry.setEnabled({ target, enabled: true });
         const activeResolution = yield* registry.resolveForManagement(target);
         if (activeResolution.launchContext.home.strategy !== "managed-direct") {
@@ -313,6 +317,7 @@ describe("ProviderProfileRegistryLive", () => {
         const created = yield* registry.create({ provider: "codex", displayName: "Work" });
         const createdTarget = created.profiles[1]!.target;
         target = createdTarget;
+        yield* registry.sealManagedAuthentication(createdTarget);
         yield* registry.setEnabled({ target: createdTarget, enabled: true });
       }),
     );
@@ -438,6 +443,93 @@ describe("ProviderProfileRegistryLive", () => {
 
     expect(error.code).toBe("PROVIDER_PROFILE_REGISTRY_INVALID");
     expect(fs.readFileSync(indexPath, "utf8")).toBe(invalidContents);
+  });
+
+  it("migrates v1 enabled profiles to disabled and unbound with a stable private namespace", async () => {
+    const baseDir = makeBaseDir();
+    const storageKey = "11111111-1111-4111-8111-111111111111";
+    const profile = { ...storedProfile("codex_one", storageKey), enabled: true };
+    const indexPath = path.join(baseDir, "userdata", "provider-profiles", "index.json");
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      indexPath,
+      `${JSON.stringify({ version: 1, revision: 7, profiles: [profile] }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+
+    const result = await runWithRegistry(
+      baseDir,
+      Effect.gen(function* () {
+        const registry = yield* ProviderProfileRegistry;
+        const target = { provider: "codex" as const, profileId: profile.profileId };
+        const snapshot = yield* registry.list({ provider: "codex" });
+        const resolution = yield* registry.resolveForManagement(target);
+        const enableError = yield* registry
+          .setEnabled({ target, enabled: true })
+          .pipe(Effect.flip);
+        return { snapshot, resolution, enableError };
+      }),
+    );
+
+    expect(result.snapshot.profiles[1]?.enabled).toBe(false);
+    expect(JSON.stringify(result.snapshot)).not.toContain(storageKey);
+    expect(result.enableError.code).toBe("PROVIDER_PROFILE_AUTHENTICATION_UNBOUND");
+    expect(result.resolution.launchContext.home.strategy).toBe("managed-direct");
+    if (result.resolution.launchContext.home.strategy !== "managed-direct") {
+      throw new Error("Expected managed launch context");
+    }
+    expect(result.resolution.launchContext.authenticationBoundAt).toBeNull();
+    expect(result.resolution.launchContext.continuationNamespaceId).toBe(storageKey);
+
+    const persisted = JSON.parse(fs.readFileSync(indexPath, "utf8")) as {
+      version: number;
+      revision: number;
+      profiles: Array<{ enabled: boolean; authenticationBoundAt: string | null }>;
+    };
+    expect(persisted).toMatchObject({
+      version: 2,
+      revision: 8,
+      profiles: [{ enabled: false, authenticationBoundAt: null }],
+    });
+
+    const reloaded = await runWithRegistry(
+      baseDir,
+      Effect.gen(function* () {
+        const registry = yield* ProviderProfileRegistry;
+        const target = { provider: "codex" as const, profileId: profile.profileId };
+        return yield* registry.resolveForManagement(target);
+      }),
+    );
+    expect(reloaded.launchContext.registryRevision).toBe(8);
+    expect(fs.readFileSync(indexPath, "utf8")).toBe(
+      `${JSON.stringify(persisted, null, 2)}\n`,
+    );
+  });
+
+  it("rejects a v2 enabled profile with a noncanonical authentication binding", async () => {
+    const baseDir = makeBaseDir();
+    const indexPath = path.join(baseDir, "userdata", "provider-profiles", "index.json");
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true, mode: 0o700 });
+    const profile = {
+      ...storedProfile("codex_one", "11111111-1111-4111-8111-111111111111"),
+      enabled: true,
+      authenticationBoundAt: "x",
+    };
+    fs.writeFileSync(
+      indexPath,
+      `${JSON.stringify({ version: 2, revision: 7, profiles: [profile] }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+
+    const error = await runWithRegistry(
+      baseDir,
+      Effect.gen(function* () {
+        const registry = yield* ProviderProfileRegistry;
+        return yield* registry.list({ provider: "codex" });
+      }).pipe(Effect.flip),
+    );
+
+    expect(error.code).toBe("PROVIDER_PROFILE_REGISTRY_INVALID");
   });
 
   it("leaves an inert private orphan instead of publishing a profile when index persistence fails", async () => {

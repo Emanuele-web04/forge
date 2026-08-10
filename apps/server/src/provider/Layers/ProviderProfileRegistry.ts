@@ -38,10 +38,29 @@ import {
   type ProviderProfileRegistryShape,
 } from "../Services/ProviderProfileRegistry";
 
-const REGISTRY_VERSION = 1;
+const REGISTRY_VERSION = 2;
 const DEFAULT_PROFILE_DISPLAY_NAME = "Default";
 
 const StorageKey = Schema.String.check(Schema.isPattern(/^[0-9a-f-]{36}$/u));
+const CanonicalIsoInstant = Schema.String.check(
+  Schema.makeFilter((value: string) => {
+    try {
+      return new Date(value).toISOString() === value;
+    } catch {
+      return false;
+    }
+  }),
+);
+
+const StoredCodexProfileV1 = Schema.Struct({
+  profileId: ProviderProfileId,
+  storageKey: StorageKey,
+  displayName: ProviderProfileDisplayName,
+  enabled: Schema.Boolean,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  tombstonedAt: Schema.NullOr(Schema.String),
+});
 
 const StoredCodexProfile = Schema.Struct({
   profileId: ProviderProfileId,
@@ -51,8 +70,15 @@ const StoredCodexProfile = Schema.Struct({
   createdAt: Schema.String,
   updatedAt: Schema.String,
   tombstonedAt: Schema.NullOr(Schema.String),
+  authenticationBoundAt: Schema.NullOr(CanonicalIsoInstant),
 });
 type StoredCodexProfile = typeof StoredCodexProfile.Type;
+
+const StoredProviderProfileRegistryV1 = Schema.Struct({
+  version: Schema.Literal(1),
+  revision: NonNegativeInt,
+  profiles: Schema.Array(StoredCodexProfileV1),
+});
 
 const StoredProviderProfileRegistry = Schema.Struct({
   version: Schema.Literal(REGISTRY_VERSION),
@@ -60,6 +86,11 @@ const StoredProviderProfileRegistry = Schema.Struct({
   profiles: Schema.Array(StoredCodexProfile),
 });
 type StoredProviderProfileRegistry = typeof StoredProviderProfileRegistry.Type;
+
+const PersistedProviderProfileRegistry = Schema.Union([
+  StoredProviderProfileRegistryV1,
+  StoredProviderProfileRegistry,
+]);
 
 type ActiveProfileInspection = Readonly<{
   state: StoredProviderProfileRegistry;
@@ -109,6 +140,9 @@ function assertValidRegistry(state: StoredProviderProfileRegistry): StoredProvid
       storageKeys.has(profile.storageKey) ||
       !isCodexProfileStorageKey(profile.storageKey) ||
       (profile.tombstonedAt !== null && profile.enabled) ||
+      (profile.tombstonedAt === null &&
+        profile.enabled &&
+        profile.authenticationBoundAt === null) ||
       (profile.tombstonedAt === null && activeDisplayNames.has(normalizedName))
     ) {
       throw registryError(
@@ -165,6 +199,38 @@ function assertActive(profile: StoredCodexProfile): void {
   }
 }
 
+function assertAuthenticationBound(profile: StoredCodexProfile): void {
+  if (profile.authenticationBoundAt !== null) return;
+  throw registryError(
+    "PROVIDER_PROFILE_AUTHENTICATION_UNBOUND",
+    `Codex provider profile '${profile.profileId}' has not completed account login.`,
+  );
+}
+
+function migrateRegistry(
+  state: typeof PersistedProviderProfileRegistry.Type,
+): { readonly state: StoredProviderProfileRegistry; readonly migrated: boolean } {
+  if (state.version === REGISTRY_VERSION) return { state, migrated: false };
+  if (state.profiles.some((profile) => profile.tombstonedAt !== null && profile.enabled)) {
+    throw registryError(
+      "PROVIDER_PROFILE_REGISTRY_INVALID",
+      "The Codex provider profile registry is invalid.",
+    );
+  }
+  return {
+    migrated: true,
+    state: {
+      version: REGISTRY_VERSION,
+      revision: state.revision + 1,
+      profiles: state.profiles.map((profile) => ({
+        ...profile,
+        enabled: false,
+        authenticationBoundAt: null,
+      })),
+    },
+  };
+}
+
 function normalizedDisplayName(displayName: string): string {
   return displayName.toLowerCase();
 }
@@ -216,6 +282,26 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
   const profilesRoot = path.join(config.stateDir, "provider-profiles");
   const indexPath = path.join(profilesRoot, "index.json");
 
+  const persist = (state: StoredProviderProfileRegistry) =>
+    Effect.uninterruptible(
+      writeFileStringAtomically({
+        filePath: indexPath,
+        contents: `${JSON.stringify(state, null, 2)}\n`,
+      }).pipe(
+        Effect.mapError((cause) =>
+          registryError(
+            "PROVIDER_PROFILE_STORAGE_ERROR",
+            "Could not save the Codex provider profile registry.",
+            cause,
+          ),
+        ),
+        // The in-memory publication and disk rename are one transaction. An
+        // interrupt between them would let a later mutation overwrite a state
+        // that was already durably committed.
+        Effect.andThen(Ref.set(stateRef, state)),
+      ),
+    );
+
   const readRegistry = Effect.tryPromise({
     try: async () => {
       let handle: fs.FileHandle | undefined;
@@ -242,10 +328,13 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
   }).pipe(
     Effect.flatMap((contents) => {
       if (contents === null) {
-        return Effect.succeed<StoredProviderProfileRegistry>({
-          version: REGISTRY_VERSION,
-          revision: 0,
-          profiles: [],
+        return Effect.succeed({
+          state: {
+            version: REGISTRY_VERSION,
+            revision: 0,
+            profiles: [],
+          } satisfies StoredProviderProfileRegistry,
+          migrated: false,
         });
       }
       return Effect.try({
@@ -257,7 +346,16 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
             cause,
           ),
       }).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(StoredProviderProfileRegistry)),
+        Effect.flatMap(Schema.decodeUnknownEffect(PersistedProviderProfileRegistry)),
+        Effect.flatMap((state) =>
+          registryAttempt(() => {
+            const migration = migrateRegistry(state);
+            return {
+              ...migration,
+              state: assertValidRegistry(migration.state),
+            };
+          }),
+        ),
         Effect.mapError((cause) =>
           cause instanceof ProviderProfileRegistryError
             ? cause
@@ -267,19 +365,6 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
                 cause,
               ),
         ),
-        Effect.flatMap((state) =>
-          Effect.try({
-            try: () => assertValidRegistry(state),
-            catch: (cause) =>
-              cause instanceof ProviderProfileRegistryError
-                ? cause
-                : registryError(
-                    "PROVIDER_PROFILE_REGISTRY_INVALID",
-                    "The Codex provider profile registry is invalid.",
-                    cause,
-                  ),
-          }),
-        ),
       );
     }),
   );
@@ -287,30 +372,16 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
   const loadState = Ref.get(stateRef).pipe(
     Effect.flatMap((cached) =>
       cached === null
-        ? readRegistry.pipe(Effect.tap((loaded) => Ref.set(stateRef, loaded)))
+        ? readRegistry.pipe(
+            Effect.flatMap(({ state, migrated }) =>
+              migrated
+                ? persist(state).pipe(Effect.as(state))
+                : Ref.set(stateRef, state).pipe(Effect.as(state)),
+            ),
+          )
         : Effect.succeed(cached),
     ),
   );
-
-  const persist = (state: StoredProviderProfileRegistry) =>
-    Effect.uninterruptible(
-      writeFileStringAtomically({
-        filePath: indexPath,
-        contents: `${JSON.stringify(state, null, 2)}\n`,
-      }).pipe(
-        Effect.mapError((cause) =>
-          registryError(
-            "PROVIDER_PROFILE_STORAGE_ERROR",
-            "Could not save the Codex provider profile registry.",
-            cause,
-          ),
-        ),
-        // The in-memory publication and disk rename are one transaction. An
-        // interrupt between them would let a later mutation overwrite a state
-        // that was already durably committed.
-        Effect.andThen(Ref.set(stateRef, state)),
-      ),
-    );
 
   const getSettingsSnapshot = serverSettings.getSnapshot.pipe(
     Effect.mapError((cause) =>
@@ -378,6 +449,7 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
               createdAt: timestamp,
               updatedAt: timestamp,
               tombstonedAt: null,
+              authenticationBoundAt: null,
             },
           ],
         };
@@ -422,6 +494,9 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
         const state = yield* loadState;
         const profile = yield* registryAttempt(() => findProfile(state, input.target));
         yield* registryAttempt(() => assertActive(profile));
+        if (input.enabled) {
+          yield* registryAttempt(() => assertAuthenticationBound(profile));
+        }
         if (profile.enabled === input.enabled) return yield* snapshot(state);
         const nextState: StoredProviderProfileRegistry = {
           ...state,
@@ -540,6 +615,8 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
         binaryPath: inspection.codexSettings.binaryPath,
         settingsRevision: inspection.settingsRevision,
         registryRevision: inspection.state.revision,
+        authenticationBoundAt: inspection.profile.authenticationBoundAt,
+        continuationNamespaceId: inspection.profile.storageKey,
         ...home,
       }),
     };
@@ -570,9 +647,39 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
             `Codex provider profile '${inspection.target.profileId}' is disabled.`,
           );
         }
+        if (inspection.profile !== null) {
+          yield* registryAttempt(() => assertAuthenticationBound(inspection.profile!));
+        }
         return yield* materializeResolvedProfile(inspection);
       }),
     );
+
+  const sealManagedAuthentication: ProviderProfileRegistryShape["sealManagedAuthentication"] =
+    (target) =>
+      lock.withPermits(1)(
+        Effect.gen(function* () {
+          yield* registryAttempt(() => assertManagedTarget(target));
+          const state = yield* loadState;
+          const profile = yield* registryAttempt(() => findProfile(state, target));
+          yield* registryAttempt(() => assertActive(profile));
+          if (profile.authenticationBoundAt !== null) return;
+          const timestamp = new Date().toISOString();
+          const nextState: StoredProviderProfileRegistry = {
+            ...state,
+            revision: state.revision + 1,
+            profiles: state.profiles.map((candidate) =>
+              candidate.profileId === profile.profileId
+                ? {
+                    ...candidate,
+                    authenticationBoundAt: timestamp,
+                    updatedAt: timestamp,
+                  }
+                : candidate,
+            ),
+          };
+          yield* persist(nextState);
+        }),
+      );
 
   return {
     list,
@@ -580,6 +687,7 @@ export const makeProviderProfileRegistry = Effect.gen(function* () {
     rename,
     setEnabled,
     tombstone,
+    sealManagedAuthentication,
     resolveForManagement,
     resolveForRuntime,
   } satisfies ProviderProfileRegistryShape;

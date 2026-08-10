@@ -22,6 +22,14 @@ import type {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import type {
+  CodexProviderAccountStatus,
+  ProviderProfileAccountReadInput,
+  ProviderProfileLoginCancelInput,
+  ProviderProfileLoginCancelResult,
+  ProviderProfileLoginStartInput,
+  ProviderProfileLoginStartResult,
+  ProviderProfileLogoutInput,
+  ProviderProfileLogoutResult,
   ProviderProfilesCreateInput,
   ProviderProfilesListInput,
   ProviderProfilesRenameInput,
@@ -780,6 +788,14 @@ export interface NativeApi {
     rename: (input: ProviderProfilesRenameInput) => Promise<ProviderProfilesSnapshot>;
     setEnabled: (input: ProviderProfilesSetEnabledInput) => Promise<ProviderProfilesSnapshot>;
     tombstone: (input: ProviderProfilesTombstoneInput) => Promise<ProviderProfilesSnapshot>;
+    readAccount: (input: ProviderProfileAccountReadInput) => Promise<CodexProviderAccountStatus>;
+    startLogin: (
+      input: ProviderProfileLoginStartInput,
+    ) => Promise<ProviderProfileLoginStartResult>;
+    cancelLogin: (
+      input: ProviderProfileLoginCancelInput,
+    ) => Promise<ProviderProfileLoginCancelResult>;
+    logout: (input: ProviderProfileLogoutInput) => Promise<ProviderProfileLogoutResult>;
   };
   stats: {
     getProfileStats: (input: StatsGetProfileStatsInput) => Promise<StatsGetProfileStatsResult>;

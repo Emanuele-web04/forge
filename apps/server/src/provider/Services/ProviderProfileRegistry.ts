@@ -15,6 +15,7 @@ import type { CodexProviderLaunchContext } from "../codexProviderLaunchContext";
 
 export type ProviderProfileRegistryErrorCode =
   | "PROVIDER_PROFILE_DEFAULT_IMMUTABLE"
+  | "PROVIDER_PROFILE_AUTHENTICATION_UNBOUND"
   | "PROVIDER_PROFILE_DISABLED"
   | "PROVIDER_PROFILE_NAME_CONFLICT"
   | "PROVIDER_PROFILE_NOT_FOUND"
@@ -52,6 +53,9 @@ export interface ProviderProfileRegistryShape {
   readonly tombstone: (
     input: ProviderProfilesTombstoneInput,
   ) => Effect.Effect<ProviderProfilesSnapshot, ProviderProfileRegistryError>;
+  readonly sealManagedAuthentication: (
+    target: CodexProviderTarget,
+  ) => Effect.Effect<void, ProviderProfileRegistryError>;
   /** Resolves active profile storage for login and other control-plane work. */
   readonly resolveForManagement: (
     target: CodexProviderTarget,

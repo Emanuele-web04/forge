@@ -100,6 +100,10 @@ import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegist
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import {
+  CodexAccountControl,
+  CodexAccountControlError,
+} from "./provider/Services/CodexAccountControl";
+import {
   ProviderProfileRegistry,
   ProviderProfileRegistryError,
 } from "./provider/Services/ProviderProfileRegistry";
@@ -165,10 +169,14 @@ export function canManageExternalMcp(role: "owner" | "client"): boolean {
 
 export type ProviderProfileRpcOperation =
   | "list"
+  | "readAccount"
   | "create"
   | "rename"
   | "setEnabled"
-  | "tombstone";
+  | "tombstone"
+  | "startLogin"
+  | "cancelLogin"
+  | "logout";
 
 export function canAccessProviderProfiles(
   role: "owner" | "client",
@@ -178,14 +186,14 @@ export function canAccessProviderProfiles(
 }
 
 export function toProviderProfileWsRpcError(
-  cause: ProviderProfileRegistryError | WsRpcError,
+  cause: ProviderProfileRegistryError | CodexAccountControlError | WsRpcError,
 ): WsRpcError {
   return cause instanceof WsRpcError
     ? cause
     : new WsRpcError({
         message: cause.message,
         code: cause.code,
-        retryable: false,
+        retryable: cause instanceof CodexAccountControlError ? cause.retryable : false,
       });
 }
 
@@ -366,6 +374,7 @@ const makeWsRpcHandlersLayer = () =>
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
       const providerProfiles = yield* ProviderProfileRegistry;
+      const codexAccountControl = yield* CodexAccountControl;
       const providerService = yield* ProviderService;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
@@ -826,7 +835,11 @@ const makeWsRpcHandlersLayer = () =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
       const providerProfileRpcEffect = <A, R>(
-        effect: Effect.Effect<A, ProviderProfileRegistryError | WsRpcError, R>,
+        effect: Effect.Effect<
+          A,
+          ProviderProfileRegistryError | CodexAccountControlError | WsRpcError,
+          R
+        >,
       ) =>
         effect.pipe(Effect.mapError(toProviderProfileWsRpcError));
 
@@ -1662,13 +1675,37 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.providerProfilesSetEnabled]: (input) =>
           providerProfileRpcEffect(
             requireProviderProfileAccess("setEnabled").pipe(
-              Effect.andThen(providerProfiles.setEnabled(input)),
+              Effect.andThen(codexAccountControl.setEnabled(input)),
             ),
           ),
         [WS_METHODS.providerProfilesTombstone]: (input) =>
           providerProfileRpcEffect(
             requireProviderProfileAccess("tombstone").pipe(
-              Effect.andThen(providerProfiles.tombstone(input)),
+              Effect.andThen(codexAccountControl.tombstone(input)),
+            ),
+          ),
+        [WS_METHODS.providerProfilesReadAccount]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("readAccount").pipe(
+              Effect.andThen(codexAccountControl.readAccount(input)),
+            ),
+          ),
+        [WS_METHODS.providerProfilesStartLogin]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("startLogin").pipe(
+              Effect.andThen(codexAccountControl.startLogin(input)),
+            ),
+          ),
+        [WS_METHODS.providerProfilesCancelLogin]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("cancelLogin").pipe(
+              Effect.andThen(codexAccountControl.cancelLogin(input)),
+            ),
+          ),
+        [WS_METHODS.providerProfilesLogout]: (input) =>
+          providerProfileRpcEffect(
+            requireProviderProfileAccess("logout").pipe(
+              Effect.andThen(codexAccountControl.logout(input)),
             ),
           ),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>

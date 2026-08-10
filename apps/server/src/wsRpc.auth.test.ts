@@ -11,18 +11,45 @@ import {
   toProviderProfileWsRpcError,
 } from "./wsRpc";
 import { ProviderProfileRegistryError } from "./provider/Services/ProviderProfileRegistry";
+import { CodexAccountControlError } from "./provider/Services/CodexAccountControl";
 
 it("reserves external MCP management for owner sessions", () => {
   assert.isTrue(canManageExternalMcp("owner"));
   assert.isFalse(canManageExternalMcp("client"));
 });
 
-it("allows clients to list provider profiles but reserves every mutation for owners", () => {
+it("allows clients to list provider profiles but reserves account data and mutations for owners", () => {
   assert.isTrue(canAccessProviderProfiles("client", "list"));
-  for (const operation of ["create", "rename", "setEnabled", "tombstone"] as const) {
+  for (const operation of [
+    "readAccount",
+    "create",
+    "rename",
+    "setEnabled",
+    "tombstone",
+    "startLogin",
+    "cancelLogin",
+    "logout",
+  ] as const) {
     assert.isTrue(canAccessProviderProfiles("owner", operation));
     assert.isFalse(canAccessProviderProfiles("client", operation));
   }
+});
+
+it("redacts account-control causes while preserving safe retry metadata", () => {
+  const secretUrl = "https://auth.example.test/start?token=secret";
+  const rpcError = toProviderProfileWsRpcError(
+    new CodexAccountControlError({
+      code: "PROVIDER_ACCOUNT_CONTROL_FAILED",
+      message: "The Codex account operation failed.",
+      retryable: true,
+      cause: new Error(secretUrl),
+    }),
+  );
+
+  assert.equal(rpcError.code, "PROVIDER_ACCOUNT_CONTROL_FAILED");
+  assert.isTrue(rpcError.retryable);
+  assert.equal(rpcError.cause, undefined);
+  assert.isFalse(JSON.stringify(rpcError).includes(secretUrl));
 });
 
 it("redacts registry error causes before they cross RPC", () => {
