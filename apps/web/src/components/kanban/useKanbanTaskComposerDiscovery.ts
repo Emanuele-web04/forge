@@ -54,6 +54,7 @@ const KANBAN_SUPPORTED_APP_SLASH_COMMANDS = new Set(["clear", "default", "plan"]
 interface UseKanbanTaskComposerDiscoveryInput {
   readonly composerTrigger: ComposerTrigger | null;
   readonly selectedProvider: ProviderKind;
+  readonly targetExecutable: boolean;
   readonly modelOptionsByProvider: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
@@ -79,6 +80,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const {
     composerTrigger,
     selectedProvider,
+    targetExecutable,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd,
@@ -115,8 +117,11 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   });
 
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, targetExecutable),
   );
+  const providerComposerCapabilities = targetExecutable
+    ? providerComposerCapabilitiesQuery.data
+    : undefined;
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
@@ -140,13 +145,14 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
           : undefined,
       agentDir: selectedProvider === "pi" ? piAgentDir : null,
       enabled:
+        targetExecutable &&
         (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
-        supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
+        supportsNativeSlashCommandDiscovery(providerComposerCapabilities) &&
         composerSkillCwd !== null,
     }),
   );
   const canDiscoverProviderSkills =
-    selectedProvider === "pi" || supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
+    selectedProvider === "pi" || supportsSkillDiscovery(providerComposerCapabilities);
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
@@ -154,6 +160,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
       threadId: scratchThreadId,
       agentDir: selectedProvider === "pi" ? piAgentDir : null,
       enabled:
+        targetExecutable &&
         (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
         canDiscoverProviderSkills &&
         composerSkillCwd !== null,
@@ -165,7 +172,8 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       enabled:
-        supportsPluginDiscovery(providerComposerCapabilitiesQuery.data) &&
+        targetExecutable &&
+        supportsPluginDiscovery(providerComposerCapabilities) &&
         composerSkillCwd !== null,
     }),
   );
@@ -179,19 +187,23 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   );
 
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
-  const providerPlugins =
-    providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
-      marketplace.plugins.map((plugin) => ({
-        plugin,
-        mention: {
-          name: plugin.name,
-          path: `plugin://${plugin.name}@${marketplace.name}`,
-        } satisfies ProviderMentionReference,
-      })),
-    ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS;
-  const providerNativeCommands =
-    providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
-  const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
+  const providerPlugins = targetExecutable
+    ? (providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
+        marketplace.plugins.map((plugin) => ({
+          plugin,
+          mention: {
+            name: plugin.name,
+            path: `plugin://${plugin.name}@${marketplace.name}`,
+          } satisfies ProviderMentionReference,
+        })),
+      ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS)
+    : EMPTY_COMPOSER_PLUGIN_SUGGESTIONS;
+  const providerNativeCommands = targetExecutable
+    ? (providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS)
+    : EMPTY_PROVIDER_NATIVE_COMMANDS;
+  const providerSkills = targetExecutable
+    ? (providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS)
+    : EMPTY_PROVIDER_SKILLS;
   const searchableModelOptions = buildSearchableModelOptions({
     providerOptions: AVAILABLE_PROVIDER_OPTIONS,
     modelOptionsByProvider,
@@ -230,14 +242,16 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
       ((mentionTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
         workspaceEntriesQuery.isLoading ||
         workspaceEntriesQuery.isFetching ||
-        providerPluginsQuery.isLoading ||
-        providerPluginsQuery.isFetching)) ||
+        (targetExecutable &&
+          (providerPluginsQuery.isLoading || providerPluginsQuery.isFetching)))) ||
     (composerTriggerKind === "slash-command" &&
+      targetExecutable &&
       (providerCommandsQuery.isLoading ||
         providerCommandsQuery.isFetching ||
         providerSkillsQuery.isLoading ||
         providerSkillsQuery.isFetching)) ||
     (composerTriggerKind === "skill" &&
+      targetExecutable &&
       (providerComposerCapabilitiesQuery.isLoading ||
         providerComposerCapabilitiesQuery.isFetching ||
         providerSkillsQuery.isLoading ||

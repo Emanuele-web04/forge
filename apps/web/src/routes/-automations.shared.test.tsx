@@ -10,6 +10,7 @@ import {
   CommandId,
   MessageId,
   ProjectId,
+  ProviderProfileId,
   ThreadId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   type AutomationDefinition,
@@ -459,19 +460,11 @@ describe("automation shared route helpers", () => {
     const projects = [
       {
         id: projectId("project-old"),
-        defaultModelSelection: {
-          provider: "codex",
-          profileId: DEFAULT_PROVIDER_PROFILE_ID,
-          model: "gpt-5-codex",
-        },
+        defaultModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
       },
       {
         id: projectId("project-new"),
-        defaultModelSelection: {
-          provider: "claudeAgent",
-          profileId: DEFAULT_PROVIDER_PROFILE_ID,
-          model: "sonnet",
-        },
+        defaultModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "sonnet" },
       },
     ] as Parameters<typeof modelSelectionForProjectChange>[0];
 
@@ -492,19 +485,11 @@ describe("automation shared route helpers", () => {
     const projects = [
       {
         id: projectId("project-old"),
-        defaultModelSelection: {
-          provider: "codex",
-          profileId: DEFAULT_PROVIDER_PROFILE_ID,
-          model: "gpt-5-codex",
-        },
+        defaultModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
       },
       {
         id: projectId("project-new"),
-        defaultModelSelection: {
-          provider: "claudeAgent",
-          profileId: DEFAULT_PROVIDER_PROFILE_ID,
-          model: "sonnet",
-        },
+        defaultModelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "sonnet" },
       },
     ] as Parameters<typeof modelSelectionForProjectChange>[0];
 
@@ -658,11 +643,7 @@ describe("automation shared route helpers", () => {
       cursor: { binaryPath: "/current/cursor", apiEndpoint: "http://cursor.example" },
     };
     const definition = definitionWith({
-      modelSelection: {
-        provider: "opencode",
-        profileId: DEFAULT_PROVIDER_PROFILE_ID,
-        model: "openai/gpt-5",
-      },
+      modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
       providerOptions: savedProviderOptions,
     });
     const nextModelSelection = {
@@ -711,13 +692,38 @@ describe("automation shared route helpers", () => {
     ).toEqual(savedProviderOptions);
   });
 
-  it("clears stale provider options when an automation edit changes models without current options", () => {
+  it("does not reuse saved provider options across profiles of the same provider and model", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      codex: { binaryPath: "/old/codex", homePath: "/old/home" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      codex: { binaryPath: "/new/codex", homePath: "/new/home" },
+    };
     const definition = definitionWith({
       modelSelection: {
-        provider: "opencode",
-        profileId: DEFAULT_PROVIDER_PROFILE_ID,
-        model: "openai/gpt-5",
+        provider: "codex",
+        profileId: ProviderProfileId.makeUnsafe("personal"),
+        model: "gpt-5-codex",
       },
+      providerOptions: savedProviderOptions,
+    });
+
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        {
+          provider: "codex",
+          profileId: ProviderProfileId.makeUnsafe("work"),
+          model: "gpt-5-codex",
+        },
+        currentProviderOptions,
+      ),
+    ).toEqual(currentProviderOptions);
+  });
+
+  it("clears stale provider options when an automation edit changes models without current options", () => {
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
       providerOptions: {
         opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
       },

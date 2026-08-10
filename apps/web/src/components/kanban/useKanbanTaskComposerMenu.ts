@@ -46,6 +46,7 @@ interface UseKanbanTaskComposerMenuInput {
   readonly composerMentions: readonly ProviderMentionReference[];
   readonly scratchThreadId: ThreadId;
   readonly selectedProvider: ProviderKind;
+  readonly targetExecutable: boolean;
   readonly modelOptionsByProvider: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
@@ -75,6 +76,7 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
     composerMentions,
     scratchThreadId,
     selectedProvider,
+    targetExecutable,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd,
@@ -111,6 +113,7 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
   } = useKanbanTaskComposerDiscovery({
     composerTrigger,
     selectedProvider,
+    targetExecutable,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd,

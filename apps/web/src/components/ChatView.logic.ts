@@ -55,6 +55,20 @@ export const PROMPT_HISTORY_MAX_ENTRIES = 100;
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
 
+export function visibleProviderDiscoveryData<T>(
+  targetExecutable: boolean,
+  cachedData: T | undefined,
+): T | undefined {
+  return targetExecutable ? cachedData : undefined;
+}
+
+export function isProviderDiscoveryPending(
+  targetExecutable: boolean,
+  ...queries: ReadonlyArray<{ readonly isLoading: boolean; readonly isFetching: boolean }>
+): boolean {
+  return targetExecutable && queries.some((query) => query.isLoading || query.isFetching);
+}
+
 export interface PendingFileUndo {
   readonly threadId: ThreadIdType;
   // A changes card can merge several turns; one Undo reverts all of them, so the
@@ -194,6 +208,7 @@ export function createRuntimeModePersistenceQueue(
 export function modelSelectionsEqual(left: ModelSelection, right: ModelSelection): boolean {
   return (
     left.provider === right.provider &&
+    left.profileId === right.profileId &&
     left.model === right.model &&
     JSON.stringify(left.options ?? null) === JSON.stringify(right.options ?? null) &&
     (left.provider !== "claudeAgent" ||
