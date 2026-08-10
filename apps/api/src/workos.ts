@@ -394,12 +394,21 @@ export function createWorkosAuth(config: ApiConfig): WorkosAuth {
     if (response.ok) return response.json();
 
     // Read the failure only to classify it. The parsed value is never
-    // returned, logged, or attached to an error.
-    const failure = classifyPasswordFailure(
-      await response.json().catch(() => null),
-      response.status,
-    );
+    // returned or attached to an error.
+    const raw = await response.json().catch(() => null);
+    const failure = classifyPasswordFailure(raw, response.status);
     if (failure) throw new WorkosPasswordError(failure);
+    // An unclassified refusal becomes an opaque 502 to the caller, so this
+    // line is the only place its identity survives. Log the status and the
+    // two code fields ONLY — both are WorkOS-chosen enum spellings. Never the
+    // description or the body: those echo request fields, and this is a
+    // password route.
+    const refusal = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+    console.error(
+      `[api] unclassified WorkOS password failure: status=${response.status}` +
+        ` code=${typeof refusal.code === "string" ? refusal.code : "-"}` +
+        ` error=${typeof refusal.error === "string" ? refusal.error : "-"}`,
+    );
     throw new WorkosApiError(response.status, `WorkOS ${path} failed with ${response.status}`);
   }
 
