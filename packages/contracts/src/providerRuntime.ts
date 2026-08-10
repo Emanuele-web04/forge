@@ -420,7 +420,12 @@ export const ItemLifecyclePayload = Schema.Struct({
   itemType: CanonicalItemType,
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
-  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Free-form body (e.g. raw tool output), which legitimately carries leading
+  // and/or trailing whitespace. Keep it unconstrained so item events from
+  // provider adapters (pi, opencode, codex, ...) always pass the durable
+  // journal's encode step; a TrimmedNonEmptyString here rejects ordinary
+  // tool output and forces the event into quarantine.
+  detail: Schema.optional(Schema.String),
   data: Schema.optional(Schema.Unknown),
 });
 export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;
