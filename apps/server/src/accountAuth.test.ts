@@ -303,11 +303,9 @@ describe("withFreshAccessToken", () => {
         client: makeClient({
           refreshAccessToken: (options) => {
             // The organization must ride along on every renewal: without it
-            // WorkOS mints an org-less token and the very next call 403s.
+            // the provider mints an org-less token and the very next call 403s.
             expect(options).toEqual({
               refreshToken: "refresh-1",
-              clientId: CLIENT_ID,
-              workosApiUrl: WORKOS_API_URL,
               organizationId: ORGANIZATION.id,
             });
             return Promise.resolve({
@@ -696,11 +694,9 @@ describe("runAuthLogin", () => {
     expect(stdout.text()).toContain("https://accounts.example.com/device?user_code=WDJB-MJHT");
     expect(stdout.text()).toContain("WDJB-MJHT");
 
-    // The client id and WorkOS origin must come from /instance: the poll goes
-    // straight to WorkOS, so a hardcoded pair would break every self-hoster.
-    expect(polls).toEqual([
-      { interval: 5, expiresIn: 900, clientId: CLIENT_ID, workosApiUrl: WORKOS_API_URL },
-    ]);
+    // The poll is proxied through the account service, so the only options
+    // that travel are the pacing hints the authorization response carried.
+    expect(polls).toEqual([{ interval: 5, expiresIn: 900 }]);
 
     expect(registered).toHaveLength(1);
     expect(registered[0]?.token).toBe("access-1");
@@ -754,14 +750,7 @@ describe("runAuthLogin", () => {
       hostname: "workstation",
     });
 
-    expect(refreshCalls).toEqual([
-      {
-        refreshToken: "refresh-0",
-        clientId: CLIENT_ID,
-        workosApiUrl: WORKOS_API_URL,
-        organizationId: ORGANIZATION.id,
-      },
-    ]);
+    expect(refreshCalls).toEqual([{ refreshToken: "refresh-0", organizationId: ORGANIZATION.id }]);
     // Registration uses the scoped token, never the one /me refused.
     expect(registerTokens).toEqual(["access-1"]);
     expect(stdout.text()).toContain(`Workspace: ${ORGANIZATION.name}`);

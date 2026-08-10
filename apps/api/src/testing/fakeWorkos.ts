@@ -93,6 +93,15 @@ export type FakeWorkos = {
     deviceCode: string,
     user?: Partial<FakeWorkosUser> & { id?: string },
   ): FakeWorkosUser;
+  /** Marks the authorization denied, as a human clicking "cancel" would. */
+  denyDevice(deviceCode: string): void;
+  /** Forces the device code past its lifetime, so polls answer expired_token. */
+  expireDevice(deviceCode: string): void;
+  /**
+   * Makes the next device-token poll answer `slow_down` (RFC 8628), once.
+   * How a test proves the client widens its interval instead of erroring.
+   */
+  slowDownNextDevicePoll(): void;
   /**
    * The live email verification for `email`, if one exists — its id and the
    * 6-digit code a real user would read out of their inbox. How a test plays
@@ -189,8 +198,13 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
    */
   const memberships: Array<{ orgId: string; userId: string }> = [];
   const requests: FakeWorkosRequest[] = [];
-  /** Device codes handed out but not yet approved, and who approved them. */
-  const deviceGrants = new Map<string, { approvedBy?: string }>();
+  /** Device codes handed out, their approval state, and forced outcomes. */
+  const deviceGrants = new Map<
+    string,
+    { approvedBy?: string; denied?: boolean; expired?: boolean }
+  >();
+  /** One-shot: the next device-token poll answers slow_down. */
+  let slowDownNext = false;
   /** Live refresh tokens → the user they belong to. Single-use, as WorkOS's are. */
   const refreshTokens = new Map<string, string>();
   /**
@@ -385,6 +399,24 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       if (!grant) {
         return c.json(
           { error: "invalid_grant", error_description: "Unknown or expired device code" },
+          400,
+        );
+      }
+      if (slowDownNext) {
+        slowDownNext = false;
+        return c.json({ error: "slow_down", error_description: "Polling too fast" }, 400);
+      }
+      if (grant.expired) {
+        deviceGrants.delete(deviceCode);
+        return c.json(
+          { error: "expired_token", error_description: "The device code has expired" },
+          400,
+        );
+      }
+      if (grant.denied) {
+        deviceGrants.delete(deviceCode);
+        return c.json(
+          { error: "access_denied", error_description: "The user denied the request" },
           400,
         );
       }
@@ -723,6 +755,20 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       const record = user.id ? (users.get(user.id) ?? addUser(user)) : addUser(user);
       deviceGrants.set(deviceCode, { approvedBy: record.id });
       return record;
+    },
+
+    denyDevice(deviceCode) {
+      const grant = deviceGrants.get(deviceCode);
+      if (grant) grant.denied = true;
+    },
+
+    expireDevice(deviceCode) {
+      const grant = deviceGrants.get(deviceCode);
+      if (grant) grant.expired = true;
+    },
+
+    slowDownNextDevicePoll() {
+      slowDownNext = true;
     },
 
     close() {

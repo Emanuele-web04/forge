@@ -112,6 +112,37 @@ export type AuthTokens = {
 };
 
 /**
+ * One answer from the device-token poll. The non-granted statuses are
+ * expected states of a healthy flow — a user who has not clicked yet is not
+ * an error — so they are values, not exceptions. `slow_down` carries RFC 8628
+ * semantics (increase the polling interval); `expired` and `denied` are
+ * terminal.
+ */
+export type DeviceTokenPollResult =
+  | { status: "granted"; tokens: AuthTokens }
+  | { status: "pending" | "slow_down" | "expired" | "denied" };
+
+/**
+ * What a successful refresh yields: the rotated pair plus which workspace the
+ * new access token is scoped to, when the provider reports one.
+ */
+export type RefreshedTokens = AuthTokens & { organizationId?: string };
+
+/**
+ * The provider terminally refused a refresh — the token is spent, revoked, or
+ * names a workspace the user has left. Distinct from
+ * {@link IdentityProviderError} because the caller's recovery differs: a
+ * refusal means the stored session is dead and a fresh sign-in is the only
+ * cure, while a provider fault says nothing about the token at all.
+ */
+export class RefreshRejectedError extends Error {
+  constructor() {
+    super("The refresh token was rejected");
+    this.name = "RefreshRejectedError";
+  }
+}
+
+/**
  * What creating a one-time sign-in code reports back. Deliberately NOT the
  * provider's whole response: that response can contain the code itself, which
  * is a credential and must never leave the implementation module — not in a
@@ -124,22 +155,22 @@ export type OtpChallenge = {
 };
 
 /**
- * What `/instance` publishes about this deployment's identity wiring — the
- * client id and provider origin the app's device-flow poll and token refresh
- * go straight to. The field names are wire contract and must stay stable;
- * `authMode` may grow into a literal union as more provider families ship,
- * but existing values must keep meaning what they mean today.
+ * What `/instance` publishes about this deployment's identity wiring. The
+ * client id and provider origin are deprecated-but-present: every provider
+ * call is proxied now, so Synara's own clients ignore them, but clients from
+ * before the proxy cutover still poll the provider directly with them. The
+ * field names are wire contract and must stay stable; `authMode` may grow
+ * into a literal union as more provider families ship, but existing values
+ * must keep meaning what they mean today.
  */
 export type InstanceAuthInfo = Omit<InstanceInfo, "version">;
 
 /**
  * Verifies who a caller is and performs the authentication grants — the seam
  * between Synara's account routes and whichever identity provider backs them.
- *
- * Token *refresh* is deliberately absent: clients redeem refresh tokens
- * directly against the provider named by {@link describeInstanceAuth}, so this
- * service never sees one. Revocation therefore takes effect where the client
- * refreshes: at the provider.
+ * Every leg of every flow goes through here: the identity vendor is invisible
+ * on the client wire, which is what makes a self-hosted or generic-OIDC
+ * implementation a drop-in rather than a client change.
  */
 export type AccountIdentityVerifier = {
   /** Rejects on any invalid, expired, or unverifiable token; callers answer 401. */
@@ -151,6 +182,25 @@ export type AccountIdentityVerifier = {
    * because starting it needs a secret a public client cannot hold.
    */
   requestDeviceAuthorization(): Promise<DeviceAuthorizationResponse>;
+  /**
+   * One poll of the device grant: redeems the device code once the user has
+   * approved, and reports the flow's state until then. The non-granted
+   * outcomes come back as values (see {@link DeviceTokenPollResult}) — a
+   * user who has not clicked yet is not an exception. The device code is
+   * bearer-ish and takes the no-leak handling rules.
+   */
+  pollDeviceToken(input: { deviceCode: string }): Promise<DeviceTokenPollResult>;
+  /**
+   * Redeems a refresh token for a rotated pair, optionally authenticating
+   * into `organizationId` so the new access token carries the organization
+   * claim the host routes authorize on. Rejects with
+   * {@link RefreshRejectedError} when the provider terminally refuses the
+   * token — spent, revoked, or naming a workspace the user has left — and
+   * with {@link IdentityProviderError} for provider faults, which say nothing
+   * about the token. The refresh token is a credential and takes the no-leak
+   * handling rules.
+   */
+  refreshTokens(input: { refreshToken: string; organizationId?: string }): Promise<RefreshedTokens>;
   /**
    * Creates a one-time sign-in code: the provider mints a 6-digit code and
    * delivers it to `email` itself. Only the address echo and expiry are

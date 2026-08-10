@@ -94,12 +94,11 @@ shapes, refusal spellings, and error classes stop at the implementation
 modules.
 
 - **`AccountIdentityVerifier`** — verifies an access token to
-  `{userId, sessionId, orgId?}`; user lookup; the authentication grants (OTP
-  send/redeem, the SSO device authorization, the email-verification challenge
-  and its resend); and `describeInstanceAuth`, what `/instance` publishes so
-  clients can reach the provider directly. Token refresh is deliberately
-  absent: clients redeem refresh tokens straight against the provider, so
-  revocation takes effect where the client refreshes.
+  `{userId, sessionId, orgId?}`; user lookup; and every authentication grant:
+  OTP send/redeem, the SSO device authorization plus its polling leg
+  (`pollDeviceToken`), token refresh (`refreshTokens`), and the
+  email-verification challenge and its resend. Every leg of every flow goes
+  through the seam — the identity vendor is invisible on the client wire.
 - **`EnvironmentGrantIssuer`** — decides which environment scope a verified
   token may act inside: today, the organization membership check plus lazy
   personal-org provisioning. The name is for what it grows into (see Token
@@ -123,8 +122,9 @@ Implementations, selected in exactly one place (`src/identity/index.ts`):
   runs the test suite's in-process identity double behind the same WorkOS
   adapter production uses, giving contributors a fully offline account stack:
   any email signs in, the OTP code is printed to stdout (the one deliberate,
-  gated exception to the no-leak rules), and SSO device authorizations
-  self-approve on a timer. **Hard safety gate:** it refuses to start — process
+  gated exception to the no-leak rules), and the WHOLE SSO device flow runs
+  locally — issue, self-approve on a timer, poll to success — which the
+  proxied polling leg makes a requirement, not a nicety. **Hard safety gate:** it refuses to start — process
   exit with an explanatory message — when `NODE_ENV=production` or while
   `WORKOS_API_KEY` is set, checked both in config loading and again inside
   the provider factory so a hand-built config cannot bypass it.
@@ -193,9 +193,11 @@ short token lifetime; revocation takes effect where the client refreshes.
 
 - _Access token_ — short-lived (~5 min) provider JWT; authenticates
   user-level calls.
-- _Refresh token_ — single-use, rotated on redemption, redeemed by the client
-  directly against the provider. Only a 4xx from the token endpoint proves a
-  refresh token dead; a 5xx or network failure must not burn the session.
+- _Refresh token_ — single-use, rotated on redemption, redeemed through
+  `POST /api/v1/auth/refresh` (proxied; the client never talks to the
+  provider). A 401 from that route proves the token dead; a 5xx or network
+  failure must not burn the session — the service maps provider faults and
+  terminal refusals to exactly that split.
 - _Host token_ — the machine credential: hashed at rest, shown once, one
   active per host, rotated on re-link, revocable independently of any user
   session. An expired user session must not stop a running server from
@@ -223,11 +225,14 @@ browser and converge on the same `establishSession`.
 **Headless and desktop alike (`synara auth`):** the device authorization
 grant (Claude Code UX). The CLI prints the approval URL and user code, the
 user approves on any browser (a phone works), and the CLI polls until the
-provider returns tokens. The one wrinkle is where each request goes: starting
-the flow needs the provider API key, so the CLI asks this service to start it
-and the service proxies with its key; everything after — polling, refresh —
-goes from the client straight to the provider, which is why `/instance`
-publishes the client id and provider API origin.
+tokens arrive. Every leg is proxied: start (`POST /auth/device`), poll
+(`POST /auth/device/token` — a 200 with a `status` discriminant that
+round-trips RFC 8628's pending / slow_down / expired / denied faithfully),
+and refresh (`POST /auth/refresh`). The client speaks only to the account
+service; which identity vendor sits behind it is invisible on the wire, which
+is what makes a self-hosted or generic-OIDC backend a drop-in. The trade-off
+is deliberate and matches the OTP routes: the account service is on the
+critical path for sign-in and refresh availability.
 
 **Workspace scoping:** device-grant tokens carry no organization claim, so
 the first authorized call answers `403 organization_required` with the
@@ -302,6 +307,8 @@ Request/response contracts live in `packages/contracts` (schema-only).
 | `POST /auth/verify-email`        | none (5/min)   | Redeem a verification challenge (defense-in-depth path)                       |
 | `POST /auth/resend-verification` | none (2/min)   | Fresh verification code; 202 also for unknown ids                             |
 | `POST /auth/device`              | none (10/min)  | Start the SSO/CLI device flow; proxies with the API key                       |
+| `POST /auth/device/token`        | none (60/min)  | One poll of the device grant; 200 with a status discriminant                  |
+| `POST /auth/refresh`             | none (10/min)  | Redeem a refresh token for a rotated, optionally workspace-scoped pair        |
 | `GET /instance`                  | none           | Version + what the verifier publishes (auth mode, client id, provider origin) |
 
 Errors: typed codes in contracts with correct HTTP status; clients branch on
@@ -310,10 +317,12 @@ server-side log. Sessions listing/revocation stays deferred to the provider's
 dashboard; sign-out is local (drops the session, keeps the host
 registration).
 
-`/instance` is wire-stable: `authMode: "workos"` plus `clientId` and
-`workosApiUrl` are what the CLI device flow consumes today. `authMode` may
-grow into a literal union as more provider families ship, but existing values
-keep their meaning — clients built against today's shape must keep working.
+`/instance` is wire-stable: `authMode: "workos"` stays, and `clientId` /
+`workosApiUrl` are now **deprecated-but-present** — Synara's own clients no
+longer consume them (every provider call is proxied), but clients built
+before the proxy cutover still poll the provider directly with them, so the
+fields keep their values and their meaning. `authMode` may grow into a
+literal union as more provider families ship.
 
 ## Client integration (`apps/server`, `apps/web`)
 

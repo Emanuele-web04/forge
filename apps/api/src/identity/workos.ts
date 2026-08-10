@@ -14,6 +14,7 @@ import type { WorkosApiConfig } from "../config";
 import {
   IdentityAuthError,
   IdentityProviderError,
+  RefreshRejectedError,
   type AccountIdentityVerifier,
   type AuthFailureReason,
   type AuthTokens,
@@ -506,6 +507,98 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
         ...(name ? { name } : {}),
         ...(user.profile_picture_url ? { avatarUrl: user.profile_picture_url } : {}),
       } satisfies IdentityUser;
+    },
+
+    async pollDeviceToken({ deviceCode }) {
+      // The device code is bearer-ish, so this rides sensitiveFetch's no-leak
+      // handling — but the flow-state refusals are expected answers of a
+      // healthy poll, not failures, so they are read off the raw response
+      // here instead of being pushed through a failure classifier.
+      const response = await fetch(`${config.workosApiUrl}/user_management/authenticate`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${config.workosApiKey}`,
+        },
+        body: JSON.stringify({
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+          device_code: deviceCode,
+          client_id: config.workosClientId,
+          // Confidential-client here too: proxying this leg is what keeps
+          // the whole provider protocol off the client wire.
+          client_secret: config.workosApiKey,
+        }),
+      });
+      if (response.ok) {
+        return { status: "granted", tokens: toAuthTokens(await response.json()) };
+      }
+
+      const raw: unknown = await response.json().catch(() => null);
+      const error =
+        typeof raw === "object" &&
+        raw !== null &&
+        typeof (raw as { error?: unknown }).error === "string"
+          ? (raw as { error: string }).error
+          : undefined;
+      // RFC 8628's four poll answers, mapped one-to-one so the client's loop
+      // semantics survive the proxy hop unchanged.
+      if (error === "authorization_pending") return { status: "pending" };
+      if (error === "slow_down") return { status: "slow_down" };
+      if (error === "expired_token") return { status: "expired" };
+      if (error === "access_denied") return { status: "denied" };
+      // `invalid_grant` here is an unknown or spent device code — dead for
+      // the same reasons an expired one is, and the client's recovery (start
+      // over) is identical.
+      if (error === "invalid_grant") return { status: "expired" };
+      // No body or description in the message: an unrecognised refusal on a
+      // credential route stays opaque, as everywhere else.
+      console.error(
+        `[api] unclassified WorkOS device-token failure: status=${response.status}` +
+          ` error=${error ?? "-"}`,
+      );
+      throw new IdentityProviderError(
+        response.status,
+        `WorkOS device-token poll failed with ${response.status}`,
+      );
+    },
+
+    async refreshTokens({ refreshToken, organizationId }) {
+      const response = await fetch(`${config.workosApiUrl}/user_management/authenticate`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${config.workosApiKey}`,
+        },
+        body: JSON.stringify({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: config.workosClientId,
+          client_secret: config.workosApiKey,
+          ...(organizationId ? { organization_id: organizationId } : {}),
+        }),
+      });
+      if (response.ok) {
+        const raw: unknown = await response.json();
+        const tokens = toAuthTokens(raw);
+        const echoed = (raw as Record<string, unknown>).organization_id;
+        return {
+          ...tokens,
+          ...(typeof echoed === "string" && echoed.length > 0 ? { organizationId: echoed } : {}),
+        };
+      }
+
+      // A terminal 4xx is the provider refusing the token — spent, revoked,
+      // or naming a lost workspace. Anything else says nothing about it, and
+      // the caller must not burn a stored session over a transient fault.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        throw new RefreshRejectedError();
+      }
+      // The refresh token is a credential: no body, no description.
+      console.error(`[api] WorkOS refresh grant failed upstream: status=${response.status}`);
+      throw new IdentityProviderError(
+        response.status,
+        `WorkOS refresh grant failed with ${response.status}`,
+      );
     },
 
     async createOtpChallenge({ email }) {

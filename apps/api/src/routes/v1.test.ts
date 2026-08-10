@@ -21,6 +21,8 @@ import {
   DEVICE_RATE_LIMIT_PER_MINUTE,
   OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
   OTP_SEND_RATE_LIMIT_PER_MINUTE,
+  DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE,
+  REFRESH_RATE_LIMIT_PER_MINUTE,
   RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
 } from "./v1";
 
@@ -37,6 +39,17 @@ function postJson(app: Hono, path: string, body: unknown, clientIp: string) {
     headers: { "content-type": "application/json", "x-forwarded-for": clientIp },
     body: JSON.stringify(body),
   });
+}
+
+/** Starts a device flow and returns its code; each test drives it onward. */
+async function startDeviceFlow(app: Hono): Promise<string> {
+  const res = await app.request("/api/v1/auth/device", { method: "POST" });
+  const body = (await res.json()) as { deviceCode: string };
+  return body.deviceCode;
+}
+
+function poll(app: Hono, deviceCode: string, ip: string) {
+  return postJson(app, "/api/v1/auth/device/token", { deviceCode }, ip);
 }
 
 function registerHostBody(environmentId: string, overrides: Record<string, unknown> = {}) {
@@ -1453,6 +1466,230 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         headers: { "x-forwarded-for": `${client}, 10.0.99.1` },
       });
       expect(limited.status).toBe(429);
+    });
+  });
+
+  describe("POST /auth/device/token", () => {
+    it("answers pending until approval, then grants the token pair", async () => {
+      const { app } = buildApp();
+      const deviceCode = await startDeviceFlow(app);
+
+      const before = await poll(app, deviceCode, "203.0.113.60");
+      expect(before.status).toBe(200);
+      expect(await before.json()).toEqual({ status: "pending" });
+
+      const user = workos.approveDevice(deviceCode, { first_name: "Ada", last_name: "Lovelace" });
+
+      const after = await poll(app, deviceCode, "203.0.113.60");
+      expect(after.status).toBe(200);
+      const granted = (await after.json()) as {
+        status: string;
+        tokens: { accessToken: string; user: { email: string } };
+      };
+      expect(granted.status).toBe("granted");
+      expect(granted.tokens.user.email).toBe(user.email);
+
+      // The minted token is a real session: it must reach /me.
+      const me = await app.request("/api/v1/me", {
+        headers: authHeaders(granted.tokens.accessToken),
+      });
+      // Fresh user, no organization claim: the 403-then-refresh dance, which
+      // is enough to prove the token verifies rather than being refused.
+      expect([200, 403]).toContain(me.status);
+    });
+
+    it("round-trips slow_down so the client can widen its interval", async () => {
+      const { app } = buildApp();
+      const deviceCode = await startDeviceFlow(app);
+
+      workos.slowDownNextDevicePoll();
+      const res = await poll(app, deviceCode, "203.0.113.61");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ status: "slow_down" });
+    });
+
+    it("answers expired for an expired authorization", async () => {
+      const { app } = buildApp();
+      const deviceCode = await startDeviceFlow(app);
+      workos.expireDevice(deviceCode);
+
+      const res = await poll(app, deviceCode, "203.0.113.62");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ status: "expired" });
+    });
+
+    it("answers denied when the user refused the request", async () => {
+      const { app } = buildApp();
+      const deviceCode = await startDeviceFlow(app);
+      workos.denyDevice(deviceCode);
+
+      const res = await poll(app, deviceCode, "203.0.113.63");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ status: "denied" });
+    });
+
+    it("answers expired for a device code that was never issued", async () => {
+      const { app } = buildApp();
+      // Unknown and spent codes are indistinguishable upstream (one
+      // invalid_grant); both are dead and the recovery is identical.
+      const res = await poll(app, "dc_never_issued", "203.0.113.64");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ status: "expired" });
+    });
+
+    it("refuses a body without a device code, without echoing anything", async () => {
+      const { app } = buildApp();
+      const res = await postJson(app, "/api/v1/auth/device/token", {}, "203.0.113.65");
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        error: "validation_failed",
+        message: "A device code is required",
+      });
+    });
+
+    it("has a budget wide enough for a whole RFC 8628 poll loop", async () => {
+      const { app } = buildApp();
+      const deviceCode = await startDeviceFlow(app);
+      const ip = "203.0.113.66";
+
+      // A 5s-interval loop makes 12 polls a minute; the budget must absorb
+      // several of those before refusing.
+      for (let attempt = 0; attempt < DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE; attempt += 1) {
+        expect((await poll(app, deviceCode, ip)).status).toBe(200);
+      }
+      const limited = await poll(app, deviceCode, ip);
+      expect(limited.status).toBe(429);
+
+      // And exhausting the poll budget must not touch the start or refresh
+      // budgets for the same client.
+      const start = await app.request("/api/v1/auth/device", {
+        method: "POST",
+        headers: { "x-forwarded-for": ip },
+      });
+      expect(start.status).toBe(200);
+    });
+  });
+
+  describe("POST /auth/refresh", () => {
+    /** A signed-in user's refresh token, minted through the whole OTP flow. */
+    async function mintedRefreshToken(app: Hono, ip: string): Promise<string> {
+      const email = `refresh-${randomUUID()}@example.com`;
+      await postJson(app, "/api/v1/auth/otp/send", { email }, ip);
+      const live = workos.currentMagicAuth(email);
+      if (!live) throw new Error("fake WorkOS minted no magic auth code");
+      const res = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code: live.code },
+        ip,
+      );
+      const body = (await res.json()) as { refreshToken: string };
+      return body.refreshToken;
+    }
+
+    it("rotates the pair through the proxy and the old token dies", async () => {
+      const { app } = buildApp();
+      const refreshToken = await mintedRefreshToken(app, "203.0.113.70");
+
+      const res = await postJson(app, "/api/v1/auth/refresh", { refreshToken }, "203.0.113.70");
+      expect(res.status).toBe(200);
+      const rotated = (await res.json()) as { accessToken: string; refreshToken: string };
+      expect(rotated.refreshToken).not.toBe(refreshToken);
+
+      // Single-use upstream: replaying the spent token is a terminal refusal.
+      const replay = await postJson(app, "/api/v1/auth/refresh", { refreshToken }, "203.0.113.70");
+      expect(replay.status).toBe(401);
+      expect(await replay.json()).toMatchObject({ error: "unauthorized" });
+
+      // And the rotated pair keeps working.
+      const again = await postJson(
+        app,
+        "/api/v1/auth/refresh",
+        { refreshToken: rotated.refreshToken },
+        "203.0.113.70",
+      );
+      expect(again.status).toBe(200);
+    });
+
+    it("scopes the new token to the named workspace", async () => {
+      const { app } = buildApp();
+      // A user with a real membership: the fake refuses a refresh into a
+      // workspace the user does not belong to, exactly as the provider does.
+      const fresh = workos.addUser({});
+      const org = workos.addOrganization({ name: "Scoped Workspace" });
+      workos.addMembership(org.id, fresh.id);
+      const email = fresh.email;
+      await postJson(app, "/api/v1/auth/otp/send", { email }, "203.0.113.72");
+      const live = workos.currentMagicAuth(email);
+      if (!live) throw new Error("fake WorkOS minted no magic auth code");
+      const authed = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code: live.code },
+        "203.0.113.72",
+      );
+      const tokens = (await authed.json()) as { refreshToken: string };
+
+      const res = await postJson(
+        app,
+        "/api/v1/auth/refresh",
+        { refreshToken: tokens.refreshToken, organizationId: org.id },
+        "203.0.113.72",
+      );
+      expect(res.status).toBe(200);
+      const scoped = (await res.json()) as { accessToken: string; organizationId?: string };
+
+      // The scoped token reaches the host routes without the 403 dance.
+      const hosts = await app.request("/api/v1/hosts", {
+        headers: authHeaders(scoped.accessToken),
+      });
+      expect(hosts.status).toBe(200);
+    });
+
+    it("refuses a workspace the user does not belong to as a dead session", async () => {
+      const { app } = buildApp();
+      const refreshToken = await mintedRefreshToken(app, "203.0.113.73");
+      const stranger = workos.addOrganization({ name: "Not Yours" });
+
+      const res = await postJson(
+        app,
+        "/api/v1/auth/refresh",
+        { refreshToken, organizationId: stranger.id },
+        "203.0.113.73",
+      );
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error: "unauthorized" });
+    });
+
+    it("refuses a body without a refresh token, without echoing anything", async () => {
+      const { app } = buildApp();
+      const res = await postJson(app, "/api/v1/auth/refresh", {}, "203.0.113.74");
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        error: "validation_failed",
+        message: "A refresh token is required",
+      });
+    });
+
+    it("rate limits refreshes on their own budget", async () => {
+      const { app } = buildApp();
+      const ip = "203.0.113.75";
+
+      for (let attempt = 0; attempt < REFRESH_RATE_LIMIT_PER_MINUTE; attempt += 1) {
+        // Budget consumption happens before the grant, so a garbage token is
+        // enough to spend it.
+        const res = await postJson(app, "/api/v1/auth/refresh", { refreshToken: "rt_x" }, ip);
+        expect([401, 502]).toContain(res.status);
+      }
+      const limited = await postJson(app, "/api/v1/auth/refresh", { refreshToken: "rt_x" }, ip);
+      expect(limited.status).toBe(429);
+
+      // Exhausting refresh must not lock the same client out of polling.
+      const deviceRes = await app.request("/api/v1/auth/device", {
+        method: "POST",
+        headers: { "x-forwarded-for": ip },
+      });
+      expect(deviceRes.status).toBe(200);
     });
   });
 });

@@ -61,9 +61,13 @@ backs both:
   its own budget below the device route's 10/min. There is **no password
   auth**.
 - **SSO** — "Continue with Google/GitHub" takes the device-authorization grant
-  (`POST /api/v1/auth/device`) and finishes on the WorkOS hosted page in a real
-  browser — the only auth step that leaves the app. This is also the flow
-  `synara auth` uses from the CLI.
+  and finishes on the WorkOS hosted page in a real browser — the only auth
+  step that leaves the app. Every leg is proxied here: start
+  (`POST /api/v1/auth/device`), polling (`POST /api/v1/auth/device/token`,
+  a 200 with a `status` discriminant round-tripping RFC 8628's
+  pending/slow_down/expired/denied), and refresh (`POST /api/v1/auth/refresh`)
+  — the client never talks to WorkOS, so a different identity backend is a
+  server-side swap. This is also the flow `synara auth` uses from the CLI.
 
 Both converge on the same token pair, so everything downstream — workspace
 scoping, credential storage, refresh — is one code path.

@@ -20,11 +20,12 @@ import {
   type OtpSendRequest,
   type OtpSendResponse,
   OtpSendResponse as OtpSendResponseSchema,
+  DeviceTokenPollResponse as DeviceTokenPollResponseSchema,
+  RefreshTokenResponse as RefreshTokenResponseSchema,
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
   type ResendVerificationRequest,
-  TrimmedNonEmptyString,
   type VerifyEmailRequest,
   type UpdateHostRequest,
   type UpdateOrganizationRequest,
@@ -137,107 +138,10 @@ export class EmailVerificationRequiredError extends Error {
   }
 }
 
-/** The identity of the WorkOS client the CLI authenticates as, from `/instance`. */
-export interface WorkosClientOptions {
-  clientId: string;
-  workosApiUrl: string;
-}
-
 export interface DeviceTokenSuccess {
   accessToken: string;
   refreshToken: string;
-  user: { id: string; email: string; name?: string };
-}
-
-/**
- * The subset of WorkOS's authenticate response this client depends on, decoded
- * rather than cast: an unannounced shape change must fail loudly here instead
- * of persisting `undefined` as someone's access token.
- */
-const WorkosAuthenticateSuccess = Schema.Struct({
-  // Trimmed-nonempty, not merely a string: a present-but-blank token decodes
-  // fine and would be persisted as a live-looking session that fails on every
-  // later call, with nothing pointing back here.
-  access_token: TrimmedNonEmptyString,
-  refresh_token: TrimmedNonEmptyString,
-  /**
-   * Echoed by WorkOS when the grant named an organization. Optional because it
-   * is absent from an org-less refresh and from the device grant; when it *is*
-   * present the caller checks it against what was asked for.
-   */
-  organization_id: Schema.optional(Schema.NullOr(Schema.String)),
-  user: Schema.Struct({
-    id: Schema.String,
-    email: Schema.String,
-    first_name: Schema.optional(Schema.NullOr(Schema.String)),
-    last_name: Schema.optional(Schema.NullOr(Schema.String)),
-  }),
-});
-type WorkosAuthenticateSuccess = typeof WorkosAuthenticateSuccess.Type;
-
-interface DeviceErrorBody {
-  error: string;
-  error_description: string;
-}
-
-function isDeviceErrorBody(value: unknown): value is DeviceErrorBody {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as Record<string, unknown>).error === "string" &&
-    typeof (value as Record<string, unknown>).error_description === "string"
-  );
-}
-
-/**
- * Maps a WorkOS OAuth error response to an `AccountApiError`. OAuth error
- * codes (`invalid_grant`, `expired_token`, `access_denied`, ...) aren't part
- * of the `AccountErrorCode` contract, so they always surface as
- * `internal_error` — callers that need to distinguish cases should match on
- * `message`, which carries the raw `error_description`.
- */
-function toDeviceApiError(response: Response, raw: unknown): AccountApiError {
-  const description = isDeviceErrorBody(raw) ? raw.error_description : undefined;
-  return new AccountApiError({
-    code: "internal_error",
-    status: response.status,
-    message: description ?? `Request failed with status ${response.status}`,
-  });
-}
-
-/**
- * WorkOS returns the user's name split in two, either half of which can be
- * absent. Recombining here keeps every caller from re-deciding what to do with
- * a half-populated name.
- */
-function toDeviceTokenSuccess(raw: unknown, expectedOrganizationId?: string): DeviceTokenSuccess {
-  const body: WorkosAuthenticateSuccess = Schema.decodeUnknownSync(WorkosAuthenticateSuccess)(raw);
-  // Only meaningful when WorkOS echoed the field; it omits it for an org-less
-  // grant, and an absent value is not evidence of a mismatch.
-  if (
-    expectedOrganizationId !== undefined &&
-    expectedOrganizationId.length > 0 &&
-    typeof body.organization_id === "string" &&
-    body.organization_id !== expectedOrganizationId
-  ) {
-    throw new AccountApiError({
-      code: "internal_error",
-      status: 502,
-      message: `Refresh returned a token for organization ${body.organization_id}, not the requested ${expectedOrganizationId}`,
-    });
-  }
-  const name = [body.user.first_name, body.user.last_name]
-    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
-    .join(" ");
-  return {
-    accessToken: body.access_token,
-    refreshToken: body.refresh_token,
-    user: {
-      id: body.user.id,
-      email: body.user.email,
-      ...(name.length > 0 ? { name } : {}),
-    },
-  };
+  user: { id: string; email: string; name?: string | undefined };
 }
 
 async function defaultSleep(milliseconds: number): Promise<void> {
@@ -254,17 +158,17 @@ export interface CreateAccountClientOptions {
   sleep?: SleepFn;
 }
 
-export interface PollDeviceTokenOptions extends WorkosClientOptions {
+export interface PollDeviceTokenOptions {
   interval?: number;
   expiresIn?: number;
 }
 
-export interface RefreshAccessTokenOptions extends WorkosClientOptions {
+export interface RefreshAccessTokenOptions {
   refreshToken: string;
   /**
-   * Which workspace to authenticate into. WorkOS puts the resulting `org_id`
-   * claim in the access token, and the account authorizes on that claim alone
-   * — so a refresh without this yields a token the host routes will refuse.
+   * Which workspace to authenticate into. The resulting access token carries
+   * the organization claim the account authorizes on — so a refresh without
+   * this yields a token the host routes will refuse.
    */
   organizationId?: string;
 }
@@ -307,7 +211,21 @@ export interface AccountClient {
   updateHost(hostToken: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
   deleteHost(token: string, hostId: string): Promise<void>;
   requestDeviceCode(): Promise<DeviceAuthorizationResponse>;
-  pollDeviceToken(deviceCode: string, options: PollDeviceTokenOptions): Promise<DeviceTokenSuccess>;
+  /**
+   * Polls the account service until the device authorization is approved,
+   * honouring `slow_down` and bounding the loop client-side. Every leg of
+   * the flow goes through the account service; the identity provider is
+   * invisible on this wire.
+   */
+  pollDeviceToken(
+    deviceCode: string,
+    options?: PollDeviceTokenOptions,
+  ): Promise<DeviceTokenSuccess>;
+  /**
+   * Redeems the refresh token through the account service for a rotated
+   * pair. A 401 means the session is terminally dead (only a fresh sign-in
+   * recovers); a 5xx says nothing about the token.
+   */
   refreshAccessToken(options: RefreshAccessTokenOptions): Promise<DeviceTokenSuccess>;
 }
 
@@ -315,22 +233,6 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
   const fetchFn = options.fetch ?? fetch;
   const sleep = options.sleep ?? defaultSleep;
-
-  /**
-   * The device-grant poll and the refresh grant both go straight to WorkOS
-   * rather than through this instance: only the initial authorization request
-   * needs the API key the service holds.
-   */
-  function workosAuthenticate(
-    workosApiUrl: string,
-    body: Record<string, string>,
-  ): Promise<Response> {
-    return fetchFn(`${workosApiUrl.replace(/\/+$/, "")}/user_management/authenticate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
 
   /**
    * The error a failed response represents. Tried in order of specificity:
@@ -548,7 +450,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       );
     },
 
-    async pollDeviceToken(deviceCode, pollOptions) {
+    async pollDeviceToken(deviceCode, pollOptions = {}) {
       let interval = pollOptions.interval ?? DEFAULT_DEVICE_POLL_INTERVAL_SECONDS;
       const deadlineMs = (pollOptions.expiresIn ?? DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS) * 1000;
       let elapsedMs = 0;
@@ -558,8 +460,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
         elapsedMs += interval * 1000;
 
         // Client-side bound: without this, a misbehaving server that never
-        // returns a terminal status (only `authorization_pending`) would
-        // keep this loop running forever.
+        // returns a terminal status would keep this loop running forever.
         if (elapsedMs > deadlineMs) {
           throw new AccountApiError({
             code: "internal_error",
@@ -568,45 +469,77 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           });
         }
 
-        const response = await workosAuthenticate(pollOptions.workosApiUrl, {
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-          device_code: deviceCode,
-          client_id: pollOptions.clientId,
+        // Proxied through the account service — the client never talks to
+        // the identity provider directly, so a self-hosted or generic-OIDC
+        // backend needs no client change. Non-granted outcomes are values on
+        // a 200; a thrown error here is a real fault, never flow state.
+        const poll = await requestJson(
+          "/api/v1/auth/device/token",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ deviceCode }),
+          },
+          DeviceTokenPollResponseSchema,
+        );
+
+        if (poll.status === "granted") {
+          return poll.tokens;
+        }
+        if (poll.status === "pending") {
+          continue;
+        }
+        if (poll.status === "slow_down") {
+          // RFC 8628 section 3.5: increase the polling interval by at least
+          // 5 seconds for each slow_down.
+          interval += SLOW_DOWN_INCREMENT_SECONDS;
+          continue;
+        }
+        throw new AccountApiError({
+          code: "unauthorized",
+          status: 401,
+          message:
+            poll.status === "denied"
+              ? "The sign-in was denied"
+              : "The sign-in attempt expired — start a new one",
         });
-
-        if (response.ok) {
-          return toDeviceTokenSuccess(await response.json());
-        }
-
-        const raw: unknown = await response.json().catch(() => null);
-        if (isDeviceErrorBody(raw)) {
-          if (raw.error === "authorization_pending") {
-            continue;
-          }
-          if (raw.error === "slow_down") {
-            interval += SLOW_DOWN_INCREMENT_SECONDS;
-            continue;
-          }
-        }
-
-        throw toDeviceApiError(response, raw);
       }
     },
 
     async refreshAccessToken(refreshOptions) {
-      const response = await workosAuthenticate(refreshOptions.workosApiUrl, {
-        grant_type: "refresh_token",
-        refresh_token: refreshOptions.refreshToken,
-        client_id: refreshOptions.clientId,
-        ...(refreshOptions.organizationId
-          ? { organization_id: refreshOptions.organizationId }
-          : {}),
-      });
-      const raw: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw toDeviceApiError(response, raw);
+      const refreshed = await requestJson(
+        "/api/v1/auth/refresh",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            refreshToken: refreshOptions.refreshToken,
+            ...(refreshOptions.organizationId
+              ? { organizationId: refreshOptions.organizationId }
+              : {}),
+          }),
+        },
+        RefreshTokenResponseSchema,
+      );
+      // Only meaningful when the service echoed the field; an absent echo is
+      // not evidence of a mismatch.
+      if (
+        refreshOptions.organizationId !== undefined &&
+        refreshOptions.organizationId.length > 0 &&
+        typeof refreshed.organizationId === "string" &&
+        refreshed.organizationId !== refreshOptions.organizationId
+      ) {
+        throw new AccountApiError({
+          code: "internal_error",
+          status: 502,
+          message: `Refresh returned a token for organization ${refreshed.organizationId}, not the requested ${refreshOptions.organizationId}`,
+        });
       }
-      return toDeviceTokenSuccess(raw, refreshOptions.organizationId);
+      return {
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        user: refreshed.user,
+      };
     },
   };
 }

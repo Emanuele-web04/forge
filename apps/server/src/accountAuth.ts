@@ -402,8 +402,6 @@ export async function withFreshAccessToken<A>(
     try {
       refreshed = await client.refreshAccessToken({
         refreshToken: credentials.refreshToken,
-        clientId: credentials.workosClientId,
-        workosApiUrl: credentials.workosApiUrl,
         organizationId: credentials.organizationId,
       });
     } catch (refreshError) {
@@ -652,13 +650,10 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   const token = await client.pollDeviceToken(device.deviceCode, {
     interval: device.interval,
     expiresIn: device.expiresIn,
-    clientId: instance.clientId,
-    workosApiUrl: instance.workosApiUrl,
   });
 
   const scoped = await scopeTokenToWorkspace(token, {
     client,
-    instance,
     chooseOrganization: (organizations) =>
       selectOrganization(organizations, { stdin: options.stdin, stdout }),
     onOrganizationChosen: (organization) => {
@@ -694,7 +689,6 @@ export interface ScopedSessionTokens {
 
 export interface ScopeTokenToWorkspaceOptions {
   readonly client: AccountClient;
-  readonly instance: { clientId: string; workosApiUrl: string };
   /**
    * Picks the workspace when the account offers several. The CLI prompts; the
    * in-app flow takes the first. Injected rather than branched on so the
@@ -723,7 +717,7 @@ export async function scopeTokenToWorkspace(
   token: { accessToken: string; refreshToken: string },
   options: ScopeTokenToWorkspaceOptions,
 ): Promise<ScopedSessionTokens> {
-  const { client, instance, chooseOrganization, onOrganizationChosen } = options;
+  const { client, chooseOrganization, onOrganizationChosen } = options;
 
   let organizations: readonly OrganizationSummary[];
   try {
@@ -740,8 +734,6 @@ export async function scopeTokenToWorkspace(
   // device-grant pair it started with.
   const refreshed = await client.refreshAccessToken({
     refreshToken: token.refreshToken,
-    clientId: instance.clientId,
-    workosApiUrl: instance.workosApiUrl,
     organizationId: organization.id,
   });
 

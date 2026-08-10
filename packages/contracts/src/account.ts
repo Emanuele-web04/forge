@@ -141,10 +141,14 @@ export const ListHostsResponse = Schema.Struct({
 export type ListHostsResponse = typeof ListHostsResponse.Type;
 
 /**
- * What a client needs to talk to the identity provider this instance is wired
- * to. `workosApiUrl` travels alongside `clientId` because the device-flow poll
- * goes straight to WorkOS rather than through this service — a self-hoster
- * pointing at a stand-in origin would otherwise have no way to say so.
+ * What `/instance` publishes about this deployment's identity wiring.
+ *
+ * `clientId` and `workosApiUrl` are DEPRECATED: every leg of the device flow
+ * (start, poll, refresh) is now proxied through this service, so Synara's own
+ * clients no longer talk to the identity provider directly and need neither
+ * field. They stay in the wire contract because clients built before the
+ * proxy cutover still consume them to poll the provider themselves — do not
+ * remove or repurpose them.
  */
 export const InstanceInfo = Schema.Struct({
   version: TrimmedNonEmptyString,
@@ -164,6 +168,16 @@ export const DeviceAuthorizationResponse = Schema.Struct({
   interval: Schema.Number,
 });
 export type DeviceAuthorizationResponse = typeof DeviceAuthorizationResponse.Type;
+
+/**
+ * One poll of the device-token proxy. The device code is bearer-ish — it
+ * redeems into a session once approved — so requests carrying it take the
+ * no-leak handling rules on the service side.
+ */
+export const DeviceTokenRequest = Schema.Struct({
+  deviceCode: TrimmedNonEmptyString,
+});
+export type DeviceTokenRequest = typeof DeviceTokenRequest.Type;
 
 export const AccountErrorCode = Schema.Literals([
   "unauthorized",
@@ -352,6 +366,51 @@ export const AuthTokensResponse = Schema.Struct({
   }),
 });
 export type AuthTokensResponse = typeof AuthTokensResponse.Type;
+
+/**
+ * One answer from the device-token proxy (`POST /api/v1/auth/device/token`).
+ *
+ * Always a 200 with a `status` discriminant rather than an OAuth-style error
+ * body: the poll's non-granted outcomes are expected states of a healthy
+ * flow, not errors, and a client should never have to sniff refusal bodies
+ * to keep looping. `slow_down` carries RFC 8628 semantics — increase the
+ * polling interval by at least 5 seconds. `expired` and `denied` are
+ * terminal; only a fresh authorization recovers.
+ */
+export const DeviceTokenPollResponse = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("granted"),
+    tokens: AuthTokensResponse,
+  }),
+  Schema.Struct({
+    status: Schema.Literals(["pending", "slow_down", "expired", "denied"]),
+  }),
+]);
+export type DeviceTokenPollResponse = typeof DeviceTokenPollResponse.Type;
+
+/** The body of `POST /api/v1/auth/refresh`. The refresh token is a credential. */
+export const RefreshTokenRequest = Schema.Struct({
+  refreshToken: TrimmedNonEmptyString,
+  /**
+   * Which workspace to authenticate into. The resulting access token carries
+   * the organization claim the host routes authorize on, so a refresh
+   * without this yields a token those routes will refuse.
+   */
+  organizationId: Schema.optional(TrimmedNonEmptyString),
+});
+export type RefreshTokenRequest = typeof RefreshTokenRequest.Type;
+
+/**
+ * What a successful refresh yields. `organizationId` echoes the workspace
+ * the new token is scoped to when the provider reports one; a caller that
+ * asked for a specific workspace can check the echo instead of trusting
+ * blindly.
+ */
+export const RefreshTokenResponse = Schema.Struct({
+  ...AuthTokensResponse.fields,
+  organizationId: Schema.optional(TrimmedNonEmptyString),
+});
+export type RefreshTokenResponse = typeof RefreshTokenResponse.Type;
 
 // ── In-app account session (server-brokered, not the CLI) ────────────
 //

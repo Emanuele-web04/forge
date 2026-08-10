@@ -7,6 +7,8 @@ import {
   type AccountProfileHandle,
   type AuthTokensResponse,
   type DeviceAuthorizationResponse,
+  DeviceTokenRequest,
+  type DeviceTokenPollResponse,
   type EmailVerificationRequiredBody,
   type InstanceInfo,
   type ListHostsResponse,
@@ -17,6 +19,8 @@ import {
   OtpSendRequest,
   type RegisterHostResponse,
   RegisterHostRequest,
+  RefreshTokenRequest,
+  type RefreshTokenResponse,
   ResendVerificationRequest,
   UpdateHostRequest,
   UpdateOrganizationRequest,
@@ -37,6 +41,7 @@ import {
   EnvironmentAlreadyLinkedError,
   IdentityAuthError,
   IdentityProviderError,
+  RefreshRejectedError,
   type AccountIdentityVerifier,
   type AuthFailureReason,
   type AuthTokens,
@@ -74,6 +79,26 @@ export const OTP_SEND_RATE_LIMIT_PER_MINUTE = 2;
 
 /** Verification-email resends allowed per client per minute. */
 export const RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE = 2;
+
+/**
+ * Device-token polls allowed per client per minute. Deliberately far above
+ * the other auth budgets: polling is chatty BY DESIGN — RFC 8628 has the
+ * client re-ask every `interval` seconds (WorkOS hands out 5s, i.e. 12
+ * requests a minute) until the user clicks through, and two concurrent
+ * sign-ins from one NAT'd office must not starve each other. The device code
+ * itself is unguessable, so the budget only needs to stop pathological
+ * hammering, not online guessing.
+ */
+export const DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE = 60;
+
+/**
+ * Refresh grants allowed per client per minute. Stricter than polling — a
+ * healthy client refreshes once per token lifetime (~5 min), so even a burst
+ * of parallel CLI commands stays far under this — but above the redemption
+ * budgets, because a refresh storm from one machine is a bug to absorb, not
+ * an attack to starve.
+ */
+export const REFRESH_RATE_LIMIT_PER_MINUTE = 10;
 
 type ProfileRow = typeof profiles.$inferSelect;
 
@@ -153,6 +178,19 @@ export function createV1Routes(deps: {
   // And again for verification resends, for the same reason.
   const resendVerificationRateLimiter = createRateLimiter({
     limit: RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
+  // Polling has its own generous budget (see the constant) so a normal RFC
+  // 8628 loop never trips it, and exhausting it cannot lock anyone out of
+  // starting a flow or refreshing a session.
+  const deviceTokenRateLimiter = createRateLimiter({
+    limit: DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
+  const refreshRateLimiter = createRateLimiter({
+    limit: REFRESH_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
@@ -744,11 +782,9 @@ export function createV1Routes(deps: {
   /**
    * Starts the SSO device flow, which is how "Continue with Google/GitHub"
    * reaches the provider. Unauthenticated by nature — the caller has no
-   * credentials yet — and, alongside the OTP routes above, a reason this
-   * service holds the provider's API key: the request the provider requires
-   * is authenticated with a secret a public client cannot be trusted with.
-   * Everything after this (polling for the token) goes straight to the
-   * provider, which is why /instance publishes the client id and API origin.
+   * credentials yet. Every leg of the flow is proxied: start here, polling
+   * at /auth/device/token, refresh at /auth/refresh — so the client speaks
+   * only to this service and the identity vendor is invisible on its wire.
    */
   v1.post("/auth/device", async (c) => {
     if (!deviceRateLimiter.tryConsume(clientIp(c))) {
@@ -765,6 +801,86 @@ export function createV1Routes(deps: {
       // the operator still needs to be able to tell them apart, hence the log.
       console.error("[api] device authorization proxy failed:", error);
       return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+    }
+  });
+
+  /**
+   * One poll of the device grant. Answers 200 with a `status` discriminant
+   * (`granted` | `pending` | `slow_down` | `expired` | `denied`) rather than
+   * OAuth error bodies: the non-granted outcomes are expected states of a
+   * healthy flow, and a client should never sniff refusal bodies to keep its
+   * loop going. The device code is bearer-ish, so the no-echo validation
+   * message and the no-leak error mapping apply.
+   */
+  v1.post("/auth/device/token", async (c) => {
+    if (!deviceTokenRateLimiter.tryConsume(clientIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Polling too fast — slow down and retry");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: DeviceTokenRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(DeviceTokenRequest)(json);
+    } catch {
+      // Not the decoder's message: it quotes the offending value, which here
+      // is the device code.
+      return errorResponse(c, 400, "validation_failed", "A device code is required");
+    }
+
+    try {
+      const result = await verifier.pollDeviceToken(parsed);
+      const body: DeviceTokenPollResponse =
+        result.status === "granted"
+          ? { status: "granted", tokens: authTokensBody(result.tokens) }
+          : { status: result.status };
+      return c.json(body);
+    } catch (error) {
+      return authErrorResponse(c, error);
+    }
+  });
+
+  /**
+   * Redeems a refresh token for a rotated pair, optionally authenticating
+   * into a workspace. A terminal refusal answers 401 `unauthorized` — the
+   * stored session is dead and only a fresh sign-in recovers — while a
+   * provider fault stays a 502, so a client never burns a possibly-valid
+   * session over an outage. The refresh token is a credential: no-echo
+   * validation message, no-leak error mapping.
+   */
+  v1.post("/auth/refresh", async (c) => {
+    if (!refreshRateLimiter.tryConsume(clientIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many refresh attempts — wait a minute");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: RefreshTokenRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(RefreshTokenRequest)(json);
+    } catch {
+      // Not the decoder's message: it quotes the offending value, which here
+      // is the refresh token.
+      return errorResponse(c, 400, "validation_failed", "A refresh token is required");
+    }
+
+    try {
+      const refreshed = await verifier.refreshTokens({
+        refreshToken: parsed.refreshToken,
+        ...(parsed.organizationId ? { organizationId: parsed.organizationId } : {}),
+      });
+      const body: RefreshTokenResponse = {
+        ...authTokensBody(refreshed),
+        ...(refreshed.organizationId ? { organizationId: refreshed.organizationId } : {}),
+      };
+      return c.json(body);
+    } catch (error) {
+      if (error instanceof RefreshRejectedError) {
+        return errorResponse(c, 401, "unauthorized", "The session has expired — sign in again");
+      }
+      return authErrorResponse(c, error);
     }
   });
 

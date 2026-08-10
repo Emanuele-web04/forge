@@ -222,7 +222,6 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
 
     const scoped = await scopeTokenToWorkspace(token, {
       client,
-      instance,
       // V1 takes the first workspace rather than asking. Lazy personal-org
       // provisioning guarantees there is at least one, so this is only ever
       // a real choice for a user who already belongs to a team — and the
@@ -315,8 +314,6 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
       const instance = await client.instance();
 
       const token = await client.pollDeviceToken(input.deviceCode, {
-        clientId: instance.clientId,
-        workosApiUrl: instance.workosApiUrl,
         interval: pending.interval,
         expiresIn: pending.expiresIn,
       });
