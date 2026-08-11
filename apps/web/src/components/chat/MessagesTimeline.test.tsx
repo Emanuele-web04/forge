@@ -139,6 +139,8 @@ beforeAll(() => {
 });
 
 describe("MessagesTimeline", () => {
+  // The first test pays the full dynamic-import cost of the MessagesTimeline
+  // module graph, which can exceed 10s under CI thread contention.
   it("renders an accent deep link to the immediate fork source", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -161,7 +163,7 @@ describe("MessagesTimeline", () => {
     expect(markup.indexOf('data-fork-source-divider="true"')).toBeLessThan(
       markup.indexOf("Fork-only turn"),
     );
-  });
+  }, 30_000);
 
   it("keeps the divider after imported history while waiting for the first fork turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -221,11 +223,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-index="0"');
     expect(markup).not.toContain('class="relative" style="height:');
     expect(markup).toContain('data-timeline-row-kind="message"');
-    // First test in the file pays the full dynamic-import cost of the
-    // MessagesTimeline module graph, which exceeds 10s under CI thread
-    // contention (observed flaking on 4-thread runners while passing in
-    // ~2s locally).
-  }, 30_000);
+  });
 
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
