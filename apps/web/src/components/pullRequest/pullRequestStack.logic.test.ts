@@ -51,9 +51,7 @@ describe("assessPullRequestStack", () => {
 
   it("blocks a stack when any affected pull request is a draft", () => {
     expect(
-      assessPullRequestStack(
-        stack({ entries: [entry(1, { isDraft: true }), entry(2), entry(3)] }),
-      ),
+      assessPullRequestStack(stack({ entries: [entry(1, { isDraft: true }), entry(2), entry(3)] })),
     ).toMatchObject({
       label: "Stack needs attention",
       canAttemptMerge: false,

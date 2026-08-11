@@ -822,13 +822,12 @@ function normalizePullRequestReviewComments(
   return comments;
 }
 
-function getGraphQlErrorDetail(
-  raw: {
-    readonly errors?:
-      | ReadonlyArray<{ readonly message?: string | null | undefined } | null>
-      | null;
-  },
-): string | null {
+function getGraphQlErrorDetail(raw: {
+  readonly errors?:
+    | ReadonlyArray<{ readonly message?: string | null | undefined } | null>
+    | null
+    | undefined;
+}): string | null {
   const messages =
     raw.errors
       ?.flatMap((error) => {
@@ -1395,7 +1394,8 @@ const makeGitHubCli = Effect.sync(() => {
             return yield* Effect.fail(
               new GitHubCliError({
                 operation: "runPullRequestAction",
-                detail: result.details.message?.trim() || "GitHub could not merge the pull request.",
+                detail:
+                  result.details.message?.trim() || "GitHub could not merge the pull request.",
                 reason: "other",
               }),
             );
@@ -1691,50 +1691,58 @@ const makeGitHubCli = Effect.sync(() => {
       ),
     runPullRequestAction: (input) =>
       validateRepository(input.repository, "runPullRequestAction").pipe(
-        Effect.flatMap((repository) => {
-          const reference = String(input.number);
-          const repoArgs = ["--repo", repositorySelector(repository)];
-          if (input.action === "merge") {
-            return runAsyncPullRequestMerge({
-              cwd: input.cwd,
-              repository,
-              number: input.number,
-              mergeMethod: input.mergeMethod ?? "merge",
-            }).pipe(
-              Effect.flatMap((result) =>
-                result.mergeOutcome !== "unavailable"
-                  ? Effect.succeed(result)
-                  : execute({
-                      cwd: input.cwd,
-                      args: [
-                        "pr",
-                        "merge",
-                        reference,
-                        ...repoArgs,
-                        `--${input.mergeMethod ?? "merge"}`,
-                      ],
-                    }).pipe(Effect.as({ mergeOutcome: "merged" as const })),
-              ),
-            );
-          }
-          const args = (() => {
+        Effect.flatMap(
+          (
+            repository,
+          ): Effect.Effect<
+            { readonly mergeOutcome: "merged" | "enqueued" | null },
+            GitHubCliError
+          > => {
+            const reference = String(input.number);
+            const repoArgs = ["--repo", repositorySelector(repository)];
+            if (input.action === "merge") {
+              return runAsyncPullRequestMerge({
+                cwd: input.cwd,
+                repository,
+                number: input.number,
+                mergeMethod: input.mergeMethod ?? "merge",
+              }).pipe(
+                Effect.flatMap((result) =>
+                  result.mergeOutcome !== "unavailable"
+                    ? Effect.succeed({ mergeOutcome: result.mergeOutcome })
+                    : execute({
+                        cwd: input.cwd,
+                        args: [
+                          "pr",
+                          "merge",
+                          reference,
+                          ...repoArgs,
+                          `--${input.mergeMethod ?? "merge"}`,
+                        ],
+                      }).pipe(Effect.as({ mergeOutcome: "merged" as const })),
+                ),
+              );
+            }
+            let args: string[];
             switch (input.action) {
               case "ready":
-                return ["pr", "ready", reference, ...repoArgs];
+                args = ["pr", "ready", reference, ...repoArgs];
+                break;
               case "draft":
-                return ["pr", "ready", reference, ...repoArgs, "--undo"];
+                args = ["pr", "ready", reference, ...repoArgs, "--undo"];
+                break;
               case "close":
-                return ["pr", "close", reference, ...repoArgs];
+                args = ["pr", "close", reference, ...repoArgs];
+                break;
               case "reopen":
-                return ["pr", "reopen", reference, ...repoArgs];
-              case "merge":
-                return [];
+                args = ["pr", "reopen", reference, ...repoArgs];
+                break;
             }
-          })();
-          return execute({ cwd: input.cwd, args }).pipe(
-            Effect.as({ mergeOutcome: null as const }),
-          );
-        }),
+            return execute({ cwd: input.cwd, args }).pipe(
+              Effect.as({ mergeOutcome: null } as const),
+            );
+          },
+        ),
       ),
     commentOnPullRequest: (input) =>
       validateRepository(input.repository, "commentOnPullRequest").pipe(

@@ -10,10 +10,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { GitForkIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-type StackPosition = Pick<
-  PullRequestStackSummary,
-  "number" | "size" | "position" | "baseBranch"
->;
+type StackPosition = Pick<PullRequestStackSummary, "number" | "size" | "position" | "baseBranch">;
 
 function stackPositionAriaLabel(stack: StackPosition): string {
   return `Stack #${stack.number}, pull request ${stack.position} of ${stack.size}`;

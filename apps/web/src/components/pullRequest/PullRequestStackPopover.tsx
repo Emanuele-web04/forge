@@ -115,10 +115,7 @@ export function PullRequestStackPopover({
           })}
 
           <div className="relative mx-2 flex items-center gap-3 px-2 py-2 text-xs text-muted-foreground">
-            <span
-              aria-hidden="true"
-              className="absolute -top-2 left-4 h-6 w-px bg-border"
-            />
+            <span aria-hidden="true" className="absolute -top-2 left-4 h-6 w-px bg-border" />
             <span
               aria-hidden="true"
               className="flex size-4 shrink-0 items-center justify-center rounded-full border border-border bg-[var(--color-background-elevated-primary-opaque)]"

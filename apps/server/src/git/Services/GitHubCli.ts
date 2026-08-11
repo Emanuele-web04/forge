@@ -208,10 +208,7 @@ export interface GitHubCliShape {
     readonly number: number;
     readonly action: "merge" | "ready" | "draft" | "close" | "reopen";
     readonly mergeMethod?: PullRequestMergeMethod;
-  }) => Effect.Effect<
-    { readonly mergeOutcome: "merged" | "enqueued" | null },
-    GitHubCliError
-  >;
+  }) => Effect.Effect<{ readonly mergeOutcome: "merged" | "enqueued" | null }, GitHubCliError>;
 
   /**
    * Post an issue comment on a pull request as the authenticated gh user.
