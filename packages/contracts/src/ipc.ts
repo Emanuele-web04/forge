@@ -3,7 +3,10 @@ import { Schema } from "effect";
 import type {
   AccountAuthenticateOtpInput,
   AccountBeginSignInResult,
+  AccountBeginSsoInput,
+  AccountBeginSsoResult,
   AccountCompleteSignInInput,
+  AccountCompleteSsoInput,
   AccountMe,
   AccountOpenVerificationUrlInput,
   AccountResendVerificationEmailInput,
@@ -866,10 +869,29 @@ export interface NativeApi {
     /** Asks the identity provider to email a fresh verification code. */
     resendVerificationEmail: (input: AccountResendVerificationEmailInput) => Promise<void>;
     /**
-     * Starts the SSO path: "Continue with Google/GitHub" opens the identity
-     * provider's page in the system browser. Email OTP users never reach this.
+     * Starts the CLI-shaped SSO path (device grant). The desktop dialog
+     * uses beginSso below; this stays for headless flows and back-compat.
      */
     beginSignIn: () => Promise<AccountBeginSignInResult>;
+    /**
+     * Starts the desktop SSO path for one provider: authorization code +
+     * PKCE with a loopback redirect, so "Continue with Google/GitHub"
+     * genuinely deep-links to that provider. The server owns the loopback
+     * listener, the PKCE verifier, and the state; the app only receives the
+     * attempt id and the URL to open.
+     */
+    beginSso: (input: AccountBeginSsoInput) => Promise<AccountBeginSsoResult>;
+    /**
+     * Waits for the browser callback, exchanges the code server-side, and
+     * persists the session. Like completeSignIn, issued without an RPC
+     * timeout; a dropped socket loses nothing.
+     */
+    completeSso: (
+      input: AccountCompleteSsoInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<AccountStatus>;
+    /** Abandons a pending SSO attempt, closing its loopback listener. */
+    cancelSso: (input: AccountCompleteSsoInput) => Promise<void>;
     /**
      * Waits for the user to finish on the hosted page, then persists the
      * session. Runs for as long as the device code lives, so it is issued

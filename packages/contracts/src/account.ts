@@ -394,6 +394,57 @@ export const ResendVerificationRequest = Schema.Struct({
 });
 export type ResendVerificationRequest = typeof ResendVerificationRequest.Type;
 
+// ── SSO via authorization code + PKCE (desktop/app path) ─────────────
+//
+// "Continue with Google/GitHub" on a machine that owns a browser takes the
+// authorization-code grant with PKCE and a loopback redirect: the server
+// starts a one-shot listener on 127.0.0.1, asks the account service for the
+// provider's authorize URL (so the identity vendor stays invisible on this
+// wire), opens it in the system browser, and exchanges the returned code —
+// again through the account service. The CLI keeps the device grant; it has
+// no browser to redirect to. Both converge on the same session establishment.
+
+/**
+ * Which identity provider an SSO button deep-links to. Deliberately Synara's
+ * own vocabulary, not any vendor's spelling: the account service translates
+ * to whatever its identity provider calls them.
+ */
+export const AccountSsoProvider = Schema.Literals(["google", "github"]);
+export type AccountSsoProvider = typeof AccountSsoProvider.Type;
+
+/**
+ * The body of `POST /api/v1/auth/authorize` — asks the account service to
+ * build the provider's authorize URL. The challenge and state are one-way
+ * values (the verifier never travels here); the redirect URI must be a
+ * loopback URL, which the service enforces.
+ */
+export const AuthorizeUrlRequest = Schema.Struct({
+  provider: AccountSsoProvider,
+  redirectUri: boundedTrimmedNonEmptyString(ACCOUNT_ENDPOINT_URL_MAX_LENGTH),
+  /** base64url S256 challenge derived from the (never-transmitted) verifier. */
+  codeChallenge: AccountAuthTokenString,
+  /** Random CSRF binder echoed back on the loopback callback. */
+  state: AccountAuthTokenString,
+});
+export type AuthorizeUrlRequest = typeof AuthorizeUrlRequest.Type;
+
+export const AuthorizeUrlResponse = Schema.Struct({
+  authorizeUrl: TrimmedNonEmptyString,
+});
+export type AuthorizeUrlResponse = typeof AuthorizeUrlResponse.Type;
+
+/**
+ * The body of `POST /api/v1/auth/authorize/token` — redeems the authorization
+ * code the loopback callback delivered, proving possession with the PKCE
+ * verifier. Both fields are single-use credentials with the full no-leak
+ * handling rules: never logged, never persisted, never echoed in an error.
+ */
+export const AuthorizeTokenRequest = Schema.Struct({
+  code: AccountAuthTokenString,
+  codeVerifier: AccountAuthTokenString,
+});
+export type AuthorizeTokenRequest = typeof AuthorizeTokenRequest.Type;
+
 /**
  * What a successful authentication grant yields: the same token pair the
  * device grant produces, so everything downstream — workspace scoping,
@@ -536,6 +587,33 @@ export type AccountVerifyEmailInput = typeof AccountVerifyEmailInput.Type;
 /** Asks the identity provider to email a fresh verification code. */
 export const AccountResendVerificationEmailInput = ResendVerificationRequest;
 export type AccountResendVerificationEmailInput = typeof AccountResendVerificationEmailInput.Type;
+
+/**
+ * Starts the desktop PKCE SSO path for one provider. The server owns the
+ * loopback listener, the verifier, and the state — none of them travel to the
+ * app; the dialog only ever sees the id to complete with and the URL to open.
+ */
+export const AccountBeginSsoInput = Schema.Struct({
+  provider: AccountSsoProvider,
+});
+export type AccountBeginSsoInput = typeof AccountBeginSsoInput.Type;
+
+/**
+ * What the sign-in dialog needs from a started SSO attempt: the handle to
+ * complete/abandon it by, and the provider's authorize URL (deep-linked to
+ * the chosen provider) for the browser hand-off. Unlike the device grant
+ * there is no user code — the loopback redirect is the binding.
+ */
+export const AccountBeginSsoResult = Schema.Struct({
+  ssoId: TrimmedNonEmptyString,
+  authorizeUrl: TrimmedNonEmptyString,
+});
+export type AccountBeginSsoResult = typeof AccountBeginSsoResult.Type;
+
+export const AccountCompleteSsoInput = Schema.Struct({
+  ssoId: TrimmedNonEmptyString,
+});
+export type AccountCompleteSsoInput = typeof AccountCompleteSsoInput.Type;
 
 /**
  * The onboarding write. `workspaceName` renames the WorkOS organization, and
