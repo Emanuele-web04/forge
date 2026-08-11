@@ -56,6 +56,7 @@ describe("Grok native plan approval", () => {
   it("sets Grok's native prompt mode idempotently on every turn", () => {
     expect(buildGrokPromptMeta("plan")).toEqual({ mode: "plan" });
     expect(buildGrokPromptMeta("default")).toEqual({ mode: "agent" });
+    expect(buildGrokPromptMeta("debug")).toEqual({ mode: "agent" });
   });
 
   it("backs native Plan mode with a fail-closed pre-tool hook", () => {
@@ -103,6 +104,15 @@ describe("Grok native plan approval", () => {
         interactionMode: "default",
       }),
     ).toBe("Implement the approved plan");
+  });
+
+  it("uses Grok agent mode for Debug prompts", () => {
+    expect(
+      buildGrokTurnPromptText({
+        text: "Investigate the failed tool call",
+        interactionMode: "debug",
+      }),
+    ).toBe("Investigate the failed tool call");
   });
 
   it("accepts current and legacy ACP method names", () => {

@@ -543,10 +543,10 @@ describe("composerDraftStore runtime and interaction settings", () => {
   it("stores interaction mode overrides in the composer draft", () => {
     const store = useComposerDraftStore.getState();
 
-    store.setInteractionMode(threadId, "plan");
+    store.setInteractionMode(threadId, "debug");
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.interactionMode).toBe(
-      "plan",
+      "debug",
     );
   });
 

@@ -286,7 +286,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             model: "openai/gpt-5.5",
           },
           runtimeMode: "approval-required",
-          interactionMode: "default",
+          interactionMode: "debug",
           createdAt: turnRequestedAt,
         },
       });
@@ -314,7 +314,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         model: "openai/gpt-5.5",
       });
       assert.equal(rows[0]!.runtimeMode, "approval-required");
-      assert.equal(rows[0]!.interactionMode, "default");
+      assert.equal(rows[0]!.interactionMode, "debug");
       assert.equal(rows[0]!.updatedAt, turnRequestedAt);
 
       const sessionRows = yield* sql<{
@@ -412,7 +412,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           messageId: MessageId.makeUnsafe("message-turn-settings-cross-provider"),
           modelSelection: { provider: "codex", model: "gpt-5-codex" },
           runtimeMode: "full-access",
-          interactionMode: "default",
+          interactionMode: "debug",
           createdAt: crossProviderRequestedAt,
         },
       });
@@ -471,7 +471,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         WHERE thread_id = 'thread-turn-settings'
       `;
       assert.equal(automationRows[0]!.runtimeMode, "full-access");
-      assert.equal(automationRows[0]!.interactionMode, "default");
+      assert.equal(automationRows[0]!.interactionMode, "debug");
     }),
   );
 
