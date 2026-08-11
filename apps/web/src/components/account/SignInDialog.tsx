@@ -155,6 +155,26 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
     }
   };
 
+  /**
+   * Sends the code, surviving one transport interruption.
+   *
+   * A WebSocket reconnect (a stream restart, a dropped socket) interrupts every
+   * request in flight on the old runtime, and a one-shot user-initiated call
+   * has no natural retry the way a poll does. Sending a code is idempotent from
+   * the user's side — a second code supersedes the first — so a single retry on
+   * the reconnected transport turns an unavoidable dead end into a no-op.
+   * Only interruptions are retried: a real refusal (rate limit, bad address)
+   * must surface immediately rather than being sent twice.
+   */
+  const sendOtpResilient = async (trimmedEmail: string) => {
+    try {
+      return await account.sendOtp.mutateAsync({ email: trimmedEmail });
+    } catch (cause) {
+      if (!isSignInCancellation(cause)) throw cause;
+      return await account.sendOtp.mutateAsync({ email: trimmedEmail });
+    }
+  };
+
   const handleEmailSubmit = async () => {
     setError(null);
     const trimmed = email.trim();
@@ -163,10 +183,18 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
       return;
     }
     try {
-      const sent = await account.sendOtp.mutateAsync({ email: trimmed });
+      const sent = await sendOtpResilient(trimmed);
       setOtpEmail(sent.email);
     } catch (cause) {
-      setError(accountErrorMessage(cause, "Could not send the code. Try again."));
+      // A transport interruption is not an outcome: the socket was torn down
+      // (a stream restart, a reconnect) while this one-shot request was in
+      // flight. Say so plainly rather than claiming the send failed, since the
+      // provider may well have sent the code.
+      setError(
+        isSignInCancellation(cause)
+          ? "The connection restarted. Try again."
+          : accountErrorMessage(cause, "Could not send the code. Try again."),
+      );
     }
   };
 
