@@ -65,6 +65,14 @@ interface PendingDeviceAuthorization {
   readonly verificationUriComplete: string;
   readonly interval: number;
   readonly expiresIn: number;
+  /** When the authorization was issued (ms since epoch). */
+  readonly issuedAtMs: number;
+  /**
+   * The provider's absolute deadline (ms since epoch): issuedAt + expiresIn.
+   * Past it the entry is dead everywhere — not pollable, and its URL leaves
+   * the browser-opener allowlist — regardless of the count-based eviction.
+   */
+  readonly expiresAtMs: number;
   /**
    * The pair a successful poll redeemed, held in memory until the session is
    * durably persisted. A device code is single-use, so a failure between
@@ -182,7 +190,20 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
    */
   const pendingAuthorizations = new Map<string, PendingDeviceAuthorization>();
 
+  /**
+   * Drops every entry past its provider-issued deadline. Ran on every start
+   * and lookup: expired attempts must not stay pollable or keep their URLs
+   * on the browser-opener allowlist until count-based eviction or a restart
+   * happens to remove them.
+   */
+  function pruneExpiredAuthorizations(nowMs: number): void {
+    for (const [code, authorization] of pendingAuthorizations) {
+      if (nowMs > authorization.expiresAtMs) pendingAuthorizations.delete(code);
+    }
+  }
+
   function rememberAuthorization(authorization: PendingDeviceAuthorization): void {
+    pruneExpiredAuthorizations(Date.now());
     pendingAuthorizations.set(authorization.deviceCode, authorization);
     while (pendingAuthorizations.size > MAX_TRACKED_DEVICE_AUTHORIZATIONS) {
       const oldest = pendingAuthorizations.keys().next();
@@ -321,11 +342,14 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     async beginSignIn() {
       const client = clientFor(configuredUrl);
       const device = await client.requestDeviceCode();
+      const issuedAtMs = Date.now();
       rememberAuthorization({
         deviceCode: device.deviceCode,
         verificationUriComplete: device.verificationUriComplete,
         interval: device.interval,
         expiresIn: device.expiresIn,
+        issuedAtMs,
+        expiresAtMs: issuedAtMs + device.expiresIn * 1000,
       });
       return {
         deviceCode: device.deviceCode,
@@ -344,9 +368,11 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
      * result from `status()`.
      */
     async completeSignIn(input) {
-      // Only a code this server handed out. Polling one supplied from outside
-      // would let a caller drive the sign-in of a device code they obtained
-      // elsewhere and have the result persisted as this machine's session.
+      // Only a live code this server handed out. Polling one supplied from
+      // outside would let a caller drive the sign-in of a device code they
+      // obtained elsewhere and have the result persisted as this machine's
+      // session; one past the provider's deadline is dead everywhere.
+      pruneExpiredAuthorizations(Date.now());
       const pending = pendingAuthorizations.get(input.deviceCode);
       if (!pending) {
         throw new Error("This sign-in attempt has expired. Start a new one.");
@@ -362,12 +388,24 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
       // and then failed before the session was persisted. The cached pair is
       // what makes retrying this RPC recover the sign-in instead of polling
       // a spent code into `expired`.
-      const token =
-        pending.redeemedToken ??
-        (await client.pollDeviceToken(input.deviceCode, {
-          interval: pending.interval,
-          expiresIn: pending.expiresIn,
-        }));
+      let token = pending.redeemedToken;
+      if (!token) {
+        try {
+          token = await client.pollDeviceToken(input.deviceCode, {
+            interval: pending.interval,
+            expiresIn: pending.expiresIn,
+          });
+        } catch (error) {
+          // A denied or expired authorization is terminal: the entry can
+          // never complete, so it is dropped now — not left pollable and on
+          // the browser-opener allowlist until eviction. Transient faults
+          // (the poll loop already absorbed retryable ones) keep the entry.
+          if (error instanceof AccountApiError && error.status === 401) {
+            pendingAuthorizations.delete(input.deviceCode);
+          }
+          throw error;
+        }
+      }
       pending.redeemedToken = token;
 
       return establishSession(token, {
@@ -479,7 +517,8 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
       // one, a self-hoster's stand-in — so any host list would be either wrong
       // for someone or wide enough to be no check at all. What is *not*
       // ambiguous is whether this URL came out of a device authorization this
-      // process just requested.
+      // process just requested. Only active, unexpired entries qualify.
+      pruneExpiredAuthorizations(Date.now());
       for (const authorization of pendingAuthorizations.values()) {
         if (authorization.verificationUriComplete === url) return Promise.resolve(true);
       }

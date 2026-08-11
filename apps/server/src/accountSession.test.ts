@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import type { AccountMe } from "@synara/contracts";
 import {
@@ -271,6 +271,55 @@ describe("sign-in", () => {
   it("refuses a device code this server did not issue", async () => {
     const session = sessionFor(makeBaseDir(), deviceFlowClient());
     await expect(session.completeSignIn({ deviceCode: "not-ours" })).rejects.toThrow(/expired/i);
+  });
+
+  // L1: an entry past the provider-issued deadline is dead everywhere — not
+  // pollable, and its verification URL leaves the opener allowlist — without
+  // waiting for count-based eviction or a restart.
+  it("expires a pending authorization past the provider deadline", async () => {
+    const session = sessionFor(makeBaseDir(), deviceFlowClient());
+    const begun = await session.beginSignIn();
+    expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(true);
+
+    const nowSpy = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.now() + (begun.expiresIn + 1) * 1000);
+    try {
+      expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(false);
+      await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
+        /expired/i,
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // A denied (or provider-expired) poll is terminal: the entry is dropped on
+  // that failure, so its URL stops being openable immediately.
+  it("drops the pending entry when the poll ends denied", async () => {
+    const session = sessionFor(
+      makeBaseDir(),
+      deviceFlowClient({
+        pollDeviceToken: () =>
+          Promise.reject(
+            new AccountApiError({
+              code: "unauthorized",
+              status: 401,
+              message: "The sign-in was denied",
+            }),
+          ),
+      }),
+    );
+    const begun = await session.beginSignIn();
+    expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(true);
+
+    await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
+      /denied/i,
+    );
+    expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(false);
+    await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
+      /expired/i,
+    );
   });
 
   // The grant is single-use: once redeemed, a failure before the session is
