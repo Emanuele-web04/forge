@@ -163,15 +163,26 @@ of this service. What Synara ships is two ways in:
   202 for known and unknown addresses (no account-existence oracle). The
   proxy exists because the grant is confidential-client — it requires the
   client secret, which a public client cannot hold.
-- **SSO (Google/GitHub) — via device grant and the system browser.** The app
-  starts the flow at `POST /api/v1/auth/device`, opens the provider's
-  approval page in the real browser (the only auth step that leaves the app),
-  and polls `POST /api/v1/auth/device/token` for the token pair — every leg
-  is proxied through the account service, exactly as the Flows section
-  describes. The CLI's `synara auth` is the same flow. (Historical note: the
-  pre-cutover design had clients polling the provider directly with the
-  `/instance` client id; that path survives only for old clients, via the
-  deprecated `InstanceInfo` fields.)
+- **SSO (Google/GitHub) — desktop via authorization code + PKCE, CLI via
+  device grant.** On the desktop, "Continue with Google/GitHub" runs the
+  authorization-code grant with PKCE (S256) and a loopback redirect: the
+  Synara server starts a one-shot listener on `127.0.0.1` (ephemeral port,
+  single-use, hard timeout), asks the account service for the provider's
+  authorize URL (`POST /api/v1/auth/authorize` — carries the provider, the
+  loopback `redirect_uri`, the S256 challenge, and a random `state`), opens
+  it in the system browser, validates `state` on the callback, and exchanges
+  the code at `POST /api/v1/auth/authorize/token` with the PKCE verifier —
+  proxied like every other grant, so the identity vendor stays off the
+  client wire. The verifier and the authorization code are credentials with
+  the full no-leak rules. **Required WorkOS dashboard configuration:** the
+  loopback redirect URI must be registered on the AuthKit application —
+  add `http://127.0.0.1:*/callback` (wildcard-port loopback redirects are
+  allowed in all WorkOS environments). The CLI's `synara auth` keeps the
+  device grant (`POST /auth/device` + `/auth/device/token`) — it has no
+  browser to redirect to. Both converge on the same `establishSession`.
+  (Historical note: the pre-cutover design had clients polling the provider
+  directly with the `/instance` client id; that path survives only for old
+  clients, via the deprecated `InstanceInfo` fields.)
 - **No password auth.** The V1.1 password routes were removed with the OTP
   cutover; nothing accepts or stores a password.
 
@@ -234,8 +245,19 @@ seam's existence is the design commitment.
 
 **Sign-in (app):** email → `sendOtp` → six-box code entry → `authenticateOtp`
 → `establishSession` (workspace scoping + credential persistence) →
-onboarding if no profile. SSO buttons take the device flow through the
-browser and converge on the same `establishSession`.
+onboarding if no profile. The SSO buttons take the PKCE authorize flow
+through the browser and converge on the same `establishSession`.
+
+**Grant timeouts, two tiers:** cheap/idempotent provider calls (discovery,
+`/me`, lookups) get a short per-attempt deadline (15s); GRANT-consuming
+calls (OTP/verification authenticate, device-token exchange, PKCE code
+exchange, refresh) get 45s, and the shared client's corresponding requests
+60s — a grant spends a single-use credential, so no client may abort before
+the layer beneath it has. When a grant still fails transiently, the server
+re-checks persisted status before surfacing anything: a sign-in that landed
+is reported as signed-in, and only a genuinely unpersisted failure surfaces
+— as a retryable "provider was slow" answer, never a flat "unavailable" for
+an operation that may have succeeded.
 
 **Headless and desktop alike (`synara auth`):** the device authorization
 grant (Claude Code UX). The CLI prints the approval URL and user code, the
@@ -321,7 +343,9 @@ Request/response contracts live in `packages/contracts` (schema-only).
 | `POST /auth/otp/authenticate`    | none (5/min)   | Redeem the code for a token pair; signs up on first use                       |
 | `POST /auth/verify-email`        | none (5/min)   | Redeem a verification challenge (defense-in-depth path)                       |
 | `POST /auth/resend-verification` | none (2/min)   | Fresh verification code; 202 also for unknown ids                             |
-| `POST /auth/device`              | none (10/min)  | Start the SSO/CLI device flow; proxies with the API key                       |
+| `POST /auth/authorize`           | none (10/min)  | Build the PKCE authorize URL (desktop SSO); loopback redirects only           |
+| `POST /auth/authorize/token`     | none (5/min)   | Exchange the authorization code + PKCE verifier for a token pair              |
+| `POST /auth/device`              | none (10/min)  | Start the CLI device flow; proxies with the API key                           |
 | `POST /auth/device/token`        | none (60/min)  | One poll of the device grant; 200 with a status discriminant                  |
 | `POST /auth/refresh`             | none (10/min)  | Redeem a refresh token for a rotated, optionally workspace-scoped pair        |
 | `GET /instance`                  | none           | Version + what the verifier publishes (auth mode, client id, provider origin) |
