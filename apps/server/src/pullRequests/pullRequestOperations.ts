@@ -38,7 +38,7 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const repository = yield* dependencies.validateProjectRepository(project, repositoryInput);
       const [owner = "", repo = ""] = repository.split("/");
-      const [detail, mergeCapabilities, reviewCommentsResult] = yield* Effect.all(
+      const [detail, mergeCapabilities, reviewCommentsResult, stack] = yield* Effect.all(
         [
           dependencies.withGitHubRead(
             dependencies.github.getPullRequestDetail({
@@ -64,8 +64,15 @@ export function makePullRequestOperations(dependencies: {
                 Effect.succeed({ comments: [], truncated: false, incomplete: true }),
               ),
             ),
+          dependencies.withGitHubRead(
+            dependencies.github.getPullRequestStack({
+              cwd: project.workspaceRoot,
+              repository,
+              number,
+            }),
+          ),
         ],
-        { concurrency: 3 },
+        { concurrency: 4 },
       );
       const comments = [
         ...detail.comments,
@@ -98,6 +105,7 @@ export function makePullRequestOperations(dependencies: {
         commentsTruncated: reviewCommentsResult.truncated,
         commentsIncomplete: reviewCommentsResult.incomplete,
         mergeCapabilities,
+        stack,
       } satisfies PullRequestDetail;
     });
 
@@ -135,7 +143,7 @@ export function makePullRequestOperations(dependencies: {
           );
         }
       }
-      yield* dependencies.github
+      const result = yield* dependencies.github
         .runPullRequestAction({
           cwd: project.workspaceRoot,
           repository,
@@ -155,6 +163,7 @@ export function makePullRequestOperations(dependencies: {
         repository,
         number: input.number,
         workspaceRoot: project.workspaceRoot,
+        mergeOutcome: result.mergeOutcome,
       };
     });
 
@@ -181,6 +190,7 @@ export function makePullRequestOperations(dependencies: {
         repository,
         number: input.number,
         workspaceRoot: project.workspaceRoot,
+        mergeOutcome: null,
       };
     });
 

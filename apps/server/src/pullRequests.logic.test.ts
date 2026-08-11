@@ -44,6 +44,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
       },
     ],
     mergeability: "unknown",
+    stack: null,
     labels: [],
     ...overrides,
   };

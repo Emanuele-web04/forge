@@ -11,6 +11,8 @@ import {
   type PullRequestCommit,
   type PullRequestLabel,
   type PullRequestMergeCapabilities,
+  type PullRequestStack,
+  type PullRequestStackSummary,
 } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import {
@@ -283,6 +285,8 @@ const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
 const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
 const PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT = 5;
 const PULL_REQUEST_REVIEW_COMMENT_LIMIT = 20;
+const PULL_REQUEST_STACK_ENTRY_LIMIT = 100;
+const PULL_REQUEST_ASYNC_MERGE_POLL_LIMIT = 300;
 
 // GraphQL review-threads query: resolved threads are filtered after fetch because GitHub's
 // reviewThreads connection does not expose an unresolved-only argument.
@@ -311,6 +315,53 @@ const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!
     }
   }
 }`;
+
+const PULL_REQUEST_STACK_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $first: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      stackEntry { position }
+      stack {
+        number
+        size
+        baseRefName
+        entries(first: $first) {
+          totalCount
+          nodes {
+            position
+            pullRequest {
+              number
+              title
+              url
+              headRefName
+              baseRefName
+              state
+              isDraft
+              mergedAt
+              mergeable
+              mergeStateStatus
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+function buildPullRequestStackSummariesQuery(numbers: ReadonlyArray<number>): string {
+  const selections = numbers
+    .map(
+      (number) => `    pr_${number}: pullRequest(number: ${number}) {
+      stackEntry { position }
+      stack { number size baseRefName }
+    }`,
+    )
+    .join("\n");
+  return `query($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+${selections}
+  }
+}`;
+}
 
 const RawGraphQlErrorSchema = Schema.Struct({
   message: Schema.optional(Schema.NullOr(Schema.String)),
@@ -381,6 +432,104 @@ const RawReviewThreadsResponseSchema = Schema.Struct({
       }),
     ),
   ),
+});
+
+const RawPullRequestStackEntrySchema = Schema.Struct({
+  position: PositiveInt,
+  pullRequest: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        title: TrimmedNonEmptyString,
+        url: TrimmedNonEmptyString,
+        headRefName: TrimmedNonEmptyString,
+        baseRefName: TrimmedNonEmptyString,
+        state: Schema.optional(Schema.NullOr(Schema.String)),
+        isDraft: Schema.optional(Schema.NullOr(Schema.Boolean)),
+        mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+        mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+        mergeStateStatus: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+});
+
+const RawPullRequestStackResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlErrorSchema)))),
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        repository: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              pullRequest: Schema.optional(
+                Schema.NullOr(
+                  Schema.Struct({
+                    stackEntry: Schema.optional(
+                      Schema.NullOr(Schema.Struct({ position: PositiveInt })),
+                    ),
+                    stack: Schema.optional(
+                      Schema.NullOr(
+                        Schema.Struct({
+                          number: PositiveInt,
+                          size: PositiveInt,
+                          baseRefName: TrimmedNonEmptyString,
+                          entries: Schema.Struct({
+                            totalCount: PositiveInt,
+                            nodes: Schema.optional(
+                              Schema.NullOr(
+                                Schema.Array(Schema.NullOr(RawPullRequestStackEntrySchema)),
+                              ),
+                            ),
+                          }),
+                        }),
+                      ),
+                    ),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+});
+
+const RawPullRequestStackSummarySchema = Schema.Struct({
+  stackEntry: Schema.optional(Schema.NullOr(Schema.Struct({ position: PositiveInt }))),
+  stack: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        size: PositiveInt,
+        baseRefName: TrimmedNonEmptyString,
+      }),
+    ),
+  ),
+});
+
+const RawPullRequestStackSummariesResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlErrorSchema)))),
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        repository: Schema.optional(
+          Schema.NullOr(
+            Schema.Record(Schema.String, Schema.NullOr(RawPullRequestStackSummarySchema)),
+          ),
+        ),
+      }),
+    ),
+  ),
+});
+
+const RawAsyncMergeResultSchema = Schema.Struct({
+  status: Schema.Literals(["pending", "merged", "enqueued", "failed"]),
+  details: Schema.Struct({
+    message: Schema.optional(Schema.NullOr(Schema.String)),
+    uuid: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
 });
 
 function normalizePullRequestSummary(
@@ -522,6 +671,7 @@ function normalizePullRequestListItem(
     ),
     labels: normalizeLabels(raw.labels),
     mergeability: normalizePullRequestMergeability(raw.mergeable),
+    stack: null,
   };
 }
 
@@ -673,7 +823,11 @@ function normalizePullRequestReviewComments(
 }
 
 function getGraphQlErrorDetail(
-  raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
+  raw: {
+    readonly errors?:
+      | ReadonlyArray<{ readonly message?: string | null | undefined } | null>
+      | null;
+  },
 ): string | null {
   const messages =
     raw.errors
@@ -693,6 +847,123 @@ function getPullRequestReviewThreadsPageInfo(
     hasNextPage: pageInfo?.hasNextPage === true,
     endCursor: pageInfo?.endCursor?.trim() || null,
   };
+}
+
+function normalizePullRequestStack(
+  raw: Schema.Schema.Type<typeof RawPullRequestStackResponseSchema>,
+  selectedPullRequestNumber: number,
+): Effect.Effect<PullRequestStack | null, GitHubCliError> {
+  const graphQlErrorDetail = getGraphQlErrorDetail(raw);
+  if (graphQlErrorDetail) {
+    return Effect.fail(
+      new GitHubCliError({
+        operation: "getPullRequestStack",
+        detail: graphQlErrorDetail,
+        reason: "other",
+      }),
+    );
+  }
+
+  const pullRequest = raw.data?.repository?.pullRequest;
+  const stack = pullRequest?.stack;
+  const selectedEntry = pullRequest?.stackEntry;
+  if (!stack && !selectedEntry) return Effect.succeed(null);
+  if (!stack || !selectedEntry) {
+    return Effect.fail(
+      new GitHubCliError({
+        operation: "getPullRequestStack",
+        detail: "GitHub returned incomplete pull request stack metadata.",
+        reason: "other",
+      }),
+    );
+  }
+
+  const entries = (stack.entries.nodes ?? [])
+    .flatMap((entry) => {
+      const member = entry?.pullRequest;
+      if (!entry || !member) return [];
+      return [
+        {
+          position: entry.position,
+          number: member.number,
+          title: member.title,
+          url: member.url,
+          headBranch: member.headRefName,
+          baseBranch: member.baseRefName,
+          state: normalizePullRequestState(member),
+          isDraft: member.isDraft === true,
+          mergeability: normalizePullRequestMergeability(member.mergeable),
+          mergeStateStatus: member.mergeStateStatus?.trim() || null,
+        },
+      ];
+    })
+    .toSorted((left, right) => left.position - right.position);
+
+  if (
+    stack.size !== stack.entries.totalCount ||
+    entries.length !== stack.size ||
+    selectedEntry.position > stack.size ||
+    entries.some((entry, index) => entry.position !== index + 1) ||
+    entries[selectedEntry.position - 1]?.number !== selectedPullRequestNumber
+  ) {
+    return Effect.fail(
+      new GitHubCliError({
+        operation: "getPullRequestStack",
+        detail: "GitHub returned a partial or inconsistent pull request stack.",
+        reason: "other",
+      }),
+    );
+  }
+
+  return Effect.succeed({
+    number: stack.number,
+    size: stack.size,
+    position: selectedEntry.position,
+    baseBranch: stack.baseRefName,
+    entries,
+  });
+}
+
+function normalizePullRequestStackSummaries(
+  raw: Schema.Schema.Type<typeof RawPullRequestStackSummariesResponseSchema>,
+  numbers: ReadonlyArray<number>,
+): Effect.Effect<ReadonlyMap<number, PullRequestStackSummary>, GitHubCliError> {
+  const graphQlErrorDetail = getGraphQlErrorDetail(raw);
+  if (graphQlErrorDetail) {
+    return Effect.fail(
+      new GitHubCliError({
+        operation: "listRepositoryPullRequests",
+        detail: graphQlErrorDetail,
+        reason: "other",
+      }),
+    );
+  }
+
+  const repository = raw.data?.repository;
+  if (!repository) {
+    return Effect.fail(
+      new GitHubCliError({
+        operation: "listRepositoryPullRequests",
+        detail: "GitHub returned incomplete pull request stack summaries.",
+        reason: "other",
+      }),
+    );
+  }
+
+  const summaries = new Map<number, PullRequestStackSummary>();
+  for (const number of numbers) {
+    const pullRequest = repository[`pr_${number}`];
+    const stack = pullRequest?.stack;
+    const stackEntry = pullRequest?.stackEntry;
+    if (!stack || !stackEntry || stackEntry.position > stack.size) continue;
+    summaries.set(number, {
+      number: stack.number,
+      size: stack.size,
+      position: stackEntry.position,
+      baseBranch: stack.baseRefName,
+    });
+  }
+  return Effect.succeed(summaries);
 }
 
 function normalizeRepositoryCloneUrls(
@@ -715,11 +986,13 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "getRepositoryCloneUrls"
     | "getPullRequestWithChecks"
     | "getPullRequestReviewComments"
+    | "getPullRequestStack"
     | "listRepositoryPullRequests"
     | "getPullRequestDetail"
     | "getPullRequestListItem"
     | "listReviewRequestedPullRequestNumbers"
-    | "getRepositoryMergeCapabilities",
+    | "getRepositoryMergeCapabilities"
+    | "runPullRequestAction",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -782,6 +1055,9 @@ const makeGitHubCli = Effect.sync(() => {
           env: { ...process.env, ...input.env, GH_HOST: GITHUB_HOST },
           ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
           ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
+          ...(input.allowNonZeroExit !== undefined
+            ? { allowNonZeroExit: input.allowNonZeroExit }
+            : {}),
           ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
           ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
           ...(input.onStderrChunk !== undefined ? { onStderrChunk: input.onStderrChunk } : {}),
@@ -979,6 +1255,50 @@ const makeGitHubCli = Effect.sync(() => {
   };
   const repositorySelector = (repository: string) => `${GITHUB_HOST}/${repository}`;
 
+  const enrichPullRequestListItemsWithStack = (input: {
+    cwd: string;
+    repository: string;
+    entries: ReadonlyArray<GitHubPullRequestListItem>;
+  }): Effect.Effect<ReadonlyArray<GitHubPullRequestListItem>> => {
+    const numbers = [...new Set(input.entries.map((entry) => entry.number))];
+    if (numbers.length === 0) return Effect.succeed(input.entries);
+    const [owner = "", repo = ""] = input.repository.split("/");
+    return execute({
+      cwd: input.cwd,
+      args: [
+        "api",
+        "graphql",
+        "--hostname",
+        GITHUB_HOST,
+        "-f",
+        `query=${buildPullRequestStackSummariesQuery(numbers)}`,
+        "-F",
+        `owner=${owner}`,
+        "-F",
+        `repo=${repo}`,
+      ],
+    }).pipe(
+      Effect.flatMap((result) =>
+        decodeGitHubJson(
+          result.stdout.trim(),
+          RawPullRequestStackSummariesResponseSchema,
+          "listRepositoryPullRequests",
+          "GitHub CLI returned invalid pull request stack summaries JSON.",
+        ),
+      ),
+      Effect.flatMap((raw) => normalizePullRequestStackSummaries(raw, numbers)),
+      Effect.map((summaries) =>
+        input.entries.map((entry) => ({
+          ...entry,
+          stack: summaries.get(entry.number) ?? null,
+        })),
+      ),
+      // Stack metadata is a progressive enhancement. A GraphQL/version/auth mismatch must not
+      // make the primary pull request list disappear.
+      Effect.catch(() => Effect.succeed(input.entries)),
+    );
+  };
+
   // One implementation behind both list methods so the field list, decoding, and
   // normalization cannot drift between the open-only and any-state lookups.
   const listPullRequestsWithState = (
@@ -1006,6 +1326,109 @@ const makeGitHubCli = Effect.sync(() => {
     }).pipe(
       Effect.flatMap((result) => decodePullRequestListJson(result.stdout, options.operation)),
     );
+
+  const decodeAsyncMergeResult = (result: Awaited<ReturnType<typeof runProcess>>) => {
+    if (result.timedOut) {
+      return Effect.fail(
+        new GitHubCliError({
+          operation: "runPullRequestAction",
+          detail: "GitHub's asynchronous merge request timed out.",
+          reason: "other",
+        }),
+      );
+    }
+    if (!result.stdout.trim()) {
+      return Effect.fail(
+        new GitHubCliError({
+          operation: "runPullRequestAction",
+          detail:
+            result.stderr.trim() ||
+            `GitHub returned an empty asynchronous merge response (command exit ${result.code ?? "unknown"}).`,
+          reason: "other",
+        }),
+      );
+    }
+    return decodeGitHubJson(
+      result.stdout.trim(),
+      RawAsyncMergeResultSchema,
+      "runPullRequestAction",
+      "GitHub returned an invalid asynchronous merge response.",
+    );
+  };
+
+  const runAsyncPullRequestMerge = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly mergeMethod: "merge" | "squash" | "rebase";
+  }): Effect.Effect<
+    { readonly mergeOutcome: "merged" | "enqueued" | "unavailable" },
+    GitHubCliError
+  > =>
+    Effect.gen(function* () {
+      const endpoint = `repos/${input.repository}/pulls/${input.number}/merge-async`;
+      const submission = yield* execute({
+        cwd: input.cwd,
+        args: ["api", "--hostname", GITHUB_HOST, "--method", "PUT", endpoint, "--input", "-"],
+        stdin: JSON.stringify({ merge_method: input.mergeMethod, merge_action: "default" }),
+        // A duplicate in-flight request is HTTP 409 but returns the existing UUID, while a
+        // closed/draft PR is HTTP 400 with a terminal `failed` result. Both bodies are useful.
+        allowNonZeroExit: true,
+      });
+      if (
+        submission.code !== 0 &&
+        /(?:HTTP\s+404|not found)/i.test(`${submission.stdout}\n${submission.stderr}`)
+      ) {
+        // Async merge is a stacked-PR preview API. A repository without the preview returns 404;
+        // its standalone PRs must retain the existing synchronous merge path.
+        return { mergeOutcome: "unavailable" };
+      }
+      let result = yield* decodeAsyncMergeResult(submission);
+
+      for (let pollCount = 0; pollCount <= PULL_REQUEST_ASYNC_MERGE_POLL_LIMIT; pollCount += 1) {
+        switch (result.status) {
+          case "merged":
+            return { mergeOutcome: "merged" };
+          case "enqueued":
+            return { mergeOutcome: "enqueued" };
+          case "failed":
+            return yield* Effect.fail(
+              new GitHubCliError({
+                operation: "runPullRequestAction",
+                detail: result.details.message?.trim() || "GitHub could not merge the pull request.",
+                reason: "other",
+              }),
+            );
+          case "pending": {
+            const uuid = result.details.uuid?.trim();
+            if (!uuid) {
+              return yield* Effect.fail(
+                new GitHubCliError({
+                  operation: "runPullRequestAction",
+                  detail: "GitHub returned a pending merge request without an identifier.",
+                  reason: "other",
+                }),
+              );
+            }
+            if (pollCount === PULL_REQUEST_ASYNC_MERGE_POLL_LIMIT) break;
+            yield* Effect.sleep("1 second");
+            result = yield* execute({
+              cwd: input.cwd,
+              args: ["api", "--hostname", GITHUB_HOST, `${endpoint}/${uuid}`],
+            }).pipe(Effect.flatMap(decodeAsyncMergeResult));
+            break;
+          }
+        }
+      }
+
+      return yield* Effect.fail(
+        new GitHubCliError({
+          operation: "runPullRequestAction",
+          detail: "GitHub's asynchronous merge did not finish within five minutes.",
+          reason: "other",
+        }),
+      );
+    });
 
   const service = {
     execute,
@@ -1053,9 +1476,17 @@ const makeGitHubCli = Effect.sync(() => {
               "--json",
               PULL_REQUEST_LIST_JSON_FIELDS,
             ],
-          }),
+          }).pipe(
+            Effect.flatMap((result) => decodeRepositoryPullRequestListJson(result.stdout)),
+            Effect.flatMap((batch) =>
+              enrichPullRequestListItemsWithStack({
+                cwd: input.cwd,
+                repository,
+                entries: batch.entries,
+              }).pipe(Effect.map((entries) => ({ ...batch, entries }))),
+            ),
+          ),
         ),
-        Effect.flatMap((result) => decodeRepositoryPullRequestListJson(result.stdout)),
       );
     },
     getPullRequestListItem: (input) =>
@@ -1072,26 +1503,34 @@ const makeGitHubCli = Effect.sync(() => {
               "--json",
               PULL_REQUEST_LIST_JSON_FIELDS,
             ],
-          }),
-        ),
-        Effect.flatMap((result) =>
-          decodeGitHubJson(
-            result.stdout.trim(),
-            Schema.Unknown,
-            "getPullRequestListItem",
-            "GitHub CLI returned invalid pull request JSON.",
-          ),
-        ),
-        Effect.flatMap((entry) =>
-          Effect.try({
-            try: () => normalizePullRequestListItem(decodeRawPullRequestListItem(entry)),
-            catch: () =>
-              new GitHubCliError({
-                operation: "getPullRequestListItem",
-                detail: "GitHub CLI returned an unrecognized pull request shape.",
-                reason: "other",
+          }).pipe(
+            Effect.flatMap((result) =>
+              decodeGitHubJson(
+                result.stdout.trim(),
+                Schema.Unknown,
+                "getPullRequestListItem",
+                "GitHub CLI returned invalid pull request JSON.",
+              ),
+            ),
+            Effect.flatMap((entry) =>
+              Effect.try({
+                try: () => normalizePullRequestListItem(decodeRawPullRequestListItem(entry)),
+                catch: () =>
+                  new GitHubCliError({
+                    operation: "getPullRequestListItem",
+                    detail: "GitHub CLI returned an unrecognized pull request shape.",
+                    reason: "other",
+                  }),
               }),
-          }),
+            ),
+            Effect.flatMap((entry) =>
+              enrichPullRequestListItemsWithStack({
+                cwd: input.cwd,
+                repository,
+                entries: [entry],
+              }).pipe(Effect.map((entries) => entries[0] ?? entry)),
+            ),
+          ),
         ),
       ),
     listReviewRequestedPullRequestNumbers: (input) =>
@@ -1150,6 +1589,40 @@ const makeGitHubCli = Effect.sync(() => {
           ),
         ),
         Effect.map(normalizePullRequestDetail),
+      ),
+    getPullRequestStack: (input) =>
+      validateRepository(input.repository, "getPullRequestStack").pipe(
+        Effect.flatMap((repository) => {
+          const [owner = "", repo = ""] = repository.split("/");
+          return execute({
+            cwd: input.cwd,
+            args: [
+              "api",
+              "graphql",
+              "--hostname",
+              GITHUB_HOST,
+              "-f",
+              `query=${PULL_REQUEST_STACK_QUERY}`,
+              "-F",
+              `owner=${owner}`,
+              "-F",
+              `repo=${repo}`,
+              "-F",
+              `number=${input.number}`,
+              "-F",
+              `first=${PULL_REQUEST_STACK_ENTRY_LIMIT}`,
+            ],
+          });
+        }),
+        Effect.flatMap((result) =>
+          decodeGitHubJson(
+            result.stdout.trim(),
+            RawPullRequestStackResponseSchema,
+            "getPullRequestStack",
+            "GitHub CLI returned invalid pull request stack JSON.",
+          ),
+        ),
+        Effect.flatMap((raw) => normalizePullRequestStack(raw, input.number)),
       ),
     getRepositoryMergeCapabilities: (input) =>
       validateRepository(input.repository, "getRepositoryMergeCapabilities").pipe(
@@ -1221,10 +1694,31 @@ const makeGitHubCli = Effect.sync(() => {
         Effect.flatMap((repository) => {
           const reference = String(input.number);
           const repoArgs = ["--repo", repositorySelector(repository)];
+          if (input.action === "merge") {
+            return runAsyncPullRequestMerge({
+              cwd: input.cwd,
+              repository,
+              number: input.number,
+              mergeMethod: input.mergeMethod ?? "merge",
+            }).pipe(
+              Effect.flatMap((result) =>
+                result.mergeOutcome !== "unavailable"
+                  ? Effect.succeed(result)
+                  : execute({
+                      cwd: input.cwd,
+                      args: [
+                        "pr",
+                        "merge",
+                        reference,
+                        ...repoArgs,
+                        `--${input.mergeMethod ?? "merge"}`,
+                      ],
+                    }).pipe(Effect.as({ mergeOutcome: "merged" as const })),
+              ),
+            );
+          }
           const args = (() => {
             switch (input.action) {
-              case "merge":
-                return ["pr", "merge", reference, ...repoArgs, `--${input.mergeMethod ?? "merge"}`];
               case "ready":
                 return ["pr", "ready", reference, ...repoArgs];
               case "draft":
@@ -1233,9 +1727,13 @@ const makeGitHubCli = Effect.sync(() => {
                 return ["pr", "close", reference, ...repoArgs];
               case "reopen":
                 return ["pr", "reopen", reference, ...repoArgs];
+              case "merge":
+                return [];
             }
           })();
-          return execute({ cwd: input.cwd, args }).pipe(Effect.asVoid);
+          return execute({ cwd: input.cwd, args }).pipe(
+            Effect.as({ mergeOutcome: null as const }),
+          );
         }),
       ),
     commentOnPullRequest: (input) =>
