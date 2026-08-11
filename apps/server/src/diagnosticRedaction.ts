@@ -26,8 +26,9 @@ const SENSITIVE_TERMINAL_TOKENS = new Set([
 
 const SENSITIVE_KEY_QUALIFIERS = new Set(["api", "private", "secret"]);
 
+const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu;
 const CREDENTIAL_ASSIGNMENT_PATTERN =
-  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu;
+  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu;
 const BEARER_CREDENTIAL_PATTERN = /\b(bearer\s+)[A-Za-z0-9._~+/=-]+/giu;
 
 function normalizedKey(key: string): string {
@@ -65,6 +66,9 @@ function isSensitiveKey(key: string): boolean {
 }
 
 export function redactDiagnosticData(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === "string") {
+    return redactDiagnosticText(value);
+  }
   if (value === null || typeof value !== "object") {
     return value;
   }
@@ -85,6 +89,7 @@ export function redactDiagnosticData(value: unknown, seen = new WeakSet<object>(
 
 export function redactDiagnosticText(value: string): string {
   return value
+    .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(BEARER_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}`);
 }

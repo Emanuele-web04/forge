@@ -62,6 +62,26 @@ describe("sanitizeUnmappedProviderData", () => {
     expect(serialized).toContain("Useful summary");
   });
 
+  it("redacts credentials embedded in ordinary native-event string fields", () => {
+    const sanitized = sanitizeUnmappedProviderEvent(
+      providerEvent("item/future/completed", {
+        payload: {
+          message: "Retrying with api_key=hunter2",
+          nested: {
+            detail: "Authorization: Bearer abc.def",
+          },
+        },
+      }),
+    );
+
+    expect(sanitized.payload).toEqual({
+      message: "Retrying with api_key=[REDACTED]",
+      nested: {
+        detail: "Authorization: [REDACTED]",
+      },
+    });
+  });
+
   it("redacts nested camel and snake case secret-key families without hiding ordinary fields", () => {
     expect(
       sanitizeUnmappedProviderData({
@@ -99,6 +119,22 @@ describe("sanitizeUnmappedProviderData", () => {
     expect(sanitizeUnmappedProviderDetail("Authorization is required for this operation")).toBe(
       "Authorization is required for this operation",
     );
+  });
+
+  it("redacts cookie headers and private-key assignments from diagnostic data string leaves", () => {
+    expect(
+      sanitizeUnmappedProviderData({
+        cookieHeader: "Cookie: session=abc; theme=dark",
+        responseHeader: "Set-Cookie: session=def; Path=/; HttpOnly",
+        note: "private_key=private-material",
+        safe: "Cookie policy is strict and private keys are never logged",
+      }),
+    ).toEqual({
+      cookieHeader: "Cookie: [REDACTED]",
+      responseHeader: "Set-Cookie: [REDACTED]",
+      note: "private_key=[REDACTED]",
+      safe: "Cookie policy is strict and private keys are never logged",
+    });
   });
 });
 
