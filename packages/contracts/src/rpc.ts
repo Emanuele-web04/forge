@@ -5,7 +5,10 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import {
   AccountAuthenticateOtpInput,
   AccountBeginSignInResult,
+  AccountBeginSsoInput,
+  AccountBeginSsoResult,
   AccountCompleteSignInInput,
+  AccountCompleteSsoInput,
   AccountEmailVerificationRequiredError,
   AccountMe,
   AccountOpenVerificationUrlInput,
@@ -1221,6 +1224,29 @@ export const WsAccountCompleteSignInRpc = Rpc.make(WS_METHODS.accountCompleteSig
   error: WsRpcError,
 });
 
+export const WsAccountBeginSsoRpc = Rpc.make(WS_METHODS.accountBeginSso, {
+  payload: AccountBeginSsoInput,
+  success: AccountBeginSsoResult,
+  error: WsRpcError,
+});
+
+/**
+ * Long-running like the device completion: the server waits on the loopback
+ * browser callback for as long as the attempt lives. Clients must not impose
+ * their usual RPC timeout on it.
+ */
+export const WsAccountCompleteSsoRpc = Rpc.make(WS_METHODS.accountCompleteSso, {
+  payload: AccountCompleteSsoInput,
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+export const WsAccountCancelSsoRpc = Rpc.make(WS_METHODS.accountCancelSso, {
+  payload: AccountCompleteSsoInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsAccountUpdateProfileRpc = Rpc.make(WS_METHODS.accountUpdateProfile, {
   payload: AccountUpdateProfileInput,
   success: AccountMe,
@@ -1423,6 +1449,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAccountResendVerificationEmailRpc,
   WsAccountBeginSignInRpc,
   WsAccountCompleteSignInRpc,
+  WsAccountBeginSsoRpc,
+  WsAccountCompleteSsoRpc,
+  WsAccountCancelSsoRpc,
   WsAccountUpdateProfileRpc,
   WsAccountSignOutRpc,
   WsAccountOpenVerificationUrlRpc,
