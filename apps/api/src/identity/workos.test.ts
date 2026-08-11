@@ -467,3 +467,48 @@ describe("request deadlines", () => {
     }
   });
 });
+
+describe("refreshTokens classification", () => {
+  /** A stand-in that answers the refresh grant with a fixed response. */
+  async function refreshAgainst(status: number, body: unknown) {
+    const { serve } = await import("@hono/node-server");
+    const { Hono } = await import("hono");
+    const app = new Hono();
+    app.post("/user_management/authenticate", (c) => c.json(body as object, status as 400));
+    const server = serve({ fetch: app.fetch, port: 0 });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("failed to bind");
+      const auth = createWorkosAuth(
+        workos.config({ workosApiUrl: `http://127.0.0.1:${address.port}` }),
+      );
+      return await auth
+        .refreshTokens({ refreshToken: "rt_test" })
+        .catch((error: unknown) => error);
+    } finally {
+      server.close();
+    }
+  }
+
+  // Only the allowlisted OAuth refusal is terminal: HTTP 400 invalid_grant.
+  it("classifies 400 invalid_grant as a terminal refusal", async () => {
+    const caught = await refreshAgainst(400, {
+      error: "invalid_grant",
+      error_description: "Refresh token is invalid or spent",
+    });
+    expect(caught).toMatchObject({ name: "RefreshRejectedError" });
+  });
+
+  // 408, 429, other 4xx shapes, and 5xx say nothing about the token: they
+  // must surface as provider faults, never clear a stored session.
+  it.each([
+    [408, { message: "timeout" }],
+    [429, { message: "slow down" }],
+    [400, { error: "invalid_request", error_description: "malformed" }],
+    [403, { message: "forbidden" }],
+    [502, { message: "bad gateway" }],
+  ])("keeps %i (non-invalid_grant) a retryable provider fault", async (status, body) => {
+    const caught = await refreshAgainst(status, body);
+    expect(caught).toMatchObject({ name: "IdentityProviderError", status });
+  });
+});

@@ -659,13 +659,23 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
         };
       }
 
-      // A terminal 4xx is the provider refusing the token — spent, revoked,
-      // or naming a lost workspace. Anything else says nothing about it, and
-      // the caller must not burn a stored session over a transient fault.
-      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-        throw new RefreshRejectedError();
+      // Only the OAuth refusal proves the token is dead: HTTP 400 carrying
+      // `invalid_grant` (spent, revoked, or naming a lost workspace) — the
+      // allowlisted terminal case. Everything else — 408, 429, other 4xx
+      // shapes, 5xx — says nothing about the token, and the caller must not
+      // burn a stored session over a transient fault. The body is read only
+      // for that one enum field and never logged: the refresh token is a
+      // credential and provider descriptions echo request fields.
+      if (response.status === 400) {
+        const raw: unknown = await response.json().catch(() => null);
+        const oauthError =
+          typeof raw === "object" && raw !== null && typeof (raw as { error?: unknown }).error === "string"
+            ? (raw as { error: string }).error
+            : undefined;
+        if (oauthError === "invalid_grant") {
+          throw new RefreshRejectedError();
+        }
       }
-      // The refresh token is a credential: no body, no description.
       console.error(`[api] WorkOS refresh grant failed upstream: status=${response.status}`);
       throw new IdentityProviderError(
         response.status,

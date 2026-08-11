@@ -979,6 +979,21 @@ export function createV1Routes(deps: {
       if (error instanceof RefreshRejectedError) {
         return errorResponse(c, 401, "unauthorized", "The session has expired — sign in again");
       }
+      // 408 and 429 are 4xx by number but transient by meaning, and the
+      // client's grant-rejected check keys on the status it receives — so
+      // they must survive this proxy leg as themselves, not collapse into a
+      // 502 (which would be fine) or, worse, into anything terminal.
+      if (
+        error instanceof IdentityProviderError &&
+        (error.status === 408 || error.status === 429)
+      ) {
+        return errorResponse(
+          c,
+          error.status,
+          error.status === 429 ? "rate_limited" : "internal_error",
+          "Identity provider did not answer — retry shortly",
+        );
+      }
       return authErrorResponse(c, error);
     }
   });
