@@ -9,6 +9,7 @@ const harness = vi.hoisted(() => ({
   copyText: vi.fn(),
   showContextMenu: vi.fn(),
   showInFolder: vi.fn(),
+  toast: vi.fn(),
 }));
 
 vi.mock("~/hooks/useCopyToClipboard", () => ({
@@ -22,6 +23,10 @@ vi.mock("~/nativeApi", () => ({
   }),
 }));
 
+vi.mock("~/components/ui/toast", () => ({
+  toastManager: { add: harness.toast },
+}));
+
 import { getRevealInFolderLabel, showFileReferenceContextMenu } from "./fileReferenceContextMenu";
 
 beforeEach(() => {
@@ -31,6 +36,7 @@ beforeEach(() => {
   harness.copyText.mockReset();
   harness.showContextMenu.mockReset();
   harness.showInFolder.mockReset();
+  harness.toast.mockReset();
   harness.showContextMenu.mockImplementation(async () => harness.clicked);
   harness.copyText.mockResolvedValue(undefined);
   harness.showInFolder.mockResolvedValue(undefined);
@@ -94,6 +100,26 @@ describe("showFileReferenceContextMenu", () => {
 
     expect(harness.showInFolder).toHaveBeenCalledWith("/repo/output/video.mp4");
     expect(harness.copyText).not.toHaveBeenCalled();
+  });
+
+  it("reports a stale file without leaking the shell rejection", async () => {
+    harness.clicked = "reveal-in-folder";
+    harness.showInFolder.mockRejectedValue(new Error("Folder not found: /repo/output/video.mp4"));
+
+    await expect(
+      showFileReferenceContextMenu({
+        path: "/repo/output/video.mp4",
+        revealPath: "/repo/output/video.mp4",
+        position: { x: 12, y: 34 },
+        onReferenceInChat: undefined,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.toast).toHaveBeenCalledWith({
+      type: "error",
+      title: "Unable to reveal file",
+      description: "Folder not found: /repo/output/video.mp4",
+    });
   });
 
   it("copies the displayed filesystem path with the shared clipboard fallback", async () => {

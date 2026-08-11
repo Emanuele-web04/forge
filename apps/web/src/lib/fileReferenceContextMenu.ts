@@ -8,6 +8,7 @@ import { formatSelectionLabel, type ChatFileReference } from "~/lib/chatReferenc
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { toastManager } from "~/components/ui/toast";
 
 export function getRevealInFolderLabel(platform: string): string {
   if (isWindowsPlatform(platform)) {
@@ -92,7 +93,16 @@ export async function showFileReferenceContextMenu(input: {
     return;
   }
   if (clicked === "reveal-in-folder" && revealPath) {
-    await api.shell.showInFolder(revealPath);
+    try {
+      await api.shell.showInFolder(revealPath);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to reveal file",
+        description:
+          error instanceof Error ? error.message : "An unknown error occurred opening the file.",
+      });
+    }
     return;
   }
   if (clicked === "copy-path") {
