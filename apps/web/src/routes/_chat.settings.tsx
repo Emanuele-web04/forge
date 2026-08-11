@@ -57,6 +57,7 @@ import {
   SettingsSection,
   SettingsSectionShell,
 } from "../components/settings/SettingsPanelPrimitives";
+import { ForkTypeLorePanel } from "~/components/settings/ForkTypeLorePanel";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
 import { ThemeModePicker } from "../components/settings/ThemeModePicker";
 import { ThemePackEditor } from "../components/ThemePackEditor";
@@ -516,6 +517,9 @@ function SettingsRouteView() {
           ariaLabel: "Show the Studio section in the sidebar",
         })}
       </SettingsSection>
+      <SettingsSectionShell title="Fork type lore">
+        <ForkTypeLorePanel />
+      </SettingsSectionShell>
 
       <div id={SETTINGS_TARGETS.environmentPanel} className="space-y-6">
         <SettingsSection title="Environment panel">

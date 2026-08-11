@@ -115,6 +115,9 @@ Forkara proudly supports every kind of fork:
 - **Chess fork**: A real chess tactic where one piece attacks multiple targets; in Forkara terms, it is the board-game cousin of parallel worktrees.
 - **Process fork**: A real operating-system term for creating a new process from an existing one, which is much closer to copying than cutlery.
 
+Forkara treats Git forks as operationally functional and keeps non-Git fork types as parody
+scenarios for orientation, navigation, and style only.
+
 ---
 
 ## Philosophy
