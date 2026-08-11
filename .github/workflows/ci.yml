@@ -36,7 +36,8 @@ jobs:
         # During active branding/rebrand churn, this check is intentionally advisory
         # in PR validation so documentation and naming updates do not block
         # functional validation paths.
-        run: bun run brand:check || true
+        continue-on-error: true
+        run: bun run brand:check
 
       - name: Format
         run: bun run fmt:check
