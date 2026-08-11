@@ -48,6 +48,12 @@ export const DroidServerProviderSettings = Schema.Struct({
 });
 export type DroidServerProviderSettings = typeof DroidServerProviderSettings.Type;
 
+export const CommandCodeServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "cmd")),
+});
+export type CommandCodeServerProviderSettings = typeof CommandCodeServerProviderSettings.Type;
+
 export const CursorServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "cursor-agent")),
@@ -108,6 +114,7 @@ export const ServerSettings = Schema.Struct({
     antigravity: AntigravityServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    commandCode: CommandCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -168,6 +175,7 @@ export const ServerSettingsPatch = Schema.Struct({
       antigravity: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      commandCode: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       kilo: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,

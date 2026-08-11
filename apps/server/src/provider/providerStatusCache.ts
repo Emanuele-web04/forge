@@ -15,6 +15,7 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "claudeAgent",
   "cursor",
   "antigravity",
+  "commandCode",
   "grok",
   "droid",
   "kilo",

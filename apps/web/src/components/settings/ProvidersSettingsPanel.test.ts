@@ -65,6 +65,7 @@ describe("createProviderInstallResetPatch", () => {
         "claudeBinaryPath",
         "codexBinaryPath",
         "codexHomePath",
+        "commandCodeBinaryPath",
         "cursorApiEndpoint",
         "cursorBinaryPath",
         "droidBinaryPath",

@@ -189,6 +189,11 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeAntigravityModelOptions(model, providerOptions, caps);
       break;
     }
+    case "commandCode": {
+      // CommandCode currently exposes model choice but no headless reasoning control.
+      normalizedOptions = undefined;
+      break;
+    }
     case "grok": {
       const providerOptions = modelOptions?.grok;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
@@ -293,6 +298,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("antigravity", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("antigravity", input),
+  },
+  commandCode: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("commandCode", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("commandCode", input),
   },
   grok: {
     getState: (input) => getProviderStateFromCapabilities(input),

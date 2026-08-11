@@ -145,6 +145,11 @@ export const DroidModelOptions = Schema.Struct({
 });
 export type DroidModelOptions = typeof DroidModelOptions.Type;
 
+export const CommandCodeModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+});
+export type CommandCodeModelOptions = typeof CommandCodeModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
@@ -152,6 +157,7 @@ export const ProviderModelOptions = Schema.Struct({
   antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
+  commandCode: Schema.optional(CommandCodeModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
@@ -799,6 +805,19 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CORE_HIGH_ONLY_CAPABILITIES,
     },
   ],
+  commandCode: [
+    {
+      slug: "poolside/laguna-s-2.1-free",
+      name: "Laguna S 2.1 Free",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
   opencode: [
     {
       slug: "openai/gpt-5",
@@ -1027,6 +1046,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   antigravity: "Gemini 3.5 Flash",
   grok: "grok-build",
   droid: "claude-opus-4-8",
+  commandCode: "poolside/laguna-s-2.1-free",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
@@ -1147,6 +1167,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     deepseek: "deepseek-v4-pro",
     minimax: "minimax-m3",
   },
+  commandCode: {},
   grok: {
     grok: "grok-build-0.1",
     build: "grok-build-0.1",
@@ -1197,6 +1218,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",
+  commandCode: "CommandCode",
   kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",

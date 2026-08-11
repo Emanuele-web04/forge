@@ -45,6 +45,10 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
       // cursor-agent natively scans .cursor/.agents/.claude/.codex skill roots;
       // only Synara-owned paths need inlining.
       return segments.has(".synara");
+    case "commandCode":
+      // The headless CLI has no structured skill-selection flag, so explicitly
+      // selected skills must be projected into the turn even when auto-discoverable.
+      return true;
     case "claudeAgent":
       // Claude Code only loads skills from .claude/skills folders.
       return !segments.has(".claude");

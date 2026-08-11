@@ -28,6 +28,10 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.antigravity,
           binaryPath: "",
         },
+        commandCode: {
+          ...DEFAULT_SERVER_SETTINGS.providers.commandCode,
+          binaryPath: "",
+        },
         grok: {
           ...DEFAULT_SERVER_SETTINGS.providers.grok,
           binaryPath: "",

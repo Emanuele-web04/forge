@@ -26,6 +26,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "claude.sdk.hook",
   "codex.sdk.thread-event",
   "antigravity.cli.event",
+  "commandcode.cli.event",
   "acp.jsonrpc",
   "acp.cursor.extension",
   "kilo.sdk.event",

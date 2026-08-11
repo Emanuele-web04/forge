@@ -29,6 +29,7 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
   "claudeAgent",
   "cursor",
   "antigravity",
+  "commandCode",
   "grok",
   "droid",
   "kilo",

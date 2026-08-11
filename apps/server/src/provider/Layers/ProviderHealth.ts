@@ -103,6 +103,7 @@ import {
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import { DEFAULT_COMMAND_CODE_BINARY, resolveCommandCodeBinaryPath } from "../commandCodeCli.ts";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -115,6 +116,7 @@ const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const ANTIGRAVITY_PROVIDER = "antigravity" as const;
+const COMMAND_CODE_PROVIDER = "commandCode" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
 const KILO_PROVIDER = "kilo" as const;
@@ -129,6 +131,7 @@ const PROVIDERS = [
   CLAUDE_AGENT_PROVIDER,
   CURSOR_PROVIDER,
   ANTIGRAVITY_PROVIDER,
+  COMMAND_CODE_PROVIDER,
   GROK_PROVIDER,
   DROID_PROVIDER,
   KILO_PROVIDER,
@@ -234,6 +237,18 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
       executable: "agy",
       args: () => ["update"],
       lockKey: "antigravity-native",
+      strategy: "always",
+    },
+  },
+  commandCode: {
+    provider: COMMAND_CODE_PROVIDER,
+    binaryName: DEFAULT_COMMAND_CODE_BINARY,
+    npmPackageName: "command-code",
+    homebrew: null,
+    nativeUpdate: {
+      executable: DEFAULT_COMMAND_CODE_BINARY,
+      args: () => ["update"],
+      lockKey: "commandcode-native",
       strategy: "always",
     },
   },
@@ -848,6 +863,18 @@ const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
 
 const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") =>
   runProviderCommand(executable, args, providerCommandEnv(ANTIGRAVITY_PROVIDER)).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
+const runCommandCodeCommand = (
+  args: ReadonlyArray<string>,
+  executable = DEFAULT_COMMAND_CODE_BINARY,
+) =>
+  runProviderCommand(executable, args, providerCommandEnv(COMMAND_CODE_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1717,6 +1744,98 @@ export const checkAntigravityProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
+// ── CommandCode CLI health check ──────────────────────────────────
+
+export const checkCommandCodeProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveCommandCodeBinaryPath(binaryPath);
+    const versionProbe = yield* probeProviderCliVersion(
+      runCommandCodeCommand(["--version"], executable),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      return {
+        provider: COMMAND_CODE_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "CommandCode CLI (`cmd`) is not installed or is not on PATH."
+            : `CommandCode CLI health check failed: ${String(versionProbe.cause)}`,
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: COMMAND_CODE_PROVIDER,
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt,
+        message: "CommandCode CLI version check timed out.",
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "nonzero") {
+      return {
+        provider: COMMAND_CODE_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message: detailFromResult(versionProbe.result) ?? "CommandCode CLI version check failed.",
+      } satisfies ServerProviderStatus;
+    }
+    const version = parseGenericCliVersion(
+      `${versionProbe.result.stdout}\n${versionProbe.result.stderr}`,
+    );
+    const statusResult = yield* runCommandCodeCommand(["status", "--json"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+    if (Result.isSuccess(statusResult) && Option.isSome(statusResult.success)) {
+      const result = statusResult.success.value;
+      const parsed = decodeUnknownJson(result.stdout.trim());
+      if (Result.isSuccess(parsed)) {
+        const authenticated = extractAuthBoolean(parsed.success);
+        if (authenticated === true) {
+          return {
+            provider: COMMAND_CODE_PROVIDER,
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            ...(version ? { version } : {}),
+            checkedAt,
+            message: "CommandCode CLI is installed and authenticated.",
+          } satisfies ServerProviderStatus;
+        }
+        if (authenticated === false) {
+          return {
+            provider: COMMAND_CODE_PROVIDER,
+            status: "error",
+            available: true,
+            authStatus: "unauthenticated",
+            ...(version ? { version } : {}),
+            checkedAt,
+            message: "CommandCode CLI is not authenticated. Run `cmd login` and try again.",
+          } satisfies ServerProviderStatus;
+        }
+      }
+    }
+    return {
+      provider: COMMAND_CODE_PROVIDER,
+      status: "warning",
+      available: true,
+      authStatus: "unknown",
+      ...(version ? { version } : {}),
+      checkedAt,
+      message: "CommandCode CLI is installed, but Synara could not verify authentication.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── Cursor health check ─────────────────────────────────────────────
 
 export const makeCheckCursorProviderStatus = (
@@ -2195,6 +2314,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.cursor.binaryPath;
           case "antigravity":
             return settings.providers.antigravity.binaryPath;
+          case "commandCode":
+            return settings.providers.commandCode.binaryPath;
           case "grok":
             return settings.providers.grok.binaryPath;
           case "droid":
@@ -2389,6 +2510,11 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   settings,
                   ANTIGRAVITY_PROVIDER,
                   checkAntigravityProviderStatus(settings.providers.antigravity.binaryPath),
+                ),
+                checkProviderWhenEnabled(
+                  settings,
+                  COMMAND_CODE_PROVIDER,
+                  checkCommandCodeProviderStatus(settings.providers.commandCode.binaryPath),
                 ),
                 checkProviderWhenEnabled(
                   settings,

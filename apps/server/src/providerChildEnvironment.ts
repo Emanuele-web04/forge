@@ -7,6 +7,7 @@ export type ProviderChildKind =
   | "antigravity"
   | "claude"
   | "codex"
+  | "commandCode"
   | "cursor"
   | "droid"
   | "grok"
@@ -47,6 +48,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
   codex: "all",
+  commandCode: "all",
   kilo: "all",
   opencode: "all",
   pi: "all",

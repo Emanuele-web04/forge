@@ -34,6 +34,7 @@ function makeSettings(
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
     antigravityBinaryPath: "",
+    commandCodeBinaryPath: "",
     grokBinaryPath: "",
     droidBinaryPath: "",
     kiloBinaryPath: "",
