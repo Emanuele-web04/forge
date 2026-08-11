@@ -26,5 +26,14 @@ export function hasLiveThreadsWithMissingProjects(snapshot: ProjectRecoverySnaps
  * busy long enough for unrelated provider commands to time out.
  */
 export function shouldRepairDesktopProjectSnapshot(snapshot: ProjectRecoverySnapshot): boolean {
-  return hasLiveThreadsWithMissingProjects(snapshot);
+  const requiresEmptyProjectShellRepair =
+    "requiresEmptyProjectShellRepair" in snapshot &&
+    snapshot.requiresEmptyProjectShellRepair === true;
+
+  return (
+    hasLiveThreadsWithMissingProjects(snapshot) ||
+    (snapshot.projects.length === 0 &&
+      snapshot.threads.length === 0 &&
+      requiresEmptyProjectShellRepair)
+  );
 }

@@ -161,6 +161,23 @@ describe("desktopProjectRecovery", () => {
     ).toBe(false);
   });
 
+  it("repairs an empty shell only when the server found an active durable project", () => {
+    expect(
+      shouldRepairDesktopProjectSnapshot(
+        makeShellSnapshot({
+          requiresEmptyProjectShellRepair: true,
+          projects: [],
+          threads: [],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRepairDesktopProjectSnapshot(
+        makeShellSnapshot({ requiresEmptyProjectShellRepair: true }),
+      ),
+    ).toBe(false);
+  });
+
   it("returns false when live threads still have live project rows", () => {
     const snapshot = makeSnapshot();
 

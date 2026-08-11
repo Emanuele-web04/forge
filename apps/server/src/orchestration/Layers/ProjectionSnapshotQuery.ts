@@ -169,6 +169,9 @@ const ProjectionCountsRowSchema = Schema.Struct({
   projectCount: Schema.Number,
   threadCount: Schema.Number,
 });
+const EmptyProjectShellRepairRowSchema = Schema.Struct({
+  required: Schema.Number,
+});
 const WorkspaceRootLookupInput = Schema.Struct({
   workspaceRoot: Schema.String,
 });
@@ -1246,6 +1249,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const readEmptyProjectShellRepair = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: EmptyProjectShellRepairRowSchema,
+    execute: () =>
+      sql`
+        SELECT EXISTS (
+          SELECT 1
+          FROM orchestration_events AS created
+          WHERE created.aggregate_kind = 'project'
+            AND created.event_type = 'project.created'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM orchestration_events AS deleted
+              WHERE deleted.aggregate_kind = 'project'
+                AND deleted.stream_id = created.stream_id
+                AND deleted.event_type = 'project.deleted'
+                AND deleted.sequence > created.sequence
+            )
+        ) AS required
+      `,
+  });
+
   // Cheap targeted reads avoid hydrating the full snapshot for startup and diff lookups.
   const readProjectionCounts = SqlSchema.findOne({
     Request: Schema.Void,
@@ -2270,8 +2295,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updatedAt = maxOptionalIso(updatedAt, latestTurns.updatedAt);
           updatedAt = maxOptionalIso(updatedAt, sessions.updatedAt);
 
+          const shellIsEmpty =
+            !projectRows.some((row) => row.deletedAt === null) &&
+            !threadRows.some((row) => row.deletedAt === null);
+          const requiresEmptyProjectShellRepair = shellIsEmpty
+            ? yield* readEmptyProjectShellRepair(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getShellSnapshot:emptyProjectShellRepair:query",
+                    "ProjectionSnapshotQuery.getShellSnapshot:emptyProjectShellRepair:decodeRow",
+                  ),
+                ),
+                Effect.map((row) => row.required > 0),
+              )
+            : false;
+
           const snapshot = {
             snapshotSequence: computeSnapshotSequence(stateRows),
+            requiresEmptyProjectShellRepair,
             spaces: spaceRows.filter((row) => row.deletedAt === null).map(toProjectedSpaceShell),
             projects: projectRows
               .filter((row) => row.deletedAt === null)
