@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { accountQueryKeys } from "~/lib/accountReactQuery";
+import { accountQueryKeys, accountStatusQueryOptions } from "~/lib/accountReactQuery";
 import { useAccount } from "./useAccount";
 
 const accountApiMock = {
@@ -200,6 +200,73 @@ describe("useAccount", () => {
 
     expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
       state: "signed-out",
+    });
+  });
+
+  // M7: an `account.status` fetch in flight when a mutation runs must not
+  // resolve afterwards and overwrite the mutation's newer cache state. The
+  // mutations cancel the in-flight query up front and invalidate after
+  // settlement, so the stale answer is discarded in both orderings.
+  describe("status-query vs mutation races", () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    }
+
+    it("a slow signed-out status resolving after sign-in does not overwrite it", async () => {
+      const queryClient = new QueryClient();
+      const me = makeMe();
+      const slowStatus = deferred<AccountStatus>();
+      accountApiMock.status.mockReturnValue(slowStatus.promise);
+      accountApiMock.authenticateOtp.mockResolvedValue({ state: "signed-in", me });
+
+      // A status fetch starts while signed out and hangs.
+      const statusFetch = queryClient
+        .fetchQuery(accountStatusQueryOptions())
+        .catch(() => undefined);
+
+      const account = renderUseAccount(queryClient);
+      await account.authenticateOtp.mutateAsync({ email: "ada@example.com", code: "654321" });
+
+      // The pre-mutation fetch resolves late, with the pre-mutation answer.
+      slowStatus.resolve({ state: "signed-out" });
+      await statusFetch;
+      await new Promise((res) => setTimeout(res, 0));
+
+      expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
+        state: "signed-in",
+        me,
+      });
+    });
+
+    it("a slow signed-in status resolving after sign-out does not resurrect it", async () => {
+      const queryClient = new QueryClient();
+      const me = makeMe();
+      queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), {
+        state: "signed-in",
+        me,
+      });
+      const slowStatus = deferred<AccountStatus>();
+      accountApiMock.status.mockReturnValue(slowStatus.promise);
+      accountApiMock.signOut.mockResolvedValue(undefined);
+
+      const statusFetch = queryClient
+        .fetchQuery({ ...accountStatusQueryOptions(), staleTime: 0 })
+        .catch(() => undefined);
+
+      const account = renderUseAccount(queryClient);
+      await account.signOut.mutateAsync();
+
+      slowStatus.resolve({ state: "signed-in", me });
+      await statusFetch;
+      await new Promise((res) => setTimeout(res, 0));
+
+      expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
+        state: "signed-out",
+      });
     });
   });
 

@@ -13,7 +13,12 @@ import type {
   AccountVerifyEmailInput,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { accountQueryKeys, accountStatusQueryOptions } from "~/lib/accountReactQuery";
+import {
+  accountQueryKeys,
+  accountStatusQueryOptions,
+  cancelAccountStatusFetches,
+  invalidateAccountStatus,
+} from "~/lib/accountReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
 
 export function useAccount() {
@@ -22,6 +27,20 @@ export function useAccount() {
 
   const setStatus = (status: AccountStatus) => {
     queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), status);
+  };
+
+  /**
+   * The fence every status-changing mutation wears. Without it, an
+   * `account.status` fetch already in flight when the mutation starts can
+   * resolve after the mutation's cache write and overwrite the newer state
+   * with the pre-mutation answer (a sign-in flashing back to signed-out, or
+   * a sign-out resurrecting the old identity). Cancel discards the stale
+   * in-flight result before the RPC runs; invalidate-on-settled re-reads
+   * the authoritative answer afterwards, success or failure.
+   */
+  const statusFence = {
+    onMutate: () => cancelAccountStatusFetches(queryClient),
+    onSettled: () => invalidateAccountStatus(queryClient),
   };
 
   const sendOtp = useMutation({
@@ -35,6 +54,7 @@ export function useAccount() {
   // rules as a password: pass it straight through and keep it nowhere past
   // the call.
   const authenticateOtp = useMutation({
+    ...statusFence,
     mutationFn: async (input: AccountAuthenticateOtpInput) => {
       const api = ensureNativeApi();
       return api.account.authenticateOtp(input);
@@ -46,6 +66,7 @@ export function useAccount() {
   // bearer-ish secrets with the same handling rules as a password: pass them
   // straight through and keep them nowhere past the call.
   const verifyEmail = useMutation({
+    ...statusFence,
     mutationFn: async (input: AccountVerifyEmailInput) => {
       const api = ensureNativeApi();
       return api.account.verifyEmail(input);
@@ -73,6 +94,7 @@ export function useAccount() {
   // persisted server-side and the status query's refetch-on-reconnect recovers
   // the signed-in state.
   const completeSignIn = useMutation({
+    ...statusFence,
     mutationFn: async (input: { deviceCode: string; signal?: AbortSignal }) => {
       const api = ensureNativeApi();
       return api.account.completeSignIn(
@@ -84,6 +106,7 @@ export function useAccount() {
   });
 
   const updateProfile = useMutation({
+    ...statusFence,
     mutationFn: async (input: AccountUpdateProfileInput) => {
       const api = ensureNativeApi();
       return api.account.updateProfile(input);
@@ -94,6 +117,7 @@ export function useAccount() {
   });
 
   const signOut = useMutation({
+    ...statusFence,
     mutationFn: async () => {
       const api = ensureNativeApi();
       await api.account.signOut();

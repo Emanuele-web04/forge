@@ -40,3 +40,15 @@ export function accountStatusQueryOptions() {
 export async function invalidateAccountStatus(queryClient: QueryClient): Promise<void> {
   await queryClient.invalidateQueries({ queryKey: accountQueryKeys.status() });
 }
+
+/**
+ * Fences a status-changing account mutation against the status query. An
+ * `account.status` fetch already in flight when the mutation starts would
+ * otherwise resolve afterwards and overwrite the mutation's newer cache write
+ * with pre-mutation state — so the in-flight query is cancelled up front
+ * (its late result is discarded), and after settlement the status is
+ * invalidated so the next active read refetches the authoritative answer.
+ */
+export async function cancelAccountStatusFetches(queryClient: QueryClient): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: accountQueryKeys.status() });
+}
