@@ -1,11 +1,24 @@
 import type { AccountErrorBody } from "@synara/contracts";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type pg from "pg";
 import type { ApiConfig } from "./config";
 import { createDb } from "./db";
 import { createIdentityAdapters } from "./identity";
 import type { IdentityAdapters } from "./identity/interfaces";
 import { createV1Routes } from "./routes/v1";
+
+/**
+ * The largest request body any /api/v1 route accepts. Every payload this API
+ * takes is small structured JSON — an email address, a token, a profile, a
+ * host record whose contract-level field bounds sum to a few tens of KB — so
+ * 64 KB is comfortably above any honest request while stopping an
+ * unauthenticated caller from making `c.req.json()` buffer megabytes before
+ * schema validation ever runs. The middleware rejects both an oversized
+ * `Content-Length` up front and a streaming body the moment it crosses the
+ * limit.
+ */
+export const API_MAX_BODY_BYTES = 64 * 1024;
 
 export async function createApp(
   config: ApiConfig,
@@ -14,6 +27,23 @@ export async function createApp(
   const identity = await createIdentityAdapters(config, db);
 
   const app = new Hono();
+
+  // Before the routes, so no handler ever parses an oversized body. 413 in
+  // the documented error shape: `validation_failed` because the cure is the
+  // caller's (shrink the request), and the client already renders that code.
+  app.use(
+    "/api/*",
+    bodyLimit({
+      maxSize: API_MAX_BODY_BYTES,
+      onError: (c) => {
+        const body: AccountErrorBody = {
+          error: "validation_failed",
+          message: "Request body is too large",
+        };
+        return c.json(body, 413);
+      },
+    }),
+  );
 
   app.route(
     "/api/v1",

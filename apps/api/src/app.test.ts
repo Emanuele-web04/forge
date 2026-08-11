@@ -1,6 +1,6 @@
 import type { AccountErrorBody } from "@synara/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createApp } from "./app";
+import { API_MAX_BODY_BYTES, createApp } from "./app";
 import type { ApiConfig } from "./config";
 import { runMigrations } from "./db/migrate";
 import { startFakeWorkos, type FakeWorkos } from "./testing/fakeWorkos";
@@ -62,6 +62,34 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
     const body = (await res.json()) as AccountErrorBody;
     expect(body.error).toBe("internal_error");
     expect(typeof body.message).toBe("string");
+  });
+
+  // An unauthenticated caller must not be able to make the server buffer an
+  // arbitrarily large body before schema validation runs. At the boundary the
+  // limiter admits the request (it then fails ordinary validation); one byte
+  // over answers 413 in the documented error shape.
+  it("rejects a request body over the size limit with a 413 error body", async () => {
+    const built = await createApp(baseConfig);
+    pool = built.pool;
+
+    const post = (body: string) =>
+      built.app.request("/api/v1/auth/otp/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+
+    const filler = (size: number) =>
+      `{"email":"a@example.com","pad":"${"x".repeat(size)}"}`.slice(0, size);
+
+    const atLimit = await post(filler(API_MAX_BODY_BYTES));
+    expect(atLimit.status).not.toBe(413);
+
+    const oneOver = await post(filler(API_MAX_BODY_BYTES + 1));
+    expect(oneOver.status).toBe(413);
+    const body = (await oneOver.json()) as AccountErrorBody;
+    expect(body.error).toBe("validation_failed");
+    expect(body.message).not.toContain("x".repeat(32));
   });
 
   it("points non-API paths at the repo instead of returning the API error body", async () => {

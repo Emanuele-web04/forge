@@ -1,12 +1,40 @@
 import { Schema } from "effect";
 
-import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas";
+import { boundedTrimmedNonEmptyString, EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas";
+
+// ── Request field bounds ─────────────────────────────────────────────
+//
+// Every externally-supplied string and array in a request contract carries an
+// explicit maximum: an unbounded field on an unauthenticated (or merely
+// authenticated) route lets a caller inflate database rows, responses, and
+// logs to whatever the transport accepts. The values are generous for honest
+// input — display names, hostnames, and URLs are all short in practice — and
+// exist to bound abuse, not to police taste. Response-only fields stay
+// unbounded (the server is the author of those).
+
+/** Human-entered names: display name, workspace name, host name. */
+export const ACCOUNT_NAME_MAX_LENGTH = 200;
+/** RFC 5321 caps a mail path at 256 octets; nothing longer is a deliverable address. */
+export const ACCOUNT_EMAIL_MAX_LENGTH = 320;
+/** A host endpoint URL. Real endpoint origins are tens of characters. */
+export const ACCOUNT_ENDPOINT_URL_MAX_LENGTH = 2048;
+/** How many endpoints one host may advertise; a real host has a handful. */
+export const ACCOUNT_HOST_ENDPOINTS_MAX = 16;
+/** A semver-ish app version string. */
+export const ACCOUNT_APP_VERSION_MAX_LENGTH = 64;
+/** Opaque provider-issued tokens/ids the client echoes back on auth routes. */
+export const ACCOUNT_AUTH_TOKEN_MAX_LENGTH = 4096;
+
+const AccountNameString = boundedTrimmedNonEmptyString(ACCOUNT_NAME_MAX_LENGTH);
+const AccountEmailString = boundedTrimmedNonEmptyString(ACCOUNT_EMAIL_MAX_LENGTH);
+const AccountAuthTokenString = boundedTrimmedNonEmptyString(ACCOUNT_AUTH_TOKEN_MAX_LENGTH);
+const AccountAppVersionString = boundedTrimmedNonEmptyString(ACCOUNT_APP_VERSION_MAX_LENGTH);
 
 export const AccountHostTransport = Schema.Literals(["lan", "tailscale", "public"]);
 export type AccountHostTransport = typeof AccountHostTransport.Type;
 
 export const AccountHostEndpoint = Schema.Struct({
-  url: TrimmedNonEmptyString,
+  url: boundedTrimmedNonEmptyString(ACCOUNT_ENDPOINT_URL_MAX_LENGTH),
   transport: AccountHostTransport,
 });
 export type AccountHostEndpoint = typeof AccountHostEndpoint.Type;
@@ -101,24 +129,26 @@ export type AccountMe = typeof AccountMe.Type;
  */
 export const UpdateProfileRequest = Schema.Struct({
   handle: AccountProfileHandle,
-  displayName: TrimmedNonEmptyString,
+  displayName: AccountNameString,
   avatarColor: AccountProfileAvatarColor,
 });
 export type UpdateProfileRequest = typeof UpdateProfileRequest.Type;
 
 /** The body of `PATCH /api/v1/organization` — the workspace rename. */
 export const UpdateOrganizationRequest = Schema.Struct({
-  name: TrimmedNonEmptyString,
+  name: AccountNameString,
 });
 export type UpdateOrganizationRequest = typeof UpdateOrganizationRequest.Type;
 
 export const RegisterHostRequest = Schema.Struct({
   environmentId: EnvironmentId,
-  name: TrimmedNonEmptyString,
+  name: AccountNameString,
   platform: AccountHostPlatform,
   kind: AccountHostKind,
-  endpoints: Schema.Array(AccountHostEndpoint),
-  appVersion: Schema.optional(TrimmedNonEmptyString),
+  endpoints: Schema.Array(AccountHostEndpoint).check(
+    Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX),
+  ),
+  appVersion: Schema.optional(AccountAppVersionString),
 });
 export type RegisterHostRequest = typeof RegisterHostRequest.Type;
 
@@ -129,9 +159,11 @@ export const RegisterHostResponse = Schema.Struct({
 export type RegisterHostResponse = typeof RegisterHostResponse.Type;
 
 export const UpdateHostRequest = Schema.Struct({
-  name: Schema.optional(TrimmedNonEmptyString),
-  endpoints: Schema.optional(Schema.Array(AccountHostEndpoint)),
-  appVersion: Schema.optional(TrimmedNonEmptyString),
+  name: Schema.optional(AccountNameString),
+  endpoints: Schema.optional(
+    Schema.Array(AccountHostEndpoint).check(Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX)),
+  ),
+  appVersion: Schema.optional(AccountAppVersionString),
 });
 export type UpdateHostRequest = typeof UpdateHostRequest.Type;
 
@@ -175,7 +207,7 @@ export type DeviceAuthorizationResponse = typeof DeviceAuthorizationResponse.Typ
  * no-leak handling rules on the service side.
  */
 export const DeviceTokenRequest = Schema.Struct({
-  deviceCode: TrimmedNonEmptyString,
+  deviceCode: AccountAuthTokenString,
 });
 export type DeviceTokenRequest = typeof DeviceTokenRequest.Type;
 
@@ -318,7 +350,7 @@ export type EmailVerificationCode = typeof EmailVerificationCode.Type;
 
 /** The body of `POST /api/v1/auth/otp/send` — just the address to email. */
 export const OtpSendRequest = Schema.Struct({
-  email: TrimmedNonEmptyString,
+  email: AccountEmailString,
 });
 export type OtpSendRequest = typeof OtpSendRequest.Type;
 
@@ -340,7 +372,7 @@ export type OtpSendResponse = typeof OtpSendResponse.Type;
  * — never logged, never echoed back in an error.
  */
 export const OtpAuthenticateRequest = Schema.Struct({
-  email: TrimmedNonEmptyString,
+  email: AccountEmailString,
   code: EmailVerificationCode,
 });
 export type OtpAuthenticateRequest = typeof OtpAuthenticateRequest.Type;
@@ -353,13 +385,13 @@ export type OtpAuthenticateRequest = typeof OtpAuthenticateRequest.Type;
  */
 export const VerifyEmailRequest = Schema.Struct({
   code: EmailVerificationCode,
-  pendingAuthenticationToken: TrimmedNonEmptyString,
+  pendingAuthenticationToken: AccountAuthTokenString,
 });
 export type VerifyEmailRequest = typeof VerifyEmailRequest.Type;
 
 /** The body of `POST /api/v1/auth/resend-verification`. */
 export const ResendVerificationRequest = Schema.Struct({
-  emailVerificationId: TrimmedNonEmptyString,
+  emailVerificationId: AccountAuthTokenString,
 });
 export type ResendVerificationRequest = typeof ResendVerificationRequest.Type;
 
@@ -403,13 +435,13 @@ export type DeviceTokenPollResponse = typeof DeviceTokenPollResponse.Type;
 
 /** The body of `POST /api/v1/auth/refresh`. The refresh token is a credential. */
 export const RefreshTokenRequest = Schema.Struct({
-  refreshToken: TrimmedNonEmptyString,
+  refreshToken: AccountAuthTokenString,
   /**
    * Which workspace to authenticate into. The resulting access token carries
    * the organization claim the host routes authorize on, so a refresh
    * without this yields a token those routes will refuse.
    */
-  organizationId: Schema.optional(TrimmedNonEmptyString),
+  organizationId: Schema.optional(AccountAuthTokenString),
 });
 export type RefreshTokenRequest = typeof RefreshTokenRequest.Type;
 
@@ -513,7 +545,7 @@ export type AccountResendVerificationEmailInput = typeof AccountResendVerificati
  */
 export const AccountUpdateProfileInput = Schema.Struct({
   ...UpdateProfileRequest.fields,
-  workspaceName: Schema.optional(TrimmedNonEmptyString),
+  workspaceName: Schema.optional(AccountNameString),
 });
 export type AccountUpdateProfileInput = typeof AccountUpdateProfileInput.Type;
 

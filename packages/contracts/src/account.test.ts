@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
 import {
+  ACCOUNT_ENDPOINT_URL_MAX_LENGTH,
+  ACCOUNT_HOST_ENDPOINTS_MAX,
+  ACCOUNT_NAME_MAX_LENGTH,
   AccountErrorBody,
   AccountHost,
   AccountMe,
@@ -9,6 +12,7 @@ import {
   InstanceInfo,
   OrganizationRequiredBody,
   RegisterHostRequest,
+  UpdateProfileRequest,
 } from "./account";
 
 const decodeRegisterHostRequest = Schema.decodeUnknownSync(RegisterHostRequest);
@@ -71,6 +75,83 @@ describe("RegisterHostRequest", () => {
         endpoints: [{ url: "https://example.com", transport: "lan" }],
       }),
     ).toThrow();
+  });
+
+  // Request fields are explicitly bounded; the boundary passes, one-over fails.
+  it("accepts a name at the maximum length and rejects one character over", () => {
+    const base = {
+      environmentId: "env-1",
+      platform: "darwin",
+      kind: "local",
+      endpoints: [],
+    };
+    expect(
+      decodeRegisterHostRequest({ ...base, name: "a".repeat(ACCOUNT_NAME_MAX_LENGTH) }).name,
+    ).toHaveLength(ACCOUNT_NAME_MAX_LENGTH);
+    expect(() =>
+      decodeRegisterHostRequest({ ...base, name: "a".repeat(ACCOUNT_NAME_MAX_LENGTH + 1) }),
+    ).toThrow();
+  });
+
+  it("caps the endpoints array at the maximum and rejects one entry over", () => {
+    const endpointAt = (index: number) => ({
+      url: `https://host-${index}.example.com`,
+      transport: "lan",
+    });
+    const base = {
+      environmentId: "env-1",
+      name: "My Laptop",
+      platform: "darwin",
+      kind: "local",
+    };
+    expect(
+      decodeRegisterHostRequest({
+        ...base,
+        endpoints: Array.from({ length: ACCOUNT_HOST_ENDPOINTS_MAX }, (_, index) =>
+          endpointAt(index),
+        ),
+      }).endpoints,
+    ).toHaveLength(ACCOUNT_HOST_ENDPOINTS_MAX);
+    expect(() =>
+      decodeRegisterHostRequest({
+        ...base,
+        endpoints: Array.from({ length: ACCOUNT_HOST_ENDPOINTS_MAX + 1 }, (_, index) =>
+          endpointAt(index),
+        ),
+      }),
+    ).toThrow();
+  });
+
+  it("bounds each endpoint URL", () => {
+    const base = {
+      environmentId: "env-1",
+      name: "My Laptop",
+      platform: "darwin",
+      kind: "local",
+    };
+    const prefix = "https://";
+    const atLimit = `${prefix}${"a".repeat(ACCOUNT_ENDPOINT_URL_MAX_LENGTH - prefix.length)}`;
+    expect(
+      decodeRegisterHostRequest({ ...base, endpoints: [{ url: atLimit, transport: "lan" }] })
+        .endpoints,
+    ).toHaveLength(1);
+    expect(() =>
+      decodeRegisterHostRequest({
+        ...base,
+        endpoints: [{ url: `${atLimit}a`, transport: "lan" }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("UpdateProfileRequest", () => {
+  it("bounds the display name", () => {
+    const base = { handle: "ada", avatarColor: "#22c55e" };
+    const decode = Schema.decodeUnknownSync(UpdateProfileRequest);
+    expect(
+      decode({ ...base, displayName: "a".repeat(ACCOUNT_NAME_MAX_LENGTH) }).displayName,
+    ).toHaveLength(ACCOUNT_NAME_MAX_LENGTH);
+    expect(() => decode({ ...base, displayName: "a".repeat(ACCOUNT_NAME_MAX_LENGTH + 1) })).toThrow();
   });
 });
 
