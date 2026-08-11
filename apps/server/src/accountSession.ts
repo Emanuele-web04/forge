@@ -439,23 +439,26 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     },
 
     /**
-     * Writes the profile, renaming the workspace first when it differs.
+     * Writes the profile, then renames the workspace when it differs.
      *
-     * The rename goes first because it is the call that can fail on someone
-     * else's authority (WorkOS, membership), and doing it second would leave a
-     * saved profile beside a rename the user watched fail. Both answer with
-     * the same `/me` body, so the profile write's answer is the current one.
+     * The profile goes FIRST because it is where the user-recoverable
+     * conflict surfaces: `handle_taken` must leave everything unchanged, and
+     * renaming first would make a handle conflict a permanent partial rename
+     * (the org renamed, the dialog still open asking for another handle).
+     * With the rename second, a handle conflict changes nothing; a rename
+     * failure after a saved profile costs only re-submitting the same form,
+     * which upserts the identical profile and retries the rename. The rename
+     * answers with the same `/me` body, so whichever call ran last provides
+     * the current answer.
      */
     async updateProfile(input) {
       const { workspaceName, ...profile } = input;
       return withSession(async (token, client) => {
-        if (workspaceName !== undefined) {
-          const current = await client.me(token);
-          if (current.organization.name !== workspaceName) {
-            await client.updateOrganization(token, { name: workspaceName });
-          }
+        const written = await client.updateProfile(token, profile);
+        if (workspaceName !== undefined && written.organization.name !== workspaceName) {
+          return client.updateOrganization(token, { name: workspaceName });
         }
-        return client.updateProfile(token, profile);
+        return written;
       });
     },
 

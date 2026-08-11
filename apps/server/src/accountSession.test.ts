@@ -699,7 +699,10 @@ describe("updateProfile", () => {
     expect(await session.updateProfile(profile)).toMatchObject({ profile });
   });
 
-  it("renames the workspace before writing the profile when the name differs", async () => {
+  // The profile is written FIRST: it is where the user-recoverable
+  // `handle_taken` conflict surfaces, and a rename that ran before it would
+  // turn that conflict into a permanent partial rename.
+  it("writes the profile before renaming the workspace when the name differs", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, credentials());
     const calls: string[] = [];
@@ -707,7 +710,6 @@ describe("updateProfile", () => {
     const session = sessionFor(
       baseDir,
       makeClient({
-        me: () => Promise.resolve(meResponse()),
         updateOrganization: (_token, request) => {
           calls.push(`rename:${request.name}`);
           return Promise.resolve(meResponse({ organization: { id: ORGANIZATION.id, ...request } }));
@@ -719,8 +721,44 @@ describe("updateProfile", () => {
       }),
     );
 
-    await session.updateProfile({ ...profile, workspaceName: "Analytical Engines" });
-    expect(calls).toEqual(["rename:Analytical Engines", "profile"]);
+    const result = await session.updateProfile({ ...profile, workspaceName: "Analytical Engines" });
+    expect(calls).toEqual(["profile", "rename:Analytical Engines"]);
+    expect(result.organization.name).toBe("Analytical Engines");
+  });
+
+  // M8: a handle conflict during onboarding must change NOTHING — no partial
+  // rename left behind for the user to discover after picking another handle.
+  it("leaves the workspace name untouched when the handle is taken", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+    let renamed = false;
+    const session = sessionFor(
+      baseDir,
+      makeClient({
+        updateOrganization: () => {
+          renamed = true;
+          return Promise.resolve(meResponse());
+        },
+        updateProfile: () =>
+          Promise.reject(
+            new AccountApiError({
+              code: "handle_taken",
+              status: 409,
+              message: "That handle is already taken",
+            }),
+          ),
+      }),
+    );
+
+    await expect(
+      session.updateProfile({
+        handle: "ada",
+        displayName: "Ada",
+        avatarColor: "#22c55e",
+        workspaceName: "Analytical Engines",
+      }),
+    ).rejects.toMatchObject({ code: "handle_taken" });
+    expect(renamed).toBe(false);
   });
 
   // Renaming to the name it already has is a no-op, not a WorkOS round trip:
