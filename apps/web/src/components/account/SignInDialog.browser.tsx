@@ -210,6 +210,23 @@ describe("SignInDialog", () => {
     );
   });
 
+  // A server-side fiber interruption must never be rendered as UI copy —
+  // this exact runtime wording was observed in the dialog in production.
+  it("shows plain copy, not runtime internals, when the RPC fiber is interrupted", async () => {
+    accountApi.beginSso.mockResolvedValue({
+      ssoId: "sso_1",
+      authorizeUrl: "https://auth.example.com/authorize?provider=GoogleOAuth",
+    });
+    accountApi.openVerificationUrl.mockResolvedValue(undefined);
+    accountApi.completeSso.mockRejectedValue(new Error("All fibers interrupted without error"));
+
+    renderDialog();
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+
+    await expect.element(page.getByText("Sign-in was interrupted. Try again.")).toBeVisible();
+    expect(page.getByText(/fibers interrupted/).elements()).toHaveLength(0);
+  });
+
   // Timeout regression: a transient completeSso failure while the session
   // actually landed must advance, never show an error to a signed-in user.
   it("advances instead of showing an error when the status says signed in", async () => {

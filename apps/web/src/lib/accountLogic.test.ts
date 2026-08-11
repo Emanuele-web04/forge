@@ -12,6 +12,7 @@ import {
   accountInitial,
   formatResendCountdown,
   handleFormatError,
+  isSignInCancellation,
   publicProfileUrl,
   readAccountErrorCode,
   readEmailVerificationChallenge,
@@ -100,10 +101,97 @@ describe("formatResendCountdown", () => {
 });
 
 describe("accountErrorMessage", () => {
-  it("prefers the error's own message and falls back for empty ones", () => {
-    expect(accountErrorMessage(new Error("Handle taken"), "fallback")).toBe("Handle taken");
+  it("shows the message of a classified account error", () => {
+    // A WsRpcError as it crosses the wire: tagged, message we wrote.
+    expect(
+      accountErrorMessage(
+        Object.assign(new Error("That handle is already taken"), {
+          _tag: "WsRpcError",
+          code: "handle_taken",
+        }),
+        "fallback",
+      ),
+    ).toBe("That handle is already taken");
+    // Bare code without the tag still qualifies — the code is ours.
+    expect(
+      accountErrorMessage(
+        Object.assign(new Error("That code didn't work — check it and try again"), {
+          code: "invalid_verification_code",
+        }),
+        "fallback",
+      ),
+    ).toBe("That code didn't work — check it and try again");
+    // The verification refusal keeps its message too.
+    expect(
+      accountErrorMessage(
+        Object.assign(new Error("Enter the 6-digit code we sent to your email"), {
+          _tag: "AccountEmailVerificationRequiredError",
+        }),
+        "fallback",
+      ),
+    ).toBe("Enter the 6-digit code we sent to your email");
+  });
+
+  // Raw runtime/transport internals must never become UI copy: this is the
+  // guard that keeps "All fibers interrupted without error" out of a dialog.
+  it("falls back for unclassified errors, runtime internals, and non-errors", () => {
+    expect(accountErrorMessage(new Error("All fibers interrupted without error"), "fallback")).toBe(
+      "fallback",
+    );
+    expect(accountErrorMessage(new Error("socket hang up"), "fallback")).toBe("fallback");
+    expect(
+      accountErrorMessage(
+        Object.assign(new Error("interrupted"), { _tag: "InterruptedException" }),
+        "fallback",
+      ),
+    ).toBe("fallback");
+    // An unrecognized code is not ours to quote.
+    expect(
+      accountErrorMessage(
+        Object.assign(new Error("weird upstream text"), { code: "not_a_real_code" }),
+        "fallback",
+      ),
+    ).toBe("fallback");
     expect(accountErrorMessage(new Error("  "), "fallback")).toBe("fallback");
     expect(accountErrorMessage("not-an-error", "fallback")).toBe("fallback");
+    expect(accountErrorMessage(null, "fallback")).toBe("fallback");
+  });
+});
+
+describe("isSignInCancellation", () => {
+  it("recognizes the transport's interrupted wrapper and Effect interruption tags", () => {
+    expect(
+      isSignInCancellation(
+        Object.assign(new Error("WebSocket RPC account.completeSso was cancelled."), {
+          _tag: "WsTransportRequestInterruptedError",
+          code: "WS_REQUEST_ABORTED",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isSignInCancellation(Object.assign(new Error("interrupted"), { _tag: "Interrupted" })),
+    ).toBe(true);
+    expect(
+      isSignInCancellation(
+        Object.assign(new Error("interrupted"), { _tag: "InterruptedException" }),
+      ),
+    ).toBe(true);
+    // The squashed runtime form seen rendered in the live bug.
+    expect(isSignInCancellation(new Error("All fibers interrupted without error"))).toBe(true);
+  });
+
+  it("does not treat real outcomes as cancellations", () => {
+    expect(
+      isSignInCancellation(
+        Object.assign(new Error("That code didn't work"), {
+          _tag: "WsRpcError",
+          code: "invalid_verification_code",
+        }),
+      ),
+    ).toBe(false);
+    expect(isSignInCancellation(new Error("socket hang up"))).toBe(false);
+    expect(isSignInCancellation("not-an-error")).toBe(false);
+    expect(isSignInCancellation(null)).toBe(false);
   });
 });
 

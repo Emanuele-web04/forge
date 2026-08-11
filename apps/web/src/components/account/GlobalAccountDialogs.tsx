@@ -25,6 +25,25 @@ export function GlobalAccountDialogs() {
     if (needsOnboarding && view !== "onboarding") openOnboarding();
   }, [needsOnboarding, view, openOnboarding]);
 
+  // Account STATUS, not the sign-in RPC promise, is the authority on whether
+  // sign-in happened. The dialog's own completeSignIn/completeSso can time
+  // out, be aborted, or have its fiber interrupted while the session still
+  // lands (persisted server-side, observed by the status query on refetch or
+  // reconnect) — without this, the user is signed in behind a dialog stuck on
+  // "Waiting for your browser…". Only fires while the sign-in view is
+  // actually open, so an explicit close stays closed: a signed-out close is
+  // `view === "closed"` and never re-enters here, and the onboarding case is
+  // the effect above. `onSignedIn` remains the fast path; this is the net.
+  const signedInProfile = account.me === null ? undefined : (account.me.profile ?? null);
+  useEffect(() => {
+    if (view !== "sign-in" || signedInProfile === undefined) return;
+    if (signedInProfile === null) {
+      openOnboarding();
+    } else {
+      close();
+    }
+  }, [view, signedInProfile, openOnboarding, close]);
+
   return (
     <>
       <SignInDialog

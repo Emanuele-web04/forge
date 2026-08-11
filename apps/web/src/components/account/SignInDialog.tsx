@@ -20,6 +20,7 @@ import { useNowMs } from "~/hooks/useNowMs";
 import {
   accountErrorMessage,
   formatResendCountdown,
+  isSignInCancellation,
   readAccountErrorCode,
   readEmailVerificationChallenge,
   RESEND_COOLDOWN_SECONDS,
@@ -114,12 +115,15 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
 
   const handleSso = async (provider: AccountSsoProvider) => {
     setError(null);
+    // Held locally so the guard below cannot be weakened by the `finally`
+    // (or a newer attempt) nulling the shared ref before the catch reads it.
+    let controller: AbortController | null = null;
     try {
       const begin = await account.beginSso.mutateAsync({ provider });
       ssoIdRef.current = begin.ssoId;
       await account.openVerificationUrl(begin.authorizeUrl);
       setSsoWait({ ssoId: begin.ssoId });
-      const controller = new AbortController();
+      controller = new AbortController();
       ssoAbortRef.current = controller;
       const status = await account.completeSso.mutateAsync({
         ssoId: begin.ssoId,
@@ -128,15 +132,26 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
       ssoIdRef.current = null;
       onSignedIn(status);
     } catch (cause) {
-      if (ssoAbortRef.current?.signal.aborted) return;
+      // The user's own abort ("Stop waiting", closing the dialog) is a
+      // decision, not an outcome — swallow it entirely.
+      if (controller?.signal.aborted) return;
+      // Any failure may hide a success (a slow provider, an interrupted RPC
+      // whose sign-in still landed): the authoritative status decides first.
       if (await signedInDespiteError()) {
         ssoIdRef.current = null;
         return;
       }
       setSsoWait(null);
-      setError(accountErrorMessage(cause, "Sign-in did not finish. Try again."));
+      // A server-side interruption (reconnect, superseded request) with a
+      // genuinely signed-out outcome resets to the buttons with plain copy —
+      // never the runtime's own interrupt vocabulary.
+      setError(
+        isSignInCancellation(cause)
+          ? "Sign-in was interrupted. Try again."
+          : accountErrorMessage(cause, "Sign-in did not finish. Try again."),
+      );
     } finally {
-      ssoAbortRef.current = null;
+      if (ssoAbortRef.current === controller) ssoAbortRef.current = null;
     }
   };
 

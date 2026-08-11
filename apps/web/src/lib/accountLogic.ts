@@ -3,7 +3,12 @@
 // classification of RPC failures and handle/display derivations.
 // Layer: Web account feature logic (no I/O).
 
-import { AccountProfileHandle, type AccountErrorCode, type AccountMe } from "@synara/contracts";
+import {
+  AccountErrorCode as AccountErrorCodeSchema,
+  AccountProfileHandle,
+  type AccountErrorCode,
+  type AccountMe,
+} from "@synara/contracts";
 import { Schema } from "effect";
 
 /** How many digits the WorkOS verification code always has. */
@@ -74,8 +79,61 @@ export function formatResendCountdown(secondsLeft: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+/**
+ * Whether a failed sign-in RPC was a CANCELLATION rather than an outcome —
+ * our own abort, or the server-side fiber being interrupted (WS lease
+ * replaced, reconnect, request superseded). A cancellation carries no verdict
+ * on the sign-in: the caller must not render it as an error, and the
+ * authoritative account status decides what actually happened.
+ *
+ * Checked structurally rather than by `instanceof`: the rejection crosses
+ * serialization and runtime boundaries, so only tags and shapes survive.
+ */
+export function isSignInCancellation(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { _tag?: unknown; code?: unknown; message?: unknown };
+  // The transport's own wrapper for an aborted/timed-out request.
+  if (candidate._tag === "WsTransportRequestInterruptedError") return true;
+  // Effect interruption tags, as they appear on the squashed rejection.
+  if (candidate._tag === "Interrupted" || candidate._tag === "InterruptedException") return true;
+  // The squashed form a fiber interruption reaches a Promise rejection as.
+  // Matching the message is deliberate defense-in-depth: this exact runtime
+  // wording was observed rendered in the dialog, and no legitimate account
+  // error will ever spell it.
+  if (typeof candidate.message === "string" && /fibers?\s+interrupted/i.test(candidate.message)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Tags of the errors whose `message` this app authored (server-side mappings
+ * write them; see accountRpcErrors.ts). Only these may reach the UI verbatim.
+ */
+const TRUSTED_ACCOUNT_ERROR_TAGS: ReadonlySet<string> = new Set([
+  "WsRpcError",
+  "AccountEmailVerificationRequiredError",
+]);
+
+/**
+ * The user-facing message for a failed account call: the error's own message
+ * when it is one WE wrote — a `WsRpcError` / verification refusal off the RPC
+ * contract, or anything carrying a classified {@link AccountErrorCode} — and
+ * `fallback` for everything else. Never the raw `Error.message` of an
+ * arbitrary failure: transport and runtime internals ("All fibers interrupted
+ * without error", "socket hang up") are not copy, and rendering them taught
+ * us that the hard way.
+ */
 export function accountErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback;
+  if (typeof error !== "object" || error === null) return fallback;
+  const candidate = error as { _tag?: unknown; code?: unknown; message?: unknown };
+  const message = typeof candidate.message === "string" ? candidate.message.trim() : "";
+  if (message.length === 0) return fallback;
+
+  const trusted =
+    (typeof candidate._tag === "string" && TRUSTED_ACCOUNT_ERROR_TAGS.has(candidate._tag)) ||
+    (typeof candidate.code === "string" && Schema.is(AccountErrorCodeSchema)(candidate.code));
+  return trusted ? message : fallback;
 }
 
 /** Strips the visual @-prefix and anything a handle can never contain. */
