@@ -641,6 +641,7 @@ describe("provider runtime activity projection", () => {
   });
 
   it("projects unmapped passthrough events instead of dropping them", () => {
+    const oversizedDiagnostic = "x".repeat(64_000);
     const [activity] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "event.unmapped",
@@ -649,7 +650,11 @@ describe("provider runtime activity projection", () => {
         payload: {
           nativeType: "item/agentMessage/completed",
           detail: "Finished the refactor",
-          data: { msg: { type: "item/agentMessage/completed", summary: "Finished the refactor" } },
+          data: {
+            apiKey: "must-not-reach-the-activity-snapshot",
+            msg: { type: "item/agentMessage/completed", summary: "Finished the refactor" },
+            output: oversizedDiagnostic,
+          },
         },
       }),
     );
@@ -662,9 +667,16 @@ describe("provider runtime activity projection", () => {
       payload: {
         nativeEventType: "item/agentMessage/completed",
         detail: "Finished the refactor",
-        data: { msg: { type: "item/agentMessage/completed", summary: "Finished the refactor" } },
+        data: expect.objectContaining({
+          apiKey: "[REDACTED]",
+          msg: { type: "item/agentMessage/completed", summary: "Finished the refactor" },
+          __synaraTruncated: true,
+        }),
       },
     });
+    const serializedPayload = JSON.stringify(activity?.payload);
+    expect(serializedPayload.length).toBeLessThanOrEqual(17_000);
+    expect(serializedPayload).not.toContain("must-not-reach-the-activity-snapshot");
     // The activity must survive the schema of the command that carries it.
     expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 

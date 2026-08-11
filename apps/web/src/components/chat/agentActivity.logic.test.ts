@@ -202,24 +202,21 @@ describe("deriveAgentActivityTimelineState", () => {
 });
 
 describe("unmapped provider events", () => {
-  it("labels a raw unmapped event with its native type and payload preview", () => {
+  it("labels an unmapped event with its native type and safe detail", () => {
     const entry = workEntry({
       id: "unmapped-1",
       label: "item/agentMessage/completed",
       toolTitle: "item/agentMessage/completed",
       activityKind: "provider.event.unmapped",
       nativeEventType: "item/agentMessage/completed",
-      preview: '{"msg":{"type":"item/agentMessage/completed","summary":"Finished the refactor"}}',
+      detail: "Finished the refactor",
       tone: "info",
     });
 
     expect(isUnmappedProviderEventWorkEntry(entry)).toBe(true);
     // Raw native type/label is the title instead of the generic "Activity".
     expect(formatAgentActivityEntryTitle(entry)).toBe("Item/agentMessage/completed");
-    // Raw payload is the preview.
-    expect(formatAgentActivityEntryPreview(entry)).toBe(
-      '{"msg":{"type":"item/agentMessage/completed","summary":"Finished the refactor"}}',
-    );
+    expect(formatAgentActivityEntryPreview(entry)).toBe("Finished the refactor");
     // The unmapped fallback never hijacks explicit, working mappings.
     expect(isCodexActivityStatusWorkEntry(entry)).toBe(false);
     expect(isAgentActivityWorkEntry(entry)).toBe(false);

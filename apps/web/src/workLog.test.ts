@@ -25,6 +25,30 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
+  it("does not render unmapped diagnostic data as a raw transcript preview", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unmapped-provider-event",
+          kind: "provider.event.unmapped",
+          summary: "item/future/completed",
+          payload: {
+            nativeEventType: "item/future/completed",
+            detail: "Safe provider summary",
+            data: { apiKey: "[REDACTED]", arbitrary: "must-not-render" },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry).toMatchObject({
+      nativeEventType: "item/future/completed",
+      detail: "Safe provider summary",
+    });
+    expect(entry?.preview).toBeUndefined();
+  });
+
   it("omits task start and completion lifecycle entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

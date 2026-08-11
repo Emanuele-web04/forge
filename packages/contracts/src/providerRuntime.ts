@@ -738,10 +738,8 @@ const RuntimeErrorPayload = Schema.Struct({
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
 
-// Passthrough carrier for raw provider events no adapter mapping recognizes.
-// Without it those events are dropped before the GUI ever sees them; with it
-// the GUI renders the raw native type/label as the row title and the raw
-// payload as the preview. `detail` is a best-effort readable one-liner.
+// Forward-compatible diagnostic for provider events without an explicit mapping.
+// Ingress bounds and redacts `data`; `detail` is a safe best-effort summary.
 const EventUnmappedPayload = Schema.Struct({
   nativeType: TrimmedNonEmptyStringSchema,
   detail: Schema.optional(TrimmedNonEmptyStringSchema),
