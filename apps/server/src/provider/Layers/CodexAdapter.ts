@@ -2079,7 +2079,14 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             detail: toMessage(cause, "Failed to stop Codex adapter session."),
             cause,
           }),
-      });
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            turnWatchdogs.delete(threadId);
+            unmappedEventGate.releaseThread(threadId);
+          }),
+        ),
+      );
 
     const listSessions: CodexAdapterShape["listSessions"] = () =>
       Effect.sync(() => manager.listSessions());
@@ -2097,7 +2104,14 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             detail: toMessage(cause, "Failed to stop all Codex app-server processes."),
             cause,
           }),
-      });
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            turnWatchdogs.clear();
+            unmappedEventGate.clear();
+          }),
+        ),
+      );
 
     const getComposerCapabilities: NonNullable<CodexAdapterShape["getComposerCapabilities"]> = () =>
       Effect.succeed(manager.getComposerCapabilities() satisfies ProviderComposerCapabilities);
@@ -2280,6 +2294,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           yield* Effect.sync(() => {
             clearInterval(watchdogTicker);
             turnWatchdogs.clear();
+            unmappedEventGate.clear();
             manager.off("event", listener);
           });
           yield* ingress.stop;

@@ -1,70 +1,27 @@
 import type { ProviderEvent } from "@synara/contracts";
 
 import { boundActivityData } from "../activityData.ts";
+import { redactDiagnosticData, redactDiagnosticText } from "../diagnosticRedaction.ts";
 
-const REDACTED_VALUE = "[REDACTED]";
 const MAX_UNMAPPED_PROVIDER_DETAIL_CHARS = 500;
 const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu;
 const TURN_TERMINAL_METHODS = new Set(["turn/completed", "turn/aborted"]);
 const SESSION_TERMINAL_METHODS = new Set(["session/exited", "session/closed", "thread/closed"]);
-
-const SENSITIVE_KEYS = new Set([
-  "authorization",
-  "proxyauthorization",
-  "apikey",
-  "password",
-  "passphrase",
-  "cookie",
-  "setcookie",
-  "credential",
-  "credentials",
-  "privatekey",
-]);
-
-function normalizedKey(key: string): string {
-  return key.replace(/[^a-z0-9]/giu, "").toLowerCase();
-}
-
-function isSensitiveKey(key: string): boolean {
-  const normalized = normalizedKey(key);
-  return (
-    SENSITIVE_KEYS.has(normalized) ||
-    normalized.endsWith("token") ||
-    normalized.endsWith("secret") ||
-    normalized.endsWith("apikey") ||
-    normalized.endsWith("password") ||
-    normalized.endsWith("privatekey")
-  );
-}
-
-function redactSensitiveFields(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-  if (seen.has(value)) {
-    return "[Circular]";
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactSensitiveFields(entry, seen));
-  }
-
-  const redacted: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    redacted[key] = isSensitiveKey(key) ? REDACTED_VALUE : redactSensitiveFields(entry, seen);
-  }
-  return redacted;
-}
+const DEFAULT_MAX_TRACKED_BURST_SCOPES = 512;
+const DEFAULT_MAX_BURST_METHODS_PER_SCOPE = 32;
 
 export function sanitizeUnmappedProviderData(value: unknown): unknown {
-  return boundActivityData(redactSensitiveFields(value));
+  return boundActivityData(redactDiagnosticData(value));
 }
 
 export function sanitizeUnmappedProviderDetail(value: string | undefined): string | undefined {
-  if (value === undefined || value.length <= MAX_UNMAPPED_PROVIDER_DETAIL_CHARS) {
+  if (value === undefined) {
     return value;
   }
-  return `${value.slice(0, MAX_UNMAPPED_PROVIDER_DETAIL_CHARS - 3)}...`;
+  const redacted = redactDiagnosticText(value);
+  return redacted.length <= MAX_UNMAPPED_PROVIDER_DETAIL_CHARS
+    ? redacted
+    : `${redacted.slice(0, MAX_UNMAPPED_PROVIDER_DETAIL_CHARS - 3)}...`;
 }
 
 export function sanitizeUnmappedProviderEvent(event: ProviderEvent): ProviderEvent {
@@ -84,9 +41,37 @@ function isBurstStyleMethod(method: string): boolean {
 export type UnmappedProviderEventGate = {
   readonly shouldSurface: (event: ProviderEvent) => boolean;
   readonly release: (event: ProviderEvent) => void;
+  readonly releaseThread: (threadId: ProviderEvent["threadId"]) => void;
+  readonly clear: () => void;
 };
 
-export function makeUnmappedProviderEventGate(): UnmappedProviderEventGate {
+type UnmappedProviderEventGateOptions = {
+  readonly maxTrackedScopes?: number;
+  readonly maxMethodsPerScope?: number;
+};
+
+function positiveIntegerOr(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function removeOldest<T>(collection: Map<T, unknown> | Set<T>): void {
+  const oldest = collection.keys().next().value;
+  if (oldest !== undefined) {
+    collection.delete(oldest);
+  }
+}
+
+export function makeUnmappedProviderEventGate(
+  options: UnmappedProviderEventGateOptions = {},
+): UnmappedProviderEventGate {
+  const maxTrackedScopes = positiveIntegerOr(
+    options.maxTrackedScopes,
+    DEFAULT_MAX_TRACKED_BURST_SCOPES,
+  );
+  const maxMethodsPerScope = positiveIntegerOr(
+    options.maxMethodsPerScope,
+    DEFAULT_MAX_BURST_METHODS_PER_SCOPE,
+  );
   const surfacedBurstMethods = new Map<string, Set<string>>();
 
   const shouldSurface = (event: ProviderEvent): boolean => {
@@ -94,13 +79,31 @@ export function makeUnmappedProviderEventGate(): UnmappedProviderEventGate {
       return true;
     }
     const scope = eventScope(event);
-    const methods = surfacedBurstMethods.get(scope) ?? new Set<string>();
+    let methods = surfacedBurstMethods.get(scope);
+    if (methods === undefined) {
+      if (surfacedBurstMethods.size >= maxTrackedScopes) {
+        removeOldest(surfacedBurstMethods);
+      }
+      methods = new Set<string>();
+      surfacedBurstMethods.set(scope, methods);
+    }
     if (methods.has(event.method)) {
       return false;
     }
+    if (methods.size >= maxMethodsPerScope) {
+      removeOldest(methods);
+    }
     methods.add(event.method);
-    surfacedBurstMethods.set(scope, methods);
     return true;
+  };
+
+  const releaseThread = (threadId: ProviderEvent["threadId"]): void => {
+    const threadPrefix = `${threadId}\u0000`;
+    for (const scope of surfacedBurstMethods.keys()) {
+      if (scope.startsWith(threadPrefix)) {
+        surfacedBurstMethods.delete(scope);
+      }
+    }
   };
 
   const release = (event: ProviderEvent): void => {
@@ -111,13 +114,13 @@ export function makeUnmappedProviderEventGate(): UnmappedProviderEventGate {
     if (!SESSION_TERMINAL_METHODS.has(event.method)) {
       return;
     }
-    const threadPrefix = `${event.threadId}\u0000`;
-    for (const scope of surfacedBurstMethods.keys()) {
-      if (scope.startsWith(threadPrefix)) {
-        surfacedBurstMethods.delete(scope);
-      }
-    }
+    releaseThread(event.threadId);
   };
 
-  return { shouldSurface, release };
+  return {
+    shouldSurface,
+    release,
+    releaseThread,
+    clear: () => surfacedBurstMethods.clear(),
+  };
 }

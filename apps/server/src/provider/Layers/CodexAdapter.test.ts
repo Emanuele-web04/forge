@@ -95,6 +95,7 @@ class FakeCodexManager extends CodexAppServerManager {
   );
 
   public stopAllImpl = vi.fn(() => undefined);
+  public stopSessionImpl = vi.fn(async (_threadId: ThreadId): Promise<void> => undefined);
 
   override startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
     return this.startSessionImpl(input);
@@ -140,7 +141,9 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.respondToUserInputImpl(threadId, requestId, answers);
   }
 
-  override async stopSession(_threadId: ThreadId): Promise<void> {}
+  override stopSession(threadId: ThreadId): Promise<void> {
+    return this.stopSessionImpl(threadId);
+  }
 
   override listSessions(): ProviderSession[] {
     return [];
@@ -1651,6 +1654,41 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         ),
         ["item/future/outputDelta", "item/future/completed"],
       );
+    }),
+  );
+
+  it.effect("releases unmapped burst state when its session stops", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const threadId = asThreadId("thread-unmapped-stopped");
+      const emitDelta = (id: string) =>
+        lifecycleManager.emit("event", {
+          id: asEventId(id),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method: "item/future/outputDelta",
+          threadId,
+          turnId: asTurnId("turn-abandoned"),
+          payload: { summary: id },
+        } satisfies ProviderEvent);
+
+      emitDelta("evt-unmapped-before-stop");
+      yield* adapter.stopSession(threadId);
+      emitDelta("evt-unmapped-after-stop");
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      assert.deepEqual(
+        events.map((event) =>
+          event.type === "event.unmapped" ? event.payload.detail : event.type,
+        ),
+        ["evt-unmapped-before-stop", "evt-unmapped-after-stop"],
+      );
+      assert.deepEqual(lifecycleManager.stopSessionImpl.mock.lastCall, [threadId]);
     }),
   );
 });
