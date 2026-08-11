@@ -60,7 +60,9 @@ describe("CreateProjectDialog GitHub source", () => {
     await page.getByRole("radio", { name: "GitHub" }).click();
     expect(document.body.textContent).toContain("What you need");
     expect(document.body.textContent).toContain("Private access");
+    expect(document.body.textContent).toContain("Fork destination owner");
     await page.getByLabelText("Repository").fill("openai/codex");
+    await page.getByLabelText("Fork destination owner").fill("octocat-org");
 
     expect((page.getByLabelText("Folder name").element() as HTMLInputElement).value).toBe("codex");
     expect(document.body.textContent).toContain("Final location: /Users/test/Developer/codex");
@@ -71,12 +73,36 @@ describe("CreateProjectDialog GitHub source", () => {
     expect(value).toMatchObject({
       source: "github",
       repository: "openai/codex",
+      forkDestinationOwner: "octocat-org",
       destinationParent: "/Users/test/Developer",
       directoryName: "codex",
       spaceId: null,
     });
     expect(value.operationId).toEqual(expect.any(String));
     expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("omits fork destination owner when left blank", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    await render(
+      <CreateProjectDialog
+        open
+        githubProvisioningAvailable
+        spaces={[]}
+        activeSpaceId={null}
+        defaultCloneParent="/Users/test/Developer"
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await page.getByRole("radio", { name: "GitHub" }).click();
+    await page.getByLabelText("Repository").fill("openai/codex");
+    await page.getByRole("button", { name: "Clone and add" }).click();
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    const [value] = onSubmit.mock.calls[0] ?? [];
+    expect(value.forkDestinationOwner).toBeUndefined();
   });
 
   it("rejects invalid clone folder names before provisioning", async () => {

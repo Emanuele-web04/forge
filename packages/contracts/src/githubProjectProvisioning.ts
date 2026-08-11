@@ -6,6 +6,7 @@ import { ModelSelection } from "./orchestration";
 const BoundedRepositoryInput = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
 const BoundedPath = TrimmedNonEmptyString.check(Schema.isMaxLength(4_096));
 const BoundedDirectoryName = TrimmedNonEmptyString.check(Schema.isMaxLength(255));
+const BoundedGitHubOwner = TrimmedNonEmptyString.check(Schema.isMaxLength(100));
 
 /**
  * One server-owned GitHub checkout + project-registration operation.
@@ -19,6 +20,7 @@ export const GitHubProjectProvisionInput = Schema.Struct({
   repository: BoundedRepositoryInput,
   destinationParent: BoundedPath,
   directoryName: BoundedDirectoryName,
+  forkDestinationOwner: Schema.optional(BoundedGitHubOwner),
   commandId: CommandId,
   projectId: ProjectId,
   /** Destination for a newly registered project; reusing an existing project preserves its Space. */
