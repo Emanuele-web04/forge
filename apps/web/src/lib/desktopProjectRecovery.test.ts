@@ -9,7 +9,10 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { hasLiveThreadsWithMissingProjects } from "./desktopProjectRecovery";
+import {
+  hasLiveThreadsWithMissingProjects,
+  shouldRepairDesktopProjectSnapshot,
+} from "./desktopProjectRecovery";
 
 function makeProject(
   overrides: Partial<OrchestrationReadModel["projects"][number]> = {},
@@ -147,6 +150,17 @@ function makeShellSnapshot(
 }
 
 describe("desktopProjectRecovery", () => {
+  it("does not repair a valid empty first-run snapshot", () => {
+    expect(
+      shouldRepairDesktopProjectSnapshot(
+        makeShellSnapshot({
+          projects: [],
+          threads: [],
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("returns false when live threads still have live project rows", () => {
     const snapshot = makeSnapshot();
 

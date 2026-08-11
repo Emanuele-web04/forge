@@ -18,3 +18,13 @@ export function hasLiveThreadsWithMissingProjects(snapshot: ProjectRecoverySnaps
     return isLiveThread && !liveProjectIds.has(thread.projectId);
   });
 }
+
+/**
+ * A genuinely empty profile is a valid first-run state, not evidence that its
+ * projections are damaged. Rebuilding projections in that case is expensive
+ * and, when the desktop bootstrap reruns, can keep the orchestration database
+ * busy long enough for unrelated provider commands to time out.
+ */
+export function shouldRepairDesktopProjectSnapshot(snapshot: ProjectRecoverySnapshot): boolean {
+  return hasLiveThreadsWithMissingProjects(snapshot);
+}
