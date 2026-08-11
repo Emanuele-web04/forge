@@ -136,7 +136,18 @@ The no-leak rules travel with the seam and remain binding: submitted codes
 and pending tokens never appear in logs, error messages, thrown causes, or
 response bodies beyond the documented challenge fields; credential-path
 helpers never echo upstream bodies; validation failures use hand-worded
-messages because the schema decoder quotes the offending value.
+messages because the schema decoder quotes the offending value. Unclassified
+provider refusals log only the HTTP status plus allowlisted labels — the
+provider's free-form `code`/`error` strings never travel verbatim.
+
+One deliberate, documented exemption: the client-side credential file. The
+session tokens (access/refresh) and the host token ARE persisted on disk, in
+plaintext, at `<synara home>/account-credentials.json`, mode `0600`, written
+atomically. That is the accepted V1 threat model — an attacker who can read
+the owner's home directory already owns the machine — and it is a storage
+decision, not a hole in the no-leak rules above, which govern logs, error
+paths, and response bodies. There is no OS-keychain storage in V1; step 10's
+device-bound grants are the planned upgrade, not a keychain.
 
 ## Auth methods
 
@@ -155,8 +166,12 @@ of this service. What Synara ships is two ways in:
 - **SSO (Google/GitHub) — via device grant and the system browser.** The app
   starts the flow at `POST /api/v1/auth/device`, opens the provider's
   approval page in the real browser (the only auth step that leaves the app),
-  and polls the provider directly for the token pair. The CLI's `synara auth`
-  is the same flow.
+  and polls `POST /api/v1/auth/device/token` for the token pair — every leg
+  is proxied through the account service, exactly as the Flows section
+  describes. The CLI's `synara auth` is the same flow. (Historical note: the
+  pre-cutover design had clients polling the provider directly with the
+  `/instance` client id; that path survives only for old clients, via the
+  deprecated `InstanceInfo` fields.)
 - **No password auth.** The V1.1 password routes were removed with the OTP
   cutover; nothing accepts or stores a password.
 
@@ -334,7 +349,11 @@ literal union as more provider families ship.
 - **Transparent refresh** — every user-scoped call retries once on a 401,
   persisting the rotated pair before the retry.
 - **In-app account** — `accountSession.ts` owns sign-in state server-side;
-  the six account RPCs ride the existing WebSocket; the web app renders the
+  the account RPC group (ten methods: status, sendOtp, authenticateOtp,
+  verifyEmail, resendVerificationEmail, beginSignIn, completeSignIn,
+  updateProfile, signOut, openVerificationUrl — see
+  `apps/server/src/wsAccountRpc.ts`, all owner-only) rides the existing
+  WebSocket; the web app renders the
   sign-in dialog (email → code boxes), onboarding (handle, display name,
   avatar color), and the sidebar account menu. All sign-in paths converge on
   `establishSession`.

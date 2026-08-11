@@ -996,6 +996,80 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         warnSpy.mockRestore();
       }
     });
+
+    // The adversarial variant: the refusal's `code`/`error` fields are
+    // free-form provider strings, and the unclassified-failure log line is
+    // the one place they used to travel verbatim. A provider edge case that
+    // echoes the submitted secret into them must still never reach a log —
+    // only allowlisted labels do.
+    it("never logs unclassified provider code/error fields that echo the submitted secret", async () => {
+      const { serve } = await import("@hono/node-server");
+      const submittedCode = "654321";
+      const pendingToken = "pat_secret_echo_test";
+      const hostile = new Hono();
+      // Every grant refuses with the secrets embedded in the two fields the
+      // log line reads, under spellings no classifier recognizes.
+      hostile.post("/user_management/authenticate", (c) =>
+        c.json(
+          { code: `weird_refusal ${submittedCode}`, error: `edge ${pendingToken}` },
+          400 as 400,
+        ),
+      );
+      const server = serve({ fetch: hostile.fetch, port: 0 });
+
+      const logged: string[] = [];
+      const capture = (...args: unknown[]) => {
+        logged.push(args.map((arg) => String(arg)).join(" "));
+      };
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(capture);
+      const logSpy = vi.spyOn(console, "log").mockImplementation(capture);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(capture);
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") throw new Error("failed to bind");
+        const { db } = buildApp();
+        const app = new Hono();
+        app.route(
+          "/api/v1",
+          routesFor(db, workos.config({ databaseUrl, workosApiUrl: `http://127.0.0.1:${address.port}` })),
+        );
+
+        const otp = await postJson(
+          app,
+          "/api/v1/auth/otp/authenticate",
+          { email: "ada@example.com", code: submittedCode },
+          "203.0.113.35",
+        );
+        expect(otp.status).toBe(502);
+        const verify = await postJson(
+          app,
+          "/api/v1/auth/verify-email",
+          { code: submittedCode, pendingAuthenticationToken: pendingToken },
+          "203.0.113.35",
+        );
+        expect(verify.status).toBe(502);
+        const device = await postJson(
+          app,
+          "/api/v1/auth/device/token",
+          { deviceCode: `dc_${submittedCode}` },
+          "203.0.113.35",
+        );
+        expect(device.status).toBe(502);
+
+        const joined = logged.join("\n");
+        // The refusals were logged (as unclassified) ...
+        expect(joined).toContain("unclassified WorkOS");
+        // ... but nothing provider-supplied travelled verbatim.
+        expect(joined).not.toContain(submittedCode);
+        expect(joined).not.toContain(pendingToken);
+        expect(joined).toContain("unrecognized");
+      } finally {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+        warnSpy.mockRestore();
+        server.close();
+      }
+    });
   });
 
   describe("email verification", () => {

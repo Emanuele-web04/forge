@@ -152,6 +152,46 @@ function contextFields(context: AuthRequestContext | undefined): Record<string, 
   };
 }
 
+/**
+ * The WorkOS error spellings this service knows about, for logging ONLY.
+ * The `code`/`error` fields of a refusal are free-form provider strings, and
+ * on a credential route a hostile or buggy upstream could put a submitted
+ * secret in them — so an unclassified refusal's log line carries an internal
+ * label from this allowlist, never the raw field. Classification for
+ * behavior lives in the classifiers above; this list exists so an operator
+ * can still tell refusal families apart in production without any provider
+ * string reaching a log.
+ */
+const LOGGABLE_REFUSAL_SPELLINGS: ReadonlySet<string> = new Set([
+  "email_verification_required",
+  "sso_required",
+  "organization_authentication_methods_required",
+  "organization_selection_required",
+  "invalid_one_time_code",
+  "invalid_code",
+  "invalid_credentials",
+  "invalid_grant",
+  "invalid_client",
+  "invalid_request",
+  "unsupported_grant_type",
+  "one_time_code_expired",
+  "magic_auth_expired",
+  "email_verification_code_incorrect",
+  "email_verification_code_expired",
+  "pending_authentication_token_expired",
+  "invalid_pending_authentication_token",
+  "authorization_pending",
+  "slow_down",
+  "expired_token",
+  "access_denied",
+]);
+
+/** An allowlisted label for a provider field value: the value itself only when recognized. */
+function loggableRefusalLabel(value: unknown): string {
+  if (typeof value !== "string") return "-";
+  return LOGGABLE_REFUSAL_SPELLINGS.has(value) ? value : "unrecognized";
+}
+
 function fullName(user: WorkosUserResponse): string | undefined {
   const parts = [user.first_name, user.last_name].filter(
     (part): part is string => typeof part === "string" && part.trim().length > 0,
@@ -478,15 +518,16 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     }
     if (failure) throw new IdentityAuthError(failure);
     // An unclassified refusal becomes an opaque 502 to the caller, so this
-    // line is the only place its identity survives. Log the status and the
-    // two code fields ONLY — both are WorkOS-chosen enum spellings. Never the
-    // description or the body: those echo request fields, and this is a
-    // credential route.
+    // line is the only place its identity survives. Log the status plus
+    // allowlisted labels ONLY: the code fields are free-form provider
+    // strings, and on a credential route an unexpected upstream could echo
+    // the submitted secret into them — so anything not on the known-spelling
+    // list logs as "unrecognized", never verbatim.
     const refusal = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
     console.error(
       `[api] unclassified WorkOS auth failure: status=${response.status}` +
-        ` code=${typeof refusal.code === "string" ? refusal.code : "-"}` +
-        ` error=${typeof refusal.error === "string" ? refusal.error : "-"}`,
+        ` code=${loggableRefusalLabel(refusal.code)}` +
+        ` error=${loggableRefusalLabel(refusal.error)}`,
     );
     throw new IdentityProviderError(
       response.status,
@@ -617,11 +658,12 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       // the same reasons an expired one is, and the client's recovery (start
       // over) is identical.
       if (error === "invalid_grant") return { status: "expired" };
-      // No body or description in the message: an unrecognised refusal on a
-      // credential route stays opaque, as everywhere else.
+      // No body or description in the message, and the error field only as
+      // an allowlisted label: an unrecognised refusal on a credential route
+      // stays opaque, as everywhere else.
       console.error(
         `[api] unclassified WorkOS device-token failure: status=${response.status}` +
-          ` error=${error ?? "-"}`,
+          ` error=${loggableRefusalLabel(error)}`,
       );
       throw new IdentityProviderError(
         response.status,
@@ -779,8 +821,9 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     },
 
     describeInstanceAuth() {
-      // The device-flow poll and token refresh go from the client straight to
-      // WorkOS, which is why the client id and API origin are published.
+      // Deprecated-but-present: every provider call is proxied now, and
+      // Synara's own clients ignore these — only clients from before the
+      // proxy cutover still poll WorkOS directly with them.
       return {
         authMode: "workos",
         clientId: config.workosClientId,

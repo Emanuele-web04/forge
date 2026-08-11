@@ -267,7 +267,13 @@ export type AccountIdentityVerifier = {
    * deliberately flattens that into the same 202 as success.
    */
   resendVerificationEmail(emailVerificationId: string): Promise<void>;
-  /** What `/instance` publishes so clients can reach the provider directly. */
+  /**
+   * What `/instance` publishes about this deployment's identity wiring.
+   * Every provider call is proxied through this service now; the client id
+   * and provider origin in here are deprecated-but-present solely for
+   * clients built before the proxy cutover, which still poll the provider
+   * directly with them.
+   */
   describeInstanceAuth(): InstanceAuthInfo;
 };
 
