@@ -37,7 +37,6 @@ import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream }
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
-import { toAccountWsRpcError, toSensitiveWsRpcError } from "./accountRpcErrors";
 import { createAccountSession } from "./accountSession";
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
@@ -137,6 +136,8 @@ import {
   WsConnectionSessionsLive,
   type WsConnectionSession,
 } from "./wsConnectionSessions";
+import { makeAccountRpcHandlers } from "./wsAccountRpc";
+import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
   parseWsNegotiateSearchParams,
@@ -158,7 +159,7 @@ import {
 } from "./project/githubProjectProvisioning";
 
 export function canManageExternalMcp(role: "owner" | "client"): boolean {
-  return role === "owner";
+  return isOwnerRole(role);
 }
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
@@ -801,31 +802,14 @@ const makeWsRpcHandlersLayer = () =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
       /**
-       * `rpcEffect` for the account handlers: an `AccountApiError` keeps its
-       * message and carries its `AccountErrorCode` as `code`, which the web UI
-       * branches on (`handle_taken` under the handle field, an expired device
-       * code offering a retry, ...).
+       * The account RPCs are owner-only, entirely — reads included; see
+       * wsAccountRpc.ts, which owns the guard, the error mappings, and the
+       * handler bodies.
        */
-      const accountRpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
-        effect.pipe(Effect.mapError((cause) => toAccountWsRpcError(cause, fallbackMessage)));
-
-      /**
-       * `accountRpcEffect` for handlers whose request carried a credential
-       * (the emailed OTP code, or the verification code + pending token).
-       *
-       * Same classification, minus the `cause`: the ordinary path attaches the
-       * original error, which for a failed credential call is an object graph
-       * built from a request that contained the secret — a fetch error can
-       * quote the request, and anything attached here is serialized to the
-       * client and may be logged on the way. The account service has already
-       * turned the real reason into a message and code
-       * (`invalid_verification_code`, ...), so those are all that is worth
-       * keeping.
-       */
-      const sensitiveRpcEffect = <A, E, R>(
-        effect: Effect.Effect<A, E, R>,
-        fallbackMessage: string,
-      ) => effect.pipe(Effect.mapError((cause) => toSensitiveWsRpcError(cause, fallbackMessage)));
+      const accountRpcHandlers = makeAccountRpcHandlers({
+        accountSession,
+        openBrowser: (url) => open.openBrowser(url),
+      });
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
@@ -852,11 +836,7 @@ const makeWsRpcHandlersLayer = () =>
           );
 
       const requireOwner = Effect.gen(function* () {
-        if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
-          return yield* Effect.fail(
-            new WsRpcError({ message: "Owner authorization is required for this operation." }),
-          );
-        }
+        yield* requireOwnerRole;
         if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
           return yield* Effect.fail(
             new WsRpcError({
@@ -1934,84 +1914,7 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
-        [WS_METHODS.accountStatus]: () =>
-          accountRpcEffect(
-            Effect.promise(() => accountSession.status()),
-            "Failed to read the account session",
-          ),
-        // The send carries only the address — no credential — but shares the
-        // sensitive mapping so no upstream cause can ride to the wire.
-        [WS_METHODS.accountSendOtp]: (input) =>
-          sensitiveRpcEffect(
-            Effect.tryPromise(() => accountSession.sendOtp(input)),
-            "Could not send the code. Try again in a minute.",
-          ),
-        // The payload carries the emailed code — a credential — so it goes
-        // through sensitiveRpcEffect rather than rpcEffect: the failure is
-        // reduced to a message and the cause is dropped, so no object graph
-        // derived from the request can reach the wire or a log.
-        [WS_METHODS.accountAuthenticateOtp]: (input) =>
-          sensitiveRpcEffect(
-            Effect.tryPromise(() => accountSession.authenticateOtp(input)),
-            "Could not sign in. Check the code and try again.",
-          ),
-        // The payload is the emailed code plus the pending token — bearer-ish
-        // secrets, so the sensitive mapping applies to it too.
-        [WS_METHODS.accountVerifyEmail]: (input) =>
-          sensitiveRpcEffect(
-            Effect.tryPromise(() => accountSession.verifyEmail(input)),
-            "Could not verify your email. Try again.",
-          ),
-        [WS_METHODS.accountResendVerificationEmail]: (input) =>
-          sensitiveRpcEffect(
-            Effect.tryPromise(() => accountSession.resendVerificationEmail(input)),
-            "Could not resend the code. Try again in a minute.",
-          ),
-        [WS_METHODS.accountBeginSignIn]: () =>
-          accountRpcEffect(
-            Effect.tryPromise(() => accountSession.beginSignIn()),
-            "Failed to start sign-in",
-          ),
-        // Runs until the user finishes on the hosted page, so it deliberately
-        // has no timeout of its own; the device code's own expiry bounds it,
-        // and the client is told not to time it out either. A client that
-        // disconnects mid-flight loses nothing: the credentials are persisted
-        // here before this answers, and `account.status` recovers them.
-        [WS_METHODS.accountCompleteSignIn]: (input) =>
-          accountRpcEffect(
-            Effect.tryPromise(() => accountSession.completeSignIn(input)),
-            "Failed to finish signing in",
-          ),
-        [WS_METHODS.accountUpdateProfile]: (input) =>
-          accountRpcEffect(
-            Effect.tryPromise(() => accountSession.updateProfile(input)),
-            "Failed to save your profile",
-          ),
-        [WS_METHODS.accountSignOut]: () =>
-          accountRpcEffect(
-            Effect.tryPromise(() => accountSession.signOut()),
-            "Failed to sign out",
-          ),
-        [WS_METHODS.accountOpenVerificationUrl]: (input) =>
-          accountRpcEffect(
-            Effect.gen(function* () {
-              // Only a URL this server issued from a device authorization.
-              // Without this the method would be an arbitrary-URL opener
-              // reachable by anyone who can reach the WebSocket.
-              const allowed = yield* Effect.promise(() =>
-                accountSession.isVerificationUrlAllowed(input.url),
-              );
-              if (!allowed) {
-                return yield* Effect.fail(
-                  new WsRpcError({
-                    message: "That link is not a sign-in verification URL from this server.",
-                  }),
-                );
-              }
-              yield* open.openBrowser(input.url);
-            }),
-            "Failed to open the sign-in page",
-          ),
+        ...accountRpcHandlers,
         [WS_METHODS.automationList]: (input) =>
           rpcEffect(automationService.list(input), "Failed to list automations"),
         [WS_METHODS.automationGetMemory]: ({ automationId }) =>
