@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "prepare": "effect-language-service patch",
+    "prepare": "if [ \"${CI}\" != \"true\" ]; then effect-language-service patch; fi",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",

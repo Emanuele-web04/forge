@@ -282,7 +282,7 @@
     }
   },
   "scripts": {
-    "prepare": "effect-language-service patch",
+    "prepare": "if [ \"${CI}\" != \"true\" ]; then effect-language-service patch; fi",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

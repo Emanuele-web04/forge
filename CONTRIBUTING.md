@@ -4,6 +4,8 @@
 
 We are accepting focused contributions, especially small bug fixes, reliability fixes, performance improvements, and maintenance work.
 
+If you are preparing a downstream fork, use the [rebrand checklist](./docs/rebrand-checklist.md) before making identity-related edits.
+
 You can open an issue or PR, but please do so knowing that Forkara is still early and we are keeping scope, quality, and direction tight.
 
 Large, unfocused, or direction-changing PRs may still be closed quickly.

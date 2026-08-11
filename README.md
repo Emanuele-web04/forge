@@ -87,6 +87,7 @@ They're surprisingly lightweight.
 ## Contributing
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
+For downstream forks, start with [docs/rebrand-checklist.md](./docs/rebrand-checklist.md).
 
 Need support?
 
@@ -195,7 +196,7 @@ Not yet. Sporks are in the roadmap, and we keep promises in the issue tracker be
 
 Forkara began as a fork of Synara.
 
-Synara began as a clone of T3Code.
+Synara began as an early clone of a public template, but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.
 
 Forkara began as a fork of a clone that wasn't a fork because it was a clone.
 

@@ -130,7 +130,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       {
         id: "analytics-configuration-removed",
         title:
-          "A review of the Forkara codebase found an analytics configuration that came from the original T3 Code codebase when Forkara was created as a clone in March.",
+          "A review of the Synara codebase found an analytics configuration that came from the original T3 Code codebase when Synara was created as a clone in March.",
         description:
           "We did not add it, and we have no access to the PostHog project receiving the events.",
         details:
