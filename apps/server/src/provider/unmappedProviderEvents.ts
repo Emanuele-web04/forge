@@ -3,6 +3,7 @@ import type { ProviderEvent } from "@synara/contracts";
 export const MAX_UNMAPPED_PROVIDER_DATA_JSON_CHARS = 16_000;
 
 const MAX_UNMAPPED_PROVIDER_DETAIL_CHARS = 500;
+const MAX_UNMAPPED_PROVIDER_NATIVE_TYPE_CHARS = 200;
 const MAX_UNMAPPED_PROVIDER_PREVIEW_CHARS = 2_000;
 const REDACTED_VALUE = "[REDACTED]";
 const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu;
@@ -38,6 +39,13 @@ function redactText(value: string): string {
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
     .replace(BEARER_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}`);
+}
+
+function sanitizeText(value: string, maxChars: number): string {
+  const redacted = redactText(value);
+  return redacted.length <= maxChars
+    ? redacted
+    : `${redacted.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
 function keyTokens(key: string): ReadonlyArray<string> {
@@ -96,24 +104,35 @@ export function sanitizeUnmappedProviderData(value: unknown): unknown {
 }
 
 export function sanitizeUnmappedProviderDetail(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  const redacted = redactText(value);
-  return redacted.length <= MAX_UNMAPPED_PROVIDER_DETAIL_CHARS
-    ? redacted
-    : `${redacted.slice(0, MAX_UNMAPPED_PROVIDER_DETAIL_CHARS - 3)}...`;
+  return value === undefined ? undefined : sanitizeText(value, MAX_UNMAPPED_PROVIDER_DETAIL_CHARS);
+}
+
+export function sanitizeUnmappedProviderNativeType(value: string): string {
+  return sanitizeText(value, MAX_UNMAPPED_PROVIDER_NATIVE_TYPE_CHARS);
 }
 
 export function sanitizeUnmappedProviderEvent(event: ProviderEvent): ProviderEvent {
-  return event.payload === undefined
-    ? event
-    : { ...event, payload: sanitizeUnmappedProviderData(event.payload) };
+  return {
+    ...event,
+    method: sanitizeUnmappedProviderNativeType(event.method),
+    ...(event.message !== undefined
+      ? { message: sanitizeText(event.message, MAX_UNMAPPED_PROVIDER_DETAIL_CHARS) }
+      : {}),
+    ...(event.textDelta !== undefined
+      ? { textDelta: sanitizeText(event.textDelta, MAX_UNMAPPED_PROVIDER_DETAIL_CHARS) }
+      : {}),
+    ...(event.payload !== undefined
+      ? { payload: sanitizeUnmappedProviderData(event.payload) }
+      : {}),
+  };
 }
 
 export function makeUnmappedProviderEventGate(maxTrackedBursts = 128) {
   const surfacedBursts = new Set<string>();
   return (event: ProviderEvent): boolean => {
     if (!BURST_METHOD_SUFFIX.test(event.method)) return true;
-    const key = `${event.threadId}\u0000${event.method}`;
+    const generation = event.lifecycleGeneration?.slice(0, 200) ?? "session";
+    const key = `${event.threadId}\u0000${generation}\u0000${sanitizeUnmappedProviderNativeType(event.method)}`;
     if (surfacedBursts.has(key)) return false;
     if (surfacedBursts.size >= Math.max(1, maxTrackedBursts)) {
       const oldest = surfacedBursts.values().next().value;

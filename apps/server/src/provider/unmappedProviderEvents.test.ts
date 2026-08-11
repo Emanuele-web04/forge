@@ -8,7 +8,11 @@ import {
   sanitizeUnmappedProviderEvent,
 } from "./unmappedProviderEvents.ts";
 
-function event(method: string, threadId = "thread-unmapped"): ProviderEvent {
+function event(
+  method: string,
+  threadId = "thread-unmapped",
+  lifecycleGeneration?: string,
+): ProviderEvent {
   return {
     id: EventId.makeUnsafe(`event-${method}-${threadId}`),
     kind: "notification",
@@ -17,6 +21,7 @@ function event(method: string, threadId = "thread-unmapped"): ProviderEvent {
     turnId: TurnId.makeUnsafe("turn-unmapped"),
     createdAt: "2026-08-11T08:00:00.000Z",
     method,
+    ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
   };
 }
 
@@ -58,7 +63,27 @@ describe("unmapped provider event safety", () => {
     const shouldSurface = makeUnmappedProviderEventGate(2);
     expect(shouldSurface(event("future/outputDelta"))).toBe(true);
     expect(shouldSurface(event("future/outputDelta"))).toBe(false);
+    expect(shouldSurface(event("future/outputDelta", "thread-unmapped", "generation-2"))).toBe(
+      true,
+    );
     expect(shouldSurface(event("future/outputDelta", "thread-other"))).toBe(true);
     expect(shouldSurface(event("future/completed"))).toBe(true);
+  });
+
+  it("sanitizes and caps top-level native diagnostic fields", () => {
+    const sanitized = sanitizeUnmappedProviderEvent({
+      ...event(`future/${"m".repeat(64_000)}`),
+      id: EventId.makeUnsafe("event-oversized-top-level"),
+      message: `api_key=message-secret ${"m".repeat(2_000)}`,
+      textDelta: `Authorization: Bearer delta-secret ${"d".repeat(2_000)}`,
+    });
+    const serialized = JSON.stringify(sanitized);
+
+    expect(sanitized.method.length).toBeLessThan(500);
+    expect(sanitized.message?.length).toBeLessThan(600);
+    expect(sanitized.textDelta?.length).toBeLessThan(600);
+    expect(serialized).not.toContain("message-secret");
+    expect(serialized).not.toContain("delta-secret");
+    expect(serialized.length).toBeLessThan(2_000);
   });
 });

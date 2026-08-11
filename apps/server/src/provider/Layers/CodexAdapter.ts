@@ -85,6 +85,7 @@ import {
   sanitizeUnmappedProviderData,
   sanitizeUnmappedProviderDetail,
   sanitizeUnmappedProviderEvent,
+  sanitizeUnmappedProviderNativeType,
 } from "../unmappedProviderEvents.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -889,6 +890,7 @@ function mapUnmappedCodexEvent(
 ): ProviderRuntimeEvent {
   const payload = asObject(event.payload);
   const msg = codexEventMessage(payload);
+  const nativeType = sanitizeUnmappedProviderNativeType(event.method);
   const detail = sanitizeUnmappedProviderDetail(
     asTrimmedString(payload?.message) ??
       asTrimmedString(msg?.summary) ??
@@ -902,12 +904,12 @@ function mapUnmappedCodexEvent(
     ...runtimeEventBase(event, canonicalThreadId),
     raw: {
       source: eventRawSource(event),
-      method: event.method,
+      method: nativeType,
       payload: { synaraSanitized: true },
     },
     type: "event.unmapped",
     payload: {
-      nativeType: event.method,
+      nativeType,
       ...(detail ? { detail } : {}),
       ...(event.payload !== undefined ? { data: sanitizeUnmappedProviderData(event.payload) } : {}),
     },

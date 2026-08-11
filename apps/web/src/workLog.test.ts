@@ -46,6 +46,28 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.preview).toBeUndefined();
   });
 
+  it("does not derive unmapped details from generic raw tool output", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unmapped-provider-output",
+          kind: "provider.event.unmapped",
+          summary: "item/future/completed",
+          payload: {
+            nativeEventType: "item/future/completed",
+            data: {
+              rawOutput: { stdout: "must-not-render", error: "must-not-render-error" },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBeUndefined();
+    expect(entry?.preview).toBeUndefined();
+  });
+
   it("omits task start and completion lifecycle entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
