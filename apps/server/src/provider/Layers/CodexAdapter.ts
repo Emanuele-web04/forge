@@ -877,6 +877,34 @@ function mapItemLifecycle(
   };
 }
 
+function mapUnmappedCodexEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): ProviderRuntimeEvent {
+  const payload = asObject(event.payload);
+  const msg = codexEventMessage(payload);
+  // Best-effort readable one-liner for the row preview; the raw payload itself
+  // is preserved verbatim in `data` so the GUI can show it instead of dropping
+  // or generically labeling the event.
+  const detail =
+    asTrimmedString(payload?.message) ??
+    asTrimmedString(msg?.summary) ??
+    asTrimmedString(payload?.reason) ??
+    asTrimmedString(payload?.summary) ??
+    asTrimmedString(msg?.status) ??
+    asTrimmedString(payload?.detail) ??
+    asTrimmedString(payload?.status);
+  return {
+    ...runtimeEventBase(event, canonicalThreadId),
+    type: "event.unmapped",
+    payload: {
+      nativeType: event.method,
+      ...(detail ? { detail } : {}),
+      ...(event.payload !== undefined ? { data: event.payload } : {}),
+    },
+  };
+}
+
 function mapToRuntimeEvents(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -1670,7 +1698,11 @@ function mapToRuntimeEvents(
     ];
   }
 
-  return [];
+  // No explicit mapping matched: keep the event visible instead of dropping
+  // it. The raw native method becomes the row title and the raw payload the
+  // preview, so a provider protocol addition degrades to a readable row rather
+  // than silence.
+  return [mapUnmappedCodexEvent(event, canonicalThreadId)];
 }
 
 const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>

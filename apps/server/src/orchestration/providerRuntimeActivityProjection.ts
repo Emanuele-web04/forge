@@ -1118,6 +1118,35 @@ export function projectProviderRuntimeActivities(
       ];
     }
 
+    case "event.unmapped": {
+      const payload = runtimePayloadRecord(event);
+      const nativeType = asString(payload?.nativeType);
+      if (!nativeType) {
+        return [];
+      }
+      const detail = asString(payload?.detail);
+      const rawData = payload?.data;
+      // Passthrough for native events no adapter mapping recognizes: the raw
+      // native type/label is the row title, and the raw payload rides along in
+      // `data` so the GUI can preview it instead of discarding the event.
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "provider.event.unmapped",
+          summary: nativeType,
+          payload: toActivityPayload({
+            nativeEventType: nativeType,
+            ...(detail ? { detail: truncateDetail(detail, 500) } : {}),
+            ...(rawData !== undefined ? { data: rawData } : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     default:
       break;
   }

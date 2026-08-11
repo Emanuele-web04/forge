@@ -204,6 +204,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "vcs.state.changed",
   "runtime.warning",
   "runtime.error",
+  "event.unmapped",
 ]);
 export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
 
@@ -257,6 +258,7 @@ const FilesPersistedType = Schema.Literal("files.persisted");
 const VcsStateChangedType = Schema.Literal("vcs.state.changed");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
+const EventUnmappedType = Schema.Literal("event.unmapped");
 
 const ProviderRuntimeEventBase = Schema.Struct({
   eventId: EventId,
@@ -736,6 +738,17 @@ const RuntimeErrorPayload = Schema.Struct({
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
 
+// Passthrough carrier for raw provider events no adapter mapping recognizes.
+// Without it those events are dropped before the GUI ever sees them; with it
+// the GUI renders the raw native type/label as the row title and the raw
+// payload as the preview. `detail` is a best-effort readable one-liner.
+const EventUnmappedPayload = Schema.Struct({
+  nativeType: TrimmedNonEmptyStringSchema,
+  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+  data: Schema.optional(Schema.Unknown),
+});
+export type EventUnmappedPayload = typeof EventUnmappedPayload.Type;
+
 const ProviderRuntimeSessionStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: SessionStartedType,
@@ -1096,6 +1109,13 @@ const ProviderRuntimeWarningEvent = Schema.Struct({
 });
 export type ProviderRuntimeWarningEvent = typeof ProviderRuntimeWarningEvent.Type;
 
+const ProviderRuntimeEventUnmappedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: EventUnmappedType,
+  payload: EventUnmappedPayload,
+});
+export type ProviderRuntimeEventUnmappedEvent = typeof ProviderRuntimeEventUnmappedEvent.Type;
+
 const ProviderRuntimeErrorEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: RuntimeErrorType,
@@ -1154,6 +1174,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeVcsStateChangedEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
+  ProviderRuntimeEventUnmappedEvent,
 ]);
 export type ProviderRuntimeEventV2 = typeof ProviderRuntimeEventV2.Type;
 

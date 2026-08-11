@@ -344,6 +344,33 @@ function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): bo
   return activity.tone !== "error";
 }
 
+// One-line preview for events no adapter mapping recognized: the raw payload
+// serialized as compact JSON, capped so one pathological native message cannot
+// flood the transcript row.
+const UNMAPPED_EVENT_PREVIEW_MAX_CHARS = 400;
+
+function unmappedEventPreview(data: unknown): string | null {
+  if (data === undefined || data === null) {
+    return null;
+  }
+  let serialized: string;
+  if (typeof data === "string") {
+    serialized = data;
+  } else {
+    try {
+      serialized = JSON.stringify(data);
+    } catch {
+      return null;
+    }
+    if (!serialized) {
+      return null;
+    }
+  }
+  return serialized.length > UNMAPPED_EVENT_PREVIEW_MAX_CHARS
+    ? `${serialized.slice(0, UNMAPPED_EVENT_PREVIEW_MAX_CHARS - 3)}...`
+    : serialized;
+}
+
 function isUninformativeCommandStartEntry(entry: DerivedWorkLogEntry): boolean {
   return entry.activityKind === "tool.started" && entry.suppressStandaloneCommandStart === true;
 }
@@ -481,6 +508,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       : undefined;
   if (nativeEventType) {
     entry.nativeEventType = nativeEventType;
+  }
+  // Unmapped provider events ride through with their raw payload in `data`;
+  // surface it as the row preview so the event renders (raw type as title,
+  // raw payload as preview) instead of being discarded or generically labeled.
+  if (activity.kind === "provider.event.unmapped") {
+    const unmappedPreview = unmappedEventPreview(payload?.data) ?? entry.detail;
+    if (unmappedPreview) {
+      entry.preview = unmappedPreview;
+    }
   }
   const runtimeWarningMessage =
     activity.kind === "runtime.warning" &&

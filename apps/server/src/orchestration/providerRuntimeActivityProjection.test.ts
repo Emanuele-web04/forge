@@ -639,4 +639,44 @@ describe("provider runtime activity projection", () => {
       Object.keys((turn?.payload as { modelUsage?: Record<string, unknown> }).modelUsage ?? {}),
     ).toEqual(["claude-fable-5"]);
   });
+
+  it("projects unmapped passthrough events instead of dropping them", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "event.unmapped",
+        eventId: "unmapped-native-event",
+        turnId: TURN_ID,
+        payload: {
+          nativeType: "item/agentMessage/completed",
+          detail: "Finished the refactor",
+          data: { msg: { type: "item/agentMessage/completed", summary: "Finished the refactor" } },
+        },
+      }),
+    );
+    expect(activity).toMatchObject({
+      tone: "info",
+      kind: "provider.event.unmapped",
+      // Raw native type/label is the row title.
+      summary: "item/agentMessage/completed",
+      turnId: TURN_ID,
+      payload: {
+        nativeEventType: "item/agentMessage/completed",
+        detail: "Finished the refactor",
+        data: { msg: { type: "item/agentMessage/completed", summary: "Finished the refactor" } },
+      },
+    });
+    // The activity must survive the schema of the command that carries it.
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+    // A passthrough event without a native type is the one case still dropped.
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "event.unmapped",
+          eventId: "unmapped-without-type",
+          payload: { detail: "no type" },
+        }),
+      ),
+    ).toEqual([]);
+  });
 });

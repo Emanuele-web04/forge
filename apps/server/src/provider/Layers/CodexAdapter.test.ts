@@ -1557,6 +1557,61 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.status, "inProgress");
     }),
   );
+
+  it.effect(
+    "surfaces previously-unmapped native events with their raw type and payload instead of dropping them",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+        // `item/agentMessage/completed` has no explicit mapping (only the
+        // `item/agentMessage/delta` stream does); before the passthrough
+        // fallback this event produced no runtime event at all.
+        lifecycleManager.emit("event", {
+          id: asEventId("evt-unmapped-agent-message-completed"),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method: "item/agentMessage/completed",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("agent_message_9"),
+          payload: {
+            msg: {
+              type: "item/agentMessage/completed",
+              item_id: "agent_message_9",
+              summary: "Finished the refactor",
+            },
+          },
+        } satisfies ProviderEvent);
+
+        const firstEvent = yield* Fiber.join(firstEventFiber);
+        assert.equal(firstEvent._tag, "Some");
+        if (firstEvent._tag !== "Some") {
+          return;
+        }
+        assert.equal(firstEvent.value.type, "event.unmapped");
+        if (firstEvent.value.type !== "event.unmapped") {
+          return;
+        }
+        // Raw native type/label is carried as the title source.
+        assert.equal(firstEvent.value.payload.nativeType, "item/agentMessage/completed");
+        // Readable one-liner extracted from the raw payload.
+        assert.equal(firstEvent.value.payload.detail, "Finished the refactor");
+        // Raw payload preserved verbatim for the GUI preview.
+        assert.deepEqual(firstEvent.value.payload.data, {
+          msg: {
+            type: "item/agentMessage/completed",
+            item_id: "agent_message_9",
+            summary: "Finished the refactor",
+          },
+        });
+        // Provider refs still resolved from the raw event.
+        assert.equal(firstEvent.value.itemId, "agent_message_9");
+        assert.equal(firstEvent.value.providerRefs?.providerItemId, "agent_message_9");
+      }),
+  );
 });
 
 afterAll(() => {
