@@ -434,3 +434,36 @@ describe("getUser", () => {
     await expect(auth.getUser("user_does_not_exist")).rejects.toThrow();
   });
 });
+
+describe("request deadlines", () => {
+  // A connection that is accepted and then stalls must fail the one call at
+  // the per-attempt deadline as a retryable provider fault (504) — never a
+  // refusal of whatever credential it carried, and never a hang that pins
+  // the request behind it.
+  it("aborts a hung provider call at the deadline as a 504 provider fault", async () => {
+    const { serve } = await import("@hono/node-server");
+    const { Hono } = await import("hono");
+    const app = new Hono();
+    // Accept and never answer.
+    app.all("*", () => new Promise<Response>(() => {}));
+    const server = serve({ fetch: app.fetch, port: 0 });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("failed to bind");
+      const auth = createWorkosAuth(
+        workos.config({
+          workosApiUrl: `http://127.0.0.1:${address.port}`,
+          workosRequestTimeoutMs: 200,
+        }),
+      );
+
+      const caught = await auth.getUser("user_1").catch((error: unknown) => error);
+      expect(caught).toMatchObject({ name: "IdentityProviderError", status: 504 });
+      // The message must name only the path — no request fields, which on
+      // credential routes include the secret.
+      expect((caught as Error).message).toBe("WorkOS /user_management/users/user_1 timed out");
+    } finally {
+      server.close();
+    }
+  });
+});

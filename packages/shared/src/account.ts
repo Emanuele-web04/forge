@@ -77,6 +77,14 @@ const SLOW_DOWN_INCREMENT_SECONDS = 5;
 // device-code TTL the server is expected to configure.
 const DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS = 30 * 60;
 
+/**
+ * Per-attempt deadline on every account-service request. A connection that
+ * is accepted and then stalls must fail the one attempt, not pin the caller
+ * (a CLI command, a WebSocket RPC) forever. Long-running flows — the device
+ * poll — are made of many short attempts, each individually bounded.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 type FetchLike = typeof fetch;
 type SleepFn = (milliseconds: number) => Promise<void>;
 
@@ -142,6 +150,17 @@ export interface DeviceTokenSuccess {
   accessToken: string;
   refreshToken: string;
   user: { id: string; email: string; name?: string | undefined };
+}
+
+/**
+ * Whether a failed poll attempt said nothing about the flow itself — a
+ * timed-out attempt (408) or a service/provider fault (5xx). Safe to retry
+ * for the idempotent device poll. A 429 is deliberately NOT here: the
+ * service's rate answer is actionable flow feedback (the caller is polling
+ * too fast) and surfaces as-is, like RFC 8628's terminal statuses.
+ */
+function isRetryablePollFailure(error: unknown): boolean {
+  return error instanceof AccountApiError && (error.status === 408 || error.status >= 500);
 }
 
 async function defaultSleep(milliseconds: number): Promise<void> {
@@ -301,12 +320,40 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
     });
   }
 
+  /**
+   * One bounded attempt. A timeout becomes a 408 {@link AccountApiError} —
+   * the transient classification (`withFreshAccessToken` treats 408 as "the
+   * provider did not answer", never as a refusal of the stored session), and
+   * a message that names only the path, since request bodies on credential
+   * routes carry secrets.
+   */
+  async function boundedFetch(path: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetchFn(`${baseUrl}${path}`, {
+        ...init,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (
+        error instanceof DOMException &&
+        (error.name === "TimeoutError" || error.name === "AbortError")
+      ) {
+        throw new AccountApiError({
+          code: "internal_error",
+          status: 408,
+          message: `Request to ${path} timed out`,
+        });
+      }
+      throw error;
+    }
+  }
+
   async function requestJson<S extends Schema.Top & { readonly DecodingServices: never }>(
     path: string,
     init: RequestInit,
     schema: S,
   ): Promise<S["Type"]> {
-    const response = await fetchFn(`${baseUrl}${path}`, init);
+    const response = await boundedFetch(path, init);
     if (!response.ok) {
       throw await toRequestError(response);
     }
@@ -315,7 +362,7 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
   }
 
   async function requestEmpty(path: string, init: RequestInit): Promise<void> {
-    const response = await fetchFn(`${baseUrl}${path}`, init);
+    const response = await boundedFetch(path, init);
     if (!response.ok) {
       throw await toRequestError(response);
     }
@@ -453,7 +500,21 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
     async pollDeviceToken(deviceCode, pollOptions = {}) {
       let interval = pollOptions.interval ?? DEFAULT_DEVICE_POLL_INTERVAL_SECONDS;
       const deadlineMs = (pollOptions.expiresIn ?? DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS) * 1000;
+      // Two clocks, both bounding the loop. Accumulated planned sleep is the
+      // deterministic bound (it advances even under an injected instant
+      // sleep); the wall clock also counts request time, so a sequence of
+      // slow attempts still stops at the provider-issued absolute expiry
+      // instead of stretching the authorization's life client-side.
+      const deadlineAt = Date.now() + deadlineMs;
       let elapsedMs = 0;
+
+      const expired = () => elapsedMs > deadlineMs || Date.now() > deadlineAt;
+      const timedOut = () =>
+        new AccountApiError({
+          code: "internal_error",
+          status: 408,
+          message: "Device authorization timed out",
+        });
 
       for (;;) {
         await sleep(interval * 1000);
@@ -461,27 +522,32 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
 
         // Client-side bound: without this, a misbehaving server that never
         // returns a terminal status would keep this loop running forever.
-        if (elapsedMs > deadlineMs) {
-          throw new AccountApiError({
-            code: "internal_error",
-            status: 408,
-            message: "Device authorization timed out",
-          });
-        }
+        if (expired()) throw timedOut();
 
         // Proxied through the account service — the client never talks to
         // the identity provider directly, so a self-hosted or generic-OIDC
         // backend needs no client change. Non-granted outcomes are values on
         // a 200; a thrown error here is a real fault, never flow state.
-        const poll = await requestJson(
-          "/api/v1/auth/device/token",
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ deviceCode }),
-          },
-          DeviceTokenPollResponseSchema,
-        );
+        let poll;
+        try {
+          poll = await requestJson(
+            "/api/v1/auth/device/token",
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ deviceCode }),
+            },
+            DeviceTokenPollResponseSchema,
+          );
+        } catch (error) {
+          // Polling is idempotent, so a transient fault (a timed-out
+          // attempt, a provider blip) is retried on the next tick rather
+          // than aborting a sign-in the user may be mid-way through
+          // approving. The deadlines above still bound the loop; anything
+          // terminal propagates.
+          if (isRetryablePollFailure(error) && !expired()) continue;
+          throw error;
+        }
 
         if (poll.status === "granted") {
           return poll.tokens;

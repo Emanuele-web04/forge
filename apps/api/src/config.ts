@@ -39,6 +39,11 @@ export type WorkosApiConfig = ApiConfigBase & {
    * AuthKit application. Set this only for a custom auth domain or a stand-in.
    */
   workosIssuer?: string;
+  /**
+   * Per-attempt deadline on WorkOS calls, milliseconds. Test hook only —
+   * there is no env var for it; production uses the module default (15s).
+   */
+  workosRequestTimeoutMs?: number;
 };
 
 /**

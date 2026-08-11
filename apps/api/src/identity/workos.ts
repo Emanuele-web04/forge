@@ -53,6 +53,21 @@ type OidcMetadata = {
  */
 const DISCOVERY_TIMEOUT_MS = 10_000;
 
+/**
+ * Per-attempt deadline on every WorkOS call. A connection that is accepted
+ * and then stalls would otherwise pin the Hono request (and any WebSocket
+ * RPC behind it) forever. Timeouts surface as a 504 IdentityProviderError —
+ * a provider fault, retryable, never a refusal of whatever credential the
+ * call carried.
+ */
+const WORKOS_REQUEST_TIMEOUT_MS = 15_000;
+
+function isAbortTimeout(error: unknown): boolean {
+  return (
+    error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError")
+  );
+}
+
 function discoveryUrl(config: WorkosApiConfig): string {
   return `${config.workosApiUrl}/user_management/${encodeURIComponent(config.workosClientId)}/.well-known/openid-configuration`;
 }
@@ -368,8 +383,33 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     return verificationKeys;
   }
 
+  const requestTimeoutMs = config.workosRequestTimeoutMs ?? WORKOS_REQUEST_TIMEOUT_MS;
+
+  /**
+   * `fetch` with the per-attempt deadline. A connection that is accepted and
+   * then stalls must fail this one call, not pin the request behind it
+   * forever. On timeout, throws a 504 {@link IdentityProviderError} — a
+   * provider fault, retryable, never a refusal of whatever credential the
+   * call carried — whose message names only the path, since request fields
+   * on credential paths include the secret.
+   */
+  async function fetchWithDeadline(
+    url: string,
+    path: string,
+    init: RequestInit,
+  ): Promise<Response> {
+    try {
+      return await fetch(url, { ...init, signal: AbortSignal.timeout(requestTimeoutMs) });
+    } catch (error) {
+      if (isAbortTimeout(error)) {
+        throw new IdentityProviderError(504, `WorkOS ${path} timed out`);
+      }
+      throw error;
+    }
+  }
+
   async function workosFetch(path: string, init?: RequestInit): Promise<unknown> {
-    const response = await fetch(`${config.workosApiUrl}${path}`, {
+    const response = await fetchWithDeadline(`${config.workosApiUrl}${path}`, path, {
       ...init,
       headers: {
         ...init?.headers,
@@ -407,7 +447,7 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     // and response is identical.
     classify: (raw: unknown) => AuthFailureReason | undefined,
   ): Promise<unknown> {
-    const response = await fetch(`${config.workosApiUrl}${path}`, {
+    const response = await fetchWithDeadline(`${config.workosApiUrl}${path}`, path, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -527,7 +567,10 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       // handling — but the flow-state refusals are expected answers of a
       // healthy poll, not failures, so they are read off the raw response
       // here instead of being pushed through a failure classifier.
-      const response = await fetch(`${config.workosApiUrl}/user_management/authenticate`, {
+      const response = await fetchWithDeadline(
+        `${config.workosApiUrl}/user_management/authenticate`,
+        "/user_management/authenticate",
+        {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -542,7 +585,8 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
           client_secret: config.workosApiKey,
           ...contextFields(context),
         }),
-      });
+        },
+      );
       if (response.ok) {
         return { status: "granted", tokens: toAuthTokens(await response.json()) };
       }
@@ -577,21 +621,25 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     },
 
     async refreshTokens({ refreshToken, organizationId, context }) {
-      const response = await fetch(`${config.workosApiUrl}/user_management/authenticate`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${config.workosApiKey}`,
+      const response = await fetchWithDeadline(
+        `${config.workosApiUrl}/user_management/authenticate`,
+        "/user_management/authenticate",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${config.workosApiKey}`,
+          },
+          body: JSON.stringify({
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+            client_id: config.workosClientId,
+            client_secret: config.workosApiKey,
+            ...(organizationId ? { organization_id: organizationId } : {}),
+            ...contextFields(context),
+          }),
         },
-        body: JSON.stringify({
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-          client_id: config.workosClientId,
-          client_secret: config.workosApiKey,
-          ...(organizationId ? { organization_id: organizationId } : {}),
-          ...contextFields(context),
-        }),
-      });
+      );
       if (response.ok) {
         const raw: unknown = await response.json();
         const tokens = toAuthTokens(raw);
