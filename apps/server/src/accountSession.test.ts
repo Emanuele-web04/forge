@@ -273,6 +273,61 @@ describe("sign-in", () => {
     await expect(session.completeSignIn({ deviceCode: "not-ours" })).rejects.toThrow(/expired/i);
   });
 
+  // The grant is single-use: once redeemed, a failure before the session is
+  // persisted must leave the attempt resumable, not strand the user with a
+  // spent code and nothing stored. The retry resumes from the cached pair
+  // (one poll total) and completes without a second redemption.
+  it("recovers a redeemed device grant when persistence fails on the first attempt", async () => {
+    const baseDir = makeBaseDir();
+    let polls = 0;
+    let scopedRefreshFails = true;
+    const session = sessionFor(
+      baseDir,
+      deviceFlowClient({
+        pollDeviceToken: () => {
+          polls += 1;
+          if (polls > 1) {
+            return Promise.reject(
+              new AccountApiError({ code: "unauthorized", status: 401, message: "spent" }),
+            );
+          }
+          return Promise.resolve({
+            accessToken: "access-0",
+            refreshToken: "refresh-0",
+            user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
+          });
+        },
+        refreshAccessToken: () => {
+          if (scopedRefreshFails) {
+            scopedRefreshFails = false;
+            return Promise.reject(new Error("scoping blipped"));
+          }
+          return Promise.resolve({
+            accessToken: "access-1",
+            refreshToken: "refresh-1",
+            user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
+          });
+        },
+      }),
+    );
+
+    const begun = await session.beginSignIn();
+    await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
+      /scoping blipped/,
+    );
+    // Nothing persisted yet, but the attempt is still live: the retry
+    // completes from the redeemed pair without polling the spent code.
+    expect(await session.completeSignIn({ deviceCode: begun.deviceCode })).toEqual({
+      state: "signed-in",
+      me: meResponse(),
+    });
+    expect(polls).toBe(1);
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      accessToken: "access-1",
+      refreshToken: "refresh-1",
+    });
+  });
+
   it("refuses to complete the same device code twice", async () => {
     const session = sessionFor(makeBaseDir(), deviceFlowClient());
     const begun = await session.beginSignIn();
@@ -440,6 +495,61 @@ describe("OTP sign-in", () => {
 
     await expect(session.authenticateOtp(OTP_INPUT)).rejects.toThrow(/didn't work/);
     expect(await session.status()).toEqual({ state: "signed-out" });
+  });
+
+  // The single-use code must not be spent into a race that can throw the
+  // result away: /instance is fetched BEFORE the grant, so its failure costs
+  // a retryable error while the code is still redeemable.
+  it("does not consume the code when the instance lookup fails", async () => {
+    let redeemed = false;
+    const session = sessionFor(
+      makeBaseDir(),
+      otpClient({
+        instance: () => Promise.reject(new Error("instance unavailable")),
+        authenticateOtp: () => {
+          redeemed = true;
+          return Promise.reject(new Error("must not be reached"));
+        },
+      }),
+    );
+
+    await expect(session.authenticateOtp(OTP_INPUT)).rejects.toThrow(/instance unavailable/);
+    expect(redeemed).toBe(false);
+  });
+
+  // Once the grant succeeded and the scoped pair is on disk, an ancillary
+  // failure (the status /me here) must not lose the sign-in: the session is
+  // already persisted and status() recovers it.
+  it("keeps the persisted session when the post-persist status read fails", async () => {
+    const baseDir = makeBaseDir();
+    let persistedMeCalls = 0;
+    const session = sessionFor(
+      baseDir,
+      otpClient({
+        me: (token) => {
+          if (token === "access-0") {
+            return Promise.reject(
+              new OrganizationRequiredError({
+                message: "Pick a workspace",
+                organizations: [ORGANIZATION],
+              }),
+            );
+          }
+          persistedMeCalls += 1;
+          return persistedMeCalls === 1
+            ? Promise.reject(new Error("status read blipped"))
+            : Promise.resolve(meResponse());
+        },
+      }),
+    );
+
+    await expect(session.authenticateOtp(OTP_INPUT)).rejects.toThrow(/status read blipped/);
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      organizationId: ORGANIZATION.id,
+      accessToken: "access-1",
+      refreshToken: "refresh-1",
+    });
+    expect(await session.status()).toEqual({ state: "signed-in", me: meResponse() });
   });
 });
 

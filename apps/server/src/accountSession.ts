@@ -65,6 +65,15 @@ interface PendingDeviceAuthorization {
   readonly verificationUriComplete: string;
   readonly interval: number;
   readonly expiresIn: number;
+  /**
+   * The pair a successful poll redeemed, held in memory until the session is
+   * durably persisted. A device code is single-use, so a failure between
+   * redemption and persistence would otherwise strand the user — the code is
+   * spent, nothing is stored, and re-polling can only answer `expired`.
+   * With the pair cached, retrying `completeSignIn` resumes from here
+   * instead of polling again. Memory-only, like every token in flight.
+   */
+  redeemedToken?: { accessToken: string; refreshToken: string };
 }
 
 export interface AccountSessionOptions {
@@ -223,7 +232,19 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
    */
   async function establishSession(
     token: { accessToken: string; refreshToken: string },
-    context: { accountUrl: string; client: AccountClient; instance: InstanceInfo },
+    context: {
+      accountUrl: string;
+      client: AccountClient;
+      instance: InstanceInfo;
+      /**
+       * Called the moment the scoped pair is durably on disk — the point after
+       * which the sign-in can no longer be lost. The device path uses it to
+       * retire its pending authorization: deleting earlier would let a failure
+       * between redemption and persistence strand the user with a spent code
+       * and nothing stored.
+       */
+      onPersisted?: () => void;
+    },
   ): Promise<AccountStatus> {
     const { accountUrl, client, instance } = context;
 
@@ -269,6 +290,11 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         ...(previous?.hostId ? { hostId: previous.hostId } : {}),
       });
     });
+
+    // The durable checkpoint: the scoped pair is on disk, so everything after
+    // this line — the status `/me` below included — can fail without losing
+    // the sign-in; `status()` recovers it from the file.
+    context.onPersisted?.();
 
     return signedInStatus(await withSession((accessToken, c) => c.me(accessToken)));
   }
@@ -328,18 +354,34 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
 
       const accountUrl = configuredUrl;
       const client = clientFor(accountUrl);
+      // Non-secret metadata, fetched BEFORE the poll can redeem the grant: an
+      // /instance failure here costs a retryable error, not a spent code.
       const instance = await client.instance();
 
-      const token = await client.pollDeviceToken(input.deviceCode, {
-        interval: pending.interval,
-        expiresIn: pending.expiresIn,
+      // Resumable: a previous attempt may have redeemed the single-use code
+      // and then failed before the session was persisted. The cached pair is
+      // what makes retrying this RPC recover the sign-in instead of polling
+      // a spent code into `expired`.
+      const token =
+        pending.redeemedToken ??
+        (await client.pollDeviceToken(input.deviceCode, {
+          interval: pending.interval,
+          expiresIn: pending.expiresIn,
+        }));
+      pending.redeemedToken = token;
+
+      return establishSession(token, {
+        accountUrl,
+        client,
+        instance,
+        // The entry is retired only once the scoped pair is durably on disk.
+        // A device code is single-use, so after redemption the entry can
+        // never complete again — but deleting it before persistence would
+        // turn a failure in between into a spent code with no session and no
+        // way to retry; kept until the checkpoint, `status()` (or retrying
+        // this RPC) recovers the sign-in instead.
+        onPersisted: () => pendingAuthorizations.delete(input.deviceCode),
       });
-
-      // Redeemed. A device code is single-use, so keeping it would only leave
-      // a stale entry that can never complete again.
-      pendingAuthorizations.delete(input.deviceCode);
-
-      return establishSession(token, { accountUrl, client, instance });
     },
 
     /**
@@ -361,10 +403,12 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     async authenticateOtp(input) {
       const accountUrl = configuredUrl;
       const client = clientFor(accountUrl);
-      const [instance, token] = await Promise.all([
-        client.instance(),
-        client.authenticateOtp(input),
-      ]);
+      // Sequenced, not raced: the instance metadata is non-secret and does
+      // not depend on the grant, so it is fetched BEFORE the code is spent.
+      // In a Promise.all an /instance failure would discard a successful
+      // redemption — the user's single-use code, gone with nothing stored.
+      const instance = await client.instance();
+      const token = await client.authenticateOtp(input);
       return establishSession(token, { accountUrl, client, instance });
     },
 
@@ -376,7 +420,11 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     async verifyEmail(input) {
       const accountUrl = configuredUrl;
       const client = clientFor(accountUrl);
-      const [instance, token] = await Promise.all([client.instance(), client.verifyEmail(input)]);
+      // Instance first, grant second, for the same reason as authenticateOtp:
+      // the pending token is single-use and must not be spent into a race
+      // that can throw the result away.
+      const instance = await client.instance();
+      const token = await client.verifyEmail(input);
       return establishSession(token, { accountUrl, client, instance });
     },
 
