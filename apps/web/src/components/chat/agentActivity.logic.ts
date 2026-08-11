@@ -48,7 +48,7 @@ export function isAgentActivityWorkEntry(entry: WorkLogEntry): boolean {
   return entry.itemType === "collab_agent_tool_call" || isReasoningUpdateWorkEntry(entry);
 }
 
-// Provider events without an explicit mapping keep their native type as the title.
+// Unmapped provider events keep their native type as the title and a safe detail as preview.
 export function isUnmappedProviderEventWorkEntry(
   entry: Pick<WorkLogEntry, "activityKind">,
 ): boolean {
@@ -64,7 +64,8 @@ export function formatAgentActivityEntryTitle(entry: WorkLogEntry): string {
     return capitalizePhrase(heading);
   }
   if (isUnmappedProviderEventWorkEntry(entry) && entry.nativeEventType) {
-    // The native type is the only title the event carries.
+    // The raw native type/label is the only title the event carries; use it
+    // verbatim instead of degrading to the generic "Activity" label.
     return capitalizePhrase(entry.nativeEventType);
   }
   return entry.itemType === "collab_agent_tool_call" ? "Agent task" : "Activity";

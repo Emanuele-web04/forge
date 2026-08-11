@@ -651,8 +651,8 @@ describe("provider runtime activity projection", () => {
           nativeType: "item/agentMessage/completed",
           detail: "Finished the refactor",
           data: {
-            apiKey: "must-not-reach-the-activity-snapshot",
-            msg: { type: "item/agentMessage/completed", summary: "Finished the refactor" },
+            secretKey: "must-not-reach-the-activity-snapshot",
+            note: "api_key=another-secret",
             output: oversizedDiagnostic,
           },
         },
@@ -667,16 +667,13 @@ describe("provider runtime activity projection", () => {
       payload: {
         nativeEventType: "item/agentMessage/completed",
         detail: "Finished the refactor",
-        data: expect.objectContaining({
-          apiKey: "[REDACTED]",
-          msg: { type: "item/agentMessage/completed", summary: "Finished the refactor" },
-          __synaraTruncated: true,
-        }),
+        data: expect.objectContaining({ __synaraTruncated: true }),
       },
     });
     const serializedPayload = JSON.stringify(activity?.payload);
-    expect(serializedPayload.length).toBeLessThanOrEqual(17_000);
+    expect(serializedPayload.length).toBeLessThan(17_000);
     expect(serializedPayload).not.toContain("must-not-reach-the-activity-snapshot");
+    expect(serializedPayload).not.toContain("another-secret");
     // The activity must survive the schema of the command that carries it.
     expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 

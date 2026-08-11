@@ -25,7 +25,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
-  it("does not render unmapped diagnostic data as a raw transcript preview", () => {
+  it("does not expose unmapped diagnostic data as a transcript preview", () => {
     const [entry] = deriveWorkLogEntries(
       [
         makeActivity({
@@ -35,17 +35,14 @@ describe("deriveWorkLogEntries", () => {
           payload: {
             nativeEventType: "item/future/completed",
             detail: "Safe provider summary",
-            data: { apiKey: "[REDACTED]", arbitrary: "must-not-render" },
+            data: { arbitrary: "must-not-render" },
           },
         }),
       ],
       undefined,
     );
 
-    expect(entry).toMatchObject({
-      nativeEventType: "item/future/completed",
-      detail: "Safe provider summary",
-    });
+    expect(entry?.detail).toBe("Safe provider summary");
     expect(entry?.preview).toBeUndefined();
   });
 

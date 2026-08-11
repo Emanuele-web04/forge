@@ -1,24 +1,103 @@
 import type { ProviderEvent } from "@synara/contracts";
 
-import { boundActivityData } from "../activityData.ts";
-import { redactDiagnosticData, redactDiagnosticText } from "../diagnosticRedaction.ts";
+export const MAX_UNMAPPED_PROVIDER_DATA_JSON_CHARS = 16_000;
 
 const MAX_UNMAPPED_PROVIDER_DETAIL_CHARS = 500;
+const MAX_UNMAPPED_PROVIDER_PREVIEW_CHARS = 2_000;
+const REDACTED_VALUE = "[REDACTED]";
 const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu;
-const TURN_TERMINAL_METHODS = new Set(["turn/completed", "turn/aborted"]);
-const SESSION_TERMINAL_METHODS = new Set(["session/exited", "session/closed", "thread/closed"]);
-const DEFAULT_MAX_TRACKED_BURST_SCOPES = 512;
-const DEFAULT_MAX_BURST_METHODS_PER_SCOPE = 32;
+const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu;
+const CREDENTIAL_ASSIGNMENT_PATTERN =
+  /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu;
+const BEARER_CREDENTIAL_PATTERN = /\b(bearer\s+)[A-Za-z0-9._~+/=-]+/giu;
+const EXACT_SENSITIVE_KEYS = new Set([
+  "authorization",
+  "proxyauthorization",
+  "apikey",
+  "password",
+  "passphrase",
+  "cookie",
+  "setcookie",
+  "credential",
+  "credentials",
+  "privatekey",
+]);
+const SENSITIVE_TERMINAL_TOKENS = new Set([
+  "authorization",
+  "cookie",
+  "credential",
+  "credentials",
+  "passphrase",
+  "password",
+  "secret",
+  "token",
+]);
+
+function redactText(value: string): string {
+  return value
+    .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
+    .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)
+    .replace(BEARER_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}`);
+}
+
+function keyTokens(key: string): ReadonlyArray<string> {
+  return (
+    key
+      .replace(/([A-Z]+)([A-Z][a-z])/gu, "$1 $2")
+      .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+      .toLowerCase()
+      .match(/[a-z0-9]+/gu) ?? []
+  );
+}
+
+function isSensitiveKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/giu, "").toLowerCase();
+  if (EXACT_SENSITIVE_KEYS.has(normalized)) {
+    return true;
+  }
+  const tokens = keyTokens(key);
+  const terminal = tokens.at(-1);
+  return (
+    terminal !== undefined &&
+    (SENSITIVE_TERMINAL_TOKENS.has(terminal) ||
+      (terminal === "key" &&
+        tokens.slice(0, -1).some((token) => ["api", "private", "secret"].includes(token))))
+  );
+}
+
+function redactValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === "string") return redactText(value);
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value !== "object") return null;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((entry) => redactValue(entry, seen));
+
+  const redacted: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    redacted[key] = isSensitiveKey(key) ? REDACTED_VALUE : redactValue(entry, seen);
+  }
+  return redacted;
+}
 
 export function sanitizeUnmappedProviderData(value: unknown): unknown {
-  return boundActivityData(redactDiagnosticData(value));
+  const redacted = redactValue(value);
+  const serialized = JSON.stringify(redacted) ?? "null";
+  if (serialized.length <= MAX_UNMAPPED_PROVIDER_DATA_JSON_CHARS) {
+    return redacted;
+  }
+  return {
+    __synaraTruncated: true,
+    originalJsonChars: serialized.length,
+    preview: `${serialized.slice(0, MAX_UNMAPPED_PROVIDER_PREVIEW_CHARS - 3)}...`,
+  };
 }
 
 export function sanitizeUnmappedProviderDetail(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return value;
-  }
-  const redacted = redactDiagnosticText(value);
+  if (value === undefined) return undefined;
+  const redacted = redactText(value);
   return redacted.length <= MAX_UNMAPPED_PROVIDER_DETAIL_CHARS
     ? redacted
     : `${redacted.slice(0, MAX_UNMAPPED_PROVIDER_DETAIL_CHARS - 3)}...`;
@@ -30,97 +109,17 @@ export function sanitizeUnmappedProviderEvent(event: ProviderEvent): ProviderEve
     : { ...event, payload: sanitizeUnmappedProviderData(event.payload) };
 }
 
-function eventScope(event: ProviderEvent): string {
-  return `${event.threadId}\u0000${event.turnId ?? event.lifecycleGeneration ?? "session"}`;
-}
-
-function isBurstStyleMethod(method: string): boolean {
-  return BURST_METHOD_SUFFIX.test(method);
-}
-
-export type UnmappedProviderEventGate = {
-  readonly shouldSurface: (event: ProviderEvent) => boolean;
-  readonly release: (event: ProviderEvent) => void;
-  readonly releaseThread: (threadId: ProviderEvent["threadId"]) => void;
-  readonly clear: () => void;
-};
-
-type UnmappedProviderEventGateOptions = {
-  readonly maxTrackedScopes?: number;
-  readonly maxMethodsPerScope?: number;
-};
-
-function positiveIntegerOr(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isInteger(value) && value > 0 ? value : fallback;
-}
-
-function removeOldest<T>(collection: Map<T, unknown> | Set<T>): void {
-  const oldest = collection.keys().next().value;
-  if (oldest !== undefined) {
-    collection.delete(oldest);
-  }
-}
-
-export function makeUnmappedProviderEventGate(
-  options: UnmappedProviderEventGateOptions = {},
-): UnmappedProviderEventGate {
-  const maxTrackedScopes = positiveIntegerOr(
-    options.maxTrackedScopes,
-    DEFAULT_MAX_TRACKED_BURST_SCOPES,
-  );
-  const maxMethodsPerScope = positiveIntegerOr(
-    options.maxMethodsPerScope,
-    DEFAULT_MAX_BURST_METHODS_PER_SCOPE,
-  );
-  const surfacedBurstMethods = new Map<string, Set<string>>();
-
-  const shouldSurface = (event: ProviderEvent): boolean => {
-    if (!isBurstStyleMethod(event.method)) {
-      return true;
+export function makeUnmappedProviderEventGate(maxTrackedBursts = 128) {
+  const surfacedBursts = new Set<string>();
+  return (event: ProviderEvent): boolean => {
+    if (!BURST_METHOD_SUFFIX.test(event.method)) return true;
+    const key = `${event.threadId}\u0000${event.method}`;
+    if (surfacedBursts.has(key)) return false;
+    if (surfacedBursts.size >= Math.max(1, maxTrackedBursts)) {
+      const oldest = surfacedBursts.values().next().value;
+      if (oldest !== undefined) surfacedBursts.delete(oldest);
     }
-    const scope = eventScope(event);
-    let methods = surfacedBurstMethods.get(scope);
-    if (methods === undefined) {
-      if (surfacedBurstMethods.size >= maxTrackedScopes) {
-        removeOldest(surfacedBurstMethods);
-      }
-      methods = new Set<string>();
-      surfacedBurstMethods.set(scope, methods);
-    }
-    if (methods.has(event.method)) {
-      return false;
-    }
-    if (methods.size >= maxMethodsPerScope) {
-      removeOldest(methods);
-    }
-    methods.add(event.method);
+    surfacedBursts.add(key);
     return true;
-  };
-
-  const releaseThread = (threadId: ProviderEvent["threadId"]): void => {
-    const threadPrefix = `${threadId}\u0000`;
-    for (const scope of surfacedBurstMethods.keys()) {
-      if (scope.startsWith(threadPrefix)) {
-        surfacedBurstMethods.delete(scope);
-      }
-    }
-  };
-
-  const release = (event: ProviderEvent): void => {
-    if (TURN_TERMINAL_METHODS.has(event.method) && event.turnId !== undefined) {
-      surfacedBurstMethods.delete(eventScope(event));
-      return;
-    }
-    if (!SESSION_TERMINAL_METHODS.has(event.method)) {
-      return;
-    }
-    releaseThread(event.threadId);
-  };
-
-  return {
-    shouldSurface,
-    release,
-    releaseThread,
-    clear: () => surfacedBurstMethods.clear(),
   };
 }

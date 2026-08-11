@@ -739,7 +739,7 @@ const RuntimeErrorPayload = Schema.Struct({
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
 
 // Forward-compatible diagnostic for provider events without an explicit mapping.
-// Ingress bounds and redacts `data`; `detail` is a safe best-effort summary.
+// The adapter bounds and redacts `data`; `detail` is a safe readable one-liner.
 const EventUnmappedPayload = Schema.Struct({
   nativeType: TrimmedNonEmptyStringSchema,
   detail: Schema.optional(TrimmedNonEmptyStringSchema),

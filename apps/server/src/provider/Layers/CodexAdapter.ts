@@ -82,8 +82,9 @@ import {
 } from "../providerRuntimeEventIngress.ts";
 import {
   makeUnmappedProviderEventGate,
-  sanitizeUnmappedProviderEvent,
+  sanitizeUnmappedProviderData,
   sanitizeUnmappedProviderDetail,
+  sanitizeUnmappedProviderEvent,
 } from "../unmappedProviderEvents.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -888,7 +889,6 @@ function mapUnmappedCodexEvent(
 ): ProviderRuntimeEvent {
   const payload = asObject(event.payload);
   const msg = codexEventMessage(payload);
-  // Extract a readable line before the ingress sanitizes and bounds diagnostic data.
   const detail = sanitizeUnmappedProviderDetail(
     asTrimmedString(payload?.message) ??
       asTrimmedString(msg?.summary) ??
@@ -900,11 +900,16 @@ function mapUnmappedCodexEvent(
   );
   return {
     ...runtimeEventBase(event, canonicalThreadId),
+    raw: {
+      source: eventRawSource(event),
+      method: event.method,
+      payload: { synaraSanitized: true },
+    },
     type: "event.unmapped",
     payload: {
       nativeType: event.method,
       ...(detail ? { detail } : {}),
-      ...(event.payload !== undefined ? { data: event.payload } : {}),
+      ...(event.payload !== undefined ? { data: sanitizeUnmappedProviderData(event.payload) } : {}),
     },
   };
 }
@@ -1702,8 +1707,10 @@ function mapToRuntimeEvents(
     ];
   }
 
-  // Preserve one safe diagnostic when a provider protocol adds an event that
-  // Synara does not recognize yet.
+  // No explicit mapping matched: keep the event visible instead of dropping
+  // it. The raw native method becomes the row title and the raw payload the
+  // preview, so a provider protocol addition degrades to a readable row rather
+  // than silence.
   return [mapUnmappedCodexEvent(event, canonicalThreadId)];
 }
 
@@ -1751,7 +1758,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
     const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
-    const unmappedEventGate = makeUnmappedProviderEventGate();
+    const shouldSurfaceUnmappedEvent = makeUnmappedProviderEventGate();
 
     // Idle-progress backstop for codex turns. Same semantics as
     // AcpTurnIdleWatchdog (any inbound activity resets it, a pending human
@@ -2079,14 +2086,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             detail: toMessage(cause, "Failed to stop Codex adapter session."),
             cause,
           }),
-      }).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            turnWatchdogs.delete(threadId);
-            unmappedEventGate.releaseThread(threadId);
-          }),
-        ),
-      );
+      });
 
     const listSessions: CodexAdapterShape["listSessions"] = () =>
       Effect.sync(() => manager.listSessions());
@@ -2104,14 +2104,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             detail: toMessage(cause, "Failed to stop all Codex app-server processes."),
             cause,
           }),
-      }).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            turnWatchdogs.clear();
-            unmappedEventGate.clear();
-          }),
-        ),
-      );
+      });
 
     const getComposerCapabilities: NonNullable<CodexAdapterShape["getComposerCapabilities"]> = () =>
       Effect.succeed(manager.getComposerCapabilities() satisfies ProviderComposerCapabilities);
@@ -2255,21 +2248,20 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const mappedRuntimeEvents = assignDerivedProviderRuntimeEventIds(
             mapToRuntimeEvents(event, event.threadId),
           );
-          const nativeEvent = mappedRuntimeEvents.some(
+          const hasUnmappedEvent = mappedRuntimeEvents.some(
             (runtimeEvent) => runtimeEvent.type === "event.unmapped",
-          )
-            ? sanitizeUnmappedProviderEvent(event)
-            : event;
+          );
           const runtimeEvents = mappedRuntimeEvents
             .filter(
               (runtimeEvent) =>
-                runtimeEvent.type !== "event.unmapped" || unmappedEventGate.shouldSurface(event),
+                runtimeEvent.type !== "event.unmapped" || shouldSurfaceUnmappedEvent(event),
             )
             .map(compactProviderRuntimeEventForIngress);
-          unmappedEventGate.release(event);
           trackTurnWatchdogActivity(event.threadId, runtimeEvents);
           const result = ingress.offer({
-            nativeEvent: compactCodexNativeEventForIngress(nativeEvent),
+            nativeEvent: compactCodexNativeEventForIngress(
+              hasUnmappedEvent ? sanitizeUnmappedProviderEvent(event) : event,
+            ),
             runtimeEvents,
           });
           if (result === "terminal-overflow") {
@@ -2294,7 +2286,6 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           yield* Effect.sync(() => {
             clearInterval(watchdogTicker);
             turnWatchdogs.clear();
-            unmappedEventGate.clear();
             manager.off("event", listener);
           });
           yield* ingress.stop;
