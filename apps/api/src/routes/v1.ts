@@ -145,6 +145,11 @@ function toOrganizationSummary(organization: OrganizationRef): OrganizationSumma
 }
 
 /** The response body every successful authentication grant answers with. */
+/** One rate-limit key per mailbox: case-folded, trimmed. */
+function emailRateKey(email: string): string {
+  return `email:${email.trim().toLowerCase()}`;
+}
+
 function authTokensBody(auth_: AuthTokens): AuthTokensResponse {
   return {
     accessToken: auth_.accessToken,
@@ -240,9 +245,6 @@ export function createV1Routes(deps: {
     limit: PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR,
     windowMs: 60 * 60_000,
   });
-
-  /** One rate-limit key per mailbox: case-folded, trimmed. */
-  const emailRateKey = (email: string): string => `email:${email.trim().toLowerCase()}`;
 
   /**
    * Resolves the caller from an access token. Verification is stateless
@@ -857,9 +859,7 @@ export function createV1Routes(deps: {
 
     // Second gate keyed on the verification id — each id names exactly one
     // recipient, so this bounds mail into that mailbox across caller IPs.
-    if (
-      !perEmailSendRateLimiter.tryConsume(`verification:${parsed.emailVerificationId.trim()}`)
-    ) {
+    if (!perEmailSendRateLimiter.tryConsume(`verification:${parsed.emailVerificationId.trim()}`)) {
       return errorResponse(c, 429, "rate_limited", "Too many resend requests — wait a minute");
     }
 

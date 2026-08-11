@@ -93,29 +93,35 @@ describe("account RPC owner boundary", () => {
     const accountMethods = Object.values(WS_METHODS).filter((method) =>
       method.startsWith("account."),
     );
-    expect(methodNames.sort()).toEqual([...accountMethods].sort());
+    expect(methodNames.toSorted()).toEqual(accountMethods.toSorted());
   });
 
-  it.each(methodNames)("refuses a client-role session on %s without touching the session", async (method) => {
-    const { session, calls } = spySession();
-    const openBrowser = vi.fn(() => Effect.void);
-    const handlers = handlersFor(session, openBrowser) as unknown as Record<
-      string,
-      (input?: unknown) => Effect.Effect<unknown, { message: string }>
-    >;
-    const handler = handlers[method];
-    if (!handler) throw new Error(`no handler for ${method}`);
+  it.each(methodNames)(
+    "refuses a client-role session on %s without touching the session",
+    async (method) => {
+      const { session, calls } = spySession();
+      const openBrowser = vi.fn(() => Effect.void);
+      const handlers = handlersFor(session, openBrowser) as unknown as Record<
+        string,
+        (input?: unknown) => Effect.Effect<unknown, { message: string }>
+      >;
+      const handler = handlers[method];
+      if (!handler) throw new Error(`no handler for ${method}`);
 
-    const result = await Effect.runPromise(
-      provideWsConnectionSession(handler(SAMPLE_INPUTS[method]).pipe(Effect.flip), CLIENT_SESSION),
-    );
+      const result = await Effect.runPromise(
+        provideWsConnectionSession(
+          handler(SAMPLE_INPUTS[method]).pipe(Effect.flip),
+          CLIENT_SESSION,
+        ),
+      );
 
-    expect(result.message).toMatch(/owner authorization/i);
-    // The guard must fire before any handler work: no credential-file read
-    // or write can have happened because the session was never invoked.
-    expect(calls()).toEqual([]);
-    expect(openBrowser).not.toHaveBeenCalled();
-  });
+      expect(result.message).toMatch(/owner authorization/i);
+      // The guard must fire before any handler work: no credential-file read
+      // or write can have happened because the session was never invoked.
+      expect(calls()).toEqual([]);
+      expect(openBrowser).not.toHaveBeenCalled();
+    },
+  );
 
   // The default role for a connection with no registered session is
   // "client", so an unregistered connection is refused the same way.

@@ -1031,7 +1031,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         const app = new Hono();
         app.route(
           "/api/v1",
-          routesFor(db, workos.config({ databaseUrl, workosApiUrl: `http://127.0.0.1:${address.port}` })),
+          routesFor(
+            db,
+            workos.config({ databaseUrl, workosApiUrl: `http://127.0.0.1:${address.port}` }),
+          ),
         );
 
         const otp = await postJson(

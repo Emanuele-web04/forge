@@ -123,7 +123,10 @@ export function makeAccountRpcHandlers({ accountSession, openBrowser }: AccountR
         "Failed to save your profile",
       ),
     [WS_METHODS.accountSignOut]: () =>
-      ownerAccountRpc(() => Effect.tryPromise(() => accountSession.signOut()), "Failed to sign out"),
+      ownerAccountRpc(
+        () => Effect.tryPromise(() => accountSession.signOut()),
+        "Failed to sign out",
+      ),
     [WS_METHODS.accountOpenVerificationUrl]: (input: { readonly url: string }) =>
       ownerAccountRpc(
         () =>

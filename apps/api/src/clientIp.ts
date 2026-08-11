@@ -38,8 +38,7 @@ export const DEFAULT_TRUSTED_PROXY_HOPS = 1;
  * bucket of last resort for requests that expose neither.
  */
 export function resolveClientIp(source: ClientIpSource, trustedProxyHops: number): string {
-  const hops =
-    Number.isInteger(trustedProxyHops) && trustedProxyHops > 0 ? trustedProxyHops : 0;
+  const hops = Number.isInteger(trustedProxyHops) && trustedProxyHops > 0 ? trustedProxyHops : 0;
 
   if (hops > 0 && source.forwardedFor !== undefined) {
     const entries = source.forwardedFor

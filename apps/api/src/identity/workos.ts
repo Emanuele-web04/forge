@@ -621,20 +621,20 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
         `${config.workosApiUrl}/user_management/authenticate`,
         "/user_management/authenticate",
         {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${config.workosApiKey}`,
-        },
-        body: JSON.stringify({
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-          device_code: deviceCode,
-          client_id: config.workosClientId,
-          // Confidential-client here too: proxying this leg is what keeps
-          // the whole provider protocol off the client wire.
-          client_secret: config.workosApiKey,
-          ...contextFields(context),
-        }),
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${config.workosApiKey}`,
+          },
+          body: JSON.stringify({
+            grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+            device_code: deviceCode,
+            client_id: config.workosClientId,
+            // Confidential-client here too: proxying this leg is what keeps
+            // the whole provider protocol off the client wire.
+            client_secret: config.workosApiKey,
+            ...contextFields(context),
+          }),
         },
       );
       if (response.ok) {
@@ -711,7 +711,9 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       if (response.status === 400) {
         const raw: unknown = await response.json().catch(() => null);
         const oauthError =
-          typeof raw === "object" && raw !== null && typeof (raw as { error?: unknown }).error === "string"
+          typeof raw === "object" &&
+          raw !== null &&
+          typeof (raw as { error?: unknown }).error === "string"
             ? (raw as { error: string }).error
             : undefined;
         if (oauthError === "invalid_grant") {

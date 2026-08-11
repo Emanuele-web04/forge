@@ -482,9 +482,7 @@ describe("refreshTokens classification", () => {
       const auth = createWorkosAuth(
         workos.config({ workosApiUrl: `http://127.0.0.1:${address.port}` }),
       );
-      return await auth
-        .refreshTokens({ refreshToken: "rt_test" })
-        .catch((error: unknown) => error);
+      return await auth.refreshTokens({ refreshToken: "rt_test" }).catch((error: unknown) => error);
     } finally {
       server.close();
     }

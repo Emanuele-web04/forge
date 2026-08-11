@@ -159,9 +159,7 @@ describe("clientIp", () => {
       // With one trusted hop, the rightmost entry is the caller — a spoofed
       // prefix does not change the bucket.
       expect(
-        await (
-          await fetch(url, { headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.9" } })
-        ).text(),
+        await (await fetch(url, { headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.9" } })).text(),
       ).toBe("203.0.113.9");
     } finally {
       await new Promise<void>((resolve, reject) => {
