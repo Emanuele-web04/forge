@@ -32,6 +32,7 @@ function makeSettings(
     droidBinaryPath: "",
     kiloBinaryPath: "",
     openCodeBinaryPath: "",
+    commandCodeBinaryPath: "",
     piBinaryPath: "",
     piAgentDir: "",
     ...overrides,

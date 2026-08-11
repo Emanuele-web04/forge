@@ -36,6 +36,12 @@ export const AntigravityServerProviderSettings = Schema.Struct({
 });
 export type AntigravityServerProviderSettings = typeof AntigravityServerProviderSettings.Type;
 
+export const CommandCodeServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "cmd")),
+});
+export type CommandCodeServerProviderSettings = typeof CommandCodeServerProviderSettings.Type;
+
 export const GrokServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "grok")),
@@ -110,6 +116,7 @@ export const ServerSettings = Schema.Struct({
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    commandcode: CommandCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -168,6 +175,7 @@ export const ServerSettingsPatch = Schema.Struct({
       antigravity: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      commandcode: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       kilo: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,

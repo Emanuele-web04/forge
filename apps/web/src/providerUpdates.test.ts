@@ -74,6 +74,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         serverPasswordConfigured: false,
         experimentalWebSockets: false,
       },
+      commandcode: { ...provider, binaryPath: "cmd" },
       pi: { ...provider, binaryPath: "pi", agentDir: "" },
       ...overrides,
     },

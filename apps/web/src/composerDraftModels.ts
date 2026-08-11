@@ -36,6 +36,7 @@ export const COMPOSER_PROVIDER_KINDS = [
   "droid",
   "kilo",
   "opencode",
+  "commandcode",
   "pi",
 ] as const satisfies readonly ProviderKind[];
 
@@ -201,6 +202,16 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
           : {}),
       };
+    case "commandcode":
+      return {
+        provider,
+        model,
+        ...(options
+          ? {
+              options: options as Extract<ModelSelection, { provider: "commandcode" }>["options"],
+            }
+          : {}),
+      };
     case "pi":
       return {
         provider,
@@ -245,6 +256,10 @@ export function normalizeProviderModelOptions(
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
       ? (candidate.opencode as Record<string, unknown>)
+      : null;
+  const commandCodeCandidate =
+    candidate?.commandcode && typeof candidate.commandcode === "object"
+      ? (candidate.commandcode as Record<string, unknown>)
       : null;
   const kiloCandidate =
     candidate?.kilo && typeof candidate.kilo === "object"
@@ -389,6 +404,11 @@ export function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
+  const commandCodeReasoningEffort = trimStringOrUndefined(commandCodeCandidate?.reasoningEffort);
+  const commandcode =
+    commandCodeReasoningEffort !== undefined
+      ? { reasoningEffort: commandCodeReasoningEffort }
+      : undefined;
   if (
     !codex &&
     !claude &&
@@ -398,6 +418,7 @@ export function normalizeProviderModelOptions(
     !droid &&
     !kilo &&
     !opencode &&
+    !commandcode &&
     !pi
   ) {
     return null;
@@ -411,6 +432,7 @@ export function normalizeProviderModelOptions(
     ...(droid ? { droid } : {}),
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
+    ...(commandcode ? { commandcode } : {}),
     ...(pi ? { pi } : {}),
   };
 }
@@ -483,9 +505,11 @@ export function normalizeModelSelection(
                   ? modelOptions?.cursor
                   : provider === "opencode"
                     ? modelOptions?.opencode
-                    : provider === "pi"
-                      ? modelOptions?.pi
-                      : undefined;
+                    : provider === "commandcode"
+                      ? modelOptions?.commandcode
+                      : provider === "pi"
+                        ? modelOptions?.pi
+                        : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {

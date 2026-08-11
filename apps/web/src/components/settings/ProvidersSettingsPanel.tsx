@@ -80,6 +80,7 @@ type ProviderInstallTextKey =
   | "kiloServerUrl"
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
+  | "commandCodeBinaryPath"
   | "piBinaryPath"
   | "piAgentDir";
 type ProviderInstallPasswordKey = "kiloServerPassword" | "openCodeServerPassword";
@@ -344,6 +345,26 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         label: "OpenAI response WebSockets",
         description:
           "Use Opencode's experimental OpenAI response WebSocket transport for managed local servers.",
+      },
+    ],
+  },
+  {
+    provider: "commandcode",
+    docs: [
+      { label: "Install", href: "https://commandcode.ai/docs/install" },
+      { label: "Config", href: "https://commandcode.ai/docs" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "commandCodeBinaryPath",
+        label: "Command Code binary path",
+        placeholder: "Command Code binary path",
+        description: (
+          <>
+            Leave blank to use <code>cmd</code> from your PATH.
+          </>
+        ),
       },
     ],
   },

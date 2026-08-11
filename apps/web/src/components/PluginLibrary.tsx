@@ -394,6 +394,9 @@ export function PluginLibrary() {
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
+  const commandCodeCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions("commandcode"),
+  );
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
 
   const providerCapabilities: Record<ProviderKind, ProviderCapabilities> = {
@@ -428,6 +431,10 @@ export function PluginLibrary() {
     opencode: {
       plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
+    },
+    commandcode: {
+      plugins: supportsPluginDiscovery(commandCodeCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(commandCodeCapabilitiesQuery.data),
     },
     pi: {
       plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),

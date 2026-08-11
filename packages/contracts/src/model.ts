@@ -115,6 +115,11 @@ export const AntigravityModelOptions = Schema.Struct({
 });
 export type AntigravityModelOptions = typeof AntigravityModelOptions.Type;
 
+export const CommandCodeModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+});
+export type CommandCodeModelOptions = typeof CommandCodeModelOptions.Type;
+
 export const OpenCodeModelOptions = Schema.Struct({
   variant: Schema.optional(TrimmedNonEmptyString),
   agent: Schema.optional(TrimmedNonEmptyString),
@@ -153,6 +158,7 @@ export const ProviderModelOptions = Schema.Struct({
   droid: Schema.optional(DroidModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
+  commandcode: Schema.optional(CommandCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
@@ -602,6 +608,9 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   // Antigravity owns its model catalog. The web app populates this provider from
   // `agy models` so CLI updates appear without a Synara release.
   antigravity: [],
+  // Command Code owns its model catalog. The web app populates this provider
+  // from `cmd --list-models` so CLI updates appear without a Synara release.
+  commandcode: [],
   grok: [
     {
       slug: "grok-build-0.1",
@@ -1028,6 +1037,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
+  commandcode: "deepseek/deepseek-v4-flash",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -1107,6 +1117,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     kimi: "kimi-k2.7-code",
   },
   antigravity: {},
+  commandcode: {},
   droid: {
     droid: "claude-opus-4-8",
     factory: "claude-opus-4-8",
@@ -1197,5 +1208,6 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   droid: "Droid",
   kilo: "Kilo",
   opencode: "OpenCode",
+  commandcode: "Command Code",
   pi: "Pi",
 };

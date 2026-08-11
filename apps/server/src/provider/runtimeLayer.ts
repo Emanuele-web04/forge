@@ -13,6 +13,7 @@ import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
 import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeAntigravityAdapterLive } from "./Layers/AntigravityAdapter";
+import { makeCommandCodeAdapterLive } from "./Layers/CommandCodeAdapter";
 import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
 import { makeKiloAdapterLive, makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
@@ -68,6 +69,7 @@ export function makeServerProviderLayer(
     const antigravityAdapterLayer = makeAntigravityAdapterLive().pipe(
       Layer.provide(agentGatewayCredentialsLayer),
     );
+    const commandCodeAdapterLayer = makeCommandCodeAdapterLive();
     const grokAdapterLayer = makeGrokAdapterLive(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
@@ -92,6 +94,7 @@ export function makeServerProviderLayer(
       Layer.provide(droidAdapterLayer),
       Layer.provide(kiloAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
+      Layer.provide(commandCodeAdapterLayer),
       Layer.provide(piAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );

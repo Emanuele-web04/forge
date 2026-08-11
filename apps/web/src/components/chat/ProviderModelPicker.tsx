@@ -207,6 +207,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     EMPTY_FAVORITE_MODEL_SLUGS,
     FavoriteModelSlugs,
   );
+  const [commandCodeFavoriteModelSlugs, setCommandCodeFavoriteModelSlugs] = useLocalStorage(
+    FAVORITE_MODEL_STORAGE_KEYS.commandcode,
+    EMPTY_FAVORITE_MODEL_SLUGS,
+    FavoriteModelSlugs,
+  );
   const [piFavoriteModelSlugs, setPiFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.pi,
     EMPTY_FAVORITE_MODEL_SLUGS,
@@ -238,11 +243,13 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   const kiloFavoriteModelSlugSet = new Set(kiloFavoriteModelSlugs);
   const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
   const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
+  const commandCodeFavoriteModelSlugSet = new Set(commandCodeFavoriteModelSlugs);
   const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
   const favoriteModelSlugSets = {
     cursor: cursorFavoriteModelSlugSet,
     kilo: kiloFavoriteModelSlugSet,
     opencode: openCodeFavoriteModelSlugSet,
+    commandcode: commandCodeFavoriteModelSlugSet,
     pi: piFavoriteModelSlugSet,
   };
   const handleModelChange = (provider: ProviderKind, value: string) => {
@@ -263,9 +270,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         ? setCursorFavoriteModelSlugs
         : provider === "kilo"
           ? setKiloFavoriteModelSlugs
-          : provider === "pi"
-            ? setPiFavoriteModelSlugs
-            : setOpenCodeFavoriteModelSlugs;
+          : provider === "commandcode"
+            ? setCommandCodeFavoriteModelSlugs
+            : provider === "pi"
+              ? setPiFavoriteModelSlugs
+              : setOpenCodeFavoriteModelSlugs;
     setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
   };
 
@@ -288,6 +297,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       (provider === "kilo" ||
         provider === "opencode" ||
         provider === "cursor" ||
+        provider === "commandcode" ||
         provider === "pi") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
     const normalizedModelSearchQuery = deferredModelSearchQuery.trim().toLowerCase();

@@ -33,6 +33,7 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
   "droid",
   "kilo",
   "opencode",
+  "commandcode",
   "pi",
 ]);
 

@@ -113,6 +113,7 @@ export function useProviderModelCatalog(input: {
   const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid", false);
   const kiloModelDiscoveryEnabled = shouldDiscoverProvider("kilo");
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
+  const commandCodeModelDiscoveryEnabled = shouldDiscoverProvider("commandcode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
 
   const claudeDynamicModelsQuery = useQuery(
@@ -184,6 +185,14 @@ export function useProviderModelCatalog(input: {
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
       enabled: piModelDiscoveryEnabled,
+    }),
+  );
+  const commandCodeDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "commandcode",
+      binaryPath: settings.commandCodeBinaryPath || null,
+      cwd: discoveryCwd,
+      enabled: commandCodeModelDiscoveryEnabled,
     }),
   );
 
@@ -267,6 +276,13 @@ export function useProviderModelCatalog(input: {
       (antigravityModelsQuery.data.models.length ?? 0) > 0
     ) &&
     isInitialModelDiscoveryPending(antigravityModelsQuery);
+  const hasResolvedCommandCodeModelDiscovery =
+    commandCodeDynamicModelsQuery.data?.source === "commandcode.cli" &&
+    (commandCodeDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const commandCodeModelDiscoveryPending =
+    commandCodeModelDiscoveryEnabled &&
+    !hasResolvedCommandCodeModelDiscovery &&
+    isInitialModelDiscoveryPending(commandCodeDynamicModelsQuery);
 
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
@@ -294,6 +310,11 @@ export function useProviderModelCatalog(input: {
         customModelsByProvider.opencode,
         modelHintByProvider?.opencode,
       ),
+      commandcode: getAppModelOptions(
+        "commandcode",
+        customModelsByProvider.commandcode,
+        modelHintByProvider?.commandcode,
+      ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
     };
     const result: Record<
@@ -312,6 +333,7 @@ export function useProviderModelCatalog(input: {
       droid: droidDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
+      commandcode: commandCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
     };
     for (const provider of [
@@ -323,6 +345,7 @@ export function useProviderModelCatalog(input: {
       "droid",
       "kilo",
       "opencode",
+      "commandcode",
       "pi",
     ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
@@ -347,6 +370,7 @@ export function useProviderModelCatalog(input: {
     kiloDynamicModelsQuery.data,
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
+    commandCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
   ]);
 
@@ -357,6 +381,7 @@ export function useProviderModelCatalog(input: {
       droid: droidModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
+      commandcode: commandCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
     }),
     [
@@ -365,6 +390,7 @@ export function useProviderModelCatalog(input: {
       droidModelDiscoveryPending,
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
+      commandCodeModelDiscoveryPending,
       piModelDiscoveryPending,
     ],
   );
@@ -381,6 +407,7 @@ export function useProviderModelCatalog(input: {
       droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
+      commandcode: commandCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
     }),
     [
@@ -392,6 +419,7 @@ export function useProviderModelCatalog(input: {
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
+      commandCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,
     ],
   );
@@ -441,9 +469,11 @@ export function useProviderModelCatalog(input: {
                 ? droidDynamicModelsQuery
                 : selectedProvider === "kilo"
                   ? kiloDynamicModelsQuery
-                  : selectedProvider === "opencode"
-                    ? openCodeDynamicModelsQuery
-                    : piDynamicModelsQuery;
+              : selectedProvider === "opencode"
+                ? openCodeDynamicModelsQuery
+                : selectedProvider === "commandcode"
+                  ? commandCodeDynamicModelsQuery
+                  : piDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

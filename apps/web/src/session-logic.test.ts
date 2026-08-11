@@ -859,6 +859,7 @@ describe("PROVIDER_OPTIONS", () => {
     const droid = PROVIDER_OPTIONS.find((option) => option.value === "droid");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
+    const commandcode = PROVIDER_OPTIONS.find((option) => option.value === "commandcode");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
@@ -869,6 +870,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "droid", label: "Droid", available: true },
       { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
+      { value: "commandcode", label: "Command Code", available: true },
       { value: "pi", label: "Pi", available: true },
     ]);
     expect(claude).toEqual({
@@ -899,6 +901,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(opencode).toEqual({
       value: "opencode",
       label: "OpenCode",
+      available: true,
+    });
+    expect(commandcode).toEqual({
+      value: "commandcode",
+      label: "Command Code",
       available: true,
     });
     expect(pi).toEqual({

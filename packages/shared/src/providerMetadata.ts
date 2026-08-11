@@ -88,6 +88,16 @@ export const PROVIDER_DESCRIPTORS = [
     usage: null,
   },
   {
+    kind: "commandcode",
+    displayName: PROVIDER_DISPLAY_NAMES.commandcode,
+    available: true,
+    supportsNativeTurnSteering: false,
+    usage: {
+      signInCommand: "cmd login",
+      learnMoreHref: "https://commandcode.ai/docs",
+    },
+  },
+  {
     kind: "pi",
     displayName: PROVIDER_DISPLAY_NAMES.pi,
     available: true,

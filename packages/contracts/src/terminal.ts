@@ -159,6 +159,7 @@ const TerminalActivityEvent = Schema.Struct({
       Schema.Literal("codex"),
       Schema.Literal("claude"),
       Schema.Literal("antigravity"),
+      Schema.Literal("commandcode"),
     ]),
   ),
   agentState: Schema.NullOr(
