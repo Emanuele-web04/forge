@@ -1,14 +1,15 @@
 // FILE: SignInDialog.tsx
-// Purpose: "Welcome to Synara" sign-in modal — SSO through the system browser
-// (device grant, server-brokered; the hosted page offers Google/GitHub) and
-// in-app email OTP: the user enters their email, receives a 6-digit code, and
-// enters it in the same dialog. Sign-in and sign-up are one path. Dismissable;
-// a successful sign-in with no profile hands off to the onboarding modal.
+// Purpose: "Welcome to Synara" sign-in modal — provider SSO through the
+// system browser (authorization code + PKCE with a loopback redirect,
+// server-brokered, deep-linked to Google/GitHub) and in-app email OTP: the
+// user enters their email, receives a 6-digit code, and enters it in the same
+// dialog. Sign-in and sign-up are one path. Dismissable; a successful sign-in
+// with no profile hands off to the onboarding modal.
 // Layer: Web account feature.
 
-import type { AccountStatus } from "@synara/contracts";
+import type { AccountSsoProvider, AccountStatus } from "@synara/contracts";
 import { useEffect, useId, useRef, useState } from "react";
-import { LuGlobe } from "react-icons/lu";
+import { SiGithub, SiGoogle } from "react-icons/si";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
@@ -47,7 +48,8 @@ export function SignInDialog({ open, onOpenChange, onSignedIn }: SignInDialogPro
   );
 }
 
-type SsoWait = { readonly userCode: string };
+/** The waiting state of a PKCE attempt: which one, for the cancel RPC. */
+type SsoWait = { readonly ssoId: string };
 
 function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProps, "open">) {
   const account = useAccount();
@@ -66,39 +68,71 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
   // Normally unreachable on the OTP path (redeeming a code implicitly
   // verifies the email); wired so the challenge is a step, not a dead end.
   const [verification, setVerification] = useState<EmailVerificationChallenge | null>(null);
-  // Abandoning the dialog mid-SSO aborts the pending completeSignIn RPC so it
-  // does not resolve into a closed dialog later.
+  // Abandoning the dialog mid-SSO aborts the pending completeSso RPC so it
+  // does not resolve into a closed dialog later, and tells the server to
+  // drop the attempt (closing its loopback listener).
   const ssoAbortRef = useRef<AbortController | null>(null);
+  const ssoIdRef = useRef<string | null>(null);
+  const cancelSso = account.cancelSso;
 
   // Abort on EVERY way out of the dialog, not only the visible "Stop
   // waiting" control: this content unmounts on outer close, Escape, and
   // "Continue without an account", so the cleanup is the one place that
   // covers them all. An explicit user close is a cancellation of the client
-  // request; server-side completion tolerance stays only for genuine
-  // transport loss (reconnect recovery via the status query).
+  // request AND of the server-side attempt; server-side completion tolerance
+  // stays only for genuine transport loss (reconnect recovery via the
+  // status query).
   useEffect(() => {
     return () => {
       ssoAbortRef.current?.abort();
+      const ssoId = ssoIdRef.current;
+      if (ssoId) void cancelSso(ssoId).catch(() => {});
     };
-  }, []);
+  }, [cancelSso]);
 
-  const busy = account.sendOtp.isPending || account.beginSignIn.isPending || ssoWait !== null;
+  const busy = account.sendOtp.isPending || account.beginSso.isPending || ssoWait !== null;
 
-  const handleSso = async () => {
+  /**
+   * A sign-in error must never outrank a sign-in that actually happened: a
+   * slow provider can push the grant past a timeout while the session still
+   * lands on disk (the server already re-checks, but the RPC itself can be
+   * the leg that failed). Before showing any sign-in error, re-ask the
+   * authoritative status — signed-in means advance, not apologize.
+   */
+  const signedInDespiteError = async (): Promise<boolean> => {
+    try {
+      const { data } = await account.statusQuery.refetch();
+      if (data?.state === "signed-in") {
+        onSignedIn(data);
+        return true;
+      }
+    } catch {
+      // Unknowable status changes nothing; the original error stands.
+    }
+    return false;
+  };
+
+  const handleSso = async (provider: AccountSsoProvider) => {
     setError(null);
     try {
-      const begin = await account.beginSignIn.mutateAsync();
-      await account.openVerificationUrl(begin.verificationUriComplete);
-      setSsoWait({ userCode: begin.userCode });
+      const begin = await account.beginSso.mutateAsync({ provider });
+      ssoIdRef.current = begin.ssoId;
+      await account.openVerificationUrl(begin.authorizeUrl);
+      setSsoWait({ ssoId: begin.ssoId });
       const controller = new AbortController();
       ssoAbortRef.current = controller;
-      const status = await account.completeSignIn.mutateAsync({
-        deviceCode: begin.deviceCode,
+      const status = await account.completeSso.mutateAsync({
+        ssoId: begin.ssoId,
         signal: controller.signal,
       });
+      ssoIdRef.current = null;
       onSignedIn(status);
     } catch (cause) {
       if (ssoAbortRef.current?.signal.aborted) return;
+      if (await signedInDespiteError()) {
+        ssoIdRef.current = null;
+        return;
+      }
       setSsoWait(null);
       setError(accountErrorMessage(cause, "Sign-in did not finish. Try again."));
     } finally {
@@ -132,10 +166,21 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
         submitting={account.verifyEmail.isPending}
         resending={account.resendVerificationEmail.isPending}
         onSubmit={async (code) => {
-          const status = await account.verifyEmail.mutateAsync({
-            code,
-            pendingAuthenticationToken: verification.pendingAuthenticationToken,
-          });
+          let status: AccountStatus;
+          try {
+            status = await account.verifyEmail.mutateAsync({
+              code,
+              pendingAuthenticationToken: verification.pendingAuthenticationToken,
+            });
+          } catch (cause) {
+            // A slow provider is not a failed sign-in: if the session
+            // landed anyway, advance instead of showing the error.
+            if (await signedInDespiteError()) {
+              setVerification(null);
+              return;
+            }
+            throw cause;
+          }
           // Terminal completion: the pending token is spent — discard it.
           setVerification(null);
           onSignedIn(status);
@@ -169,10 +214,16 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
             // The one recoverable refusal with a payload: the provider wants
             // the email verified first and has already mailed a fresh code.
             // Route to the verification step instead of dead-ending; any
-            // other failure keeps the step open with its inline error.
+            // other failure keeps the step open with its inline error —
+            // unless the session actually landed despite the error, in
+            // which case advancing is the only honest outcome.
             const challenge = readEmailVerificationChallenge(cause);
-            if (!challenge) throw cause;
-            setVerification(challenge);
+            if (challenge) {
+              setVerification(challenge);
+              return;
+            }
+            if (await signedInDespiteError()) return;
+            throw cause;
           }
         }}
         onResend={async () => {
@@ -205,17 +256,17 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
             <span>Waiting for your browser…</span>
           </div>
           <p className="text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
-            Confirm this code matches the one shown in your browser:
+            Finish signing in with your provider, then return here.
           </p>
-          <div className="rounded-lg border border-border bg-secondary/40 px-3 py-1.5 font-mono text-sm tracking-widest">
-            {ssoWait.userCode}
-          </div>
           <Button
             variant="ghost"
             size="xs"
             className="text-muted-foreground"
             onClick={() => {
               ssoAbortRef.current?.abort();
+              const ssoId = ssoIdRef.current;
+              ssoIdRef.current = null;
+              if (ssoId) void cancelSso(ssoId).catch(() => {});
               setSsoWait(null);
             }}
           >
@@ -227,21 +278,28 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
         </div>
       ) : (
         <>
-          {/* One honest button, not per-provider ones: the device
-              authorization the wire actually makes is provider-neutral
-              (WorkOS's device grant accepts only client_id — no provider or
-              connection hint), so branded Google/GitHub buttons would
-              promise a selection the request never transmits. The hosted
-              page is where the provider gets chosen. */}
+          {/* Per-provider buttons, honestly: each one carries its provider
+              through the PKCE authorize URL, so the browser genuinely lands
+              on that provider's sign-in — the deep link the device grant
+              could never transmit. */}
           <div className="flex flex-col gap-2">
             <Button
               variant="outline"
               className="w-full gap-2"
               disabled={busy}
-              onClick={() => void handleSso()}
+              onClick={() => void handleSso("google")}
             >
-              <LuGlobe className="size-3.5" />
-              Continue in your browser
+              <SiGoogle className="size-3.5" />
+              Continue with Google
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full gap-2"
+              disabled={busy}
+              onClick={() => void handleSso("github")}
+            >
+              <SiGithub className="size-3.5" />
+              Continue with GitHub
             </Button>
           </div>
 

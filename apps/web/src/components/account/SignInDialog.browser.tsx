@@ -15,6 +15,9 @@ const accountApi = vi.hoisted(() => ({
   resendVerificationEmail: vi.fn(),
   beginSignIn: vi.fn(),
   completeSignIn: vi.fn(),
+  beginSso: vi.fn(),
+  completeSso: vi.fn(),
+  cancelSso: vi.fn(),
   updateProfile: vi.fn(),
   signOut: vi.fn(),
   openVerificationUrl: vi.fn(),
@@ -148,19 +151,18 @@ describe("SignInDialog", () => {
     expect(input.getAttribute("aria-describedby")).toBeTruthy();
   });
 
-  // M6: EVERY close path aborts the in-flight completeSignIn — here the
-  // outer "Continue without an account", which unmounts the dialog content.
-  it("aborts the in-flight sign-in when the dialog is closed", async () => {
+  // M6: EVERY close path aborts the in-flight completeSso and cancels the
+  // server-side attempt — here the outer "Continue without an account",
+  // which unmounts the dialog content.
+  it("aborts and cancels the in-flight sign-in when the dialog is closed", async () => {
     const seenSignals: AbortSignal[] = [];
-    accountApi.beginSignIn.mockResolvedValue({
-      deviceCode: "device-code",
-      userCode: "WDJB-MJHT",
-      verificationUriComplete: "https://auth.example.com/device?user_code=WDJB-MJHT",
-      expiresIn: 900,
-      interval: 5,
+    accountApi.beginSso.mockResolvedValue({
+      ssoId: "sso_1",
+      authorizeUrl: "https://auth.example.com/authorize?provider=GoogleOAuth",
     });
     accountApi.openVerificationUrl.mockResolvedValue(undefined);
-    accountApi.completeSignIn.mockImplementation(
+    accountApi.cancelSso.mockResolvedValue(undefined);
+    accountApi.completeSso.mockImplementation(
       (_input: unknown, options?: { signal?: AbortSignal }) =>
         new Promise((_resolve, reject) => {
           if (options?.signal) {
@@ -173,23 +175,64 @@ describe("SignInDialog", () => {
     );
 
     const { onOpenChange } = renderDialog();
-    await page.getByRole("button", { name: "Continue in your browser" }).click();
-    await vi.waitFor(() => expect(accountApi.completeSignIn).toHaveBeenCalledOnce());
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+    await vi.waitFor(() => expect(accountApi.completeSso).toHaveBeenCalledOnce());
     await expect.element(page.getByText("Stop waiting")).toBeVisible();
 
     await page.getByRole("button", { name: "Continue without an account" }).click();
     expect(onOpenChange).toHaveBeenCalledWith(false);
     await vi.waitFor(() => expect(seenSignals[0]?.aborted).toBe(true));
+    await vi.waitFor(() => expect(accountApi.cancelSso).toHaveBeenCalledWith({ ssoId: "sso_1" }));
   });
 
-  // L3: one honest SSO action; no provider-branded buttons promising a
-  // selection the provider-neutral device request never transmits.
-  it("offers a single browser sign-in action instead of provider-branded buttons", async () => {
+  // The branded buttons are honest again: each one sends ITS provider on the
+  // begin RPC, so the deep link the PKCE authorize URL carries matches the
+  // label the user clicked.
+  it.each([
+    ["Continue with Google", "google"],
+    ["Continue with GitHub", "github"],
+  ] as const)("%s begins SSO with provider %s", async (label, provider) => {
+    accountApi.beginSso.mockResolvedValue({
+      ssoId: "sso_1",
+      authorizeUrl: `https://auth.example.com/authorize?provider=${provider}`,
+    });
+    accountApi.openVerificationUrl.mockResolvedValue(undefined);
+    accountApi.completeSso.mockImplementation(() => new Promise(() => {}));
+
     renderDialog();
-    await expect
-      .element(page.getByRole("button", { name: "Continue in your browser" }))
-      .toBeVisible();
-    expect(page.getByText("Continue with Google").elements()).toHaveLength(0);
-    expect(page.getByText("Continue with GitHub").elements()).toHaveLength(0);
+    await page.getByRole("button", { name: label }).click();
+    await vi.waitFor(() => expect(accountApi.beginSso).toHaveBeenCalledWith({ provider }));
+    // The browser hand-off opens the URL the server built for that provider.
+    await vi.waitFor(() =>
+      expect(accountApi.openVerificationUrl).toHaveBeenCalledWith({
+        url: `https://auth.example.com/authorize?provider=${provider}`,
+      }),
+    );
+  });
+
+  // Timeout regression: a transient completeSso failure while the session
+  // actually landed must advance, never show an error to a signed-in user.
+  it("advances instead of showing an error when the status says signed in", async () => {
+    const onSignedIn = vi.fn();
+    accountApi.beginSso.mockResolvedValue({
+      ssoId: "sso_1",
+      authorizeUrl: "https://auth.example.com/authorize?provider=GoogleOAuth",
+    });
+    accountApi.openVerificationUrl.mockResolvedValue(undefined);
+    accountApi.completeSso.mockRejectedValue(
+      Object.assign(new Error("The identity provider is responding slowly"), {
+        code: "internal_error",
+      }),
+    );
+
+    renderDialog({ onSignedIn });
+    // The post-error re-check answers signed-in: the grant completed
+    // upstream. Set after renderDialog, which primes status to signed-out.
+    accountApi.status.mockResolvedValue({ state: "signed-in", me: makeMe() });
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+    await vi.waitFor(() =>
+      expect(onSignedIn).toHaveBeenCalledWith({ state: "signed-in", me: makeMe() }),
+    );
+    expect(page.getByText(/responding slowly/).elements()).toHaveLength(0);
   });
 });

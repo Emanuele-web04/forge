@@ -812,6 +812,15 @@ export function createWsNativeApi(): NativeApi {
           timeoutMs: null,
           ...(options?.signal ? { signal: options.signal } : {}),
         }),
+      beginSso: (input) => transport.request(WS_METHODS.accountBeginSso, input),
+      // Same no-deadline rationale as completeSignIn: the server waits on
+      // the browser callback for as long as the attempt lives.
+      completeSso: (input, options) =>
+        transport.request(WS_METHODS.accountCompleteSso, input, {
+          timeoutMs: null,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
+      cancelSso: (input) => transport.request(WS_METHODS.accountCancelSso, input),
       updateProfile: (input) => transport.request(WS_METHODS.accountUpdateProfile, input),
       signOut: () => transport.request(WS_METHODS.accountSignOut),
       openVerificationUrl: (input) =>

@@ -5,6 +5,7 @@
 
 import type {
   AccountAuthenticateOtpInput,
+  AccountBeginSsoInput,
   AccountMe,
   AccountResendVerificationEmailInput,
   AccountSendOtpInput,
@@ -105,6 +106,32 @@ export function useAccount() {
     onSuccess: setStatus,
   });
 
+  const beginSso = useMutation({
+    mutationFn: async (input: AccountBeginSsoInput) => {
+      const api = ensureNativeApi();
+      return api.account.beginSso(input);
+    },
+  });
+
+  // Same no-timeout shape as completeSignIn: the server waits on the
+  // loopback callback, and a dropped socket loses nothing.
+  const completeSso = useMutation({
+    ...statusFence,
+    mutationFn: async (input: { ssoId: string; signal?: AbortSignal }) => {
+      const api = ensureNativeApi();
+      return api.account.completeSso(
+        { ssoId: input.ssoId },
+        input.signal ? { signal: input.signal } : undefined,
+      );
+    },
+    onSuccess: setStatus,
+  });
+
+  const cancelSso = (ssoId: string) => {
+    const api = ensureNativeApi();
+    return api.account.cancelSso({ ssoId });
+  };
+
   const updateProfile = useMutation({
     ...statusFence,
     mutationFn: async (input: AccountUpdateProfileInput) => {
@@ -144,6 +171,9 @@ export function useAccount() {
     resendVerificationEmail,
     beginSignIn,
     completeSignIn,
+    beginSso,
+    completeSso,
+    cancelSso,
     updateProfile,
     signOut,
     openVerificationUrl,
