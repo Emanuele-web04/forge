@@ -469,11 +469,11 @@ export function useProviderModelCatalog(input: {
                 ? droidDynamicModelsQuery
                 : selectedProvider === "kilo"
                   ? kiloDynamicModelsQuery
-              : selectedProvider === "opencode"
-                ? openCodeDynamicModelsQuery
-                : selectedProvider === "commandcode"
-                  ? commandCodeDynamicModelsQuery
-                  : piDynamicModelsQuery;
+                  : selectedProvider === "opencode"
+                    ? openCodeDynamicModelsQuery
+                    : selectedProvider === "commandcode"
+                      ? commandCodeDynamicModelsQuery
+                      : piDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

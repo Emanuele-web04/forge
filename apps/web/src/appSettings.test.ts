@@ -805,10 +805,7 @@ describe("provider-indexed custom model settings", () => {
         "openrouter/gpt-oss-120b",
         "openrouter/gpt-oss-120b",
       ],
-      customCommandCodeModels: [
-        " commandcode/custom-model ",
-        "commandcode/custom-model",
-      ],
+      customCommandCodeModels: [" commandcode/custom-model ", "commandcode/custom-model"],
       customPiModels: [
         " anthropic/claude-sonnet-4-5 ",
         "anthropic/custom-pi",

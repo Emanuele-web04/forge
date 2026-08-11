@@ -199,9 +199,7 @@ export const AppSettingsSchema = Schema.Struct({
   kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerPasswordConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
-  commandCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
-    withDefaults(() => ""),
-  ),
+  commandCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),

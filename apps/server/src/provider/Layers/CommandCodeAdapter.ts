@@ -104,6 +104,11 @@ function nonEmptyText(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return value.length > 0 ? value : undefined;
+}
+
 function cliModelFromSelection(
   model: string | undefined,
   options: CommandCodeModelOptions | undefined,
@@ -357,9 +362,7 @@ const makeCommandCodeAdapter = (dependencies: CommandCodeAdapterDependencies = {
         ? { turnId: context.activeTurnId }
         : {}),
       ...(options?.itemId ? { itemId: options.itemId } : {}),
-      ...(context.sessionId
-        ? { providerRefs: { providerThreadId: context.sessionId } }
-        : {}),
+      ...(context.sessionId ? { providerRefs: { providerThreadId: context.sessionId } } : {}),
     });
 
     const raw = (messageType: string, payload: unknown) => ({
@@ -461,35 +464,36 @@ const makeCommandCodeAdapter = (dependencies: CommandCodeAdapterDependencies = {
       const openItemId =
         kind === "reasoning" ? context.openReasoningItemId : context.openAssistantItemId;
       if (openItemId) return openItemId;
-  const itemId = RuntimeItemId.makeUnsafe(
-    `commandcode-${context.activeTurnId ?? "turn"}-${kind}-${crypto.randomUUID()}`,
-  );
-  if (kind === "reasoning") {
-    context.openReasoningItemId = itemId;
-  } else {
-    context.openAssistantItemId = itemId;
-    context.sawAssistant = true;
-  }
-  currentTurn(context)?.items.push({ kind, itemId });
-  offer({
-    ...base(context, { itemId }),
-    type: "item.started",
-    payload: {
-      itemType: kind === "reasoning" ? "reasoning" : "assistant_message",
-      status: "inProgress",
-      title: kind === "reasoning" ? "Reasoning" : "Assistant",
-    },
-    raw: raw("stream-item-started", { kind }),
-  } satisfies ProviderRuntimeEvent);
-  return itemId;
-};
+      const itemId = RuntimeItemId.makeUnsafe(
+        `commandcode-${context.activeTurnId ?? "turn"}-${kind}-${crypto.randomUUID()}`,
+      );
+      if (kind === "reasoning") {
+        context.openReasoningItemId = itemId;
+      } else {
+        context.openAssistantItemId = itemId;
+        context.sawAssistant = true;
+      }
+      currentTurn(context)?.items.push({ kind, itemId });
+      offer({
+        ...base(context, { itemId }),
+        type: "item.started",
+        payload: {
+          itemType: kind === "reasoning" ? "reasoning" : "assistant_message",
+          status: "inProgress",
+          title: kind === "reasoning" ? "Reasoning" : "Assistant",
+        },
+        raw: raw("stream-item-started", { kind }),
+      } satisfies ProviderRuntimeEvent);
+      return itemId;
+    };
 
     const completeStreamingItem = (
       context: CommandCodeSessionContext,
       kind: "reasoning" | "assistant",
       detail?: string,
     ): void => {
-      const itemId = kind === "reasoning" ? context.openReasoningItemId : context.openAssistantItemId;
+      const itemId =
+        kind === "reasoning" ? context.openReasoningItemId : context.openAssistantItemId;
       if (!itemId) return;
       if (kind === "reasoning") {
         context.openReasoningItemId = undefined;
@@ -601,7 +605,7 @@ const makeCommandCodeAdapter = (dependencies: CommandCodeAdapterDependencies = {
       }
       switch (eventType) {
         case "thinking_delta": {
-          const delta = nonEmptyText(event.delta);
+          const delta = nonEmptyString(event.delta);
           if (!delta) return;
           const itemId = startStreamingItem(context, "reasoning");
           offer({
@@ -617,7 +621,7 @@ const makeCommandCodeAdapter = (dependencies: CommandCodeAdapterDependencies = {
           return;
         }
         case "text_delta": {
-          const delta = nonEmptyText(event.delta);
+          const delta = nonEmptyString(event.delta);
           if (!delta) return;
           const itemId = startStreamingItem(context, "assistant");
           offer({
@@ -1108,7 +1112,7 @@ const makeCommandCodeAdapter = (dependencies: CommandCodeAdapterDependencies = {
     return {
       provider: PROVIDER,
       capabilities: {
-        sessionModelSwitch: "restart-session",
+        sessionModelSwitch: "in-session",
         conversationRollback: "restart-session",
         supportsRuntimeModelList: true,
         supportsLiveTurnDiffPatch: false,

@@ -21,7 +21,7 @@ cmd -p "<prompt>" --output-format json --max-turns 100 --skip-onboarding --yolo 
 
 Two consequences shaped the implementation:
 
-1. **No interactive approval pause.** Print mode cannot pause for interactive approvals, so the adapter **hard-requires `full-access` runtime mode** (the `--yolo` flag) and rejects `approval-required` with a clear validation error: *"Command Code CLI print mode cannot pause for interactive approvals. Select Full access to use this provider."* `respondToRequest` / `respondToUserInput` return an unsupported error.
+1. **No interactive approval pause.** Print mode cannot pause for interactive approvals, so the adapter **hard-requires `full-access` runtime mode** (the `--yolo` flag) and rejects `approval-required` with a clear validation error: _"Command Code CLI print mode cannot pause for interactive approvals. Select Full access to use this provider."_ `respondToRequest` / `respondToUserInput` return an unsupported error.
 2. **NDJSON streaming.** With `--output-format json`, the CLI emits newline-delimited JSON frames: `{"type":"event","event":{...}}` lifecycle events interleaved with `{"type":"result",...}` / `{"type":"error",...}` final frames. The adapter parses both with one line-splitter.
 
 ## Files Affected
@@ -169,7 +169,7 @@ flowchart TD
 2. Also confirmed the composer editor is disabled while `isConnecting` / `phase === "disconnected"`, which would freeze the entire composer if the backend is unreachable.
 3. Inspected the Command Code adapter (`CommandCodeAdapter.ts`) and health check; found the full-access runtime-mode enforcement and confirmed the CLI itself works (`cmd --version`, `cmd --list-models` succeed).
 4. Checked the running `apps/server/dist` build — it includes the commandcode changes (33 matches), so a stale build was not the cause.
-5. **Root cause found at runtime:** the dev backend had died — the dev harness (vite + tsdown watch + `dev-electron.mjs`) was still alive, but the Electron GUI process had exited and the runner only auto-restarts on *abnormal* exits, so it sat idle with no window and no live server. With the server down, provider statuses were stale/unavailable, so the send gating blocked every message regardless of provider.
+5. **Root cause found at runtime:** the dev backend had died — the dev harness (vite + tsdown watch + `dev-electron.mjs`) was still alive, but the Electron GUI process had exited and the runner only auto-restarts on _abnormal_ exits, so it sat idle with no window and no live server. With the server down, provider statuses were stale/unavailable, so the send gating blocked every message regardless of provider.
 
 **Fix:** Killed the stale harness and relaunched the full dev stack in one command:
 
