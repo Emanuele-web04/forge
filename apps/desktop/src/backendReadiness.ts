@@ -4,7 +4,7 @@
 // Exports: waitForHttpReady, isBackendReadinessAborted, BackendReadinessAbortedError
 
 export interface WaitForHttpReadyOptions {
-  readonly timeoutMs?: number;
+  readonly timeoutMs?: number | null;
   readonly intervalMs?: number;
   readonly requestTimeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
@@ -62,12 +62,12 @@ export async function waitForHttpReady(
 ): Promise<void> {
   const fetchImpl = options?.fetchImpl ?? fetch;
   const signal = options?.signal;
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = options?.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
   const intervalMs = options?.intervalMs ?? DEFAULT_INTERVAL_MS;
   const requestTimeoutMs = options?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const readinessPath = options?.path ?? "/";
   const isReady = options?.isReady ?? ((response: Response) => response.ok);
-  const deadline = Date.now() + timeoutMs;
+  const deadline = timeoutMs === null ? null : Date.now() + timeoutMs;
 
   for (;;) {
     if (signal?.aborted) {
@@ -104,7 +104,7 @@ export async function waitForHttpReady(
       signal?.removeEventListener("abort", abortRequest);
     }
 
-    if (Date.now() >= deadline) {
+    if (deadline !== null && Date.now() >= deadline) {
       throw new Error(`Timed out waiting for backend readiness at ${baseUrl}.`);
     }
 

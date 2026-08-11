@@ -5,7 +5,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { PersistenceDecodeError } from "../Errors.ts";
 import { OrchestrationEventStore } from "../Services/OrchestrationEventStore.ts";
-import { OrchestrationEventStoreLive } from "./OrchestrationEventStore.ts";
+import {
+  buildReadEventRowsFromSequenceQuery,
+  OrchestrationEventStoreLive,
+} from "./OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 
 const layer = it.layer(
@@ -13,6 +16,91 @@ const layer = it.layer(
 );
 
 layer("OrchestrationEventStore", (it) => {
+  it.effect("projector replay pages keep the primary-key range scan for every filter shape", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const baseRequest = {
+        sequenceExclusive: 10,
+        throughSequenceInclusive: 1_000,
+        limit: 500,
+      };
+      // One request per replayFilter branch in buildReadEventRowsFromSequenceQuery.
+      const requests = [
+        {
+          ...baseRequest,
+          filterEnabled: false,
+          includeBoundaryEvent: false,
+          eventTypes: [],
+          activityKinds: [],
+        },
+        {
+          ...baseRequest,
+          filterEnabled: true,
+          includeBoundaryEvent: true,
+          eventTypes: ["thread.activity-appended", "thread.created"],
+          activityKinds: [],
+        },
+        {
+          ...baseRequest,
+          filterEnabled: true,
+          includeBoundaryEvent: true,
+          eventTypes: ["thread.activity-appended"],
+          activityKinds: ["approval.requested"],
+        },
+        // Empty eventTypes yields the constant-0 predicate (checkpoints projector).
+        {
+          ...baseRequest,
+          filterEnabled: true,
+          includeBoundaryEvent: true,
+          eventTypes: [],
+          activityKinds: [],
+        },
+        {
+          ...baseRequest,
+          filterEnabled: true,
+          includeBoundaryEvent: false,
+          eventTypes: ["thread.activity-appended"],
+          activityKinds: ["approval.requested"],
+        },
+      ];
+
+      for (const request of requests) {
+        const [query, params] = buildReadEventRowsFromSequenceQuery(sql, request).compile();
+        const plan = yield* sql.unsafe<{ readonly detail: string }>(
+          `EXPLAIN QUERY PLAN ${query}`,
+          params,
+        );
+        const details = plan.map((row) => row.detail).join("\n");
+        // The boundary OR must never demote the sequence cursor to a
+        // MULTI-INDEX OR plan: with a large event log that plan rescans the
+        // whole event_type index per page and turns projection bootstrap
+        // into minutes of startup time.
+        //
+        // EXPLAIN QUERY PLAN text is not a stable format across SQLite
+        // releases, so assert independent fragments of the required plan
+        // (table search, integer PK usage, both rowid range bounds) instead
+        // of one exact phrase.
+        for (const fragment of [
+          /SEARCH orchestration_events/,
+          /USING INTEGER PRIMARY KEY/,
+          /rowid>/,
+          /rowid</,
+        ]) {
+          assert.match(
+            details,
+            fragment,
+            `expected PK range scan (${fragment}), got plan:\n${details}\nfor request: ${JSON.stringify(request)}`,
+          );
+        }
+        assert.notMatch(
+          details,
+          /MULTI-INDEX OR|TEMP B-TREE/,
+          `plan regressed to index-OR or temp sort:\n${details}\nfor request: ${JSON.stringify(request)}`,
+        );
+      }
+    }),
+  );
+
   it.effect("reads stable newest-first pages from one thread stream", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
@@ -29,6 +117,34 @@ layer("OrchestrationEventStore", (it) => {
         correlationId: null,
         metadata: {},
         payload: { threadId, archivedAt: now, updatedAt: now },
+      });
+      yield* eventStore.append({
+        type: "thread.archived",
+        eventId: EventId.makeUnsafe("evt-thread-diagnostic-unrelated"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-diagnostic-unrelated"),
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-diagnostic-unrelated"),
+          archivedAt: now,
+          updatedAt: now,
+        },
+      });
+      const sameThreadNonDetail = yield* eventStore.append({
+        type: "thread.deleted",
+        eventId: EventId.makeUnsafe("evt-thread-diagnostic-non-detail"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: { threadId, deletedAt: now },
       });
       const second = yield* eventStore.append({
         type: "thread.unarchived",
@@ -63,6 +179,22 @@ layer("OrchestrationEventStore", (it) => {
       assert.deepEqual(
         older.map((event) => event.sequence),
         [first.sequence],
+      );
+      const catchup = yield* Stream.runCollect(
+        eventStore.readThreadEventsFromSequence(threadId, first.sequence, 10, second.sequence),
+      ).pipe(Effect.map((events) => Array.from(events)));
+      assert.deepEqual(
+        catchup.map((event) => event.sequence),
+        [sameThreadNonDetail.sequence, second.sequence],
+      );
+      const detailCatchup = yield* Stream.runCollect(
+        eventStore.readThreadEventsFromSequence(threadId, first.sequence, 1, second.sequence, [
+          "thread.unarchived",
+        ]),
+      ).pipe(Effect.map((events) => Array.from(events)));
+      assert.deepEqual(
+        detailCatchup.map((event) => event.sequence),
+        [second.sequence],
       );
     }),
   );
@@ -118,6 +250,52 @@ layer("OrchestrationEventStore", (it) => {
       assert.equal(replayed.length, 1);
       assert.equal(replayed[0]?.type, "project.created");
       assert.equal(replayed[0]?.metadata.adapterKey, "codex");
+    }),
+  );
+
+  it.effect("filters sparse projector replay before decoding unrelated activity payloads", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const now = "2026-08-09T00:00:00.000Z";
+      const threadId = ThreadId.makeUnsafe("thread-filtered-replay");
+      const appendActivity = (eventId: string, kind: string) =>
+        eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.makeUnsafe(eventId),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe(`${eventId}-activity`),
+              tone: "info",
+              kind,
+              summary: kind,
+              payload: {},
+              turnId: null,
+              createdAt: now,
+            },
+          },
+        } as Parameters<typeof eventStore.append>[0]);
+
+      yield* appendActivity("evt-filtered-replay-noise", "context-window.updated");
+      const relevant = yield* appendActivity("evt-filtered-replay-relevant", "approval.requested");
+      const replayed = yield* Stream.runCollect(
+        eventStore.readFromSequence(0, Number.MAX_SAFE_INTEGER, relevant.sequence, {
+          eventTypes: ["thread.activity-appended"],
+          activityKinds: ["approval.requested"],
+        }),
+      ).pipe(Effect.map((events) => Array.from(events)));
+
+      assert.deepEqual(
+        replayed.map((event) => event.eventId),
+        [relevant.eventId],
+      );
     }),
   );
 

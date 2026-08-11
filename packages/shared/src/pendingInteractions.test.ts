@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isPendingInteractionResponseClaimable,
+  respondingInteractionReclaimAt,
   respondingInteractionReclaimCutoff,
 } from "./pendingInteractions";
 
@@ -22,6 +23,9 @@ describe("pending interaction response claims", () => {
   it("only reclaims responding interactions after the grace period", () => {
     expect(respondingInteractionReclaimCutoff("2026-07-14T12:31:00.000Z")).toBe(
       "2026-07-14T12:30:30.000Z",
+    );
+    expect(respondingInteractionReclaimAt("2026-07-14T12:30:30.000Z")).toBe(
+      "2026-07-14T12:31:00.000Z",
     );
     expect(
       isPendingInteractionResponseClaimable({

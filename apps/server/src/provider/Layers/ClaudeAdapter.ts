@@ -85,7 +85,6 @@ import {
   Queue,
   Random,
   Ref,
-  Semaphore,
   Stream,
 } from "effect";
 
@@ -147,6 +146,7 @@ import {
   MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION,
 } from "../claudeCliVersion.ts";
 import { parseGenericCliVersion } from "../providerMaintenance.ts";
+import { makeKeyedLock } from "../keyedLock.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -559,6 +559,10 @@ export interface ClaudeAdapterLiveOptions {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }) => ClaudeQueryRuntime | Promise<ClaudeQueryRuntime>;
+  readonly forkNativeSession?: (
+    sessionId: string,
+    options?: { readonly dir?: string; readonly upToMessageId?: string },
+  ) => Promise<{ sessionId: string }>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   // Interval for polling a live workflow's transcript directory. Tests shrink it.
@@ -774,6 +778,34 @@ function readClaudeModelRefusalFallback(message: unknown): ClaudeModelRefusalFal
     ...(typeof record.content === "string" && record.content.trim().length > 0
       ? { content: record.content }
       : {}),
+  };
+}
+
+// VCS state transitions (commit, checkout, rebase) stream as an untyped system
+// message; match structurally so SDK type drift stays inert.
+interface ClaudeVcsStateChange {
+  readonly kind?: string;
+  readonly cwd?: string;
+}
+
+function readClaudeVcsStateChange(message: unknown): ClaudeVcsStateChange | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const record = message as {
+    type?: unknown;
+    subtype?: unknown;
+    kind?: unknown;
+    cwd?: unknown;
+  };
+  if (record.type !== "system" || record.subtype !== "vcs_state_changed") {
+    return undefined;
+  }
+  const kind = readNonEmptyString(record.kind);
+  const cwd = readNonEmptyString(record.cwd);
+  return {
+    ...(kind !== undefined ? { kind } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
   };
 }
 
@@ -1727,6 +1759,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       const { query } = await loadClaudeAgentSdk();
       return query({ prompt: input.prompt, options: input.options }) as ClaudeQueryRuntime;
     };
+    const forkNativeSession = async (
+      sessionId: string,
+      forkOptions?: { readonly dir?: string; readonly upToMessageId?: string },
+    ): Promise<{ sessionId: string }> => {
+      const override = options?.forkNativeSession;
+      if (override) {
+        return override(sessionId, forkOptions);
+      }
+      const { forkSession } = await loadClaudeAgentSdk();
+      return forkSession(sessionId, forkOptions);
+    };
     const spawnClaudeProcess = options?.spawnClaudeCodeProcess ?? spawnOwnedClaudeCodeProcess;
     const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
     const readClaudeCliVersion = options?.readClaudeCliVersion ?? readInstalledClaudeCliVersion;
@@ -1734,7 +1777,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const sessions = new Map<ThreadId, ClaudeSessionContext>();
     const failedStartupProcessOwners = new Map<ThreadId, ClaudeProcessOwner>();
     const failedDiscoveryProcessOwners = new Set<ClaudeProcessOwner>();
-    const sessionLifecycleLocks = new Map<ThreadId, Semaphore.Semaphore>();
+    const sessionLifecycleLock = makeKeyedLock<ThreadId>();
     let cachedModels: ProviderListModelsResult | null = null;
     let cachedAgents: ProviderListAgentsResult | null = null;
     const verifyClaudeAutoModelSupport = (input: {
@@ -1803,17 +1846,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
-    const withSessionLifecycleLock = <A, E, R>(
-      threadId: ThreadId,
-      effect: Effect.Effect<A, E, R>,
-    ): Effect.Effect<A, E, R> => {
-      let lock = sessionLifecycleLocks.get(threadId);
-      if (lock === undefined) {
-        lock = Semaphore.makeUnsafe(1);
-        sessionLifecycleLocks.set(threadId, lock);
-      }
-      return lock.withPermits(1)(effect);
-    };
+    const withSessionLifecycleLock = sessionLifecycleLock.withLock;
     const resolveClaudeSdkEnv = Effect.sync(() =>
       buildClaudeProcessEnv({ homeDir: serverConfig.homeDir }),
     );
@@ -3983,6 +4016,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
+        // VCS transitions let the thread git metadata reactor refresh the durable
+        // branch/PR projection mid-turn instead of waiting for the turn boundary.
+        const vcsStateChange = readClaudeVcsStateChange(message);
+        if (vcsStateChange) {
+          yield* offerRuntimeEvent(context, {
+            ...base,
+            type: "vcs.state.changed",
+            payload: vcsStateChange,
+          });
+          return;
+        }
+
         switch (message.subtype) {
           case "init":
             yield* offerRuntimeEvent(context, {
@@ -5888,6 +5933,59 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }),
       );
 
+    const forkThread: NonNullable<ClaudeAdapterShape["forkThread"]> = (input) =>
+      Effect.gen(function* () {
+        // Prefer the live session's cursor: the persisted binding may lag the
+        // runtime by a turn.
+        const liveSource = sessions.get(input.sourceThreadId);
+        // Mid-turn `lastAssistantUuid` can point at a tool_use without its
+        // result yet, so a fork now would cut the transcript in an incomplete
+        // state. Let the retained-transcript fallback handle busy sources.
+        if (liveSource?.turnState !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue:
+              "The source Claude session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
+          });
+        }
+        const sourceState = readClaudeResumeState(input.sourceResumeCursor);
+        const sourceSessionId = liveSource?.resumeSessionId ?? sourceState?.resume;
+        if (!sourceSessionId) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue: "The source Claude session has no resumable native cursor.",
+          });
+        }
+        const upToMessageId = liveSource?.lastAssistantUuid ?? sourceState?.resumeSessionAt;
+        const sourceCwd = liveSource?.session.cwd ?? input.sourceCwd;
+        const forked = yield* Effect.tryPromise({
+          try: () =>
+            forkNativeSession(sourceSessionId, {
+              ...(sourceCwd ? { dir: sourceCwd } : {}),
+              ...(upToMessageId ? { upToMessageId } : {}),
+            }),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/fork",
+              detail: toMessage(cause, "Failed to fork the Claude session transcript."),
+              cause,
+            }),
+        });
+        // The SDK fork remaps every message uuid, so the source's resume pin
+        // (`resumeSessionAt`) and tracked tasks must not carry into the fork.
+        // A live context restarts `turns` at [] on resume, so its length can
+        // undercount the cumulative persisted total — keep the larger of the two.
+        const resumeCursor = {
+          threadId: input.threadId,
+          resume: forked.sessionId,
+          turnCount: Math.max(liveSource?.turns.length ?? 0, sourceState?.turnCount ?? 0),
+        };
+        return { threadId: input.threadId, resumeCursor };
+      });
+
     const respondToRequest: ClaudeAdapterShape["respondToRequest"] = (
       threadId,
       requestId,
@@ -6284,6 +6382,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       steerSubagent,
       readThread,
       rollbackThread,
+      forkThread,
       respondToRequest,
       respondToUserInput,
       stopSession,

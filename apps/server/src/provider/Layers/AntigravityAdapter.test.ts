@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
@@ -99,17 +99,65 @@ GPT-OSS 120B (Medium)
     ]);
   });
 
+  it("collapses tab-separated slug/label rows from newer agy models output", () => {
+    expect(
+      parseAntigravityModelLines(`
+gemini-3.6-flash-high\tGemini 3.6 Flash (High)
+gemini-3.6-flash-medium\tGemini 3.6 Flash (Medium)
+gemini-3.6-flash-low\tGemini 3.6 Flash (Low)
+gemini-3.1-pro-high\tGemini 3.1 Pro (High)
+gemini-3.1-pro-low\tGemini 3.1 Pro (Low)
+claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
+`),
+    ).toEqual([
+      {
+        slug: "Gemini 3.6 Flash",
+        name: "Gemini 3.6 Flash",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+        ],
+        defaultReasoningEffort: "medium",
+      },
+      {
+        slug: "Gemini 3.1 Pro",
+        name: "Gemini 3.1 Pro",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+        defaultReasoningEffort: "low",
+      },
+      {
+        slug: "Claude Sonnet 4.6",
+        name: "Claude Sonnet 4.6",
+        supportedReasoningEfforts: [{ value: "thinking", label: "Thinking" }],
+        defaultReasoningEffort: "thinking",
+      },
+    ]);
+  });
+
   it("rebuilds the exact CLI model label only at dispatch", () => {
     expect(parseAntigravityCliModelLabel("Gemini 3.5 Flash (High)")).toEqual({
       model: "Gemini 3.5 Flash",
       effort: "high",
     });
+    expect(parseAntigravityCliModelLabel("gemini-3.6-flash-high\tGemini 3.6 Flash (High)")).toEqual(
+      {
+        model: "Gemini 3.6 Flash",
+        effort: "high",
+      },
+    );
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash")).toBe("Gemini 3.5 Flash (Medium)");
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash", { reasoningEffort: "high" })).toBe(
       "Gemini 3.5 Flash (High)",
     );
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash (Low)")).toBe(
       "Gemini 3.5 Flash (Low)",
+    );
+    expect(resolveAntigravityCliModelLabel("gemini-3.6-flash-high\tGemini 3.6 Flash (High)")).toBe(
+      "Gemini 3.6 Flash (High)",
     );
   });
 
@@ -504,7 +552,15 @@ describe("Antigravity CLI integration helpers", () => {
     try {
       await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
       const command = buildAntigravityCaptureCommand(process.execPath, scriptPath, "pre-tool");
-      const payload = JSON.stringify({ tool: "shell" });
+      const payload = JSON.stringify({
+        stepIdx: 12,
+        conversationId: "conversation-1",
+        transcriptPath: "/tmp/transcript.jsonl",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "echo super-secret-token" },
+        },
+      });
       const result = runCaptureCommand(command, payload, {
         SYNARA_ANTIGRAVITY_EVENTS: eventPath,
         SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
@@ -513,7 +569,11 @@ describe("Antigravity CLI integration helpers", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe('{"decision":"allow"}');
-      expect(await fs.readFile(eventPath, "utf8")).toBe(`pre-tool\t${payload}\n`);
+      const captured = await fs.readFile(eventPath, "utf8");
+      expect(captured).toBe(
+        'pre-tool\t{"conversationId":"conversation-1","transcriptPath":"/tmp/transcript.jsonl","stepIdx":12,"toolCall":{"name":"run_command"}}\n',
+      );
+      expect(captured).not.toContain("super-secret-token");
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }
@@ -588,11 +648,263 @@ describe("Antigravity CLI integration helpers", () => {
     }
   });
 
+  it("streams hook tool names and terminal states without arguments", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-tool-events-"));
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const toolEventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.filter(
+              (event) => event.type === "item.started" || event.type === "item.completed",
+            ),
+            Stream.take(4),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-tool-events");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "exercise tools",
+            attachments: [],
+          });
+          expect(eventFile).toBeTruthy();
+          yield* Effect.promise(() =>
+            fs.appendFile(
+              eventFile!,
+              [
+                'pre-tool\t{"stepIdx":7,"toolCall":{"name":"run_command","args":{"token":"super-secret-token"}}}',
+                'post-tool\t{"stepIdx":7,"error":"super-secret-error"}',
+                'pre-tool\t{"stepIdx":8,"toolCall":{"name":"write_to_file","args":{"content":"super-secret-content"}}}',
+                'post-tool\t{"stepIdx":8,"error":""}',
+                "",
+              ].join("\n"),
+            ),
+          );
+
+          const events = Array.from(
+            yield* Fiber.join(toolEventsFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          expect(events).toHaveLength(4);
+          expect(events.map((event) => event.type)).toEqual([
+            "item.started",
+            "item.completed",
+            "item.started",
+            "item.completed",
+          ]);
+          expect(events.map((event) => event.payload)).toEqual([
+            {
+              itemType: "command_execution",
+              status: "inProgress",
+              title: "run_command",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-0`,
+                toolName: "run_command",
+              },
+            },
+            {
+              itemType: "command_execution",
+              status: "failed",
+              title: "run_command",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-0`,
+                toolName: "run_command",
+              },
+            },
+            {
+              itemType: "file_change",
+              status: "inProgress",
+              title: "write_to_file",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-1`,
+                toolName: "write_to_file",
+              },
+            },
+            {
+              itemType: "file_change",
+              status: "completed",
+              title: "write_to_file",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-1`,
+                toolName: "write_to_file",
+              },
+            },
+          ]);
+          expect(JSON.stringify(events)).not.toContain("super-secret");
+
+          child?.emit("close", 0, null);
+          yield* Effect.sleep("25 millis");
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-tool-events-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("terminates helper processes that exceed their timeout", async () => {
     await expect(
       runAntigravityHelperProcess(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
         timeoutMs: 50,
       }),
     ).rejects.toThrow("Antigravity helper timed out after 50ms");
+  });
+
+  // #465: an active Stop hook must not emit a non-standard decision that can
+  // hang the print process after the assistant reply is already visible.
+  it("answers stop hooks with a neutral allow-exit payload", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stop-hook-"));
+    const scriptPath = path.join(directory, "capture.cjs");
+    const eventPath = path.join(directory, "events.ndjson");
+    try {
+      await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
+      const result = spawnSync(process.execPath, [scriptPath, "stop"], {
+        env: { ...process.env, SYNARA_ANTIGRAVITY_EVENTS: eventPath },
+        input: JSON.stringify({ stop: true }),
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("{}");
+      expect(result.stdout).not.toContain('"decision":"stop"');
+      expect(await fs.readFile(eventPath, "utf8")).toContain("stop\t");
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Antigravity turn settle on cancel (#465)", () => {
+  const makeSpawnProcess = (children: ChildProcess[]) =>
+    ((
+      _command: string,
+      _args: readonly string[],
+      _options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      const child = new EventEmitter() as ChildProcess;
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      Object.assign(child, {
+        stdout,
+        stderr,
+        killed: false,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        kill: () => true,
+      });
+      children.push(child);
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+
+  const failTeardown = async () => {
+    throw new Error("process exit could not be proven");
+  };
+
+  it("unlocks Cancel without letting a late close settle the follow-up", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-interrupt-hung-"));
+    const children: ChildProcess[] = [];
+    const spawnProcess = makeSpawnProcess(children);
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-interrupt-hung");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const turn = yield* adapter.sendTurn({
+            threadId,
+            input: "stuck working",
+            attachments: [],
+          });
+          const before = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
+          expect(before?.status).toBe("running");
+          expect(before?.activeTurnId).toBe(turn.turnId);
+
+          yield* adapter.interruptTurn(threadId, turn.turnId);
+
+          const after = (yield* adapter.listSessions()).find((s) => s.threadId === threadId);
+          expect(after?.status).toBe("ready");
+          expect(after?.activeTurnId).toBeUndefined();
+
+          const followUp = yield* adapter.sendTurn({
+            threadId,
+            input: "follow-up",
+            attachments: [],
+          });
+          children[0]?.emit("close", 0, null);
+          yield* Effect.sleep("25 millis");
+
+          const afterLateClose = (yield* adapter.listSessions()).find(
+            (session) => session.threadId === threadId,
+          );
+          expect(afterLateClose?.status).toBe("running");
+          expect(afterLateClose?.activeTurnId).toBe(followUp.turnId);
+
+          children[1]?.emit("close", 0, null);
+          yield* Effect.sleep("25 millis");
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree: failTeardown,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-interrupt-hung-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -61,6 +61,7 @@ Invalid rules are ignored. Invalid config files are ignored. Warnings are logged
 - `diff.change.next`: scroll the diff panel to the next changed file (only while the diff panel is open)
 - `diff.change.previous`: scroll the diff panel to the previous changed file (only while the diff panel is open)
 - `composer.focus.toggle`: focus or blur the chat prompt composer
+- `thread.copyId`: copy the active thread's ID to the clipboard
 - `editor.openFavorite`: open current project/worktree in the last-used editor
 - `editor.file.save`: write the focused file editor's unsaved changes back to disk (editor view file and diff editors)
 - `script.{id}.run`: run a project script by id (for example `script.test.run`)

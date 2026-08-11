@@ -31,6 +31,7 @@ import {
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
@@ -1074,7 +1075,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
-          title: command.title,
+          title: command.sidechatSourceThreadId
+            ? command.title
+            : buildForkThreadTitle(
+                sourceThread,
+                listThreadsByProjectId(readModel, command.projectId),
+              ),
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,

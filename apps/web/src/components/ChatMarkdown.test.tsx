@@ -136,6 +136,33 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain('class="katex"');
   });
 
+  it("renders a table whose delimiter row is missing cells", async () => {
+    // Models regularly emit a delimiter row with fewer cells than the header;
+    // GFM rejects the whole block on the mismatch and the table degrades into
+    // one run-on paragraph of pipes. The repair pass pads the delimiter row.
+    const markup = await renderMarkdown(
+      [
+        "Studio vs. normal mode:",
+        "",
+        "| | Normal mode | Studio |",
+        "|---|---|",
+        "| Purpose | Focused, interactive work | Long-running, agent-led work |",
+      ].join("\n"),
+    );
+
+    expect(markup).toContain("<table>");
+    expect(markup).toContain("<th>Studio</th>");
+    expect(markup).toContain("<td>Purpose</td>");
+    expect(markup).not.toContain("|---|");
+  });
+
+  it("keeps pipe-and-dash lines inside code fences out of table repair", async () => {
+    const markup = await renderMarkdown(["```", "| a | b |", "|---|", "```"].join("\n"));
+
+    expect(markup).not.toContain("<table>");
+    expect(markup).toContain("|---|");
+  });
+
   it("renders exact thread marker ranges without changing markdown structure", async () => {
     const marker: ThreadMarker = {
       id: ThreadMarkerId.makeUnsafe("marker-1"),

@@ -9,6 +9,7 @@ import path from "node:path";
 
 import type {
   ProviderApprovalDecision,
+  ProviderForkThreadInput,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -251,6 +252,19 @@ function makeFakeCodexAdapter(
     (_threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> => Effect.void,
   );
 
+  const forkThread = vi.fn(
+    (
+      input: ProviderForkThreadInput,
+    ): Effect.Effect<
+      { readonly threadId: ThreadId; readonly resumeCursor: { readonly opaque: string } },
+      ProviderAdapterError
+    > =>
+      Effect.succeed({
+        threadId: input.threadId,
+        resumeCursor: { opaque: `fork-${String(input.threadId)}` },
+      }),
+  );
+
   const stopAll = vi.fn(
     (): Effect.Effect<void, ProviderAdapterError> =>
       Effect.sync(() => {
@@ -280,6 +294,7 @@ function makeFakeCodexAdapter(
     readThread,
     rollbackThread,
     compactThread,
+    forkThread,
     stopAll,
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
@@ -325,6 +340,7 @@ function makeFakeCodexAdapter(
     readThread,
     rollbackThread,
     compactThread,
+    forkThread,
     stopAll,
   };
 }
@@ -441,7 +457,7 @@ const rotationRetry = makeProviderServiceLayer({
       if (eventId === ROTATION_RETRY_FAILURE_EVENT_ID && attempts === 1) {
         return Effect.fail(new Error("injected transient runtime persistence failure"));
       }
-      return Effect.void;
+      return Effect.succeed({ sequence: attempts, event });
     }),
   runtimeEventRetryBaseDelayMs: 1,
   runtimeEventRetryMaxDelayMs: 1,
@@ -702,6 +718,85 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("reuses a deferred native fork binding and preserves its inherited cwd", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const sourceThreadId = asThreadId("thread-native-fork-source");
+      const targetThreadId = asThreadId("thread-native-fork-target");
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: "codex",
+        threadId: sourceThreadId,
+        cwd: "/tmp/native-fork-source",
+        runtimeMode: "full-access",
+      });
+      const forkCallCount = routing.codex.forkThread.mock.calls.length;
+      const forkInput = {
+        sourceThreadId,
+        threadId: targetThreadId,
+        runtimeMode: "full-access" as const,
+      };
+
+      const first = yield* provider.forkThread!(forkInput);
+      yield* provider.stopSession({ threadId: sourceThreadId });
+      yield* directory.remove(sourceThreadId);
+      const second = yield* provider.forkThread!(forkInput);
+      const startsBeforeRecovery = routing.codex.startSession.mock.calls.length;
+      yield* provider.sendTurn({
+        threadId: targetThreadId,
+        input: "continue the fork",
+        attachments: [],
+      });
+
+      assert.deepEqual(second, first);
+      assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 1);
+      assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeRecovery + 1);
+      const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
+      assert.equal(recoveredStart?.threadId, targetThreadId);
+      assert.equal(recoveredStart?.cwd, "/tmp/native-fork-source");
+      assert.deepEqual(recoveredStart?.resumeCursor, first?.resumeCursor);
+      const targetBinding = Option.getOrUndefined(yield* directory.getBinding(targetThreadId));
+      assert.equal(targetBinding?.status, "running");
+      assert.equal(
+        asRuntimePayloadRecord(targetBinding?.runtimePayload).cwd,
+        "/tmp/native-fork-source",
+      );
+
+      yield* provider.stopSession({ threadId: targetThreadId });
+    }),
+  );
+
+  it.effect("fork source overrides explicit and persisted resume cursors", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-external-fork");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        resumeCursor: { threadId: "persisted-thread" },
+        runtimeMode: "full-access",
+      });
+      routing.codex.startSession.mockClear();
+
+      const forkSourceResumeCursor = { threadId: "external-thread" };
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        forkSourceResumeCursor,
+        resumeCursor: { threadId: "explicit-thread" },
+        runtimeMode: "full-access",
+      });
+
+      const startInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(startInput?.forkSourceResumeCursor, forkSourceResumeCursor);
+      assert.equal(startInput?.resumeCursor, undefined);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("runs the idempotent adapter cleanup barrier for an inactive binding", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -4664,6 +4759,67 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
       assert.equal(runtimePayload.activeTurnId, null);
+    }),
+  );
+});
+
+let persistedFanoutSequence = 0;
+const persistedFanout = makeProviderServiceLayer({
+  persistRuntimeEvent: (event) =>
+    Effect.sync(() => ({
+      sequence: ++persistedFanoutSequence,
+      event,
+    })),
+});
+persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
+  it.effect("reuses the durable journal result without changing the canonical event stream", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-persisted-fanout");
+      const session = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.notEqual(provider.streamPersistedEvents, undefined);
+
+      const canonicalEvents = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
+      const persistedEvents = yield* Ref.make<
+        Array<{ readonly sequence: number; readonly event: ProviderRuntimeEvent }>
+      >([]);
+      const canonicalEventFiber = yield* Stream.runForEach(provider.streamEvents, (event) =>
+        Ref.update(canonicalEvents, (current) => [...current, event]),
+      ).pipe(Effect.forkChild);
+      const persistedEventFiber = yield* Stream.runForEach(
+        provider.streamPersistedEvents!,
+        (event) => Ref.update(persistedEvents, (current) => [...current, event]),
+      ).pipe(Effect.forkChild);
+      yield* sleep(50);
+
+      const completedEvent: LegacyProviderRuntimeEvent = {
+        type: "turn.completed",
+        eventId: asEventId("evt-persisted-fanout"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: session.threadId,
+        turnId: asTurnId("turn-persisted-fanout"),
+        status: "completed",
+      };
+      persistedFanout.codex.emit(completedEvent);
+      yield* sleep(100);
+
+      const canonicalEvent = (yield* Ref.get(canonicalEvents))[0];
+      const persistedEvent = (yield* Ref.get(persistedEvents))[0];
+      yield* Fiber.interrupt(canonicalEventFiber);
+      yield* Fiber.interrupt(persistedEventFiber);
+      assert.notEqual(canonicalEvent, undefined);
+      assert.notEqual(persistedEvent, undefined);
+      if (canonicalEvent === undefined || persistedEvent === undefined) {
+        assert.fail("Expected both canonical and persisted runtime events");
+      }
+      assert.equal(canonicalEvent.eventId, completedEvent.eventId);
+      assert.equal(persistedEvent.event.eventId, completedEvent.eventId);
+      assert.equal(persistedEvent.sequence > 0, true);
     }),
   );
 });

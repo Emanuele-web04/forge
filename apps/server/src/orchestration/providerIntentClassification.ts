@@ -51,7 +51,12 @@ export const isProviderIntentEvent = (event: OrchestrationEvent): event is Provi
   isProviderIntentEventType(event.type);
 
 export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
-  event.type === "thread.created" || event.type === "thread.archived";
+  event.type === "thread.created" ||
+  event.type === "thread.archived" ||
+  // The claimed handler only performs the idempotent durable enqueue. Queue
+  // draining runs after the delivery settles, so replay never repeats provider
+  // dispatch as part of this claim.
+  event.type === "thread.turn-queued";
 
 export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean =>
   event.type !== "thread.created" &&

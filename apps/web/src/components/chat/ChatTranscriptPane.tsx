@@ -26,6 +26,7 @@ import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
 import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
+import { composerOverlayAffordanceBottomPx } from "./composerOverlay";
 import { MessageTrail } from "./MessageTrail";
 import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
@@ -38,6 +39,10 @@ interface ChatTranscriptPaneProps {
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
+  contentInsetBottomPx?: ComponentProps<typeof MessagesTimeline>["contentInsetBottomPx"];
+  contentInsetBottomClearancePx?: ComponentProps<
+    typeof MessagesTimeline
+  >["contentInsetBottomClearancePx"];
   chatFontSizePx: number;
   emptyStateContent?: ReactNode;
   emptyStateProjectName: string | undefined;
@@ -46,6 +51,7 @@ interface ChatTranscriptPaneProps {
   isRevertingCheckpoint: boolean;
   isTemporaryThread?: boolean;
   isWorking: boolean;
+  workingLabel?: ComponentProps<typeof MessagesTimeline>["workingLabel"];
   followLiveOutput: boolean;
   listRef: RefObject<LegendListRef | null>;
   timelineControllerRef?: RefObject<MessagesTimelineController | null>;
@@ -59,6 +65,7 @@ interface ChatTranscriptPaneProps {
     typeof MessagesTimeline
   >["tailAnchorScrollInFlightRef"];
   crossTaskOrigin?: ComponentProps<typeof MessagesTimeline>["crossTaskOrigin"];
+  forkSource?: ComponentProps<typeof MessagesTimeline>["forkSource"];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
@@ -92,6 +99,10 @@ interface ChatTranscriptPaneProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
   worktreeSetup: WorktreeSetupSnapshot | null;
+  worktreeSetupPendingAction?: ComponentProps<
+    typeof MessagesTimeline
+  >["worktreeSetupPendingAction"];
+  onResolveWorktreeSetup?: ComponentProps<typeof MessagesTimeline>["onResolveWorktreeSetup"];
 }
 
 export function ChatTranscriptPane({
@@ -101,6 +112,8 @@ export function ChatTranscriptPane({
   activeTurnStartedAt,
   agentActivityDetail,
   contentInsetRightPx,
+  contentInsetBottomPx,
+  contentInsetBottomClearancePx,
   chatFontSizePx,
   emptyStateContent,
   emptyStateProjectName,
@@ -109,6 +122,7 @@ export function ChatTranscriptPane({
   isRevertingCheckpoint,
   isTemporaryThread,
   isWorking,
+  workingLabel,
   followLiveOutput,
   listRef,
   timelineControllerRef,
@@ -120,6 +134,7 @@ export function ChatTranscriptPane({
   tailAnchorMessageId,
   tailAnchorScrollInFlightRef,
   crossTaskOrigin,
+  forkSource,
   markdownCwd,
   onExpandTimelineImage,
   onMessagesClickCapture,
@@ -153,10 +168,20 @@ export function ChatTranscriptPane({
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
   worktreeSetup,
+  worktreeSetupPendingAction,
+  onResolveWorktreeSetup,
 }: ChatTranscriptPaneProps) {
-  const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
-    ? { paddingRight: contentInsetRightPx }
-    : undefined;
+  // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
+  // affordance rides above it on the same inset the transcript content uses.
+  const scrollButtonFrameStyle: CSSProperties | undefined =
+    contentInsetRightPx || contentInsetBottomPx
+      ? {
+          ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
+          ...(contentInsetBottomPx
+            ? { bottom: composerOverlayAffordanceBottomPx(contentInsetBottomPx) }
+            : {}),
+        }
+      : undefined;
 
   // Left-edge navigation trail: one tick per sent message. Current + visible
   // highlights are pushed up from MessagesTimeline as the viewport scrolls. They
@@ -197,7 +222,10 @@ export function ChatTranscriptPane({
             key={activeThreadId}
             hasMessages={hasMessages}
             isWorking={isWorking}
+            {...(workingLabel ? { workingLabel } : {})}
             worktreeSetup={worktreeSetup}
+            worktreeSetupPendingAction={worktreeSetupPendingAction ?? null}
+            {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
             activeTurnId={activeTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
             activeTurnStartedAt={activeTurnStartedAt}
@@ -211,6 +239,7 @@ export function ChatTranscriptPane({
             tailAnchorMessageId={tailAnchorMessageId ?? null}
             {...(tailAnchorScrollInFlightRef ? { tailAnchorScrollInFlightRef } : {})}
             {...(crossTaskOrigin ? { crossTaskOrigin } : {})}
+            {...(forkSource ? { forkSource } : {})}
             isTemporaryThread={isTemporaryThread ?? false}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
@@ -243,6 +272,8 @@ export function ChatTranscriptPane({
             timestampFormat={timestampFormat}
             workspaceRoot={workspaceRoot}
             contentInsetRightPx={contentInsetRightPx}
+            contentInsetBottomPx={contentInsetBottomPx}
+            contentInsetBottomClearancePx={contentInsetBottomClearancePx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
             emptyStateContent={
               emptyStateContent === undefined ? (

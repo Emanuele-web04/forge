@@ -56,7 +56,10 @@ const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 
 const makeThreadEventReadMethods = (
   events: ReadonlyArray<OrchestrationEvent>,
-): Pick<OrchestrationEventStoreShape, "getThreadHighWaterSequence" | "readThreadEvents"> => ({
+): Pick<
+  OrchestrationEventStoreShape,
+  "getThreadHighWaterSequence" | "readThreadEvents" | "readThreadEventsFromSequence"
+> => ({
   getThreadHighWaterSequence: (threadId) =>
     Effect.succeed(
       events
@@ -76,6 +79,25 @@ const makeThreadEventReadMethods = (
         )
         .toSorted((left, right) => right.sequence - left.sequence)
         .slice(0, input.limit),
+    ),
+  readThreadEventsFromSequence: (
+    threadId,
+    sequenceExclusive,
+    limit = 1_000,
+    throughSequenceInclusive = Number.MAX_SAFE_INTEGER,
+    eventTypes,
+  ) =>
+    Stream.fromIterable(
+      events
+        .filter(
+          (event) =>
+            event.aggregateKind === "thread" &&
+            event.aggregateId === threadId &&
+            event.sequence > sequenceExclusive &&
+            event.sequence <= throughSequenceInclusive &&
+            (eventTypes === undefined || eventTypes.includes(event.type)),
+        )
+        .slice(0, limit),
     ),
 });
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);

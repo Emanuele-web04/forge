@@ -11,6 +11,7 @@ import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 // from this list so they can never drift apart.
 export const RIGHT_DOCK_PANE_KINDS = [
   "browser",
+  "device",
   "diff",
   "explorer",
   "file",

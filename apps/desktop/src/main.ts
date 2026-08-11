@@ -37,6 +37,7 @@ import type {
 } from "electron";
 import * as Effect from "effect/Effect";
 import type {
+  DesktopAppIcon,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -51,6 +52,7 @@ import {
 import type { ContextMenuItem } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
+import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   resolveSynaraDesktopFlavor,
@@ -80,9 +82,18 @@ import {
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
+  desktopAppIconResourceName,
+  isDesktopAppIcon,
+  shouldUpdateDesktopAppIcon,
+} from "./desktopAppIcon";
+import {
   makeUpdateInstallPreparationCoordinator,
   type UpdateInstallPreparationAttempt,
 } from "./updateInstallPreparation";
+import {
+  makeDeferredDesktopQuitIntentCoordinator,
+  settleDeferredDesktopQuitAfterUpdaterFailure,
+} from "./desktopQuitIntent";
 import {
   hasPendingDesktopMigrationRecovery,
   requiresDesktopMigrationRecovery,
@@ -251,6 +262,7 @@ const BASE_DIR =
   Path.join(OS.homedir(), desktopIdentity.defaultHomeDirectoryName);
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
+const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -327,6 +339,7 @@ let isQuitting = false;
 let isUpdaterInstallPreparing = false;
 let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
+const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForMigrationRecovery = false;
 let desktopShutdownComplete = false;
@@ -596,7 +609,11 @@ async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" |
     waitForHttpReady: () =>
       waitForBackendHttpReady(baseUrl, {
         path: "/health",
-        timeoutMs: 60_000,
+        // The child supervisor, not elapsed wall time, owns the terminal
+        // condition. Large projection catch-up can legitimately outlive a
+        // minute; this observer is cancelled when that child exits or the app
+        // shuts down.
+        timeoutMs: null,
         isReady: async (response) => {
           if (!response.ok) {
             return false;
@@ -789,6 +806,45 @@ function clearUpdaterInstallInFlightAfterError(input?: {
   return preparationCancelled;
 }
 
+function deferDesktopQuitUntilUpdaterSettles(reason: string): void {
+  const deferred = deferredDesktopQuitIntent.defer(reason);
+  writeDesktopLogHeader(
+    deferred
+      ? `${reason} deferred until updater install preparation settles`
+      : `${reason} waiting for previously deferred quit after updater install preparation`,
+  );
+}
+
+function replayDeferredDesktopQuitAfterUpdaterSettles(): boolean {
+  const outcome = settleDeferredDesktopQuitAfterUpdaterFailure(deferredDesktopQuitIntent, {
+    replayQuit: (intent) => {
+      writeDesktopLogHeader(`${intent.reason} replaying deferred quit after updater settled`);
+      requestGracefulAppQuit(intent.reason);
+    },
+    // Preflight callers only need to replay a pending quit. Full install
+    // recovery separately decides whether the stopped backend must be resumed.
+    resumeApp: () => undefined,
+  });
+  return outcome !== "resumed-app";
+}
+
+function recoverDesktopAfterUpdaterInstallFailure(): void {
+  if (replayDeferredDesktopQuitAfterUpdaterSettles()) return;
+
+  // A second updater failure signal can race the replay above (for example,
+  // before-quit handoff validation followed by the cancelled preparation).
+  // Once graceful shutdown owns the lifecycle, do not revive the backend or
+  // enqueue another quit chain.
+  if (desktopShutdownPromise !== null || isQuitting) {
+    return;
+  }
+
+  // The backend was already stopped for install preparation. When no quit was
+  // requested in the meantime, restore the live app and its update polling.
+  startBackend();
+  scheduleUpdatePoll();
+}
+
 function clearUpdateInstallWatchdogTimer(): void {
   if (updateInstallWatchdogTimer) {
     clearTimeout(updateInstallWatchdogTimer);
@@ -871,13 +927,6 @@ function armInstallWatchdog(): void {
     }
     const failedHandoff = activeUpdateInstallHandoff;
     clearUpdaterInstallInFlightAfterError();
-    // The backend was already stopped before quitAndInstall(); since the app is
-    // not actually quitting, bring it back so the recovered app is functional
-    // (renderer reconnects) instead of a zombie window with a dead backend.
-    startBackend();
-    // Polling was stopped before the install attempt; resume it so background
-    // update checks keep running after this recovery.
-    scheduleUpdatePoll();
     const consecutiveFailures = recordInstallMarkerFailure(new Date().toISOString(), failedHandoff);
     setUpdateState({
       ...reduceDesktopUpdateStateOnInstallFailure(
@@ -889,6 +938,7 @@ function armInstallWatchdog(): void {
     console.error(
       "[desktop-updater] quitAndInstall did not exit the app within the watchdog window; surfacing manual-download fallback.",
     );
+    recoverDesktopAfterUpdaterInstallFailure();
   }, AUTO_UPDATE_INSTALL_WATCHDOG_MS);
 }
 
@@ -1857,23 +1907,61 @@ function configureAppIdentity(): void {
 // The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
 // the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
 // a runtime dock override because it does not apply the modern system mask itself.
-function applyLegacyMacDockIcon(): void {
+function usesLegacyMacDockIcon(): boolean {
+  if (process.platform !== "darwin") return false;
+  const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
+  return Number.isFinite(darwinMajor) && darwinMajor < 25;
+}
+
+function readDesktopAppIcon(): DesktopAppIcon {
+  try {
+    const storedIcon = FS.readFileSync(DESKTOP_APP_ICON_PATH, "utf8").trim();
+    return isDesktopAppIcon(storedIcon) ? storedIcon : "default";
+  } catch {
+    return "default";
+  }
+}
+
+function persistDesktopAppIcon(icon: DesktopAppIcon): void {
+  FS.mkdirSync(Path.dirname(DESKTOP_APP_ICON_PATH), { recursive: true });
+  FS.writeFileSync(DESKTOP_APP_ICON_PATH, icon, "utf8");
+}
+
+function applyDesktopAppIcon(icon: DesktopAppIcon): void {
+  if (
+    process.platform !== "darwin" &&
+    process.platform !== "linux" &&
+    process.platform !== "win32"
+  ) {
+    return;
+  }
+  const resourceName = desktopAppIconResourceName({
+    icon,
+    platform: process.platform,
+    useLegacyMacDefault: usesLegacyMacDockIcon(),
+  });
+  const iconPath = resolveResourcePath(resourceName);
+  if (!iconPath) return;
+
+  const image = nativeImage.createFromPath(iconPath);
+  if (image.isEmpty()) return;
+
+  if (process.platform === "darwin") {
+    app.dock?.setIcon(image);
+    return;
+  }
+  mainWindow?.setIcon(image);
+}
+
+function applyInitialMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
     return;
   }
-  const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
-  if (!Number.isFinite(darwinMajor) || darwinMajor >= 25) {
+  const icon = readDesktopAppIcon();
+  if (icon === "default" && !usesLegacyMacDockIcon()) {
     return;
   }
-  const iconPath = resolveResourcePath("dock-icon.png");
-  if (!iconPath) {
-    return;
-  }
-  const image = nativeImage.createFromPath(iconPath);
-  if (image.isEmpty()) {
-    return;
-  }
-  app.dock.setIcon(image);
+  applyDesktopAppIcon(icon);
 }
 
 function readLaunchVersionRecordContents(): string | null {
@@ -2758,8 +2846,6 @@ async function runDownloadedUpdateInstall(
     const consecutiveFailures = markerWritten
       ? recordInstallMarkerFailure(new Date().toISOString(), handoffExpectation)
       : updateState.installFailureCount;
-    startBackend();
-    scheduleUpdatePoll();
     setUpdateState({
       ...(artifactInvalidated
         ? reduceDesktopUpdateStateOnDownloadFailure(updateState, message)
@@ -2767,6 +2853,7 @@ async function runDownloadedUpdateInstall(
       installFailureCount: consecutiveFailures,
     });
     console.error(`[desktop-updater] Failed to install update: ${message}`);
+    recoverDesktopAfterUpdaterInstallFailure();
     return { accepted: true, completed: false };
   }
 }
@@ -2789,6 +2876,10 @@ async function installDownloadedUpdate(): Promise<{
   } finally {
     if (!isUpdaterQuitAndInstallInFlight && isUpdaterInstallPreparing) {
       clearUpdaterInstallInFlightAfterError();
+      // Validation can reject a stale or changed artifact before the backend is
+      // stopped and before the main install try/catch starts. A quit deferred
+      // during that asynchronous validation still has to be replayed.
+      replayDeferredDesktopQuitAfterUpdaterSettles();
     }
     updateInstallPreparation.release(preparationAttempt);
   }
@@ -2947,10 +3038,6 @@ function configureAutoUpdater(): void {
       errorContext === "install"
         ? recordInstallMarkerFailure(new Date().toISOString(), failedHandoff)
         : updateState.installFailureCount;
-    if (errorContext === "install" && !installPreparationPending) {
-      startBackend();
-      scheduleUpdatePoll();
-    }
     if (!updateCheckInFlight && !updateDownloadInFlight) {
       setUpdateState({
         status: "error",
@@ -2963,6 +3050,9 @@ function configureAutoUpdater(): void {
       });
     }
     console.error(`[desktop-updater] Updater error: ${message}`);
+    if (errorContext === "install" && !installPreparationPending) {
+      recoverDesktopAfterUpdaterInstallFailure();
+    }
   });
   autoUpdater.on("download-progress", (progress) => {
     const percent = Math.floor(progress.percent);
@@ -3029,6 +3119,9 @@ function backendEnv(): NodeJS.ProcessEnv {
     // Point the backend's HTTP static route at the same swap-immune snapshot the
     // synara:// protocol serves, so both surfaces survive app.asar being replaced.
     ...(servedStaticRoot?.snapshotted ? { SYNARA_STATIC_DIR: servedStaticRoot.dir } : {}),
+    ...(app.isPackaged
+      ? { [DEVICE_HELPER_SOURCE_DIR_ENV]: Path.join(process.resourcesPath, "device-helper") }
+      : {}),
     SYNARA_MODE: "desktop",
     SYNARA_NO_BROWSER: "1",
     SYNARA_PORT: String(backendPort),
@@ -3233,6 +3326,10 @@ async function restartBackendAfterCrash(
   }
 
   cancelBackendReadinessWait();
+  // The aborted observer settles on a later microtask. Clear its identity now
+  // so the replacement child always gets a fresh readiness observation even
+  // when the renderer window survived the crash.
+  backendInitialWindowOpenInFlight = null;
   try {
     await reserveBackendEndpoint("backend restart");
   } catch (error) {
@@ -3500,7 +3597,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
 
 function requestGracefulAppQuit(reason: string): void {
   if (isUpdaterInstallPreparing) {
-    writeDesktopLogHeader(`${reason} waiting for updater quit-and-install`);
+    deferDesktopQuitUntilUpdaterSettles(reason);
     return;
   }
 
@@ -3595,6 +3692,19 @@ function registerIpcHandlers(): void {
     }
 
     nativeTheme.themeSource = theme;
+  });
+
+  ipcMain.removeHandler(IPC.getAppIcon);
+  ipcMain.handle(IPC.getAppIcon, () => readDesktopAppIcon());
+
+  ipcMain.removeHandler(IPC.setAppIcon);
+  ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
+    if (!isDesktopAppIcon(rawIcon)) return;
+    // Renderer hydration mirrors this native preference. Avoid reapplying the icon selected
+    // during boot, especially the bundled default that modern macOS renders itself.
+    if (!shouldUpdateDesktopAppIcon(readDesktopAppIcon(), rawIcon)) return;
+    persistDesktopAppIcon(rawIcon);
+    applyDesktopAppIcon(rawIcon);
   });
 
   ipcMain.removeHandler(IPC.contextMenu);
@@ -3834,8 +3944,13 @@ function registerIpcHandlers(): void {
 
 function getIconOption(): { icon: string } | Record<string, never> {
   if (process.platform === "darwin") return {}; // macOS uses .icns from app bundle
-  const ext = process.platform === "win32" ? "ico" : "png";
-  const iconPath = resolveIconPath(ext);
+  if (process.platform !== "linux" && process.platform !== "win32") return {};
+  const resourceName = desktopAppIconResourceName({
+    icon: readDesktopAppIcon(),
+    platform: process.platform,
+    useLegacyMacDefault: false,
+  });
+  const iconPath = resolveResourcePath(resourceName);
   return iconPath ? { icon: iconPath } : {};
 }
 
@@ -4322,8 +4437,6 @@ app.on("before-quit", (event) => {
         new Date().toISOString(),
         failedHandoff,
       );
-      startBackend();
-      scheduleUpdatePoll();
       setUpdateState({
         ...reduceDesktopUpdateStateOnInstallFailure(
           updateState,
@@ -4334,7 +4447,14 @@ app.on("before-quit", (event) => {
       console.error(
         `[desktop-updater] Refused mismatched install handoff during quit: ${formatErrorMessage(error)}`,
       );
+      recoverDesktopAfterUpdaterInstallFailure();
       return;
+    }
+    // Keep any deferred plain-quit intent until the process actually exits.
+    // before-quit is not proof of a successful updater handoff: the watchdog
+    // can still discover that quitAndInstall left this process alive.
+    if (deferredDesktopQuitIntent.observeUpdaterQuitAttempt()) {
+      writeDesktopLogHeader("deferred quit preserved through updater quit-and-install attempt");
     }
     writeDesktopLogHeader("before-quit allowing updater quit-and-install");
     return;
@@ -4342,7 +4462,7 @@ app.on("before-quit", (event) => {
 
   if (isUpdaterInstallPreparing) {
     // Keep user/system quits from preempting the pending updater install with a plain app.quit().
-    writeDesktopLogHeader("before-quit waiting for updater quit-and-install");
+    deferDesktopQuitUntilUpdaterSettles("before-quit");
     event.preventDefault();
     return;
   }
@@ -4357,7 +4477,7 @@ if (hasSingleInstanceLock) {
     .then(() => {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
-      applyLegacyMacDockIcon();
+      applyInitialMacDockIcon();
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       initializeDesktopAppSnap();

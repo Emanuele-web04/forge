@@ -441,12 +441,19 @@ function makeToolCallState(
   }
   const kindSpecificTitleIsGeneric = isProviderGenericToolTitle(title, kind);
   const fallbackDetail =
-    command ??
-    locationDetail ??
-    structuredContent ??
-    outputDetail ??
-    (kindSpecificTitleIsGeneric ? undefined : normalizedTitle) ??
-    textContent;
+    status === "failed"
+      ? (textContent ??
+        outputDetail ??
+        command ??
+        locationDetail ??
+        structuredContent ??
+        (kindSpecificTitleIsGeneric ? undefined : normalizedTitle))
+      : (command ??
+        locationDetail ??
+        structuredContent ??
+        outputDetail ??
+        (kindSpecificTitleIsGeneric ? undefined : normalizedTitle) ??
+        textContent);
   const actionTitle = deriveGenericToolActionTitle(kind, status);
   const hasPresentationSeed =
     title !== undefined ||

@@ -348,12 +348,14 @@ describe("wsNativeApi", () => {
     const onTerminalEvent = vi.fn();
     const onDomainEvent = vi.fn();
     const onActionProgress = vi.fn();
+    const onWorktreeSetupProgress = vi.fn();
 
     api.terminal.onEvent(onTerminalEvent);
     expect(channelListeners.has(ORCHESTRATION_WS_CHANNELS.domainEvent)).toBe(false);
     const unsubscribeDomainEvent = api.orchestration.onDomainEvent(onDomainEvent);
     expect(channelListeners.get(ORCHESTRATION_WS_CHANNELS.domainEvent)?.size).toBe(1);
     api.git.onActionProgress(onActionProgress);
+    api.git.onWorktreeSetupProgress(onWorktreeSetupProgress);
 
     const terminalEvent = {
       threadId: "thread-1",
@@ -395,6 +397,11 @@ describe("wsNativeApi", () => {
       phase: "commit",
       label: "Committing...",
     });
+    emitPush(WS_CHANNELS.gitWorktreeSetupProgress, {
+      progressId: "progress-1",
+      kind: "phase_started",
+      phase: "worktree",
+    });
 
     expect(onTerminalEvent).toHaveBeenCalledTimes(1);
     expect(onTerminalEvent).toHaveBeenCalledWith(terminalEvent);
@@ -410,6 +417,12 @@ describe("wsNativeApi", () => {
       kind: "phase_started",
       phase: "commit",
       label: "Committing...",
+    });
+    expect(onWorktreeSetupProgress).toHaveBeenCalledTimes(1);
+    expect(onWorktreeSetupProgress).toHaveBeenCalledWith({
+      progressId: "progress-1",
+      kind: "phase_started",
+      phase: "worktree",
     });
   });
 
@@ -541,7 +554,10 @@ describe("wsNativeApi", () => {
   });
 
   it("forwards workspace file writes to the websocket project method", async () => {
-    requestMock.mockResolvedValue({ relativePath: "plan.md" });
+    requestMock.mockResolvedValue({
+      relativePath: "plan.md",
+      version: `sha256:${"1".repeat(64)}`,
+    });
     const { createWsNativeApi } = await import("./wsNativeApi");
 
     const api = createWsNativeApi();
@@ -563,6 +579,9 @@ describe("wsNativeApi", () => {
       relativePath: "src/app.ts",
       contents: "export {};\n",
       truncated: false,
+      version: `sha256:${"1".repeat(64)}`,
+      encoding: "utf8",
+      lineEnding: "lf",
     });
     const { createWsNativeApi } = await import("./wsNativeApi");
 
@@ -824,6 +843,19 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.getFullThreadDiff, {
       threadId: "thread-1",
       toTurnCount: 1,
+    });
+  });
+
+  it("scopes orchestration replay requests to the visible thread when provided", async () => {
+    requestMock.mockResolvedValue([]);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.orchestration.replayEvents(41, ThreadId.makeUnsafe("thread-1"));
+
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.replayEvents, {
+      fromSequenceExclusive: 41,
+      threadId: "thread-1",
     });
   });
 

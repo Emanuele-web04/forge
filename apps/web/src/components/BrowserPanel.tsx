@@ -46,7 +46,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
-import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
+import { NATIVE_SURFACE_OCCLUSION_SYNC_EVENT } from "~/lib/nativeSurfaceOcclusion";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacPlatform } from "~/lib/utils";
 
@@ -1170,7 +1170,7 @@ export function BrowserPanel({
     // measured rect and would otherwise strand the native view at the old scale.
     const unsubscribeZoom = subscribeDesktopZoomFactor(scheduleSyncBounds);
     window.addEventListener("resize", scheduleSyncBounds);
-    window.addEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
+    window.addEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, scheduleSyncBounds);
     document.addEventListener("transitionrun", handleTransitionBounds, true);
     document.addEventListener("transitionend", handleTransitionBounds, true);
     document.addEventListener("transitioncancel", handleTransitionBounds, true);
@@ -1180,7 +1180,7 @@ export function BrowserPanel({
       observer.disconnect();
       unsubscribeZoom();
       window.removeEventListener("resize", scheduleSyncBounds);
-      window.removeEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
+      window.removeEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, scheduleSyncBounds);
       document.removeEventListener("transitionrun", handleTransitionBounds, true);
       document.removeEventListener("transitionend", handleTransitionBounds, true);
       document.removeEventListener("transitioncancel", handleTransitionBounds, true);

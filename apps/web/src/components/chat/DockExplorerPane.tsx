@@ -65,6 +65,7 @@ export const DockExplorerPane = function DockExplorerPane(props: {
         <WorkspaceFilePreview
           workspaceRoot={props.workspaceRoot}
           filePath={selectedFilePath}
+          editable
           emptyState={
             <PanelStateMessage density="compact" fill="flex">
               <p>Select a file from the tree to view it.</p>

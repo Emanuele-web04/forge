@@ -314,10 +314,50 @@ describe("decider worktree metadata", () => {
     }
 
     expect(createdEvent.payload).toMatchObject({
+      title: "Worktree thread (2)",
       associatedWorktreePath: WORKTREE_PATH,
       associatedWorktreeBranch: WORKTREE_BRANCH,
       associatedWorktreeRef: WORKTREE_BRANCH,
     });
+  });
+
+  it("preserves purpose-built sidechat titles", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createWorktreeThreadReadModel(now);
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.fork.create",
+          commandId: CommandId.makeUnsafe("cmd-sidechat-title"),
+          threadId: FORK_THREAD_ID,
+          sourceThreadId: THREAD_ID,
+          sidechatSourceThreadId: THREAD_ID,
+          projectId: PROJECT_ID,
+          title: "Sidechat: Worktree thread",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          importedMessages: [],
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    const createdEvent = (Array.isArray(result) ? result : [result])[0];
+    expect(createdEvent?.type).toBe("thread.created");
+    if (!createdEvent || createdEvent.type !== "thread.created") {
+      return;
+    }
+
+    expect(createdEvent.payload.title).toBe("Sidechat: Worktree thread");
   });
 
   it("does not emit associated worktree clears for unrelated thread.meta.update commands", async () => {

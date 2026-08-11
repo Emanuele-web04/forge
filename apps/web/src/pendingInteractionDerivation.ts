@@ -5,6 +5,7 @@ import {
   type TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
 import {
   approvalRequestKindFromRequestType,
   pendingRequestInstanceKey,
@@ -39,6 +40,11 @@ export interface PendingInteractionDerivationOptions {
   // unresolved older request so a background prompt can outlive later turns.
   readonly authoritativeHasPending: boolean | undefined;
   readonly latestTurnId: TurnId | undefined;
+  // The active composer supplies a wall-clock reference so durable failures
+  // and orphaned response claims become actionable under the same atomic
+  // reclaim policy enforced by persistence. Historical/sidebar derivations
+  // can omit it to remain time-independent.
+  readonly responseClaimReferenceAt?: string;
 }
 
 interface PendingInteractionReplay<T extends { requestId: ApprovalRequestId }> {
@@ -92,6 +98,7 @@ function retainActionableSettlements<T extends { requestId: ApprovalRequestId }>
   openByInstance: Map<string, T>,
   settlements: ReadonlyArray<OrchestrationPendingInteraction> | undefined,
   interactionKind: PendingInteractionKind,
+  responseClaimReferenceAt: string | undefined,
 ): void {
   if (settlements === undefined) {
     return;
@@ -101,7 +108,14 @@ function retainActionableSettlements<T extends { requestId: ApprovalRequestId }>
       .filter(
         (settlement) =>
           settlement.interactionKind === interactionKind &&
-          (settlement.status === "pending" || settlement.status === "retryable"),
+          (settlement.status === "pending" ||
+            settlement.status === "retryable" ||
+            (responseClaimReferenceAt !== undefined &&
+              isPendingInteractionResponseClaimable({
+                status: settlement.status,
+                responseRequestedAt: settlement.responseRequestedAt,
+                requestedAt: responseClaimReferenceAt,
+              }))),
       )
       .map((settlement) =>
         pendingRequestInstanceKey(
@@ -181,7 +195,12 @@ function replayPendingInteractions<T extends { requestId: ApprovalRequestId; cre
     }
   }
 
-  retainActionableSettlements(openByInstance, settlements, replay.interactionKind);
+  retainActionableSettlements(
+    openByInstance,
+    settlements,
+    replay.interactionKind,
+    options?.responseClaimReferenceAt,
+  );
   if (isAggregateFallback && options.authoritativeHasPending === true) {
     const actionableLatestTurnKeys = [...openByInstance.keys()].filter((key) =>
       latestTurnRequestedKeys.has(key),
