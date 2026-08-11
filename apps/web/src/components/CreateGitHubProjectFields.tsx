@@ -12,10 +12,12 @@ export const PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME = "h-9 rounded-lg border-fo
 
 export function CreateGitHubProjectFields(props: {
   readonly repositoryInputId: string;
+  readonly forkDestinationOwnerInputId: string;
   readonly destinationParentInputId: string;
   readonly directoryNameInputId: string;
   readonly errorId: string;
   readonly repositoryInput: string;
+  readonly forkDestinationOwner: string;
   readonly destinationParent: string;
   readonly directoryName: string;
   readonly finalClonePath: string;
@@ -25,6 +27,7 @@ export function CreateGitHubProjectFields(props: {
   readonly isPickingFolder: boolean;
   readonly submitting: boolean;
   readonly onRepositoryChange: (value: string) => void;
+  readonly onForkDestinationOwnerChange: (value: string) => void;
   readonly onDestinationParentChange: (value: string) => void;
   readonly onDirectoryNameChange: (value: string) => void;
   readonly onBrowse: () => void;
@@ -44,8 +47,11 @@ export function CreateGitHubProjectFields(props: {
           <GitHubRequirement index={2} title="Destination">
             Choose the parent folder where Forkara should create the checkout.
           </GitHubRequirement>
-          <GitHubRequirement index={3} title="Private access">
-            Public repositories work immediately. For private repositories, run{" "}
+          <GitHubRequirement index={3} title="Destination owner">
+            Optional: pick an organization or user account for the fork destination.
+          </GitHubRequirement>
+          <GitHubRequirement index={4} title="Private access">
+            Fork creation uses your GitHub auth context. For private repositories, run{" "}
             <code className="font-mono text-foreground">gh auth login</code> or configure Git
             credentials.
           </GitHubRequirement>
@@ -121,6 +127,31 @@ export function CreateGitHubProjectFields(props: {
             </Button>
           ) : null}
         </div>
+      </div>
+
+      <div className="space-y-2">
+        <label
+          htmlFor={props.forkDestinationOwnerInputId}
+          className={cn(
+            "block",
+            dialogFieldLabelClassName,
+            "text-[length:var(--app-font-size-ui,12px)] text-foreground",
+          )}
+        >
+          Fork destination owner
+        </label>
+        <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
+          <InputGroupInput
+            id={props.forkDestinationOwnerInputId}
+            value={props.forkDestinationOwner}
+            placeholder="Leave empty to use your account"
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            onChange={(event) => props.onForkDestinationOwnerChange(event.target.value)}
+            onKeyDown={props.onSubmitKeyDown}
+          />
+        </InputGroup>
       </div>
 
       <div className="space-y-2">

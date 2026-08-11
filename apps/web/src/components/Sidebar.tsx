@@ -3330,6 +3330,7 @@ export default function Sidebar() {
                   {
                     operationId: value.operationId,
                     repository: value.repository,
+                    forkDestinationOwner: value.forkDestinationOwner,
                     destinationParent: value.destinationParent,
                     directoryName: value.directoryName,
                     commandId: newCommandId(),
