@@ -324,6 +324,21 @@ function isUnauthorized(error: unknown): boolean {
 const TRANSIENT_GRANT_STATUSES: ReadonlySet<number> = new Set([408, 429]);
 
 /**
+ * Whether a refresh failure says nothing about the token — a transient 4xx
+ * (408/429), any 5xx, or a network error (no AccountApiError at all). Worth
+ * one bounded retry with the SAME token: the provider only rotates on
+ * success, so re-presenting it is safe.
+ */
+function isTransientRefreshFailure(error: unknown): boolean {
+  if (!(error instanceof AccountApiError)) return true;
+  return TRANSIENT_GRANT_STATUSES.has(error.status) || error.status >= 500;
+}
+
+/** Bounded backoff between refresh retries; injectable clock not needed — one step. */
+const REFRESH_RETRY_DELAY_MS = 1_000;
+const REFRESH_ATTEMPTS = 2;
+
+/**
  * Whether the identity provider actually refused the grant, as opposed to
  * failing to answer. Only a terminal 4xx means the stored refresh token is
  * genuinely spent; a 5xx, a timeout, a rate limit, or a DNS failure says
@@ -341,6 +356,8 @@ function isGrantRejected(error: unknown): boolean {
 export interface WithFreshAccessTokenOptions {
   readonly baseDir: string;
   readonly client: AccountClient;
+  /** Delay before the one transient-refresh retry; injectable for tests. */
+  readonly refreshRetryDelayMs?: number;
 }
 
 /** Strips the session half of a stored file, keeping the host registration. */
@@ -395,6 +412,28 @@ async function clearStoredSessionIfCurrent(
 type SessionRenewal = { kind: "renewed"; accessToken: string } | { kind: "expired" };
 
 /**
+ * The refresh grant with one bounded retry on a transient failure. Refresh
+ * is safe to re-attempt with the same token — the provider only rotates on
+ * success — and a single retry absorbs the blip (a timed-out attempt, a
+ * rate-limit tick, a 5xx) that would otherwise fail a user's command while
+ * their session was perfectly renewable.
+ */
+async function refreshWithBoundedRetry(
+  client: AccountClient,
+  request: { refreshToken: string; organizationId: string },
+  retryDelayMs: number,
+): ReturnType<AccountClient["refreshAccessToken"]> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await client.refreshAccessToken(request);
+    } catch (error) {
+      if (attempt >= REFRESH_ATTEMPTS || !isTransientRefreshFailure(error)) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+}
+
+/**
  * Renews the stored session after `consumed` was rejected, serialized under
  * the credential-file lock and committed compare-and-swap.
  *
@@ -416,6 +455,7 @@ async function renewSession(
   baseDir: string,
   client: AccountClient,
   consumed: AccountCredentials,
+  retryDelayMs: number,
 ): Promise<SessionRenewal> {
   return withLockedAccountFile(baseDir, async (): Promise<SessionRenewal> => {
     const current = await readAccountFile(baseDir);
@@ -431,10 +471,11 @@ async function renewSession(
 
     let refreshed;
     try {
-      refreshed = await client.refreshAccessToken({
-        refreshToken: current.refreshToken,
-        organizationId: current.organizationId,
-      });
+      refreshed = await refreshWithBoundedRetry(
+        client,
+        { refreshToken: current.refreshToken, organizationId: current.organizationId },
+        retryDelayMs,
+      );
     } catch (refreshError) {
       // Only a refusal proves the token is dead. On an outage or a network
       // failure the stored token is probably still good, and keeping a
@@ -489,7 +530,12 @@ export async function withFreshAccessToken<A>(
     }
     if (!isUnauthorized(error)) throw error;
 
-    const renewal = await renewSession(baseDir, client, credentials);
+    const renewal = await renewSession(
+      baseDir,
+      client,
+      credentials,
+      options.refreshRetryDelayMs ?? REFRESH_RETRY_DELAY_MS,
+    );
     if (renewal.kind === "expired") throw new SessionExpiredError();
     return await fn(renewal.accessToken);
   }

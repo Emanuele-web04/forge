@@ -383,12 +383,56 @@ describe("withFreshAccessToken", () => {
           client: makeClient({
             refreshAccessToken: () => Promise.reject(new Error("ECONNREFUSED")),
           }),
+          refreshRetryDelayMs: 0,
         },
         () => Promise.reject(unauthorized()),
       ),
     ).rejects.toThrow("ECONNREFUSED");
 
     expect(await readAccountCredentials(baseDir)).toEqual(credentials());
+  });
+
+  // A transient refresh failure is worth one bounded retry with the SAME
+  // token — the provider only rotates on success — so a single blip renews
+  // the session instead of failing the command.
+  it("retries a transient refresh failure once and renews on success", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    let refreshCalls = 0;
+    const result = await withFreshAccessToken(
+      {
+        baseDir,
+        client: makeClient({
+          refreshAccessToken: () => {
+            refreshCalls += 1;
+            if (refreshCalls === 1) {
+              return Promise.reject(
+                new AccountApiError({
+                  code: "internal_error",
+                  status: 502,
+                  message: "Identity provider is unavailable",
+                }),
+              );
+            }
+            return Promise.resolve({
+              accessToken: "access-2",
+              refreshToken: "refresh-2",
+              user: { id: "user_1", email: "ada@example.com" },
+            });
+          },
+        }),
+        refreshRetryDelayMs: 0,
+      },
+      (accessToken) =>
+        accessToken === "access-1" ? Promise.reject(unauthorized()) : Promise.resolve(accessToken),
+    );
+
+    expect(result).toBe("access-2");
+    expect(refreshCalls).toBe(2);
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({ accessToken: "access-2", refreshToken: "refresh-2" }),
+    );
   });
 
   it("keeps the stored refresh token when the identity provider returns a 5xx", async () => {
@@ -408,6 +452,7 @@ describe("withFreshAccessToken", () => {
               }),
             ),
         }),
+        refreshRetryDelayMs: 0,
       },
       () => Promise.reject(unauthorized()),
     ).catch((error: unknown) => error);
@@ -439,6 +484,7 @@ describe("withFreshAccessToken", () => {
             refreshAccessToken: () =>
               Promise.reject(new AccountApiError({ code: "internal_error", status, message })),
           }),
+          refreshRetryDelayMs: 0,
         },
         () => Promise.reject(unauthorized()),
       ).catch((error: unknown) => error);
