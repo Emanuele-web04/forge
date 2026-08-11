@@ -6,7 +6,6 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { type AccountHost, EnvironmentId } from "@synara/contracts";
-import { Readable } from "node:stream";
 
 import type { AccountClient } from "@synara/shared/account";
 import { AccountApiError, OrganizationRequiredError } from "@synara/shared/account";
@@ -83,11 +82,6 @@ function organizationRequired(
   organizations: ReadonlyArray<{ id: string; name: string }> = [ORGANIZATION],
 ): OrganizationRequiredError {
   return new OrganizationRequiredError({ message: "Pick a workspace", organizations });
-}
-
-/** A readable stdin that yields the given lines, for the workspace picker. */
-function stdinOf(...lines: string[]): NodeJS.ReadableStream {
-  return Readable.from([`${lines.join("\n")}\n`]) as unknown as NodeJS.ReadableStream;
 }
 
 function unimplemented(name: string) {
@@ -632,63 +626,28 @@ describe("withFreshAccessToken", () => {
 });
 
 describe("selectOrganization", () => {
-  // One workspace is not a decision. Prompting anyway would put a question in
-  // front of every single-workspace user on every sign-in.
-  it("returns the only workspace without prompting", async () => {
-    const stdout = makeStdout();
-    const selected = await selectOrganization([ORGANIZATION], {
-      stdout: stdout.write,
-      // Reaching stdin at all would hang: this stream never yields a line.
-      stdin: Readable.from([]) as unknown as NodeJS.ReadableStream,
-    });
-
-    expect(selected).toEqual(ORGANIZATION);
-    expect(stdout.text()).toBe("");
+  it("returns the only workspace", async () => {
+    await expect(selectOrganization([ORGANIZATION])).resolves.toEqual(ORGANIZATION);
   });
 
-  it("prompts for a numbered choice when there is more than one", async () => {
-    const stdout = makeStdout();
-    const organizations = [ORGANIZATION, { id: "org_2", name: "Acme" }];
-
-    const selected = await selectOrganization(organizations, {
-      stdout: stdout.write,
-      stdin: stdinOf("2"),
+  // V1 is personal-org-only, matching the in-app flow: several workspaces
+  // fail closed with the same classified error, so the CLI and desktop paths
+  // are indistinguishable — no interactive picker until workspace selection
+  // ships for both.
+  it("fails closed when the account offers several workspaces", async () => {
+    const caught = await selectOrganization([ORGANIZATION, { id: "org_2", name: "Acme" }]).catch(
+      (error: unknown) => error,
+    );
+    expect(caught).toBeInstanceOf(AccountApiError);
+    expect(caught).toMatchObject({
+      code: "multiple_organizations_unsupported",
+      status: 403,
+      message: "Multiple workspaces aren't supported yet",
     });
-
-    expect(selected).toEqual({ id: "org_2", name: "Acme" });
-    expect(stdout.text()).toContain("1. Personal — ada@example.com");
-    expect(stdout.text()).toContain("2. Acme");
-  });
-
-  it("re-asks on an out-of-range or non-numeric answer", async () => {
-    const stdout = makeStdout();
-    const organizations = [ORGANIZATION, { id: "org_2", name: "Acme" }];
-
-    const selected = await selectOrganization(organizations, {
-      stdout: stdout.write,
-      stdin: stdinOf("9", "banana", "1"),
-    });
-
-    expect(selected).toEqual(ORGANIZATION);
-    expect(stdout.text()).toContain('"9" is not one of the options');
-    expect(stdout.text()).toContain('"banana" is not one of the options');
-  });
-
-  // A closed stdin cannot answer. Looping on end-of-input would hang the CLI
-  // with no prompt visible and no way to interrupt it.
-  it("fails rather than looping when stdin ends without an answer", async () => {
-    await expect(
-      selectOrganization([ORGANIZATION, { id: "org_2", name: "Acme" }], {
-        stdout: makeStdout().write,
-        stdin: Readable.from([]) as unknown as NodeJS.ReadableStream,
-      }),
-    ).rejects.toThrow("No workspace was selected");
   });
 
   it("explains rather than crashing when the account offers no workspace at all", async () => {
-    await expect(selectOrganization([], { stdout: makeStdout().write })).rejects.toThrow(
-      "no workspace",
-    );
+    await expect(selectOrganization([])).rejects.toThrow("no workspace");
   });
 });
 
@@ -903,41 +862,32 @@ describe("runAuthLogin", () => {
     );
   });
 
-  it("asks which workspace to use when the account offers several", async () => {
+  // The CLI matches the desktop path: personal-org-only, fail closed. A
+  // multi-org account is refused with the same classified error the app
+  // answers with, and nothing is persisted.
+  it("fails closed when the account offers several workspaces", async () => {
     const baseDir = makeBaseDir();
     const stdout = makeStdout();
     const acme = { id: "org_2", name: "Acme" };
 
-    const refreshCalls: Array<{ organizationId?: string }> = [];
     const client = deviceFlowClient({
-      me: (token) =>
-        token === "access-0"
-          ? Promise.reject(organizationRequired([ORGANIZATION, acme]))
-          : Promise.resolve(meResponse({ organization: acme })),
-      refreshAccessToken: (options) => {
-        refreshCalls.push(options);
-        return Promise.resolve({
-          accessToken: "access-1",
-          refreshToken: "refresh-1",
-          user: { id: "user_1", email: "ada@example.com" },
-        });
-      },
-      registerHost: () => Promise.resolve({ host, hostToken: "host-token" }),
+      me: () => Promise.reject(organizationRequired([ORGANIZATION, acme])),
+      refreshAccessToken: () => Promise.reject(new Error("must not refresh")),
+      registerHost: () => Promise.reject(new Error("must not register")),
     });
 
-    await runAuthLogin({
+    const caught = await runAuthLogin({
       accountUrl: "https://accounts.example.com",
       baseDir,
       client,
       stdout: stdout.write,
       platform: "darwin",
       hostname: "workstation",
-      stdin: stdinOf("2"),
-    });
+    }).catch((error: unknown) => error);
 
-    expect(stdout.text()).toContain("Which workspace");
-    expect(refreshCalls[0]?.organizationId).toBe(acme.id);
-    expect((await readAccountCredentials(baseDir))?.organizationId).toBe(acme.id);
+    expect(caught).toBeInstanceOf(AccountApiError);
+    expect(caught).toMatchObject({ code: "multiple_organizations_unsupported", status: 403 });
+    expect(await readAccountFile(baseDir)).toBeUndefined();
   });
 
   // A self-hoster whose WorkOS already scopes the device grant never sees the

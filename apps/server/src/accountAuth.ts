@@ -11,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import OS from "node:os";
 import path from "node:path";
-import readline from "node:readline";
 
 import {
   type AccountHost,
@@ -278,8 +277,6 @@ export interface AccountFlowOptions {
   readonly platform?: NodeJS.Platform | string;
   readonly hostname?: string;
   readonly appVersion?: string;
-  /** Where the workspace picker reads its answer from; defaults to stdin. */
-  readonly stdin?: NodeJS.ReadableStream | undefined;
 }
 
 function clientFor(accountUrl: string, injected: AccountClient | undefined): AccountClient {
@@ -541,25 +538,16 @@ export async function withFreshAccessToken<A>(
   }
 }
 
-/** The stdin half of the picker, narrowed to what reading one line needs. */
-export type SelectOrganizationIo = {
-  readonly stdin?: NodeJS.ReadableStream | undefined;
-  readonly stdout?: Stdout | undefined;
-};
-
 /**
- * Asks which workspace to use, and returns it.
- *
- * One organization answers itself: a user with a single personal workspace has
- * no decision to make, and a prompt with one option is noise on every sign-in.
- * Several means asking, because guessing would silently register the machine
- * somewhere the user's teammates can see.
- *
- * Both streams are injectable so the prompt is testable without a terminal.
+ * Resolves which workspace to use, fail-closed — identical to the in-app
+ * flow's `chooseOrganization` in accountSession.ts. V1 is personal-org-only:
+ * one organization answers itself; several are refused with the same
+ * classified error the app answers with, so the CLI and desktop paths are
+ * indistinguishable. None means the account is unusable until a workspace
+ * exists.
  */
 export async function selectOrganization(
   organizations: readonly OrganizationSummary[],
-  io: SelectOrganizationIo = {},
 ): Promise<OrganizationSummary> {
   const first = organizations[0];
   if (!first) {
@@ -567,88 +555,14 @@ export async function selectOrganization(
       "The account offered no workspace to sign in to. Create one in the WorkOS dashboard, then run `synara auth` again.",
     );
   }
-  if (organizations.length === 1) return first;
-
-  const stdout = io.stdout ?? defaultStdout;
-  stdout(
-    [
-      "",
-      "  Which workspace should this host belong to?",
-      "",
-      ...organizations.map((org, index) => `    ${index + 1}. ${org.name}`),
-      "",
-    ].join("\n"),
-  );
-
-  const lines = lineReader(io.stdin ?? process.stdin);
-  try {
-    for (;;) {
-      stdout(`  Enter a number [1-${organizations.length}]: `);
-      const line = await lines.next();
-      // End of input — a piped or closed stdin cannot answer, and looping on
-      // it forever would hang the CLI with no way out.
-      if (line === undefined) {
-        throw new Error("No workspace was selected.");
-      }
-      const choice = Number.parseInt(line.trim(), 10);
-      const selected = Number.isInteger(choice) ? organizations[choice - 1] : undefined;
-      if (selected) {
-        stdout("\n");
-        return selected;
-      }
-      stdout(`  "${line.trim()}" is not one of the options.\n`);
-    }
-  } finally {
-    lines.close();
+  if (organizations.length > 1) {
+    throw new AccountApiError({
+      code: "multiple_organizations_unsupported",
+      status: 403,
+      message: "Multiple workspaces aren't supported yet",
+    });
   }
-}
-
-/**
- * Reads lines one at a time from a stream.
- *
- * Lines are buffered as they arrive rather than awaited one listener at a
- * time: readline emits a whole chunk's worth synchronously, so a consumer that
- * attaches a fresh listener per read drops every line but the first and then
- * waits forever for input that has already been delivered.
- */
-function lineReader(input: NodeJS.ReadableStream): {
-  next(): Promise<string | undefined>;
-  close(): void;
-} {
-  const iface = readline.createInterface({ input });
-  const buffered: string[] = [];
-  /** Set while a read is outstanding with nothing buffered to satisfy it. */
-  let waiting: ((line: string | undefined) => void) | undefined;
-  let ended = false;
-
-  iface.on("line", (line: string) => {
-    if (waiting) {
-      const resolve = waiting;
-      waiting = undefined;
-      resolve(line);
-      return;
-    }
-    buffered.push(line);
-  });
-  iface.on("close", () => {
-    ended = true;
-    waiting?.(undefined);
-    waiting = undefined;
-  });
-
-  return {
-    next() {
-      const ready = buffered.shift();
-      if (ready !== undefined) return Promise.resolve(ready);
-      if (ended) return Promise.resolve(undefined);
-      return new Promise((resolve) => {
-        waiting = resolve;
-      });
-    },
-    close() {
-      iface.close();
-    },
-  };
+  return first;
 }
 
 /**
@@ -776,8 +690,7 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
 
   const scoped = await scopeTokenToWorkspace(token, {
     client,
-    chooseOrganization: (organizations) =>
-      selectOrganization(organizations, { stdin: options.stdin, stdout }),
+    chooseOrganization: selectOrganization,
     onOrganizationChosen: (organization) => {
       stdout(`Workspace: ${organization.name}\n`);
     },
@@ -814,10 +727,11 @@ export interface ScopedSessionTokens {
 export interface ScopeTokenToWorkspaceOptions {
   readonly client: AccountClient;
   /**
-   * Picks the workspace when the account offers several. The CLI prompts; the
-   * in-app flow takes the first. Injected rather than branched on so the
-   * decision is the *only* difference between the two sign-ins — everything
-   * about probing, refreshing, and spending the token stays shared.
+   * Resolves the workspace from the account's list. Both callers — the CLI
+   * and the in-app flow — fail closed on more than one workspace in V1
+   * (personal-org-only); the seam stays injected so a future workspace
+   * picker slots in without touching probing, refreshing, or how the token
+   * is spent.
    */
   readonly chooseOrganization: (
     organizations: readonly OrganizationSummary[],
