@@ -7,6 +7,7 @@ import {
   isCodexActivityStatusWorkEntry,
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
+import { deriveTimelineEntries } from "../../workLog";
 
 function workEntry(overrides: Partial<WorkLogEntry> & Pick<WorkLogEntry, "id">): WorkLogEntry {
   return {
@@ -196,5 +197,36 @@ describe("deriveAgentActivityTimelineState", () => {
     expect(state.timelineWorkEntries[0]).toMatchObject({
       detail: "Full changelog report\nwith many file references and implementation notes.",
     });
+  });
+
+  it("anchors a reasoning group spanning an interleaved tool row to its first update", () => {
+    const firstReasoningAt = "2026-06-05T00:00:01.000Z";
+    const interleavedToolAt = "2026-06-05T00:00:02.000Z";
+    const secondReasoningAt = "2026-06-05T00:00:03.000Z";
+    const trailingToolAt = "2026-06-05T00:00:04.000Z";
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "reasoning-1",
+        label: "Reasoning update",
+        tone: "info",
+        createdAt: firstReasoningAt,
+      }),
+      workEntry({
+        id: "reasoning-2",
+        label: "Reasoning update",
+        tone: "info",
+        createdAt: secondReasoningAt,
+      }),
+      workEntry({ id: "tool-1", label: "bash", createdAt: interleavedToolAt }),
+      workEntry({ id: "tool-2", label: "bash", createdAt: trailingToolAt }),
+    ]);
+
+    expect(state.timelineWorkEntries[0]!.createdAt).toBe(firstReasoningAt);
+    const timeline = deriveTimelineEntries([], [], state.timelineWorkEntries);
+    expect(timeline.map((entry) => entry.id)).toEqual([
+      "agent-reasoning:reasoning-1",
+      "tool-1",
+      "tool-2",
+    ]);
   });
 });

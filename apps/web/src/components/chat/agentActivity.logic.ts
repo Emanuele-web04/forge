@@ -120,6 +120,7 @@ export function deriveAgentActivityTimelineState(
     const displayEntry: WorkLogEntry = {
       ...latest,
       id: groupId,
+      createdAt: first.createdAt,
       label: "Reasoning trace",
       toolTitle: "Reasoning trace",
       tone: "tool",
