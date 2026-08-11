@@ -6,7 +6,7 @@
 // Layer: Web account feature.
 
 import type { AccountMe } from "@synara/contracts";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import {
@@ -58,6 +58,10 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
   const [avatarColor, setAvatarColor] = useState(PROFILE_AVATAR_COLORS[0] ?? "#22c55e");
   const [handleTouched, setHandleTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Stable ids linking the handle input to its help/error text and the save
+  // failure to the form, for assistive tech.
+  const handleHelpId = useId();
+  const saveErrorId = useId();
 
   const formatError = handleTouched ? handleFormatError(handle) : null;
   const saving = account.updateProfile.isPending;
@@ -151,18 +155,29 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
               placeholder="handle"
               disabled={saving}
               aria-invalid={formatError !== null || undefined}
+              aria-describedby={handleHelpId}
               onChange={(event) => {
                 setHandle(sanitizeHandleInput(event.target.value));
                 setHandleTouched(true);
               }}
             />
           </InputGroup>
+          {/* One stable region, always described-by the input: help text
+              normally, role="alert" when it flips to a format error so the
+              change is announced. */}
           {formatError ? (
-            <span className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive">
+            <span
+              id={handleHelpId}
+              role="alert"
+              className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive"
+            >
               {formatError}
             </span>
           ) : (
-            <span className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground">
+            <span
+              id={handleHelpId}
+              className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground"
+            >
               Your public profile: trysynara.com/profile/@{handle || "handle"}
             </span>
           )}
@@ -177,8 +192,13 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
           />
         </label>
 
+        {/* Announces a save failure (handle conflict, network) on arrival. */}
         {error ? (
-          <p className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive">
+          <p
+            id={saveErrorId}
+            role="alert"
+            className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive"
+          >
             {error}
           </p>
         ) : null}

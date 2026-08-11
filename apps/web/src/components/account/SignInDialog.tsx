@@ -1,19 +1,18 @@
 // FILE: SignInDialog.tsx
-// Purpose: "Welcome to Synara" sign-in modal — Google/GitHub SSO through the
-// system browser (device grant, server-brokered) and in-app email OTP: the
-// user enters their email, receives a 6-digit code, and enters it in the same
-// dialog. Sign-in and sign-up are one path. Dismissable; a successful sign-in
-// with no profile hands off to the onboarding modal.
+// Purpose: "Welcome to Synara" sign-in modal — SSO through the system browser
+// (device grant, server-brokered; the hosted page offers Google/GitHub) and
+// in-app email OTP: the user enters their email, receives a 6-digit code, and
+// enters it in the same dialog. Sign-in and sign-up are one path. Dismissable;
+// a successful sign-in with no profile hands off to the onboarding modal.
 // Layer: Web account feature.
 
 import type { AccountStatus } from "@synara/contracts";
-import { useEffect, useRef, useState } from "react";
-import { SiGoogle } from "react-icons/si";
+import { useEffect, useId, useRef, useState } from "react";
+import { LuGlobe } from "react-icons/lu";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
-import { GitHubIcon } from "~/components/Icons";
 import { SynaraLogo } from "~/components/SynaraLogo";
 import { useAccount } from "~/hooks/useAccount";
 import { useNowMs } from "~/hooks/useNowMs";
@@ -21,9 +20,11 @@ import {
   accountErrorMessage,
   formatResendCountdown,
   readAccountErrorCode,
+  readEmailVerificationChallenge,
   RESEND_COOLDOWN_SECONDS,
   sanitizeVerificationCodeInput,
   VERIFICATION_CODE_LENGTH,
+  type EmailVerificationChallenge,
 } from "~/lib/accountLogic";
 import { cn } from "~/lib/utils";
 
@@ -52,13 +53,34 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
   const account = useAccount();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Stable id linking the email input to its error text for assistive tech.
+  const emailErrorId = useId();
   const [ssoWait, setSsoWait] = useState<SsoWait | null>(null);
   // The OTP code-entry step, entered once a code was sent. Only the address
   // is held — the code lives in the step's own state and dies with it.
   const [otpEmail, setOtpEmail] = useState<string | null>(null);
+  // The email-verification challenge, entered when a grant answers
+  // `email_verification_required`. In-memory ONLY: the pending token is a
+  // bearer-ish secret, and this state (with the token in it) dies with the
+  // dialog content on close or terminal completion — never persisted.
+  // Normally unreachable on the OTP path (redeeming a code implicitly
+  // verifies the email); wired so the challenge is a step, not a dead end.
+  const [verification, setVerification] = useState<EmailVerificationChallenge | null>(null);
   // Abandoning the dialog mid-SSO aborts the pending completeSignIn RPC so it
   // does not resolve into a closed dialog later.
   const ssoAbortRef = useRef<AbortController | null>(null);
+
+  // Abort on EVERY way out of the dialog, not only the visible "Stop
+  // waiting" control: this content unmounts on outer close, Escape, and
+  // "Continue without an account", so the cleanup is the one place that
+  // covers them all. An explicit user close is a cancellation of the client
+  // request; server-side completion tolerance stays only for genuine
+  // transport loss (reconnect recovery via the status query).
+  useEffect(() => {
+    return () => {
+      ssoAbortRef.current?.abort();
+    };
+  }, []);
 
   const busy = account.sendOtp.isPending || account.beginSignIn.isPending || ssoWait !== null;
 
@@ -99,6 +121,40 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
     }
   };
 
+  if (verification) {
+    // The same six-box step, redeeming the verification grant instead of the
+    // OTP one: the code entered here travels with the pending token to
+    // account.verifyEmail, and "Resend code" re-mails through the
+    // verification id rather than restarting the OTP send.
+    return (
+      <CodeEntryStep
+        email={verification.email}
+        submitting={account.verifyEmail.isPending}
+        resending={account.resendVerificationEmail.isPending}
+        onSubmit={async (code) => {
+          const status = await account.verifyEmail.mutateAsync({
+            code,
+            pendingAuthenticationToken: verification.pendingAuthenticationToken,
+          });
+          // Terminal completion: the pending token is spent — discard it.
+          setVerification(null);
+          onSignedIn(status);
+        }}
+        onResend={async () => {
+          await account.resendVerificationEmail.mutateAsync({
+            emailVerificationId: verification.emailVerificationId,
+          });
+        }}
+        onUseDifferentEmail={() => {
+          // Abandoning the challenge discards the pending token with it.
+          setVerification(null);
+          setOtpEmail(null);
+          setError(null);
+        }}
+      />
+    );
+  }
+
   if (otpEmail) {
     return (
       <CodeEntryStep
@@ -106,8 +162,18 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
         submitting={account.authenticateOtp.isPending}
         resending={account.sendOtp.isPending}
         onSubmit={async (code) => {
-          const status = await account.authenticateOtp.mutateAsync({ email: otpEmail, code });
-          onSignedIn(status);
+          try {
+            const status = await account.authenticateOtp.mutateAsync({ email: otpEmail, code });
+            onSignedIn(status);
+          } catch (cause) {
+            // The one recoverable refusal with a payload: the provider wants
+            // the email verified first and has already mailed a fresh code.
+            // Route to the verification step instead of dead-ending; any
+            // other failure keeps the step open with its inline error.
+            const challenge = readEmailVerificationChallenge(cause);
+            if (!challenge) throw cause;
+            setVerification(challenge);
+          }
         }}
         onResend={async () => {
           await account.sendOtp.mutateAsync({ email: otpEmail });
@@ -153,11 +219,20 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               setSsoWait(null);
             }}
           >
-            Cancel
+            Stop waiting
           </Button>
+          <p className="text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
+            A page you already approved may still finish signing in.
+          </p>
         </div>
       ) : (
         <>
+          {/* One honest button, not per-provider ones: the device
+              authorization the wire actually makes is provider-neutral
+              (WorkOS's device grant accepts only client_id — no provider or
+              connection hint), so branded Google/GitHub buttons would
+              promise a selection the request never transmits. The hosted
+              page is where the provider gets chosen. */}
           <div className="flex flex-col gap-2">
             <Button
               variant="outline"
@@ -165,17 +240,8 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               disabled={busy}
               onClick={() => void handleSso()}
             >
-              <SiGoogle className="size-3.5" />
-              Continue with Google
-            </Button>
-            <Button
-              variant="outline"
-              className="w-full gap-2"
-              disabled={busy}
-              onClick={() => void handleSso()}
-            >
-              <GitHubIcon className="size-4" />
-              Continue with GitHub
+              <LuGlobe className="size-3.5" />
+              Continue in your browser
             </Button>
           </div>
 
@@ -200,10 +266,16 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               placeholder="Email"
               value={email}
               disabled={busy}
+              aria-invalid={error !== null || undefined}
+              aria-describedby={error !== null ? emailErrorId : undefined}
               onChange={(event) => setEmail(event.target.value)}
             />
             {error ? (
-              <p className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive">
+              <p
+                id={emailErrorId}
+                role="alert"
+                className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive"
+              >
                 {error}
               </p>
             ) : null}
@@ -257,6 +329,8 @@ function CodeEntryStep({
 }: CodeEntryStepProps) {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Stable id linking the input to its error text for assistive tech.
+  const errorId = useId();
   // Flipped by a successful resend, back off on the next countdown render
   // tick after a few seconds; the subtitle swap the design asks for.
   const [resent, setResent] = useState(false);
@@ -358,6 +432,8 @@ function CodeEntryStep({
             value={code}
             disabled={submitting}
             aria-label="Sign-in code"
+            aria-invalid={error !== null || undefined}
+            aria-describedby={error !== null ? errorId : undefined}
             // The code field is the only thing to type into on this step.
             autoFocus
             onChange={(event) => handleCodeChange(event.target.value)}
@@ -380,8 +456,14 @@ function CodeEntryStep({
           ))}
         </label>
 
+        {/* role="alert" announces a wrong code or a failed resend when the
+            boxes clear; the id ties it back to the (visually hidden) input. */}
         {error ? (
-          <p className="text-center text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive">
+          <p
+            id={errorId}
+            role="alert"
+            className="text-center text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-destructive"
+          >
             {error}
           </p>
         ) : null}
