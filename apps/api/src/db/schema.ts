@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 export type HostEndpoint = { url: string; transport: "lan" | "tailscale" | "public" };
@@ -52,13 +53,25 @@ export const profiles = pgTable("profiles", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const hostTokens = pgTable("host_tokens", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  hostId: uuid("host_id")
-    .notNull()
-    .references(() => hosts.id, { onDelete: "cascade" }),
-  tokenHash: text("token_hash").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-  revokedAt: timestamp("revoked_at", { withTimezone: true }),
-});
+export const hostTokens = pgTable(
+  "host_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    hostId: uuid("host_id")
+      .notNull()
+      .references(() => hosts.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    // One live credential per host, enforced by the database rather than by
+    // rotation happening to run alone: rotation is revoke-then-insert, and
+    // without this a race (or a bug) could leave a host with two valid
+    // tokens. Partial over `revoked_at IS NULL` so history rows are exempt.
+    uniqueIndex("host_tokens_one_active_per_host")
+      .on(table.hostId)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ],
+);

@@ -7,7 +7,7 @@
 // Depends on: node:crypto, db/schema (host_tokens).
 
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../db/schema";
 import { hostTokens } from "../db/schema";
@@ -35,15 +35,25 @@ export function createDeviceCredentialStore(
 ): DeviceCredentialStore {
   return {
     async rotate(hostId) {
-      // Revoke-then-mint in that order, so a crash between the two leaves the
-      // host without a token (recoverable by re-registering) rather than with
-      // two live ones.
-      await db
-        .update(hostTokens)
-        .set({ revokedAt: new Date() })
-        .where(and(eq(hostTokens.hostId, hostId), isNull(hostTokens.revokedAt)));
       const { token, hash } = mintHostToken();
-      await db.insert(hostTokens).values({ hostId, tokenHash: hash });
+      // One transaction, serialized per host: revoke-then-mint must be atomic
+      // or a crash in between leaves the host with zero usable tokens and a
+      // concurrent rotation could leave it with two. The advisory lock is
+      // transaction-scoped (released on commit/rollback) and keyed on the
+      // host id, so two concurrent registrations of one host queue rather
+      // than interleave — the loser revokes the winner's token and mints its
+      // own, ending with exactly one active credential either way. The
+      // partial unique index on (host_id) WHERE revoked_at IS NULL is the
+      // backstop the database enforces even if this serialization is
+      // bypassed.
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${hostId}, 0))`);
+        await tx
+          .update(hostTokens)
+          .set({ revokedAt: new Date() })
+          .where(and(eq(hostTokens.hostId, hostId), isNull(hostTokens.revokedAt)));
+        await tx.insert(hostTokens).values({ hostId, tokenHash: hash });
+      });
       return token;
     },
 
