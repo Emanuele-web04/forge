@@ -209,6 +209,15 @@ export function createV1Routes(deps: {
     windowMs: 60_000,
   });
 
+  // Verify-email has its own instance at the same posture: it shares the
+  // redemption budget's SIZE, but a user who exhausted the OTP budget
+  // mistyping codes must still be able to complete the verification step
+  // mid-flow (and vice versa) — one instance would couple the two.
+  const verifyEmailRateLimiter = createRateLimiter({
+    limit: OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
   // Its own budget: sends trigger outbound email, and exhausting the
   // redemption budget must not stop a user from asking for a fresh code (or
   // vice versa).
@@ -820,7 +829,7 @@ export function createV1Routes(deps: {
    * for any flow the provider still answers the challenge on.
    */
   v1.post("/auth/verify-email", async (c) => {
-    if (!otpAuthenticateRateLimiter.tryConsume(callerIp(c))) {
+    if (!verifyEmailRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
     }
 

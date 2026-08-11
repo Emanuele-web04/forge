@@ -943,6 +943,16 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         "203.0.113.32",
       );
       expect(other.status).toBe(401);
+
+      // The two credential-redeeming routes have separate instances: a user
+      // who exhausted the OTP budget can still complete verification mid-flow.
+      const verify = await postJson(
+        app,
+        "/api/v1/auth/verify-email",
+        { code: "000000", pendingAuthenticationToken: "pat_none" },
+        clientIp,
+      );
+      expect(verify.status).not.toBe(429);
     });
 
     // WorkOS refuses Magic Auth outright for a domain governed by an SSO
