@@ -815,6 +815,29 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(other.status).toBe(202);
     });
 
+    // Multi-org fail-closed (personal-org-only V1): a provider that wants an
+    // organization chosen gets a clear classified 403, never a silent
+    // first-organization pick and never an unclassified 502.
+    it("answers 403 multiple_organizations_unsupported when the provider requires org selection", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+      const { code } = await sendCode(app, email, "203.0.113.90");
+
+      workos.requireOrganizationSelectionOnNextAuthenticate();
+      const res = await postJson(
+        app,
+        "/api/v1/auth/otp/authenticate",
+        { email, code },
+        "203.0.113.90",
+      );
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: "multiple_organizations_unsupported",
+        message: expect.stringContaining("aren't supported yet"),
+      });
+    });
+
     // hops=0 is the no-proxy deployment: the forwarded header must be inert,
     // so every synthetic request (no socket) shares the one fallback bucket.
     it("keys on the socket and ignores x-forwarded-for entirely with zero trusted hops", async () => {

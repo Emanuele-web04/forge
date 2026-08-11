@@ -188,6 +188,11 @@ export function classifyMagicAuthFailure(raw: unknown): AuthFailureReason | unde
   // and it reveals domain policy, not account existence.
   if (error === "sso_required" || code === "sso_required") return "sso_required";
   if (error === "organization_authentication_methods_required") return "sso_required";
+  // The caller belongs to several organizations and WorkOS wants a choice
+  // made. V1 fails closed on this rather than picking one or 502ing.
+  if (error === "organization_selection_required" || code === "organization_selection_required") {
+    return "organization_selection_required";
+  }
   // A refused code that may be retried in place.
   if (code === "invalid_one_time_code" || code === "invalid_code") {
     return "invalid_verification_code";
@@ -247,6 +252,10 @@ export function classifyVerificationFailure(raw: unknown): AuthFailureReason | u
   const code = typeof body.code === "string" ? body.code : undefined;
   const error = typeof body.error === "string" ? body.error : undefined;
 
+  // Multi-org account: same fail-closed answer as on the Magic Auth grant.
+  if (error === "organization_selection_required" || code === "organization_selection_required") {
+    return "organization_selection_required";
+  }
   // The code itself was wrong but the attempt may be retried in place.
   if (code === "invalid_one_time_code" || code === "invalid_code") {
     return "invalid_verification_code";

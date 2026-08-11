@@ -103,6 +103,13 @@ export type FakeWorkos = {
    */
   slowDownNextDevicePoll(): void;
   /**
+   * Makes the next authenticate grant (any grant type) refuse with WorkOS's
+   * `organization_selection_required` shape, once — what a multi-org user
+   * gets when the environment wants a workspace chosen. How a test proves
+   * the service fails closed on it instead of 502ing.
+   */
+  requireOrganizationSelectionOnNextAuthenticate(): void;
+  /**
    * The live email verification for `email`, if one exists — its id and the
    * 6-digit code a real user would read out of their inbox. How a test plays
    * the human: the code never travels through the service under test until
@@ -205,6 +212,8 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   >();
   /** One-shot: the next device-token poll answers slow_down. */
   let slowDownNext = false;
+  /** One-shot: the next authenticate grant refuses with org selection. */
+  let organizationSelectionNext = false;
   /** Live refresh tokens → the user they belong to. Single-use, as WorkOS's are. */
   const refreshTokens = new Map<string, string>();
   /**
@@ -392,6 +401,24 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   app.post("/user_management/authenticate", async (c) => {
     const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
     const grantType = typeof body?.grant_type === "string" ? body.grant_type : "";
+
+    if (organizationSelectionNext) {
+      organizationSelectionNext = false;
+      // The shape WorkOS answers a multi-org user with: an error naming the
+      // required selection, a pending token to complete it, and the
+      // organizations on offer.
+      return c.json(
+        {
+          error: "organization_selection_required",
+          pending_authentication_token: `pat_fake_${randomUUID()}`,
+          organizations: [...organizations.values()].map((organization) => ({
+            id: organization.id,
+            name: organization.name,
+          })),
+        },
+        400,
+      );
+    }
 
     if (grantType === "urn:ietf:params:oauth:grant-type:device_code") {
       const deviceCode = typeof body?.device_code === "string" ? body.device_code : "";
@@ -770,6 +797,10 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
 
     slowDownNextDevicePoll() {
       slowDownNext = true;
+    },
+
+    requireOrganizationSelectionOnNextAuthenticate() {
+      organizationSelectionNext = true;
     },
 
     close() {

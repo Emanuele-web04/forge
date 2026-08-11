@@ -207,6 +207,13 @@ export const AccountErrorCode = Schema.Literals([
    * resend and start over).
    */
   "invalid_verification_code",
+  /**
+   * The account resolved to more than one organization, and V1 is
+   * personal-org-only: rather than silently scoping to whichever the
+   * provider listed first, sign-in fails closed until workspace selection
+   * ships.
+   */
+  "multiple_organizations_unsupported",
   "validation_failed",
   "rate_limited",
   "internal_error",

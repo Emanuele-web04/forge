@@ -229,18 +229,25 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
 
     const scoped = await scopeTokenToWorkspace(token, {
       client,
-      // V1 takes the first workspace rather than asking. Lazy personal-org
-      // provisioning guarantees there is at least one, so this is only ever
-      // a real choice for a user who already belongs to a team — and the
-      // workspace picker that would let them choose is deliberately deferred
-      // rather than guessed at here. They can still reach the others once it
-      // exists; nothing about this choice is persisted beyond the session.
+      // V1 is personal-org-only, and this flow has no picker — so more than
+      // one workspace FAILS CLOSED rather than silently taking whichever
+      // the provider listed first: membership order is not a tenant-selection
+      // contract, and binding the machine to an arbitrary team (whose hosts
+      // it would then see, and whose name onboarding might rename) is worse
+      // than asking the user to wait for workspace selection to ship.
       chooseOrganization: async (organizations) => {
         const first = organizations[0];
         if (!first) {
           throw new Error(
             "Your account has no workspace to sign in to. Contact your administrator, or create one in the WorkOS dashboard.",
           );
+        }
+        if (organizations.length > 1) {
+          throw new AccountApiError({
+            code: "multiple_organizations_unsupported",
+            status: 403,
+            message: "Multiple workspaces aren't supported yet",
+          });
         }
         return first;
       },

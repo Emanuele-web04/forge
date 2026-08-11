@@ -664,6 +664,14 @@ export function createV1Routes(deps: {
       code: "invalid_verification_code",
       message: "That code has expired — request a new one and try again",
     },
+    // The personal-org-only decision, fail closed: an account that resolves
+    // to several organizations is refused with a clear answer, never
+    // silently scoped to the provider's first listing and never a 502.
+    organization_selection_required: {
+      status: 403,
+      code: "multiple_organizations_unsupported",
+      message: "Multiple workspaces aren't supported yet",
+    },
   };
 
   /** Turns an authentication outcome into the error contract. */

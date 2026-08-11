@@ -53,7 +53,14 @@ export type AuthFailureReason =
   /** The grant refused the emailed code itself; retyping it can help. */
   | "invalid_verification_code"
   /** The code (or its pending token) is spent or expired; only a resend recovers. */
-  | "verification_expired";
+  | "verification_expired"
+  /**
+   * The provider requires the caller to choose between several
+   * organizations. V1 is personal-org-only and fails closed on this: the
+   * refusal becomes a clear "multiple workspaces aren't supported yet"
+   * answer, never a silent first-organization pick and never an opaque 502.
+   */
+  | "organization_selection_required";
 
 /**
  * What an `email_verification_required` refusal carries beyond its reason —

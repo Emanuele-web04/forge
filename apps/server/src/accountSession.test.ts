@@ -283,8 +283,11 @@ describe("sign-in", () => {
     );
   });
 
-  // V1 has no workspace picker, so a member of several teams gets the first.
-  it("takes the first workspace when the account offers several", async () => {
+  // V1 is personal-org-only and this flow has no picker: several workspaces
+  // FAIL CLOSED with a clear classified error. Membership order is not a
+  // tenant-selection contract, so silently taking the first would bind the
+  // machine to an arbitrary team.
+  it("fails closed when the account offers several workspaces", async () => {
     const baseDir = makeBaseDir();
     const second = { id: "org_2", name: "Acme" };
     const session = sessionFor(
@@ -303,9 +306,18 @@ describe("sign-in", () => {
     );
 
     const begun = await session.beginSignIn();
-    await session.completeSignIn({ deviceCode: begun.deviceCode });
+    const caught = await session
+      .completeSignIn({ deviceCode: begun.deviceCode })
+      .catch((error: unknown) => error);
 
-    expect(await readAccountFile(baseDir)).toMatchObject({ organizationId: ORGANIZATION.id });
+    expect(caught).toBeInstanceOf(AccountApiError);
+    expect(caught).toMatchObject({
+      code: "multiple_organizations_unsupported",
+      status: 403,
+      message: expect.stringContaining("aren't supported yet"),
+    });
+    // Nothing was persisted: the machine is not bound to either workspace.
+    expect(await readAccountFile(baseDir)).toBeUndefined();
   });
 });
 
