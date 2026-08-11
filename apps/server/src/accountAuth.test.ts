@@ -119,6 +119,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     updateHost: unimplemented("updateHost"),
     deleteHost: unimplemented("deleteHost"),
     requestDeviceCode: unimplemented("requestDeviceCode"),
+    requestAuthorizeUrl: unimplemented("requestAuthorizeUrl"),
+    exchangeAuthorizeCode: unimplemented("exchangeAuthorizeCode"),
     pollDeviceToken: unimplemented("pollDeviceToken"),
     refreshAccessToken: unimplemented("refreshAccessToken"),
     ...overrides,

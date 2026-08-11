@@ -117,6 +117,24 @@ export function makeAccountRpcHandlers({ accountSession, openBrowser }: AccountR
         () => Effect.tryPromise(() => accountSession.completeSignIn(input)),
         "Failed to finish signing in",
       ),
+    [WS_METHODS.accountBeginSso]: (input: Parameters<AccountSession["beginSso"]>[0]) =>
+      ownerAccountRpc(
+        () => Effect.tryPromise(() => accountSession.beginSso(input)),
+        "Failed to start sign-in",
+      ),
+    // The PKCE counterpart of completeSignIn: same no-RPC-timeout rationale
+    // (the loopback listener's own deadline bounds it), same
+    // persist-before-answer guarantee.
+    [WS_METHODS.accountCompleteSso]: (input: Parameters<AccountSession["completeSso"]>[0]) =>
+      ownerAccountRpc(
+        () => Effect.tryPromise(() => accountSession.completeSso(input)),
+        "Failed to finish signing in",
+      ),
+    [WS_METHODS.accountCancelSso]: (input: Parameters<AccountSession["cancelSso"]>[0]) =>
+      ownerAccountRpc(
+        () => Effect.tryPromise(() => accountSession.cancelSso(input)),
+        "Failed to cancel the sign-in",
+      ),
     [WS_METHODS.accountUpdateProfile]: (input: Parameters<AccountSession["updateProfile"]>[0]) =>
       ownerAccountRpc(
         () => Effect.tryPromise(() => accountSession.updateProfile(input)),

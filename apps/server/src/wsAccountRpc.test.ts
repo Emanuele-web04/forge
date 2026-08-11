@@ -22,6 +22,9 @@ const SAMPLE_INPUTS: Record<string, unknown> = {
   [WS_METHODS.accountResendVerificationEmail]: { emailVerificationId: "ev_test" },
   [WS_METHODS.accountBeginSignIn]: undefined,
   [WS_METHODS.accountCompleteSignIn]: { deviceCode: "dc_test" },
+  [WS_METHODS.accountBeginSso]: { provider: "google" },
+  [WS_METHODS.accountCompleteSso]: { ssoId: "sso_test" },
+  [WS_METHODS.accountCancelSso]: { ssoId: "sso_test" },
   [WS_METHODS.accountUpdateProfile]: {
     handle: "ada",
     displayName: "Ada",
@@ -59,6 +62,12 @@ function spySession(): { session: AccountSession; calls: () => string[] } {
       interval: 5,
     }),
     completeSignIn: record("completeSignIn", { state: "signed-out" as const }),
+    beginSso: record("beginSso", {
+      ssoId: "sso_test",
+      authorizeUrl: "https://auth.example.com/authorize?provider=GoogleOAuth",
+    }),
+    completeSso: record("completeSso", { state: "signed-out" as const }),
+    cancelSso: record("cancelSso", undefined),
     updateProfile: record("updateProfile", {
       id: "user_1",
       name: "Ada",

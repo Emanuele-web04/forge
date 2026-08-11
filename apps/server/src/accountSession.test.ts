@@ -59,6 +59,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     updateHost: unimplemented("updateHost"),
     deleteHost: unimplemented("deleteHost"),
     requestDeviceCode: unimplemented("requestDeviceCode"),
+    requestAuthorizeUrl: unimplemented("requestAuthorizeUrl"),
+    exchangeAuthorizeCode: unimplemented("exchangeAuthorizeCode"),
     pollDeviceToken: unimplemented("pollDeviceToken"),
     refreshAccessToken: unimplemented("refreshAccessToken"),
     ...overrides,
@@ -597,6 +599,238 @@ describe("OTP sign-in", () => {
       refreshToken: "refresh-1",
     });
     expect(await session.status()).toEqual({ state: "signed-in", me: meResponse() });
+  });
+});
+
+describe("PKCE SSO sign-in", () => {
+  /**
+   * A client whose authorize/exchange legs succeed, recording what they were
+   * given. The recorded authorize input is how a test plays the browser: it
+   * fetches the loopback redirect URI with a code and the flow's own state.
+   */
+  function ssoClient(overrides: Partial<AccountClient> = {}) {
+    const authorizeInputs: Array<{
+      provider: string;
+      redirectUri: string;
+      codeChallenge: string;
+      state: string;
+    }> = [];
+    const exchangeInputs: Array<{ code: string; codeVerifier: string }> = [];
+    const client = makeClient({
+      requestAuthorizeUrl: (input) => {
+        authorizeInputs.push(input);
+        return Promise.resolve({
+          authorizeUrl: `https://auth.example.com/authorize?provider=${input.provider}&state=${input.state}`,
+        });
+      },
+      exchangeAuthorizeCode: (input) => {
+        exchangeInputs.push(input);
+        return Promise.resolve({
+          accessToken: "access-0",
+          refreshToken: "refresh-0",
+          user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
+        });
+      },
+      me: (token) =>
+        token === "access-0"
+          ? Promise.reject(
+              new OrganizationRequiredError({
+                message: "Pick a workspace",
+                organizations: [ORGANIZATION],
+              }),
+            )
+          : Promise.resolve(meResponse()),
+      refreshAccessToken: () =>
+        Promise.resolve({
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+          user: { id: "user_1", email: "ada@example.com" },
+        }),
+      ...overrides,
+    });
+    return { client, authorizeInputs, exchangeInputs };
+  }
+
+  /** Plays the browser: delivers `code` to the attempt's loopback listener. */
+  function deliverCallback(redirectUri: string, params: Record<string, string>) {
+    const url = new URL(redirectUri);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    return fetch(url);
+  }
+
+  it("begins with a loopback redirect, S256 challenge, and the chosen provider", async () => {
+    const { client, authorizeInputs } = ssoClient();
+    const session = sessionFor(makeBaseDir(), client);
+
+    const begun = await session.beginSso({ provider: "github" });
+    expect(begun.ssoId.length).toBeGreaterThan(0);
+    expect(begun.authorizeUrl).toContain("provider=github");
+
+    const input = authorizeInputs[0];
+    if (!input) throw new Error("no authorize request was made");
+    expect(input.provider).toBe("github");
+    const redirect = new URL(input.redirectUri);
+    expect(redirect.hostname).toBe("127.0.0.1");
+    expect(redirect.protocol).toBe("http:");
+    // base64url S256 output is 43 characters, no padding.
+    expect(input.codeChallenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(input.state.length).toBeGreaterThan(0);
+
+    await session.cancelSso({ ssoId: begun.ssoId });
+  });
+
+  it("completes end to end: callback, proxied exchange, scoped persistence", async () => {
+    const baseDir = makeBaseDir();
+    const { client, authorizeInputs, exchangeInputs } = ssoClient();
+    const session = sessionFor(baseDir, client);
+
+    const begun = await session.beginSso({ provider: "google" });
+    const input = authorizeInputs[0];
+    if (!input) throw new Error("no authorize request was made");
+
+    const completion = session.completeSso({ ssoId: begun.ssoId });
+    const delivered = await deliverCallback(input.redirectUri, {
+      code: "authz_code_1",
+      state: input.state,
+    });
+    expect(delivered.status).toBe(200);
+
+    expect(await completion).toEqual({ state: "signed-in", me: meResponse() });
+    // The exchange went through the account client — never the provider
+    // directly — and carried the verifier matching the challenge.
+    expect(exchangeInputs).toHaveLength(1);
+    expect(exchangeInputs[0]?.code).toBe("authz_code_1");
+    const { createHash } = await import("node:crypto");
+    expect(
+      createHash("sha256")
+        .update(exchangeInputs[0]?.codeVerifier ?? "")
+        .digest("base64url"),
+    ).toBe(input.codeChallenge);
+    // Scoped pair persisted, as on every other path.
+    expect(await readAccountFile(baseDir)).toMatchObject({
+      organizationId: ORGANIZATION.id,
+      accessToken: "access-1",
+      refreshToken: "refresh-1",
+    });
+  });
+
+  it("rejects a callback whose state does not match, exchanging nothing", async () => {
+    const { client, authorizeInputs, exchangeInputs } = ssoClient();
+    const session = sessionFor(makeBaseDir(), client);
+
+    const begun = await session.beginSso({ provider: "google" });
+    const input = authorizeInputs[0];
+    if (!input) throw new Error("no authorize request was made");
+
+    // The assertion attaches its handler before the callback can reject the
+    // completion, so the rejection is never momentarily unhandled.
+    const completion = expect(session.completeSso({ ssoId: begun.ssoId })).rejects.toThrow(
+      /did not match/,
+    );
+    await deliverCallback(input.redirectUri, { code: "authz_stolen", state: "forged" });
+
+    await completion;
+    expect(exchangeInputs).toHaveLength(0);
+  });
+
+  it("cancelSso closes the listener so a late callback lands on nothing", async () => {
+    const { client, authorizeInputs } = ssoClient();
+    const session = sessionFor(makeBaseDir(), client);
+
+    const begun = await session.beginSso({ provider: "google" });
+    const input = authorizeInputs[0];
+    if (!input) throw new Error("no authorize request was made");
+
+    await session.cancelSso({ ssoId: begun.ssoId });
+    await expect(
+      deliverCallback(input.redirectUri, { code: "late", state: input.state }),
+    ).rejects.toThrow();
+    await expect(session.completeSso({ ssoId: begun.ssoId })).rejects.toThrow(/expired/);
+  });
+
+  it("allows opening the authorize URL it issued, and only that", async () => {
+    const { client } = ssoClient();
+    const session = sessionFor(makeBaseDir(), client);
+    const begun = await session.beginSso({ provider: "google" });
+
+    expect(await session.isVerificationUrlAllowed(begun.authorizeUrl)).toBe(true);
+    expect(await session.isVerificationUrlAllowed("https://evil.example.com/authorize")).toBe(
+      false,
+    );
+    await session.cancelSso({ ssoId: begun.ssoId });
+    expect(await session.isVerificationUrlAllowed(begun.authorizeUrl)).toBe(false);
+  });
+});
+
+describe("transient sign-in recovery", () => {
+  const OTP_INPUT = { email: "ada@example.com", code: "654321" } as const;
+
+  it("reports signed-in, not an error, when a timed-out grant actually persisted", async () => {
+    const baseDir = makeBaseDir();
+    // The grant leg times out client-side — but the session was persisted
+    // anyway (as when the provider finishes after our abort and a concurrent
+    // completion stored it).
+    const client = makeClient({
+      authenticateOtp: async () => {
+        await writeAccountCredentials(baseDir, credentials());
+        throw new AccountApiError({
+          code: "internal_error",
+          status: 408,
+          message: "Request to /api/v1/auth/otp/authenticate timed out",
+        });
+      },
+      me: () => Promise.resolve(meResponse()),
+    });
+    const session = sessionFor(baseDir, client);
+
+    expect(await session.authenticateOtp(OTP_INPUT)).toEqual({
+      state: "signed-in",
+      me: meResponse(),
+    });
+  });
+
+  it("surfaces a retryable provider-slow error when nothing was persisted", async () => {
+    const session = sessionFor(
+      makeBaseDir(),
+      makeClient({
+        authenticateOtp: () =>
+          Promise.reject(
+            new AccountApiError({ code: "internal_error", status: 504, message: "Timed out" }),
+          ),
+      }),
+    );
+
+    const caught = await session.authenticateOtp(OTP_INPUT).catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(AccountApiError);
+    // Retryable status preserved; message says slow + code may still be
+    // valid, never the flat "unavailable".
+    expect((caught as AccountApiError).status).toBe(504);
+    expect((caught as AccountApiError).message).toMatch(/slowly/);
+    expect((caught as AccountApiError).message).toMatch(/still/);
+    expect((caught as AccountApiError).message).not.toMatch(/unavailable/i);
+  });
+
+  it("passes a genuine terminal refusal through untouched", async () => {
+    const session = sessionFor(
+      makeBaseDir(),
+      makeClient({
+        authenticateOtp: () =>
+          Promise.reject(
+            new AccountApiError({
+              code: "invalid_verification_code",
+              status: 401,
+              message: "That code didn't work — check it and try again",
+            }),
+          ),
+      }),
+    );
+
+    const caught = await session.authenticateOtp(OTP_INPUT).catch((error: unknown) => error);
+    expect(caught).toMatchObject({
+      code: "invalid_verification_code",
+      status: 401,
+      message: "That code didn't work — check it and try again",
+    });
   });
 });
 
