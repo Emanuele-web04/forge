@@ -311,10 +311,18 @@ export type EnvironmentGrantIssuer = {
    * one on first use so each user has a workspace from their first sign-in.
    * Membership is an authorization input: implementations must fail a request
    * they cannot answer rather than degrade to an empty list.
+   *
+   * Two freshness levels, chosen by the route. Reads/display may serve a
+   * short-lived cached membership (staleness SLA ≤60s: a revoked member can
+   * keep read access for at most that long). PRIVILEGED/MUTATING operations
+   * pass `freshMembership: true` and get a live provider answer, so
+   * revocation takes effect immediately where it matters. Mutations are
+   * rare; the extra provider round trip is the accepted price.
    */
   resolveEnvironmentScope(
     session: VerifiedAccessToken,
     email: string,
+    options?: { freshMembership?: boolean },
   ): Promise<EnvironmentScopeResolution>;
   /**
    * Renames an organization and invalidates whatever the implementation

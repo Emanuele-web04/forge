@@ -835,11 +835,12 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
   };
 
   const grants: EnvironmentGrantIssuer = {
-    async resolveEnvironmentScope(session, email) {
+    async resolveEnvironmentScope(session, email, options) {
       const memberships = await ensurePersonalOrg(
         { listUserOrganizationMemberships, createOrganization, createOrganizationMembership },
         session.userId,
         email,
+        options?.freshMembership ? { fresh: true } : undefined,
       );
       if (!session.orgId) {
         return { kind: "selection_required", why: "unscoped", organizations: memberships };

@@ -252,6 +252,34 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     }
   });
 
+  // M4: the membership cache is a read-path convenience with a ≤60s staleness
+  // SLA — it must never be the authorization answer for a mutation. A member
+  // removed after priming the cache may still read, but registering a host
+  // (mutating, credential-minting) resolves membership live and is refused.
+  it("refuses a mutating op for a member revoked after the cache was primed", async () => {
+    const { app } = buildApp();
+    const { token, userId, orgId } = await signIn();
+
+    // Prime the cache with a read.
+    const primed = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
+    expect(primed.status).toBe(200);
+
+    workos.removeMembership(orgId, userId);
+
+    // The read path may still serve the cached membership within the TTL.
+    const readAfter = await app.request("/api/v1/hosts", { headers: authHeaders(token) });
+    expect(readAfter.status).toBe(200);
+
+    // The mutating path must not: fresh membership, immediate refusal.
+    const registerRes = await app.request("/api/v1/hosts", {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(registerHostBody(randomUUID())),
+    });
+    expect(registerRes.status).toBe(403);
+    expect(await registerRes.json()).toMatchObject({ error: "organization_required" });
+  });
+
   it("registers a host and lists it back", async () => {
     const { app } = buildApp();
     const { token } = await signIn();

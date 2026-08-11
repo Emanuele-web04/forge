@@ -301,12 +301,22 @@ export function createV1Routes(deps: {
    * personal workspace if they have none, and answers 403 with the list to
    * pick from. The client re-runs the refresh grant with `organization_id`
    * and retries. A token naming an organization the caller has since left
-   * takes the same path, which is what makes a revoked membership stop
-   * granting access without waiting for anything to be purged.
+   * takes the same path — on reads within the membership cache's ≤60s TTL,
+   * and immediately on mutating routes, which resolve membership live.
    *
    * Returns the session, or a Response that the caller must return as-is.
+   *
+   * Freshness: plain reads (`/me`, host listing, profile) accept the
+   * membership cache — a revoked member can retain READ access for up to the
+   * cache TTL (≤60s), the documented read-path SLA. PRIVILEGED/MUTATING
+   * routes (host register, owner host delete, organization rename) pass
+   * `{ freshMembership: true }` so the membership is resolved live and
+   * revocation takes effect immediately on anything that changes state.
    */
-  async function requireOrgSession(c: Context): Promise<OrgSession | Response> {
+  async function requireOrgSession(
+    c: Context,
+    options?: { freshMembership?: boolean },
+  ): Promise<OrgSession | Response> {
     const session = await getDeviceSession(c);
     if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
 
@@ -314,7 +324,7 @@ export function createV1Routes(deps: {
     let scope: Awaited<ReturnType<EnvironmentGrantIssuer["resolveEnvironmentScope"]>>;
     try {
       user = await verifier.getUser(session.userId);
-      scope = await grants.resolveEnvironmentScope(session, user.email);
+      scope = await grants.resolveEnvironmentScope(session, user.email, options);
     } catch (error) {
       if (error instanceof IdentityProviderError && error.status === 404) {
         return errorResponse(c, 401, "unauthorized", "This account no longer exists");
@@ -489,7 +499,8 @@ export function createV1Routes(deps: {
    * primary control.
    */
   v1.patch("/organization", async (c) => {
-    const session = await requireOrgSession(c);
+    // Mutating and privileged: membership resolved live, never off the cache.
+    const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
 
     const json = await c.req.json().catch(() => null);
@@ -548,7 +559,9 @@ export function createV1Routes(deps: {
   });
 
   v1.post("/hosts", async (c) => {
-    const session = await requireOrgSession(c);
+    // Mutating: registering mints a host credential, so membership is
+    // resolved live — a just-revoked member must not link machines.
+    const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
 
     const json = await c.req.json().catch(() => null);
@@ -628,7 +641,8 @@ export function createV1Routes(deps: {
       return c.body(null, 204);
     }
 
-    const session = await requireOrgSession(c);
+    // Mutating: owner deletion is resolved against live membership.
+    const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
 
     const deleted = await environments.deleteForOrg(id, session.orgId);

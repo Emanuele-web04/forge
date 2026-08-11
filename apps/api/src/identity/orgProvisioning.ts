@@ -156,10 +156,19 @@ export async function ensurePersonalOrg(
   deps: OrgProvisioningDeps,
   userId: string,
   email: string,
+  options?: {
+    /**
+     * Skip the cached membership list and ask the provider now. For
+     * privileged/mutating callers, where a revoked membership must stop
+     * granting access immediately rather than after the TTL; the fresh
+     * answer still refills the cache for subsequent reads.
+     */
+    fresh?: boolean;
+  },
 ): Promise<OrganizationRef[]> {
   const clock = deps.now ?? Date.now;
 
-  const cached = cache.get(userId);
+  const cached = options?.fresh ? undefined : cache.get(userId);
   if (cached && clock() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached.memberships;
   }
