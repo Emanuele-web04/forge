@@ -215,7 +215,6 @@ export const AccountErrorCode = Schema.Literals([
   "unauthorized",
   "host_not_found",
   "token_revoked",
-  "signup_restricted",
   "organization_required",
   "environment_already_linked",
   "handle_taken",

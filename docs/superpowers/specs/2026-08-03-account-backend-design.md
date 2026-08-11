@@ -372,6 +372,14 @@ literal union as more provider families ship.
   `DATABASE_URL` → PlanetScale Postgres over TLS. Environment unchanged means
   the WorkOS provider with identical behavior — the seam refactor is invisible
   to a deployed instance.
+- **Deploy ordering: api before clients.** The proxied device-token and
+  refresh routes (`/auth/device/token`, `/auth/refresh`) exist only on the
+  new api, and a new client polls them unconditionally — there is no
+  capability negotiation in V1 (clients are same-repo, the risk window is one
+  rolling deploy). Against a pre-proxy api the client's poll 404s and the
+  client reports the api as out of date (see `pollDeviceToken` in
+  `packages/shared/src/account.ts`) rather than hanging. A real
+  capability/version gate is deliberate future work.
 
 ## Testing
 

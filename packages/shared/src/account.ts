@@ -167,6 +167,28 @@ async function defaultSleep(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
+/**
+ * Rewrites the 404 a proxied auth route gets from a pre-proxy account
+ * service into an actionable answer. V1 has no capability negotiation
+ * (deploy ordering is api-before-clients; see the design spec), so the one
+ * skew that can happen — a new client against an old api during a rolling
+ * deploy or rollback — must read as "the account service is out of date",
+ * not as a mysterious unknown-route failure mid-sign-in.
+ */
+function withProxySkewError<A>(promise: Promise<A>): Promise<A> {
+  return promise.catch((error: unknown) => {
+    if (error instanceof AccountApiError && error.status === 404) {
+      throw new AccountApiError({
+        code: "internal_error",
+        status: 404,
+        message:
+          "The account service does not support this sign-in flow yet — it is likely an older version. Update the account service (or wait for its deploy to finish) and try again.",
+      });
+    }
+    throw error;
+  });
+}
+
 function authHeaders(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
 }
@@ -530,14 +552,16 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
         // a 200; a thrown error here is a real fault, never flow state.
         let poll;
         try {
-          poll = await requestJson(
-            "/api/v1/auth/device/token",
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ deviceCode }),
-            },
-            DeviceTokenPollResponseSchema,
+          poll = await withProxySkewError(
+            requestJson(
+              "/api/v1/auth/device/token",
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ deviceCode }),
+              },
+              DeviceTokenPollResponseSchema,
+            ),
           );
         } catch (error) {
           // Polling is idempotent, so a transient fault (a timed-out
@@ -573,19 +597,21 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
     },
 
     async refreshAccessToken(refreshOptions) {
-      const refreshed = await requestJson(
-        "/api/v1/auth/refresh",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            refreshToken: refreshOptions.refreshToken,
-            ...(refreshOptions.organizationId
-              ? { organizationId: refreshOptions.organizationId }
-              : {}),
-          }),
-        },
-        RefreshTokenResponseSchema,
+      const refreshed = await withProxySkewError(
+        requestJson(
+          "/api/v1/auth/refresh",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              refreshToken: refreshOptions.refreshToken,
+              ...(refreshOptions.organizationId
+                ? { organizationId: refreshOptions.organizationId }
+                : {}),
+            }),
+          },
+          RefreshTokenResponseSchema,
+        ),
       );
       // Only meaningful when the service echoed the field; an absent echo is
       // not evidence of a mismatch.

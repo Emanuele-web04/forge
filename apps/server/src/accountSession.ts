@@ -317,6 +317,10 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     // the sign-in; `status()` recovers it from the file.
     context.onPersisted?.();
 
+    // Not redundant on the common path: scoping's probe `/me` ran against the
+    // org-less token and was refused, so this is the first `/me` the scoped
+    // token answers (and it runs through withSession's renewal). Only the
+    // pre-scoped self-hoster path pays a second call.
     return signedInStatus(await withSession((accessToken, c) => c.me(accessToken)));
   }
 

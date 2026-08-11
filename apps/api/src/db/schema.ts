@@ -43,9 +43,10 @@ export const hosts = pgTable(
  */
 export const profiles = pgTable("profiles", {
   userId: text("user_id").primaryKey(),
-  // Lowercase by contract, enforced at the route. The unique index is over the
-  // stored value, so case-folding on write is what makes it a real reservation
-  // rather than one that "Dylan" and "dylan" could both pass.
+  // Lowercase by contract: the schema pattern rejects any non-lowercase
+  // handle at decode, so the unique index over the stored value only ever
+  // sees folded spellings — which is what makes the reservation real rather
+  // than one that "Dylan" and "dylan" could both pass.
   handle: text("handle").notNull().unique(),
   displayName: text("display_name").notNull(),
   avatarColor: text("avatar_color").notNull(),
