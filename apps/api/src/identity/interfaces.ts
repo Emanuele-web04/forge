@@ -9,6 +9,7 @@
 
 import type {
   AccountHost,
+  AccountSsoProvider,
   DeviceAuthorizationResponse,
   InstanceInfo,
   RegisterHostRequest,
@@ -200,6 +201,32 @@ export type AccountIdentityVerifier = {
    * because starting it needs a secret a public client cannot hold.
    */
   requestDeviceAuthorization(): Promise<DeviceAuthorizationResponse>;
+  /**
+   * Builds the provider's authorization-code + PKCE authorize URL for the
+   * desktop SSO path, deep-linked to `provider`. `redirectUri` must be a
+   * loopback URL (the route enforces this before calling); `codeChallenge` is
+   * the S256 challenge — one-way, so it may travel — and `state` is the
+   * caller's CSRF binder, echoed back on the redirect. Building the URL
+   * consumes nothing; the credential work happens at the exchange.
+   */
+  buildAuthorizeUrl(input: {
+    provider: AccountSsoProvider;
+    redirectUri: string;
+    codeChallenge: string;
+    state: string;
+  }): string;
+  /**
+   * Exchanges the authorization code the loopback callback delivered for a
+   * token pair, proving possession with the PKCE verifier. Both inputs are
+   * single-use credentials and take the no-leak handling rules. Rejects with
+   * {@link IdentityAuthError} for a classified refusal and
+   * {@link IdentityProviderError} for provider faults.
+   */
+  exchangeAuthorizationCode(input: {
+    code: string;
+    codeVerifier: string;
+    context?: AuthRequestContext;
+  }): Promise<AuthTokens>;
   /**
    * One poll of the device grant: redeems the device code once the user has
    * approved, and reports the flow's state until then. The non-granted

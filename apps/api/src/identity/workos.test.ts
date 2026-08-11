@@ -435,6 +435,23 @@ describe("getUser", () => {
   });
 });
 
+/** The server's bound port, once it is actually listening. */
+function boundPort(server: import("node:http").Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    if (server.listening) {
+      const address = server.address();
+      if (!address || typeof address === "string") return reject(new Error("failed to bind"));
+      return resolve(address.port);
+    }
+    server.once("listening", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") return reject(new Error("failed to bind"));
+      resolve(address.port);
+    });
+    server.once("error", reject);
+  });
+}
+
 describe("request deadlines", () => {
   // A connection that is accepted and then stalls must fail the one call at
   // the per-attempt deadline as a retryable provider fault (504) — never a
@@ -448,11 +465,10 @@ describe("request deadlines", () => {
     app.all("*", () => new Promise<Response>(() => {}));
     const server = serve({ fetch: app.fetch, port: 0 });
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("failed to bind");
+      const port = await boundPort(server as unknown as import("node:http").Server);
       const auth = createWorkosAuth(
         workos.config({
-          workosApiUrl: `http://127.0.0.1:${address.port}`,
+          workosApiUrl: `http://127.0.0.1:${port}`,
           workosRequestTimeoutMs: 200,
         }),
       );
@@ -462,6 +478,88 @@ describe("request deadlines", () => {
       // The message must name only the path — no request fields, which on
       // credential routes include the secret.
       expect((caught as Error).message).toBe("WorkOS /user_management/users/user_1 timed out");
+    } finally {
+      server.close();
+    }
+  });
+
+  // The grant deadline is the timeout-regression fix's backbone: a grant that
+  // outlives the cheap-call deadline must NOT be aborted, because aborting a
+  // call that spends a single-use credential turns a slow success into a
+  // reported failure for a user who is actually signed in.
+  it("gives grant calls the longer grant deadline, not the request one", async () => {
+    const { WORKOS_GRANT_TIMEOUT_MS, WORKOS_REQUEST_TIMEOUT_MS } = await import("./workos");
+    expect(WORKOS_GRANT_TIMEOUT_MS).toBeGreaterThan(WORKOS_REQUEST_TIMEOUT_MS);
+
+    const { serve } = await import("@hono/node-server");
+    const { Hono } = await import("hono");
+    const app = new Hono();
+    // The grant answers AFTER the (tiny) request deadline but inside the
+    // grant one — a slow-but-successful provider.
+    app.post("/user_management/authenticate", async (c) => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const body = (await c.req.json()) as Record<string, unknown>;
+      // Ride the real fake for token minting: answer through it.
+      const upstream = await fetch(`${workos.origin}/user_management/authenticate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return c.json((await upstream.json()) as object, upstream.status as 200);
+    });
+    const server = serve({ fetch: app.fetch, port: 0 });
+    try {
+      const port = await boundPort(server as unknown as import("node:http").Server);
+      const auth = createWorkosAuth(
+        workos.config({
+          workosApiUrl: `http://127.0.0.1:${port}`,
+          // A request deadline the slow grant clearly exceeds…
+          workosRequestTimeoutMs: 100,
+          // …and a grant deadline it comfortably fits inside.
+          workosGrantTimeoutMs: 5_000,
+        }),
+      );
+
+      workos.addUser({ email: "slow-grant@example.com" });
+      // Mint a live magic auth directly against the real fake.
+      await fetch(`${workos.origin}/user_management/magic_auth`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "slow-grant@example.com" }),
+      });
+      const live = workos.currentMagicAuth("slow-grant@example.com");
+      if (!live) throw new Error("no live magic auth");
+
+      const tokens = await auth.authenticateWithOtp({
+        email: "slow-grant@example.com",
+        code: live.code,
+      });
+      expect(tokens.user.email).toBe("slow-grant@example.com");
+    } finally {
+      server.close();
+    }
+  });
+
+  it("still aborts a grant call that exceeds the grant deadline", async () => {
+    const { serve } = await import("@hono/node-server");
+    const { Hono } = await import("hono");
+    const app = new Hono();
+    app.all("*", () => new Promise<Response>(() => {}));
+    const server = serve({ fetch: app.fetch, port: 0 });
+    try {
+      const port = await boundPort(server as unknown as import("node:http").Server);
+      const auth = createWorkosAuth(
+        workos.config({
+          workosApiUrl: `http://127.0.0.1:${port}`,
+          workosRequestTimeoutMs: 50,
+          workosGrantTimeoutMs: 200,
+        }),
+      );
+      const caught = await auth
+        .authenticateWithOtp({ email: "hang@example.com", code: "123456" })
+        .catch((error: unknown) => error);
+      expect(caught).toMatchObject({ name: "IdentityProviderError", status: 504 });
+      expect((caught as Error).message).toBe("WorkOS /user_management/authenticate timed out");
     } finally {
       server.close();
     }

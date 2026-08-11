@@ -40,10 +40,18 @@ export type WorkosApiConfig = ApiConfigBase & {
    */
   workosIssuer?: string;
   /**
-   * Per-attempt deadline on WorkOS calls, milliseconds. Test hook only —
-   * there is no env var for it; production uses the module default (15s).
+   * Per-attempt deadline on cheap/idempotent WorkOS calls, milliseconds.
+   * Test hook only — there is no env var for it; production uses the module
+   * default (15s).
    */
   workosRequestTimeoutMs?: number;
+  /**
+   * Per-attempt deadline on grant-consuming WorkOS calls (authenticates,
+   * token exchanges, refresh), milliseconds. Test hook only — production
+   * uses the module default (45s): a grant spends a single-use credential,
+   * so it gets far longer than a cheap lookup before we abandon it.
+   */
+  workosGrantTimeoutMs?: number;
 };
 
 /**

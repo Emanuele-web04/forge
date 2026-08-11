@@ -8,7 +8,7 @@
 // Depends on: jose (JWKS + JWT verification), WorkOS User Management REST API,
 // interfaces.ts (the seam), orgProvisioning.ts (org resolution + cache).
 
-import type { DeviceAuthorizationResponse } from "@synara/contracts";
+import type { AccountSsoProvider, DeviceAuthorizationResponse } from "@synara/contracts";
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 import type { WorkosApiConfig } from "../config";
 import {
@@ -54,13 +54,26 @@ type OidcMetadata = {
 const DISCOVERY_TIMEOUT_MS = 10_000;
 
 /**
- * Per-attempt deadline on every WorkOS call. A connection that is accepted
- * and then stalls would otherwise pin the Hono request (and any WebSocket
- * RPC behind it) forever. Timeouts surface as a 504 IdentityProviderError —
- * a provider fault, retryable, never a refusal of whatever credential the
- * call carried.
+ * Per-attempt deadline on cheap, idempotent WorkOS calls — discovery, `/me`,
+ * user and organization lookups. A connection that is accepted and then
+ * stalls would otherwise pin the Hono request (and any WebSocket RPC behind
+ * it) forever. Timeouts surface as a 504 IdentityProviderError — a provider
+ * fault, retryable, never a refusal of whatever credential the call carried.
  */
-const WORKOS_REQUEST_TIMEOUT_MS = 15_000;
+export const WORKOS_REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * Per-attempt deadline on the GRANT-consuming calls: the Magic Auth and
+ * email-verification authenticates, the device-token exchange, the refresh
+ * grant, and the PKCE code exchange. Deliberately much longer than
+ * {@link WORKOS_REQUEST_TIMEOUT_MS}: these calls spend a single-use
+ * credential, so aborting one that the provider goes on to complete leaves
+ * the user with a consumed code and an error for a sign-in that actually
+ * succeeded — a slow provider must not cause us to abandon a credential we
+ * may already have spent. A cheap lookup can afford to fail fast; a grant
+ * cannot.
+ */
+export const WORKOS_GRANT_TIMEOUT_MS = 45_000;
 
 function isAbortTimeout(error: unknown): boolean {
   return (
@@ -244,6 +257,40 @@ export function classifyMagicAuthFailure(raw: unknown): AuthFailureReason | unde
   if (code === "one_time_code_expired" || code === "magic_auth_expired") {
     return "verification_expired";
   }
+  return undefined;
+}
+
+/**
+ * Synara's provider vocabulary → WorkOS's `provider` parameter on
+ * `GET /user_management/authorize`. The only place the WorkOS spellings
+ * exist; the wire and the seam speak Synara's own names.
+ */
+const WORKOS_AUTHORIZE_PROVIDERS: Record<AccountSsoProvider, string> = {
+  google: "GoogleOAuth",
+  github: "GitHubOAuth",
+};
+
+/**
+ * Which classified failure a refusal of the *authorization-code grant*
+ * describes. The credential here is the authorization code (bound to the
+ * PKCE verifier): `invalid_grant` means it is spent, expired, or never ours,
+ * and only starting the sign-in over recovers — the same recovery as an
+ * expired emailed code, so it shares that classification. The multi-org and
+ * verification refusals keep their usual meanings.
+ */
+export function classifyAuthorizationCodeFailure(raw: unknown): AuthFailureReason | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const body = raw as Record<string, unknown>;
+  const code = typeof body.code === "string" ? body.code : undefined;
+  const error = typeof body.error === "string" ? body.error : undefined;
+
+  if (code === "email_verification_required") return "email_verification_required";
+  if (error === "organization_selection_required" || code === "organization_selection_required") {
+    return "organization_selection_required";
+  }
+  // A spent, expired, or foreign code — or a failed PKCE proof. Dead either
+  // way; only a fresh authorization recovers.
+  if (error === "invalid_grant" || code === "invalid_grant") return "verification_expired";
   return undefined;
 }
 
@@ -433,22 +480,25 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
   }
 
   const requestTimeoutMs = config.workosRequestTimeoutMs ?? WORKOS_REQUEST_TIMEOUT_MS;
+  const grantTimeoutMs = config.workosGrantTimeoutMs ?? WORKOS_GRANT_TIMEOUT_MS;
 
   /**
-   * `fetch` with the per-attempt deadline. A connection that is accepted and
+   * `fetch` with a per-attempt deadline. A connection that is accepted and
    * then stalls must fail this one call, not pin the request behind it
    * forever. On timeout, throws a 504 {@link IdentityProviderError} — a
    * provider fault, retryable, never a refusal of whatever credential the
    * call carried — whose message names only the path, since request fields
-   * on credential paths include the secret.
+   * on credential paths include the secret. `timeoutMs` defaults to the
+   * cheap-call deadline; grant-consuming calls pass the longer grant one.
    */
   async function fetchWithDeadline(
     url: string,
     path: string,
     init: RequestInit,
+    timeoutMs: number = requestTimeoutMs,
   ): Promise<Response> {
     try {
-      return await fetch(url, { ...init, signal: AbortSignal.timeout(requestTimeoutMs) });
+      return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
     } catch (error) {
       if (isAbortTimeout(error)) {
         throw new IdentityProviderError(504, `WorkOS ${path} timed out`);
@@ -495,15 +545,23 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     // different things per grant, but the no-leak handling of the request
     // and response is identical.
     classify: (raw: unknown) => AuthFailureReason | undefined,
+    // Grant-consuming calls pass the longer grant deadline; a call that only
+    // mints a challenge keeps the cheap-call default.
+    timeoutMs?: number,
   ): Promise<unknown> {
-    const response = await fetchWithDeadline(`${config.workosApiUrl}${path}`, path, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${config.workosApiKey}`,
+    const response = await fetchWithDeadline(
+      `${config.workosApiUrl}${path}`,
+      path,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${config.workosApiKey}`,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    });
+      timeoutMs,
+    );
 
     if (response.ok) return response.json();
 
@@ -636,6 +694,9 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
             ...contextFields(context),
           }),
         },
+        // Grant-consuming: a redeemed device code aborted mid-answer is a
+        // spent credential with no session to show for it.
+        grantTimeoutMs,
       );
       if (response.ok) {
         return { status: "granted", tokens: toAuthTokens(await response.json()) };
@@ -690,6 +751,9 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
             ...contextFields(context),
           }),
         },
+        // Grant-consuming: refresh tokens are single-use, and an abort after
+        // the provider rotated the pair strands the stored session.
+        grantTimeoutMs,
       );
       if (response.ok) {
         const raw: unknown = await response.json();
@@ -764,6 +828,8 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
           ...contextFields(context),
         },
         classifyMagicAuthFailure,
+        // Grant-consuming: the emailed code is single-use.
+        grantTimeoutMs,
       );
       return toAuthTokens(raw);
     },
@@ -783,6 +849,8 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
           ...contextFields(context),
         },
         classifyVerificationFailure,
+        // Grant-consuming: the pending token + code pair is single-use.
+        grantTimeoutMs,
       );
       return toAuthTokens(raw);
     },
@@ -802,6 +870,43 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
         `/user_management/users/${encodeURIComponent(verification.user_id)}/email_verification/send`,
         { method: "POST" },
       );
+    },
+
+    buildAuthorizeUrl({ provider, redirectUri, codeChallenge, state }) {
+      // The hosted authorize endpoint, deep-linked to the chosen provider.
+      // PKCE (S256) because the requesting client is public — the verifier
+      // never appears here, only its one-way challenge.
+      const params = new URLSearchParams({
+        client_id: config.workosClientId,
+        redirect_uri: redirectUri,
+        response_type: "code",
+        provider: WORKOS_AUTHORIZE_PROVIDERS[provider],
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        state,
+      });
+      return `${config.workosApiUrl}/user_management/authorize?${params.toString()}`;
+    },
+
+    async exchangeAuthorizationCode({ code, codeVerifier, context }) {
+      const raw = await sensitiveFetch(
+        "/user_management/authenticate",
+        {
+          grant_type: "authorization_code",
+          code,
+          code_verifier: codeVerifier,
+          client_id: config.workosClientId,
+          // Proxied like every other grant so the vendor stays off the client
+          // wire; the PKCE verifier is the proof of possession, the secret
+          // authenticates this service.
+          client_secret: config.workosApiKey,
+          ...contextFields(context),
+        },
+        classifyAuthorizationCodeFailure,
+        // Grant-consuming: the authorization code is single-use.
+        grantTimeoutMs,
+      );
+      return toAuthTokens(raw);
     },
 
     async requestDeviceAuthorization() {

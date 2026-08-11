@@ -1,6 +1,9 @@
 import {
   type AccountErrorBody,
   type AccountErrorCode,
+  AuthorizeTokenRequest,
+  AuthorizeUrlRequest,
+  type AuthorizeUrlResponse,
   type AccountMe,
   type AccountProfile,
   type AccountProfileAvatarColor,
@@ -148,6 +151,25 @@ function toOrganizationSummary(organization: OrganizationRef): OrganizationSumma
 /** One rate-limit key per mailbox: case-folded, trimmed. */
 function emailRateKey(email: string): string {
   return `email:${email.trim().toLowerCase()}`;
+}
+
+/**
+ * Whether `redirectUri` is an http loopback URL — the only redirect shape
+ * the PKCE authorize route accepts. The authorize URL embeds whatever the
+ * caller sends, so without this the route would happily build a provider
+ * sign-in link that delivers a real user's authorization code to an
+ * attacker-chosen origin. Loopback (any port, any path) is exactly what the
+ * desktop flow needs and nothing more.
+ */
+export function isLoopbackRedirectUri(redirectUri: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(redirectUri);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:") return false;
+  return url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
 }
 
 function authTokensBody(auth_: AuthTokens): AuthTokensResponse {
@@ -901,11 +923,94 @@ export function createV1Routes(deps: {
   });
 
   /**
-   * Starts the SSO device flow, which is how "Continue with Google/GitHub"
-   * reaches the provider. Unauthenticated by nature — the caller has no
-   * credentials yet. Every leg of the flow is proxied: start here, polling
-   * at /auth/device/token, refresh at /auth/refresh — so the client speaks
-   * only to this service and the identity vendor is invisible on its wire.
+   * Builds the provider's authorize URL for the desktop PKCE flow — how
+   * "Continue with Google/GitHub" deep-links to the chosen provider.
+   * Unauthenticated by nature; nothing is consumed by building a URL, so it
+   * shares the device-authorization budget. The redirect URI must be
+   * loopback: this route otherwise mints provider sign-in links that hand a
+   * user's authorization code to whatever origin the caller named.
+   */
+  v1.post("/auth/authorize", async (c) => {
+    if (!deviceRateLimiter.tryConsume(callerIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many sign-in requests");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: AuthorizeUrlRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(AuthorizeUrlRequest)(json);
+    } catch {
+      // Not the decoder's message: it quotes offending values, and the
+      // challenge/state fields are flow secrets' derivatives.
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        "A provider, loopback redirect URI, code challenge, and state are required",
+      );
+    }
+
+    if (!isLoopbackRedirectUri(parsed.redirectUri)) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        "The redirect URI must be an http loopback address",
+      );
+    }
+
+    const body: AuthorizeUrlResponse = { authorizeUrl: verifier.buildAuthorizeUrl(parsed) };
+    return c.json(body);
+  });
+
+  /**
+   * Redeems the authorization code from the loopback callback, proving
+   * possession with the PKCE verifier. Both fields are single-use
+   * credentials: redemption budget, no-echo validation message, no-leak
+   * error mapping — the same posture as the OTP redemption.
+   */
+  v1.post("/auth/authorize/token", async (c) => {
+    if (!otpAuthenticateRateLimiter.tryConsume(callerIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
+    }
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: AuthorizeTokenRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(AuthorizeTokenRequest)(json);
+    } catch {
+      // Not the decoder's message: it quotes the offending value, which here
+      // is the authorization code and PKCE verifier.
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        "An authorization code and its PKCE verifier are required",
+      );
+    }
+
+    try {
+      return c.json(
+        authTokensBody(
+          await verifier.exchangeAuthorizationCode({ ...parsed, context: authContext(c) }),
+        ),
+      );
+    } catch (error) {
+      return authErrorResponse(c, error);
+    }
+  });
+
+  /**
+   * Starts the SSO device flow — the CLI's `synara auth` path (the desktop
+   * app uses the PKCE authorize routes above). Unauthenticated by nature —
+   * the caller has no credentials yet. Every leg of the flow is proxied:
+   * start here, polling at /auth/device/token, refresh at /auth/refresh — so
+   * the client speaks only to this service and the identity vendor is
+   * invisible on its wire.
    */
   v1.post("/auth/device", async (c) => {
     if (!deviceRateLimiter.tryConsume(callerIp(c))) {

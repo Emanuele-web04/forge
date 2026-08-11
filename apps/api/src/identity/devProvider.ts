@@ -43,6 +43,11 @@ export async function createDevIdentityProvider(): Promise<{
     onMagicAuth(email, code) {
       console.log(`[dev-identity] OTP for ${email}: ${code}`);
     },
+    // The PKCE authorize page self-approves as the dev user: the browser hits
+    // the fake's authorize endpoint and is 302'd straight back to the app's
+    // loopback listener with a code — the offline stand-in for the human
+    // finishing the hosted provider page.
+    autoApproveAuthorizeAs: "dev-user@example.com",
     onDeviceAuthorization(deviceCode) {
       console.log(
         `[dev-identity] device authorization requested; approving in ${DEVICE_APPROVE_DELAY_MS / 1000}s`,

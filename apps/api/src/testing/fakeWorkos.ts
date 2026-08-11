@@ -6,7 +6,7 @@
 // Layer: API test support (also drives `scripts/fake-workos.ts`, the dev stub)
 // Depends on: jose, hono, @hono/node-server.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -93,6 +93,12 @@ export type FakeWorkos = {
     deviceCode: string,
     user?: Partial<FakeWorkosUser> & { id?: string },
   ): FakeWorkosUser;
+  /**
+   * Mints an authorization code bound to a PKCE challenge, as completing the
+   * hosted authorize page would. Registers `email`'s user if needed. Tests
+   * that skip the hosted page drive the exchange with this directly.
+   */
+  issueAuthorizationCode(email: string, params: { codeChallenge: string }): string;
   /** Marks the authorization denied, as a human clicking "cancel" would. */
   denyDevice(deviceCode: string): void;
   /** Forces the device code past its lifetime, so polls answer expired_token. */
@@ -184,6 +190,15 @@ export type StartFakeWorkosOptions = {
    * double never delivers codes itself.
    */
   onMagicAuth?: (email: string, code: string) => void;
+  /**
+   * When set, `GET /user_management/authorize` self-approves as this email:
+   * it answers the 302 to `redirect_uri` carrying a fresh authorization code
+   * (bound to the request's PKCE challenge) and the echoed `state` — standing
+   * in for the human finishing the hosted provider page. Unset, the endpoint
+   * refuses: approval stays an action performed on this double from the
+   * outside (`issueAuthorizationCode`), exactly like device approval.
+   */
+  autoApproveAuthorizeAs?: string;
 };
 
 /** How long a fake Magic Auth code lives — WorkOS's documented 10 minutes. */
@@ -232,6 +247,13 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   const emailVerifications = new Map<string, { userId: string; code: string }>();
   /** Pending authentication tokens → the verification they redeem against. */
   const pendingAuthTokens = new Map<string, { userId: string; verificationId: string }>();
+  /**
+   * Live authorization codes → the user they sign in and the PKCE challenge
+   * the exchange must prove. Single-use, as WorkOS's are, and the challenge
+   * binding is enforced so a service that dropped the verifier (or hashed it
+   * wrong) fails here as it would in production.
+   */
+  const authorizationCodes = new Map<string, { userId: string; codeChallenge: string }>();
   /**
    * Deterministic, sequential 6-digit codes. Sequential rather than random so
    * a test that needs "a wrong code" can rely on any other six digits being
@@ -360,6 +382,13 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     };
   }
 
+  function issueAuthorizationCode(email: string, params: { codeChallenge: string }): string {
+    const record = [...users.values()].find((user) => user.email === email) ?? addUser({ email });
+    const code = `authz_fake_${randomUUID()}`;
+    authorizationCodes.set(code, { userId: record.id, codeChallenge: params.codeChallenge });
+    return code;
+  }
+
   const app = new Hono();
   app.use("*", async (c, next) => {
     requests.push({
@@ -383,6 +412,39 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       token_endpoint: `${origin}/user_management/authenticate`,
     }),
   );
+
+  /**
+   * The hosted authorize page, reduced to its outcome. Real WorkOS serves the
+   * provider's sign-in UI here; this double either self-approves (the dev
+   * provider's mode) with a 302 back to `redirect_uri` carrying the code and
+   * echoed state, or refuses so a test approves via `issueAuthorizationCode`.
+   */
+  app.get("/user_management/authorize", (c) => {
+    const redirectUri = c.req.query("redirect_uri") ?? "";
+    const codeChallenge = c.req.query("code_challenge") ?? "";
+    const state = c.req.query("state") ?? "";
+    if (
+      c.req.query("client_id") !== clientId ||
+      c.req.query("response_type") !== "code" ||
+      c.req.query("code_challenge_method") !== "S256" ||
+      !redirectUri ||
+      !codeChallenge
+    ) {
+      return c.json({ error: "invalid_request", error_description: "Malformed authorize" }, 400);
+    }
+    const approveAs = options.autoApproveAuthorizeAs;
+    if (!approveAs) {
+      return c.json(
+        { error: "access_denied", error_description: "No auto-approval configured" },
+        403,
+      );
+    }
+    const code = issueAuthorizationCode(approveAs, { codeChallenge });
+    const target = new URL(redirectUri);
+    target.searchParams.set("code", code);
+    if (state) target.searchParams.set("state", state);
+    return c.redirect(target.toString(), 302);
+  });
 
   app.post("/user_management/authorize/device", (c) => {
     // Same fixed code every time, so tests can assert against the exported
@@ -532,6 +594,32 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       pendingAuthTokens.delete(pendingToken);
       emailVerifications.delete(pending.verificationId);
       return c.json(await issueTokenPair(pending.userId));
+    }
+
+    // The authorization-code + PKCE exchange. The challenge binding is real:
+    // S256(verifier) must equal the challenge the code was minted against, so
+    // a proxy that lost or mangled the verifier fails here as in production.
+    if (grantType === "authorization_code") {
+      const code = typeof body?.code === "string" ? body.code : "";
+      const codeVerifier = typeof body?.code_verifier === "string" ? body.code_verifier : "";
+      const grant = authorizationCodes.get(code);
+      if (!grant) {
+        return c.json(
+          { error: "invalid_grant", error_description: "Authorization code is invalid or spent" },
+          400,
+        );
+      }
+      const hashed = createHash("sha256").update(codeVerifier).digest("base64url");
+      if (hashed !== grant.codeChallenge) {
+        // The code dies with a failed proof, as a single-use credential must.
+        authorizationCodes.delete(code);
+        return c.json(
+          { error: "invalid_grant", error_description: "PKCE verification failed" },
+          400,
+        );
+      }
+      authorizationCodes.delete(code);
+      return c.json(await issueTokenPair(grant.userId));
     }
 
     if (grantType === "refresh_token") {
@@ -792,6 +880,8 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       deviceGrants.set(deviceCode, { approvedBy: record.id });
       return record;
     },
+
+    issueAuthorizationCode,
 
     denyDevice(deviceCode) {
       const grant = deviceGrants.get(deviceCode);

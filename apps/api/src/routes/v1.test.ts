@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type AccountErrorBody,
   DeviceAuthorizationResponse,
@@ -1653,6 +1653,138 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       authMode: "workos",
       clientId: workos.clientId,
       workosApiUrl: workos.origin,
+    });
+  });
+
+  describe("PKCE authorize routes", () => {
+    const CODE_VERIFIER = "verifier_1234567890_1234567890_1234567890_123";
+    const codeChallenge = () =>
+      // The S256 challenge the server-side flow would derive.
+      createHash("sha256").update(CODE_VERIFIER).digest("base64url");
+
+    function authorizeBody(overrides: Record<string, unknown> = {}) {
+      return {
+        provider: "google",
+        redirectUri: "http://127.0.0.1:49321/callback",
+        codeChallenge: codeChallenge(),
+        state: "state_abc123",
+        ...overrides,
+      };
+    }
+
+    it("builds a WorkOS authorize URL carrying the provider, S256 challenge, and state", async () => {
+      const { app } = buildApp();
+
+      const res = await postJson(app, "/api/v1/auth/authorize", authorizeBody(), "203.0.113.50");
+      expect(res.status).toBe(200);
+      const { authorizeUrl } = (await res.json()) as { authorizeUrl: string };
+      const url = new URL(authorizeUrl);
+      expect(`${url.origin}${url.pathname}`).toBe(`${workos.origin}/user_management/authorize`);
+      expect(url.searchParams.get("client_id")).toBe(workos.clientId);
+      expect(url.searchParams.get("response_type")).toBe("code");
+      expect(url.searchParams.get("provider")).toBe("GoogleOAuth");
+      expect(url.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:49321/callback");
+      expect(url.searchParams.get("code_challenge")).toBe(codeChallenge());
+      expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+      expect(url.searchParams.get("state")).toBe("state_abc123");
+      // The API key must not appear anywhere in a URL handed to a browser.
+      expect(authorizeUrl).not.toContain(workos.apiKey);
+    });
+
+    it("maps the github provider to WorkOS's spelling", async () => {
+      const { app } = buildApp();
+      const res = await postJson(
+        app,
+        "/api/v1/auth/authorize",
+        authorizeBody({ provider: "github" }),
+        "203.0.113.51",
+      );
+      expect(res.status).toBe(200);
+      const { authorizeUrl } = (await res.json()) as { authorizeUrl: string };
+      expect(new URL(authorizeUrl).searchParams.get("provider")).toBe("GitHubOAuth");
+    });
+
+    it("refuses a non-loopback redirect URI", async () => {
+      const { app } = buildApp();
+      for (const redirectUri of [
+        "https://evil.example.com/callback",
+        "http://synara.example.com/callback",
+        "http://127.0.0.1.evil.example/callback",
+        "not-a-url",
+      ]) {
+        const res = await postJson(
+          app,
+          "/api/v1/auth/authorize",
+          authorizeBody({ redirectUri }),
+          "203.0.113.52",
+        );
+        expect(res.status).toBe(400);
+        expect(await res.json()).toMatchObject({ error: "validation_failed" });
+      }
+    });
+
+    it("exchanges a challenge-bound code for a token pair", async () => {
+      const { app } = buildApp();
+      const code = workos.issueAuthorizationCode("pkce-user@example.com", {
+        codeChallenge: codeChallenge(),
+      });
+
+      const res = await postJson(
+        app,
+        "/api/v1/auth/authorize/token",
+        { code, codeVerifier: CODE_VERIFIER },
+        "203.0.113.53",
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        accessToken: string;
+        refreshToken: string;
+        user: { email: string };
+      };
+      expect(body.user.email).toBe("pkce-user@example.com");
+      expect(body.accessToken.length).toBeGreaterThan(0);
+      expect(body.refreshToken.length).toBeGreaterThan(0);
+    });
+
+    it("refuses a wrong verifier and spends the code doing so", async () => {
+      const { app } = buildApp();
+      const code = workos.issueAuthorizationCode("pkce-user2@example.com", {
+        codeChallenge: codeChallenge(),
+      });
+
+      const wrong = await postJson(
+        app,
+        "/api/v1/auth/authorize/token",
+        { code, codeVerifier: "wrong_verifier_wrong_verifier_wrong_verifie" },
+        "203.0.113.54",
+      );
+      expect(wrong.status).toBe(401);
+      expect(await wrong.json()).toMatchObject({ error: "invalid_verification_code" });
+
+      // Single-use: the failed proof killed the code.
+      const retry = await postJson(
+        app,
+        "/api/v1/auth/authorize/token",
+        { code, codeVerifier: CODE_VERIFIER },
+        "203.0.113.54",
+      );
+      expect(retry.status).toBe(401);
+    });
+
+    it("refuses a spent or unknown code with the no-leak error contract", async () => {
+      const { app } = buildApp();
+      const res = await postJson(
+        app,
+        "/api/v1/auth/authorize/token",
+        { code: "authz_fake_never_issued", codeVerifier: CODE_VERIFIER },
+        "203.0.113.55",
+      );
+      expect(res.status).toBe(401);
+      const body = (await res.json()) as AccountErrorBody;
+      expect(body.error).toBe("invalid_verification_code");
+      // Neither credential may be echoed anywhere in the response.
+      expect(JSON.stringify(body)).not.toContain("authz_fake_never_issued");
+      expect(JSON.stringify(body)).not.toContain(CODE_VERIFIER);
     });
   });
 
