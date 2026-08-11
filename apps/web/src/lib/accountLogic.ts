@@ -91,6 +91,9 @@ export function formatResendCountdown(secondsLeft: number): string {
  */
 export function isSignInCancellation(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
+  // Our own AbortController's rejection, when the raw reason surfaces
+  // instead of the transport's wrapper.
+  if (error instanceof DOMException && error.name === "AbortError") return true;
   const candidate = error as { _tag?: unknown; code?: unknown; message?: unknown };
   // The transport's own wrapper for an aborted/timed-out request.
   if (candidate._tag === "WsTransportRequestInterruptedError") return true;

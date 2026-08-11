@@ -180,6 +180,12 @@ describe("isSignInCancellation", () => {
     expect(isSignInCancellation(new Error("All fibers interrupted without error"))).toBe(true);
   });
 
+  it("recognizes our own AbortController's raw rejection", () => {
+    expect(isSignInCancellation(new DOMException("The operation was aborted.", "AbortError"))).toBe(
+      true,
+    );
+  });
+
   it("does not treat real outcomes as cancellations", () => {
     expect(
       isSignInCancellation(
