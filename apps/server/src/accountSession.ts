@@ -45,9 +45,9 @@ import {
   scopeTokenToWorkspace,
   SessionExpiredError,
   withFreshAccessToken,
+  withLockedAccountFile,
   WorkspaceAccessChangedError,
   writeAccountCredentials,
-  type StoredAccountFile,
 } from "./accountAuth";
 
 const SIGNED_OUT: AccountStatus = { state: "signed-out" };
@@ -133,16 +133,23 @@ function isSignedOut(error: unknown): boolean {
  *
  * The organization goes with the session — it was chosen for that sign-in, and
  * carrying it into the next one would silently re-pick a workspace the user
- * may no longer have.
+ * may no longer have. Runs read→write under the credential lock so a
+ * concurrent rotation or host registration cannot interleave; sign-out is
+ * user intent, so unlike a race-loser's clear it applies to whatever session
+ * is on disk at that moment.
  */
-async function clearStoredSession(baseDir: string, stored: StoredAccountFile): Promise<void> {
-  const {
-    accessToken: _accessToken,
-    refreshToken: _refreshToken,
-    organizationId: _organizationId,
-    ...rest
-  } = stored;
-  await writeAccountCredentials(baseDir, rest);
+async function clearStoredSession(baseDir: string): Promise<void> {
+  await withLockedAccountFile(baseDir, async () => {
+    const stored = await readAccountFile(baseDir);
+    if (!stored) return;
+    const {
+      accessToken: _accessToken,
+      refreshToken: _refreshToken,
+      organizationId: _organizationId,
+      ...rest
+    } = stored;
+    await writeAccountCredentials(baseDir, rest);
+  });
 }
 
 export function createAccountSession(options: AccountSessionOptions): AccountSession {
@@ -240,17 +247,20 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     });
 
     // A file left behind by an expired session still holds this machine's
-    // host registration; carrying it forward keeps the link intact.
-    const previous = await readAccountFile(baseDir);
-    await writeAccountCredentials(baseDir, {
-      accountUrl,
-      workosClientId: instance.clientId,
-      workosApiUrl: instance.workosApiUrl,
-      organizationId: scoped.organizationId,
-      accessToken: scoped.accessToken,
-      refreshToken: scoped.refreshToken,
-      ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
-      ...(previous?.hostId ? { hostId: previous.hostId } : {}),
+    // host registration; carrying it forward keeps the link intact. Read and
+    // write under the credential lock so nothing interleaves.
+    await withLockedAccountFile(baseDir, async () => {
+      const previous = await readAccountFile(baseDir);
+      await writeAccountCredentials(baseDir, {
+        accountUrl,
+        workosClientId: instance.clientId,
+        workosApiUrl: instance.workosApiUrl,
+        organizationId: scoped.organizationId,
+        accessToken: scoped.accessToken,
+        refreshToken: scoped.refreshToken,
+        ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
+        ...(previous?.hostId ? { hostId: previous.hostId } : {}),
+      });
     });
 
     return signedInStatus(await withSession((accessToken, c) => c.me(accessToken)));
@@ -401,9 +411,7 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
      * registration survives, exactly as it does across an ordinary expiry.
      */
     async signOut() {
-      const stored = await readAccountFile(baseDir);
-      if (!stored) return;
-      await clearStoredSession(baseDir, stored);
+      await clearStoredSession(baseDir);
     },
 
     isVerificationUrlAllowed(url) {

@@ -485,6 +485,104 @@ describe("withFreshAccessToken", () => {
       hostId: "host_1",
     });
   });
+
+  // The double-spend race: WorkOS refresh tokens are single-use, so two
+  // concurrent expired-token operations that both consumed the stored token
+  // must not both redeem it — and the loser must not clear the winner's
+  // rotated pair off disk. Renewal is serialized and compare-and-swapped, so
+  // the loser re-reads and rides the winner's stored pair instead.
+  it("lets concurrent expired-token operations share one rotation instead of double-spending", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+
+    // Single-use semantics, as WorkOS enforces them: only the stored token
+    // redeems, exactly once.
+    let liveRefreshToken = "refresh-1";
+    let refreshCalls = 0;
+    const client = makeClient({
+      refreshAccessToken: (options) => {
+        refreshCalls += 1;
+        if (options.refreshToken !== liveRefreshToken) {
+          return Promise.reject(
+            new AccountApiError({
+              code: "unauthorized",
+              status: 400,
+              message: "Refresh token is invalid or spent",
+            }),
+          );
+        }
+        liveRefreshToken = "refresh-2";
+        return Promise.resolve({
+          accessToken: "access-2",
+          refreshToken: "refresh-2",
+          user: { id: "user_1", email: "ada@example.com" },
+        });
+      },
+    });
+
+    // Both operations reject their first (stale) token, forcing both into
+    // renewal with the same consumed refresh token.
+    const operation = () =>
+      withFreshAccessToken({ baseDir, client }, (accessToken) =>
+        accessToken === "access-1" ? Promise.reject(unauthorized()) : Promise.resolve(accessToken),
+      );
+
+    const [first, second] = await Promise.all([operation(), operation()]);
+
+    expect(first).toBe("access-2");
+    expect(second).toBe("access-2");
+    // Exactly one redemption: the loser saw the rotated pair on re-read and
+    // never presented the spent token.
+    expect(refreshCalls).toBe(1);
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({ accessToken: "access-2", refreshToken: "refresh-2", hostToken: "host-token" }),
+    );
+  });
+
+  // A caller that decided "this session is dead" from a stale snapshot must
+  // not clear the fresh session another caller stored since: the clear is
+  // compare-and-swapped on the refresh token it consumed.
+  it("does not let a stale workspace-changed clear overwrite a newly rotated session", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+
+    let releaseFn: ((error: unknown) => void) | undefined;
+    const gate = new Promise<never>((_, reject) => {
+      releaseFn = reject;
+    });
+
+    // Operation A: stalls inside `fn` holding the stale snapshot, then fails
+    // with the workspace-changed refusal.
+    const stale = withFreshAccessToken({ baseDir, client: makeClient({}) }, () => gate).catch(
+      (error: unknown) => error,
+    );
+
+    // Meanwhile the session rotates and a host token is stored.
+    await writeAccountCredentials(
+      baseDir,
+      credentials({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+        hostToken: "host-token-2",
+        hostId: "host_2",
+      }),
+    );
+
+    releaseFn?.(organizationRequired());
+    const caught = await stale;
+    expect(caught).toBeInstanceOf(WorkspaceAccessChangedError);
+
+    // The stale clear was skipped: the rotated session and its host fields
+    // survive untouched.
+    expect(await readAccountCredentials(baseDir)).toEqual(
+      credentials({
+        accessToken: "access-2",
+        refreshToken: "refresh-2",
+        hostToken: "host-token-2",
+        hostId: "host_2",
+      }),
+    );
+  });
 });
 
 describe("selectOrganization", () => {

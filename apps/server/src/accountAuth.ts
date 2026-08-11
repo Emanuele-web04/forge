@@ -30,6 +30,7 @@ import {
 } from "@synara/shared/account";
 import { Effect, Path } from "effect";
 
+import { withCredentialFileLock } from "./accountCredentialLock";
 import { writeFileStringAtomically } from "./atomicWrite";
 import { deriveServerPaths } from "./config";
 import { PRIVATE_FILE_MODE } from "./privatePathPermissions";
@@ -342,23 +343,115 @@ export interface WithFreshAccessTokenOptions {
   readonly client: AccountClient;
 }
 
-/**
- * Drops the session half of the stored file, keeping the host registration.
- * The registration is still real, and keeping it lets a later `synara auth`
- * re-link this machine instead of stranding a phantom host on the account.
- *
- * The organization goes with the session: it was chosen for that sign-in, and
- * carrying it into the next one would silently re-pick a workspace the user
- * may no longer have.
- */
-async function clearStoredSession(baseDir: string, credentials: StoredAccountFile): Promise<void> {
+/** Strips the session half of a stored file, keeping the host registration. */
+function withoutSession(credentials: StoredAccountFile): StoredAccountFile {
   const {
     accessToken: _accessToken,
     refreshToken: _refreshToken,
     organizationId: _organizationId,
     ...rest
   } = credentials;
-  await writeAccountCredentials(baseDir, rest);
+  return rest;
+}
+
+/**
+ * Runs `fn` under the credential-file lock (see accountCredentialLock.ts).
+ * Every read-modify-write of the stored file goes through here so concurrent
+ * operations — this process's or another's — cannot interleave between the
+ * read and the write.
+ */
+export function withLockedAccountFile<A>(baseDir: string, fn: () => Promise<A>): Promise<A> {
+  return withCredentialFileLock(accountCredentialsPath(baseDir), fn);
+}
+
+/**
+ * Drops the session half of the stored file, keeping the host registration —
+ * but only if the on-disk refresh token is still `consumedRefreshToken`.
+ *
+ * The compare-and-swap is what makes a concurrent rotation safe: a caller
+ * that decided "this session is dead" from a stale snapshot must not clear
+ * the fresh pair another caller has stored since. If the token on disk has
+ * moved on, the clear is silently skipped — the on-disk session is not the
+ * one that was rejected.
+ *
+ * The registration is kept because it is still real, and keeping it lets a
+ * later `synara auth` re-link this machine instead of stranding a phantom
+ * host on the account. The organization goes with the session: it was chosen
+ * for that sign-in, and carrying it into the next one would silently re-pick
+ * a workspace the user may no longer have.
+ */
+async function clearStoredSessionIfCurrent(
+  baseDir: string,
+  consumedRefreshToken: string,
+): Promise<void> {
+  await withLockedAccountFile(baseDir, async () => {
+    const current = await readAccountFile(baseDir);
+    if (!current || current.refreshToken !== consumedRefreshToken) return;
+    await writeAccountCredentials(baseDir, withoutSession(current));
+  });
+}
+
+/** What renewing the session produced: a usable token, or a dead session. */
+type SessionRenewal = { kind: "renewed"; accessToken: string } | { kind: "expired" };
+
+/**
+ * Renews the stored session after `consumed` was rejected, serialized under
+ * the credential-file lock and committed compare-and-swap.
+ *
+ * Inside the lock the file is re-read first: if the refresh token on disk no
+ * longer equals the one this caller consumed, another caller already
+ * refreshed — the loser of that race must use the winner's stored pair, not
+ * spend a token of its own (WorkOS refresh tokens are single-use, so a
+ * second redemption would be refused and, without this check, would clear
+ * the winner's perfectly valid session).
+ *
+ * The rotated pair is persisted while still inside the lock and *before* the
+ * caller retries: if the process died between redeeming a token and writing
+ * the replacement, the stored token would already be spent and the user
+ * silently signed out with no way to tell why. The write merges into the
+ * re-read file, not the caller's snapshot, so host fields stored concurrently
+ * survive.
+ */
+async function renewSession(
+  baseDir: string,
+  client: AccountClient,
+  consumed: AccountCredentials,
+): Promise<SessionRenewal> {
+  return withLockedAccountFile(baseDir, async (): Promise<SessionRenewal> => {
+    const current = await readAccountFile(baseDir);
+    // Signed out (or the file vanished) while this caller was in flight:
+    // there is no session left to renew.
+    if (!current?.refreshToken || !current.organizationId) return { kind: "expired" };
+    // Someone else rotated first — their stored pair is the live one.
+    if (current.refreshToken !== consumed.refreshToken) {
+      return current.accessToken
+        ? { kind: "renewed", accessToken: current.accessToken }
+        : { kind: "expired" };
+    }
+
+    let refreshed;
+    try {
+      refreshed = await client.refreshAccessToken({
+        refreshToken: current.refreshToken,
+        organizationId: current.organizationId,
+      });
+    } catch (refreshError) {
+      // Only a refusal proves the token is dead. On an outage or a network
+      // failure the stored token is probably still good, and keeping a
+      // possibly-spent token costs one failed command, where discarding a
+      // possibly-valid one costs a full re-authentication.
+      if (!isGrantRejected(refreshError)) throw refreshError;
+      await writeAccountCredentials(baseDir, withoutSession(current));
+      return { kind: "expired" };
+    }
+
+    await writeAccountCredentials(baseDir, {
+      ...current,
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+    });
+    return { kind: "renewed", accessToken: refreshed.accessToken };
+  });
 }
 
 /**
@@ -368,12 +461,10 @@ async function clearStoredSession(baseDir: string, credentials: StoredAccountFil
  *
  * Credentials are re-read per call rather than captured by the caller: a
  * rotation performed for one call must be visible to the next one, and the
- * spent refresh token must never be presented twice.
- *
- * The rotated pair is persisted *before* the retry, not after. WorkOS refresh
- * tokens are single-use: if the process died between redeeming one and writing
- * the replacement, the stored token would already be spent and the user would
- * be silently signed out with no way to tell why.
+ * spent refresh token must never be presented twice. Renewal itself runs
+ * under the credential-file lock with compare-and-swap semantics — see
+ * {@link renewSession} — so concurrent expired-token operations cannot
+ * double-spend the single-use refresh token or clobber each other's writes.
  *
  * Renewal is driven purely by a rejected call, not by reading `exp` off the
  * JWT first. The deliberate trade is one wasted round trip per expiry against
@@ -393,34 +484,14 @@ export async function withFreshAccessToken<A>(
     // would mint another token for the same dead organization, so the retry
     // is skipped and the session dropped in favour of a fresh sign-in.
     if (error instanceof OrganizationRequiredError) {
-      await clearStoredSession(baseDir, credentials);
+      await clearStoredSessionIfCurrent(baseDir, credentials.refreshToken);
       throw new WorkspaceAccessChangedError();
     }
     if (!isUnauthorized(error)) throw error;
 
-    let refreshed;
-    try {
-      refreshed = await client.refreshAccessToken({
-        refreshToken: credentials.refreshToken,
-        organizationId: credentials.organizationId,
-      });
-    } catch (refreshError) {
-      // Only a refusal proves the token is dead. On an outage or a network
-      // failure the stored token is probably still good, and keeping a
-      // possibly-spent token costs one failed command, where discarding a
-      // possibly-valid one costs a full re-authentication.
-      if (!isGrantRejected(refreshError)) throw refreshError;
-
-      await clearStoredSession(baseDir, credentials);
-      throw new SessionExpiredError();
-    }
-
-    await writeAccountCredentials(baseDir, {
-      ...credentials,
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-    });
-    return await fn(refreshed.accessToken);
+    const renewal = await renewSession(baseDir, client, credentials);
+    if (renewal.kind === "expired") throw new SessionExpiredError();
+    return await fn(renewal.accessToken);
   }
 }
 
@@ -580,22 +651,27 @@ async function registerThisHost(
     return;
   }
 
+  // Read-modify-write under the credential lock, so a concurrent session
+  // rotation or sign-out cannot interleave between the read and the write.
   // The file can be gone if something removed it mid-flight (a concurrent
   // `synara auth logout`, say). The account now has a host this machine has no
   // token for, so saying "registered" would be a lie the user acts on.
-  const current = await readAccountFile(options.baseDir);
-  if (!current) {
+  const saved = await withLockedAccountFile(options.baseDir, async () => {
+    const current = await readAccountFile(options.baseDir);
+    if (!current) return false;
+    await writeAccountCredentials(options.baseDir, {
+      ...current,
+      hostToken: registered.hostToken,
+      hostId: registered.host.id,
+    });
+    return true;
+  });
+  if (!saved) {
     stdout(
       `Registered this host as "${registered.host.name}" (${registered.host.id}), but the local credentials file disappeared before the host token could be saved.\nRun \`synara auth\` again; remove the stale host from the Synara UI if it lingers.\n`,
     );
     return;
   }
-
-  await writeAccountCredentials(options.baseDir, {
-    ...current,
-    hostToken: registered.hostToken,
-    hostId: registered.host.id,
-  });
 
   stdout(
     [
@@ -663,19 +739,21 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
 
   // A file left behind by an expired session still holds this machine's host
   // registration; carrying it forward keeps the re-link intact if registering
-  // again fails.
-  const previous = await readAccountFile(options.baseDir);
-  const session = {
-    accountUrl: options.accountUrl,
-    workosClientId: instance.clientId,
-    workosApiUrl: instance.workosApiUrl,
-    organizationId: scoped.organizationId,
-    accessToken: scoped.accessToken,
-    refreshToken: scoped.refreshToken,
-    ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
-    ...(previous?.hostId ? { hostId: previous.hostId } : {}),
-  } satisfies StoredAccountFile;
-  await writeAccountCredentials(options.baseDir, session);
+  // again fails. Read and write under the lock so nothing interleaves.
+  await withLockedAccountFile(options.baseDir, async () => {
+    const previous = await readAccountFile(options.baseDir);
+    const session = {
+      accountUrl: options.accountUrl,
+      workosClientId: instance.clientId,
+      workosApiUrl: instance.workosApiUrl,
+      organizationId: scoped.organizationId,
+      accessToken: scoped.accessToken,
+      refreshToken: scoped.refreshToken,
+      ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
+      ...(previous?.hostId ? { hostId: previous.hostId } : {}),
+    } satisfies StoredAccountFile;
+    await writeAccountCredentials(options.baseDir, session);
+  });
 
   await registerThisHost(options, client, stdout);
 }

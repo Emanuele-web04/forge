@@ -99,9 +99,9 @@ describe("account RPC owner boundary", () => {
   it.each(methodNames)("refuses a client-role session on %s without touching the session", async (method) => {
     const { session, calls } = spySession();
     const openBrowser = vi.fn(() => Effect.void);
-    const handlers = handlersFor(session, openBrowser) as Record<
+    const handlers = handlersFor(session, openBrowser) as unknown as Record<
       string,
-      (input: unknown) => Effect.Effect<unknown, { message: string }>
+      (input?: unknown) => Effect.Effect<unknown, { message: string }>
     >;
     const handler = handlers[method];
     if (!handler) throw new Error(`no handler for ${method}`);
@@ -121,9 +121,9 @@ describe("account RPC owner boundary", () => {
   // "client", so an unregistered connection is refused the same way.
   it("refuses a connection with no registered session", async () => {
     const { session, calls } = spySession();
-    const handlers = handlersFor(session) as Record<
+    const handlers = handlersFor(session) as unknown as Record<
       string,
-      () => Effect.Effect<unknown, { message: string }>
+      (input?: unknown) => Effect.Effect<unknown, { message: string }>
     >;
     const statusHandler = handlers[WS_METHODS.accountStatus];
     if (!statusHandler) throw new Error("no status handler");
@@ -136,9 +136,9 @@ describe("account RPC owner boundary", () => {
 
   it.each(methodNames)("admits an owner-role session on %s", async (method) => {
     const { session, calls } = spySession();
-    const handlers = handlersFor(session) as Record<
+    const handlers = handlersFor(session) as unknown as Record<
       string,
-      (input: unknown) => Effect.Effect<unknown, unknown>
+      (input?: unknown) => Effect.Effect<unknown, unknown>
     >;
     const handler = handlers[method];
     if (!handler) throw new Error(`no handler for ${method}`);
