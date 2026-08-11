@@ -308,6 +308,12 @@ const SIDECHAT_BOUNDARY_INSTRUCTION =
 
 type ProviderContextTag = "handoff_context" | "sidechat_context" | "thread_context";
 
+interface BootstrapContextSelection {
+  readonly tag: ProviderContextTag;
+  readonly contextText: string;
+  readonly wrapLatestUserMessage: boolean;
+}
+
 function wrapProviderContext(input: {
   readonly tag: ProviderContextTag;
   readonly contextText: string;
@@ -1549,29 +1555,29 @@ const make = Effect.gen(function* () {
             priorTranscriptBootstrapAvailableChars,
           )
         : null;
-    const providerInput = handoffBootstrapText
-      ? wrapProviderContext({
-          tag: "handoff_context",
-          contextText: handoffBootstrapText,
-          messageText: boundaryMessageText,
-          wrapLatestUserMessage: true,
-        })
-      : sidechatBootstrapText
-        ? wrapProviderContext({
-            tag: "sidechat_context",
-            contextText: sidechatBootstrapText,
-            messageText: boundaryMessageText,
-            wrapLatestUserMessage: false,
-          })
-        : priorTranscriptBootstrapText
-          ? wrapProviderContext({
-              tag: "thread_context",
-              contextText: priorTranscriptBootstrapText,
-              messageText: boundaryMessageText,
-              wrapLatestUserMessage: true,
-            })
-          : boundaryMessageText;
-    const providerInputWithMentionContext = `${providerInput}${mentionContextSuffix}`;
+    // The guards above make the three bootstrap flavors mutually exclusive, so
+    // a turn carries at most one context block.
+    const selectedBootstrapContext: BootstrapContextSelection | null =
+      handoffBootstrapText !== null
+        ? { tag: "handoff_context", contextText: handoffBootstrapText, wrapLatestUserMessage: true }
+        : sidechatBootstrapText !== null
+          ? {
+              tag: "sidechat_context",
+              contextText: sidechatBootstrapText,
+              wrapLatestUserMessage: false,
+            }
+          : priorTranscriptBootstrapText !== null
+            ? {
+                tag: "thread_context",
+                contextText: priorTranscriptBootstrapText,
+                wrapLatestUserMessage: true,
+              }
+            : null;
+    const composeProviderInput = (bootstrap: BootstrapContextSelection | null): string =>
+      bootstrap
+        ? wrapProviderContext({ ...bootstrap, messageText: boundaryMessageText })
+        : boundaryMessageText;
+    const providerInputWithMentionContext = `${composeProviderInput(selectedBootstrapContext)}${mentionContextSuffix}`;
     // Portable skills fallback: providers that cannot load the referenced skill
     // file natively get the skill instructions inlined into the prompt.
     const skillInlineText =
@@ -1596,16 +1602,20 @@ const make = Effect.gen(function* () {
             ),
           )
         : "";
-    const providerInputWithSkills = skillInlineText
-      ? `${providerInputWithMentionContext}\n\n${skillInlineText}`
-      : providerInputWithMentionContext;
-    const normalizedInput = toNonEmptyProviderInput(
-      normalizeSkillMentionTextForProvider({
-        provider: selectedProvider as ProviderKind,
-        messageText: providerInputWithSkills,
-        ...(input.skills !== undefined ? { skills: input.skills } : {}),
-      }),
-    );
+    const finalizeProviderInput = (bootstrap: BootstrapContextSelection | null) => {
+      const withMentionContext = `${composeProviderInput(bootstrap)}${mentionContextSuffix}`;
+      const withSkills = skillInlineText
+        ? `${withMentionContext}\n\n${skillInlineText}`
+        : withMentionContext;
+      return toNonEmptyProviderInput(
+        normalizeSkillMentionTextForProvider({
+          provider: selectedProvider as ProviderKind,
+          messageText: withSkills,
+          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        }),
+      );
+    };
+    const normalizedInput = finalizeProviderInput(selectedBootstrapContext);
     const normalizedAttachments = yield* resolveProviderDispatchAttachments({
       attachments: input.attachments,
       attachmentsDir: serverConfig.attachmentsDir,
@@ -1746,24 +1756,14 @@ const make = Effect.gen(function* () {
                   priorTranscriptBootstrapAvailableChars,
                 )
               : null;
-          const retryProviderInput = retryBootstrapText
-            ? wrapProviderContext({
-                tag: "thread_context",
-                contextText: retryBootstrapText,
-                messageText: boundaryMessageText,
-                wrapLatestUserMessage: true,
-              })
-            : boundaryMessageText;
-          const retryProviderInputWithMentionContext = `${retryProviderInput}${mentionContextSuffix}`;
-          const retryProviderInputWithSkills = skillInlineText
-            ? `${retryProviderInputWithMentionContext}\n\n${skillInlineText}`
-            : retryProviderInputWithMentionContext;
-          const retryNormalizedInput = toNonEmptyProviderInput(
-            normalizeSkillMentionTextForProvider({
-              provider: selectedProvider as ProviderKind,
-              messageText: retryProviderInputWithSkills,
-              ...(input.skills !== undefined ? { skills: input.skills } : {}),
-            }),
+          const retryNormalizedInput = finalizeProviderInput(
+            retryBootstrapText !== null
+              ? {
+                  tag: "thread_context",
+                  contextText: retryBootstrapText,
+                  wrapLatestUserMessage: true,
+                }
+              : null,
           );
 
           yield* Effect.logWarning(

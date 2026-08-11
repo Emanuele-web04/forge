@@ -87,6 +87,7 @@ import {
   settleAcpPendingUserInputsAsEmptyAnswers,
   withAcpPlanModePrompt,
 } from "../acp/AcpAdapterSessionSupport.ts";
+import { forkViaAcpRuntime } from "../acp/acpFork.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -1945,27 +1946,27 @@ export function makeDroidAdapter(
         }
 
         const forkRuntime = (runtime: AcpSessionRuntimeShape) =>
-          Effect.gen(function* () {
-            if (!(yield* runtime.supportsSessionFork)) {
-              return yield* new ProviderAdapterValidationError({
-                provider: PROVIDER,
-                operation: "forkThread",
-                issue:
-                  "This Droid ACP version does not advertise session/fork; Synara will rebuild the fork from its retained transcript.",
-              });
-            }
-            return yield* runtime.forkSession({ cwd: targetCwd, mcpServers: [] });
-          }).pipe(
-            Effect.timeoutOption(DROID_ACP_REQUEST_TIMEOUT_MS),
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(droidAcpTimeoutError("session/fork")),
-                onSome: Effect.succeed,
-              }),
-            ),
-          );
+          forkViaAcpRuntime({
+            provider: PROVIDER,
+            runtime,
+            targetCwd,
+            unsupportedIssue:
+              "This Droid ACP version does not advertise session/fork; Synara will rebuild the fork from its retained transcript.",
+            requestTimeoutMs: DROID_ACP_REQUEST_TIMEOUT_MS,
+            timeoutError: droidAcpTimeoutError,
+          });
 
         const activeSource = sessions.get(input.sourceThreadId);
+        // Forking mid-turn would branch from incomplete in-flight state, so
+        // let the retained-transcript fallback handle busy sources.
+        if (activeSource?.activeTurnId !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue:
+              "The source Droid session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
+          });
+        }
         const forked = activeSource
           ? yield* forkRuntime(activeSource.acp)
           : yield* Effect.gen(function* () {
@@ -2001,20 +2002,17 @@ export function makeDroidAdapter(
               return yield* forkRuntime(runtime);
             }).pipe(Effect.scoped);
 
-        const resumeCursor = {
-          schemaVersion: DROID_RESUME_VERSION,
-          sessionId: forked.sessionId,
-        };
-        yield* startSession({
+        // Return only the cursor: ProviderService registers the binding under
+        // a committed lifecycle lease and the target's first turn resumes it
+        // there. Starting the runtime here would capture an undefined
+        // lifecycle generation, orphaning the fork's approval requests.
+        return {
           threadId: input.threadId,
-          provider: PROVIDER,
-          cwd: targetCwd,
-          runtimeMode: input.runtimeMode,
-          resumeCursor,
-          ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
-          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-        });
-        return { threadId: input.threadId, resumeCursor };
+          resumeCursor: {
+            schemaVersion: DROID_RESUME_VERSION,
+            sessionId: forked.sessionId,
+          },
+        };
       }).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderAdapterRequestError ||

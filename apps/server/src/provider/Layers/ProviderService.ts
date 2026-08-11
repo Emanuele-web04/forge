@@ -1716,6 +1716,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
 
+        const existingTargetBinding = Option.getOrUndefined(
+          yield* directory.getBinding(input.threadId),
+        );
+        if (existingTargetBinding) {
+          const existingTargetPayload = runtimePayloadRecord(existingTargetBinding.runtimePayload);
+          if (
+            existingTargetPayload.lastRuntimeEvent === "provider.thread.forked" &&
+            hasResumeCursor(existingTargetBinding.resumeCursor)
+          ) {
+            return {
+              threadId: input.threadId,
+              resumeCursor: existingTargetBinding.resumeCursor,
+            };
+          }
+          return null;
+        }
+
         const sourceBinding = Option.getOrUndefined(
           yield* directory.getBinding(input.sourceThreadId),
         );
@@ -1723,13 +1740,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return null;
         }
 
-        if (Option.isSome(yield* directory.getBinding(input.threadId))) {
-          return null;
-        }
-
         const effectiveProviderOptions =
           input.providerOptions ?? readPersistedProviderOptions(sourceBinding.runtimePayload);
         const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
+        const targetCwd = input.cwd ?? sourceCwd;
         yield* validateAutoRuntimeMode(
           "ProviderService.forkThread",
           sourceBinding.provider,
@@ -1807,7 +1821,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 lifecycleGeneration: lease.generation,
                 ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
                 runtimePayload: {
-                  cwd: input.cwd ?? null,
+                  cwd: targetCwd ?? null,
                   model: input.modelSelection?.model ?? null,
                   activeTurnId: null,
                   lastError: null,

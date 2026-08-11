@@ -17,6 +17,8 @@ import {
   type AcpProtocolLogEvent,
   type AcpSessionRequestLogEvent,
 } from "./AcpSessionRuntime.ts";
+import { forkViaAcpRuntime } from "./acpFork.ts";
+import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
@@ -336,6 +338,57 @@ describe("AcpSessionRuntime", () => {
           },
           cwd: process.cwd(),
           clientCapabilities: { _meta: { parameterizedModelPicker: true } },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("rejects fork cursors when the ACP agent cannot reopen sessions", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+      expect(yield* runtime.supportsSessionFork).toBe(true);
+      expect(yield* runtime.supportsSessionRecovery).toBe(false);
+
+      const error = yield* forkViaAcpRuntime({
+        provider: "test",
+        runtime,
+        targetCwd: process.cwd(),
+        unsupportedIssue: "fork unsupported",
+        requestTimeoutMs: 1_000,
+        timeoutError: (method) =>
+          new ProviderAdapterRequestError({
+            provider: "test",
+            method,
+            detail: "timed out",
+          }),
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(ProviderAdapterValidationError);
+      expect(error.message).toContain("cannot reopen the forked session");
+      expect(requestEvents.some((event) => event.method === "session/fork")).toBe(false);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: {
+              VITEST: "true",
+              SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
+              SYNARA_ACP_SUPPORT_SESSION_LOAD: "0",
+            },
+          },
+          cwd: process.cwd(),
           clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
           requestLogger: (event) =>

@@ -4365,6 +4365,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const forkThread: NonNullable<OpenCodeAdapterShape["forkThread"]> = (input) =>
         Effect.gen(function* () {
           const sourceContext = sessions.get(input.sourceThreadId);
+          // Forking mid-turn would branch from incomplete in-flight state, so
+          // let the retained-transcript fallback handle busy sources.
+          if (sourceContext?.activeTurnId !== undefined) {
+            return yield* new ProviderAdapterValidationError({
+              provider,
+              operation: "forkThread",
+              issue: `The source ${adapterConfig.displayName} session has a turn in flight; Synara will rebuild the fork from its retained transcript.`,
+            });
+          }
           const sourceSessionId =
             sourceContext?.openCodeSessionId ?? extractResumeSessionId(input.sourceResumeCursor);
           if (!sourceSessionId) {
@@ -4434,19 +4443,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             });
           }
 
-          const session = yield* startSession({
-            threadId: input.threadId,
-            provider,
-            cwd: targetDirectory,
-            ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
-            ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-            resumeCursor: { openCodeSessionId: forkedSessionId, cwd: targetDirectory },
-            runtimeMode: input.runtimeMode,
-          });
-
+          // Return only the cursor: ProviderService registers the binding under
+          // a committed lifecycle lease and the target's first turn resumes it
+          // there. Starting the runtime here would capture an undefined
+          // lifecycle generation, orphaning the fork's approval requests.
           return {
             threadId: input.threadId,
-            ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
+            resumeCursor: { openCodeSessionId: forkedSessionId, cwd: targetDirectory },
           };
         });
 

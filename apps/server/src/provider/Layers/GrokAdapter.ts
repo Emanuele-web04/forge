@@ -61,7 +61,9 @@ import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
+  ProviderAdapterProcessError,
   ProviderAdapterRequestError,
+  ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
@@ -86,6 +88,7 @@ import {
   settleAcpPendingUserInputsAsEmptyAnswers,
   withAcpPlanModePrompt,
 } from "../acp/AcpAdapterSessionSupport.ts";
+import { forkViaAcpRuntime } from "../acp/acpFork.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -136,6 +139,9 @@ export const takeGrokSynaraHarnessPolicyTextPart = (
   });
 const GROK_RESUME_VERSION = 1 as const;
 const GROK_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
+// Forking a dead source session must first resume it, which replays history,
+// so the fork exchange shares the resume-replay budget.
+const GROK_ACP_FORK_TIMEOUT_MS = 30_000;
 const GROK_ACP_TRANSPORT_DEBUG_MARKER = "grok-acp-meta-stripper-v2";
 const GROK_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
@@ -2501,6 +2507,110 @@ export function makeGrokAdapter(
       );
     };
 
+    const grokForkTimeoutError = (method: string): ProviderAdapterRequestError =>
+      new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method,
+        detail: `Grok ACP did not respond to ${method} within ${GROK_ACP_FORK_TIMEOUT_MS / 1000}s.`,
+      });
+
+    const forkThread: NonNullable<GrokAdapterShape["forkThread"]> = (input) =>
+      Effect.gen(function* () {
+        const sourceCwd = resolveGrokSessionCwd(input.sourceCwd ?? input.cwd, serverConfig);
+        const targetCwd = resolveGrokSessionCwd(input.cwd ?? input.sourceCwd, serverConfig);
+        if (!sourceCwd || !targetCwd) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue: "A source and target cwd are required to fork a Grok session.",
+          });
+        }
+
+        const forkRuntime = (runtime: AcpSessionRuntimeShape) =>
+          forkViaAcpRuntime({
+            provider: PROVIDER,
+            runtime,
+            targetCwd,
+            unsupportedIssue:
+              "This Grok ACP version does not advertise session/fork; Synara will rebuild the fork from its retained transcript.",
+            requestTimeoutMs: GROK_ACP_FORK_TIMEOUT_MS,
+            timeoutError: grokForkTimeoutError,
+          });
+
+        const activeSource = sessions.get(input.sourceThreadId);
+        // Forking mid-turn would branch from incomplete in-flight state, so
+        // let the retained-transcript fallback handle busy sources.
+        if (activeSource?.activeTurnId !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue:
+              "The source Grok session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
+          });
+        }
+        const forked = activeSource
+          ? yield* forkRuntime(activeSource.acp)
+          : yield* Effect.gen(function* () {
+              const sourceSessionId = parseGrokResume(input.sourceResumeCursor)?.sessionId;
+              if (!sourceSessionId) {
+                return yield* new ProviderAdapterValidationError({
+                  provider: PROVIDER,
+                  operation: "forkThread",
+                  issue: "The source Grok session has no resumable native cursor.",
+                });
+              }
+              const providerGrokOptions = input.providerOptions?.grok;
+              const runtime = yield* makeGrokAcpRuntime({
+                grokSettings: {
+                  ...(grokSettings.binaryPath !== undefined
+                    ? { binaryPath: grokSettings.binaryPath }
+                    : {}),
+                  ...(providerGrokOptions?.binaryPath !== undefined
+                    ? { binaryPath: providerGrokOptions.binaryPath }
+                    : {}),
+                },
+                childProcessSpawner,
+                cwd: sourceCwd,
+                runtimeMode: input.runtimeMode,
+                resumeSessionId: sourceSessionId,
+                clientInfo: { name: "Synara Fork", version: "0.0.0" },
+                sessionMeta: GROK_SESSION_META,
+              });
+              yield* runtime.start().pipe(
+                Effect.timeoutOption(GROK_ACP_FORK_TIMEOUT_MS),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.fail(grokForkTimeoutError("session/resume")),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              );
+              return yield* forkRuntime(runtime);
+            }).pipe(Effect.scoped);
+
+        // Return only the cursor: ProviderService registers the binding under
+        // a committed lifecycle lease and the target's first turn resumes it
+        // there. Starting the runtime here would capture an undefined
+        // lifecycle generation, orphaning the fork's approval requests.
+        return {
+          threadId: input.threadId,
+          resumeCursor: {
+            schemaVersion: GROK_RESUME_VERSION,
+            sessionId: forked.sessionId,
+          },
+        };
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof ProviderAdapterRequestError ||
+          cause instanceof ProviderAdapterProcessError ||
+          cause instanceof ProviderAdapterSessionClosedError ||
+          cause instanceof ProviderAdapterSessionNotFoundError ||
+          cause instanceof ProviderAdapterValidationError
+            ? cause
+            : mapAcpToAdapterError(PROVIDER, input.sourceThreadId, "session/fork", cause),
+        ),
+      );
+
     const stopAll: GrokAdapterShape["stopAll"] = () =>
       Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
 
@@ -2523,6 +2633,7 @@ export function makeGrokAdapter(
       interruptTurn,
       readThread,
       rollbackThread,
+      forkThread,
       respondToRequest,
       respondToUserInput,
       stopSession,
