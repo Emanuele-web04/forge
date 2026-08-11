@@ -12,6 +12,10 @@ import {
   InstanceInfo as InstanceInfoSchema,
   type AuthTokensResponse,
   AuthTokensResponse as AuthTokensResponseSchema,
+  type AuthorizeTokenRequest,
+  type AuthorizeUrlRequest,
+  type AuthorizeUrlResponse,
+  AuthorizeUrlResponse as AuthorizeUrlResponseSchema,
   type ListHostsResponse,
   ListHostsResponse as ListHostsResponseSchema,
   OrganizationRequiredBody,
@@ -78,12 +82,23 @@ const SLOW_DOWN_INCREMENT_SECONDS = 5;
 const DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS = 30 * 60;
 
 /**
- * Per-attempt deadline on every account-service request. A connection that
+ * Per-attempt deadline on cheap account-service requests. A connection that
  * is accepted and then stalls must fail the one attempt, not pin the caller
  * (a CLI command, a WebSocket RPC) forever. Long-running flows — the device
  * poll — are made of many short attempts, each individually bounded.
  */
-const REQUEST_TIMEOUT_MS = 15_000;
+export const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * Per-attempt deadline on the GRANT-consuming requests: OTP/verification
+ * redemption, the device-token exchange, the PKCE code exchange, and refresh.
+ * Longer than {@link REQUEST_TIMEOUT_MS}, and deliberately longer than the
+ * account service's own upstream grant deadline (45s): these requests spend a
+ * single-use credential, so this client must never give up before the service
+ * has — aborting first is how a slow-but-successful grant turns into "error"
+ * shown to a user who is actually signed in.
+ */
+export const GRANT_REQUEST_TIMEOUT_MS = 60_000;
 
 type FetchLike = typeof fetch;
 type SleepFn = (milliseconds: number) => Promise<void>;
@@ -253,6 +268,18 @@ export interface AccountClient {
   deleteHost(token: string, hostId: string): Promise<void>;
   requestDeviceCode(): Promise<DeviceAuthorizationResponse>;
   /**
+   * Asks the account service for the provider's PKCE authorize URL — the
+   * desktop SSO path. Only the S256 challenge and state travel; the verifier
+   * stays with the caller until the exchange.
+   */
+  requestAuthorizeUrl(request: AuthorizeUrlRequest): Promise<AuthorizeUrlResponse>;
+  /**
+   * Exchanges the loopback callback's authorization code for a token pair,
+   * proving possession with the PKCE verifier. Both fields are single-use
+   * credentials: do not log the argument, and do not retain it past the call.
+   */
+  exchangeAuthorizeCode(request: AuthorizeTokenRequest): Promise<AuthTokensResponse>;
+  /**
    * Polls the account service until the device authorization is approved,
    * honouring `slow_down` and bounding the loop client-side. Every leg of
    * the flow goes through the account service; the identity provider is
@@ -349,11 +376,15 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
    * a message that names only the path, since request bodies on credential
    * routes carry secrets.
    */
-  async function boundedFetch(path: string, init: RequestInit): Promise<Response> {
+  async function boundedFetch(
+    path: string,
+    init: RequestInit,
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<Response> {
     try {
       return await fetchFn(`${baseUrl}${path}`, {
         ...init,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       if (
@@ -374,8 +405,9 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
     path: string,
     init: RequestInit,
     schema: S,
+    timeoutMs?: number,
   ): Promise<S["Type"]> {
-    const response = await boundedFetch(path, init);
+    const response = await boundedFetch(path, init, timeoutMs);
     if (!response.ok) {
       throw await toRequestError(response);
     }
@@ -416,6 +448,8 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           body: JSON.stringify(request),
         },
         AuthTokensResponseSchema,
+        // Grant-consuming: never abort before the service's upstream deadline.
+        GRANT_REQUEST_TIMEOUT_MS,
       );
     },
 
@@ -428,6 +462,37 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           body: JSON.stringify(request),
         },
         AuthTokensResponseSchema,
+        GRANT_REQUEST_TIMEOUT_MS,
+      );
+    },
+
+    async requestAuthorizeUrl(request) {
+      return withProxySkewError(
+        requestJson(
+          "/api/v1/auth/authorize",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(request),
+          },
+          AuthorizeUrlResponseSchema,
+        ),
+      );
+    },
+
+    async exchangeAuthorizeCode(request) {
+      return withProxySkewError(
+        requestJson(
+          "/api/v1/auth/authorize/token",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(request),
+          },
+          AuthTokensResponseSchema,
+          // Grant-consuming: the authorization code is single-use.
+          GRANT_REQUEST_TIMEOUT_MS,
+        ),
       );
     },
 
@@ -561,6 +626,9 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
                 body: JSON.stringify({ deviceCode }),
               },
               DeviceTokenPollResponseSchema,
+              // Each attempt may be the one that redeems the single-use
+              // device code, so it gets the grant deadline.
+              GRANT_REQUEST_TIMEOUT_MS,
             ),
           );
         } catch (error) {
@@ -611,6 +679,8 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
             }),
           },
           RefreshTokenResponseSchema,
+          // Grant-consuming: the refresh token is single-use.
+          GRANT_REQUEST_TIMEOUT_MS,
         ),
       );
       // Only meaningful when the service echoed the field; an absent echo is
