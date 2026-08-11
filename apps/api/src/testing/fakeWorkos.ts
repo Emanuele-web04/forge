@@ -744,6 +744,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
         databaseUrl: "postgres://unused",
         baseUrl: "http://localhost:8788",
         port: 8788,
+        trustedProxyHops: 1,
         workosApiKey: apiKey,
         workosClientId: clientId,
         workosApiUrl: origin,

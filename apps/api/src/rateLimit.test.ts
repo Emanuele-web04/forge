@@ -37,6 +37,34 @@ describe("createRateLimiter", () => {
     expect(limiter.tryConsume("a")).toBe(true);
   });
 
+  // The prune is amortized: limiting stays correct while a large expired
+  // burst is reclaimed piecemeal by the requests that follow it, and a key
+  // deleted mid-pass that comes back is limited afresh.
+  it("keeps limiting correct while an expired burst is reclaimed incrementally", () => {
+    let clock = 0;
+    const limiter = createRateLimiter({
+      limit: 2,
+      windowMs: 1_000,
+      now: () => clock,
+      pruneThreshold: 4,
+    });
+
+    for (let i = 0; i < 100; i += 1) {
+      expect(limiter.tryConsume(`burst-${i}`)).toBe(true);
+    }
+    clock = 5_000;
+    expect(limiter.tryConsume("live")).toBe(true);
+    expect(limiter.tryConsume("live")).toBe(true);
+    expect(limiter.tryConsume("live")).toBe(false);
+
+    // Burst keys aged out: each is allowed again, and re-limited, regardless
+    // of whether the incremental prune has reached it yet.
+    for (let i = 0; i < 100; i += 1) {
+      expect(limiter.tryConsume(`burst-${i}`)).toBe(true);
+    }
+    expect(limiter.tryConsume("live")).toBe(false);
+  });
+
   // A burst of single-use keys must not retain their entries forever.
   it("prunes keys that have fallen out of the window", () => {
     let clock = 0;

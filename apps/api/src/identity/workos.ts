@@ -17,6 +17,7 @@ import {
   RefreshRejectedError,
   type AccountIdentityVerifier,
   type AuthFailureReason,
+  type AuthRequestContext,
   type AuthTokens,
   type EmailVerificationChallenge,
   type EnvironmentGrantIssuer,
@@ -121,6 +122,18 @@ function toOrganization(entry: unknown): OrganizationRef {
     // Falls back to the id so the field is always displayable. An unnamed
     // organization is not a reason to hide it from the workspace picker.
     orgName: typeof orgName === "string" && orgName.trim().length > 0 ? orgName : orgId,
+  };
+}
+
+/**
+ * The WorkOS `ip_address`/`user_agent` fields for an authenticate call, from
+ * the sanitized request context. Forwarded so WorkOS's own risk controls see
+ * the caller, not this proxy; absent fields are simply omitted.
+ */
+function contextFields(context: AuthRequestContext | undefined): Record<string, string> {
+  return {
+    ...(context?.ipAddress ? { ip_address: context.ipAddress } : {}),
+    ...(context?.userAgent ? { user_agent: context.userAgent } : {}),
   };
 }
 
@@ -509,7 +522,7 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       } satisfies IdentityUser;
     },
 
-    async pollDeviceToken({ deviceCode }) {
+    async pollDeviceToken({ deviceCode, context }) {
       // The device code is bearer-ish, so this rides sensitiveFetch's no-leak
       // handling — but the flow-state refusals are expected answers of a
       // healthy poll, not failures, so they are read off the raw response
@@ -527,6 +540,7 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
           // Confidential-client here too: proxying this leg is what keeps
           // the whole provider protocol off the client wire.
           client_secret: config.workosApiKey,
+          ...contextFields(context),
         }),
       });
       if (response.ok) {
@@ -562,7 +576,7 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       );
     },
 
-    async refreshTokens({ refreshToken, organizationId }) {
+    async refreshTokens({ refreshToken, organizationId, context }) {
       const response = await fetch(`${config.workosApiUrl}/user_management/authenticate`, {
         method: "POST",
         headers: {
@@ -575,6 +589,7 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
           client_id: config.workosClientId,
           client_secret: config.workosApiKey,
           ...(organizationId ? { organization_id: organizationId } : {}),
+          ...contextFields(context),
         }),
       });
       if (response.ok) {
@@ -624,7 +639,7 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       return { email: body.email, expiresAt: body.expires_at };
     },
 
-    async authenticateWithOtp({ email, code }) {
+    async authenticateWithOtp({ email, code, context }) {
       const raw = await sensitiveFetch(
         "/user_management/authenticate",
         {
@@ -635,13 +650,14 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
           // Confidential-client: WorkOS requires the secret, which is why
           // this call runs here rather than in the app.
           client_secret: config.workosApiKey,
+          ...contextFields(context),
         },
         classifyMagicAuthFailure,
       );
       return toAuthTokens(raw);
     },
 
-    async verifyEmailCode({ code, pendingAuthenticationToken }) {
+    async verifyEmailCode({ code, pendingAuthenticationToken, context }) {
       const raw = await sensitiveFetch(
         "/user_management/authenticate",
         {
@@ -653,6 +669,7 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
           // the secret, which is why this call runs here rather than in the
           // app.
           client_secret: config.workosApiKey,
+          ...contextFields(context),
         },
         classifyVerificationFailure,
       );

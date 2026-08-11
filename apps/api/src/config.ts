@@ -1,7 +1,16 @@
+import { resolveTrustedProxyHops } from "./clientIp";
+
 export type ApiConfigBase = {
   databaseUrl: string;
   baseUrl: string;
   port: number;
+  /**
+   * How many proxies in front of this service append to `x-forwarded-for`,
+   * from TRUSTED_PROXY_HOPS. The rate limiter keys on the address the
+   * outermost trusted proxy saw; 0 means "no proxy — trust only the socket".
+   * Defaults to 1, the deployed Railway shape (one TLS-terminating hop).
+   */
+  trustedProxyHops: number;
 };
 
 /**
@@ -108,6 +117,7 @@ export function loadApiConfig(env: Env): ApiConfig {
   }
 
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : 8788;
+  const trustedProxyHops = resolveTrustedProxyHops(env.TRUSTED_PROXY_HOPS);
 
   if (identityProvider === "dev") {
     assertDevIdentityAllowed(env);
@@ -117,6 +127,7 @@ export function loadApiConfig(env: Env): ApiConfig {
       databaseUrl: env.DATABASE_URL as string,
       baseUrl: env.ACCOUNT_BASE_URL as string,
       port,
+      trustedProxyHops,
     };
   }
 
@@ -128,6 +139,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     databaseUrl: env.DATABASE_URL as string,
     baseUrl: env.ACCOUNT_BASE_URL as string,
     port,
+    trustedProxyHops,
     workosApiKey: env.WORKOS_API_KEY as string,
     workosClientId,
     workosApiUrl,

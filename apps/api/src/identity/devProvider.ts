@@ -66,6 +66,7 @@ export async function createDevIdentityProvider(): Promise<{
     databaseUrl: "unused://dev-identity",
     baseUrl: "http://localhost",
     port: 0,
+    trustedProxyHops: 0,
     workosApiKey: fake.apiKey,
     workosClientId: fake.clientId,
     workosApiUrl: fake.origin,

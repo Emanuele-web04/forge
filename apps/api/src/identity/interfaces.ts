@@ -104,6 +104,17 @@ export class IdentityProviderError extends Error {
   }
 }
 
+/**
+ * Where an authentication request originally came from, forwarded upstream so
+ * the provider's own risk controls see the caller rather than this proxy.
+ * Both fields are sanitized before they get here (see clientIp.ts) and are
+ * advisory only — absence must never fail a grant.
+ */
+export type AuthRequestContext = {
+  ipAddress?: string;
+  userAgent?: string;
+};
+
 /** The token pair a successful authentication grant yields. */
 export type AuthTokens = {
   accessToken: string;
@@ -189,7 +200,10 @@ export type AccountIdentityVerifier = {
    * user who has not clicked yet is not an exception. The device code is
    * bearer-ish and takes the no-leak handling rules.
    */
-  pollDeviceToken(input: { deviceCode: string }): Promise<DeviceTokenPollResult>;
+  pollDeviceToken(input: {
+    deviceCode: string;
+    context?: AuthRequestContext;
+  }): Promise<DeviceTokenPollResult>;
   /**
    * Redeems a refresh token for a rotated pair, optionally authenticating
    * into `organizationId` so the new access token carries the organization
@@ -200,7 +214,11 @@ export type AccountIdentityVerifier = {
    * about the token. The refresh token is a credential and takes the no-leak
    * handling rules.
    */
-  refreshTokens(input: { refreshToken: string; organizationId?: string }): Promise<RefreshedTokens>;
+  refreshTokens(input: {
+    refreshToken: string;
+    organizationId?: string;
+    context?: AuthRequestContext;
+  }): Promise<RefreshedTokens>;
   /**
    * Creates a one-time sign-in code: the provider mints a 6-digit code and
    * delivers it to `email` itself. Only the address echo and expiry are
@@ -216,7 +234,11 @@ export type AccountIdentityVerifier = {
    * `invalid_verification_code` (retry in place) or `verification_expired`
    * (only a resend recovers).
    */
-  authenticateWithOtp(input: { email: string; code: string }): Promise<AuthTokens>;
+  authenticateWithOtp(input: {
+    email: string;
+    code: string;
+    context?: AuthRequestContext;
+  }): Promise<AuthTokens>;
   /**
    * Redeems the emailed 6-digit code together with the pending authentication
    * token an `email_verification_required` refusal carried. Both inputs are
@@ -225,7 +247,11 @@ export type AccountIdentityVerifier = {
    * place) or `verification_expired` (the token or code is spent; only a
    * resend recovers).
    */
-  verifyEmailCode(input: { code: string; pendingAuthenticationToken: string }): Promise<AuthTokens>;
+  verifyEmailCode(input: {
+    code: string;
+    pendingAuthenticationToken: string;
+    context?: AuthRequestContext;
+  }): Promise<AuthTokens>;
   /**
    * Emails the user a fresh verification code, invalidating the old one. The
    * user is resolved from the verification object server-side — the caller

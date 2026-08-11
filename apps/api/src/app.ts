@@ -23,6 +23,7 @@ export async function createApp(
       deviceCredentials: identity.deviceCredentials,
       environments: identity.environments,
       db,
+      trustedProxyHops: config.trustedProxyHops,
     }),
   );
 

@@ -33,7 +33,12 @@ import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { clientIp } from "../clientIp";
+import {
+  clientIp,
+  DEFAULT_TRUSTED_PROXY_HOPS,
+  sanitizeForwardableIp,
+  sanitizeForwardableUserAgent,
+} from "../clientIp";
 import type * as schema from "../db/schema";
 import { profiles } from "../db/schema";
 import { isUniqueViolation } from "../identity/environmentRegistry";
@@ -79,6 +84,15 @@ export const OTP_SEND_RATE_LIMIT_PER_MINUTE = 2;
 
 /** Verification-email resends allowed per client per minute. */
 export const RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE = 2;
+
+/**
+ * Email sends allowed per recipient address per hour, across all sender IPs.
+ * The per-IP budgets bound a single caller; this bounds the *target*: even a
+ * caller who defeats IP keying (a botnet, or a header trick against a
+ * misconfigured proxy) cannot flood one mailbox past this. Generous enough
+ * that a real user retrying across devices never hits it.
+ */
+export const PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR = 10;
 
 /**
  * Device-token polls allowed per client per minute. Deliberately far above
@@ -149,9 +163,32 @@ export function createV1Routes(deps: {
   deviceCredentials: DeviceCredentialStore;
   environments: EnvironmentRegistry;
   db: NodePgDatabase<typeof schema>;
+  /**
+   * How many proxies in front of this service append to `x-forwarded-for`;
+   * see clientIp.ts. Defaults to the deployed shape (Railway, one hop).
+   */
+  trustedProxyHops?: number;
 }): Hono {
   const { verifier, grants, deviceCredentials, environments, db } = deps;
+  const trustedProxyHops = deps.trustedProxyHops ?? DEFAULT_TRUSTED_PROXY_HOPS;
   const v1 = new Hono();
+
+  /** The rate-limiting caller identity for this deployment's proxy shape. */
+  const callerIp = (c: Context): string => clientIp(c, trustedProxyHops);
+
+  /**
+   * Sanitized caller facts forwarded to the identity provider on the grant
+   * calls, so upstream risk controls see the actual caller rather than this
+   * proxy. Advisory: absent or unusable values are simply omitted.
+   */
+  const authContext = (c: Context) => {
+    const ipAddress = sanitizeForwardableIp(callerIp(c));
+    const userAgent = sanitizeForwardableUserAgent(c.req.header("user-agent"));
+    return {
+      ...(ipAddress ? { ipAddress } : {}),
+      ...(userAgent ? { userAgent } : {}),
+    };
+  };
 
   // Per router instance, not module-global: two routers in one process (tests,
   // or a future multi-tenant mount) must not share a budget.
@@ -193,6 +230,19 @@ export function createV1Routes(deps: {
     limit: REFRESH_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
+
+  // The per-recipient budget behind the two email-sending routes. One
+  // limiter shared by send and resend deliberately — both put mail in the
+  // same mailbox, so they must draw down one target-side allowance — keyed
+  // by normalized address (send) or verification id (resend). BOTH the
+  // per-IP budget and this must pass.
+  const perEmailSendRateLimiter = createRateLimiter({
+    limit: PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR,
+    windowMs: 60 * 60_000,
+  });
+
+  /** One rate-limit key per mailbox: case-folded, trimmed. */
+  const emailRateKey = (email: string): string => `email:${email.trim().toLowerCase()}`;
 
   /**
    * Resolves the caller from an access token. Verification is stateless
@@ -654,7 +704,7 @@ export function createV1Routes(deps: {
    * parses it allowlist-style and the code never reaches this function.
    */
   v1.post("/auth/otp/send", async (c) => {
-    if (!otpSendRateLimiter.tryConsume(clientIp(c))) {
+    if (!otpSendRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many code requests — wait a minute");
     }
 
@@ -666,6 +716,12 @@ export function createV1Routes(deps: {
       parsed = Schema.decodeUnknownSync(OtpSendRequest)(json);
     } catch {
       return errorResponse(c, 400, "validation_failed", "An email address is required");
+    }
+
+    // Second gate, keyed on the recipient rather than the caller: bounds
+    // mail into one mailbox even when the per-IP key is defeated.
+    if (!perEmailSendRateLimiter.tryConsume(emailRateKey(parsed.email))) {
+      return errorResponse(c, 429, "rate_limited", "Too many code requests — wait a minute");
     }
 
     try {
@@ -684,7 +740,7 @@ export function createV1Routes(deps: {
    * no-echo validation message and the no-leak error mapping both apply.
    */
   v1.post("/auth/otp/authenticate", async (c) => {
-    if (!otpAuthenticateRateLimiter.tryConsume(clientIp(c))) {
+    if (!otpAuthenticateRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
     }
 
@@ -701,7 +757,9 @@ export function createV1Routes(deps: {
     }
 
     try {
-      return c.json(authTokensBody(await verifier.authenticateWithOtp(parsed)));
+      return c.json(
+        authTokensBody(await verifier.authenticateWithOtp({ ...parsed, context: authContext(c) })),
+      );
     } catch (error) {
       return authErrorResponse(c, error);
     }
@@ -716,7 +774,7 @@ export function createV1Routes(deps: {
    * for any flow the provider still answers the challenge on.
    */
   v1.post("/auth/verify-email", async (c) => {
-    if (!otpAuthenticateRateLimiter.tryConsume(clientIp(c))) {
+    if (!otpAuthenticateRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
     }
 
@@ -738,7 +796,9 @@ export function createV1Routes(deps: {
     }
 
     try {
-      return c.json(authTokensBody(await verifier.verifyEmailCode(parsed)));
+      return c.json(
+        authTokensBody(await verifier.verifyEmailCode({ ...parsed, context: authContext(c) })),
+      );
     } catch (error) {
       return authErrorResponse(c, error);
     }
@@ -751,7 +811,7 @@ export function createV1Routes(deps: {
    * caller's next step — wait for the email — is the same either way.
    */
   v1.post("/auth/resend-verification", async (c) => {
-    if (!resendVerificationRateLimiter.tryConsume(clientIp(c))) {
+    if (!resendVerificationRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many resend requests — wait a minute");
     }
 
@@ -763,6 +823,14 @@ export function createV1Routes(deps: {
       parsed = Schema.decodeUnknownSync(ResendVerificationRequest)(json);
     } catch {
       return errorResponse(c, 400, "validation_failed", "A verification id is required");
+    }
+
+    // Second gate keyed on the verification id — each id names exactly one
+    // recipient, so this bounds mail into that mailbox across caller IPs.
+    if (
+      !perEmailSendRateLimiter.tryConsume(`verification:${parsed.emailVerificationId.trim()}`)
+    ) {
+      return errorResponse(c, 429, "rate_limited", "Too many resend requests — wait a minute");
     }
 
     try {
@@ -787,7 +855,7 @@ export function createV1Routes(deps: {
    * only to this service and the identity vendor is invisible on its wire.
    */
   v1.post("/auth/device", async (c) => {
-    if (!deviceRateLimiter.tryConsume(clientIp(c))) {
+    if (!deviceRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many device authorization requests");
     }
 
@@ -813,7 +881,7 @@ export function createV1Routes(deps: {
    * message and the no-leak error mapping apply.
    */
   v1.post("/auth/device/token", async (c) => {
-    if (!deviceTokenRateLimiter.tryConsume(clientIp(c))) {
+    if (!deviceTokenRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Polling too fast — slow down and retry");
     }
 
@@ -830,7 +898,7 @@ export function createV1Routes(deps: {
     }
 
     try {
-      const result = await verifier.pollDeviceToken(parsed);
+      const result = await verifier.pollDeviceToken({ ...parsed, context: authContext(c) });
       const body: DeviceTokenPollResponse =
         result.status === "granted"
           ? { status: "granted", tokens: authTokensBody(result.tokens) }
@@ -850,7 +918,7 @@ export function createV1Routes(deps: {
    * validation message, no-leak error mapping.
    */
   v1.post("/auth/refresh", async (c) => {
-    if (!refreshRateLimiter.tryConsume(clientIp(c))) {
+    if (!refreshRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many refresh attempts — wait a minute");
     }
 
@@ -870,6 +938,7 @@ export function createV1Routes(deps: {
       const refreshed = await verifier.refreshTokens({
         refreshToken: parsed.refreshToken,
         ...(parsed.organizationId ? { organizationId: parsed.organizationId } : {}),
+        context: authContext(c),
       });
       const body: RefreshTokenResponse = {
         ...authTokensBody(refreshed),

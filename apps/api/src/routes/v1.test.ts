@@ -21,6 +21,7 @@ import {
   DEVICE_RATE_LIMIT_PER_MINUTE,
   OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
   OTP_SEND_RATE_LIMIT_PER_MINUTE,
+  PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR,
   DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE,
   REFRESH_RATE_LIMIT_PER_MINUTE,
   RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
@@ -101,7 +102,11 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   }
 
   /** Routes wired to a full adapter set built from `config`. */
-  function routesFor(db: ReturnType<typeof createDb>["db"], forConfig: WorkosApiConfig) {
+  function routesFor(
+    db: ReturnType<typeof createDb>["db"],
+    forConfig: WorkosApiConfig,
+    trustedProxyHops?: number,
+  ) {
     const { verifier, grants } = createWorkosIdentityProvider(forConfig);
     return createV1Routes({
       verifier,
@@ -109,13 +114,14 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       deviceCredentials: createDeviceCredentialStore(db),
       environments: createEnvironmentRegistry(db),
       db,
+      ...(trustedProxyHops !== undefined ? { trustedProxyHops } : {}),
     });
   }
 
-  function buildApp() {
+  function buildApp(options: { trustedProxyHops?: number } = {}) {
     const { db } = createDb(databaseUrl);
     const app = new Hono();
-    app.route("/api/v1", routesFor(db, config));
+    app.route("/api/v1", routesFor(db, config, options.trustedProxyHops));
     return { app, db };
   }
 
@@ -750,6 +756,109 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         "203.0.113.30",
       );
       expect(other.status).toBe(202);
+    });
+
+    // The spoof the leftmost-entry key allowed: with one trusted hop only the
+    // rightmost entry counts, so an attacker-chosen prefix lands in the same
+    // bucket as the honest request and cannot mint fresh budgets.
+    it("does not grant a fresh budget to a spoofed leftmost x-forwarded-for entry", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+      const realIp = "203.0.113.40";
+
+      const send = (spoofedPrefix: string) =>
+        app.request("/api/v1/auth/otp/send", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-forwarded-for": `${spoofedPrefix}, ${realIp}`,
+          },
+          body: JSON.stringify({ email }),
+        });
+
+      for (let i = 0; i < OTP_SEND_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect((await send(`10.0.${i}.1`)).status).toBe(202);
+      }
+      // A fresh spoofed prefix must not escape the per-IP budget.
+      const limited = await send("10.0.99.1");
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
+    });
+
+    // The target-side bound: even when the caller rotates real IPs, mail into
+    // one mailbox stops at the per-email budget.
+    it("throttles repeated sends to one address across differing client IPs", async () => {
+      const { app } = buildApp();
+      const email = `Ada-${randomUUID()}@Example.com`;
+
+      for (let i = 0; i < PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR; i += 1) {
+        const res = await postJson(app, "/api/v1/auth/otp/send", { email }, `203.0.114.${i + 1}`);
+        expect(res.status).toBe(202);
+      }
+      // Case-folded: the same mailbox under different spelling shares the key.
+      const limited = await postJson(
+        app,
+        "/api/v1/auth/otp/send",
+        { email: email.toLowerCase() },
+        "203.0.114.200",
+      );
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
+
+      // Another mailbox is unaffected.
+      const other = await postJson(
+        app,
+        "/api/v1/auth/otp/send",
+        { email: `other-${randomUUID()}@example.com` },
+        "203.0.114.201",
+      );
+      expect(other.status).toBe(202);
+    });
+
+    // hops=0 is the no-proxy deployment: the forwarded header must be inert,
+    // so every synthetic request (no socket) shares the one fallback bucket.
+    it("keys on the socket and ignores x-forwarded-for entirely with zero trusted hops", async () => {
+      const { app } = buildApp({ trustedProxyHops: 0 });
+      const email = `ada-${randomUUID()}@example.com`;
+
+      for (let i = 0; i < OTP_SEND_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect(
+          (await postJson(app, "/api/v1/auth/otp/send", { email }, `203.0.115.${i + 1}`)).status,
+        ).toBe(202);
+      }
+      // A fresh forwarded value would have escaped the budget under header
+      // keying; with hops=0 it must not.
+      const limited = await postJson(app, "/api/v1/auth/otp/send", { email }, "203.0.115.99");
+      expect(limited.status).toBe(429);
+    });
+
+    // codex H7 tail: the grant calls forward the sanitized caller identity so
+    // WorkOS risk controls see the caller, not this proxy.
+    it("forwards the sanitized client ip and user agent to the provider on authenticate", async () => {
+      const { app } = buildApp();
+      const email = `ada-${randomUUID()}@example.com`;
+      const { code } = await sendCode(app, email, "203.0.113.77");
+
+      const res = await app.request("/api/v1/auth/otp/authenticate", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.77",
+          "user-agent": "synara-test/1.0",
+        },
+        body: JSON.stringify({ email, code }),
+      });
+      expect(res.status).toBe(200);
+
+      const grant = workos.requests.findLast(
+        (request) =>
+          request.path === "/user_management/authenticate" &&
+          request.body.includes("magic-auth:code"),
+      );
+      if (!grant) throw new Error("fake WorkOS saw no magic auth grant");
+      const body = JSON.parse(grant.body) as Record<string, unknown>;
+      expect(body.ip_address).toBe("203.0.113.77");
+      expect(body.user_agent).toBe("synara-test/1.0");
     });
 
     it("rate limits redemption attempts well below the device limit", async () => {
@@ -1448,22 +1557,24 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(otherIp.status).toBe(200);
     });
 
-    it("keys the limit on the first hop of a forwarded chain", async () => {
+    it("keys the limit on the rightmost (trusted-proxy-written) hop of a forwarded chain", async () => {
       const { app } = buildApp();
       const client = `192.0.2.${Math.floor(Math.random() * 250) + 1}`;
 
       for (let attempt = 0; attempt < DEVICE_RATE_LIMIT_PER_MINUTE; attempt += 1) {
+        // The prefix varies per request — client-writable — while the
+        // rightmost entry, the one the trusted proxy appended, stays put.
         const res = await app.request("/api/v1/auth/device", {
           method: "POST",
-          headers: { "x-forwarded-for": `${client}, 10.0.0.${attempt}` },
+          headers: { "x-forwarded-for": `10.0.0.${attempt}, ${client}` },
         });
         expect(res.status).toBe(200);
       }
 
-      // Same client, a different proxy hop: still the same bucket.
+      // Same caller, another spoofed prefix: still the same bucket.
       const limited = await app.request("/api/v1/auth/device", {
         method: "POST",
-        headers: { "x-forwarded-for": `${client}, 10.0.99.1` },
+        headers: { "x-forwarded-for": `10.0.99.1, ${client}` },
       });
       expect(limited.status).toBe(429);
     });
