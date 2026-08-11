@@ -175,12 +175,10 @@ export type ListHostsResponse = typeof ListHostsResponse.Type;
 /**
  * What `/instance` publishes about this deployment's identity wiring.
  *
- * `clientId` and `workosApiUrl` are DEPRECATED: every leg of the device flow
- * (start, poll, refresh) is now proxied through this service, so Synara's own
- * clients no longer talk to the identity provider directly and need neither
- * field. They stay in the wire contract because clients built before the
- * proxy cutover still consume them to poll the provider themselves — do not
- * remove or repurpose them.
+ * `clientId` and `workosApiUrl` are DEPRECATED: every provider call is
+ * proxied through this service, so Synara's own clients no longer talk to
+ * the identity provider directly and need neither field. They stay in the
+ * wire contract for stability — do not remove or repurpose them.
  */
 export const InstanceInfo = Schema.Struct({
   version: TrimmedNonEmptyString,
@@ -189,27 +187,6 @@ export const InstanceInfo = Schema.Struct({
   workosApiUrl: TrimmedNonEmptyString,
 });
 export type InstanceInfo = typeof InstanceInfo.Type;
-
-/** RFC 8628 device authorization response, camelCased. */
-export const DeviceAuthorizationResponse = Schema.Struct({
-  deviceCode: TrimmedNonEmptyString,
-  userCode: TrimmedNonEmptyString,
-  verificationUri: TrimmedNonEmptyString,
-  verificationUriComplete: TrimmedNonEmptyString,
-  expiresIn: Schema.Number,
-  interval: Schema.Number,
-});
-export type DeviceAuthorizationResponse = typeof DeviceAuthorizationResponse.Type;
-
-/**
- * One poll of the device-token proxy. The device code is bearer-ish — it
- * redeems into a session once approved — so requests carrying it take the
- * no-leak handling rules on the service side.
- */
-export const DeviceTokenRequest = Schema.Struct({
-  deviceCode: AccountAuthTokenString,
-});
-export type DeviceTokenRequest = typeof DeviceTokenRequest.Type;
 
 export const AccountErrorCode = Schema.Literals([
   "unauthorized",
@@ -221,8 +198,8 @@ export const AccountErrorCode = Schema.Literals([
   /**
    * The identity provider will not authenticate this account until its email
    * address is verified. Not expected on the OTP path — redeeming a Magic
-   * Auth code proves email ownership — but kept because the challenge
-   * machinery below still serves it, defensively, should WorkOS answer it.
+   * Auth code proves email ownership — kept as a classified terse dead-end
+   * (sign in with an emailed code instead) should WorkOS ever answer it.
    */
   "email_verification_required",
   /**
@@ -279,51 +256,6 @@ export const OrganizationRequiredBody = Schema.Struct({
 });
 export type OrganizationRequiredBody = typeof OrganizationRequiredBody.Type;
 
-/**
- * The 403 a sign-in or sign-up gets when the identity provider refuses to
- * authenticate until the email address is verified. Like
- * {@link OrganizationRequiredBody}, a distinct richer body for one code rather
- * than a widening of the generic one: it is not a dead end, because WorkOS has
- * already emailed the user a 6-digit code and the fields here are exactly what
- * completing verification in-app needs.
- *
- * `pendingAuthenticationToken` is a bearer-ish secret — redeeming it plus the
- * emailed code yields a session. It must live only in the client's in-memory
- * dialog state: never logged, never persisted.
- */
-export const EmailVerificationRequiredBody = Schema.Struct({
-  error: Schema.Literal("email_verification_required"),
-  message: TrimmedNonEmptyString,
-  /** Redeemed together with the emailed code by the verification grant. */
-  pendingAuthenticationToken: TrimmedNonEmptyString,
-  /** The address the code was sent to, for "We sent a code to {email}". */
-  email: TrimmedNonEmptyString,
-  /** Names the verification server-side; what a resend request carries. */
-  emailVerificationId: TrimmedNonEmptyString,
-});
-export type EmailVerificationRequiredBody = typeof EmailVerificationRequiredBody.Type;
-
-/**
- * {@link EmailVerificationRequiredBody} as an RPC error, so the fields survive
- * the WebSocket hop. The sensitive RPCs' error channel is a union of this and
- * the generic `WsRpcError` (the same shape the pull-request RPCs use for their
- * unavailable state): the ordinary mapping strips everything but a message and
- * code off a credential-carrying failure, and this is the one refusal whose
- * payload the client genuinely needs — it is what the in-app verification
- * step redeems.
- *
- * The same no-persistence rule as the HTTP body applies: dialog state only.
- */
-export class AccountEmailVerificationRequiredError extends Schema.TaggedErrorClass<AccountEmailVerificationRequiredError>()(
-  "AccountEmailVerificationRequiredError",
-  {
-    message: TrimmedNonEmptyString,
-    pendingAuthenticationToken: TrimmedNonEmptyString,
-    email: TrimmedNonEmptyString,
-    emailVerificationId: TrimmedNonEmptyString,
-  },
-) {}
-
 // ── Email OTP authentication (WorkOS Magic Auth) ─────────────────────
 //
 // Email sign-in happens inside the app: the user types their address, WorkOS
@@ -335,8 +267,8 @@ export class AccountEmailVerificationRequiredError extends Schema.TaggedErrorCla
 // call WorkOS directly, because the Magic Auth grant requires the client
 // secret.
 //
-// SSO (Google/GitHub) does not use these — it takes the device-grant flow
-// below, which hands the user to the provider's page in a real browser.
+// SSO (Google/Apple/GitHub) does not use these — it takes the PKCE authorize
+// flow below, which hands the user to the provider's page in a real browser.
 
 /**
  * The 6-digit code WorkOS emails — the Magic Auth OTP and the email
@@ -376,40 +308,21 @@ export const OtpAuthenticateRequest = Schema.Struct({
 });
 export type OtpAuthenticateRequest = typeof OtpAuthenticateRequest.Type;
 
-/**
- * The body of `POST /api/v1/auth/verify-email` — the emailed code plus the
- * pending token an `email_verification_required` refusal carried. Both are
- * bearer-ish secrets and take the credential handling rules: never logged,
- * never echoed back.
- */
-export const VerifyEmailRequest = Schema.Struct({
-  code: EmailVerificationCode,
-  pendingAuthenticationToken: AccountAuthTokenString,
-});
-export type VerifyEmailRequest = typeof VerifyEmailRequest.Type;
-
-/** The body of `POST /api/v1/auth/resend-verification`. */
-export const ResendVerificationRequest = Schema.Struct({
-  emailVerificationId: AccountAuthTokenString,
-});
-export type ResendVerificationRequest = typeof ResendVerificationRequest.Type;
-
 // ── SSO via authorization code + PKCE (desktop/app path) ─────────────
 //
-// "Continue with Google/GitHub" on a machine that owns a browser takes the
-// authorization-code grant with PKCE and a loopback redirect: the server
-// starts a one-shot listener on 127.0.0.1, asks the account service for the
-// provider's authorize URL (so the identity vendor stays invisible on this
-// wire), opens it in the system browser, and exchanges the returned code —
-// again through the account service. The CLI keeps the device grant; it has
-// no browser to redirect to. Both converge on the same session establishment.
+// "Continue with Google/Apple/GitHub" takes the authorization-code grant
+// with PKCE and a loopback redirect: the server starts a one-shot listener
+// on 127.0.0.1, asks the account service for the provider's authorize URL
+// (so the identity vendor stays invisible on this wire), opens it in the
+// system browser, and exchanges the returned code — again through the
+// account service. Every path converges on the same session establishment.
 
 /**
  * Which identity provider an SSO button deep-links to. Deliberately Synara's
  * own vocabulary, not any vendor's spelling: the account service translates
  * to whatever its identity provider calls them.
  */
-export const AccountSsoProvider = Schema.Literals(["google", "github"]);
+export const AccountSsoProvider = Schema.Literals(["google", "apple", "github"]);
 export type AccountSsoProvider = typeof AccountSsoProvider.Type;
 
 /**
@@ -446,8 +359,8 @@ export const AuthorizeTokenRequest = Schema.Struct({
 export type AuthorizeTokenRequest = typeof AuthorizeTokenRequest.Type;
 
 /**
- * What a successful authentication grant yields: the same token pair the
- * device grant produces, so everything downstream — workspace scoping,
+ * What a successful authentication grant yields: one token-pair shape for
+ * every sign-in path, so everything downstream — workspace scoping,
  * credential persistence, refresh — is one code path regardless of how the
  * user signed in.
  */
@@ -461,27 +374,6 @@ export const AuthTokensResponse = Schema.Struct({
   }),
 });
 export type AuthTokensResponse = typeof AuthTokensResponse.Type;
-
-/**
- * One answer from the device-token proxy (`POST /api/v1/auth/device/token`).
- *
- * Always a 200 with a `status` discriminant rather than an OAuth-style error
- * body: the poll's non-granted outcomes are expected states of a healthy
- * flow, not errors, and a client should never have to sniff refusal bodies
- * to keep looping. `slow_down` carries RFC 8628 semantics — increase the
- * polling interval by at least 5 seconds. `expired` and `denied` are
- * terminal; only a fresh authorization recovers.
- */
-export const DeviceTokenPollResponse = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("granted"),
-    tokens: AuthTokensResponse,
-  }),
-  Schema.Struct({
-    status: Schema.Literals(["pending", "slow_down", "expired", "denied"]),
-  }),
-]);
-export type DeviceTokenPollResponse = typeof DeviceTokenPollResponse.Type;
 
 /** The body of `POST /api/v1/auth/refresh`. The refresh token is a credential. */
 export const RefreshTokenRequest = Schema.Struct({
@@ -520,10 +412,10 @@ export type RefreshTokenResponse = typeof RefreshTokenResponse.Type;
 //               in (provisioning the account first if it is new). The code
 //               passes through server and account service to WorkOS and is
 //               stored nowhere along the way.
-//   SSO       — "Continue with Google/GitHub" takes the device grant below,
-//               which opens the provider's page in a real browser. Sign-in is
-//               two calls rather than a polling loop in the app because the
-//               server does the waiting.
+//   SSO       — "Continue with Google/Apple/GitHub" takes the PKCE authorize
+//               flow below, which opens the provider's page in a real
+//               browser. Sign-in is two calls rather than a polling loop in
+//               the app because the server does the waiting.
 //
 // Both end in the same place: a scoped token pair persisted server-side, and
 // an {@link AccountStatus} describing it.
@@ -538,26 +430,6 @@ export const AccountStatus = Schema.Union([
   Schema.Struct({ state: Schema.Literal("signed-in"), me: AccountMe }),
 ]);
 export type AccountStatus = typeof AccountStatus.Type;
-
-/**
- * What the sign-in modal needs to show. `verificationUriComplete` embeds the
- * user code, so the browser hand-off is one click; `userCode` is still shown
- * because the user must be able to confirm the code on the page matches, and
- * to type it in if the hand-off lands somewhere unexpected.
- */
-export const AccountBeginSignInResult = Schema.Struct({
-  deviceCode: TrimmedNonEmptyString,
-  userCode: TrimmedNonEmptyString,
-  verificationUriComplete: TrimmedNonEmptyString,
-  expiresIn: Schema.Number,
-  interval: Schema.Number,
-});
-export type AccountBeginSignInResult = typeof AccountBeginSignInResult.Type;
-
-export const AccountCompleteSignInInput = Schema.Struct({
-  deviceCode: TrimmedNonEmptyString,
-});
-export type AccountCompleteSignInInput = typeof AccountCompleteSignInInput.Type;
 
 /** Asks WorkOS to email the 6-digit sign-in code to `email`. */
 export const AccountSendOtpInput = OtpSendRequest;
@@ -576,19 +448,6 @@ export const AccountAuthenticateOtpInput = OtpAuthenticateRequest;
 export type AccountAuthenticateOtpInput = typeof AccountAuthenticateOtpInput.Type;
 
 /**
- * In-app email verification: the code the user typed plus the pending token
- * from the `email_verification_required` refusal. Same handling rules as
- * {@link OtpAuthenticateRequest} — the payload is a secret, so it must never
- * be logged by transport-level request tracing.
- */
-export const AccountVerifyEmailInput = VerifyEmailRequest;
-export type AccountVerifyEmailInput = typeof AccountVerifyEmailInput.Type;
-
-/** Asks the identity provider to email a fresh verification code. */
-export const AccountResendVerificationEmailInput = ResendVerificationRequest;
-export type AccountResendVerificationEmailInput = typeof AccountResendVerificationEmailInput.Type;
-
-/**
  * Starts the desktop PKCE SSO path for one provider. The server owns the
  * loopback listener, the verifier, and the state — none of them travel to the
  * app; the dialog only ever sees the id to complete with and the URL to open.
@@ -601,8 +460,8 @@ export type AccountBeginSsoInput = typeof AccountBeginSsoInput.Type;
 /**
  * What the sign-in dialog needs from a started SSO attempt: the handle to
  * complete/abandon it by, and the provider's authorize URL (deep-linked to
- * the chosen provider) for the browser hand-off. Unlike the device grant
- * there is no user code — the loopback redirect is the binding.
+ * the chosen provider) for the browser hand-off. There is no user code —
+ * the loopback redirect is the binding.
  */
 export const AccountBeginSsoResult = Schema.Struct({
   ssoId: TrimmedNonEmptyString,
@@ -627,9 +486,9 @@ export const AccountUpdateProfileInput = Schema.Struct({
 export type AccountUpdateProfileInput = typeof AccountUpdateProfileInput.Type;
 
 /**
- * The URL to hand to the system browser. Constrained to the verification URL
- * the account service just issued: the server refuses anything else, so this
- * method can never become a general "open any URL for me" primitive.
+ * The URL to hand to the system browser. Constrained to the authorize URL of
+ * an SSO attempt this server just started: the server refuses anything else,
+ * so this method can never become a general "open any URL for me" primitive.
  */
 export const AccountOpenVerificationUrlInput = Schema.Struct({
   url: TrimmedNonEmptyString,

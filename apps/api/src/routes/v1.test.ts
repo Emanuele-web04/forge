@@ -1,10 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  type AccountErrorBody,
-  DeviceAuthorizationResponse,
-  InstanceInfo,
-  OrganizationRequiredBody,
-} from "@synara/contracts";
+import { type AccountErrorBody, InstanceInfo, OrganizationRequiredBody } from "@synara/contracts";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,16 +10,13 @@ import { createDeviceCredentialStore } from "../identity/deviceCredentialStore";
 import { createEnvironmentRegistry } from "../identity/environmentRegistry";
 import { clearOrgCache } from "../identity/orgProvisioning";
 import { createWorkosIdentityProvider } from "../identity/workos";
-import { FAKE_DEVICE_AUTHORIZATION, startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
+import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import {
   createV1Routes,
-  DEVICE_RATE_LIMIT_PER_MINUTE,
   OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
   OTP_SEND_RATE_LIMIT_PER_MINUTE,
   PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR,
-  DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE,
   REFRESH_RATE_LIMIT_PER_MINUTE,
-  RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
 } from "./v1";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -40,17 +32,6 @@ function postJson(app: Hono, path: string, body: unknown, clientIp: string) {
     headers: { "content-type": "application/json", "x-forwarded-for": clientIp },
     body: JSON.stringify(body),
   });
-}
-
-/** Starts a device flow and returns its code; each test drives it onward. */
-async function startDeviceFlow(app: Hono): Promise<string> {
-  const res = await app.request("/api/v1/auth/device", { method: "POST" });
-  const body = (await res.json()) as { deviceCode: string };
-  return body.deviceCode;
-}
-
-function poll(app: Hono, deviceCode: string, ip: string) {
-  return postJson(app, "/api/v1/auth/device/token", { deviceCode }, ip);
 }
 
 function registerHostBody(environmentId: string, overrides: Record<string, unknown> = {}) {
@@ -92,8 +73,8 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   }
 
   /**
-   * A user with a token that names no organization — exactly what the WorkOS
-   * device grant hands back, before the client refreshes into a workspace.
+   * A user with a token that names no organization — exactly what the first
+   * sign-in grant hands back, before the client refreshes into a workspace.
    */
   async function signInWithoutOrg(): Promise<{ token: string; userId: string }> {
     const user = workos.addUser({ first_name: "Orgless", last_name: "User" });
@@ -912,7 +893,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(body.user_agent).toBe("synara-test/1.0");
     });
 
-    it("rate limits redemption attempts well below the device limit", async () => {
+    it("rate limits redemption attempts on their own budget", async () => {
       const { app } = buildApp();
       const email = `ada-${randomUUID()}@example.com`;
       const clientIp = "203.0.113.31";
@@ -944,15 +925,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       );
       expect(other.status).toBe(401);
 
-      // The two credential-redeeming routes have separate instances: a user
-      // who exhausted the OTP budget can still complete verification mid-flow.
-      const verify = await postJson(
-        app,
-        "/api/v1/auth/verify-email",
-        { code: "000000", pendingAuthenticationToken: "pat_none" },
-        clientIp,
-      );
-      expect(verify.status).not.toBe(429);
+      // The sending budget is separate: the same client can still request a
+      // fresh code after burning its redemption attempts.
+      const send = await postJson(app, "/api/v1/auth/otp/send", { email }, clientIp);
+      expect(send.status).toBe(202);
     });
 
     // WorkOS refuses Magic Auth outright for a domain governed by an SSO
@@ -1043,13 +1019,13 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     it("never logs unclassified provider code/error fields that echo the submitted secret", async () => {
       const { serve } = await import("@hono/node-server");
       const submittedCode = "654321";
-      const pendingToken = "pat_secret_echo_test";
+      const providerSecret = "provider_secret_echo_test";
       const hostile = new Hono();
       // Every grant refuses with the secrets embedded in the two fields the
       // log line reads, under spellings no classifier recognizes.
       hostile.post("/user_management/authenticate", (c) =>
         c.json(
-          { code: `weird_refusal ${submittedCode}`, error: `edge ${pendingToken}` },
+          { code: `weird_refusal ${submittedCode}`, error: `edge ${providerSecret}` },
           400 as 400,
         ),
       );
@@ -1082,225 +1058,19 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
           "203.0.113.35",
         );
         expect(otp.status).toBe(502);
-        const verify = await postJson(
-          app,
-          "/api/v1/auth/verify-email",
-          { code: submittedCode, pendingAuthenticationToken: pendingToken },
-          "203.0.113.35",
-        );
-        expect(verify.status).toBe(502);
-        const device = await postJson(
-          app,
-          "/api/v1/auth/device/token",
-          { deviceCode: `dc_${submittedCode}` },
-          "203.0.113.35",
-        );
-        expect(device.status).toBe(502);
 
         const joined = logged.join("\n");
-        // The refusals were logged (as unclassified) ...
+        // The refusal was logged (as unclassified) ...
         expect(joined).toContain("unclassified WorkOS");
         // ... but nothing provider-supplied travelled verbatim.
         expect(joined).not.toContain(submittedCode);
-        expect(joined).not.toContain(pendingToken);
+        expect(joined).not.toContain(providerSecret);
         expect(joined).toContain("unrecognized");
       } finally {
         errorSpy.mockRestore();
         logSpy.mockRestore();
         warnSpy.mockRestore();
         server.close();
-      }
-    });
-  });
-
-  describe("email verification", () => {
-    function post(path: string, body: unknown, headers: Record<string, string> = {}) {
-      const { app } = buildApp();
-      return app.request(path, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...headers },
-        body: JSON.stringify(body),
-      });
-    }
-
-    /**
-     * Mints a verification challenge directly on the fake — the Magic Auth
-     * grant verifies the email itself and never answers the challenge, so
-     * the fake stands in for whichever flow produced it. The code is read
-     * from the fake as a human reads their inbox.
-     */
-    function issueChallenge() {
-      const email = `unverified-${randomUUID()}@example.com`;
-      const challenge = workos.issueEmailVerificationChallenge(email);
-      const verification = workos.currentVerification(email);
-      if (!verification) throw new Error("fake WorkOS minted no verification");
-      return { email, challenge, code: verification.code };
-    }
-
-    it("redeems the emailed code for a usable token pair", async () => {
-      const { email, challenge, code } = issueChallenge();
-
-      const res = await post(
-        "/api/v1/auth/verify-email",
-        { code, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
-        { "x-forwarded-for": "198.51.100.2" },
-      );
-      expect(res.status).toBe(200);
-      const auth = (await res.json()) as { accessToken: string; user: { email: string } };
-      expect(auth.user.email).toBe(email);
-      expect(auth.accessToken.length).toBeGreaterThan(0);
-    });
-
-    it("answers 401 invalid_verification_code for a wrong code, leaving the token retryable", async () => {
-      const { challenge, code } = issueChallenge();
-      const wrongCode = code === "999999" ? "999998" : "999999";
-
-      const wrong = await post(
-        "/api/v1/auth/verify-email",
-        { code: wrongCode, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
-        { "x-forwarded-for": "198.51.100.3" },
-      );
-      expect(wrong.status).toBe(401);
-      expect(await wrong.json()).toMatchObject({ error: "invalid_verification_code" });
-
-      // The pending token survived the wrong code; the right one still works.
-      const right = await post(
-        "/api/v1/auth/verify-email",
-        { code, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
-        { "x-forwarded-for": "198.51.100.3" },
-      );
-      expect(right.status).toBe(200);
-    });
-
-    it("answers 401 invalid_verification_code for a spent pending token", async () => {
-      const { challenge, code } = issueChallenge();
-      const redeem = () =>
-        post(
-          "/api/v1/auth/verify-email",
-          { code, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
-          { "x-forwarded-for": "198.51.100.4" },
-        );
-
-      expect((await redeem()).status).toBe(200);
-      // Replay: the token was consumed by the successful redemption. One
-      // contract code for spent and wrong — the message is what differs.
-      const replay = await redeem();
-      expect(replay.status).toBe(401);
-      expect(await replay.json()).toMatchObject({ error: "invalid_verification_code" });
-    });
-
-    it("resends a fresh code that works while the old one stops", async () => {
-      const { email, challenge, code: oldCode } = issueChallenge();
-
-      const resend = await post(
-        "/api/v1/auth/resend-verification",
-        { emailVerificationId: challenge.emailVerificationId },
-        { "x-forwarded-for": "198.51.100.5" },
-      );
-      expect(resend.status).toBe(202);
-      expect(await resend.text()).toBe("");
-
-      const fresh = workos.currentVerification(email);
-      if (!fresh) throw new Error("resend left no live verification");
-      expect(fresh.code).not.toBe(oldCode);
-
-      const stale = await post(
-        "/api/v1/auth/verify-email",
-        { code: oldCode, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
-        { "x-forwarded-for": "198.51.100.5" },
-      );
-      expect(stale.status).toBe(401);
-
-      const current = await post(
-        "/api/v1/auth/verify-email",
-        { code: fresh.code, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
-        { "x-forwarded-for": "198.51.100.5" },
-      );
-      expect(current.status).toBe(200);
-    });
-
-    // A resend endpoint that confirmed which verification ids exist would let
-    // anyone probe them; unknown ids answer exactly like real ones.
-    it("answers the same 202 for an unknown verification id", async () => {
-      const res = await post(
-        "/api/v1/auth/resend-verification",
-        { emailVerificationId: `email_verification_fake_${randomUUID()}` },
-        { "x-forwarded-for": "198.51.100.6" },
-      );
-      expect(res.status).toBe(202);
-      expect(await res.text()).toBe("");
-    });
-
-    it("rate limits resends on their own tight budget", async () => {
-      const headers = { "x-forwarded-for": "198.51.100.7" };
-      const body = { emailVerificationId: `email_verification_fake_${randomUUID()}` };
-      const { app } = buildApp();
-      const request = (path: string, requestBody: unknown) =>
-        app.request(path, {
-          method: "POST",
-          headers: { "content-type": "application/json", ...headers },
-          body: JSON.stringify(requestBody),
-        });
-
-      for (let i = 0; i < RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE; i += 1) {
-        expect((await request("/api/v1/auth/resend-verification", body)).status).toBe(202);
-      }
-      const limited = await request("/api/v1/auth/resend-verification", body);
-      expect(limited.status).toBe(429);
-      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
-
-      // The redemption budget is separate: verify-email is still reachable
-      // from the same client after the resend budget is spent.
-      const verify = await request("/api/v1/auth/verify-email", {
-        code: "123456",
-        pendingAuthenticationToken: `pat_fake_${randomUUID()}`,
-      });
-      expect(verify.status).toBe(401);
-    });
-
-    // The code and pending token are bearer-ish secrets: asserted out of
-    // every response body and every log line.
-    it("never emits the code or pending token in a response body or a log line", async () => {
-      const { challenge, code } = issueChallenge();
-
-      const logged: string[] = [];
-      const capture = (...args: unknown[]) => {
-        logged.push(args.map((arg) => String(arg)).join(" "));
-      };
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(capture);
-      const logSpy = vi.spyOn(console, "log").mockImplementation(capture);
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(capture);
-      try {
-        // A wrong code and a malformed body: the two refusals whose natural
-        // implementations (upstream echo, schema decoder message) quote the
-        // submitted secrets.
-        const wrongCode = code === "999999" ? "999998" : "999999";
-        const wrong = await post(
-          "/api/v1/auth/verify-email",
-          { code: wrongCode, pendingAuthenticationToken: challenge.pendingAuthenticationToken },
-          { "x-forwarded-for": "198.51.100.8" },
-        );
-        const malformed = await post(
-          "/api/v1/auth/verify-email",
-          {
-            code: { nested: wrongCode },
-            pendingAuthenticationToken: challenge.pendingAuthenticationToken,
-          },
-          { "x-forwarded-for": "198.51.100.8" },
-        );
-
-        for (const res of [wrong, malformed]) {
-          const text = await res.text();
-          expect(text).not.toContain(challenge.pendingAuthenticationToken);
-          expect(text).not.toContain(wrongCode);
-        }
-        const joined = logged.join("\n");
-        expect(joined).not.toContain(challenge.pendingAuthenticationToken);
-        expect(joined).not.toContain(code);
-      } finally {
-        errorSpy.mockRestore();
-        logSpy.mockRestore();
-        warnSpy.mockRestore();
       }
     });
   });
@@ -1516,7 +1286,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
   describe("organization gate", () => {
     /**
-     * The first call after `synara auth`: the device grant mints an org-less
+     * The first call after `synara auth`: the sign-in grant mints an org-less
      * token, so the caller is authenticated but has nowhere to act. Answering
      * 403 with the list is what lets the client refresh into a workspace
      * rather than dead-end.
@@ -1691,17 +1461,20 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(authorizeUrl).not.toContain(workos.apiKey);
     });
 
-    it("maps the github provider to WorkOS's spelling", async () => {
+    it.each([
+      ["github", "GitHubOAuth"],
+      ["apple", "AppleOAuth"],
+    ])("maps the %s provider to WorkOS's spelling", async (provider, workosProvider) => {
       const { app } = buildApp();
       const res = await postJson(
         app,
         "/api/v1/auth/authorize",
-        authorizeBody({ provider: "github" }),
+        authorizeBody({ provider }),
         "203.0.113.51",
       );
       expect(res.status).toBe(200);
       const { authorizeUrl } = (await res.json()) as { authorizeUrl: string };
-      expect(new URL(authorizeUrl).searchParams.get("provider")).toBe("GitHubOAuth");
+      expect(new URL(authorizeUrl).searchParams.get("provider")).toBe(workosProvider);
     });
 
     it("refuses a non-loopback redirect URI", async () => {
@@ -1785,191 +1558,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       // Neither credential may be echoed anywhere in the response.
       expect(JSON.stringify(body)).not.toContain("authz_fake_never_issued");
       expect(JSON.stringify(body)).not.toContain(CODE_VERIFIER);
-    });
-  });
-
-  describe("POST /auth/device", () => {
-    it("passes the WorkOS device authorization through without the API key", async () => {
-      const { app } = buildApp();
-
-      const res = await app.request("/api/v1/auth/device", { method: "POST" });
-      expect(res.status).toBe(200);
-      const raw = await res.text();
-      const body = Schema.decodeUnknownSync(DeviceAuthorizationResponse)(JSON.parse(raw));
-      expect(body).toEqual({
-        deviceCode: FAKE_DEVICE_AUTHORIZATION.device_code,
-        userCode: FAKE_DEVICE_AUTHORIZATION.user_code,
-        verificationUri: FAKE_DEVICE_AUTHORIZATION.verification_uri,
-        verificationUriComplete: FAKE_DEVICE_AUTHORIZATION.verification_uri_complete,
-        expiresIn: FAKE_DEVICE_AUTHORIZATION.expires_in,
-        interval: FAKE_DEVICE_AUTHORIZATION.interval,
-      });
-      // The whole point of proxying: the secret stays server-side.
-      expect(raw).not.toContain(workos.apiKey);
-    });
-
-    it("answers 502 in the error contract and logs when WorkOS is unreachable", async () => {
-      const { db } = buildApp();
-      const brokenConfig: WorkosApiConfig = { ...config, workosApiUrl: "http://127.0.0.1:1" };
-      const app = new Hono();
-      app.route("/api/v1", routesFor(db, brokenConfig));
-
-      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-      try {
-        const res = await app.request("/api/v1/auth/device", { method: "POST" });
-        expect(res.status).toBe(502);
-        expect(await res.json()).toMatchObject({ error: "internal_error" });
-        expect(logged).toHaveBeenCalledWith(
-          "[api] device authorization proxy failed:",
-          expect.anything(),
-        );
-      } finally {
-        logged.mockRestore();
-      }
-    });
-
-    it("rate limits a single client and leaves other clients alone", async () => {
-      const { app } = buildApp();
-      const ip = `203.0.113.${Math.floor(Math.random() * 250) + 1}`;
-      const request = (forwardedFor: string) =>
-        app.request("/api/v1/auth/device", {
-          method: "POST",
-          headers: { "x-forwarded-for": forwardedFor },
-        });
-
-      for (let attempt = 0; attempt < DEVICE_RATE_LIMIT_PER_MINUTE; attempt += 1) {
-        expect((await request(ip)).status).toBe(200);
-      }
-
-      const limited = await request(ip);
-      expect(limited.status).toBe(429);
-      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
-
-      const otherIp = await request("198.51.100.7");
-      expect(otherIp.status).toBe(200);
-    });
-
-    it("keys the limit on the rightmost (trusted-proxy-written) hop of a forwarded chain", async () => {
-      const { app } = buildApp();
-      const client = `192.0.2.${Math.floor(Math.random() * 250) + 1}`;
-
-      for (let attempt = 0; attempt < DEVICE_RATE_LIMIT_PER_MINUTE; attempt += 1) {
-        // The prefix varies per request — client-writable — while the
-        // rightmost entry, the one the trusted proxy appended, stays put.
-        const res = await app.request("/api/v1/auth/device", {
-          method: "POST",
-          headers: { "x-forwarded-for": `10.0.0.${attempt}, ${client}` },
-        });
-        expect(res.status).toBe(200);
-      }
-
-      // Same caller, another spoofed prefix: still the same bucket.
-      const limited = await app.request("/api/v1/auth/device", {
-        method: "POST",
-        headers: { "x-forwarded-for": `10.0.99.1, ${client}` },
-      });
-      expect(limited.status).toBe(429);
-    });
-  });
-
-  describe("POST /auth/device/token", () => {
-    it("answers pending until approval, then grants the token pair", async () => {
-      const { app } = buildApp();
-      const deviceCode = await startDeviceFlow(app);
-
-      const before = await poll(app, deviceCode, "203.0.113.60");
-      expect(before.status).toBe(200);
-      expect(await before.json()).toEqual({ status: "pending" });
-
-      const user = workos.approveDevice(deviceCode, { first_name: "Ada", last_name: "Lovelace" });
-
-      const after = await poll(app, deviceCode, "203.0.113.60");
-      expect(after.status).toBe(200);
-      const granted = (await after.json()) as {
-        status: string;
-        tokens: { accessToken: string; user: { email: string } };
-      };
-      expect(granted.status).toBe("granted");
-      expect(granted.tokens.user.email).toBe(user.email);
-
-      // The minted token is a real session: it must reach /me.
-      const me = await app.request("/api/v1/me", {
-        headers: authHeaders(granted.tokens.accessToken),
-      });
-      // Fresh user, no organization claim: the 403-then-refresh dance, which
-      // is enough to prove the token verifies rather than being refused.
-      expect([200, 403]).toContain(me.status);
-    });
-
-    it("round-trips slow_down so the client can widen its interval", async () => {
-      const { app } = buildApp();
-      const deviceCode = await startDeviceFlow(app);
-
-      workos.slowDownNextDevicePoll();
-      const res = await poll(app, deviceCode, "203.0.113.61");
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ status: "slow_down" });
-    });
-
-    it("answers expired for an expired authorization", async () => {
-      const { app } = buildApp();
-      const deviceCode = await startDeviceFlow(app);
-      workos.expireDevice(deviceCode);
-
-      const res = await poll(app, deviceCode, "203.0.113.62");
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ status: "expired" });
-    });
-
-    it("answers denied when the user refused the request", async () => {
-      const { app } = buildApp();
-      const deviceCode = await startDeviceFlow(app);
-      workos.denyDevice(deviceCode);
-
-      const res = await poll(app, deviceCode, "203.0.113.63");
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ status: "denied" });
-    });
-
-    it("answers expired for a device code that was never issued", async () => {
-      const { app } = buildApp();
-      // Unknown and spent codes are indistinguishable upstream (one
-      // invalid_grant); both are dead and the recovery is identical.
-      const res = await poll(app, "dc_never_issued", "203.0.113.64");
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ status: "expired" });
-    });
-
-    it("refuses a body without a device code, without echoing anything", async () => {
-      const { app } = buildApp();
-      const res = await postJson(app, "/api/v1/auth/device/token", {}, "203.0.113.65");
-      expect(res.status).toBe(400);
-      expect(await res.json()).toMatchObject({
-        error: "validation_failed",
-        message: "A device code is required",
-      });
-    });
-
-    it("has a budget wide enough for a whole RFC 8628 poll loop", async () => {
-      const { app } = buildApp();
-      const deviceCode = await startDeviceFlow(app);
-      const ip = "203.0.113.66";
-
-      // A 5s-interval loop makes 12 polls a minute; the budget must absorb
-      // several of those before refusing.
-      for (let attempt = 0; attempt < DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE; attempt += 1) {
-        expect((await poll(app, deviceCode, ip)).status).toBe(200);
-      }
-      const limited = await poll(app, deviceCode, ip);
-      expect(limited.status).toBe(429);
-
-      // And exhausting the poll budget must not touch the start or refresh
-      // budgets for the same client.
-      const start = await app.request("/api/v1/auth/device", {
-        method: "POST",
-        headers: { "x-forwarded-for": ip },
-      });
-      expect(start.status).toBe(200);
     });
   });
 
@@ -2087,12 +1675,15 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const limited = await postJson(app, "/api/v1/auth/refresh", { refreshToken: "rt_x" }, ip);
       expect(limited.status).toBe(429);
 
-      // Exhausting refresh must not lock the same client out of polling.
-      const deviceRes = await app.request("/api/v1/auth/device", {
-        method: "POST",
-        headers: { "x-forwarded-for": ip },
-      });
-      expect(deviceRes.status).toBe(200);
+      // Exhausting refresh must not lock the same client out of sending a
+      // fresh sign-in code.
+      const send = await postJson(
+        app,
+        "/api/v1/auth/otp/send",
+        { email: `after-refresh-${randomUUID()}@example.com` },
+        ip,
+      );
+      expect(send.status).toBe(202);
     });
   });
 });

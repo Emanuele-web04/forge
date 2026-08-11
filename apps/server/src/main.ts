@@ -619,7 +619,7 @@ const requireAccountUrl = (flag: Option.Option<string>) =>
 // a flag declared on both a parent and its subcommand, so `logout` reads the
 // parsed value out of the parent's context (same shape as `--home-dir` above).
 const baseAuthCommand = Command.make("auth", { accountUrl: accountUrlFlag }).pipe(
-  Command.withDescription("Sign in to a Synara account and register this machine as a host."),
+  Command.withDescription("Register this machine as a host on the account signed in via the app."),
 );
 
 const authLogoutCommand = Command.make("logout", {}, () =>
@@ -652,7 +652,7 @@ const authCommand = baseAuthCommand.pipe(
             baseDir,
             ...(Option.isSome(root.devUrl) ? { devUrl: root.devUrl.value } : {}),
           }),
-        catch: (cause) => new StartupError({ message: "Sign-in failed.", cause }),
+        catch: (cause) => new StartupError({ message: "Host registration failed.", cause }),
       });
     }),
   ),

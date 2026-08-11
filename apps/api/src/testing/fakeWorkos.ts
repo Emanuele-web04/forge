@@ -1,8 +1,8 @@
 // FILE: testing/fakeWorkos.ts
 // Purpose: An in-process stand-in for the WorkOS API — serves a JWKS backed by
 // a freshly generated key pair, mints access tokens signed by it, and answers
-// the user-lookup, device-authorization, and authenticate endpoints. Lets the
-// auth path be exercised end to end with no network and no shared fixtures.
+// the user-lookup, authorize, and authenticate endpoints. Lets the auth path
+// be exercised end to end with no network and no shared fixtures.
 // Layer: API test support (also drives `scripts/fake-workos.ts`, the dev stub)
 // Depends on: jose, hono, @hono/node-server.
 
@@ -66,7 +66,7 @@ export type FakeWorkos = {
    * Mints an access token with the given claims; `expiresIn` accepts jose spans.
    * `issuer` defaults to the value this server's config expects — pass a
    * different one to exercise the issuer check. `orgId` mints the `org_id`
-   * claim the refresh grant produces; leave it off for a device-grant token.
+   * claim the refresh grant produces; leave it off for an unscoped token.
    */
   signAccessToken(claims: {
     sub: string;
@@ -83,31 +83,11 @@ export type FakeWorkos = {
     clientId?: string | null;
   }): Promise<string>;
   /**
-   * Approves a pending device authorization, as a human clicking through the
-   * hosted page would. Until this is called `authenticate` answers
-   * `authorization_pending`, which is what makes the CLI's poll loop real.
-   * Registers `user` if it is not already known, so a caller can drive the
-   * whole flow with one call.
-   */
-  approveDevice(
-    deviceCode: string,
-    user?: Partial<FakeWorkosUser> & { id?: string },
-  ): FakeWorkosUser;
-  /**
    * Mints an authorization code bound to a PKCE challenge, as completing the
    * hosted authorize page would. Registers `email`'s user if needed. Tests
    * that skip the hosted page drive the exchange with this directly.
    */
   issueAuthorizationCode(email: string, params: { codeChallenge: string }): string;
-  /** Marks the authorization denied, as a human clicking "cancel" would. */
-  denyDevice(deviceCode: string): void;
-  /** Forces the device code past its lifetime, so polls answer expired_token. */
-  expireDevice(deviceCode: string): void;
-  /**
-   * Makes the next device-token poll answer `slow_down` (RFC 8628), once.
-   * How a test proves the client widens its interval instead of erroring.
-   */
-  slowDownNextDevicePoll(): void;
   /**
    * Makes the next authenticate grant (any grant type) refuse with WorkOS's
    * `organization_selection_required` shape, once — what a multi-org user
@@ -115,13 +95,6 @@ export type FakeWorkos = {
    * the service fails closed on it instead of 502ing.
    */
   requireOrganizationSelectionOnNextAuthenticate(): void;
-  /**
-   * The live email verification for `email`, if one exists — its id and the
-   * 6-digit code a real user would read out of their inbox. How a test plays
-   * the human: the code never travels through the service under test until
-   * the test types it back in.
-   */
-  currentVerification(email: string): { emailVerificationId: string; code: string } | undefined;
   /**
    * The live Magic Auth for `email`, if one exists — the 6-digit code a real
    * user would read out of their inbox, and when it expires. Same rule as
@@ -131,31 +104,10 @@ export type FakeWorkos = {
   currentMagicAuth(email: string): { code: string; expiresAt: string } | undefined;
   /** Forces the live Magic Auth for `email` past its expiry. */
   expireMagicAuth(email: string): void;
-  /**
-   * Mints an email-verification challenge for `email` — the pending token and
-   * verification id an `email_verification_required` refusal would carry —
-   * registering the user if needed. Stands in for whichever flow produced the
-   * challenge; the Magic Auth grant itself verifies the email and so never
-   * answers it.
-   */
-  issueEmailVerificationChallenge(email: string): {
-    pendingAuthenticationToken: string;
-    emailVerificationId: string;
-    email: string;
-  };
   /** Every request the server has seen, oldest first. */
   requests: FakeWorkosRequest[];
   close(): Promise<void>;
 };
-
-export const FAKE_DEVICE_AUTHORIZATION = {
-  device_code: "dc_fake_123",
-  user_code: "ABCD-EFGH",
-  verification_uri: "https://auth.example.com/device",
-  verification_uri_complete: "https://auth.example.com/device?user_code=ABCD-EFGH",
-  expires_in: 600,
-  interval: 5,
-} as const;
 
 export type StartFakeWorkosOptions = {
   apiKey?: string;
@@ -171,13 +123,6 @@ export type StartFakeWorkosOptions = {
    */
   port?: number;
   /**
-   * Called whenever a device authorization is issued. The seam the dev stub
-   * uses to stand in for a human approving the hosted page; approval stays an
-   * action performed on this double from the outside, never something it does
-   * to itself.
-   */
-  onDeviceAuthorization?: (deviceCode: string) => void;
-  /**
    * Email domains the fake treats as SSO-governed, refusing Magic Auth with
    * the OAuth-shaped `sso_required` body WorkOS answers for them (observed
    * live via its built-in example.com test connection).
@@ -186,8 +131,7 @@ export type StartFakeWorkosOptions = {
   /**
    * Called whenever a Magic Auth code is minted — the seam the dev identity
    * provider uses to print the code that real WorkOS would have emailed.
-   * Deliberately an observation hook, like `onDeviceAuthorization`: the
-   * double never delivers codes itself.
+   * Deliberately an observation hook: the double never delivers codes itself.
    */
   onMagicAuth?: (email: string, code: string) => void;
   /**
@@ -220,13 +164,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
    */
   const memberships: Array<{ orgId: string; userId: string }> = [];
   const requests: FakeWorkosRequest[] = [];
-  /** Device codes handed out, their approval state, and forced outcomes. */
-  const deviceGrants = new Map<
-    string,
-    { approvedBy?: string; denied?: boolean; expired?: boolean }
-  >();
-  /** One-shot: the next device-token poll answers slow_down. */
-  let slowDownNext = false;
   /** One-shot: the next authenticate grant refuses with org selection. */
   let organizationSelectionNext = false;
   /** Live refresh tokens → the user they belong to. Single-use, as WorkOS's are. */
@@ -239,14 +176,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
    * A re-send replaces the entry in place, invalidating the old code.
    */
   const magicAuths = new Map<string, { code: string; expiresAtMs: number }>();
-  /**
-   * Live email verifications by id — the code WorkOS would have emailed, and
-   * who it verifies. A resend replaces the code in place, which is what makes
-   * "the old code stops working" testable.
-   */
-  const emailVerifications = new Map<string, { userId: string; code: string }>();
-  /** Pending authentication tokens → the verification they redeem against. */
-  const pendingAuthTokens = new Map<string, { userId: string; verificationId: string }>();
   /**
    * Live authorization codes → the user they sign in and the PKCE challenge
    * the exchange must prove. Single-use, as WorkOS's are, and the challenge
@@ -266,24 +195,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     return String(nextVerificationCode).padStart(6, "0");
   }
 
-  /**
-   * Mints the challenge an `email_verification_required` refusal carries —
-   * the verification (with its emailed code) and a fresh pending token.
-   * Reuses a live verification for the same user but always mints a new
-   * pending token, as WorkOS does per refusal.
-   */
-  function mintEmailVerificationChallenge(user: FakeWorkosUser) {
-    let verificationId = [...emailVerifications.entries()].find(
-      ([, entry]) => entry.userId === user.id,
-    )?.[0];
-    if (!verificationId) {
-      verificationId = `email_verification_fake_${randomUUID()}`;
-      emailVerifications.set(verificationId, { userId: user.id, code: mintVerificationCode() });
-    }
-    const pendingToken = `pat_fake_${randomUUID()}`;
-    pendingAuthTokens.set(pendingToken, { userId: user.id, verificationId });
-    return { pendingToken, verificationId, email: user.email };
-  }
   const ssoRequiredDomains = new Set(options.ssoRequiredDomains ?? []);
 
   const hasMembership = (orgId: string, userId: string): boolean =>
@@ -446,18 +357,9 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     return c.redirect(target.toString(), 302);
   });
 
-  app.post("/user_management/authorize/device", (c) => {
-    // Same fixed code every time, so tests can assert against the exported
-    // constant; re-issuing simply resets it to unapproved.
-    deviceGrants.set(FAKE_DEVICE_AUTHORIZATION.device_code, {});
-    options.onDeviceAuthorization?.(FAKE_DEVICE_AUTHORIZATION.device_code);
-    return c.json(FAKE_DEVICE_AUTHORIZATION);
-  });
-
   /**
-   * The token endpoint, covering the two grants Synara uses: the device grant
-   * the CLI polls after `synara auth`, and the refresh grant it falls back to
-   * when an access token expires mid-command. Error bodies use the OAuth
+   * The token endpoint, covering the grants Synara uses: Magic Auth, the
+   * PKCE code exchange, and refresh. Error bodies use the OAuth
    * `error`/`error_description` shape the client decodes.
    */
   app.post("/user_management/authenticate", async (c) => {
@@ -480,47 +382,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
         },
         400,
       );
-    }
-
-    if (grantType === "urn:ietf:params:oauth:grant-type:device_code") {
-      const deviceCode = typeof body?.device_code === "string" ? body.device_code : "";
-      const grant = deviceGrants.get(deviceCode);
-      if (!grant) {
-        return c.json(
-          { error: "invalid_grant", error_description: "Unknown or expired device code" },
-          400,
-        );
-      }
-      if (slowDownNext) {
-        slowDownNext = false;
-        return c.json({ error: "slow_down", error_description: "Polling too fast" }, 400);
-      }
-      if (grant.expired) {
-        deviceGrants.delete(deviceCode);
-        return c.json(
-          { error: "expired_token", error_description: "The device code has expired" },
-          400,
-        );
-      }
-      if (grant.denied) {
-        deviceGrants.delete(deviceCode);
-        return c.json(
-          { error: "access_denied", error_description: "The user denied the request" },
-          400,
-        );
-      }
-      if (!grant.approvedBy) {
-        return c.json(
-          {
-            error: "authorization_pending",
-            error_description: "The user has not yet approved this device",
-          },
-          400,
-        );
-      }
-      // Consumed on success: a device code is redeemable exactly once.
-      deviceGrants.delete(deviceCode);
-      return c.json(await issueTokenPair(grant.approvedBy));
     }
 
     // The Magic Auth grant. Confidential-client, so the secret is checked
@@ -551,49 +412,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       magicAuths.delete(email);
       const record = [...users.values()].find((user) => user.email === email) ?? addUser({ email });
       return c.json(await issueTokenPair(record.id));
-    }
-
-    // The email-verification grant: the emailed code plus the pending token
-    // from a challenge. Confidential-client, like the Magic Auth grant.
-    if (grantType === "urn:workos:oauth:grant-type:email-verification:code") {
-      if (body?.client_secret !== apiKey) {
-        return c.json(
-          { error: "invalid_client", error_description: "Missing or invalid client secret" },
-          401,
-        );
-      }
-      const pendingToken =
-        typeof body?.pending_authentication_token === "string"
-          ? body.pending_authentication_token
-          : "";
-      const submittedCode = typeof body?.code === "string" ? body.code : "";
-      const pending = pendingAuthTokens.get(pendingToken);
-      if (!pending) {
-        // Spent or never issued: the OAuth-shaped refusal, since the token is
-        // the credential this grant authenticates with.
-        return c.json(
-          {
-            error: "invalid_grant",
-            error_description: "Pending authentication token is invalid or expired",
-          },
-          400,
-        );
-      }
-      const verification = emailVerifications.get(pending.verificationId);
-      if (!verification || verification.code !== submittedCode) {
-        // A wrong code does NOT spend the pending token here — the user
-        // retries in place. (Real WorkOS behavior is undocumented; the
-        // service under test must survive either, and the spent-token path is
-        // exercised separately by redeeming a token twice.)
-        return c.json(
-          { code: "email_verification_code_incorrect", message: "The code is incorrect." },
-          400,
-        );
-      }
-      // Redeemed: the token and the verification are both single-use.
-      pendingAuthTokens.delete(pendingToken);
-      emailVerifications.delete(pending.verificationId);
-      return c.json(await issueTokenPair(pending.userId));
     }
 
     // The authorization-code + PKCE exchange. The challenge binding is real:
@@ -689,35 +507,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       },
       201,
     );
-  });
-
-  // The email-verification object, named by id. Serves the user id, which is
-  // what lets the resend proxy resolve who to email without a by-email lookup.
-  app.get("/user_management/email_verification/:id", (c) => {
-    const id = c.req.param("id");
-    const verification = emailVerifications.get(id);
-    if (!verification) return c.json({ message: "Email verification not found" }, 404);
-    const user = users.get(verification.userId);
-    return c.json({
-      object: "email_verification",
-      id,
-      user_id: verification.userId,
-      email: user?.email ?? null,
-    });
-  });
-
-  // Resend: mints a new code in place, so the old one stops working — a
-  // caller that cached the first emailed code must fail after a resend here
-  // exactly as it would in production.
-  app.post("/user_management/users/:id/email_verification/send", (c) => {
-    const user = users.get(c.req.param("id"));
-    if (!user) return c.json({ message: "User not found" }, 404);
-    const existing = [...emailVerifications.entries()].find(
-      ([, entry]) => entry.userId === user.id,
-    );
-    const verificationId = existing?.[0] ?? `email_verification_fake_${randomUUID()}`;
-    emailVerifications.set(verificationId, { userId: user.id, code: mintVerificationCode() });
-    return c.json({ object: "email_verification", id: verificationId, user_id: user.id }, 201);
   });
 
   app.get("/user_management/users/:id", (c) => {
@@ -821,15 +610,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     addMembership,
     signAccessToken,
 
-    currentVerification(email) {
-      const user = [...users.values()].find((entry) => entry.email === email);
-      if (!user) return undefined;
-      const entry = [...emailVerifications.entries()].find(
-        ([, verification]) => verification.userId === user.id,
-      );
-      return entry ? { emailVerificationId: entry[0], code: entry[1].code } : undefined;
-    },
-
     currentMagicAuth(email) {
       const live = magicAuths.get(email);
       return live
@@ -840,16 +620,6 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     expireMagicAuth(email) {
       const live = magicAuths.get(email);
       if (live) magicAuths.set(email, { ...live, expiresAtMs: Date.now() - 1 });
-    },
-
-    issueEmailVerificationChallenge(email) {
-      const record = [...users.values()].find((user) => user.email === email) ?? addUser({ email });
-      const challenge = mintEmailVerificationChallenge(record);
-      return {
-        pendingAuthenticationToken: challenge.pendingToken,
-        emailVerificationId: challenge.verificationId,
-        email: challenge.email,
-      };
     },
 
     removeMembership(orgId, userId) {
@@ -875,27 +645,7 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       };
     },
 
-    approveDevice(deviceCode, user = {}) {
-      const record = user.id ? (users.get(user.id) ?? addUser(user)) : addUser(user);
-      deviceGrants.set(deviceCode, { approvedBy: record.id });
-      return record;
-    },
-
     issueAuthorizationCode,
-
-    denyDevice(deviceCode) {
-      const grant = deviceGrants.get(deviceCode);
-      if (grant) grant.denied = true;
-    },
-
-    expireDevice(deviceCode) {
-      const grant = deviceGrants.get(deviceCode);
-      if (grant) grant.expired = true;
-    },
-
-    slowDownNextDevicePoll() {
-      slowDownNext = true;
-    },
 
     requireOrganizationSelectionOnNextAuthenticate() {
       organizationSelectionNext = true;

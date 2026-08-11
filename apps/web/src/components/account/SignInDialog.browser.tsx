@@ -11,10 +11,6 @@ const accountApi = vi.hoisted(() => ({
   status: vi.fn(),
   sendOtp: vi.fn(),
   authenticateOtp: vi.fn(),
-  verifyEmail: vi.fn(),
-  resendVerificationEmail: vi.fn(),
-  beginSignIn: vi.fn(),
-  completeSignIn: vi.fn(),
   beginSso: vi.fn(),
   completeSso: vi.fn(),
   cancelSso: vi.fn(),
@@ -37,20 +33,6 @@ function makeMe(): AccountMe {
     organization: { id: "org_1", name: "Ada's Workspace" },
     profile: null,
   };
-}
-
-/**
- * A wire-shaped email-verification refusal, as the RPC error crosses the
- * WebSocket: the tagged class serializes to `_tag` plus its fields, which is
- * exactly what `readEmailVerificationChallenge` reads.
- */
-function verificationRefusal() {
-  return Object.assign(new Error("Verify your email to continue"), {
-    _tag: "AccountEmailVerificationRequiredError",
-    pendingAuthenticationToken: "pat_secret_123",
-    email: "ada@example.com",
-    emailVerificationId: "email_verification_123",
-  });
 }
 
 function renderDialog(overrides: { onSignedIn?: (status: AccountStatus) => void } = {}) {
@@ -99,52 +81,20 @@ describe("SignInDialog", () => {
     vi.clearAllMocks();
   });
 
-  // M5: an `email_verification_required` refusal after a correct OTP routes
-  // to the verification step (same six-box component), whose code submission
-  // drives verifyEmail with the pending token and whose resend drives
-  // resendVerificationEmail — not the OTP mutations.
-  it("routes an email-verification challenge into the verification step and completes it", async () => {
-    const onSignedIn = vi.fn();
-    renderDialog({ onSignedIn });
-    await enterEmailAndReachCodeStep();
-
-    accountApi.authenticateOtp.mockRejectedValue(verificationRefusal());
-    await typeCode("654321");
-    await vi.waitFor(() => expect(accountApi.authenticateOtp).toHaveBeenCalledOnce());
-
-    // Same code-entry step, now backed by the verification grant.
-    await expect.element(page.getByText("Check your email")).toBeVisible();
-
-    accountApi.verifyEmail.mockResolvedValue({ state: "signed-in", me: makeMe() });
-    await typeCode("111222");
-    await vi.waitFor(() => expect(accountApi.verifyEmail).toHaveBeenCalledOnce());
-    expect(accountApi.verifyEmail).toHaveBeenCalledWith({
-      code: "111222",
-      pendingAuthenticationToken: "pat_secret_123",
-    });
-    // The verification step never calls the OTP grant with the second code.
-    expect(accountApi.authenticateOtp).toHaveBeenCalledOnce();
-    await vi.waitFor(() =>
-      expect(onSignedIn).toHaveBeenCalledWith({ state: "signed-in", me: makeMe() }),
-    );
-  });
-
-  it("keeps a wrong verification code on the step with an announced error", async () => {
+  // L2: a wrong OTP code stays on the step with a failure announced as an
+  // alert associated with the code input.
+  it("keeps a wrong sign-in code on the step with an announced error", async () => {
     renderDialog();
     await enterEmailAndReachCodeStep();
-    accountApi.authenticateOtp.mockRejectedValue(verificationRefusal());
-    await typeCode("654321");
-    await vi.waitFor(() => expect(accountApi.authenticateOtp).toHaveBeenCalledOnce());
 
-    accountApi.verifyEmail.mockRejectedValue(
+    accountApi.authenticateOtp.mockRejectedValue(
       Object.assign(new Error("That code didn't work — check it and try again"), {
         code: "invalid_verification_code",
       }),
     );
     await typeCode("999999");
-    await vi.waitFor(() => expect(accountApi.verifyEmail).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(accountApi.authenticateOtp).toHaveBeenCalledOnce());
 
-    // L2: the failure is an alert associated with the code input.
     await expect.element(page.getByRole("alert")).toHaveTextContent(/didn't work/);
     const input = page.getByLabelText("Sign-in code").element();
     expect(input.getAttribute("aria-invalid")).toBe("true");
@@ -190,6 +140,7 @@ describe("SignInDialog", () => {
   // label the user clicked.
   it.each([
     ["Continue with Google", "google"],
+    ["Continue with Apple", "apple"],
     ["Continue with GitHub", "github"],
   ] as const)("%s begins SSO with provider %s", async (label, provider) => {
     accountApi.beginSso.mockResolvedValue({

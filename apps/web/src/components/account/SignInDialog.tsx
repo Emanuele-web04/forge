@@ -1,15 +1,15 @@
 // FILE: SignInDialog.tsx
 // Purpose: "Welcome to Synara" sign-in modal — provider SSO through the
 // system browser (authorization code + PKCE with a loopback redirect,
-// server-brokered, deep-linked to Google/GitHub) and in-app email OTP: the
-// user enters their email, receives a 6-digit code, and enters it in the same
-// dialog. Sign-in and sign-up are one path. Dismissable; a successful sign-in
-// with no profile hands off to the onboarding modal.
+// server-brokered, deep-linked to Google/Apple/GitHub) and in-app email OTP:
+// the user enters their email, receives a 6-digit code, and enters it in the
+// same dialog. Sign-in and sign-up are one path. Dismissable; a successful
+// sign-in with no profile hands off to the onboarding modal.
 // Layer: Web account feature.
 
 import type { AccountSsoProvider, AccountStatus } from "@synara/contracts";
 import { useEffect, useId, useRef, useState } from "react";
-import { SiGithub, SiGoogle } from "react-icons/si";
+import { SiApple, SiGithub, SiGoogle } from "react-icons/si";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
@@ -22,11 +22,9 @@ import {
   formatResendCountdown,
   isSignInCancellation,
   readAccountErrorCode,
-  readEmailVerificationChallenge,
   RESEND_COOLDOWN_SECONDS,
   sanitizeVerificationCodeInput,
   VERIFICATION_CODE_LENGTH,
-  type EmailVerificationChallenge,
 } from "~/lib/accountLogic";
 import { cn } from "~/lib/utils";
 
@@ -62,13 +60,6 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
   // The OTP code-entry step, entered once a code was sent. Only the address
   // is held — the code lives in the step's own state and dies with it.
   const [otpEmail, setOtpEmail] = useState<string | null>(null);
-  // The email-verification challenge, entered when a grant answers
-  // `email_verification_required`. In-memory ONLY: the pending token is a
-  // bearer-ish secret, and this state (with the token in it) dies with the
-  // dialog content on close or terminal completion — never persisted.
-  // Normally unreachable on the OTP path (redeeming a code implicitly
-  // verifies the email); wired so the challenge is a step, not a dead end.
-  const [verification, setVerification] = useState<EmailVerificationChallenge | null>(null);
   // Abandoning the dialog mid-SSO aborts the pending completeSso RPC so it
   // does not resolve into a closed dialog later, and tells the server to
   // drop the attempt (closing its loopback listener).
@@ -198,51 +189,6 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
     }
   };
 
-  if (verification) {
-    // The same six-box step, redeeming the verification grant instead of the
-    // OTP one: the code entered here travels with the pending token to
-    // account.verifyEmail, and "Resend code" re-mails through the
-    // verification id rather than restarting the OTP send.
-    return (
-      <CodeEntryStep
-        email={verification.email}
-        submitting={account.verifyEmail.isPending}
-        resending={account.resendVerificationEmail.isPending}
-        onSubmit={async (code) => {
-          let status: AccountStatus;
-          try {
-            status = await account.verifyEmail.mutateAsync({
-              code,
-              pendingAuthenticationToken: verification.pendingAuthenticationToken,
-            });
-          } catch (cause) {
-            // A slow provider is not a failed sign-in: if the session
-            // landed anyway, advance instead of showing the error.
-            if (await signedInDespiteError()) {
-              setVerification(null);
-              return;
-            }
-            throw cause;
-          }
-          // Terminal completion: the pending token is spent — discard it.
-          setVerification(null);
-          onSignedIn(status);
-        }}
-        onResend={async () => {
-          await account.resendVerificationEmail.mutateAsync({
-            emailVerificationId: verification.emailVerificationId,
-          });
-        }}
-        onUseDifferentEmail={() => {
-          // Abandoning the challenge discards the pending token with it.
-          setVerification(null);
-          setOtpEmail(null);
-          setError(null);
-        }}
-      />
-    );
-  }
-
   if (otpEmail) {
     return (
       <CodeEntryStep
@@ -254,17 +200,9 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
             const status = await account.authenticateOtp.mutateAsync({ email: otpEmail, code });
             onSignedIn(status);
           } catch (cause) {
-            // The one recoverable refusal with a payload: the provider wants
-            // the email verified first and has already mailed a fresh code.
-            // Route to the verification step instead of dead-ending; any
-            // other failure keeps the step open with its inline error —
-            // unless the session actually landed despite the error, in
-            // which case advancing is the only honest outcome.
-            const challenge = readEmailVerificationChallenge(cause);
-            if (challenge) {
-              setVerification(challenge);
-              return;
-            }
+            // Any failure keeps the step open with its inline error — unless
+            // the session actually landed despite the error, in which case
+            // advancing is the only honest outcome.
             if (await signedInDespiteError()) return;
             throw cause;
           }
@@ -334,6 +272,15 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
             >
               <SiGoogle className="size-3.5" />
               Continue with Google
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full gap-2"
+              disabled={busy}
+              onClick={() => void handleSso("apple")}
+            >
+              <SiApple className="size-3.5" />
+              Continue with Apple
             </Button>
             <Button
               variant="outline"

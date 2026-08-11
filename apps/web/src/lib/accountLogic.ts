@@ -18,18 +18,6 @@ export const VERIFICATION_CODE_LENGTH = 6;
 export const RESEND_COOLDOWN_SECONDS = 60;
 
 /**
- * What the verification step redeems, read off an
- * `email_verification_required` refusal. Lives only in the dialog's state
- * machine — the pending token is a bearer-ish secret and must never be
- * persisted or logged.
- */
-export interface EmailVerificationChallenge {
-  readonly pendingAuthenticationToken: string;
-  readonly email: string;
-  readonly emailVerificationId: string;
-}
-
-/**
  * Reads the `AccountErrorCode` a failed account RPC carried, if any. The
  * server maps `AccountApiError` onto `WsRpcError.code`; anything else (socket
  * loss, timeout) has no code and is treated as a generic failure.
@@ -38,28 +26,6 @@ export function readAccountErrorCode(error: unknown): AccountErrorCode | null {
   if (typeof error !== "object" || error === null || !("code" in error)) return null;
   const code = (error as { code: unknown }).code;
   return typeof code === "string" ? (code as AccountErrorCode) : null;
-}
-
-/**
- * The verification challenge a failed sign-in or sign-up carried, or null.
- * The server maps the refusal onto its own tagged RPC error so the fields
- * survive the WebSocket hop; everything else — including a plain
- * `email_verification_required` code with no payload — is not a challenge
- * this client can complete in-app.
- */
-export function readEmailVerificationChallenge(error: unknown): EmailVerificationChallenge | null {
-  if (typeof error !== "object" || error === null) return null;
-  const candidate = error as Record<string, unknown>;
-  if (candidate._tag !== "AccountEmailVerificationRequiredError") return null;
-  const { pendingAuthenticationToken, email, emailVerificationId } = candidate;
-  if (
-    typeof pendingAuthenticationToken !== "string" ||
-    typeof email !== "string" ||
-    typeof emailVerificationId !== "string"
-  ) {
-    return null;
-  }
-  return { pendingAuthenticationToken, email, emailVerificationId };
 }
 
 /**
@@ -113,15 +79,12 @@ export function isSignInCancellation(error: unknown): boolean {
  * Tags of the errors whose `message` this app authored (server-side mappings
  * write them; see accountRpcErrors.ts). Only these may reach the UI verbatim.
  */
-const TRUSTED_ACCOUNT_ERROR_TAGS: ReadonlySet<string> = new Set([
-  "WsRpcError",
-  "AccountEmailVerificationRequiredError",
-]);
+const TRUSTED_ACCOUNT_ERROR_TAGS: ReadonlySet<string> = new Set(["WsRpcError"]);
 
 /**
  * The user-facing message for a failed account call: the error's own message
- * when it is one WE wrote — a `WsRpcError` / verification refusal off the RPC
- * contract, or anything carrying a classified {@link AccountErrorCode} — and
+ * when it is one WE wrote — a `WsRpcError` off the RPC contract, or anything
+ * carrying a classified {@link AccountErrorCode} — and
  * `fallback` for everything else. Never the raw `Error.message` of an
  * arbitrary failure: transport and runtime internals ("All fibers interrupted
  * without error", "socket hang up") are not copy, and rendering them taught

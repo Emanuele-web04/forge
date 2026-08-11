@@ -1954,7 +1954,7 @@ function EventRouter() {
         // Reopening the socket is a projection boundary. React Query otherwise
         // keeps the previous infinite-stale config and can strand "Checking".
         void refreshServerConfigAfterTransportOpen(queryClient).catch(() => undefined);
-        // A completeSignIn cut off by the dropped socket still persisted
+        // A completeSso cut off by the dropped socket still persisted
         // credentials server-side; re-reading status recovers that result.
         void invalidateAccountStatus(queryClient).catch(() => undefined);
       },

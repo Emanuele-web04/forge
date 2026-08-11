@@ -8,7 +8,6 @@ import {
   AccountErrorBody,
   AccountHost,
   AccountMe,
-  DeviceAuthorizationResponse,
   InstanceInfo,
   OrganizationRequiredBody,
   RegisterHostRequest,
@@ -17,7 +16,6 @@ import {
 
 const decodeRegisterHostRequest = Schema.decodeUnknownSync(RegisterHostRequest);
 const decodeInstanceInfo = Schema.decodeUnknownSync(InstanceInfo);
-const decodeDeviceAuthorization = Schema.decodeUnknownSync(DeviceAuthorizationResponse);
 const decodeAccountHost = Schema.decodeUnknownSync(AccountHost);
 const decodeAccountMe = Schema.decodeUnknownSync(AccountMe);
 const decodeOrganizationRequired = Schema.decodeUnknownSync(OrganizationRequiredBody);
@@ -273,48 +271,6 @@ describe("InstanceInfo", () => {
         authMode: "workos",
         clientId: "   ",
         workosApiUrl: "https://api.workos.com",
-      }),
-    ).toThrow();
-  });
-});
-
-describe("DeviceAuthorizationResponse", () => {
-  it("decodes a camelCase device authorization", () => {
-    const parsed = decodeDeviceAuthorization({
-      deviceCode: "dc_123",
-      userCode: "ABCD-EFGH",
-      verificationUri: "https://auth.example.com/device",
-      verificationUriComplete: "https://auth.example.com/device?user_code=ABCD-EFGH",
-      expiresIn: 600,
-      interval: 5,
-    });
-
-    expect(parsed.deviceCode).toBe("dc_123");
-    expect(parsed.interval).toBe(5);
-  });
-
-  it("rejects a snake_case payload", () => {
-    expect(() =>
-      decodeDeviceAuthorization({
-        device_code: "dc_123",
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://auth.example.com/device",
-        verification_uri_complete: "https://auth.example.com/device?user_code=ABCD-EFGH",
-        expires_in: 600,
-        interval: 5,
-      }),
-    ).toThrow();
-  });
-
-  it("rejects a non-numeric interval", () => {
-    expect(() =>
-      decodeDeviceAuthorization({
-        deviceCode: "dc_123",
-        userCode: "ABCD-EFGH",
-        verificationUri: "https://auth.example.com/device",
-        verificationUriComplete: "https://auth.example.com/device?user_code=ABCD-EFGH",
-        expiresIn: 600,
-        interval: "5",
       }),
     ).toThrow();
   });

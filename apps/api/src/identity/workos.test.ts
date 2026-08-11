@@ -2,7 +2,11 @@ import { generateKeyPair, SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WorkosApiConfig } from "../config";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
-import { createWorkosIdentityProvider } from "./workos";
+import {
+  classifyAuthorizationCodeFailure,
+  classifyMagicAuthFailure,
+  createWorkosIdentityProvider,
+} from "./workos";
 
 /**
  * The flat surface these tests were written against: the verifier plus the
@@ -90,7 +94,7 @@ describe("verifyAccessToken", () => {
     await expect(auth.verifyAccessToken(token)).resolves.toMatchObject({ userId: "user_123" });
   });
 
-  // The device grant mints org-less tokens, so "no org_id" is the ordinary
+  // First sign-in mints org-less tokens, so "no org_id" is the ordinary
   // case and must verify — the route layer, not this one, decides what to do.
   it("omits orgId for a token minted without the claim", async () => {
     const auth = createWorkosAuth(workos.config());
@@ -248,28 +252,6 @@ describe("issuer discovery", () => {
     expect(
       workos.requests.slice(before).filter((r) => r.path === discoveryPath(workos.clientId)),
     ).toHaveLength(0);
-  });
-});
-
-describe("requestDeviceAuthorization", () => {
-  it("posts the client id with the API key and maps the response to camelCase", async () => {
-    const auth = createWorkosAuth(workos.config());
-    const before = workos.requests.length;
-
-    await expect(auth.requestDeviceAuthorization()).resolves.toEqual({
-      deviceCode: "dc_fake_123",
-      userCode: "ABCD-EFGH",
-      verificationUri: "https://auth.example.com/device",
-      verificationUriComplete: "https://auth.example.com/device?user_code=ABCD-EFGH",
-      expiresIn: 600,
-      interval: 5,
-    });
-
-    const call = workos.requests[before];
-    expect(call?.method).toBe("POST");
-    expect(call?.path).toBe("/user_management/authorize/device");
-    expect(call?.authorization).toBe(`Bearer ${workos.apiKey}`);
-    expect(call?.body).toContain(workos.clientId);
   });
 });
 
@@ -606,5 +588,25 @@ describe("refreshTokens classification", () => {
   ])("keeps %i (non-invalid_grant) a retryable provider fault", async (status, body) => {
     const caught = await refreshAgainst(status, body);
     expect(caught).toMatchObject({ name: "IdentityProviderError", status });
+  });
+});
+
+describe("grant failure classification", () => {
+  // The verification challenge flow was removed; the classified reason
+  // survives so the route can answer a terse dead-end instead of a 502.
+  it("classifies email_verification_required off the Magic Auth grant", () => {
+    expect(classifyMagicAuthFailure({ code: "email_verification_required" })).toBe(
+      "email_verification_required",
+    );
+  });
+
+  it("classifies it off the authorization-code grant too", () => {
+    expect(classifyAuthorizationCodeFailure({ code: "email_verification_required" })).toBe(
+      "email_verification_required",
+    );
+  });
+
+  it("yields undefined for an unrecognised refusal body", () => {
+    expect(classifyMagicAuthFailure({ code: "something_new" })).toBeUndefined();
   });
 });

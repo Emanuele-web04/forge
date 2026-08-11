@@ -16,10 +16,9 @@ const accountApiMock = {
   status: vi.fn<() => Promise<AccountStatus>>(),
   sendOtp: vi.fn(),
   authenticateOtp: vi.fn(),
-  verifyEmail: vi.fn(),
-  resendVerificationEmail: vi.fn(),
-  beginSignIn: vi.fn(),
-  completeSignIn: vi.fn(),
+  beginSso: vi.fn(),
+  completeSso: vi.fn(),
+  cancelSso: vi.fn(),
   updateProfile: vi.fn(),
   signOut: vi.fn(),
   openVerificationUrl: vi.fn(),
@@ -119,48 +118,6 @@ describe("useAccount", () => {
     expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
       state: "signed-in",
       me,
-    });
-  });
-
-  // Verification is a sign-in: its success must settle the status cache the
-  // same way the OTP grant's does.
-  it("writes the fresh status into the cache after verifyEmail", async () => {
-    const queryClient = new QueryClient();
-    queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), { state: "signed-out" });
-    const me = makeMe();
-    accountApiMock.verifyEmail.mockResolvedValue({ state: "signed-in", me });
-
-    const account = renderUseAccount(queryClient);
-    await account.verifyEmail.mutateAsync({
-      code: "123456",
-      pendingAuthenticationToken: "pat_123",
-    });
-
-    expect(accountApiMock.verifyEmail).toHaveBeenCalledWith({
-      code: "123456",
-      pendingAuthenticationToken: "pat_123",
-    });
-    expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
-      state: "signed-in",
-      me,
-    });
-  });
-
-  it("passes a resend through without touching the status cache", async () => {
-    const queryClient = new QueryClient();
-    queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), { state: "signed-out" });
-    accountApiMock.resendVerificationEmail.mockResolvedValue(undefined);
-
-    const account = renderUseAccount(queryClient);
-    await account.resendVerificationEmail.mutateAsync({
-      emailVerificationId: "email_verification_123",
-    });
-
-    expect(accountApiMock.resendVerificationEmail).toHaveBeenCalledWith({
-      emailVerificationId: "email_verification_123",
-    });
-    expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
-      state: "signed-out",
     });
   });
 
@@ -270,20 +227,20 @@ describe("useAccount", () => {
     });
   });
 
-  it("forwards the abort signal to completeSignIn", async () => {
+  it("forwards the abort signal to completeSso", async () => {
     const queryClient = new QueryClient();
     const me = makeMe();
-    accountApiMock.completeSignIn.mockResolvedValue({ state: "signed-in", me });
+    accountApiMock.completeSso.mockResolvedValue({ state: "signed-in", me });
 
     const account = renderUseAccount(queryClient);
     const controller = new AbortController();
-    await account.completeSignIn.mutateAsync({
-      deviceCode: "device-code",
+    await account.completeSso.mutateAsync({
+      ssoId: "sso_1",
       signal: controller.signal,
     });
 
-    expect(accountApiMock.completeSignIn).toHaveBeenCalledWith(
-      { deviceCode: "device-code" },
+    expect(accountApiMock.completeSso).toHaveBeenCalledWith(
+      { ssoId: "sso_1" },
       { signal: controller.signal },
     );
   });

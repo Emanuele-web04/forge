@@ -9,10 +9,6 @@ import {
   type AccountProfileAvatarColor,
   type AccountProfileHandle,
   type AuthTokensResponse,
-  type DeviceAuthorizationResponse,
-  DeviceTokenRequest,
-  type DeviceTokenPollResponse,
-  type EmailVerificationRequiredBody,
   type InstanceInfo,
   type ListHostsResponse,
   type OrganizationRequiredBody,
@@ -24,11 +20,9 @@ import {
   RegisterHostRequest,
   RefreshTokenRequest,
   type RefreshTokenResponse,
-  ResendVerificationRequest,
   UpdateHostRequest,
   UpdateOrganizationRequest,
   UpdateProfileRequest,
-  VerifyEmailRequest,
 } from "@synara/contracts";
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -64,29 +58,25 @@ import packageJson from "../../package.json" with { type: "json" };
 
 const API_VERSION: string = packageJson.version;
 
-/** Device authorizations allowed per client per minute. */
-export const DEVICE_RATE_LIMIT_PER_MINUTE = 10;
+/** Authorize-URL requests (SSO starts) allowed per client per minute. */
+export const AUTHORIZE_RATE_LIMIT_PER_MINUTE = 10;
 
 /**
  * Code-redemption attempts allowed per client per minute. Deliberately far
- * below the device limit: a device authorization is a harmless request for a
- * code, while these carry credentials and are the endpoints worth guessing
- * against. Low enough to make online guessing pointless, high enough to
- * survive a user mistyping a code a few times.
+ * below the authorize limit: building an authorize URL is a harmless
+ * request, while these carry credentials and are the endpoints worth
+ * guessing against. Low enough to make online guessing pointless, high
+ * enough to survive a user mistyping a code a few times.
  */
 export const OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE = 5;
 
 /**
- * Code-sending requests allowed per client per minute — the OTP send and the
- * verification resend share this posture (each has its own budget instance).
- * Deliberately the tightest: every request makes the identity provider send
- * somebody an email, and one user legitimately needs at most one retry a
- * minute — the UI enforces a 60s countdown of its own.
+ * Code-sending requests allowed per client per minute. Deliberately the
+ * tightest: every request makes the identity provider send somebody an
+ * email, and one user legitimately needs at most one retry a minute — the
+ * UI enforces a 60s countdown of its own.
  */
 export const OTP_SEND_RATE_LIMIT_PER_MINUTE = 2;
-
-/** Verification-email resends allowed per client per minute. */
-export const RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE = 2;
 
 /**
  * Email sends allowed per recipient address per hour, across all sender IPs.
@@ -96,17 +86,6 @@ export const RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE = 2;
  * that a real user retrying across devices never hits it.
  */
 export const PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR = 10;
-
-/**
- * Device-token polls allowed per client per minute. Deliberately far above
- * the other auth budgets: polling is chatty BY DESIGN — RFC 8628 has the
- * client re-ask every `interval` seconds (WorkOS hands out 5s, i.e. 12
- * requests a minute) until the user clicks through, and two concurrent
- * sign-ins from one NAT'd office must not starve each other. The device code
- * itself is unguessable, so the budget only needs to stop pathological
- * hammering, not online guessing.
- */
-export const DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE = 60;
 
 /**
  * Refresh grants allowed per client per minute. Stricter than polling — a
@@ -219,23 +198,14 @@ export function createV1Routes(deps: {
 
   // Per router instance, not module-global: two routers in one process (tests,
   // or a future multi-tenant mount) must not share a budget.
-  const deviceRateLimiter = createRateLimiter({
-    limit: DEVICE_RATE_LIMIT_PER_MINUTE,
+  const authorizeRateLimiter = createRateLimiter({
+    limit: AUTHORIZE_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
-  // Separate budget from the device routes, so exhausting one cannot lock a
-  // user out of the other.
+  // Separate budget from the authorize route, so exhausting one cannot lock
+  // a user out of the other.
   const otpAuthenticateRateLimiter = createRateLimiter({
-    limit: OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
-    windowMs: 60_000,
-  });
-
-  // Verify-email has its own instance at the same posture: it shares the
-  // redemption budget's SIZE, but a user who exhausted the OTP budget
-  // mistyping codes must still be able to complete the verification step
-  // mid-flow (and vice versa) — one instance would couple the two.
-  const verifyEmailRateLimiter = createRateLimiter({
     limit: OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
@@ -248,30 +218,15 @@ export function createV1Routes(deps: {
     windowMs: 60_000,
   });
 
-  // And again for verification resends, for the same reason.
-  const resendVerificationRateLimiter = createRateLimiter({
-    limit: RESEND_VERIFICATION_RATE_LIMIT_PER_MINUTE,
-    windowMs: 60_000,
-  });
-
-  // Polling has its own generous budget (see the constant) so a normal RFC
-  // 8628 loop never trips it, and exhausting it cannot lock anyone out of
-  // starting a flow or refreshing a session.
-  const deviceTokenRateLimiter = createRateLimiter({
-    limit: DEVICE_TOKEN_RATE_LIMIT_PER_MINUTE,
-    windowMs: 60_000,
-  });
-
   const refreshRateLimiter = createRateLimiter({
     limit: REFRESH_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
-  // The per-recipient budget behind the two email-sending routes. One
-  // limiter shared by send and resend deliberately — both put mail in the
-  // same mailbox, so they must draw down one target-side allowance — keyed
-  // by normalized address (send) or verification id (resend). BOTH the
-  // per-IP budget and this must pass.
+  // The per-recipient budget behind the email-sending route, keyed by
+  // normalized address. Bounds the *target*: even a caller who defeats IP
+  // keying cannot flood one mailbox past this. BOTH the per-IP budget and
+  // this must pass.
   const perEmailSendRateLimiter = createRateLimiter({
     limit: PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR,
     windowMs: 60 * 60_000,
@@ -701,18 +656,20 @@ export function createV1Routes(deps: {
    * database, a log line, or an error message. Nothing below may start doing
    * so.
    *
-   * SSO (Google/GitHub) does not come through here; it takes the device flow.
+   * SSO (Google/Apple/GitHub) does not come through here; it takes the PKCE
+   * authorize routes below.
    */
   const authFailureResponses: Record<
     AuthFailureReason,
     { status: ContentfulStatusCode; code: AccountErrorCode; message: string }
   > = {
     // Should not arrive on the OTP grant — redeeming the code proves email
-    // ownership — but the verification machinery still serves it.
+    // ownership. Kept as a classified terse dead-end (no in-app challenge
+    // flow): the emailed-code sign-in is itself the verification path.
     email_verification_required: {
       status: 403,
       code: "email_verification_required",
-      message: "Check your email to verify your address, then sign in",
+      message: "This account's email isn't verified — sign in with an emailed code instead",
     },
     // Domain policy: the address belongs to a domain with an SSO connection,
     // so the identity provider refuses email-code auth for it categorically.
@@ -747,21 +704,6 @@ export function createV1Routes(deps: {
   function authErrorResponse(c: Context, error: unknown): Response {
     if (error instanceof IdentityAuthError) {
       const mapped = authFailureResponses[error.reason];
-      // The one refusal with a richer body: the refusal's own fields are what
-      // completing verification in-app redeems, so they travel to the client
-      // (allowlisted in the implementation — extraction never widens past
-      // these three). Without them the plain body still tells the user to use
-      // the emailed link, so an upstream that omits them degrades, not breaks.
-      if (error.reason === "email_verification_required" && error.verification) {
-        const body: EmailVerificationRequiredBody = {
-          error: "email_verification_required",
-          message: "Enter the 6-digit code we sent to your email",
-          pendingAuthenticationToken: error.verification.pendingAuthenticationToken,
-          email: error.verification.email,
-          emailVerificationId: error.verification.emailVerificationId,
-        };
-        return c.json(body, 403);
-      }
       return errorResponse(c, mapped.status, mapped.code, mapped.message);
     }
     // No body, no cause: whatever went wrong upstream, the log line must not
@@ -843,95 +785,15 @@ export function createV1Routes(deps: {
   });
 
   /**
-   * Redeems the emailed 6-digit code plus the pending authentication token an
-   * `email_verification_required` refusal carried. Both are bearer-ish
-   * secrets, so the no-leak handling, the redemption rate budget, and the
-   * no-echo validation message all apply. Redeeming an OTP implicitly
-   * verifies the email, so this should not trigger on the OTP path — it stays
-   * for any flow the provider still answers the challenge on.
-   */
-  v1.post("/auth/verify-email", async (c) => {
-    if (!verifyEmailRateLimiter.tryConsume(callerIp(c))) {
-      return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
-    }
-
-    const json = await c.req.json().catch(() => null);
-    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
-
-    let parsed: VerifyEmailRequest;
-    try {
-      parsed = Schema.decodeUnknownSync(VerifyEmailRequest)(json);
-    } catch {
-      // Not the decoder's message: it quotes the offending value, which here
-      // is a code and a pending token.
-      return errorResponse(
-        c,
-        400,
-        "validation_failed",
-        "A 6-digit code and its pending authentication token are required",
-      );
-    }
-
-    try {
-      return c.json(
-        authTokensBody(await verifier.verifyEmailCode({ ...parsed, context: authContext(c) })),
-      );
-    } catch (error) {
-      return authErrorResponse(c, error);
-    }
-  });
-
-  /**
-   * Emails the user a fresh verification code. Answers 202 with an empty body
-   * on success AND on an unknown or expired verification id: a resend
-   * endpoint that confirmed which ids exist would be an oracle, and the
-   * caller's next step — wait for the email — is the same either way.
-   */
-  v1.post("/auth/resend-verification", async (c) => {
-    if (!resendVerificationRateLimiter.tryConsume(callerIp(c))) {
-      return errorResponse(c, 429, "rate_limited", "Too many resend requests — wait a minute");
-    }
-
-    const json = await c.req.json().catch(() => null);
-    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
-
-    let parsed: ResendVerificationRequest;
-    try {
-      parsed = Schema.decodeUnknownSync(ResendVerificationRequest)(json);
-    } catch {
-      return errorResponse(c, 400, "validation_failed", "A verification id is required");
-    }
-
-    // Second gate keyed on the verification id — each id names exactly one
-    // recipient, so this bounds mail into that mailbox across caller IPs.
-    if (!perEmailSendRateLimiter.tryConsume(`verification:${parsed.emailVerificationId.trim()}`)) {
-      return errorResponse(c, 429, "rate_limited", "Too many resend requests — wait a minute");
-    }
-
-    try {
-      await verifier.resendVerificationEmail(parsed.emailVerificationId);
-    } catch (error) {
-      if (error instanceof IdentityProviderError && error.status === 404) {
-        // Indistinguishable from success by design; see the route comment.
-        return c.body(null, 202);
-      }
-      // No body and no cause in the log, as on every credential-path failure.
-      console.error("[api] verification resend failed upstream");
-      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
-    }
-    return c.body(null, 202);
-  });
-
-  /**
    * Builds the provider's authorize URL for the desktop PKCE flow — how
-   * "Continue with Google/GitHub" deep-links to the chosen provider.
-   * Unauthenticated by nature; nothing is consumed by building a URL, so it
-   * shares the device-authorization budget. The redirect URI must be
-   * loopback: this route otherwise mints provider sign-in links that hand a
-   * user's authorization code to whatever origin the caller named.
+   * "Continue with Google/Apple/GitHub" deep-links to the chosen provider.
+   * Unauthenticated by nature; nothing is consumed by building a URL. The
+   * redirect URI must be loopback: this route otherwise mints provider
+   * sign-in links that hand a user's authorization code to whatever origin
+   * the caller named.
    */
   v1.post("/auth/authorize", async (c) => {
-    if (!deviceRateLimiter.tryConsume(callerIp(c))) {
+    if (!authorizeRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many sign-in requests");
     }
 
@@ -999,69 +861,6 @@ export function createV1Routes(deps: {
           await verifier.exchangeAuthorizationCode({ ...parsed, context: authContext(c) }),
         ),
       );
-    } catch (error) {
-      return authErrorResponse(c, error);
-    }
-  });
-
-  /**
-   * Starts the SSO device flow — the CLI's `synara auth` path (the desktop
-   * app uses the PKCE authorize routes above). Unauthenticated by nature —
-   * the caller has no credentials yet. Every leg of the flow is proxied:
-   * start here, polling at /auth/device/token, refresh at /auth/refresh — so
-   * the client speaks only to this service and the identity vendor is
-   * invisible on its wire.
-   */
-  v1.post("/auth/device", async (c) => {
-    if (!deviceRateLimiter.tryConsume(callerIp(c))) {
-      return errorResponse(c, 429, "rate_limited", "Too many device authorization requests");
-    }
-
-    try {
-      const body: DeviceAuthorizationResponse = await verifier.requestDeviceAuthorization();
-      return c.json(body);
-    } catch (error) {
-      // Every failure here is upstream — a rejected API key, a provider
-      // outage, a transport error. None is the caller's fault and none may
-      // leak the upstream message, which can quote the credentials we sent;
-      // the operator still needs to be able to tell them apart, hence the log.
-      console.error("[api] device authorization proxy failed:", error);
-      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
-    }
-  });
-
-  /**
-   * One poll of the device grant. Answers 200 with a `status` discriminant
-   * (`granted` | `pending` | `slow_down` | `expired` | `denied`) rather than
-   * OAuth error bodies: the non-granted outcomes are expected states of a
-   * healthy flow, and a client should never sniff refusal bodies to keep its
-   * loop going. The device code is bearer-ish, so the no-echo validation
-   * message and the no-leak error mapping apply.
-   */
-  v1.post("/auth/device/token", async (c) => {
-    if (!deviceTokenRateLimiter.tryConsume(callerIp(c))) {
-      return errorResponse(c, 429, "rate_limited", "Polling too fast — slow down and retry");
-    }
-
-    const json = await c.req.json().catch(() => null);
-    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
-
-    let parsed: DeviceTokenRequest;
-    try {
-      parsed = Schema.decodeUnknownSync(DeviceTokenRequest)(json);
-    } catch {
-      // Not the decoder's message: it quotes the offending value, which here
-      // is the device code.
-      return errorResponse(c, 400, "validation_failed", "A device code is required");
-    }
-
-    try {
-      const result = await verifier.pollDeviceToken({ ...parsed, context: authContext(c) });
-      const body: DeviceTokenPollResponse =
-        result.status === "granted"
-          ? { status: "granted", tokens: authTokensBody(result.tokens) }
-          : { status: result.status };
-      return c.json(body);
     } catch (error) {
       return authErrorResponse(c, error);
     }

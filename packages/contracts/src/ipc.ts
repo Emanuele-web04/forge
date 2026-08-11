@@ -2,19 +2,15 @@ import { Schema } from "effect";
 
 import type {
   AccountAuthenticateOtpInput,
-  AccountBeginSignInResult,
   AccountBeginSsoInput,
   AccountBeginSsoResult,
-  AccountCompleteSignInInput,
   AccountCompleteSsoInput,
   AccountMe,
   AccountOpenVerificationUrlInput,
-  AccountResendVerificationEmailInput,
   AccountSendOtpInput,
   AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
-  AccountVerifyEmailInput,
 } from "./account";
 import type {
   AuthBearerBootstrapResult,
@@ -860,20 +856,6 @@ export interface NativeApi {
      */
     authenticateOtp: (input: AccountAuthenticateOtpInput) => Promise<AccountStatus>;
     /**
-     * Redeems the emailed 6-digit verification code against the pending
-     * authentication token an `email_verification_required` refusal carried.
-     * The input is a secret pair — same handling rules as the OTP call:
-     * never logged, and kept only in the dialog's in-memory state.
-     */
-    verifyEmail: (input: AccountVerifyEmailInput) => Promise<AccountStatus>;
-    /** Asks the identity provider to email a fresh verification code. */
-    resendVerificationEmail: (input: AccountResendVerificationEmailInput) => Promise<void>;
-    /**
-     * Starts the CLI-shaped SSO path (device grant). The desktop dialog
-     * uses beginSso below; this stays for headless flows and back-compat.
-     */
-    beginSignIn: () => Promise<AccountBeginSignInResult>;
-    /**
      * Starts the desktop SSO path for one provider: authorization code +
      * PKCE with a loopback redirect, so "Continue with Google/GitHub"
      * genuinely deep-links to that provider. The server owns the loopback
@@ -883,8 +865,8 @@ export interface NativeApi {
     beginSso: (input: AccountBeginSsoInput) => Promise<AccountBeginSsoResult>;
     /**
      * Waits for the browser callback, exchanges the code server-side, and
-     * persists the session. Like completeSignIn, issued without an RPC
-     * timeout; a dropped socket loses nothing.
+     * persists the session. Issued without an RPC timeout; a dropped socket
+     * loses nothing.
      */
     completeSso: (
       input: AccountCompleteSsoInput,
@@ -892,20 +874,10 @@ export interface NativeApi {
     ) => Promise<AccountStatus>;
     /** Abandons a pending SSO attempt, closing its loopback listener. */
     cancelSso: (input: AccountCompleteSsoInput) => Promise<void>;
-    /**
-     * Waits for the user to finish on the hosted page, then persists the
-     * session. Runs for as long as the device code lives, so it is issued
-     * without an RPC timeout; if the socket drops mid-flight the credentials
-     * are still persisted server-side and `status()` recovers the result.
-     */
-    completeSignIn: (
-      input: AccountCompleteSignInInput,
-      options?: { readonly signal?: AbortSignal },
-    ) => Promise<AccountStatus>;
     /** Writes the profile, and renames the workspace when `workspaceName` differs. */
     updateProfile: (input: AccountUpdateProfileInput) => Promise<AccountMe>;
     signOut: () => Promise<void>;
-    /** Opens the device-verification page in the system browser. */
+    /** Opens an SSO authorize page this server issued in the system browser. */
     openVerificationUrl: (input: AccountOpenVerificationUrlInput) => Promise<void>;
   };
   automation: {

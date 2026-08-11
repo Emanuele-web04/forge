@@ -13,10 +13,11 @@ nothing in this app runs unless you deploy an instance and point a server at it.
 - **With `IDENTITY_PROVIDER=workos` (the default), `WORKOS_API_KEY` and
   `WORKOS_CLIENT_ID` are required**; the dev provider needs neither and refuses
   to coexist with a real key.
-- **The CLI is gated on `SYNARA_ACCOUNT_URL`.** `synara auth` and `synara
-status` only talk to an account service when that variable (or `synara auth
---account-url`) names one. Unset, `synara status` prints "account features
-  are not configured" and the CLI never opens a socket to anything.
+- **The CLI is gated on `SYNARA_ACCOUNT_URL`.** `synara auth` (host linking)
+  and `synara status` only talk to an account service when that variable (or
+  `synara auth --account-url`) names one. Unset, `synara status` prints
+  "account features are not configured" and the CLI never opens a socket to
+  anything. Sign-in itself is app-only.
 - **The in-app flow defaults to the hosted service.** Signing in from the app's
   UI is an explicit opt-in by the person clicking the button, so it falls back
   to `DEFAULT_ACCOUNT_URL` (`packages/shared/src/account.ts`) when the variable
@@ -58,16 +59,15 @@ backs both:
   separate request helper for these calls, because the general one puts the
   upstream response body into the thrown error and WorkOS echoes offending
   fields. Send is limited to 2/min per client, redemption to 5/min, each on
-  its own budget below the device route's 10/min. There is **no password
+  its own budget below the authorize route's 10/min. There is **no password
   auth**.
-- **SSO** — "Continue with Google/GitHub" takes the device-authorization grant
-  and finishes on the WorkOS hosted page in a real browser — the only auth
-  step that leaves the app. Every leg is proxied here: start
-  (`POST /api/v1/auth/device`), polling (`POST /api/v1/auth/device/token`,
-  a 200 with a `status` discriminant round-tripping RFC 8628's
-  pending/slow_down/expired/denied), and refresh (`POST /api/v1/auth/refresh`)
-  — the client never talks to WorkOS, so a different identity backend is a
-  server-side swap. This is also the flow `synara auth` uses from the CLI.
+- **SSO** — "Continue with Google/Apple/GitHub" takes the authorization-code
+  grant with PKCE and a loopback redirect, finishing on the WorkOS hosted
+  page in a real browser — the only auth step that leaves the app. Every leg
+  is proxied here: the authorize URL (`POST /api/v1/auth/authorize`), the
+  code exchange (`POST /api/v1/auth/authorize/token`), and refresh
+  (`POST /api/v1/auth/refresh`) — the client never talks to WorkOS, so a
+  different identity backend is a server-side swap.
 
 Both converge on the same token pair, so everything downstream — workspace
 scoping, credential storage, refresh — is one code path.
@@ -89,9 +89,9 @@ members: an invite, not a migration.
 - The unique index is `(owner_org_id, environment_id)`, so one machine can be
   linked from two different workspaces.
 
-WorkOS mints device-grant tokens **without** an `org_id` claim, so the first
-call after `synara auth` is always refused with `403 organization_required`.
-That response carries the caller's organizations, and the CLI refreshes with
+WorkOS mints sign-in tokens **without** an `org_id` claim, so the first call
+after a sign-in is always refused with `403 organization_required`. That
+response carries the caller's organizations, and the client refreshes with
 `organization_id` to obtain a scoped token before retrying. The same 403
 answers a token naming an organization the caller has since left, which is what
 makes a revoked membership take effect without anything being purged.
@@ -110,12 +110,11 @@ own.
   dashboard change rather than a deploy.
 - **Email verification is WorkOS's decision, not ours.** Redeeming an OTP
   implicitly verifies the address, so the challenge should not fire on the
-  OTP path — but if WorkOS answers `email_verification_required` anyway, the
-  service surfaces the challenge fields and `/api/v1/auth/verify-email` plus
-  `/api/v1/auth/resend-verification` complete it in-app (defense-in-depth,
-  kept deliberately).
-- **Email delivery is WorkOS's.** OTP and verification mail is sent by WorkOS,
-  so there is no SMTP or Resend configuration.
+  OTP path — if WorkOS answers `email_verification_required` anyway, the
+  service classifies it into a terse 403 telling the user to sign in with an
+  emailed code instead. There is no in-app challenge flow.
+- **Email delivery is WorkOS's.** OTP mail is sent by WorkOS, so there is no
+  SMTP or Resend configuration.
 - **The JWKS is WorkOS's, served by WorkOS.** This service only reads it.
   Nothing is generated or stored locally, so there is no key material to rotate
   or lose.
@@ -137,12 +136,14 @@ own.
 ### Dashboard setup
 
 1. Create an AuthKit application at <https://dashboard.workos.com>.
-2. Under **Authentication**, enable the sign-in methods you want.
-3. Under **Authentication → CLI Auth**, **enable CLI Auth**. The `synara auth`
-   device flow uses the device authorization grant, and the endpoint returns an
-   error until this is switched on.
-4. Add `${ACCOUNT_BASE_URL}` to the allowed redirect URIs.
-5. Copy the API key and client id into `WORKOS_API_KEY` / `WORKOS_CLIENT_ID`.
+2. Under **Authentication**, enable the sign-in methods you want (Magic Auth
+   for email codes; Google, Apple, and GitHub for SSO — Sign in with Apple
+   additionally needs an Apple Developer Services ID and key configured on the
+   WorkOS side).
+3. Add `http://127.0.0.1:*/callback` to the allowed redirect URIs — the
+   desktop PKCE flow redirects to a loopback listener on an ephemeral port
+   (wildcard-port loopback redirects are allowed in all WorkOS environments).
+4. Copy the API key and client id into `WORKOS_API_KEY` / `WORKOS_CLIENT_ID`.
 
 ## Quick start (local)
 
@@ -158,10 +159,10 @@ empty database is fine. To generate new SQL after a schema change, use
 `bun run --cwd apps/api db:generate`; to apply without booting the server, use
 `db:migrate`.
 
-Then, from a Synara server checkout:
+Then sign in from the Synara app (account menu), and from a server checkout:
 
 ```sh
-SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts auth
+SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts auth    # link this host
 SYNARA_ACCOUNT_URL=http://localhost:8788 bun run --cwd apps/server src/index.ts status
 ```
 
@@ -180,8 +181,8 @@ IDENTITY_PROVIDER=dev DATABASE_URL=postgres://synara:synara@localhost:5432/synar
 - Any email signs in. The 6-digit OTP code is **printed to the API's stdout**
   (`[dev-identity] OTP for you@example.com: 000001`) instead of emailed — type
   it into the app's sign-in dialog.
-- SSO device authorizations self-approve after a few seconds, standing in for
-  the browser hop.
+- SSO sign-ins self-approve as the dev user: the authorize page 302s straight
+  back to the loopback listener, standing in for the browser hop.
 - Users, organizations, and codes are in-memory and die with the process; the
   host registry and profiles still live in Postgres as usual.
 
@@ -193,17 +194,17 @@ users. Internally it runs the same in-process double the test suite uses
 behind the same WorkOS adapter that runs in production, so the code path you
 exercise is the deployed one.
 
-### The standalone stub (CLI device-flow testing)
+### The standalone stub (WorkOS env-wiring testing)
 
 `scripts/fake-workos.ts` runs that same double as a standalone server, so the
-full `synara auth` flow works against a _normally configured_ API with no
-WorkOS tenancy. It auto-approves device authorizations on a timer, standing in
-for a human clicking through the hosted page — which is what makes the flow
-headless. Prefer this over `IDENTITY_PROVIDER=dev` when you specifically want
-to exercise the env-var wiring of the WorkOS configuration itself.
+full in-app sign-in flow works against a _normally configured_ API with no
+WorkOS tenancy. SSO authorize requests self-approve as the dev user and OTP
+codes print to the stub's stdout — which is what makes the flow headless.
+Prefer this over `IDENTITY_PROVIDER=dev` when you specifically want to
+exercise the env-var wiring of the WorkOS configuration itself.
 
 ```sh
-bun run --cwd apps/api scripts/fake-workos.ts        # :8790, approves after 5s
+bun run --cwd apps/api scripts/fake-workos.ts        # :8790
 ```
 
 It prints the environment to point the API at:
@@ -219,23 +220,22 @@ environment-scoped issuer that differs from the client id — so the discovery
 path is exactly the one production takes, and neither `WORKOS_ISSUER` nor
 `WORKOS_JWKS_URL` needs setting.
 
-Start the API with those set, then run `synara auth` as usual: the CLI prints a
-code, the stub approves it a few seconds later, and you end up with a real
-credentials file and a registered host.
+Start the API with those set, then sign in from the app as usual: SSO lands
+straight back in the app, OTP codes print in the stub's terminal, and you end
+up with a real credentials file (and, after `synara auth`, a registered host).
 
-| Flag                 | Default         | Purpose                                                                                                          |
-| -------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `--port`             | `8790`          | Listen port.                                                                                                     |
-| `--approve-after`    | `5`             | Seconds before a device authorization self-approves; `0` approves immediately.                                   |
-| `--client-id`        | `client_01FAKE` | Client id to serve.                                                                                              |
-| `--access-token-ttl` | `5m`            | Access-token lifetime. Set something like `30s` to exercise the CLI's refresh path.                              |
-| `--organization`     | none            | Pre-create an organization the approved user joins. Repeatable — pass it twice to exercise the workspace picker. |
+| Flag                 | Default         | Purpose                                                                                                     |
+| -------------------- | --------------- | ----------------------------------------------------------------------------------------------------------- |
+| `--port`             | `8790`          | Listen port.                                                                                                |
+| `--client-id`        | `client_01FAKE` | Client id to serve.                                                                                         |
+| `--access-token-ttl` | `5m`            | Access-token lifetime. Set something like `30s` to exercise the refresh path.                               |
+| `--organization`     | none            | Pre-create an organization the dev user joins. Repeatable — pass it twice to exercise the workspace picker. |
 
-With no `--organization`, the approved user belongs to nothing and the API
+With no `--organization`, the dev user belongs to nothing and the API
 provisions their personal organization lazily, which is the path a real
-first-time sign-in takes. The stub mints device-grant tokens without an
-`org_id` claim and honours `organization_id` on the refresh grant, exactly as
-WorkOS does, so the 403-then-refresh dance is real here too.
+first-time sign-in takes. The stub mints sign-in tokens without an `org_id`
+claim and honours `organization_id` on the refresh grant, exactly as WorkOS
+does, so the 403-then-refresh dance is real here too.
 
 The stub mints **single-use refresh tokens**, exactly as WorkOS does, so a
 client that fails to persist a rotation is locked out here the same way it would
@@ -247,10 +247,11 @@ is never reachable from a deployed instance.
 The stub verifies the shape of the flow, not WorkOS's behaviour. Before
 trusting an instance against real WorkOS, confirm by hand:
 
-1. **CLI Auth is enabled** in the dashboard (Authentication → CLI Auth) —
-   `POST /api/v1/auth/device` errors until it is.
-2. `synara auth` prints a WorkOS URL, and approving in a browser completes the
-   CLI poll.
+1. **The loopback redirect URI is registered** in the dashboard
+   (`http://127.0.0.1:*/callback`) — the SSO buttons error until it is.
+2. "Continue with Google/Apple/GitHub" opens the provider page in the system
+   browser and lands back in the app signed in; the email OTP dialog signs in
+   with the code WorkOS mails.
 3. `synara status` resolves your real name and email through `GET /me`.
 4. A command run more than ~5 minutes after signing in still works — that is the
    refresh path, and the credentials file should hold a changed token pair
@@ -263,8 +264,8 @@ trusting an instance against real WorkOS, confirm by hand:
    discovery resolves the environment-scoped issuer, and a hand-written guess
    is the one thing that reliably breaks this.
 7. **A refresh carrying `organization_id` yields a token with an `org_id`
-   claim.** Everything about host access depends on it. Decode the access token
-   the CLI stores after signing in and confirm the claim is there and matches
+   claim.** Everything about host access depends on it. Decode the stored
+   access token after signing in and confirm the claim is there and matches
    the workspace you chose; without it every host route answers
    `organization_required` forever.
 8. **The membership listing has the shape this service reads.**
@@ -350,8 +351,8 @@ which builds to `dist/index.mjs`, this app deliberately has none.
 `bun run test` requires Postgres and a `TEST_DATABASE_URL`; without it the
 database-backed suites skip. WorkOS is never called: `src/testing/fakeWorkos.ts`
 serves a JWKS from a freshly generated key pair, mints access tokens signed by
-it, and answers the device and refresh grants, so the auth path is exercised end
-to end with no network. The same module backs the dev stub above.
+it, and answers the OTP, PKCE, and refresh grants, so the auth path is
+exercised end to end with no network. The same module backs the dev stub above.
 
 ```sh
 docker compose -f docker-compose.yml up -d

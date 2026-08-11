@@ -4,20 +4,15 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import {
   AccountAuthenticateOtpInput,
-  AccountBeginSignInResult,
   AccountBeginSsoInput,
   AccountBeginSsoResult,
-  AccountCompleteSignInInput,
   AccountCompleteSsoInput,
-  AccountEmailVerificationRequiredError,
   AccountMe,
   AccountOpenVerificationUrlInput,
-  AccountResendVerificationEmailInput,
   AccountSendOtpInput,
   AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
-  AccountVerifyEmailInput,
 } from "./account";
 import {
   AutomationCancelRunInput,
@@ -1148,26 +1143,13 @@ export const WsAccountStatusRpc = Rpc.make(WS_METHODS.accountStatus, {
 });
 
 /**
- * The sensitive account RPCs' error channel. A union rather than plain
- * `WsRpcError` (the same shape `PullRequestsRpcError` takes for its
- * unavailable state): `email_verification_required` is the one refusal whose
- * payload the client genuinely needs — the pending token, email, and
- * verification id are what the in-app verification step redeems — and the
- * ordinary sensitive-path mapping deliberately strips a failure down to a
- * message and code.
- */
-const AccountSensitiveRpcError = Schema.Union([AccountEmailVerificationRequiredError, WsRpcError]);
-
-/**
  * Asks WorkOS to email the caller a 6-digit sign-in code. Deliberately
  * answers the same shape whether or not the address has an account.
  */
 export const WsAccountSendOtpRpc = Rpc.make(WS_METHODS.accountSendOtp, {
   payload: AccountSendOtpInput,
   success: AccountSendOtpResult,
-  // The union only because the handler shares the sensitive error mapping;
-  // a send itself never produces the verification-required refusal.
-  error: AccountSensitiveRpcError,
+  error: WsRpcError,
 });
 
 /**
@@ -1178,7 +1160,7 @@ export const WsAccountSendOtpRpc = Rpc.make(WS_METHODS.accountSendOtp, {
 export const WsAccountAuthenticateOtpRpc = Rpc.make(WS_METHODS.accountAuthenticateOtp, {
   payload: AccountAuthenticateOtpInput,
   success: AccountStatus,
-  error: AccountSensitiveRpcError,
+  error: WsRpcError,
 });
 
 /**
@@ -1187,43 +1169,6 @@ export const WsAccountAuthenticateOtpRpc = Rpc.make(WS_METHODS.accountAuthentica
  * a bearer-ish secret pair, so it takes the same no-logging rule as the OTP
  * RPC above.
  */
-export const WsAccountVerifyEmailRpc = Rpc.make(WS_METHODS.accountVerifyEmail, {
-  payload: AccountVerifyEmailInput,
-  success: AccountStatus,
-  // The union, like the OTP RPC: WorkOS can re-answer the original refusal
-  // (with a fresh pending token) instead of a terminal failure, and the
-  // handler shares their error mapping either way.
-  error: AccountSensitiveRpcError,
-});
-
-export const WsAccountResendVerificationEmailRpc = Rpc.make(
-  WS_METHODS.accountResendVerificationEmail,
-  {
-    payload: AccountResendVerificationEmailInput,
-    success: Schema.Void,
-    // The union only because the handler shares the sensitive error mapping;
-    // a resend itself never produces the verification-required refusal.
-    error: AccountSensitiveRpcError,
-  },
-);
-
-export const WsAccountBeginSignInRpc = Rpc.make(WS_METHODS.accountBeginSignIn, {
-  payload: Schema.Struct({}),
-  success: AccountBeginSignInResult,
-  error: WsRpcError,
-});
-
-/**
- * Long-running by design: the server polls WorkOS until the user finishes on
- * the hosted page, so this request stays open for as long as the device code
- * lives. Clients must not impose their usual RPC timeout on it.
- */
-export const WsAccountCompleteSignInRpc = Rpc.make(WS_METHODS.accountCompleteSignIn, {
-  payload: AccountCompleteSignInInput,
-  success: AccountStatus,
-  error: WsRpcError,
-});
-
 export const WsAccountBeginSsoRpc = Rpc.make(WS_METHODS.accountBeginSso, {
   payload: AccountBeginSsoInput,
   success: AccountBeginSsoResult,
@@ -1231,9 +1176,9 @@ export const WsAccountBeginSsoRpc = Rpc.make(WS_METHODS.accountBeginSso, {
 });
 
 /**
- * Long-running like the device completion: the server waits on the loopback
- * browser callback for as long as the attempt lives. Clients must not impose
- * their usual RPC timeout on it.
+ * Long-running by design: the server waits on the loopback browser callback
+ * for as long as the attempt lives. Clients must not impose their usual RPC
+ * timeout on it.
  */
 export const WsAccountCompleteSsoRpc = Rpc.make(WS_METHODS.accountCompleteSso, {
   payload: AccountCompleteSsoInput,
@@ -1445,10 +1390,6 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAccountStatusRpc,
   WsAccountSendOtpRpc,
   WsAccountAuthenticateOtpRpc,
-  WsAccountVerifyEmailRpc,
-  WsAccountResendVerificationEmailRpc,
-  WsAccountBeginSignInRpc,
-  WsAccountCompleteSignInRpc,
   WsAccountBeginSsoRpc,
   WsAccountCompleteSsoRpc,
   WsAccountCancelSsoRpc,

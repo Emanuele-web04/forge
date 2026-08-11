@@ -2,7 +2,9 @@
 
 Status: implemented
 Date: 2026-08-03 (identity section revised 2026-08-05; rewritten 2026-08-10
-for in-app OTP auth, the identity adapter seam, and maintainer feedback)
+for in-app OTP auth, the identity adapter seam, and maintainer feedback;
+simplified 2026-08-11: CLI device grant and the in-app email-verification
+challenge flow removed, Apple SSO added)
 Branch base: `feat/remote-hosts` (implementation on a new worktree branch)
 
 ## Pivot notes
@@ -95,10 +97,9 @@ modules.
 
 - **`AccountIdentityVerifier`** — verifies an access token to
   `{userId, sessionId, orgId?}`; user lookup; and every authentication grant:
-  OTP send/redeem, the SSO device authorization plus its polling leg
-  (`pollDeviceToken`), token refresh (`refreshTokens`), and the
-  email-verification challenge and its resend. Every leg of every flow goes
-  through the seam — the identity vendor is invisible on the client wire.
+  OTP send/redeem, the PKCE authorize URL and code exchange, and token
+  refresh (`refreshTokens`). Every leg of every flow goes through the seam —
+  the identity vendor is invisible on the client wire.
 - **`EnvironmentGrantIssuer`** — decides which environment scope a verified
   token may act inside: today, the organization membership check plus lazy
   personal-org provisioning. The name is for what it grows into (see Token
@@ -122,9 +123,9 @@ Implementations, selected in exactly one place (`src/identity/index.ts`):
   runs the test suite's in-process identity double behind the same WorkOS
   adapter production uses, giving contributors a fully offline account stack:
   any email signs in, the OTP code is printed to stdout (the one deliberate,
-  gated exception to the no-leak rules), and the WHOLE SSO device flow runs
-  locally — issue, self-approve on a timer, poll to success — which the
-  proxied polling leg makes a requirement, not a nicety. **Hard safety gate:** it refuses to start — process
+  gated exception to the no-leak rules), and the SSO authorize page
+  self-approves as the dev user, 302ing straight back to the loopback
+  listener. **Hard safety gate:** it refuses to start — process
   exit with an explanatory message — when `NODE_ENV=production` or while
   `WORKOS_API_KEY` is set, checked both in config loading and again inside
   the provider factory so a hand-built config cannot bypass it.
@@ -153,7 +154,8 @@ device-bound grants are the planned upgrade, not a keychain.
 
 Identity is the provider's; the set of enabled sign-in methods is a property
 of the operator's provider application (dashboard toggles under WorkOS), not
-of this service. What Synara ships is two ways in:
+of this service. What Synara ships is two ways in — and sign-in is app-only:
+the CLI never signs in itself, it links the host using the app's session.
 
 - **Email OTP (WorkOS Magic Auth) — fully in-app.** The app asks
   `POST /api/v1/auth/otp/send` to email a 6-digit code, then redeems it at
@@ -163,42 +165,42 @@ of this service. What Synara ships is two ways in:
   202 for known and unknown addresses (no account-existence oracle). The
   proxy exists because the grant is confidential-client — it requires the
   client secret, which a public client cannot hold.
-- **SSO (Google/GitHub) — desktop via authorization code + PKCE, CLI via
-  device grant.** On the desktop, "Continue with Google/GitHub" runs the
-  authorization-code grant with PKCE (S256) and a loopback redirect: the
-  Synara server starts a one-shot listener on `127.0.0.1` (ephemeral port,
-  single-use, hard timeout), asks the account service for the provider's
-  authorize URL (`POST /api/v1/auth/authorize` — carries the provider, the
-  loopback `redirect_uri`, the S256 challenge, and a random `state`), opens
-  it in the system browser, validates `state` on the callback, and exchanges
-  the code at `POST /api/v1/auth/authorize/token` with the PKCE verifier —
-  proxied like every other grant, so the identity vendor stays off the
-  client wire. The verifier and the authorization code are credentials with
-  the full no-leak rules. **Required WorkOS dashboard configuration:** the
-  loopback redirect URI must be registered on the AuthKit application —
-  add `http://127.0.0.1:*/callback` (wildcard-port loopback redirects are
-  allowed in all WorkOS environments). The CLI's `synara auth` keeps the
-  device grant (`POST /auth/device` + `/auth/device/token`) — it has no
-  browser to redirect to. Both converge on the same `establishSession`.
-  (Historical note: the pre-cutover design had clients polling the provider
-  directly with the `/instance` client id; that path survives only for old
-  clients, via the deprecated `InstanceInfo` fields.)
+- **SSO (Google/Apple/GitHub) — authorization code + PKCE.** "Continue with
+  Google/Apple/GitHub" runs the authorization-code grant with PKCE (S256)
+  and a loopback redirect: the Synara server starts a one-shot listener on
+  `127.0.0.1` (ephemeral port, single-use, hard timeout), asks the account
+  service for the provider's authorize URL (`POST /api/v1/auth/authorize` —
+  carries the provider, the loopback `redirect_uri`, the S256 challenge, and
+  a random `state`), opens it in the system browser, validates `state` on
+  the callback, and exchanges the code at `POST /api/v1/auth/authorize/token`
+  with the PKCE verifier — proxied like every other grant, so the identity
+  vendor stays off the client wire. The verifier and the authorization code
+  are credentials with the full no-leak rules. **Required WorkOS dashboard
+  configuration:** the loopback redirect URI must be registered on the
+  AuthKit application — add `http://127.0.0.1:*/callback` (wildcard-port
+  loopback redirects are allowed in all WorkOS environments); Sign in with
+  Apple additionally needs the Apple Developer Services ID and key
+  configured on the WorkOS side. All paths converge on the same
+  `establishSession`.
 - **No password auth.** The V1.1 password routes were removed with the OTP
   cutover; nothing accepts or stores a password.
+- **No CLI device grant.** The RFC 8628 device flow (and its proxied polling
+  leg) was removed in the 2026-08-11 simplification: sign-in is app-only,
+  and `synara auth` links the host from the app's stored session.
 
-**Email verification challenge — kept, defense-in-depth.** Redeeming an OTP
+**Email verification — a classified dead-end, not a flow.** Redeeming an OTP
 implicitly proves address ownership, so the provider's
-`email_verification_required` challenge should never fire on this path. The
-in-app completion flow (`/auth/verify-email`, `/auth/resend-verification`,
-and the challenge fields on the 403) is kept anyway: provider behavior under
-verification policies is not fully documented, the machinery is decoupled
-from any removed flow, and dropping it would strip a defensive path for zero
-simplification.
+`email_verification_required` challenge should never fire on this path. If a
+provider answers it anyway it is classified and surfaced as a terse 403
+telling the user to sign in with an emailed code instead — the emailed-code
+sign-in is itself the verification path. The previous in-app completion flow
+(`/auth/verify-email`, `/auth/resend-verification`, the challenge step in
+the dialog) was removed in the 2026-08-11 simplification.
 
 Rate limits are per-route budgets, deliberately separate so exhausting one
-cannot lock a user out of another: OTP send 2/min, OTP redemption 5/min
-(shared with verify-email — both redeem emailed codes), verification resend
-2/min, device authorization 10/min; all per client IP, per process.
+cannot lock a user out of another: OTP send 2/min, OTP redemption and PKCE
+code exchange 5/min, authorize-URL requests 10/min; all per client IP, per
+process.
 
 ### Token verification
 
@@ -224,6 +226,7 @@ short token lifetime; revocation takes effect where the client refreshes.
   provider). A 401 from that route proves the token dead; a 5xx or network
   failure must not burn the session — the service maps provider faults and
   terminal refusals to exactly that split.
+
 - _Host token_ — the machine credential: hashed at rest, shown once, one
   active per host, rotated on re-link, revocable independently of any user
   session. An expired user session must not stop a running server from
@@ -250,28 +253,24 @@ through the browser and converge on the same `establishSession`.
 
 **Grant timeouts, two tiers:** cheap/idempotent provider calls (discovery,
 `/me`, lookups) get a short per-attempt deadline (15s); GRANT-consuming
-calls (OTP/verification authenticate, device-token exchange, PKCE code
-exchange, refresh) get 45s, and the shared client's corresponding requests
-60s — a grant spends a single-use credential, so no client may abort before
-the layer beneath it has. When a grant still fails transiently, the server
-re-checks persisted status before surfacing anything: a sign-in that landed
-is reported as signed-in, and only a genuinely unpersisted failure surfaces
-— as a retryable "provider was slow" answer, never a flat "unavailable" for
-an operation that may have succeeded.
+calls (OTP authenticate, PKCE code exchange, refresh) get 45s, and the
+shared client's corresponding requests 60s — a grant spends a single-use
+credential, so no client may abort before the layer beneath it has. When a
+grant still fails transiently, the server re-checks persisted status before
+surfacing anything: a sign-in that landed is reported as signed-in, and only
+a genuinely unpersisted failure surfaces — as a retryable "provider was
+slow" answer, never a flat "unavailable" for an operation that may have
+succeeded.
 
-**Headless and desktop alike (`synara auth`):** the device authorization
-grant (Claude Code UX). The CLI prints the approval URL and user code, the
-user approves on any browser (a phone works), and the CLI polls until the
-tokens arrive. Every leg is proxied: start (`POST /auth/device`), poll
-(`POST /auth/device/token` — a 200 with a `status` discriminant that
-round-trips RFC 8628's pending / slow_down / expired / denied faithfully),
-and refresh (`POST /auth/refresh`). The client speaks only to the account
-service; which identity vendor sits behind it is invisible on the wire, which
-is what makes a self-hosted or generic-OIDC backend a drop-in. The trade-off
-is deliberate and matches the OTP routes: the account service is on the
-critical path for sign-in and refresh availability.
+**The CLI (`synara auth`):** links the host, nothing more. It reads the
+app's stored session from the shared credentials file and registers this
+machine; with no session it points the user at the app's sign-in. The
+refresh leg stays proxied (`POST /auth/refresh`); which identity vendor sits
+behind the service is invisible on the wire, which is what makes a
+self-hosted or generic-OIDC backend a drop-in.
 
-**Workspace scoping:** device-grant tokens carry no organization claim, so
+**Workspace scoping:** freshly minted sign-in tokens carry no organization
+claim, so
 the first authorized call answers `403 organization_required` with the
 caller's organizations (provisioning a personal one if none exists); the
 client refreshes with `organization_id` and retries. The same 403 answers a
@@ -330,25 +329,21 @@ Request/response contracts live in `packages/contracts` (schema-only).
 
 ## API surface (`/api/v1`)
 
-| Endpoint                         | Auth           | Purpose                                                                       |
-| -------------------------------- | -------------- | ----------------------------------------------------------------------------- |
-| `GET /me`                        | access token   | Identity, workspace, and profile (or null pre-onboarding)                     |
-| `PUT /profile`                   | access token   | Upsert profile; handle immutable; answers the `/me` body                      |
-| `PATCH /organization`            | access token   | Rename the workspace; answers the `/me` body                                  |
-| `GET /hosts`                     | access token   | List the workspace's hosts with endpoints + lastSeenAt                        |
-| `POST /hosts`                    | access token   | Register this machine; returns record + one-time host token                   |
-| `PATCH /hosts/:id`               | host token     | Update name/endpoints/version; bumps lastSeenAt                               |
-| `DELETE /hosts/:id`              | access or host | Unlink (owner removal or self-removal)                                        |
-| `POST /auth/otp/send`            | none (2/min)   | Email a 6-digit sign-in code; 202 regardless of account                       |
-| `POST /auth/otp/authenticate`    | none (5/min)   | Redeem the code for a token pair; signs up on first use                       |
-| `POST /auth/verify-email`        | none (5/min)   | Redeem a verification challenge (defense-in-depth path)                       |
-| `POST /auth/resend-verification` | none (2/min)   | Fresh verification code; 202 also for unknown ids                             |
-| `POST /auth/authorize`           | none (10/min)  | Build the PKCE authorize URL (desktop SSO); loopback redirects only           |
-| `POST /auth/authorize/token`     | none (5/min)   | Exchange the authorization code + PKCE verifier for a token pair              |
-| `POST /auth/device`              | none (10/min)  | Start the CLI device flow; proxies with the API key                           |
-| `POST /auth/device/token`        | none (60/min)  | One poll of the device grant; 200 with a status discriminant                  |
-| `POST /auth/refresh`             | none (10/min)  | Redeem a refresh token for a rotated, optionally workspace-scoped pair        |
-| `GET /instance`                  | none           | Version + what the verifier publishes (auth mode, client id, provider origin) |
+| Endpoint                      | Auth           | Purpose                                                                       |
+| ----------------------------- | -------------- | ----------------------------------------------------------------------------- |
+| `GET /me`                     | access token   | Identity, workspace, and profile (or null pre-onboarding)                     |
+| `PUT /profile`                | access token   | Upsert profile; handle immutable; answers the `/me` body                      |
+| `PATCH /organization`         | access token   | Rename the workspace; answers the `/me` body                                  |
+| `GET /hosts`                  | access token   | List the workspace's hosts with endpoints + lastSeenAt                        |
+| `POST /hosts`                 | access token   | Register this machine; returns record + one-time host token                   |
+| `PATCH /hosts/:id`            | host token     | Update name/endpoints/version; bumps lastSeenAt                               |
+| `DELETE /hosts/:id`           | access or host | Unlink (owner removal or self-removal)                                        |
+| `POST /auth/otp/send`         | none (2/min)   | Email a 6-digit sign-in code; 202 regardless of account                       |
+| `POST /auth/otp/authenticate` | none (5/min)   | Redeem the code for a token pair; signs up on first use                       |
+| `POST /auth/authorize`        | none (10/min)  | Build the PKCE authorize URL (SSO); loopback redirects only                   |
+| `POST /auth/authorize/token`  | none (5/min)   | Exchange the authorization code + PKCE verifier for a token pair              |
+| `POST /auth/refresh`          | none (10/min)  | Redeem a refresh token for a rotated, optionally workspace-scoped pair        |
+| `GET /instance`               | none           | Version + what the verifier publishes (auth mode, client id, provider origin) |
 
 Errors: typed codes in contracts with correct HTTP status; clients branch on
 code. Upstream provider failures answer 502 with an opaque message and a
@@ -357,30 +352,28 @@ dashboard; sign-out is local (drops the session, keeps the host
 registration).
 
 `/instance` is wire-stable: `authMode: "workos"` stays, and `clientId` /
-`workosApiUrl` are now **deprecated-but-present** — Synara's own clients no
-longer consume them (every provider call is proxied), but clients built
-before the proxy cutover still poll the provider directly with them, so the
-fields keep their values and their meaning. `authMode` may grow into a
+`workosApiUrl` are **deprecated-but-present** — Synara's own clients do not
+consume them (every provider call is proxied), but the fields keep their
+values and their meaning for wire stability. `authMode` may grow into a
 literal union as more provider families ship.
 
 ## Client integration (`apps/server`, `apps/web`)
 
-- `synara auth` / `synara auth logout` / `synara status` — device flow,
-  teardown, and status; all inert without `SYNARA_ACCOUNT_URL`.
+- `synara auth` / `synara auth logout` / `synara status` — host linking
+  (using the app's signed-in session), teardown, and status; all inert
+  without `SYNARA_ACCOUNT_URL`. The CLI performs no sign-in of its own.
 - **Credentials file (v3)** at `<synara home>/account-credentials.json`, mode
   `0600`, written atomically; session fields and host registration are
   independently optional, so an expired session leaves the host linked.
 - **Transparent refresh** — every user-scoped call retries once on a 401,
   persisting the rotated pair before the retry.
 - **In-app account** — `accountSession.ts` owns sign-in state server-side;
-  the account RPC group (ten methods: status, sendOtp, authenticateOtp,
-  verifyEmail, resendVerificationEmail, beginSignIn, completeSignIn,
-  updateProfile, signOut, openVerificationUrl — see
+  the account RPC group (status, sendOtp, authenticateOtp, beginSso,
+  completeSso, cancelSso, updateProfile, signOut, openVerificationUrl — see
   `apps/server/src/wsAccountRpc.ts`, all owner-only) rides the existing
-  WebSocket; the web app renders the
-  sign-in dialog (email → code boxes), onboarding (handle, display name,
-  avatar color), and the sidebar account menu. All sign-in paths converge on
-  `establishSession`.
+  WebSocket; the web app renders the sign-in dialog (SSO buttons, email →
+  code boxes), onboarding (handle, display name, avatar color), and the
+  sidebar account menu. All sign-in paths converge on `establishSession`.
 
 ## Local dev, deployment
 
@@ -396,27 +389,26 @@ literal union as more provider families ship.
   `DATABASE_URL` → PlanetScale Postgres over TLS. Environment unchanged means
   the WorkOS provider with identical behavior — the seam refactor is invisible
   to a deployed instance.
-- **Deploy ordering: api before clients.** The proxied device-token and
-  refresh routes (`/auth/device/token`, `/auth/refresh`) exist only on the
-  new api, and a new client polls them unconditionally — there is no
-  capability negotiation in V1 (clients are same-repo, the risk window is one
-  rolling deploy). Against a pre-proxy api the client's poll 404s and the
-  client reports the api as out of date (see `pollDeviceToken` in
-  `packages/shared/src/account.ts`) rather than hanging. A real
-  capability/version gate is deliberate future work.
+- **Deploy ordering: api before clients.** The proxied auth routes exist
+  only on the new api, and a new client calls them unconditionally — there
+  is no capability negotiation in V1 (clients are same-repo, the risk window
+  is one rolling deploy). Against an older api the client's call 404s and is
+  rewritten to an "account service is out of date" answer (see
+  `withProxySkewError` in `packages/shared/src/account.ts`) rather than
+  hanging. A real capability/version gate is deliberate future work.
 
 ## Testing
 
 - Vitest via `bun run test` (never `bun test`), against real pg18 from
   compose. The provider is never called: `src/testing/fakeWorkos.ts` is an
-  in-process double serving JWKS, OIDC discovery, the device/refresh/OTP/
-  verification grants, Magic Auth creation, and the organization APIs, with
-  single-use refresh tokens and deterministic 6-digit codes.
+  in-process double serving JWKS, OIDC discovery, the OTP/PKCE/refresh
+  grants, Magic Auth creation, and the organization APIs, with single-use
+  refresh tokens and deterministic 6-digit codes.
 - Route tests cover host CRUD and cross-org isolation, profiles and handle
   immutability, the full OTP matrix (happy paths, wrong/expired codes, resend
   invalidation, no-oracle sends, rate-budget separation, `sso_required`), the
-  verification flow, and no-leak assertions that sentinel codes appear in no
-  response body and no captured console output.
+  PKCE authorize/exchange flow, and no-leak assertions that sentinel codes
+  appear in no response body and no captured console output.
 - The dev provider has its own suite: the safety gate (config and factory
   level) and a full offline sign-in loop driven by the stdout code.
 - Final gate: `bun fmt`, `bun lint`, `bun typecheck` full pass. Real-provider

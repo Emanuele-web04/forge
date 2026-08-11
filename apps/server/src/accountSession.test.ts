@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import type { AccountMe } from "@synara/contracts";
 import {
@@ -32,7 +32,6 @@ const ACCOUNT_URL = "https://accounts.example.com";
 const CLIENT_ID = "client_01ABC";
 const WORKOS_API_URL = "https://api.workos.example";
 const ORGANIZATION = { id: "org_1", name: "Personal — ada@example.com" };
-const VERIFICATION_URL = "https://auth.example.com/device?user_code=WDJB-MJHT";
 
 function unimplemented(name: string) {
   return () => Promise.reject(new Error(`${name} should not be called`));
@@ -49,8 +48,6 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
       }),
     sendOtp: unimplemented("sendOtp"),
     authenticateOtp: unimplemented("authenticateOtp"),
-    verifyEmail: unimplemented("verifyEmail"),
-    resendVerificationEmail: unimplemented("resendVerificationEmail"),
     me: unimplemented("me"),
     updateProfile: unimplemented("updateProfile"),
     updateOrganization: unimplemented("updateOrganization"),
@@ -58,10 +55,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     registerHost: unimplemented("registerHost"),
     updateHost: unimplemented("updateHost"),
     deleteHost: unimplemented("deleteHost"),
-    requestDeviceCode: unimplemented("requestDeviceCode"),
     requestAuthorizeUrl: unimplemented("requestAuthorizeUrl"),
     exchangeAuthorizeCode: unimplemented("exchangeAuthorizeCode"),
-    pollDeviceToken: unimplemented("pollDeviceToken"),
     refreshAccessToken: unimplemented("refreshAccessToken"),
     ...overrides,
   } as AccountClient;
@@ -93,49 +88,6 @@ function credentials(overrides: Record<string, unknown> = {}) {
 
 function sessionFor(baseDir: string, client: AccountClient) {
   return createAccountSession({ baseDir, accountUrl: ACCOUNT_URL, client });
-}
-
-/**
- * The device flow as WorkOS runs it: the grant hands back an org-less token,
- * `/me` refuses it with the memberships to pick from, and the refresh mints
- * the scoped pair that is actually usable. Modelled faithfully because a
- * session that forgot to scope its token would otherwise pass every test here
- * and fail against a real account.
- */
-function deviceFlowClient(overrides: Partial<AccountClient> = {}): AccountClient {
-  return makeClient({
-    requestDeviceCode: () =>
-      Promise.resolve({
-        deviceCode: "device-code",
-        userCode: "WDJB-MJHT",
-        verificationUri: "https://auth.example.com/device",
-        verificationUriComplete: VERIFICATION_URL,
-        expiresIn: 900,
-        interval: 5,
-      }),
-    pollDeviceToken: () =>
-      Promise.resolve({
-        accessToken: "access-0",
-        refreshToken: "refresh-0",
-        user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-      }),
-    me: (token) =>
-      token === "access-0"
-        ? Promise.reject(
-            new OrganizationRequiredError({
-              message: "Pick a workspace",
-              organizations: [ORGANIZATION],
-            }),
-          )
-        : Promise.resolve(meResponse()),
-    refreshAccessToken: () =>
-      Promise.resolve({
-        accessToken: "access-1",
-        refreshToken: "refresh-1",
-        user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-      }),
-    ...overrides,
-  });
 }
 
 describe("status", () => {
@@ -217,211 +169,6 @@ describe("status", () => {
     );
 
     await expect(session.status()).rejects.toThrow("ECONNREFUSED");
-  });
-});
-
-describe("sign-in", () => {
-  it("polls to completion, scopes the token to a workspace, and persists it", async () => {
-    const baseDir = makeBaseDir();
-    const session = sessionFor(baseDir, deviceFlowClient());
-
-    const begun = await session.beginSignIn();
-    expect(begun).toMatchObject({
-      deviceCode: "device-code",
-      userCode: "WDJB-MJHT",
-      verificationUriComplete: VERIFICATION_URL,
-    });
-
-    expect(await session.completeSignIn({ deviceCode: begun.deviceCode })).toEqual({
-      state: "signed-in",
-      me: meResponse(),
-    });
-
-    // The scoped pair, not the org-less one the device grant returned: the
-    // refresh spent `refresh-0`, so persisting it would lock the user out.
-    expect(await readAccountFile(baseDir)).toMatchObject({
-      accountUrl: ACCOUNT_URL,
-      organizationId: ORGANIZATION.id,
-      accessToken: "access-1",
-      refreshToken: "refresh-1",
-    });
-  });
-
-  it("keeps the existing host registration across a new sign-in", async () => {
-    const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
-      accountUrl: ACCOUNT_URL,
-      workosClientId: CLIENT_ID,
-      workosApiUrl: WORKOS_API_URL,
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
-    const session = sessionFor(baseDir, deviceFlowClient());
-
-    const begun = await session.beginSignIn();
-    await session.completeSignIn({ deviceCode: begun.deviceCode });
-
-    expect(await readAccountFile(baseDir)).toMatchObject({
-      hostToken: "host-token",
-      hostId: "host_1",
-      accessToken: "access-1",
-    });
-  });
-
-  // Polling a code supplied from outside would let a caller drive someone
-  // else's sign-in and have the result stored as this machine's session.
-  it("refuses a device code this server did not issue", async () => {
-    const session = sessionFor(makeBaseDir(), deviceFlowClient());
-    await expect(session.completeSignIn({ deviceCode: "not-ours" })).rejects.toThrow(/expired/i);
-  });
-
-  // L1: an entry past the provider-issued deadline is dead everywhere — not
-  // pollable, and its verification URL leaves the opener allowlist — without
-  // waiting for count-based eviction or a restart.
-  it("expires a pending authorization past the provider deadline", async () => {
-    const session = sessionFor(makeBaseDir(), deviceFlowClient());
-    const begun = await session.beginSignIn();
-    expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(true);
-
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + (begun.expiresIn + 1) * 1000);
-    try {
-      expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(false);
-      await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
-        /expired/i,
-      );
-    } finally {
-      nowSpy.mockRestore();
-    }
-  });
-
-  // A denied (or provider-expired) poll is terminal: the entry is dropped on
-  // that failure, so its URL stops being openable immediately.
-  it("drops the pending entry when the poll ends denied", async () => {
-    const session = sessionFor(
-      makeBaseDir(),
-      deviceFlowClient({
-        pollDeviceToken: () =>
-          Promise.reject(
-            new AccountApiError({
-              code: "unauthorized",
-              status: 401,
-              message: "The sign-in was denied",
-            }),
-          ),
-      }),
-    );
-    const begun = await session.beginSignIn();
-    expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(true);
-
-    await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
-      /denied/i,
-    );
-    expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(false);
-    await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
-      /expired/i,
-    );
-  });
-
-  // The grant is single-use: once redeemed, a failure before the session is
-  // persisted must leave the attempt resumable, not strand the user with a
-  // spent code and nothing stored. The retry resumes from the cached pair
-  // (one poll total) and completes without a second redemption.
-  it("recovers a redeemed device grant when persistence fails on the first attempt", async () => {
-    const baseDir = makeBaseDir();
-    let polls = 0;
-    let scopedRefreshFails = true;
-    const session = sessionFor(
-      baseDir,
-      deviceFlowClient({
-        pollDeviceToken: () => {
-          polls += 1;
-          if (polls > 1) {
-            return Promise.reject(
-              new AccountApiError({ code: "unauthorized", status: 401, message: "spent" }),
-            );
-          }
-          return Promise.resolve({
-            accessToken: "access-0",
-            refreshToken: "refresh-0",
-            user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-          });
-        },
-        refreshAccessToken: () => {
-          if (scopedRefreshFails) {
-            scopedRefreshFails = false;
-            return Promise.reject(new Error("scoping blipped"));
-          }
-          return Promise.resolve({
-            accessToken: "access-1",
-            refreshToken: "refresh-1",
-            user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-          });
-        },
-      }),
-    );
-
-    const begun = await session.beginSignIn();
-    await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
-      /scoping blipped/,
-    );
-    // Nothing persisted yet, but the attempt is still live: the retry
-    // completes from the redeemed pair without polling the spent code.
-    expect(await session.completeSignIn({ deviceCode: begun.deviceCode })).toEqual({
-      state: "signed-in",
-      me: meResponse(),
-    });
-    expect(polls).toBe(1);
-    expect(await readAccountFile(baseDir)).toMatchObject({
-      accessToken: "access-1",
-      refreshToken: "refresh-1",
-    });
-  });
-
-  it("refuses to complete the same device code twice", async () => {
-    const session = sessionFor(makeBaseDir(), deviceFlowClient());
-    const begun = await session.beginSignIn();
-    await session.completeSignIn({ deviceCode: begun.deviceCode });
-
-    await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(
-      /expired/i,
-    );
-  });
-
-  // V1 is personal-org-only and this flow has no picker: several workspaces
-  // FAIL CLOSED with a clear classified error. Membership order is not a
-  // tenant-selection contract, so silently taking the first would bind the
-  // machine to an arbitrary team.
-  it("fails closed when the account offers several workspaces", async () => {
-    const baseDir = makeBaseDir();
-    const second = { id: "org_2", name: "Acme" };
-    const session = sessionFor(
-      baseDir,
-      deviceFlowClient({
-        me: (token) =>
-          token === "access-0"
-            ? Promise.reject(
-                new OrganizationRequiredError({
-                  message: "Pick a workspace",
-                  organizations: [ORGANIZATION, second],
-                }),
-              )
-            : Promise.resolve(meResponse()),
-      }),
-    );
-
-    const begun = await session.beginSignIn();
-    const caught = await session
-      .completeSignIn({ deviceCode: begun.deviceCode })
-      .catch((error: unknown) => error);
-
-    expect(caught).toBeInstanceOf(AccountApiError);
-    expect(caught).toMatchObject({
-      code: "multiple_organizations_unsupported",
-      status: 403,
-      message: expect.stringContaining("aren't supported yet"),
-    });
-    // Nothing was persisted: the machine is not bound to either workspace.
-    expect(await readAccountFile(baseDir)).toBeUndefined();
   });
 });
 
@@ -831,136 +578,6 @@ describe("transient sign-in recovery", () => {
       status: 401,
       message: "That code didn't work — check it and try again",
     });
-  });
-});
-
-describe("email verification", () => {
-  const VERIFY_INPUT = { code: "123456", pendingAuthenticationToken: "pat_123" } as const;
-
-  /** A client whose verification grant succeeds with the usual org-less pair. */
-  function verificationClient(overrides: Partial<AccountClient> = {}): AccountClient {
-    return makeClient({
-      verifyEmail: () =>
-        Promise.resolve({
-          accessToken: "access-0",
-          refreshToken: "refresh-0",
-          user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-        }),
-      me: (token) =>
-        token === "access-0"
-          ? Promise.reject(
-              new OrganizationRequiredError({
-                message: "Pick a workspace",
-                organizations: [ORGANIZATION],
-              }),
-            )
-          : Promise.resolve(meResponse()),
-      refreshAccessToken: () =>
-        Promise.resolve({
-          accessToken: "access-1",
-          refreshToken: "refresh-1",
-          user: { id: "user_1", email: "ada@example.com" },
-        }),
-      ...overrides,
-    });
-  }
-
-  // The verification grant is another way to a token pair, and it must land
-  // in exactly the same place as the others: a scoped, persisted session.
-  it("verifies and persists the scoped session, like the OTP path", async () => {
-    const baseDir = makeBaseDir();
-    const session = sessionFor(baseDir, verificationClient());
-
-    expect(await session.verifyEmail(VERIFY_INPUT)).toEqual({
-      state: "signed-in",
-      me: meResponse(),
-    });
-    expect(await readAccountFile(baseDir)).toMatchObject({
-      organizationId: ORGANIZATION.id,
-      accessToken: "access-1",
-      refreshToken: "refresh-1",
-    });
-  });
-
-  it("keeps an existing host registration across a verification sign-in", async () => {
-    const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, {
-      accountUrl: ACCOUNT_URL,
-      workosClientId: CLIENT_ID,
-      workosApiUrl: WORKOS_API_URL,
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
-    const session = sessionFor(baseDir, verificationClient());
-
-    await session.verifyEmail(VERIFY_INPUT);
-    expect(await readAccountFile(baseDir)).toMatchObject({
-      hostToken: "host-token",
-      hostId: "host_1",
-      accessToken: "access-1",
-    });
-  });
-
-  // The credential file is the only thing this module writes to disk, so it
-  // is the one place the code or pending token could end up.
-  it("never writes the code or pending token to the credential file", async () => {
-    const baseDir = makeBaseDir();
-    const session = sessionFor(baseDir, verificationClient());
-
-    await session.verifyEmail(VERIFY_INPUT);
-
-    const raw = fs.readFileSync(accountCredentialsPath(baseDir), "utf8");
-    expect(raw).not.toContain(VERIFY_INPUT.pendingAuthenticationToken);
-    expect(raw).not.toContain(VERIFY_INPUT.code);
-  });
-
-  it("surfaces a refused code as a failure, leaving no session behind", async () => {
-    const baseDir = makeBaseDir();
-    const session = sessionFor(
-      baseDir,
-      verificationClient({
-        verifyEmail: () =>
-          Promise.reject(
-            new AccountApiError({
-              code: "invalid_verification_code",
-              status: 401,
-              message: "That code didn't work — check it and try again",
-            }),
-          ),
-      }),
-    );
-
-    await expect(session.verifyEmail(VERIFY_INPUT)).rejects.toThrow(/didn't work/);
-    expect(await session.status()).toEqual({ state: "signed-out" });
-  });
-
-  it("passes a resend through to the account service", async () => {
-    const resends: string[] = [];
-    const session = sessionFor(
-      makeBaseDir(),
-      makeClient({
-        resendVerificationEmail: (request) => {
-          resends.push(request.emailVerificationId);
-          return Promise.resolve();
-        },
-      }),
-    );
-
-    await session.resendVerificationEmail({ emailVerificationId: "email_verification_123" });
-    expect(resends).toEqual(["email_verification_123"]);
-  });
-});
-
-describe("verification URL", () => {
-  it("allows only a URL this server issued", async () => {
-    const session = sessionFor(makeBaseDir(), deviceFlowClient());
-
-    expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(false);
-
-    await session.beginSignIn();
-    expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(true);
-    expect(await session.isVerificationUrlAllowed("https://evil.example.com/")).toBe(false);
-    expect(await session.isVerificationUrlAllowed("file:///etc/passwd")).toBe(false);
   });
 });
 

@@ -88,43 +88,16 @@ export function makeAccountRpcHandlers({ accountSession, openBrowser }: AccountR
         () => Effect.tryPromise(() => accountSession.authenticateOtp(input)),
         "Could not sign in. Check the code and try again.",
       ),
-    // The payload is the emailed code plus the pending token — bearer-ish
-    // secrets, so the sensitive mapping applies to it too.
-    [WS_METHODS.accountVerifyEmail]: (input: Parameters<AccountSession["verifyEmail"]>[0]) =>
-      ownerSensitiveAccountRpc(
-        () => Effect.tryPromise(() => accountSession.verifyEmail(input)),
-        "Could not verify your email. Try again.",
-      ),
-    [WS_METHODS.accountResendVerificationEmail]: (
-      input: Parameters<AccountSession["resendVerificationEmail"]>[0],
-    ) =>
-      ownerSensitiveAccountRpc(
-        () => Effect.tryPromise(() => accountSession.resendVerificationEmail(input)),
-        "Could not resend the code. Try again in a minute.",
-      ),
-    [WS_METHODS.accountBeginSignIn]: () =>
-      ownerAccountRpc(
-        () => Effect.tryPromise(() => accountSession.beginSignIn()),
-        "Failed to start sign-in",
-      ),
-    // Runs until the user finishes on the hosted page, so it deliberately
-    // has no timeout of its own; the device code's own expiry bounds it,
-    // and the client is told not to time it out either. A client that
-    // disconnects mid-flight loses nothing: the credentials are persisted
-    // here before this answers, and `account.status` recovers them.
-    [WS_METHODS.accountCompleteSignIn]: (input: Parameters<AccountSession["completeSignIn"]>[0]) =>
-      ownerAccountRpc(
-        () => Effect.tryPromise(() => accountSession.completeSignIn(input)),
-        "Failed to finish signing in",
-      ),
     [WS_METHODS.accountBeginSso]: (input: Parameters<AccountSession["beginSso"]>[0]) =>
       ownerAccountRpc(
         () => Effect.tryPromise(() => accountSession.beginSso(input)),
         "Failed to start sign-in",
       ),
-    // The PKCE counterpart of completeSignIn: same no-RPC-timeout rationale
-    // (the loopback listener's own deadline bounds it), same
-    // persist-before-answer guarantee.
+    // Runs until the browser comes back, so it deliberately has no timeout
+    // of its own; the loopback listener's own deadline bounds it, and the
+    // client is told not to time it out either. A client that disconnects
+    // mid-flight loses nothing: the credentials are persisted here before
+    // this answers, and `account.status` recovers them.
     [WS_METHODS.accountCompleteSso]: (input: Parameters<AccountSession["completeSso"]>[0]) =>
       ownerAccountRpc(
         () => Effect.tryPromise(() => accountSession.completeSso(input)),
@@ -149,7 +122,7 @@ export function makeAccountRpcHandlers({ accountSession, openBrowser }: AccountR
       ownerAccountRpc(
         () =>
           Effect.gen(function* () {
-            // Only a URL this server issued from a device authorization.
+            // Only an authorize URL this server issued from an SSO attempt.
             // Without this the method would be an arbitrary-URL opener
             // reachable by anyone who can reach the WebSocket.
             const allowed = yield* Effect.promise(() =>

@@ -33,7 +33,7 @@ export function accountStatusQueryOptions() {
 
 /**
  * Re-reads the session after anything that could have changed it: a finished
- * sign-in/out, an onboarding write, or a WebSocket reopen (a completeSignIn cut
+ * sign-in/out, an onboarding write, or a WebSocket reopen (a completeSso cut
  * off by a dropped socket still persisted credentials server-side, and this is
  * how the UI recovers that result).
  */

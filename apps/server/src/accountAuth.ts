@@ -1,5 +1,7 @@
 /**
- * accountAuth - `synara auth` / `synara status` flows.
+ * accountAuth - the credential file, token refresh, host linking, and the
+ * `synara auth` (host link) / `synara status` CLI flows. Sign-in itself is
+ * app-only.
  *
  * Plain async functions so the CLI handlers stay thin and the flows are
  * testable without a network or an Effect runtime. Every collaborator the
@@ -43,11 +45,11 @@ export { ACCOUNT_URL_ENV_NAME };
 const CREDENTIALS_FILE_NAME = "account-credentials.json";
 
 /** What the user sees when a rotated refresh token can no longer be redeemed. */
-export const SESSION_EXPIRED_MESSAGE = "Session expired — run `synara auth` to sign in again.";
+export const SESSION_EXPIRED_MESSAGE = "Session expired — sign in again from the Synara app.";
 
 /** What the user sees when the workspace they signed in to is no longer theirs. */
 export const WORKSPACE_CHANGED_MESSAGE =
-  "Your workspace access changed — run `synara auth` to choose a workspace again.";
+  "Your workspace access changed — sign in again from the Synara app.";
 
 /**
  * The stored account file (v3). The user session (`accessToken`/
@@ -539,12 +541,11 @@ export async function withFreshAccessToken<A>(
 }
 
 /**
- * Resolves which workspace to use, fail-closed — identical to the in-app
- * flow's `chooseOrganization` in accountSession.ts. V1 is personal-org-only:
- * one organization answers itself; several are refused with the same
- * classified error the app answers with, so the CLI and desktop paths are
- * indistinguishable. None means the account is unusable until a workspace
- * exists.
+ * Resolves which workspace to use, fail-closed. V1 is personal-org-only:
+ * one organization answers itself; several are refused with a classified
+ * error rather than silently taking whichever the provider listed first
+ * (membership order is not a tenant-selection contract). None means the
+ * account is unusable until a workspace exists.
  */
 export async function selectOrganization(
   organizations: readonly OrganizationSummary[],
@@ -552,7 +553,7 @@ export async function selectOrganization(
   const first = organizations[0];
   if (!first) {
     throw new Error(
-      "The account offered no workspace to sign in to. Create one in the WorkOS dashboard, then run `synara auth` again.",
+      "Your account has no workspace to sign in to. Contact your administrator, or create one in the WorkOS dashboard.",
     );
   }
   if (organizations.length > 1) {
@@ -606,7 +607,7 @@ async function registerThisHost(
     );
   } catch (error) {
     stdout(
-      `Signed in, but registering this host failed: ${describeError(error)}\nRun \`synara auth logout\` and try again, or register the host from the Synara UI.\n`,
+      `Signed in, but registering this host failed: ${describeError(error)}\nRun \`synara auth\` to try again.\n`,
     );
     return;
   }
@@ -628,7 +629,7 @@ async function registerThisHost(
   });
   if (!saved) {
     stdout(
-      `Registered this host as "${registered.host.name}" (${registered.host.id}), but the local credentials file disappeared before the host token could be saved.\nRun \`synara auth\` again; remove the stale host from the Synara UI if it lingers.\n`,
+      `Registered this host as "${registered.host.name}" (${registered.host.id}), but the local credentials file disappeared before the host token could be saved.\nRun \`synara auth\` again; remove the stale host if it lingers.\n`,
     );
     return;
   }
@@ -645,75 +646,31 @@ async function registerThisHost(
   );
 }
 
+/**
+ * `synara auth` — links this machine as a host using the app's signed-in
+ * session. Sign-in itself is app-only (email OTP or SSO in the Synara UI);
+ * the CLI and the app share the credentials file, so once the app has signed
+ * in, this command has a session to register the host with.
+ */
 export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   const stdout = options.stdout ?? defaultStdout;
   const existing = await readAccountCredentials(options.baseDir);
-  if (existing?.hostToken && existing.hostId) {
+  if (!existing) {
     stdout(
-      `Already signed in to ${existing.accountUrl}.\nRun \`synara auth logout\` first to sign in as someone else.\n`,
+      "Not signed in — sign in from the Synara app first (account menu), then run `synara auth` to link this machine.\n",
+    );
+    return;
+  }
+
+  if (existing.hostToken && existing.hostId) {
+    stdout(
+      `Already signed in to ${existing.accountUrl} and this host is registered.\nRun \`synara auth logout\` first to link as someone else.\n`,
     );
     return;
   }
 
   const client = clientFor(options.accountUrl, options.client);
-
-  // A session with no host fields is the half-finished state a failed
-  // registration leaves behind. Refusing it would strand the user: the sign-in
-  // they already completed is fine, only the registration is missing, so
-  // finish that rather than sending them through the device flow again.
-  if (existing) {
-    stdout("Already signed in — completing host registration.\n");
-    await registerThisHost(options, client, stdout);
-    return;
-  }
-
-  const instance = await client.instance();
-  const device = await client.requestDeviceCode();
-
-  stdout(
-    [
-      "",
-      `  Sign in to ${options.accountUrl}`,
-      "",
-      `  Open:  ${device.verificationUriComplete}`,
-      `  Code:  ${device.userCode}`,
-      "",
-      "  Waiting for approval...",
-      "",
-    ].join("\n"),
-  );
-
-  const token = await client.pollDeviceToken(device.deviceCode, {
-    interval: device.interval,
-    expiresIn: device.expiresIn,
-  });
-
-  const scoped = await scopeTokenToWorkspace(token, {
-    client,
-    chooseOrganization: selectOrganization,
-    onOrganizationChosen: (organization) => {
-      stdout(`Workspace: ${organization.name}\n`);
-    },
-  });
-
-  // A file left behind by an expired session still holds this machine's host
-  // registration; carrying it forward keeps the re-link intact if registering
-  // again fails. Read and write under the lock so nothing interleaves.
-  await withLockedAccountFile(options.baseDir, async () => {
-    const previous = await readAccountFile(options.baseDir);
-    const session = {
-      accountUrl: options.accountUrl,
-      workosClientId: instance.clientId,
-      workosApiUrl: instance.workosApiUrl,
-      organizationId: scoped.organizationId,
-      accessToken: scoped.accessToken,
-      refreshToken: scoped.refreshToken,
-      ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
-      ...(previous?.hostId ? { hostId: previous.hostId } : {}),
-    } satisfies StoredAccountFile;
-    await writeAccountCredentials(options.baseDir, session);
-  });
-
+  stdout("Signed in — completing host registration.\n");
   await registerThisHost(options, client, stdout);
 }
 
@@ -741,15 +698,14 @@ export interface ScopeTokenToWorkspaceOptions {
 }
 
 /**
- * Turns the org-less token the device grant returns into one scoped to a
+ * Turns an org-less token a sign-in grant returns into one scoped to a
  * workspace.
  *
  * The probe is a real `/me` call rather than an assumption: WorkOS mints
- * device-grant tokens without `org_id`, so the account answers 403 with the
+ * sign-in tokens without `org_id`, so the account answers 403 with the
  * memberships to choose from — and, on a first-ever sign-in, provisions the
  * personal workspace as a side effect of being asked. A token that already
- * carries a workspace (a self-hoster whose WorkOS is configured to scope the
- * device grant) skips the whole dance.
+ * carries a workspace skips the whole dance.
  */
 export async function scopeTokenToWorkspace(
   token: { accessToken: string; refreshToken: string },
@@ -769,7 +725,7 @@ export async function scopeTokenToWorkspace(
   const organization = await chooseOrganization(organizations);
   // Redeeming the refresh token here spends it, so the rotated pair this
   // returns is the only usable one — the caller must persist it, not the
-  // device-grant pair it started with.
+  // pair it started with.
   const refreshed = await client.refreshAccessToken({
     refreshToken: token.refreshToken,
     organizationId: organization.id,
@@ -793,8 +749,8 @@ export interface RefreshHostRegistrationOptions {
 /**
  * Re-advertises this machine's reachable endpoints and bumps `lastSeenAt`.
  *
- * Called once per server start, best effort: a host that ran `synara auth`
- * before ever starting the server registered with no endpoints at all, and
+ * Called once per server start, best effort: a host that was linked before
+ * ever starting the server registered with no endpoints at all, and
  * nothing else would ever fix that. Failure is silent by design — the account
  * is an optional add-on and must never be able to hold up or fail a boot.
  */
@@ -917,7 +873,7 @@ export async function runStatus(options: StatusOptions): Promise<void> {
 
   const credentials = await readAccountCredentials(options.baseDir);
   if (!credentials) {
-    stdout(`Not signed in to ${options.accountUrl} — run \`synara auth\`.\n`);
+    stdout(`Not signed in to ${options.accountUrl} — sign in from the Synara app.\n`);
     return;
   }
 
@@ -943,7 +899,7 @@ export async function runStatus(options: StatusOptions): Promise<void> {
       error instanceof AccountApiError && (error.status === 401 || error.status === 403);
     stdout(
       rejected
-        ? `Signed in to ${credentials.accountUrl}, but the account rejected the stored token: ${describeError(error)}\nRun \`synara auth logout\` then \`synara auth\` to sign in again.\n`
+        ? `Signed in to ${credentials.accountUrl}, but the account rejected the stored token: ${describeError(error)}\nRun \`synara auth logout\`, then sign in again from the Synara app.\n`
         : `Signed in to ${credentials.accountUrl}, but could not reach the account: ${describeError(error)}\n`,
     );
     return;
@@ -967,7 +923,7 @@ export async function runStatus(options: StatusOptions): Promise<void> {
   stdout(
     thisHost
       ? `This host: ${thisHost.name} (${thisHost.platform}, ${thisHost.kind}) — ${formatEndpoints(thisHost)}\n`
-      : "This host: not registered — run `synara auth logout` then `synara auth` to register it.\n",
+      : "This host: not registered — run `synara auth` to register it.\n",
   );
 
   stdout(

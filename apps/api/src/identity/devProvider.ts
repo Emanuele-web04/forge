@@ -6,7 +6,7 @@
 // hosted-provider adapter at it, so there is exactly one implementation of
 // the grant mechanics and the double stays the single source of fake
 // behavior. One-time sign-in codes are printed to stdout instead of emailed;
-// SSO device authorizations self-approve after a short delay.
+// the SSO authorize page self-approves as the dev user.
 // Layer: API identity (implementation, development only)
 // Depends on: config (the safety gate), testing/fakeWorkos.ts, workos.ts.
 
@@ -14,13 +14,6 @@ import { assertDevIdentityAllowed } from "../config";
 import { startFakeWorkos } from "../testing/fakeWorkos";
 import type { AccountIdentityVerifier, EnvironmentGrantIssuer } from "./interfaces";
 import { createWorkosIdentityProvider } from "./workos";
-
-/**
- * How long a device authorization waits before self-approving — long enough
- * that the client demonstrably polls at least once, short enough not to feel
- * broken. Stands in for the human clicking through the hosted approval page.
- */
-const DEVICE_APPROVE_DELAY_MS = 3_000;
 
 /**
  * Builds the dev provider. Re-checks the safety gate on its own (not only in
@@ -48,17 +41,6 @@ export async function createDevIdentityProvider(): Promise<{
     // loopback listener with a code — the offline stand-in for the human
     // finishing the hosted provider page.
     autoApproveAuthorizeAs: "dev-user@example.com",
-    onDeviceAuthorization(deviceCode) {
-      console.log(
-        `[dev-identity] device authorization requested; approving in ${DEVICE_APPROVE_DELAY_MS / 1000}s`,
-      );
-      const timer = setTimeout(() => {
-        const user = fake.approveDevice(deviceCode, { first_name: "Dev", last_name: "User" });
-        console.log(`[dev-identity] device authorization approved as ${user.email}`);
-      }, DEVICE_APPROVE_DELAY_MS);
-      // Never keep the process alive just to approve a device code.
-      timer.unref();
-    },
   });
 
   // The provider adapter pointed at the in-process double: same verification,

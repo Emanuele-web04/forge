@@ -2,7 +2,7 @@
 // Purpose: Mounts the single sign-in and onboarding dialogs and sequences them:
 // any successful auth with a null profile flows straight into onboarding, which
 // stays up (required) until the profile write succeeds. Also catches a session
-// recovered out-of-band (reconnect after a dropped completeSignIn) that has no
+// recovered out-of-band (reconnect after a dropped completeSso) that has no
 // profile yet.
 // Layer: Web account feature (rendered once from the root route).
 
@@ -26,7 +26,7 @@ export function GlobalAccountDialogs() {
   }, [needsOnboarding, view, openOnboarding]);
 
   // Account STATUS, not the sign-in RPC promise, is the authority on whether
-  // sign-in happened. The dialog's own completeSignIn/completeSso can time
+  // sign-in happened. The dialog's own completeSso can time
   // out, be aborted, or have its fiber interrupted while the session still
   // lands (persisted server-side, observed by the status query on refetch or
   // reconnect) — without this, the user is signed in behind a dialog stuck on

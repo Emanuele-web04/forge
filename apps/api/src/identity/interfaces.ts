@@ -10,7 +10,6 @@
 import type {
   AccountHost,
   AccountSsoProvider,
-  DeviceAuthorizationResponse,
   InstanceInfo,
   RegisterHostRequest,
   UpdateHostRequest,
@@ -29,7 +28,7 @@ export type VerifiedAccessToken = {
   sessionId: string;
   /**
    * The organization the token is scoped to, when it has one. Absent on every
-   * token the device grant mints — the provider only puts an organization
+   * freshly minted sign-in token — the provider only puts an organization
    * claim in a token obtained by authenticating *into* an organization, which
    * for this service means the refresh grant carrying an `organization_id`.
    */
@@ -49,6 +48,12 @@ export type OrganizationRef = {
  * downstream branches on it alone.
  */
 export type AuthFailureReason =
+  /**
+   * The provider refuses to authenticate until the email is verified. There
+   * is no in-app challenge flow: the route answers a terse dead-end telling
+   * the user to sign in with an emailed code, which itself verifies the
+   * address.
+   */
   | "email_verification_required"
   | "sso_required"
   /** The grant refused the emailed code itself; retyping it can help. */
@@ -64,32 +69,12 @@ export type AuthFailureReason =
   | "organization_selection_required";
 
 /**
- * What an `email_verification_required` refusal carries beyond its reason —
- * the exact fields completing verification in-app needs, extracted
- * allowlist-style from the provider's refusal. The pending token is a
- * bearer-ish secret: it may travel to the client, but never into a log or an
- * error message.
- */
-export type EmailVerificationChallenge = {
-  pendingAuthenticationToken: string;
-  email: string;
-  emailVerificationId: string;
-};
-
-/**
  * An authentication grant this service refused to complete. Carries the
  * classified reason and nothing else: notably not the submitted code, and not
  * the provider's raw message, which can echo the submitted credentials back.
- * The one exception is `email_verification_required`, whose refusal names the
- * pending token, email, and verification id — the fields the in-app
- * verification step redeems — and those are carried on {@link verification},
- * allowlisted field by field.
  */
 export class IdentityAuthError extends Error {
-  constructor(
-    readonly reason: AuthFailureReason,
-    readonly verification?: EmailVerificationChallenge,
-  ) {
+  constructor(readonly reason: AuthFailureReason) {
     super(reason);
     this.name = "IdentityAuthError";
   }
@@ -129,17 +114,6 @@ export type AuthTokens = {
   refreshToken: string;
   user: IdentityUser;
 };
-
-/**
- * One answer from the device-token poll. The non-granted statuses are
- * expected states of a healthy flow — a user who has not clicked yet is not
- * an error — so they are values, not exceptions. `slow_down` carries RFC 8628
- * semantics (increase the polling interval); `expired` and `denied` are
- * terminal.
- */
-export type DeviceTokenPollResult =
-  | { status: "granted"; tokens: AuthTokens }
-  | { status: "pending" | "slow_down" | "expired" | "denied" };
 
 /**
  * What a successful refresh yields: the rotated pair plus which workspace the
@@ -196,12 +170,6 @@ export type AccountIdentityVerifier = {
   verifyAccessToken(token: string): Promise<VerifiedAccessToken>;
   getUser(userId: string): Promise<IdentityUser>;
   /**
-   * Starts the SSO device-authorization flow — how "Continue with
-   * Google/GitHub" and the CLI's `synara auth` reach the provider. Runs here
-   * because starting it needs a secret a public client cannot hold.
-   */
-  requestDeviceAuthorization(): Promise<DeviceAuthorizationResponse>;
-  /**
    * Builds the provider's authorization-code + PKCE authorize URL for the
    * desktop SSO path, deep-linked to `provider`. `redirectUri` must be a
    * loopback URL (the route enforces this before calling); `codeChallenge` is
@@ -227,17 +195,6 @@ export type AccountIdentityVerifier = {
     codeVerifier: string;
     context?: AuthRequestContext;
   }): Promise<AuthTokens>;
-  /**
-   * One poll of the device grant: redeems the device code once the user has
-   * approved, and reports the flow's state until then. The non-granted
-   * outcomes come back as values (see {@link DeviceTokenPollResult}) — a
-   * user who has not clicked yet is not an exception. The device code is
-   * bearer-ish and takes the no-leak handling rules.
-   */
-  pollDeviceToken(input: {
-    deviceCode: string;
-    context?: AuthRequestContext;
-  }): Promise<DeviceTokenPollResult>;
   /**
    * Redeems a refresh token for a rotated pair, optionally authenticating
    * into `organizationId` so the new access token carries the organization
@@ -273,27 +230,6 @@ export type AccountIdentityVerifier = {
     code: string;
     context?: AuthRequestContext;
   }): Promise<AuthTokens>;
-  /**
-   * Redeems the emailed 6-digit code together with the pending authentication
-   * token an `email_verification_required` refusal carried. Both inputs are
-   * bearer-ish secrets and take the no-leak handling rules. Rejects with
-   * {@link IdentityAuthError} carrying `invalid_verification_code` (retry in
-   * place) or `verification_expired` (the token or code is spent; only a
-   * resend recovers).
-   */
-  verifyEmailCode(input: {
-    code: string;
-    pendingAuthenticationToken: string;
-    context?: AuthRequestContext;
-  }): Promise<AuthTokens>;
-  /**
-   * Emails the user a fresh verification code, invalidating the old one. The
-   * user is resolved from the verification object server-side — the caller
-   * only ever holds the verification id. Rejects with a 404-status
-   * {@link IdentityProviderError} for an unknown or expired id; the route
-   * deliberately flattens that into the same 202 as success.
-   */
-  resendVerificationEmail(emailVerificationId: string): Promise<void>;
   /**
    * What `/instance` publishes about this deployment's identity wiring.
    * Every provider call is proxied through this service now; the client id

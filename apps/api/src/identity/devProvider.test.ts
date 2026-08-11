@@ -100,44 +100,4 @@ describe("createDevIdentityProvider", () => {
       await provider.close();
     }
   });
-
-  // Polling is proxied through the seam, so the dev provider must serve the
-  // WHOLE device flow locally: issue the code, self-approve, grant on poll.
-  it("completes the SSO device flow end to end, offline", async () => {
-    vi.stubEnv("WORKOS_API_KEY", "");
-    vi.stubEnv("NODE_ENV", "test");
-
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const provider = await createDevIdentityProvider();
-    try {
-      const device = await provider.verifier.requestDeviceAuthorization();
-      expect(device.deviceCode).toBeTruthy();
-
-      // Immediately after issuance the human has "not clicked yet".
-      const first = await provider.verifier.pollDeviceToken({ deviceCode: device.deviceCode });
-      expect(first.status).toBe("pending");
-
-      // The self-approval timer fires after DEVICE_APPROVE_DELAY_MS; poll
-      // until it does, bounded well below the test timeout.
-      let granted: Awaited<ReturnType<typeof provider.verifier.pollDeviceToken>> | undefined;
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        const poll = await provider.verifier.pollDeviceToken({ deviceCode: device.deviceCode });
-        if (poll.status === "granted") {
-          granted = poll;
-          break;
-        }
-        expect(poll.status).toBe("pending");
-      }
-      if (!granted || granted.status !== "granted") {
-        throw new Error("device authorization never self-approved");
-      }
-
-      const session = await provider.verifier.verifyAccessToken(granted.tokens.accessToken);
-      expect(session.userId).toBe(granted.tokens.user.id);
-    } finally {
-      spy.mockRestore();
-      await provider.close();
-    }
-  }, 15_000);
 });

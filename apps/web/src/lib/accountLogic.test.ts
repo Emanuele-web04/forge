@@ -15,7 +15,6 @@ import {
   isSignInCancellation,
   publicProfileUrl,
   readAccountErrorCode,
-  readEmailVerificationChallenge,
   sanitizeHandleInput,
   sanitizeVerificationCodeInput,
 } from "./accountLogic";
@@ -42,40 +41,6 @@ describe("readAccountErrorCode", () => {
     expect(readAccountErrorCode(new Error("boom"))).toBeNull();
     expect(readAccountErrorCode(null)).toBeNull();
     expect(readAccountErrorCode({ message: "x", code: 42 })).toBeNull();
-  });
-});
-
-describe("readEmailVerificationChallenge", () => {
-  const fields = {
-    pendingAuthenticationToken: "pat_123",
-    email: "ada@example.com",
-    emailVerificationId: "email_verification_123",
-  };
-
-  it("reads the challenge off the server's tagged RPC error", () => {
-    expect(
-      readEmailVerificationChallenge({
-        _tag: "AccountEmailVerificationRequiredError",
-        message: "Enter the code",
-        ...fields,
-      }),
-    ).toEqual(fields);
-  });
-
-  it("returns null for anything without the tag or the full field set", () => {
-    // A bare code with no payload cannot be completed in-app.
-    expect(
-      readEmailVerificationChallenge({ message: "x", code: "email_verification_required" }),
-    ).toBeNull();
-    expect(
-      readEmailVerificationChallenge({
-        _tag: "AccountEmailVerificationRequiredError",
-        message: "x",
-        email: "ada@example.com",
-      }),
-    ).toBeNull();
-    expect(readEmailVerificationChallenge(new Error("boom"))).toBeNull();
-    expect(readEmailVerificationChallenge(null)).toBeNull();
   });
 });
 
@@ -121,15 +86,6 @@ describe("accountErrorMessage", () => {
         "fallback",
       ),
     ).toBe("That code didn't work — check it and try again");
-    // The verification refusal keeps its message too.
-    expect(
-      accountErrorMessage(
-        Object.assign(new Error("Enter the 6-digit code we sent to your email"), {
-          _tag: "AccountEmailVerificationRequiredError",
-        }),
-        "fallback",
-      ),
-    ).toBe("Enter the 6-digit code we sent to your email");
   });
 
   // Raw runtime/transport internals must never become UI copy: this is the

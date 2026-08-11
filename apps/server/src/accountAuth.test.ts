@@ -109,8 +109,6 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     instance: unimplemented("instance"),
     sendOtp: unimplemented("sendOtp"),
     authenticateOtp: unimplemented("authenticateOtp"),
-    verifyEmail: unimplemented("verifyEmail"),
-    resendVerificationEmail: unimplemented("resendVerificationEmail"),
     me: unimplemented("me"),
     updateProfile: unimplemented("updateProfile"),
     updateOrganization: unimplemented("updateOrganization"),
@@ -118,10 +116,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     registerHost: unimplemented("registerHost"),
     updateHost: unimplemented("updateHost"),
     deleteHost: unimplemented("deleteHost"),
-    requestDeviceCode: unimplemented("requestDeviceCode"),
     requestAuthorizeUrl: unimplemented("requestAuthorizeUrl"),
     exchangeAuthorizeCode: unimplemented("exchangeAuthorizeCode"),
-    pollDeviceToken: unimplemented("pollDeviceToken"),
     refreshAccessToken: unimplemented("refreshAccessToken"),
     ...overrides,
   } as AccountClient;
@@ -129,52 +125,6 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
 
 function unauthorized(): AccountApiError {
   return new AccountApiError({ code: "unauthorized", status: 401, message: "Unauthorized" });
-}
-
-/**
- * What `synara auth`'s device flow returns once the user approves.
- *
- * The device grant hands back an org-less token — WorkOS never scopes one —
- * so `me` refuses it and the flow refreshes into a workspace. That rotation is
- * why the persisted pair is `access-1`/`refresh-1` while the poll returned
- * `access-0`/`refresh-0`: modelling it any other way would let a client that
- * forgot to scope the token pass every test here and fail against a real
- * account.
- */
-function deviceFlowClient(overrides: Partial<AccountClient> = {}): AccountClient {
-  return makeClient({
-    instance: () =>
-      Promise.resolve({
-        version: "0.6.4",
-        authMode: "workos" as const,
-        clientId: CLIENT_ID,
-        workosApiUrl: WORKOS_API_URL,
-      }),
-    requestDeviceCode: () =>
-      Promise.resolve({
-        deviceCode: "device-code",
-        userCode: "WDJB-MJHT",
-        verificationUri: "https://accounts.example.com/device",
-        verificationUriComplete: "https://accounts.example.com/device?user_code=WDJB-MJHT",
-        expiresIn: 900,
-        interval: 5,
-      }),
-    pollDeviceToken: () =>
-      Promise.resolve({
-        accessToken: "access-0",
-        refreshToken: "refresh-0",
-        user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-      }),
-    me: (token) =>
-      token === "access-0" ? Promise.reject(organizationRequired()) : Promise.resolve(meResponse()),
-    refreshAccessToken: () =>
-      Promise.resolve({
-        accessToken: "access-1",
-        refreshToken: "refresh-1",
-        user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-      }),
-    ...overrides,
-  });
 }
 
 describe("account credential store", () => {
@@ -762,24 +712,79 @@ describe("resolveAccountUrl", () => {
 });
 
 describe("runAuthLogin", () => {
-  it("completes the device flow, saves both tokens, and registers the persisted environment", async () => {
+  // Sign-in is app-only now: with no stored session there is nothing to link
+  // a host with, and the CLI must say where sign-in actually lives.
+  it("points a signed-out user at the Synara app instead of signing in", async () => {
+    const baseDir = makeBaseDir();
+    const stdout = makeStdout();
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      stdout: stdout.write,
+      client: makeClient({}),
+    });
+
+    expect(stdout.text()).toContain("Not signed in");
+    expect(stdout.text()).toContain("sign in from the Synara app");
+    expect(await readAccountFile(baseDir)).toBeUndefined();
+  });
+
+  // A file with host fields but no session is still signed out: the app must
+  // sign in first, and the stored registration is left exactly as found.
+  it("treats a session-less file with host fields as not signed in", async () => {
+    const baseDir = makeBaseDir();
+    const stored = {
+      accountUrl: "https://accounts.example.com",
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "old-host-token",
+      hostId: "host_1",
+    };
+    await writeAccountCredentials(baseDir, stored);
+    const stdout = makeStdout();
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      stdout: stdout.write,
+      client: makeClient({}),
+    });
+
+    expect(stdout.text()).toContain("Not signed in");
+    expect(await readAccountFile(baseDir)).toEqual(stored);
+  });
+
+  it("refuses to re-link when a fully registered session already exists", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token", hostId: "host_1" }),
+    );
+    const stdout = makeStdout();
+
+    await runAuthLogin({
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      stdout: stdout.write,
+      client: makeClient({}),
+    });
+
+    expect(stdout.text()).toContain("Already signed in");
+    expect(stdout.text()).toContain("this host is registered");
+    expect(stdout.text()).toContain("synara auth logout");
+  });
+
+  it("registers this host from the app's session, using the persisted environment id", async () => {
     const baseDir = makeBaseDir();
     const stateDir = path.join(baseDir, "userdata");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(stateDir, "environment-id"), "persisted-env-id\n", "utf8");
+    await writeAccountCredentials(baseDir, credentials());
     const stdout = makeStdout();
 
     const registered: Array<{ token: string; request: unknown }> = [];
-    const polls: unknown[] = [];
-    const client = deviceFlowClient({
-      pollDeviceToken: (_deviceCode, pollOptions) => {
-        polls.push(pollOptions);
-        return Promise.resolve({
-          accessToken: "access-1",
-          refreshToken: "refresh-1",
-          user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-        });
-      },
+    const client = makeClient({
       registerHost: (token, request) => {
         registered.push({ token, request });
         return Promise.resolve({ host, hostToken: "host-token" });
@@ -796,13 +801,7 @@ describe("runAuthLogin", () => {
       appVersion: "0.6.4",
     });
 
-    expect(stdout.text()).toContain("https://accounts.example.com/device?user_code=WDJB-MJHT");
-    expect(stdout.text()).toContain("WDJB-MJHT");
-
-    // The poll is proxied through the account service, so the only options
-    // that travel are the pacing hints the authorization response carried.
-    expect(polls).toEqual([{ interval: 5, expiresIn: 900 }]);
-
+    expect(stdout.text()).toContain("completing host registration");
     expect(registered).toHaveLength(1);
     expect(registered[0]?.token).toBe("access-1");
     expect(registered[0]?.request).toMatchObject({
@@ -818,112 +817,9 @@ describe("runAuthLogin", () => {
     );
   });
 
-  /**
-   * The whole loop the org model adds: the device grant's token is refused,
-   * the sole workspace is auto-selected, the token is refreshed into it, and
-   * registration then simply works. Asserted as one sequence because the
-   * ordering is the contract — refreshing before selecting, or registering
-   * with the unscoped token, both fail only at the account.
-   */
-  it("scopes the device token to a workspace and persists the rotated pair", async () => {
-    const baseDir = makeBaseDir();
-    const stdout = makeStdout();
-
-    const refreshCalls: unknown[] = [];
-    const registerTokens: string[] = [];
-    const client = deviceFlowClient({
-      refreshAccessToken: (options) => {
-        refreshCalls.push(options);
-        return Promise.resolve({
-          accessToken: "access-1",
-          refreshToken: "refresh-1",
-          user: { id: "user_1", email: "ada@example.com" },
-        });
-      },
-      registerHost: (token) => {
-        registerTokens.push(token);
-        return Promise.resolve({ host, hostToken: "host-token" });
-      },
-    });
-
-    await runAuthLogin({
-      accountUrl: "https://accounts.example.com",
-      baseDir,
-      client,
-      stdout: stdout.write,
-      platform: "darwin",
-      hostname: "workstation",
-    });
-
-    expect(refreshCalls).toEqual([{ refreshToken: "refresh-0", organizationId: ORGANIZATION.id }]);
-    // Registration uses the scoped token, never the one /me refused.
-    expect(registerTokens).toEqual(["access-1"]);
-    expect(stdout.text()).toContain(`Workspace: ${ORGANIZATION.name}`);
-    expect(await readAccountCredentials(baseDir)).toEqual(
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
-  });
-
-  // The CLI matches the desktop path: personal-org-only, fail closed. A
-  // multi-org account is refused with the same classified error the app
-  // answers with, and nothing is persisted.
-  it("fails closed when the account offers several workspaces", async () => {
-    const baseDir = makeBaseDir();
-    const stdout = makeStdout();
-    const acme = { id: "org_2", name: "Acme" };
-
-    const client = deviceFlowClient({
-      me: () => Promise.reject(organizationRequired([ORGANIZATION, acme])),
-      refreshAccessToken: () => Promise.reject(new Error("must not refresh")),
-      registerHost: () => Promise.reject(new Error("must not register")),
-    });
-
-    const caught = await runAuthLogin({
-      accountUrl: "https://accounts.example.com",
-      baseDir,
-      client,
-      stdout: stdout.write,
-      platform: "darwin",
-      hostname: "workstation",
-    }).catch((error: unknown) => error);
-
-    expect(caught).toBeInstanceOf(AccountApiError);
-    expect(caught).toMatchObject({ code: "multiple_organizations_unsupported", status: 403 });
-    expect(await readAccountFile(baseDir)).toBeUndefined();
-  });
-
-  // A self-hoster whose WorkOS already scopes the device grant never sees the
-  // 403, and must not be dragged through a refresh they do not need.
-  it("skips the workspace dance when the device token already names one", async () => {
-    const baseDir = makeBaseDir();
-
-    const client = deviceFlowClient({
-      me: () => Promise.resolve(meResponse()),
-      refreshAccessToken: () => Promise.reject(new Error("must not refresh")),
-      registerHost: () => Promise.resolve({ host, hostToken: "host-token" }),
-    });
-
-    await runAuthLogin({
-      accountUrl: "https://accounts.example.com",
-      baseDir,
-      client,
-      stdout: makeStdout().write,
-      platform: "darwin",
-      hostname: "workstation",
-    });
-
-    expect(await readAccountCredentials(baseDir)).toEqual(
-      credentials({
-        accessToken: "access-0",
-        refreshToken: "refresh-0",
-        hostToken: "host-token",
-        hostId: "host_1",
-      }),
-    );
-  });
-
   it("maps win32 to the windows platform literal", async () => {
     const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
     const stdout = makeStdout();
     const requests: Array<{ platform: string }> = [];
 
@@ -933,7 +829,7 @@ describe("runAuthLogin", () => {
       stdout: stdout.write,
       platform: "win32",
       hostname: "pc",
-      client: deviceFlowClient({
+      client: makeClient({
         registerHost: (_token, request) => {
           requests.push({ platform: request.platform });
           return Promise.resolve({
@@ -949,6 +845,7 @@ describe("runAuthLogin", () => {
 
   it("keeps the session and explains when the platform is unsupported", async () => {
     const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
     const stdout = makeStdout();
 
     await runAuthLogin({
@@ -957,7 +854,7 @@ describe("runAuthLogin", () => {
       stdout: stdout.write,
       platform: "freebsd",
       hostname: "bsd",
-      client: deviceFlowClient(),
+      client: makeClient({}),
     });
 
     expect(stdout.text()).toContain("freebsd");
@@ -965,86 +862,6 @@ describe("runAuthLogin", () => {
     expect(stored?.accessToken).toBe("access-1");
     expect(stored?.refreshToken).toBe("refresh-1");
     expect(stored?.hostId).toBeUndefined();
-  });
-
-  it("re-links an existing host registration after a session expiry", async () => {
-    const baseDir = makeBaseDir();
-    // What `withFreshAccessToken` leaves behind when the refresh token dies:
-    // no session, but a host this machine is still registered as.
-    await writeAccountCredentials(baseDir, {
-      accountUrl: "https://accounts.example.com",
-      workosClientId: CLIENT_ID,
-      workosApiUrl: WORKOS_API_URL,
-      hostToken: "old-host-token",
-      hostId: "host_1",
-    });
-
-    await runAuthLogin({
-      accountUrl: "https://accounts.example.com",
-      baseDir,
-      stdout: makeStdout().write,
-      platform: "freebsd",
-      hostname: "bsd",
-      client: deviceFlowClient(),
-    });
-
-    // Registration is skipped on this platform, so the pre-existing host
-    // fields are the only ones there are — losing them would strand the host.
-    expect(await readAccountCredentials(baseDir)).toEqual(
-      credentials({ hostToken: "old-host-token", hostId: "host_1" }),
-    );
-  });
-
-  it("refuses to re-login when a fully registered session already exists", async () => {
-    const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
-    const stdout = makeStdout();
-
-    await runAuthLogin({
-      accountUrl: "https://accounts.example.com",
-      baseDir,
-      stdout: stdout.write,
-      client: makeClient({}),
-    });
-
-    expect(stdout.text()).toContain("synara auth logout");
-  });
-
-  // The state a failed registration leaves: a good session, no host. Sending
-  // the user back through the device flow would be busywork, and refusing
-  // outright leaves them with no way to finish at all.
-  it("completes host registration for a session that never got one, without a device flow", async () => {
-    const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials());
-    const stdout = makeStdout();
-
-    const registered: Array<{ token: string }> = [];
-    const client = makeClient({
-      registerHost: (token) => {
-        registered.push({ token });
-        return Promise.resolve({ host, hostToken: "host-token" });
-      },
-    });
-
-    await runAuthLogin({
-      accountUrl: "https://accounts.example.com",
-      baseDir,
-      stdout: stdout.write,
-      platform: "darwin",
-      hostname: "workstation",
-      client,
-    });
-
-    // `requestDeviceCode` and `pollDeviceToken` are unimplemented on this
-    // client, so reaching either would have rejected the call.
-    expect(registered).toEqual([{ token: "access-1" }]);
-    expect(stdout.text()).toContain("completing host registration");
-    expect(await readAccountCredentials(baseDir)).toEqual(
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
   });
 
   it("renews an expired access token while completing an interrupted registration", async () => {
@@ -1235,7 +1052,7 @@ describe("runStatus", () => {
       client: makeClient({}),
     });
     expect(stdout.text()).toContain("Not signed in");
-    expect(stdout.text()).toContain("synara auth");
+    expect(stdout.text()).toContain("sign in from the Synara app");
   });
 
   it("prints the identity, this host, and every registered host", async () => {
@@ -1344,7 +1161,7 @@ describe("runStatus", () => {
     });
 
     expect(stdout.text()).toContain("Session expired");
-    expect(stdout.text()).toContain("synara auth");
+    expect(stdout.text()).toContain("sign in again from the Synara app");
   });
 
   // Distinct advice from an expired session: the refresh token may be fine,
@@ -1408,8 +1225,6 @@ describe("refreshHostRegistration", () => {
       registerHost: record("registerHost"),
       updateHost: record("updateHost"),
       deleteHost: record("deleteHost"),
-      requestDeviceCode: record("requestDeviceCode"),
-      pollDeviceToken: record("pollDeviceToken"),
     } as unknown as AccountClient;
     return { client, reached };
   }

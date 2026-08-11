@@ -10,13 +10,12 @@
  * reports "signed out" instead of throwing, a device poll the server runs on
  * the client's behalf, and the in-app email OTP grant.
  *
- * Three ways in, converging immediately. Email OTP sign-in happens inside
+ * Two ways in, converging immediately. Email OTP sign-in happens inside
  * the app and the emailed code is pass-through — forwarded to the account
- * service, held nowhere here. Desktop SSO ("Continue with Google/GitHub")
+ * service, held nowhere here. SSO ("Continue with Google/Apple/GitHub")
  * takes the authorization-code + PKCE grant with a loopback redirect and the
- * system browser. The CLI's `synara auth` keeps the device grant — it has no
- * browser to redirect to. All end in `establishSession`, so workspace
- * scoping and credential persistence cannot drift between them.
+ * system browser. Both end in `establishSession`, so workspace scoping and
+ * credential persistence cannot drift between them.
  *
  * @module accountSession
  */
@@ -24,24 +23,20 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AccountAuthenticateOtpInput,
-  AccountBeginSignInResult,
   AccountBeginSsoInput,
   AccountBeginSsoResult,
   AccountCompleteSsoInput,
   AccountMe,
-  AccountResendVerificationEmailInput,
   AccountSendOtpInput,
   AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
-  AccountVerifyEmailInput,
   InstanceInfo,
 } from "@synara/contracts";
 import {
   AccountApiError,
   createAccountClient,
   DEFAULT_ACCOUNT_URL,
-  OrganizationRequiredError,
   resolveAccountUrl,
   type AccountClient,
 } from "@synara/shared/account";
@@ -50,6 +45,7 @@ import {
   readAccountCredentials,
   readAccountFile,
   scopeTokenToWorkspace,
+  selectOrganization,
   SessionExpiredError,
   withFreshAccessToken,
   withLockedAccountFile,
@@ -66,13 +62,6 @@ import {
 const SIGNED_OUT: AccountStatus = { state: "signed-out" };
 
 /**
- * How many outstanding sign-in attempts stay completable. A user retrying a
- * few times is ordinary; hundreds are not, and the map must not grow with
- * them.
- */
-const MAX_TRACKED_DEVICE_AUTHORIZATIONS = 16;
-
-/**
  * How many loopback PKCE attempts may be live at once. Each one holds an open
  * HTTP listener, so the bound is much tighter than the device map's; evicting
  * the oldest closes its listener, costing only an abandoned attempt.
@@ -82,9 +71,9 @@ const MAX_TRACKED_SSO_ATTEMPTS = 4;
 /**
  * How long the loopback listener waits for the browser to come back. This
  * bounds the HUMAN leg — reading a consent screen, picking a Google account —
- * so it is aligned with the lifetime WorkOS gives a device authorization
- * (600s), not with the per-request grant deadline, which bounds only the
- * server-to-provider exchange call once the code is in hand.
+ * so it is generous (10 minutes), unlike the per-request grant deadline,
+ * which bounds only the server-to-provider exchange call once the code is in
+ * hand.
  */
 const SSO_CALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -109,31 +98,6 @@ function isTransientSignInFailure(error: unknown): boolean {
     error instanceof AccountApiError &&
     (error.status === 408 || error.status === 429 || error.status >= 500)
   );
-}
-
-/** A device authorization this server issued and can still poll for. */
-interface PendingDeviceAuthorization {
-  readonly deviceCode: string;
-  readonly verificationUriComplete: string;
-  readonly interval: number;
-  readonly expiresIn: number;
-  /** When the authorization was issued (ms since epoch). */
-  readonly issuedAtMs: number;
-  /**
-   * The provider's absolute deadline (ms since epoch): issuedAt + expiresIn.
-   * Past it the entry is dead everywhere — not pollable, and its URL leaves
-   * the browser-opener allowlist — regardless of the count-based eviction.
-   */
-  readonly expiresAtMs: number;
-  /**
-   * The pair a successful poll redeemed, held in memory until the session is
-   * durably persisted. A device code is single-use, so a failure between
-   * redemption and persistence would otherwise strand the user — the code is
-   * spent, nothing is stored, and re-polling can only answer `expired`.
-   * With the pair cached, retrying `completeSignIn` resumes from here
-   * instead of polling again. Memory-only, like every token in flight.
-   */
-  redeemedToken?: { accessToken: string; refreshToken: string };
 }
 
 export interface AccountSessionOptions {
@@ -162,18 +126,6 @@ export interface AccountSession {
    */
   authenticateOtp(input: AccountAuthenticateOtpInput): Promise<AccountStatus>;
   /**
-   * Redeems the emailed 6-digit code plus the pending authentication token an
-   * `email_verification_required` refusal carried. The pair is a bearer-ish
-   * secret with the credential handling rules: never log or persist the input.
-   * Success takes the same `establishSession` path as every other sign-in.
-   */
-  verifyEmail(input: AccountVerifyEmailInput): Promise<AccountStatus>;
-  /** Asks the identity provider to email a fresh verification code. */
-  resendVerificationEmail(input: AccountResendVerificationEmailInput): Promise<void>;
-  /** Starts the CLI/headless SSO path — the device grant. */
-  beginSignIn(): Promise<AccountBeginSignInResult>;
-  completeSignIn(input: { readonly deviceCode: string }): Promise<AccountStatus>;
-  /**
    * Starts the desktop SSO path: authorization code + PKCE with a loopback
    * redirect, deep-linked to the chosen provider. The server owns the
    * loopback listener, the verifier, and the state; the caller only receives
@@ -183,9 +135,9 @@ export interface AccountSession {
   beginSso(input: AccountBeginSsoInput): Promise<AccountBeginSsoResult>;
   /**
    * Waits for the loopback callback, exchanges the code (through the account
-   * service — never the provider directly), and persists the session. Like
-   * `completeSignIn`, the server does the waiting so a dropped WebSocket
-   * cannot lose a sign-in that already succeeded.
+   * service — never the provider directly), and persists the session. The
+   * server does the waiting, so a dropped WebSocket cannot lose a sign-in
+   * that already succeeded.
    */
   completeSso(input: AccountCompleteSsoInput): Promise<AccountStatus>;
   /** Abandons a pending SSO attempt, closing its loopback listener. */
@@ -193,9 +145,9 @@ export interface AccountSession {
   updateProfile(input: AccountUpdateProfileInput): Promise<AccountMe>;
   signOut(): Promise<void>;
   /**
-   * Whether `url` is the device-verification page of the account service this
-   * session talks to. The RPC handler asks before opening a browser, so this
-   * method can never become a general "open any URL for me" primitive.
+   * Whether `url` is the authorize URL of an SSO attempt this session
+   * started. The RPC handler asks before opening a browser, so this method
+   * can never become a general "open any URL for me" primitive.
    */
   isVerificationUrlAllowed(url: string): Promise<boolean>;
 }
@@ -243,23 +195,6 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
   const configuredUrl = options.accountUrl ?? resolveAccountUrl();
 
   /**
-   * Device authorizations this process has issued, keyed by device code.
-   *
-   * Two things depend on it. The poll needs the interval and deadline WorkOS
-   * set, and the client should not be trusted to echo them back — a client
-   * that asked for a one-second interval would have the server hammer WorkOS
-   * on its behalf. And the browser hand-off needs to know that a URL is one we
-   * issued, which is what keeps `openVerificationUrl` from becoming a general
-   * "open any URL for me" primitive.
-   *
-   * Bounded by {@link MAX_TRACKED_DEVICE_AUTHORIZATIONS}: a client that starts
-   * sign-ins in a loop must not grow it without limit. Evicting the oldest
-   * only ever costs an abandoned attempt, whose device code is expiring at
-   * WorkOS anyway.
-   */
-  const pendingAuthorizations = new Map<string, PendingDeviceAuthorization>();
-
-  /**
    * Loopback PKCE attempts this process has started, keyed by the opaque
    * attempt id handed to the client. The verifier and state never leave an
    * entry; the authorize URL is tracked so the browser-opener allowlist can
@@ -296,28 +231,6 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
       if (oldest.done) break;
       oldest.value[1].listener.close();
       pendingSsoAttempts.delete(oldest.value[0]);
-    }
-  }
-
-  /**
-   * Drops every entry past its provider-issued deadline. Ran on every start
-   * and lookup: expired attempts must not stay pollable or keep their URLs
-   * on the browser-opener allowlist until count-based eviction or a restart
-   * happens to remove them.
-   */
-  function pruneExpiredAuthorizations(nowMs: number): void {
-    for (const [code, authorization] of pendingAuthorizations) {
-      if (nowMs > authorization.expiresAtMs) pendingAuthorizations.delete(code);
-    }
-  }
-
-  function rememberAuthorization(authorization: PendingDeviceAuthorization): void {
-    pruneExpiredAuthorizations(Date.now());
-    pendingAuthorizations.set(authorization.deviceCode, authorization);
-    while (pendingAuthorizations.size > MAX_TRACKED_DEVICE_AUTHORIZATIONS) {
-      const oldest = pendingAuthorizations.keys().next();
-      if (oldest.done) break;
-      pendingAuthorizations.delete(oldest.value);
     }
   }
 
@@ -378,30 +291,11 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
   ): Promise<AccountStatus> {
     const { accountUrl, client, instance } = context;
 
+    // V1 is personal-org-only and this flow has no picker, so more than one
+    // workspace FAILS CLOSED — see selectOrganization.
     const scoped = await scopeTokenToWorkspace(token, {
       client,
-      // V1 is personal-org-only, and this flow has no picker — so more than
-      // one workspace FAILS CLOSED rather than silently taking whichever
-      // the provider listed first: membership order is not a tenant-selection
-      // contract, and binding the machine to an arbitrary team (whose hosts
-      // it would then see, and whose name onboarding might rename) is worse
-      // than asking the user to wait for workspace selection to ship.
-      chooseOrganization: async (organizations) => {
-        const first = organizations[0];
-        if (!first) {
-          throw new Error(
-            "Your account has no workspace to sign in to. Contact your administrator, or create one in the WorkOS dashboard.",
-          );
-        }
-        if (organizations.length > 1) {
-          throw new AccountApiError({
-            code: "multiple_organizations_unsupported",
-            status: 403,
-            message: "Multiple workspaces aren't supported yet",
-          });
-        }
-        return first;
-      },
+      chooseOrganization: selectOrganization,
     });
 
     // A file left behind by an expired session still holds this machine's
@@ -490,91 +384,6 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
   return {
     status: readStatus,
 
-    async beginSignIn() {
-      const client = clientFor(configuredUrl);
-      const device = await client.requestDeviceCode();
-      const issuedAtMs = Date.now();
-      rememberAuthorization({
-        deviceCode: device.deviceCode,
-        verificationUriComplete: device.verificationUriComplete,
-        interval: device.interval,
-        expiresIn: device.expiresIn,
-        issuedAtMs,
-        expiresAtMs: issuedAtMs + device.expiresIn * 1000,
-      });
-      return {
-        deviceCode: device.deviceCode,
-        userCode: device.userCode,
-        verificationUriComplete: device.verificationUriComplete,
-        expiresIn: device.expiresIn,
-        interval: device.interval,
-      };
-    },
-
-    /**
-     * Waits for the user to finish on the hosted page, then persists the
-     * session. The server does the waiting — not the browser — so a dropped
-     * WebSocket cannot lose a sign-in that already succeeded: the credentials
-     * are on disk before this returns, and a reconnecting client recovers the
-     * result from `status()`.
-     */
-    completeSignIn(input) {
-      return signInWithRecovery(async () => {
-        // Only a live code this server handed out. Polling one supplied from
-        // outside would let a caller drive the sign-in of a device code they
-        // obtained elsewhere and have the result persisted as this machine's
-        // session; one past the provider's deadline is dead everywhere.
-        pruneExpiredAuthorizations(Date.now());
-        const pending = pendingAuthorizations.get(input.deviceCode);
-        if (!pending) {
-          throw new Error("This sign-in attempt has expired. Start a new one.");
-        }
-
-        const accountUrl = configuredUrl;
-        const client = clientFor(accountUrl);
-        // Non-secret metadata, fetched BEFORE the poll can redeem the grant:
-        // an /instance failure here costs a retryable error, not a spent code.
-        const instance = await client.instance();
-
-        // Resumable: a previous attempt may have redeemed the single-use code
-        // and then failed before the session was persisted. The cached pair is
-        // what makes retrying this RPC recover the sign-in instead of polling
-        // a spent code into `expired`.
-        let token = pending.redeemedToken;
-        if (!token) {
-          try {
-            token = await client.pollDeviceToken(input.deviceCode, {
-              interval: pending.interval,
-              expiresIn: pending.expiresIn,
-            });
-          } catch (error) {
-            // A denied or expired authorization is terminal: the entry can
-            // never complete, so it is dropped now — not left pollable and on
-            // the browser-opener allowlist until eviction. Transient faults
-            // (the poll loop already absorbed retryable ones) keep the entry.
-            if (error instanceof AccountApiError && error.status === 401) {
-              pendingAuthorizations.delete(input.deviceCode);
-            }
-            throw error;
-          }
-        }
-        pending.redeemedToken = token;
-
-        return establishSession(token, {
-          accountUrl,
-          client,
-          instance,
-          // The entry is retired only once the scoped pair is durably on disk.
-          // A device code is single-use, so after redemption the entry can
-          // never complete again — but deleting it before persistence would
-          // turn a failure in between into a spent code with no session and no
-          // way to retry; kept until the checkpoint, `status()` (or retrying
-          // this RPC) recovers the sign-in instead.
-          onPersisted: () => pendingAuthorizations.delete(input.deviceCode),
-        });
-      });
-    },
-
     /**
      * The desktop SSO start: loopback listener first (its port names the
      * redirect URI), then the account service builds the provider's authorize
@@ -612,8 +421,10 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
 
     /**
      * Waits for the browser to deliver the code, exchanges it through the
-     * account service, and persists the session — the PKCE counterpart of
-     * `completeSignIn`, converging on the same `establishSession`.
+     * account service, and persists the session. The server does the waiting
+     * — not the browser — so a dropped WebSocket cannot lose a sign-in that
+     * already succeeded: the credentials are on disk before this returns,
+     * and a reconnecting client recovers the result from `status()`.
      */
     completeSso(input) {
       return signInWithRecovery(async () => {
@@ -627,8 +438,9 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         // Instance before anything can consume the code, as on every path.
         const instance = await client.instance();
 
-        // Resumable like the device path: a previous attempt may have
-        // exchanged the single-use code and failed before persistence.
+        // Resumable: a previous attempt may have exchanged the single-use
+        // code and failed before persistence; the cached pair makes a retry
+        // of this RPC recover the sign-in instead of stranding a spent code.
         let token = pending.redeemedToken;
         if (!token) {
           const code = await pending.listener.waitForCode();
@@ -654,6 +466,9 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
           client,
           instance,
           // Retired at the durable checkpoint, exactly like the device entry.
+          // Retired only once the scoped pair is durably on disk: deleting
+          // earlier would turn a failure between exchange and persistence
+          // into a spent code with no session and no way to retry.
           onPersisted: () => {
             pending.listener.close();
             pendingSsoAttempts.delete(input.ssoId);
@@ -706,34 +521,6 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     },
 
     /**
-     * Another way to a token pair: the verification grant. Converges on
-     * `establishSession` with the other two, so workspace scoping and
-     * credential persistence cannot drift no matter how the user signed in.
-     */
-    verifyEmail(input) {
-      return signInWithRecovery(async () => {
-        const accountUrl = configuredUrl;
-        const client = clientFor(accountUrl);
-        // Instance first, grant second, for the same reason as
-        // authenticateOtp: the pending token is single-use and must not be
-        // spent into a race that can throw the result away.
-        const instance = await client.instance();
-        const token = await client.verifyEmail(input);
-        return establishSession(token, { accountUrl, client, instance });
-      });
-    },
-
-    /**
-     * Thin pass-through: the account service resolves the user behind the
-     * verification id and answers 202 whether or not the id was live, so
-     * there is nothing to interpret here.
-     */
-    async resendVerificationEmail(input) {
-      const client = clientFor(configuredUrl);
-      await client.resendVerificationEmail(input);
-    },
-
-    /**
      * Writes the profile, then renames the workspace when it differs.
      *
      * The profile goes FIRST because it is where the user-recoverable
@@ -769,18 +556,12 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
 
     isVerificationUrlAllowed(url) {
       // Allowed only if this server issued it. An allowlist of hosts would be
-      // the obvious alternative, but the verification page lives on whatever
+      // the obvious alternative, but the authorize page lives on whatever
       // domain the identity provider chose — a hosted AuthKit domain, a custom
       // one, a self-hoster's stand-in — so any host list would be either wrong
       // for someone or wide enough to be no check at all. What is *not*
-      // ambiguous is whether this URL came out of a device authorization this
-      // process just requested. Only active, unexpired entries qualify.
-      pruneExpiredAuthorizations(Date.now());
-      for (const authorization of pendingAuthorizations.values()) {
-        if (authorization.verificationUriComplete === url) return Promise.resolve(true);
-      }
-      // The PKCE authorize URLs this server just built qualify on the same
-      // grounds: they came out of a sign-in attempt this process started.
+      // ambiguous is whether this URL came out of a sign-in attempt this
+      // process just started.
       for (const attempt of pendingSsoAttempts.values()) {
         if (attempt.authorizeUrl === url) return Promise.resolve(true);
       }

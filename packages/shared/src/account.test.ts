@@ -18,29 +18,12 @@ function emptyResponse(status: number): Response {
   return new Response(null, { status });
 }
 
-function tokensBody() {
-  return {
-    accessToken: "access-1",
-    refreshToken: "refresh-1",
-    user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-  };
-}
-
 function refreshedBody() {
   return {
     accessToken: "access-2",
     refreshToken: "refresh-2",
     user: { id: "user_1", email: "ada@example.com", name: "Ada" },
   };
-}
-
-// The proxy's poll answers: flow state on a 200, never an OAuth error body.
-function pendingResponse(): Response {
-  return jsonResponse({ status: "pending" });
-}
-
-function grantedResponse(): Response {
-  return jsonResponse({ status: "granted", tokens: tokensBody() });
 }
 
 function refreshedResponse(): Response {
@@ -250,6 +233,28 @@ describe("createAccountClient", () => {
         message: "Not authenticated",
       });
     });
+
+    // A hung endpoint must fail the one attempt at the per-attempt deadline
+    // — never pin the caller. Every request carries an abort signal, and the
+    // platform's timeout abort surfaces as a transient 408 whose message
+    // names only the path (request bodies on credential routes carry
+    // secrets).
+    it("arms every request with a timeout signal and maps its abort to a transient 408", async () => {
+      const seenSignals: Array<AbortSignal | null | undefined> = [];
+      const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+        seenSignals.push(init.signal);
+        // What undici throws when the AbortSignal.timeout fires mid-request.
+        return Promise.reject(new DOMException("The operation timed out", "TimeoutError"));
+      });
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.me("access-1")).rejects.toMatchObject({
+        code: "internal_error",
+        status: 408,
+        message: "Request to /api/v1/me timed out",
+      });
+      expect(seenSignals[0]).toBeInstanceOf(AbortSignal);
+    });
   });
 
   describe("listHosts", () => {
@@ -409,244 +414,6 @@ describe("createAccountClient", () => {
         code: "host_not_found",
         status: 404,
       });
-    });
-  });
-
-  describe("requestDeviceCode", () => {
-    it("posts to the instance device endpoint and decodes the contract response", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        jsonResponse({
-          deviceCode: "dc1",
-          userCode: "ABCD-EFGH",
-          verificationUri: "https://workos.example/device",
-          verificationUriComplete: "https://workos.example/device?user_code=ABCD-EFGH",
-          expiresIn: 900,
-          interval: 5,
-        }),
-      );
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
-
-      const result = await client.requestDeviceCode();
-
-      expect(result).toEqual({
-        deviceCode: "dc1",
-        userCode: "ABCD-EFGH",
-        verificationUri: "https://workos.example/device",
-        verificationUriComplete: "https://workos.example/device?user_code=ABCD-EFGH",
-        expiresIn: 900,
-        interval: 5,
-      });
-      const call = fetchMock.mock.calls[0];
-      if (call === undefined) throw new Error("expected fetch to have been called");
-      expect(call[0]).toBe(`${BASE_URL}/api/v1/auth/device`);
-      expect(call[1]).toMatchObject({ method: "POST" });
-    });
-
-    it("throws AccountApiError when the instance is rate limiting", async () => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          jsonResponse({ error: "rate_limited", message: "Too many requests" }, { status: 429 }),
-        );
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
-
-      await expect(client.requestDeviceCode()).rejects.toMatchObject({
-        code: "rate_limited",
-        status: 429,
-        message: "Too many requests",
-      });
-    });
-  });
-
-  describe("pollDeviceToken", () => {
-    it("polls the account service through pending and returns the granted tokens", async () => {
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValueOnce(pendingResponse())
-        .mockResolvedValueOnce(pendingResponse())
-        .mockResolvedValueOnce(grantedResponse());
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-      const result = await client.pollDeviceToken("dc1", { interval: 5 });
-
-      expect(result).toEqual({
-        accessToken: "access-1",
-        refreshToken: "refresh-1",
-        user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
-      });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      const call = fetchMock.mock.calls[0];
-      if (call === undefined) throw new Error("expected fetch to have been called");
-      // Proxied: the poll goes to the account service, never to the identity
-      // provider — the vendor is invisible on this wire.
-      expect(call[0]).toBe(`${BASE_URL}/api/v1/auth/device/token`);
-      expect(JSON.parse(call[1].body as string)).toEqual({ deviceCode: "dc1" });
-      expect(sleep).toHaveBeenCalledTimes(3);
-      expect(sleep).toHaveBeenNthCalledWith(1, 5000);
-      expect(sleep).toHaveBeenNthCalledWith(3, 5000);
-    });
-
-    it("increases the interval on slow_down and keeps polling", async () => {
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValueOnce(jsonResponse({ status: "slow_down" }))
-        .mockResolvedValueOnce(grantedResponse());
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-      const result = await client.pollDeviceToken("dc1", { interval: 5 });
-
-      expect(result.accessToken).toBe("access-1");
-      expect(sleep).toHaveBeenNthCalledWith(1, 5000);
-      expect(sleep).toHaveBeenNthCalledWith(2, 10000);
-    });
-
-    it("throws AccountApiError when the authorization expired", async () => {
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "expired" }));
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-      await expect(client.pollDeviceToken("dc1", { interval: 5 })).rejects.toMatchObject({
-        code: "unauthorized",
-        status: 401,
-        message: expect.stringContaining("expired"),
-      });
-    });
-
-    it("throws AccountApiError when the user denied the request", async () => {
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "denied" }));
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-      await expect(client.pollDeviceToken("dc1", { interval: 5 })).rejects.toMatchObject({
-        code: "unauthorized",
-        status: 401,
-        message: expect.stringContaining("denied"),
-      });
-    });
-
-    it("surfaces a service error body as the error contract", async () => {
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          jsonResponse({ error: "rate_limited", message: "Polling too fast" }, { status: 429 }),
-        );
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-      await expect(client.pollDeviceToken("dc1", { interval: 5 })).rejects.toMatchObject({
-        code: "rate_limited",
-        status: 429,
-        message: "Polling too fast",
-      });
-    });
-
-    it("stops polling and throws a timeout once the deadline elapses, even if the flow stays pending", async () => {
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      // A fresh Response per call: a Response body can only be read once, so
-      // reusing a single instance across polls (mockResolvedValue) would
-      // break the second `response.json()` read.
-      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(pendingResponse()));
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-      await expect(
-        client.pollDeviceToken("dc1", { interval: 5, expiresIn: 12 }),
-      ).rejects.toMatchObject({
-        code: "internal_error",
-        status: 408,
-        message: "Device authorization timed out",
-      });
-      // interval=5s against expiresIn=12s: elapsed hits 5s, then 10s (both
-      // within budget and worth a poll), then 15s exceeds the deadline and
-      // the loop must throw before issuing a third fetch.
-      expect(sleep).toHaveBeenCalledTimes(3);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    it("defaults to a bounded deadline when none is given", async () => {
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(pendingResponse()));
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-      // A huge interval blows past the default 30-minute deadline on the
-      // very first tick, proving the loop is bounded even without an
-      // explicit `expiresIn`.
-      await expect(client.pollDeviceToken("dc1", { interval: 60 * 60 })).rejects.toMatchObject({
-        code: "internal_error",
-        status: 408,
-        message: "Device authorization timed out",
-      });
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    // A hung endpoint must fail the one attempt at the per-attempt deadline
-    // — never pin the caller. Every request carries an abort signal, and the
-    // platform's timeout abort surfaces as a transient 408 whose message
-    // names only the path (request bodies on credential routes carry
-    // secrets).
-    it("arms every request with a timeout signal and maps its abort to a transient 408", async () => {
-      const seenSignals: Array<AbortSignal | null | undefined> = [];
-      const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
-        seenSignals.push(init.signal);
-        // What undici throws when the AbortSignal.timeout fires mid-request.
-        return Promise.reject(new DOMException("The operation timed out", "TimeoutError"));
-      });
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
-
-      await expect(client.me("access-1")).rejects.toMatchObject({
-        code: "internal_error",
-        status: 408,
-        message: "Request to /api/v1/me timed out",
-      });
-      expect(seenSignals[0]).toBeInstanceOf(AbortSignal);
-    });
-
-    // Attempts that fail transiently (a timed-out request, a provider blip)
-    // must not abort a sign-in mid-approval: the poll retries on the next
-    // tick, still bounded by the deadline.
-    it("retries the poll after a transient attempt failure", async () => {
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValueOnce(
-          jsonResponse({ error: "internal_error", message: "upstream blip" }, { status: 502 }),
-        )
-        .mockResolvedValueOnce(grantedResponse());
-      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-      const result = await client.pollDeviceToken("dc1", { interval: 5 });
-      expect(result.accessToken).toBe("access-1");
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    // Request time counts against the authorization's absolute expiry, not
-    // only planned sleep: a poll whose attempts are slow still stops when
-    // the provider-issued lifetime runs out.
-    it("stops at the absolute expiry even when time passes inside requests, not sleeps", async () => {
-      vi.useFakeTimers();
-      try {
-        const sleep = vi.fn().mockResolvedValue(undefined); // instant: elapsed sleep stays 0
-        const fetchMock = vi.fn().mockImplementation(async () => {
-          // Each attempt burns 7 wall-clock seconds inside the request.
-          await vi.advanceTimersByTimeAsync(7_000);
-          return pendingResponse();
-        });
-        const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock, sleep });
-
-        await expect(
-          client.pollDeviceToken("dc1", { interval: 0, expiresIn: 12 }),
-        ).rejects.toMatchObject({
-          code: "internal_error",
-          status: 408,
-          message: "Device authorization timed out",
-        });
-        // Two 7s attempts pass the 12s expiry; the loop must stop before a
-        // third fetch.
-        expect(fetchMock).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-      }
     });
   });
 

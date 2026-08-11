@@ -1,14 +1,14 @@
 // FILE: identity/workos.ts
 // Purpose: The WorkOS AuthKit implementation of the identity adapter seam —
-// access-token verification against the JWKS, user lookup, the Magic Auth /
-// email-verification / device grants, and organization membership. Everything
+// access-token verification against the JWKS, user lookup, the Magic Auth
+// and PKCE grants, and organization membership. Everything
 // WorkOS-specific lives here: wire shapes, refusal spellings, error classes.
 // Nothing outside this module (and config plumbing) may name WorkOS.
 // Layer: API identity (implementation)
 // Depends on: jose (JWKS + JWT verification), WorkOS User Management REST API,
 // interfaces.ts (the seam), orgProvisioning.ts (org resolution + cache).
 
-import type { AccountSsoProvider, DeviceAuthorizationResponse } from "@synara/contracts";
+import type { AccountSsoProvider } from "@synara/contracts";
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 import type { WorkosApiConfig } from "../config";
 import {
@@ -19,7 +19,6 @@ import {
   type AuthFailureReason,
   type AuthRequestContext,
   type AuthTokens,
-  type EmailVerificationChallenge,
   type EnvironmentGrantIssuer,
   type IdentityUser,
   type OrganizationRef,
@@ -63,9 +62,9 @@ const DISCOVERY_TIMEOUT_MS = 10_000;
 export const WORKOS_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
- * Per-attempt deadline on the GRANT-consuming calls: the Magic Auth and
- * email-verification authenticates, the device-token exchange, the refresh
- * grant, and the PKCE code exchange. Deliberately much longer than
+ * Per-attempt deadline on the GRANT-consuming calls: the Magic Auth
+ * authenticate, the refresh grant, and the PKCE code exchange. Deliberately
+ * much longer than
  * {@link WORKOS_REQUEST_TIMEOUT_MS}: these calls spend a single-use
  * credential, so aborting one that the provider goes on to complete leaves
  * the user with a consumed code and an error for a sign-in that actually
@@ -116,15 +115,6 @@ type WorkosOrganizationWire = {
  * only once teams exist at all.
  */
 const MEMBERSHIP_PAGE_LIMIT = 100;
-
-type WorkosDeviceAuthorizationWire = {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  verification_uri_complete: string;
-  expires_in: number;
-  interval: number;
-};
 
 /**
  * Reads one membership off the wire, refusing anything unusable. Skipping a
@@ -232,8 +222,8 @@ export function classifyMagicAuthFailure(raw: unknown): AuthFailureReason | unde
   const error = typeof body.error === "string" ? body.error : undefined;
 
   // Defensive: Magic Auth implicitly verifies the email, so this challenge
-  // should never arrive on this grant — but if WorkOS answers it anyway, the
-  // existing verification machinery can complete it.
+  // should never arrive on this grant — if WorkOS answers it anyway it is
+  // classified and surfaced as a terse dead-end.
   if (code === "email_verification_required") return "email_verification_required";
   // Domain policy, not a credential outcome: the email's domain has an SSO
   // connection, so WorkOS refuses non-SSO authentication for it
@@ -267,6 +257,7 @@ export function classifyMagicAuthFailure(raw: unknown): AuthFailureReason | unde
  */
 const WORKOS_AUTHORIZE_PROVIDERS: Record<AccountSsoProvider, string> = {
   google: "GoogleOAuth",
+  apple: "AppleOAuth",
   github: "GitHubOAuth",
 };
 
@@ -291,74 +282,6 @@ export function classifyAuthorizationCodeFailure(raw: unknown): AuthFailureReaso
   // A spent, expired, or foreign code — or a failed PKCE proof. Dead either
   // way; only a fresh authorization recovers.
   if (error === "invalid_grant" || code === "invalid_grant") return "verification_expired";
-  return undefined;
-}
-
-/**
- * The verification challenge an `email_verification_required` refusal names,
- * or `undefined` when the body does not carry all three fields. Extraction is
- * allowlist-style — exactly these fields, nothing else off the body — and it
- * exists only for this one failure; every other refusal stays discard-everything.
- */
-export function extractVerificationChallenge(raw: unknown): EmailVerificationChallenge | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const body = raw as Record<string, unknown>;
-  const pendingAuthenticationToken = body.pending_authentication_token;
-  const email = body.email;
-  const emailVerificationId = body.email_verification_id;
-  if (
-    typeof pendingAuthenticationToken !== "string" ||
-    pendingAuthenticationToken.length === 0 ||
-    typeof email !== "string" ||
-    email.length === 0 ||
-    typeof emailVerificationId !== "string" ||
-    emailVerificationId.length === 0
-  ) {
-    return undefined;
-  }
-  return { pendingAuthenticationToken, email, emailVerificationId };
-}
-
-/**
- * Which classified failure a refusal of the *email-verification grant*
- * describes. Separate from {@link classifyMagicAuthFailure} because the same
- * OAuth spelling means different things per grant: `invalid_grant` on the
- * Magic Auth grant is a refused code (retryable), while on the verification
- * grant the credential being refused is the pending token — spent, expired,
- * or never ours — which only a resend or a fresh sign-in recovers.
- *
- * WorkOS does not document whether a wrong code spends the pending token, so
- * both outcomes are represented: `invalid_verification_code` (the code was
- * refused; retry in place) and `verification_expired` (the token or code is
- * dead; offer resend/start-over). An unrecognised body yields `undefined` and
- * becomes an upstream fault, as everywhere else.
- */
-export function classifyVerificationFailure(raw: unknown): AuthFailureReason | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const body = raw as Record<string, unknown>;
-  const code = typeof body.code === "string" ? body.code : undefined;
-  const error = typeof body.error === "string" ? body.error : undefined;
-
-  // Multi-org account: same fail-closed answer as on the Magic Auth grant.
-  if (error === "organization_selection_required" || code === "organization_selection_required") {
-    return "organization_selection_required";
-  }
-  // The code itself was wrong but the attempt may be retried in place.
-  if (code === "invalid_one_time_code" || code === "invalid_code") {
-    return "invalid_verification_code";
-  }
-  if (code === "email_verification_code_incorrect") return "invalid_verification_code";
-  // The code or the pending token is spent or expired; retyping cannot help.
-  if (code === "email_verification_code_expired" || code === "one_time_code_expired") {
-    return "verification_expired";
-  }
-  if (code === "pending_authentication_token_expired") return "verification_expired";
-  if (error === "invalid_grant" || code === "invalid_pending_authentication_token") {
-    return "verification_expired";
-  }
-  // WorkOS re-answers the original refusal when the token is still pending
-  // but the code was not accepted — treat it as a wrong code.
-  if (code === "email_verification_required") return "invalid_verification_code";
   return undefined;
 }
 
@@ -566,14 +489,9 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
     if (response.ok) return response.json();
 
     // Read the failure only to classify it. The parsed value is never
-    // returned or attached to an error — except the verification challenge,
-    // whose three fields are extracted allowlist-style below because they are
-    // exactly what completing verification in-app redeems.
+    // returned or attached to an error.
     const raw = await response.json().catch(() => null);
     const failure = classify(raw);
-    if (failure === "email_verification_required") {
-      throw new IdentityAuthError(failure, extractVerificationChallenge(raw));
-    }
     if (failure) throw new IdentityAuthError(failure);
     // An unclassified refusal becomes an opaque 502 to the caller, so this
     // line is the only place its identity survives. Log the status plus
@@ -668,68 +586,6 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
         ...(name ? { name } : {}),
         ...(user.profile_picture_url ? { avatarUrl: user.profile_picture_url } : {}),
       } satisfies IdentityUser;
-    },
-
-    async pollDeviceToken({ deviceCode, context }) {
-      // The device code is bearer-ish, so this rides sensitiveFetch's no-leak
-      // handling — but the flow-state refusals are expected answers of a
-      // healthy poll, not failures, so they are read off the raw response
-      // here instead of being pushed through a failure classifier.
-      const response = await fetchWithDeadline(
-        `${config.workosApiUrl}/user_management/authenticate`,
-        "/user_management/authenticate",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${config.workosApiKey}`,
-          },
-          body: JSON.stringify({
-            grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-            device_code: deviceCode,
-            client_id: config.workosClientId,
-            // Confidential-client here too: proxying this leg is what keeps
-            // the whole provider protocol off the client wire.
-            client_secret: config.workosApiKey,
-            ...contextFields(context),
-          }),
-        },
-        // Grant-consuming: a redeemed device code aborted mid-answer is a
-        // spent credential with no session to show for it.
-        grantTimeoutMs,
-      );
-      if (response.ok) {
-        return { status: "granted", tokens: toAuthTokens(await response.json()) };
-      }
-
-      const raw: unknown = await response.json().catch(() => null);
-      const error =
-        typeof raw === "object" &&
-        raw !== null &&
-        typeof (raw as { error?: unknown }).error === "string"
-          ? (raw as { error: string }).error
-          : undefined;
-      // RFC 8628's four poll answers, mapped one-to-one so the client's loop
-      // semantics survive the proxy hop unchanged.
-      if (error === "authorization_pending") return { status: "pending" };
-      if (error === "slow_down") return { status: "slow_down" };
-      if (error === "expired_token") return { status: "expired" };
-      if (error === "access_denied") return { status: "denied" };
-      // `invalid_grant` here is an unknown or spent device code — dead for
-      // the same reasons an expired one is, and the client's recovery (start
-      // over) is identical.
-      if (error === "invalid_grant") return { status: "expired" };
-      // No body or description in the message, and the error field only as
-      // an allowlisted label: an unrecognised refusal on a credential route
-      // stays opaque, as everywhere else.
-      console.error(
-        `[api] unclassified WorkOS device-token failure: status=${response.status}` +
-          ` error=${loggableRefusalLabel(error)}`,
-      );
-      throw new IdentityProviderError(
-        response.status,
-        `WorkOS device-token poll failed with ${response.status}`,
-      );
     },
 
     async refreshTokens({ refreshToken, organizationId, context }) {
@@ -834,44 +690,6 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       return toAuthTokens(raw);
     },
 
-    async verifyEmailCode({ code, pendingAuthenticationToken, context }) {
-      const raw = await sensitiveFetch(
-        "/user_management/authenticate",
-        {
-          grant_type: "urn:workos:oauth:grant-type:email-verification:code",
-          code,
-          pending_authentication_token: pendingAuthenticationToken,
-          client_id: config.workosClientId,
-          // Confidential-client, like the Magic Auth grant: WorkOS requires
-          // the secret, which is why this call runs here rather than in the
-          // app.
-          client_secret: config.workosApiKey,
-          ...contextFields(context),
-        },
-        classifyVerificationFailure,
-        // Grant-consuming: the pending token + code pair is single-use.
-        grantTimeoutMs,
-      );
-      return toAuthTokens(raw);
-    },
-
-    async resendVerificationEmail(emailVerificationId) {
-      // The caller holds only the verification id; the user id it belongs to
-      // is read from the verification object here, server-side. Chosen over a
-      // user-by-email lookup because the id names exactly one verification —
-      // an email search could match a user the id was never issued for.
-      const verification = (await workosFetch(
-        `/user_management/email_verification/${encodeURIComponent(emailVerificationId)}`,
-      )) as { user_id?: unknown };
-      if (typeof verification.user_id !== "string" || verification.user_id.length === 0) {
-        throw new IdentityProviderError(502, "WorkOS email verification object named no user id");
-      }
-      await workosFetch(
-        `/user_management/users/${encodeURIComponent(verification.user_id)}/email_verification/send`,
-        { method: "POST" },
-      );
-    },
-
     buildAuthorizeUrl({ provider, redirectUri, codeChallenge, state }) {
       // The hosted authorize endpoint, deep-linked to the chosen provider.
       // PKCE (S256) because the requesting client is public — the verifier
@@ -907,24 +725,6 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
         grantTimeoutMs,
       );
       return toAuthTokens(raw);
-    },
-
-    async requestDeviceAuthorization() {
-      const response = (await workosFetch("/user_management/authorize/device", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ client_id: config.workosClientId }).toString(),
-      })) as WorkosDeviceAuthorizationWire;
-
-      const mapped: DeviceAuthorizationResponse = {
-        deviceCode: response.device_code,
-        userCode: response.user_code,
-        verificationUri: response.verification_uri,
-        verificationUriComplete: response.verification_uri_complete,
-        expiresIn: response.expires_in,
-        interval: response.interval,
-      };
-      return mapped;
     },
 
     describeInstanceAuth() {

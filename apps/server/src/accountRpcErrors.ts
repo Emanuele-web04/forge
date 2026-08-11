@@ -6,8 +6,8 @@
 // generic fallback message — and never the `AccountErrorCode` the UI branches on
 // (`invalid_verification_code`, `handle_taken`, ...).
 
-import { AccountEmailVerificationRequiredError, WsRpcError } from "@synara/contracts";
-import { AccountApiError, EmailVerificationRequiredError } from "@synara/shared/account";
+import { WsRpcError } from "@synara/contracts";
+import { AccountApiError } from "@synara/shared/account";
 import { Cause, Schema } from "effect";
 
 /** The original rejection from an `Effect.tryPromise`d account-session call. */
@@ -37,31 +37,15 @@ export function toAccountWsRpcError(rawCause: unknown, fallbackMessage: string):
 
 /**
  * The mapping for RPCs whose *request* carried a credential (the emailed OTP
- * code, or the verification code + pending token pair). Same classification
- * as {@link toAccountWsRpcError}, but nothing derived from the request may ride
- * along: no `cause` is ever attached (a fetch error can quote the request body,
- * and anything attached here is serialized to the client and may be logged on
- * the way), and an unrecognized failure is reduced to the fallback message
- * rather than its own — the account service has already worded every failure
- * that is safe to show.
+ * code). Same classification as {@link toAccountWsRpcError}, but nothing
+ * derived from the request may ride along: no `cause` is ever attached (a
+ * fetch error can quote the request body, and anything attached here is
+ * serialized to the client and may be logged on the way), and an unrecognized
+ * failure is reduced to the fallback message rather than its own — the
+ * account service has already worded every failure that is safe to show.
  */
-export function toSensitiveWsRpcError(
-  rawCause: unknown,
-  fallbackMessage: string,
-): WsRpcError | AccountEmailVerificationRequiredError {
+export function toSensitiveWsRpcError(rawCause: unknown, fallbackMessage: string): WsRpcError {
   const cause = unwrapTryPromiseError(rawCause);
-  // The one refusal that keeps a payload: the pending token, email,
-  // and verification id are what the in-app verification step redeems, so
-  // they cross the RPC boundary as their own tagged error — field by field,
-  // never as an attached `cause`.
-  if (cause instanceof EmailVerificationRequiredError) {
-    return new AccountEmailVerificationRequiredError({
-      message: cause.message,
-      pendingAuthenticationToken: cause.pendingAuthenticationToken,
-      email: cause.email,
-      emailVerificationId: cause.emailVerificationId,
-    });
-  }
   if (Schema.is(WsRpcError)(cause)) {
     return new WsRpcError({ message: cause.message, code: cause.code });
   }
