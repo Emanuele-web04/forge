@@ -478,9 +478,13 @@ export function createV1Routes(deps: {
 
   /**
    * Renames the workspace. The name lives on the identity provider's
-   * organization rather than here, so this is a write-through — and it is
-   * gated on membership by `requireOrgSession`, which is what stops a caller
-   * renaming an organization they merely know the id of.
+   * organization rather than here, so this is a write-through — gated on
+   * membership by `requireOrgSession` (which stops a caller renaming an
+   * organization they merely know the id of) AND on the organization being
+   * single-member. V1 is personal-org-only: membership alone must not let
+   * one member of a shared team rename the workspace for everyone, and with
+   * multi-org sign-in failing closed this is defense-in-depth, not the
+   * primary control.
    */
   v1.patch("/organization", async (c) => {
     const session = await requireOrgSession(c);
@@ -503,6 +507,24 @@ export function createV1Routes(deps: {
 
     const user = await loadSessionUser(c, session.userId);
     if (user instanceof Response) return user;
+
+    try {
+      // Asking for up to 2 answers "single-member or not" in one bounded
+      // request; an unanswerable count fails the request (authorization
+      // input), it does not degrade to a guess.
+      const members = await grants.countOrganizationMembers(session.orgId, 2);
+      if (members > 1) {
+        return errorResponse(
+          c,
+          403,
+          "organization_rename_not_allowed",
+          "Only a personal workspace can be renamed",
+        );
+      }
+    } catch (error) {
+      console.error("[api] organization member count failed:", error);
+      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+    }
 
     let renamed: OrganizationRef;
     try {

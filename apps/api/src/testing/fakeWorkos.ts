@@ -643,8 +643,16 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   // pass against a double that omitted it and fail against WorkOS.
   app.get("/user_management/organization_memberships", (c) => {
     const userId = c.req.query("user_id");
+    const orgId = c.req.query("organization_id");
+    const limitParam = Number.parseInt(c.req.query("limit") ?? "", 10);
+    const limit = Number.isInteger(limitParam) && limitParam > 0 ? limitParam : 100;
     const data = memberships
-      .filter((entry) => entry.userId === userId)
+      .filter(
+        (entry) =>
+          (userId === undefined || entry.userId === userId) &&
+          (orgId === undefined || entry.orgId === orgId),
+      )
+      .slice(0, limit)
       .map((entry) => ({
         object: "organization_membership",
         id: `om_fake_${entry.orgId}_${entry.userId}`,

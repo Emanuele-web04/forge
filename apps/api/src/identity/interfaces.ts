@@ -315,6 +315,14 @@ export type EnvironmentGrantIssuer = {
    * caches about it. Callers must have checked membership first.
    */
   renameOrganization(orgId: string, name: string): Promise<OrganizationRef>;
+  /**
+   * How many members `orgId` has, up to `atLeast` — the caller only ever
+   * needs "is this a single-member (personal) organization", so
+   * implementations may stop counting at the bound rather than paginate a
+   * large team. An authorization input: implementations must fail a request
+   * they cannot answer rather than degrade to a guess.
+   */
+  countOrganizationMembers(orgId: string, atLeast: number): Promise<number>;
 };
 
 export type DeviceCredentialAuthResult =

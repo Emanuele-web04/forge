@@ -796,6 +796,22 @@ export function createWorkosIdentityProvider(config: WorkosApiConfig): {
       return { kind: "scoped", organization: active };
     },
 
+    async countOrganizationMembers(orgId, atLeast) {
+      // The membership listing filtered by organization; asking for exactly
+      // `atLeast` rows answers "single-member or not" in one bounded request
+      // without paginating a large team.
+      const response = (await workosFetch(
+        `/user_management/organization_memberships?organization_id=${encodeURIComponent(orgId)}&limit=${Math.max(1, atLeast)}`,
+      )) as WorkosMembershipListWire;
+      if (!Array.isArray(response.data)) {
+        throw new IdentityProviderError(
+          502,
+          "WorkOS organization membership listing returned no data array",
+        );
+      }
+      return response.data.length;
+    },
+
     async renameOrganization(orgId, name) {
       // WorkOS models the rename as a full replacement (PUT).
       const response = (await workosFetch(`/organizations/${encodeURIComponent(orgId)}`, {

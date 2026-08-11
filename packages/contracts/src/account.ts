@@ -214,6 +214,12 @@ export const AccountErrorCode = Schema.Literals([
    * ships.
    */
   "multiple_organizations_unsupported",
+  /**
+   * Workspace rename is limited to single-member (personal) organizations
+   * in V1: membership alone must not let one member rename a workspace out
+   * from under the rest.
+   */
+  "organization_rename_not_allowed",
   "validation_failed",
   "rate_limited",
   "internal_error",

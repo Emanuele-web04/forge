@@ -1361,6 +1361,28 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(await res.json()).toMatchObject({ error: "validation_failed" });
     });
 
+    // V1 is personal-org-only: membership alone must not let one member of a
+    // shared team rename the workspace out from under the rest. With
+    // multi-org sign-in failing closed this is defense-in-depth.
+    it("refuses to rename a multi-member organization", async () => {
+      const { app } = buildApp();
+      const { token, orgId, orgName } = await signIn();
+      const teammate = workos.addUser({ first_name: "Team", last_name: "Mate" });
+      workos.addMembership(orgId, teammate.id);
+
+      const res = await app.request("/api/v1/organization", {
+        method: "PATCH",
+        headers: authHeaders(token),
+        body: JSON.stringify({ name: "Hijacked" }),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: "organization_rename_not_allowed" });
+
+      // The name is untouched.
+      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await meRes.json()).toMatchObject({ organization: { id: orgId, name: orgName } });
+    });
+
     // Membership, not knowledge of the id, is what authorizes the rename.
     it("refuses a caller whose token names an organization they have left", async () => {
       const { app } = buildApp();
