@@ -7,6 +7,11 @@ import { startFakeWorkos, type FakeWorkos } from "./testing/fakeWorkos";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
+/** A syntactically plausible OTP-send body padded to exactly `size` bytes. */
+function oversizedSendBody(size: number): string {
+  return `{"email":"a@example.com","pad":"${"x".repeat(size)}"}`.slice(0, size);
+}
+
 describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
   const databaseUrl = TEST_DATABASE_URL as string;
 
@@ -79,13 +84,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createApp", () => {
         body,
       });
 
-    const filler = (size: number) =>
-      `{"email":"a@example.com","pad":"${"x".repeat(size)}"}`.slice(0, size);
-
-    const atLimit = await post(filler(API_MAX_BODY_BYTES));
+    const atLimit = await post(oversizedSendBody(API_MAX_BODY_BYTES));
     expect(atLimit.status).not.toBe(413);
 
-    const oneOver = await post(filler(API_MAX_BODY_BYTES + 1));
+    const oneOver = await post(oversizedSendBody(API_MAX_BODY_BYTES + 1));
     expect(oneOver.status).toBe(413);
     const body = (await oneOver.json()) as AccountErrorBody;
     expect(body.error).toBe("validation_failed");

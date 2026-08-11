@@ -281,9 +281,7 @@ describe("sign-in", () => {
     const begun = await session.beginSignIn();
     expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(true);
 
-    const nowSpy = vi
-      .spyOn(Date, "now")
-      .mockReturnValue(Date.now() + (begun.expiresIn + 1) * 1000);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + (begun.expiresIn + 1) * 1000);
     try {
       expect(await session.isVerificationUrlAllowed(VERIFICATION_URL)).toBe(false);
       await expect(session.completeSignIn({ deviceCode: begun.deviceCode })).rejects.toThrow(

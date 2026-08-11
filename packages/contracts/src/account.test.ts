@@ -22,6 +22,10 @@ const decodeAccountHost = Schema.decodeUnknownSync(AccountHost);
 const decodeAccountMe = Schema.decodeUnknownSync(AccountMe);
 const decodeOrganizationRequired = Schema.decodeUnknownSync(OrganizationRequiredBody);
 
+function endpointAt(index: number) {
+  return { url: `https://host-${index}.example.com`, transport: "lan" };
+}
+
 function hostPayload(overrides: Record<string, unknown> = {}) {
   return {
     id: "host_1",
@@ -94,10 +98,6 @@ describe("RegisterHostRequest", () => {
   });
 
   it("caps the endpoints array at the maximum and rejects one entry over", () => {
-    const endpointAt = (index: number) => ({
-      url: `https://host-${index}.example.com`,
-      transport: "lan",
-    });
     const base = {
       environmentId: "env-1",
       name: "My Laptop",
@@ -151,7 +151,9 @@ describe("UpdateProfileRequest", () => {
     expect(
       decode({ ...base, displayName: "a".repeat(ACCOUNT_NAME_MAX_LENGTH) }).displayName,
     ).toHaveLength(ACCOUNT_NAME_MAX_LENGTH);
-    expect(() => decode({ ...base, displayName: "a".repeat(ACCOUNT_NAME_MAX_LENGTH + 1) })).toThrow();
+    expect(() =>
+      decode({ ...base, displayName: "a".repeat(ACCOUNT_NAME_MAX_LENGTH + 1) }),
+    ).toThrow();
   });
 });
 

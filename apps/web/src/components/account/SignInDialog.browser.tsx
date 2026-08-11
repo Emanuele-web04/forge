@@ -186,7 +186,9 @@ describe("SignInDialog", () => {
   // selection the provider-neutral device request never transmits.
   it("offers a single browser sign-in action instead of provider-branded buttons", async () => {
     renderDialog();
-    await expect.element(page.getByRole("button", { name: "Continue in your browser" })).toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Continue in your browser" }))
+      .toBeVisible();
     expect(page.getByText("Continue with Google").elements()).toHaveLength(0);
     expect(page.getByText("Continue with GitHub").elements()).toHaveLength(0);
   });
