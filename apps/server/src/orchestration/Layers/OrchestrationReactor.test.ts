@@ -5,6 +5,7 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
+import { ThreadGitMetadataReactor } from "../Services/ThreadGitMetadataReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 
@@ -76,6 +77,17 @@ describe("OrchestrationReactor", () => {
             drain: Effect.void,
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(ThreadGitMetadataReactor, {
+            start: Effect.acquireRelease(
+              Effect.sync(() => {
+                started.push("thread-git-metadata-reactor");
+              }),
+              () => Effect.sync(() => stopped.push("thread-git-metadata-reactor")),
+            ),
+            drain: Effect.void,
+          }),
+        ),
       ),
     );
 
@@ -87,6 +99,7 @@ describe("OrchestrationReactor", () => {
     expect(started).toEqual([
       "studio-output-reactor",
       "checkpoint-reactor",
+      "thread-git-metadata-reactor",
       "provider-runtime-ingestion",
       "provider-command-reactor",
     ]);
@@ -96,6 +109,7 @@ describe("OrchestrationReactor", () => {
     expect(stopped).toEqual([
       "provider-command-reactor",
       "provider-runtime-ingestion",
+      "thread-git-metadata-reactor",
       "checkpoint-reactor",
       "studio-output-reactor",
     ]);

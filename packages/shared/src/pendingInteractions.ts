@@ -14,6 +14,13 @@ export function respondingInteractionReclaimCutoff(requestedAt: string): string 
     : new Date(requestedAtMs - RESPONDING_INTERACTION_RECLAIM_GRACE_MS).toISOString();
 }
 
+export function respondingInteractionReclaimAt(responseRequestedAt: string): string {
+  const responseRequestedAtMs = Date.parse(responseRequestedAt);
+  return Number.isNaN(responseRequestedAtMs)
+    ? responseRequestedAt
+    : new Date(responseRequestedAtMs + RESPONDING_INTERACTION_RECLAIM_GRACE_MS).toISOString();
+}
+
 export function isPendingInteractionResponseClaimable(input: {
   readonly status: OrchestrationPendingInteraction["status"];
   readonly responseRequestedAt: string | null;

@@ -218,6 +218,7 @@ export function pruneArchivedManagedWorktrees(input: {
                   cwd: entry.workspaceRoot,
                   path: entry.path,
                   force: true,
+                  reclaimTemporaryBranch: true,
                 }),
               ),
               Effect.tap(() => Effect.sync(() => removedPaths.add(entry.path))),

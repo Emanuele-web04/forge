@@ -78,8 +78,10 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
 import {
+  DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES,
   shouldApplyDeferredThreadShellSummary,
   shouldApplyThreadsProjection,
+  THREAD_PROJECTION_EVENT_TYPES,
 } from "../threadShellEvents.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
@@ -105,6 +107,10 @@ interface ProjectorDefinition {
   readonly name: ProjectorName;
   readonly phase: "hot" | "deferred";
   readonly shouldApply?: (event: OrchestrationEvent) => boolean;
+  readonly replayFilter: {
+    readonly eventTypes: ReadonlyArray<OrchestrationEvent["type"]>;
+    readonly activityKinds?: ReadonlyArray<string>;
+  };
   readonly apply: (
     event: OrchestrationEvent,
     attachmentSideEffects: AttachmentSideEffects,
@@ -167,12 +173,32 @@ const THREAD_ACTIVITY_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"
   "thread.conversation-rolled-back",
 ]);
 
+const THREAD_SESSION_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.turn-start-requested",
+  "thread.session-set",
+]);
+
 const THREAD_TURN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.turn-start-requested",
   "thread.session-set",
   "thread.turn-diff-completed",
   "thread.reverted",
   "thread.conversation-rolled-back",
+]);
+
+const PENDING_INTERACTION_ACTIVITY_KINDS = new Set([
+  "approval.requested",
+  "approval.resolved",
+  "provider.approval.respond.failed",
+  "user-input.requested",
+  "user-input.resolved",
+  "provider.user-input.respond.failed",
+]);
+
+const PENDING_INTERACTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.activity-appended",
+  "thread.approval-response-requested",
+  "thread.user-input-response-requested",
 ]);
 
 function shouldApplyThreadTurnsProjection(event: OrchestrationEvent): boolean {
@@ -189,12 +215,7 @@ function shouldApplyPendingInteractionsProjection(event: OrchestrationEvent): bo
     event.type === "thread.approval-response-requested" ||
     event.type === "thread.user-input-response-requested" ||
     (event.type === "thread.activity-appended" &&
-      (event.payload.activity.kind === "approval.requested" ||
-        event.payload.activity.kind === "approval.resolved" ||
-        event.payload.activity.kind === "provider.approval.respond.failed" ||
-        event.payload.activity.kind === "user-input.requested" ||
-        event.payload.activity.kind === "user-input.resolved" ||
-        event.payload.activity.kind === "provider.user-input.respond.failed"))
+      PENDING_INTERACTION_ACTIVITY_KINDS.has(event.payload.activity.kind))
   );
 }
 
@@ -1809,61 +1830,75 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       name: ORCHESTRATION_PROJECTOR_NAMES.projects,
       phase: "hot",
       shouldApply: (event) => PROJECT_EVENT_TYPES.has(event.type),
+      replayFilter: { eventTypes: [...PROJECT_EVENT_TYPES] },
       apply: applyProjectsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
       phase: "hot",
       shouldApply: (event) => THREAD_MESSAGE_PROJECTION_EVENT_TYPES.has(event.type),
+      replayFilter: { eventTypes: [...THREAD_MESSAGE_PROJECTION_EVENT_TYPES] },
       apply: applyThreadMessagesProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
       phase: "hot",
       shouldApply: (event) => THREAD_PROPOSED_PLAN_PROJECTION_EVENT_TYPES.has(event.type),
+      replayFilter: { eventTypes: [...THREAD_PROPOSED_PLAN_PROJECTION_EVENT_TYPES] },
       apply: applyThreadProposedPlansProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
       phase: "hot",
       shouldApply: (event) => THREAD_ACTIVITY_PROJECTION_EVENT_TYPES.has(event.type),
+      replayFilter: { eventTypes: [...THREAD_ACTIVITY_PROJECTION_EVENT_TYPES] },
       apply: applyThreadActivitiesProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threads,
       phase: "hot",
       shouldApply: shouldApplyThreadsProjection,
+      replayFilter: { eventTypes: [...THREAD_PROJECTION_EVENT_TYPES] },
       apply: applyThreadsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
       phase: "hot",
-      shouldApply: (event) =>
-        event.type === "thread.turn-start-requested" || event.type === "thread.session-set",
+      shouldApply: (event) => THREAD_SESSION_PROJECTION_EVENT_TYPES.has(event.type),
+      replayFilter: { eventTypes: [...THREAD_SESSION_PROJECTION_EVENT_TYPES] },
       apply: applyThreadSessionsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
       phase: "hot",
       shouldApply: shouldApplyThreadTurnsProjection,
+      replayFilter: {
+        eventTypes: [...THREAD_TURN_PROJECTION_EVENT_TYPES, "thread.message-sent"],
+      },
       apply: applyThreadTurnsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
       phase: "hot",
       shouldApply: () => false,
+      replayFilter: { eventTypes: [] },
       apply: applyCheckpointsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.pendingInteractions,
       phase: "hot",
       shouldApply: shouldApplyPendingInteractionsProjection,
+      replayFilter: {
+        eventTypes: [...PENDING_INTERACTION_EVENT_TYPES],
+        activityKinds: [...PENDING_INTERACTION_ACTIVITY_KINDS],
+      },
       apply: applyPendingInteractionsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
       phase: "deferred",
       shouldApply: shouldApplyDeferredThreadShellSummary,
+      replayFilter: { eventTypes: [...DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES] },
       apply: applyThreadShellSummariesProjection,
     },
   ];
@@ -2102,6 +2137,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 Option.isSome(stateRow) ? stateRow.value.lastAppliedSequence : 0,
                 Number.MAX_SAFE_INTEGER,
                 highWaterSequence,
+                {
+                  ...projector.replayFilter,
+                  includeBoundaryEvent: true,
+                },
               ),
               (event) => {
                 if (!(projector.shouldApply?.(event) ?? true)) {

@@ -12,6 +12,7 @@ import type {
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
+  GitWorktreeSetupPhase,
   GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
@@ -54,6 +55,12 @@ export interface GitStatusDetails extends Omit<GitStatusResult, "pr"> {
   hasOriginRemote: boolean;
   isDefaultBranch: boolean;
   upstreamRef: string | null;
+}
+
+export interface GitBranchContext {
+  readonly isRepo: boolean;
+  readonly branch: string | null;
+  readonly upstreamRef: string | null;
 }
 
 export interface GitPreparedCommitContext {
@@ -204,6 +211,9 @@ export interface GitCoreShape {
    */
   readonly statusDetails: (cwd: string) => Effect.Effect<GitStatusDetails, GitCommandError>;
 
+  /** Read only branch identity, without diff stats or remote refresh work. */
+  readonly readBranchContext: (cwd: string) => Effect.Effect<GitBranchContext, GitCommandError>;
+
   /**
    * Read a unified patch for the current working tree, including untracked files.
    */
@@ -306,10 +316,14 @@ export interface GitCoreShape {
   ) => Effect.Effect<void, GitCommandError>;
 
   /**
-   * Create a detached worktree from a branch or ref.
+   * Create a detached worktree from a branch or ref. `onPhase` fires as each
+   * setup phase (branch → worktree → copy-changes) begins, for progress UIs.
    */
   readonly createDetachedWorktree: (
     input: GitCreateDetachedWorktreeInput,
+    options?: {
+      readonly onPhase?: (phase: GitWorktreeSetupPhase) => Effect.Effect<void>;
+    },
   ) => Effect.Effect<GitCreateDetachedWorktreeResult, GitCommandError>;
 
   /**

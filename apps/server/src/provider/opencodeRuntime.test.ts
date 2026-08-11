@@ -4,14 +4,17 @@
 // Exports: Vitest suites for opencodeRuntime.ts
 
 import { Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { type ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { resolveWindowsComSpec } from "@synara/shared/windowsProcess";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildOpenCodePermissionRules,
   buildOpenCodeServerProcessEnv,
+  KILO_CLI_SPEC,
+  KILO_CREDENTIAL_STARTUP_RETRY_DELAYS_MS,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   makeOpenCodeRuntimeLive,
@@ -66,10 +69,17 @@ function mockOpenCodeServerHandle(input: {
   });
 }
 
-function mockOpenCodeServerSpawnerLayer(input: { stdout: string; stderr: string }) {
+function mockOpenCodeServerSpawnerLayer(input: {
+  stdout: string;
+  stderr: string;
+  spawnedCommands?: Array<ChildProcess.StandardCommand>;
+}) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() => Effect.succeed(mockOpenCodeServerHandle(input))),
+    ChildProcessSpawner.make((command) => {
+      if (command._tag === "StandardCommand") input.spawnedCommands?.push(command);
+      return Effect.succeed(mockOpenCodeServerHandle(input));
+    }),
   );
 }
 
@@ -221,6 +231,62 @@ describe("buildOpenCodeServerProcessEnv", () => {
 });
 
 describe("OpenCodeRuntime startup diagnostics", () => {
+  it("wraps Windows .cmd server shims before spawning", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const spawnedCommands: Array<ChildProcess.StandardCommand> = [];
+
+    try {
+      const server = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* OpenCodeRuntime;
+            return yield* runtime.startOpenCodeServerProcess({
+              binaryPath: "C:\\Users\\Test User\\AppData\\Roaming\\npm\\opencode.cmd",
+              hostname: "127.0.0.1",
+              port: 58_123,
+            });
+          }),
+        ).pipe(
+          Effect.provide(
+            makeOpenCodeRuntimeLive({
+              teardownProcessTree: async () => ({
+                escalated: false,
+                signalErrors: [],
+              }),
+            }).pipe(
+              Layer.provide(
+                mockOpenCodeServerSpawnerLayer({
+                  stdout: "opencode server listening on http://127.0.0.1:58123\n",
+                  stderr: "",
+                  spawnedCommands,
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(server.url).toBe("http://127.0.0.1:58123");
+      expect(spawnedCommands).toHaveLength(1);
+      expect(spawnedCommands[0]).toMatchObject({
+        command: resolveWindowsComSpec(),
+        args: [
+          "/d",
+          "/s",
+          "/v:off",
+          "/c",
+          'call "C:\\Users\\Test User\\AppData\\Roaming\\npm\\opencode.cmd" "serve" "--hostname" "127.0.0.1" "--port" "58123"',
+        ],
+        options: {
+          shell: false,
+          windowsVerbatimArguments: true,
+        },
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("includes command and partial process output when server startup times out", async () => {
     const error = await Effect.runPromise(
       Effect.scoped(
@@ -311,6 +377,119 @@ describe("OpenCodeRuntime startup diagnostics", () => {
 });
 
 describe("OpenCodeRuntime local server pool", () => {
+  it("retries transient Kilo credential-store startup failures", async () => {
+    let spawnCount = 0;
+    let teardownCount = 0;
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() => {
+        spawnCount += 1;
+        if (spawnCount < 3) {
+          return Effect.succeed(
+            mockOpenCodeServerHandle({
+              stdout: "",
+              stderr:
+                '\u001b[91mError: Unexpected error Failed query: update "credential" set "value" = ?\n',
+              pid: spawnCount,
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+            }),
+          );
+        }
+        return Effect.succeed(
+          mockOpenCodeServerHandle({
+            stdout: "kilo server listening on http://127.0.0.1:59002\n",
+            stderr: "",
+            pid: spawnCount,
+          }),
+        );
+      }),
+    );
+    const layer = Layer.merge(
+      makeOpenCodeRuntimeLive({
+        netService: {
+          canListenOnHost: () => Effect.succeed(true),
+          isPortAvailableOnLoopback: () => Effect.succeed(true),
+          reserveLoopbackPort: () => Effect.succeed(59_000),
+          findAvailablePort: () => Effect.succeed(59_000),
+        },
+        teardownProcessTree: async () => {
+          teardownCount += 1;
+          return { escalated: false, signalErrors: [] };
+        },
+      }).pipe(Layer.provide(spawnerLayer)),
+      TestClock.layer(),
+    );
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          const serverScope = yield* Scope.make();
+          const connectionFiber = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "kilo",
+              cliSpec: KILO_CLI_SPEC,
+              poolIsolationKey: "synara-kilo-thread",
+            })
+            .pipe(Effect.provideService(Scope.Scope, serverScope), Effect.forkChild);
+
+          for (const delayMs of KILO_CREDENTIAL_STARTUP_RETRY_DELAYS_MS) {
+            yield* Effect.yieldNow;
+            yield* TestClock.adjust(Duration.millis(delayMs));
+          }
+
+          const connection = yield* Fiber.join(connectionFiber);
+          expect(connection.url).toBe("http://127.0.0.1:59002");
+          expect(spawnCount).toBe(3);
+          expect(teardownCount).toBe(2);
+
+          yield* Scope.close(serverScope, Exit.void);
+          expect(teardownCount).toBe(3);
+        }),
+      ).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("does not retry unrelated Kilo startup failures", async () => {
+    let spawnCount = 0;
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() => {
+        spawnCount += 1;
+        return Effect.succeed(
+          mockOpenCodeServerHandle({
+            stdout: "",
+            stderr: "Error: invalid Kilo configuration\n",
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+          }),
+        );
+      }),
+    );
+    const layer = makeOpenCodeRuntimeLive({
+      netService: {
+        canListenOnHost: () => Effect.succeed(true),
+        isPortAvailableOnLoopback: () => Effect.succeed(true),
+        reserveLoopbackPort: () => Effect.succeed(59_000),
+        findAvailablePort: () => Effect.succeed(59_000),
+      },
+      teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+    }).pipe(Layer.provide(spawnerLayer));
+
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime
+            .connectToOpenCodeServer({ binaryPath: "kilo", cliSpec: KILO_CLI_SPEC })
+            .pipe(Effect.flip);
+        }),
+      ).pipe(Effect.provide(layer)),
+    );
+
+    expect(spawnCount).toBe(1);
+    expect(error.detail).toContain("invalid Kilo configuration");
+  });
+
   it("keeps server scope closure pending until process-tree exit is proven", async () => {
     let proveExit: (() => void) | undefined;
     const exitProof = new Promise<void>((resolve) => {

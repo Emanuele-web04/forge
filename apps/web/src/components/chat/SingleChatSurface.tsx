@@ -24,6 +24,8 @@ import { basenameOfPath } from "../../file-icons";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useDockPaneRuntimeActivation } from "../../hooks/useDockPaneRuntimeActivation";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
+import { useDeviceSupport } from "../../hooks/useDeviceSupport";
 import { useRepoDiffTotals } from "../../hooks/useRepoDiffTotals";
 import {
   addChatFileComment,
@@ -42,7 +44,7 @@ import type { FileCommentSelection } from "../../lib/fileComments";
 import { gitBranchesQueryOptions } from "../../lib/gitReactQuery";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
-import { getSidechatCreator } from "../../lib/sidechatCreatorRegistry";
+import { waitForSidechatCreator } from "../../lib/sidechatCreatorRegistry";
 import {
   clearSidechatPaneRetention,
   getSidechatPaneRetentionVersion,
@@ -81,6 +83,7 @@ import {
   ChatMountLoader,
   DeferredChatView,
   LazyBrowserPanel,
+  LazyDevicePanel,
   LazyDiffPanel,
   noopChatSurfaceAction,
 } from "./ChatThreadSurfacePrimitives";
@@ -93,6 +96,7 @@ import {
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
 import { routeSingleBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
+import { routeSingleDevicePaneOpenRequest } from "./devicePaneOpenRequest";
 import {
   pullRequestDetailInputFromPane,
   pullRequestPaneTabLabel,
@@ -221,10 +225,12 @@ export function SingleChatSurface(props: {
     gitCwd: workspaceRoot,
     isGitRepo: hasGitRepository,
   });
+  const hasDeviceSupport = useDeviceSupport();
   const dockLauncherItems = resolveRightDockLauncherItems({
     hasWorkspace: workspaceRoot !== null,
     hasGitRepository,
     hasReview: dockDiffTotals.fileCount > 0,
+    hasDeviceSupport,
   });
   const availableDockPaneKinds = dockLauncherItems.map(({ kind }) => kind);
   const projects = useStore((store) => store.projects);
@@ -310,6 +316,10 @@ export function SingleChatSurface(props: {
   const handleToggleBrowser = () => {
     requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
+  };
+  const handleToggleDevice = () => {
+    requestImmediateDockHydration("device");
+    toggleSingletonPane(props.threadId, { kind: "device" });
   };
   const handleToggleRightDock = () => {
     setDockOpen(props.threadId, !dockState.open);
@@ -567,6 +577,26 @@ export function SingleChatSurface(props: {
     },
   });
 
+  useDeviceEventBridge({
+    onOpenPaneRequested: hasDeviceSupport
+      ? (event) => {
+          routeSingleDevicePaneOpenRequest({
+            currentThreadId: props.threadId,
+            requestedThreadId: event.threadId,
+            requestImmediateDeviceHydration: () => requestImmediateDockHydration("device"),
+            openDevicePane: (threadId) => openPane(threadId, { kind: "device" }),
+            navigateToThread: (threadId) => {
+              void navigate({
+                to: "/$threadId",
+                params: { threadId },
+                replace: true,
+              });
+            },
+          });
+        }
+      : null,
+  });
+
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
 
   // Sidechat tab labels only need thread titles, so subscribe to the coarse
@@ -709,23 +739,28 @@ export function SingleChatSurface(props: {
     if (kind === "sidechat") {
       // Sidechat spawns a thread; reuse the composer's /side flow (correct model
       // selection) published via the registry instead of opening an empty pane.
-      const createSidechat = getSidechatCreator(props.threadId);
-      if (!createSidechat) {
-        toastManager.add({
-          type: "warning",
-          title: "Side is unavailable",
-          description: "Open a server-backed main thread before starting Side.",
+      void waitForSidechatCreator(props.threadId)
+        .then((createSidechat) => {
+          if (!createSidechat) {
+            toastManager.add({
+              type: "warning",
+              title: "Side chat is unavailable",
+              description: "Open a server-backed main thread before starting a Side chat.",
+            });
+            return;
+          }
+          return createSidechat();
+        })
+        .catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not start Side chat",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating Side chat.",
+          });
         });
-        return;
-      }
-      void createSidechat().catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Could not start Side",
-          description:
-            error instanceof Error ? error.message : "An error occurred while creating Side.",
-        });
-      });
       return;
     }
     openPane(props.threadId, { kind });
@@ -744,6 +779,19 @@ export function SingleChatSurface(props: {
               threadId={props.threadId}
               onClosePanel={() => closePane(props.threadId, pane.id)}
               runtimeMode={context.runtimeMode}
+              onRequestLive={requestActiveDockPaneLive}
+            />
+          </Suspense>
+        );
+      case "device":
+        return (
+          <Suspense fallback={<PanelStateMessage>Loading simulator...</PanelStateMessage>}>
+            <LazyDevicePanel
+              mode="sidebar"
+              threadId={props.threadId}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
+              runtimeMode={context.runtimeMode}
+              isVisible={context.isVisible}
               onRequestLive={requestActiveDockPaneLive}
             />
           </Suspense>
@@ -794,6 +842,7 @@ export function SingleChatSurface(props: {
               hostThreadId={props.threadId}
               projectId={props.projectId}
               isActive={context.isActive && dockState.open}
+              onClosePanel={() => closePane(props.threadId, pane.id)}
             />
           </Suspense>
         );
@@ -1016,6 +1065,7 @@ export function SingleChatSurface(props: {
               onToggleDiff={handleToggleDiff}
               onToggleRightDock={handleToggleRightDock}
               onToggleBrowser={handleToggleBrowser}
+              {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onOpenBrowserUrl={handleOpenBrowserUrl}
               onOpenTurnDiff={handleOpenTurnDiff}
               onSplitSurface={handleSplitSurface}

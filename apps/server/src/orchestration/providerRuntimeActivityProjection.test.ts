@@ -354,6 +354,67 @@ describe("provider runtime activity projection", () => {
     expect(providerActivityUpdateFingerprint(activity!)).toContain('"kind":"tool.updated"');
   });
 
+  it.each(["antigravity", "codex"] as const)(
+    "projects %s tool lifecycle events through the same canonical activities",
+    (provider) => {
+      const itemId = RuntimeItemId.makeUnsafe(`${provider}-tool-1`);
+      const data = { toolCallId: itemId, toolName: "run_command" };
+      const [started] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          provider,
+          type: "item.started",
+          eventId: `${provider}-tool-started`,
+          turnId: TURN_ID,
+          itemId,
+          payload: {
+            itemType: "command_execution",
+            status: "inProgress",
+            title: "run_command",
+            data,
+          },
+        }),
+      );
+      const [completed] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          provider,
+          type: "item.completed",
+          eventId: `${provider}-tool-completed`,
+          turnId: TURN_ID,
+          itemId,
+          payload: {
+            itemType: "command_execution",
+            status: "completed",
+            title: "run_command",
+            data,
+          },
+        }),
+      );
+
+      expect(started).toMatchObject({
+        kind: "tool.started",
+        summary: "run_command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "run_command",
+          data,
+        },
+      });
+      expect(completed).toMatchObject({
+        kind: "tool.completed",
+        summary: "run_command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "run_command",
+          data,
+        },
+      });
+      expect(() => decodeActivityAppendCommand(started!)).not.toThrow();
+      expect(() => decodeActivityAppendCommand(completed!)).not.toThrow();
+    },
+  );
+
   it("maps canonical approvals and structured user input", () => {
     const approval = projectProviderRuntimeActivities(
       runtimeEvent({

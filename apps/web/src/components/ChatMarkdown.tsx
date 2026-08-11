@@ -33,6 +33,7 @@ import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeF
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
+import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
@@ -1039,8 +1040,13 @@ function ChatMarkdown({
   const smoothedText = useSmoothStreamedText(text, isStreaming);
   // The dollar rewrite exists to disambiguate math from currency; the user
   // variant has no math, so its text must stay byte-for-byte what was typed.
+  // Table repair runs first and can change text length, so the thread-marker
+  // plugin below must resolve offsets against the same repaired text.
   const normalizedText = useMemo(
-    () => (isUserVariant ? smoothedText : protectLiteralMarkdownDollars(smoothedText)),
+    () =>
+      isUserVariant
+        ? smoothedText
+        : protectLiteralMarkdownDollars(repairMarkdownTableDelimiters(smoothedText)),
     [isUserVariant, smoothedText],
   );
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
@@ -1049,9 +1055,15 @@ function ChatMarkdown({
   // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
+  // Marker offsets are applied against mdast positions, which come from the
+  // repaired text — validate them against the same string. A marker recorded
+  // after a repaired delimiter row fails its `selectedText` check and is
+  // dropped instead of highlighting a shifted range.
   const threadMarkerRemarkPlugin = useMemo(
     () =>
-      markers && markers.length > 0 ? createThreadMarkerRemarkPlugin({ text, markers }) : null,
+      markers && markers.length > 0
+        ? createThreadMarkerRemarkPlugin({ text: repairMarkdownTableDelimiters(text), markers })
+        : null,
     [markers, text],
   );
   const composerChipsRemarkPlugin = useMemo(

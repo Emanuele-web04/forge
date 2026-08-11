@@ -15,6 +15,7 @@ import {
 } from "react";
 
 import type { OrchestrationThreadPullRequest, ProjectId, ThreadId } from "@synara/contracts";
+import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 
 import {
   AddPlusIcon,
@@ -23,6 +24,7 @@ import {
   NewThreadIcon,
   SortIcon,
   Undo2Icon,
+  WorktreeIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -33,6 +35,7 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
   sidebarHoverRevealHideClassName,
 } from "../sidebarRowStyles";
+import { resolveThreadPullRequestFallback } from "../hooks/useThreadPullRequests";
 import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { FolderClosed } from "./FolderClosed";
@@ -41,6 +44,7 @@ import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
   resolveSidebarThreadListPaging,
+  resolveThreadDisplayBranch,
   resolveThreadProjectLabel,
   resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
@@ -129,7 +133,13 @@ function ActivityThreadRow({
   renderHoverCard: (anchorId: string) => ReactNode;
 }) {
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
-  const branch = thread.associatedWorktreeBranch?.trim() || thread.branch?.trim() || null;
+  const branch = resolveThreadDisplayBranch(thread);
+  const isWorktree =
+    resolveThreadEnvironmentMode({
+      envMode: thread.envMode,
+      worktreePath: thread.worktreePath,
+    }) === "worktree";
+  const ProjectGlyph = isWorktree ? WorktreeIcon : FolderClosed;
   const hoverAnchorId = createSidebarThreadHoverAnchorId({
     scope: "activity",
     threadId: thread.id,
@@ -197,7 +207,7 @@ function ActivityThreadRow({
             </span>
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
-            <FolderClosed
+            <ProjectGlyph
               className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
               aria-hidden
             />
@@ -691,7 +701,18 @@ export function SidebarActivityView({
       isActive={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
-      pr={prByThreadId.get(thread.id) ?? thread.lastKnownPr ?? null}
+      pr={
+        // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+        // checkout moved on); falling back to raw lastKnownPr would resurrect that stale
+        // badge. Rows not yet covered (revealed by paging a paint before the parent's map
+        // catches up) get the same resolution without live status instead.
+        prByThreadId.has(thread.id)
+          ? (prByThreadId.get(thread.id) ?? null)
+          : resolveThreadPullRequestFallback({
+              branch: thread.branch,
+              lastKnownPr: thread.lastKnownPr ?? null,
+            })
+      }
       status={resolveThreadStatus(thread)}
       onOpen={() => onOpenThread(thread.id)}
       onSetSettled={(settled) => {

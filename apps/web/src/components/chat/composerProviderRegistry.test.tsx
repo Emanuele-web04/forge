@@ -763,6 +763,52 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("keeps Pi max thinking selections when discovery advertises max", () => {
+    const runtimeModel: ProviderModelDescriptor = {
+      slug: "moonshotai/kimi-k3",
+      name: "Kimi K3",
+      upstreamProviderId: "moonshotai",
+      upstreamProviderName: "Moonshot AI",
+      supportedReasoningEfforts: [
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+        { value: "max", label: "Max" },
+      ],
+      defaultReasoningEffort: "high",
+    };
+    const selection = getComposerTraitSelection(
+      "pi",
+      "moonshotai/kimi-k3",
+      "",
+      { thinkingLevel: "max" },
+      runtimeModel,
+    );
+    const state = getComposerProviderState({
+      provider: "pi",
+      model: "moonshotai/kimi-k3",
+      runtimeModel,
+      prompt: "",
+      modelOptions: {
+        pi: {
+          thinkingLevel: "max",
+        },
+      },
+    });
+
+    expect(selection.effort).toBe("max");
+    expect(selection.primarySelectDescriptor).toMatchObject({
+      id: "thinkingLevel",
+      currentValue: "max",
+    });
+    expect(state).toEqual({
+      provider: "pi",
+      promptEffort: "max",
+      modelOptionsForDispatch: {
+        thinkingLevel: "max",
+      },
+    });
+  });
+
   it("does not render a traits picker for OpenCode models without exposed controls", () => {
     const threadId = ThreadId.makeUnsafe("thread-opencode-traits-hidden");
 

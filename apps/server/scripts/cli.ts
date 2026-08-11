@@ -142,6 +142,16 @@ const buildCmd = Command.make(
         })`bun tsdown`,
       );
 
+      // The device backend compiles this helper against the user's installed
+      // Xcode on first attach. tsdown bundles JavaScript only, and desktop/CLI
+      // packaging stage only `dist`, so leaving the sources under `native`
+      // makes the feature work in development but fail in every packaged app.
+      const deviceHelperSource = path.join(serverDir, "native/device-helper");
+      const deviceHelperTarget = path.join(serverDir, "dist/device-helper");
+      yield* fs.copy(deviceHelperSource, deviceHelperTarget);
+      yield* fs.chmod(path.join(deviceHelperTarget, "build.sh"), 0o755);
+      yield* Effect.log("[cli] Bundled iOS Simulator helper sources into dist/device-helper");
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 

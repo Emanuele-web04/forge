@@ -37,6 +37,7 @@ import {
 } from "../../session-logic";
 import {
   type TurnDiffSummary,
+  type WorktreeSetupResolutionAction,
   type WorktreeSetupSnapshot,
   type WorktreeSetupStep,
 } from "../../types";
@@ -58,7 +59,9 @@ import {
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
+import { composerOverlayScrollMaskImage } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
+import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -104,6 +107,7 @@ import {
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
 import { useTailAnchorScroll } from "./useTailAnchorScroll";
+import { useTimelineRowOverlapGuard } from "./useTimelineRowOverlapGuard";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -309,7 +313,22 @@ function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"
 // Transient "Preparing worktree..." panel: a compact bordered card with a
 // git-branch header and a connected stepper. Hugs its content so it reads as a
 // status chip rather than a full-width block.
-function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> }) {
+function WorktreeSetupCard({
+  steps,
+  pendingAction,
+  onResolve,
+}: {
+  steps: ReadonlyArray<WorktreeSetupStep>;
+  pendingAction?: WorktreeSetupResolutionAction | null | undefined;
+  onResolve?: ((action: WorktreeSetupResolutionAction) => void) | undefined;
+}) {
+  // The send pipeline only honors a resolution at checkpoints before the turn
+  // dispatch, so hide the actions once "Starting session" is underway (or the
+  // setup already failed) rather than offering a cancel that can no longer win.
+  const canResolve =
+    onResolve !== undefined &&
+    steps.every((step) => step.status !== "error") &&
+    !steps.some((step) => step.id === "start-session" && step.status !== "pending");
   return (
     <div className="w-fit max-w-full rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3.5 py-3 font-system-ui shadow-xs">
       <div className="flex items-center gap-2">
@@ -354,6 +373,26 @@ function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> 
           );
         })}
       </ol>
+      {canResolve ? (
+        <div className="mt-2.5 flex items-center gap-1.5">
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={pendingAction != null}
+            onClick={() => onResolve("work-locally")}
+          >
+            {pendingAction === "work-locally" ? "Switching to local..." : "Work locally"}
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={pendingAction != null}
+            onClick={() => onResolve("cancel")}
+          >
+            {pendingAction === "cancel" ? "Cancelling..." : "Cancel"}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -361,10 +400,15 @@ function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> 
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
+  workingLabel?: "Loading" | "Thinking" | undefined;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
+  /** Action already chosen from the worktree setup card; disables its buttons while it applies. */
+  worktreeSetupPendingAction?: WorktreeSetupResolutionAction | null;
+  /** Resolve the in-flight worktree preparation (cancel the send or fall back to the local checkout). */
+  onResolveWorktreeSetup?: (action: WorktreeSetupResolutionAction) => void;
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
   listRef?: RefObject<LegendListRef | null>;
@@ -393,6 +437,8 @@ interface MessagesTimelineProps {
   tailAnchorScrollInFlightRef?: RefObject<boolean> | undefined;
   /** Provenance for a conversation created from another Synara task. */
   crossTaskOrigin?: CrossTaskOrigin | null;
+  /** Immediate source chat for a forked transcript. */
+  forkSource?: ForkSourceReference | null;
   /** Marks the transcript as a temporary chat so user bubbles render the dashed primary outline. */
   isTemporaryThread?: boolean;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
@@ -444,14 +490,25 @@ interface MessagesTimelineProps {
    * far right; only the content is inset.
    */
   contentInsetRightPx?: number | undefined;
+  /**
+   * Bottom padding (px) applied to the scroll viewport so transcript rows clear the
+   * floating composer. Passed through `style` (not a class) on purpose: LegendList reads
+   * style padding, so it can account for the inset in its own end-space math.
+   */
+  contentInsetBottomPx?: number | undefined;
+  /** Measured distance from the composer's bottom edge to the top of its footer controls. */
+  contentInsetBottomClearancePx?: number | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
   isWorking,
+  workingLabel: workingLabelProp,
   activeTurnInProgress,
   activeTurnStartedAt,
   worktreeSetup: worktreeSetupProp,
+  worktreeSetupPendingAction: worktreeSetupPendingActionProp,
+  onResolveWorktreeSetup,
   followLiveOutput: followLiveOutputProp,
   listRef,
   controllerRef,
@@ -463,6 +520,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   tailAnchorMessageId: tailAnchorMessageIdProp,
   tailAnchorScrollInFlightRef,
   crossTaskOrigin: crossTaskOriginProp,
+  forkSource: forkSourceProp,
   isTemporaryThread: isTemporaryThreadProp,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
@@ -500,16 +558,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   workspaceRoot,
   emptyStateContent,
   contentInsetRightPx,
+  contentInsetBottomPx,
+  contentInsetBottomClearancePx,
 }: MessagesTimelineProps) {
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
   // entire component (silently, since `panicThreshold` is unset), which would drop
   // memoization for the whole transcript. See MessagesTimeline.compiler.test.ts.
+  const workingLabel = workingLabelProp ?? "Thinking";
   const worktreeSetup = worktreeSetupProp ?? null;
+  const worktreeSetupPendingAction = worktreeSetupPendingActionProp ?? null;
   const followLiveOutput = followLiveOutputProp ?? false;
   const threadMarkers = threadMarkersProp ?? EMPTY_MESSAGE_MARKERS;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
+  const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
   const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
   // The timeline remounts per thread (and when the agent-activity detail view
@@ -537,10 +600,32 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // Inset rows from the right (overriding the gutter's right padding) without moving the
   // scroll viewport, so the scrollbar stays pinned to the far right while content clears
   // any right-edge overlay. Kept stable so LegendList isn't re-rendered on unrelated updates.
-  const listScrollStyle = useMemo(
-    () => (contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined),
-    [contentInsetRightPx],
-  );
+  // The bottom inset clears the floating composer the transcript scrolls under; it is
+  // padding on the scroll viewport (not a taller footer) so the list's own footer-layout
+  // and initial-scroll machinery is never resized from outside. The mask dissolves rows
+  // as they pass behind the composer's glass so nothing remains visible behind its
+  // footer controls (see composerOverlayScrollMaskImage).
+  const listScrollStyle = useMemo(() => {
+    if (!contentInsetRightPx && !contentInsetBottomPx) {
+      return undefined;
+    }
+    const style: CSSProperties = {};
+    if (contentInsetRightPx) {
+      style.paddingRight = contentInsetRightPx;
+    }
+    if (contentInsetBottomPx) {
+      style.paddingBottom = contentInsetBottomPx;
+      const maskImage = composerOverlayScrollMaskImage(
+        contentInsetBottomPx,
+        contentInsetBottomClearancePx,
+      );
+      if (maskImage) {
+        style.maskImage = maskImage;
+        style.WebkitMaskImage = maskImage;
+      }
+    }
+    return style;
+  }, [contentInsetBottomClearancePx, contentInsetBottomPx, contentInsetRightPx]);
   const appTypographyScale = useMemo(
     () => getAppTypographyScale(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
@@ -627,21 +712,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
-  // Fixed bottom content inset. The variable space that lets a just-sent
-  // message anchor at the viewport top is reserved natively by LegendList's
-  // `anchoredEndSpace` below, not by resizing this footer — resizing the footer
-  // from outside fights the list's own footer-layout and initial-scroll
-  // machinery (visible as send-time scroll jumps).
-  const listFooter = useMemo(
-    () => (
-      <div
-        aria-hidden="true"
-        data-tail-anchor-spacer="true"
-        style={{ height: BOTTOM_CONTENT_INSET_PX }}
-      />
-    ),
-    [],
-  );
+  const observeTimelineRow = useTimelineRowOverlapGuard();
   useTailAnchorScroll({
     listRef: resolvedListRef,
     timelineRootRef,
@@ -680,6 +751,48 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const canRenderForkSourceDivider = forkSource !== null && onOpenThread !== undefined;
+  const forkSourceDivider = useMemo(
+    () =>
+      forkSource && onOpenThread ? (
+        <ForkSourceDivider source={forkSource} onOpenSourceThread={onOpenThread} />
+      ) : null,
+    [forkSource, onOpenThread],
+  );
+  const forkDividerBeforeRowId = useMemo(() => {
+    if (!canRenderForkSourceDivider) {
+      return null;
+    }
+    let lastImportedMessageIndex = -1;
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]!;
+      if (row.kind === "message" && row.message.source === "fork-import") {
+        lastImportedMessageIndex = index;
+      }
+    }
+    return rows[lastImportedMessageIndex + 1]?.id ?? null;
+  }, [canRenderForkSourceDivider, rows]);
+  const forkDividerAtEnd = canRenderForkSourceDivider && forkDividerBeforeRowId === null;
+  // Fixed bottom content inset. The variable space that lets a just-sent
+  // message anchor at the viewport top is reserved natively by LegendList's
+  // `anchoredEndSpace` below, not by resizing this footer — resizing the footer
+  // from outside fights the list's own footer-layout and initial-scroll
+  // machinery (visible as send-time scroll jumps).
+  const listFooter = useMemo(
+    () => (
+      <>
+        {forkDividerAtEnd ? (
+          <div className={cn(CHAT_COLUMN_FRAME_CLASS_NAME, "px-1")}>{forkSourceDivider}</div>
+        ) : null}
+        <div
+          aria-hidden="true"
+          data-tail-anchor-spacer="true"
+          style={{ height: BOTTOM_CONTENT_INSET_PX }}
+        />
+      </>
+    ),
+    [forkDividerAtEnd, forkSourceDivider],
+  );
   // Native reserve for the anchored send: LegendList sizes an end space so the
   // anchor row can sit at the viewport top when scrolled to the end, keeps that
   // reserve in sync with measured tail sizes inside its own layout pass, and
@@ -705,10 +818,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return;
     }
     const style = getComputedStyle(node);
-    const inset =
-      (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+    // Only the *class-based* padding belongs here. The composer inset is applied through
+    // `style.paddingBottom`, which the list already reads and reserves for itself —
+    // counting it twice would push the anchored message a composer-height off the top.
+    const bottomPadding = Math.max(
+      0,
+      (Number.parseFloat(style.paddingBottom) || 0) - (contentInsetBottomPx ?? 0),
+    );
+    const inset = (Number.parseFloat(style.paddingTop) || 0) + bottomPadding;
     setAnchorVerticalInsetPx((current) => (Math.abs(current - inset) > 0.5 ? inset : current));
-  }, [resolvedListRef, tailAnchorMessageId]);
+  }, [contentInsetBottomPx, resolvedListRef, tailAnchorMessageId]);
   const anchoredEndSpace = useMemo(
     () =>
       tailAnchorRowIndex < 0
@@ -719,12 +838,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           },
     [anchorVerticalInsetPx, tailAnchorRowIndex],
   );
-  // Surface the live reserve for tests/diagnostics without re-rendering. The
-  // signal (unlike `onSizeChanged`) also reports the collapse to zero after the
-  // anchor is cleared, when no config object exists to receive a callback.
+  // `anchoredEndSpaceSize` is an internal LegendList signal used only to make
+  // the native reserve observable to the browser regression harness. Its
+  // public listener union deliberately omits it, so narrow the internal hook
+  // locally rather than weakening the ref type throughout the transcript.
   useEffect(() => {
     const state = resolvedListRef.current?.getState?.();
-    return state?.listen?.("anchoredEndSpaceSize", (size) => {
+    const listenForAnchoredEndSpace = state?.listen as
+      | ((listenerType: "anchoredEndSpaceSize", callback: (size: number) => void) => () => void)
+      | undefined;
+    return listenForAnchoredEndSpace?.("anchoredEndSpaceSize", (size) => {
       timelineRootRef.current?.setAttribute("data-anchored-end-space", String(Math.round(size)));
     });
   }, [resolvedListRef]);
@@ -908,6 +1031,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, [rows]);
   const tailScrollFrameRef = useRef<number | null>(null);
   const tailScrollTimeoutsRef = useRef<number[]>([]);
+  const tailExpansionScrollSuppressedRef = useRef(false);
   const clearTailExpansionScrollTimers = useCallback(() => {
     if (tailScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(tailScrollFrameRef.current);
@@ -920,6 +1044,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, []);
   const scrollTailExpansionToEnd = useCallback(() => {
     clearTailExpansionScrollTimers();
+    if (tailExpansionScrollSuppressedRef.current) {
+      return;
+    }
     const scrollToEnd = () => {
       scrollLegendListToEnd(resolvedListRef);
     };
@@ -982,11 +1109,71 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onMessagesScroll?.(event);
       const state = readLegendListState(resolvedListRef);
       if (state) {
+        tailExpansionScrollSuppressedRef.current = !state.isAtEnd;
+        if (!state.isAtEnd) {
+          clearTailExpansionScrollTimers();
+        }
         onIsAtEndChange?.(state.isAtEnd);
         emitTrailHighlightsForViewport(state.start, state.end);
       }
     },
-    [emitTrailHighlightsForViewport, onIsAtEndChange, onMessagesScroll, resolvedListRef],
+    [
+      clearTailExpansionScrollTimers,
+      emitTrailHighlightsForViewport,
+      onIsAtEndChange,
+      onMessagesScroll,
+      resolvedListRef,
+    ],
+  );
+  const suppressTailExpansionScroll = useCallback(() => {
+    tailExpansionScrollSuppressedRef.current = true;
+    clearTailExpansionScrollTimers();
+  }, [clearTailExpansionScrollTimers]);
+  // These retries only preserve an existing bottom stick while tail content
+  // settles. A direct user gesture owns the viewport immediately and must
+  // cancel every delayed re-stick scheduled by an earlier image/disclosure.
+  const handleMessagesPointerCancel = useCallback<
+    NonNullable<MessagesTimelineProps["onMessagesPointerCancel"]>
+  >(
+    (event) => {
+      clearTailExpansionScrollTimers();
+      onMessagesPointerCancel?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesPointerCancel],
+  );
+  const handleMessagesPointerDown = useCallback<
+    NonNullable<MessagesTimelineProps["onMessagesPointerDown"]>
+  >(
+    (event) => {
+      clearTailExpansionScrollTimers();
+      onMessagesPointerDown?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesPointerDown],
+  );
+  const handleMessagesTouchMove = useCallback<
+    NonNullable<MessagesTimelineProps["onMessagesTouchMove"]>
+  >(
+    (event) => {
+      suppressTailExpansionScroll();
+      onMessagesTouchMove?.(event);
+    },
+    [onMessagesTouchMove, suppressTailExpansionScroll],
+  );
+  const handleMessagesTouchStart = useCallback<
+    NonNullable<MessagesTimelineProps["onMessagesTouchStart"]>
+  >(
+    (event) => {
+      clearTailExpansionScrollTimers();
+      onMessagesTouchStart?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesTouchStart],
+  );
+  const handleMessagesWheel = useCallback<NonNullable<MessagesTimelineProps["onMessagesWheel"]>>(
+    (event) => {
+      suppressTailExpansionScroll();
+      onMessagesWheel?.(event);
+    },
+    [onMessagesWheel, suppressTailExpansionScroll],
   );
   const handleViewableItemsChanged = useCallback<
     NonNullable<ComponentProps<typeof LegendList>["onViewableItemsChanged"]>
@@ -1063,6 +1250,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const renderRowContent = (row: MessagesTimelineRow) => (
     <div
+      ref={observeTimelineRow}
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
         "px-1 transition-colors duration-500",
@@ -1086,6 +1274,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       data-message-id={row.kind === "message" ? row.message.id : undefined}
       data-message-role={row.kind === "message" ? row.message.role : undefined}
     >
+      {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
         (() => {
           const groupId = row.id;
@@ -2145,14 +2334,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          Thinking
+          {workingLabel}
         </div>
       )}
 
       {row.kind === "worktree-setup" && (
         <DisclosureRegion open={row.open}>
           <div className="pt-0.5 pb-1">
-            <WorktreeSetupCard steps={row.steps} />
+            <WorktreeSetupCard
+              steps={row.steps}
+              pendingAction={worktreeSetupPendingAction}
+              onResolve={onResolveWorktreeSetup}
+            />
           </div>
         </DisclosureRegion>
       )}
@@ -2161,7 +2354,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   // Transient rows (for example failed first-send worktree setup) must be able
   // to render even when there are no persisted chat messages yet.
-  const hasRenderableTranscriptContent = hasMessages || rows.length > 0;
+  const hasRenderableTranscriptContent =
+    hasMessages || rows.length > 0 || canRenderForkSourceDivider;
   if (!hasRenderableTranscriptContent && !isWorking) {
     if (emptyStateContent) {
       return <div className="flex h-full items-center justify-center">{emptyStateContent}</div>;
@@ -2202,8 +2396,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             : {})}
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
-        onPointerCancel={onMessagesPointerCancel}
-        onPointerDown={onMessagesPointerDown}
+        onPointerCancel={handleMessagesPointerCancel}
+        onPointerDown={handleMessagesPointerDown}
         onPointerUp={onMessagesPointerUp}
         onScroll={handleListScroll}
         {...(onTrailHighlightsChange
@@ -2213,17 +2407,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             }
           : {})}
         onTouchEnd={onMessagesTouchEnd}
-        onTouchMove={onMessagesTouchMove}
-        onTouchStart={onMessagesTouchStart}
-        onWheel={onMessagesWheel}
+        onTouchMove={handleMessagesTouchMove}
+        onTouchStart={handleMessagesTouchStart}
+        onWheel={handleMessagesWheel}
         data-chat-scroll-container="true"
         ListFooterComponent={listFooter}
         // `scroll-fade-b` (vendored shadcn 4.12.0 util in index.css) masks the bottom
         // edge so streamed content dissolves toward the composer. It is scroll-aware
         // via `animation-timeline: scroll()`, so the fade clears at the live edge and a
         // pinned or non-scrollable transcript stays crisp (no permanent shadow).
+        // With the floating composer the viewport bottom sits *behind* the frosted
+        // surface, so the scroll-aware fade is replaced by the fixed composer mask in
+        // `listScrollStyle`: rows dissolve through the glass over the editor region and
+        // are fully cut before the composer's footer controls.
         className={cn(
-          "scroll-fade-b h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          contentInsetBottomPx ? null : "scroll-fade-b",
           ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
           CHAT_COLUMN_GUTTER_CLASS_NAME,
         )}

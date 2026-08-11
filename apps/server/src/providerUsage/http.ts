@@ -19,9 +19,16 @@ export async function fetchJson(input: {
   method?: "GET" | "POST";
   headers?: Record<string, string>;
   body?: unknown;
+  /** How to encode `body`: JSON (default) or application/x-www-form-urlencoded (OAuth endpoints). */
+  bodyFormat?: "json" | "form";
   timeoutMs?: number;
 }): Promise<FetchJsonResult> {
-  const encodedBody = input.body === undefined ? undefined : JSON.stringify(input.body);
+  const encodedBody =
+    input.body === undefined
+      ? undefined
+      : input.bodyFormat === "form"
+        ? new URLSearchParams(input.body as Record<string, string>).toString()
+        : JSON.stringify(input.body);
   const response = await outboundHttp.request({
     policy: {
       service: input.service,

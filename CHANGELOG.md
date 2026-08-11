@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.7.1 - 2026-08-09
+
+### Added
+
+- Added editable Explorer previews with dirty-state tracking, guarded saves, path validation, and clearer file breadcrumbs for focused code and text edits inside Synara.
+- Added a complete commit-push-create-PR workflow with draft or ready-for-review actions, progress-aware controls, safer upstream handling, and post-action refresh that cannot hold the successful Git action open.
+- Added live thread Git metadata propagation so branch, worktree, push, and pull-request changes made during a turn update task state without waiting for a later manual refresh.
+- Added worktree setup progress, cancellation before dispatch, and a local-checkout action, while restoring automatic branch creation and attachment for worktree tasks.
+- Added Codex thread forks for imported history while preserving source-thread provenance.
+- Added server-side provider usage caching and one shared batch query for sidebar and Settings usage surfaces, including refresh joining, identity fencing, throttling, and retention of the latest healthy snapshot.
+- Added customizable desktop app icons with persisted renderer-startup selection and native-style macOS artwork, plus a compact visual theme picker in Settings.
+- Added in-app release history to the sidebar Help menu and a shortcut for copying the active task ID.
+- Added reproducible performance harnesses for provider-runtime journal appends, orchestration replay, and the web transcript hot path.
+
+### Changed
+
+- Changed desktop backend readiness from a fixed deadline to a cancellable uncapped wait, so large histories and slow migration or replay work do not become false startup failures.
+- Reworked WebSocket reconnects with cancellable bounded backoff and strengthened late-event reconciliation after the backend becomes available.
+- Prefiltered orchestration replay in SQL before payload decoding and scoped runtime event persistence to avoid duplicate or irrelevant replay work.
+- Reduced steady-state runtime and transcript work with adaptive polling, selective thread-detail subscriptions, reference-counted keyed locks, and more focused event ingestion.
+- Serialized and coalesced Git refreshes per checkout, detached terminal Git action success from metadata refresh, and added bounded retry handling when expensive WebSocket read capacity is saturated.
+- Improved branch, worktree, and pull-request recognition, including configured-model branch naming, mid-turn VCS propagation, merged-PR badge repair, and more reliable comment metadata parsing.
+- Consolidated provider usage around server-owned credential and snapshot lifecycle handling for Claude, Codex, and Cursor, with safer keychain fallback and refresh-token behavior.
+- Improved provider session startup, cancellation, resume, and settlement across Codex, Claude, OpenCode, Grok, Kilo, Antigravity, and ACP adapters.
+- Refined live transcript status so Loading covers only unacknowledged sends, Working remains visible through the first-send gap, and takeover or lost acknowledgements cannot leave the composer spinner stuck.
+- Guarded streaming timeline rows against painted overlap while preserving the simpler non-virtualized path for ordinary conversations.
+- Improved project-picker search focus, shared picker composition, conditional keybinding edits, terminal exit shortcuts, and shortcut Settings layout.
+- Refined translucent sidebar and floating-composer surfaces, strengthened production backdrop-filter preservation and fallbacks, and aligned icon and theme preview presentation.
+- Changed the shared toast default to 10 seconds while retaining explicit persistent notices, and moved thread errors from inline banners to the common error-toast path.
+- Bumped Synara release package versions to `0.7.1` across server, desktop, web, and contracts packages and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed desktop startup failing after a fixed wait even though backend migration, replay, or readiness work was still making progress.
+- Fixed late renderer reconnects exhausting a short retry window and missing a backend that became healthy afterward.
+- Fixed orchestration replay decoding and projecting large volumes of events that could not affect the requested snapshot, and duplicate runtime events being persisted during reconciliation.
+- Fixed commit, push, and PR actions appearing stuck after Git succeeded because post-action refresh competed for expensive read capacity.
+- Fixed stale Git refresh coalescing, upstream refresh bursts, task branch and PR recognition, and merged pull requests retaining an open badge.
+- Fixed Explorer previews being read-only, ambiguous save failures, unsafe path assumptions, and file headers losing useful breadcrumb context.
+- Fixed transient Grok fresh-session storage failures and Kilo credential startup failures without broad retries that could duplicate an already-started turn.
+- Fixed OpenCode host policy being lost after resume, Windows `.cmd` shims failing to spawn, inline API keys not counting as credentials, and Antigravity model TSV parsing regressions.
+- Fixed Antigravity cancellation and clean-stop settlement, Grok ACP authentication and permission handling, AskUserQuestion response recovery, and provider handoff eligibility.
+- Fixed Expo and Metro local servers being title-probed as web pages unless the project actually runs Expo with `--web`.
+- Fixed Windows terminal activity polling, side-chat terminal keybinding exits, and natural process-tree changes being misclassified.
+- Fixed send spinners and Loading labels surviving lost stream acknowledgements, live-turn takeover, or post-ack lifecycle gaps.
+- Fixed streaming timeline rows overlapping after layout changes and reduced feedback between measurement, follow-scroll, and non-message tool activity.
+- Fixed malformed GitHub-flavored Markdown table delimiter rows, image overlays rendering below the native browser, and pull-request comment metadata parsing inconsistencies.
+- Fixed production CSS stripping `backdrop-filter`, composer transparency fallbacks overriding native window behavior, and several icon-preview sizing and inset-artwork inconsistencies.
+- Fixed conditional keybinding edits replacing unrelated bindings, terminal exits being routed through the wrong shortcut path, and project search failing to focus when opened.
+
+### Verification
+
+- `bun run fmt:check` passed across 15,761 files.
+- `bun run lint` passed with 405 warnings and 0 errors.
+- `bun run typecheck` passed across all 7 packages; only existing Effect Schema informational messages and Astro/Vite deprecation notices remained.
+- `bun run release:smoke` passed across the 1,448-package dependency graph. Its first restricted-sandbox attempt could not write Bun's temporary lockfile workspace; the required rerun with normal temporary-directory access passed.
+- `bun run build` passed with all 5 Turbo tasks successful; existing Astro/Vite deprecation, plugin-timing, and large-bundle advisories remained non-blocking.
+- Full `bun run test` passed with all 8 Turbo tasks successful in 3m8.811s. Server/CLI passed 304 files / 3,408 tests with 2 skipped files / 7 skipped tests. No targeted reruns or flaky failures were needed.
+
 ## 0.7.0 - 2026-08-05
 
 **A review of the Synara codebase found an analytics configuration that came from the original T3 Code codebase when Synara was created as a clone in March. We did not add it, and we have no access to the PostHog project receiving the events.**

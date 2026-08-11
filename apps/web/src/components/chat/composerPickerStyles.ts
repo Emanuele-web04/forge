@@ -119,13 +119,14 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
  */
 export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
 
-/** Opaque base behind the composer shell: the composer overlaps the scrolling
- *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
- *  transcript text bleed through its top edge. Match the chat surface to stay seamless.
+/** Shell around the composer surface. Deliberately has NO background: the composer
+ *  floats over the scrolling transcript (see `composerOverlay.ts`) and its frosted
+ *  material is meant to reveal and blur the content passing behind it — an opaque
+ *  backing here would be the only thing its `backdrop-filter` ever sampled.
  *  `relative z-[1]` keeps the full input outline above the inset stacked rail
  *  (`-mb-px`), so the top border is never covered by live-changes / task / queue chrome. */
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
-  "group relative z-[1] chat-composer-shell bg-[var(--color-background-surface)] transition-colors duration-200";
+  "group relative z-[1] chat-composer-shell transition-colors duration-200";
 
 /** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =

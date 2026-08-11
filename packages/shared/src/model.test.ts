@@ -3,6 +3,8 @@ import {
   CLAUDE_API_EFFORT_OPTIONS,
   CLAUDE_CODE_MODE_OPTIONS,
   CLAUDE_PROMPT_MODE_OPTIONS,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_OPTIONS,
@@ -28,6 +30,7 @@ import {
   normalizeCodexModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
+  normalizePiModelOptions,
   parseCursorCliReasoningEffort,
   resolveApiModelId,
   resolveSelectableModel,
@@ -39,6 +42,13 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
 } from "./model";
+
+describe("Git text generation defaults", () => {
+  it("uses GPT-5.6 Luna with high reasoning", () => {
+    expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe("gpt-5.6-luna");
+    expect(DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT).toBe("high");
+  });
+});
 
 describe("parseCursorCliReasoningEffort", () => {
   it.each([
@@ -866,6 +876,15 @@ describe("normalizeGrokModelOptions", () => {
     expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
     });
+  });
+});
+
+describe("normalizePiModelOptions", () => {
+  it("keeps supported Pi thinking levels including max", () => {
+    expect(normalizePiModelOptions({ thinkingLevel: "high" })).toEqual({ thinkingLevel: "high" });
+    expect(normalizePiModelOptions({ thinkingLevel: "max" })).toEqual({ thinkingLevel: "max" });
+    expect(normalizePiModelOptions({ thinkingLevel: "ultra" as never })).toBeUndefined();
+    expect(normalizePiModelOptions({})).toBeUndefined();
   });
 });
 

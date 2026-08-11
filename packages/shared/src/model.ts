@@ -48,6 +48,7 @@ const PI_THINKING_LEVEL_SET = new Set<PiThinkingLevel>([
   "medium",
   "high",
   "xhigh",
+  "max",
 ]);
 export const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [],

@@ -408,12 +408,20 @@ async function requestHop(input: {
             url: input.url.href,
           });
         });
-        response.once("error", (cause) => {
+        // `on`, not `once`: a stream can emit `error` more than once, and a
+        // second emit with no listener attached is fatal to the process.
+        response.on("error", (cause) => {
           settle(new OutboundHttpError("request", "Outbound response failed.", cause));
         });
       },
     );
-    request.once("error", (cause) => {
+    // Also `on` rather than `once`. Happy Eyeballs tries each resolved address
+    // in turn, so a host that refuses all of them emits `error` once per
+    // attempt. `once` detaches after the first, `settle` correctly ignores the
+    // rest as duplicates, and those later emits then reach a request with no
+    // error listener. Node treats an unhandled `error` event as fatal, so the
+    // whole server exits: a failed favicon fetch could take the process down.
+    request.on("error", (cause) => {
       if (input.signal.aborted) {
         settle(abortedError(input.signal.reason));
       } else {

@@ -2,6 +2,7 @@ import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
+import { DeviceService } from "../../device/Services/DeviceService";
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
 import { TerminalManager } from "../../terminal/Services/Manager";
@@ -81,6 +82,22 @@ export const cleanupSucceededUnlessInterrupted = <R, E>({
         cause: Cause.pretty(cause),
       }).pipe(Effect.as(false));
     }),
+  );
+
+export const detachThreadDevice = (threadId: ThreadId) =>
+  Effect.service(DeviceService).pipe(
+    Effect.flatMap((service) =>
+      Effect.promise(() => service.manager.handleThreadRemoved(threadId)).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logDebug("thread lifecycle cleanup skipped device detach", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      ),
+    ),
   );
 
 const make = Effect.gen(function* () {
@@ -218,6 +235,7 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      yield* detachThreadDevice(threadId);
       const terminalCleanupSucceeded = yield* closeThreadTerminals(
         threadId,
         false,
@@ -236,6 +254,7 @@ const make = Effect.gen(function* () {
 
   const processThreadDeleted = Effect.fn(function* (event: ThreadDeletedEvent) {
     const { threadId } = event.payload;
+    yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
     if (!cleanupSucceeded) {
       yield* Effect.logWarning("thread deletion cleanup deferred stats archive purge", {

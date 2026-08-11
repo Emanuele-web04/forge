@@ -42,6 +42,11 @@ export const WS_CLIENT_REQUIRED_CAPABILITIES = [
   "orchestration.cursor-safe-streams",
   "orchestration.thread-detail-snapshot",
   "rpc.typed-errors",
+  // git.createDetachedWorktree is a streaming RPC on this client; an older
+  // server would answer it unary and the worktree-setup card would never
+  // advance, so require the capability and fail negotiation with a clear
+  // "update-server" instead.
+  "git.worktree-setup-progress",
 ] as const;
 
 export const WS_SERVER_CAPABILITIES = [

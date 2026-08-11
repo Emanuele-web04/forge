@@ -225,6 +225,25 @@ describe("PullRequestRow pin control", () => {
     expect(page.getByRole("button", { name: "Pin pull request #42" })).toBeVisible();
   });
 
+  it("renders neutral diff statistics when colors are disabled", async () => {
+    await render(
+      <PullRequestRow
+        entry={makeEntry(false)}
+        selected={false}
+        showDiffColors={false}
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+      />,
+    );
+
+    expect(page.getByText("+2", { exact: true }).element().className).not.toContain(
+      "color-decoration-added",
+    );
+    expect(page.getByText("-1", { exact: true }).element().className).not.toContain(
+      "color-decoration-deleted",
+    );
+  });
+
   it("restores focus by remote identity when aggregate project context changes", async () => {
     const entry = makeEntry(false);
     await render(

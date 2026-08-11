@@ -1048,6 +1048,22 @@ function closeThreadTerminalAndEnsureReplacement(
   return closeThreadTerminal(withReplacement, terminalId);
 }
 
+export type TerminalExitDisposition = "ignored" | "remaining" | "final";
+
+function closeExitedThreadTerminal(
+  state: ThreadTerminalState,
+  terminalId: string,
+): { state: ThreadTerminalState; disposition: TerminalExitDisposition } {
+  const normalized = normalizeThreadTerminalState(state);
+  if (!normalized.terminalIds.includes(terminalId)) {
+    return { state: normalized, disposition: "ignored" };
+  }
+  return {
+    state: closeThreadTerminal(normalized, terminalId),
+    disposition: normalized.terminalIds.length === 1 ? "final" : "remaining",
+  };
+}
+
 function closeThreadTerminalGroup(
   state: ThreadTerminalState,
   groupId: string,
@@ -1237,6 +1253,7 @@ interface TerminalStateStoreState {
     terminalId: string,
     replacementTerminalId: string,
   ) => void;
+  closeExitedTerminal: (threadId: ThreadId, terminalId: string) => TerminalExitDisposition;
   closeTerminalGroup: (threadId: ThreadId, groupId: string) => void;
   resizeTerminalSplit: (
     threadId: ThreadId,
@@ -1348,6 +1365,15 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
           updateTerminal(threadId, (state) =>
             closeThreadTerminalAndEnsureReplacement(state, terminalId, replacementTerminalId),
           ),
+        closeExitedTerminal: (threadId, terminalId) => {
+          let disposition: TerminalExitDisposition = "ignored";
+          updateTerminal(threadId, (state) => {
+            const transition = closeExitedThreadTerminal(state, terminalId);
+            disposition = transition.disposition;
+            return transition.state;
+          });
+          return disposition;
+        },
         closeTerminalGroup: (threadId, groupId) =>
           updateTerminal(threadId, (state) => closeThreadTerminalGroup(state, groupId)),
         resizeTerminalSplit: (threadId, groupId, splitId, weights) =>

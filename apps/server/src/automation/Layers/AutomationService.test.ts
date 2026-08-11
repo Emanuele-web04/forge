@@ -17,6 +17,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
+import { isTemporaryWorktreeBranch } from "@synara/shared/git";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
@@ -349,6 +350,8 @@ const orchestrationEngine = {
   }),
   readEvents: () => Stream.empty,
   readEventsThrough: () => Stream.empty,
+  readThreadEvents: () => Stream.empty,
+  readThreadEventsThrough: () => Stream.empty,
   getEventHighWaterSequence: Effect.succeed(0),
   subscribeDomainEvents: Effect.succeed(Stream.empty),
   getReadModel: () =>
@@ -489,7 +492,7 @@ const gitCore = {
         worktree: {
           path: "/tmp/automation-worktree",
           ref: "0123456789abcdef0123456789abcdef01234567",
-          branch: null,
+          branch: input.newBranch ?? null,
         },
       };
     }),
@@ -953,8 +956,10 @@ layer("AutomationService", (it) => {
       }
       assert.strictEqual(threadCreate.envMode, "worktree");
       assert.strictEqual(threadCreate.worktreePath, "/tmp/automation-worktree");
-      assert.strictEqual(threadCreate.branch, null);
-      assert.strictEqual(threadCreate.associatedWorktreeBranch, null);
+      assert.ok(createdWorktree.newBranch);
+      assert.ok(isTemporaryWorktreeBranch(createdWorktree.newBranch));
+      assert.strictEqual(threadCreate.branch, createdWorktree.newBranch);
+      assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktree.newBranch);
       assert.strictEqual(
         threadCreate.associatedWorktreeRef,
         "0123456789abcdef0123456789abcdef01234567",
@@ -979,6 +984,7 @@ layer("AutomationService", (it) => {
           cwd: project.workspaceRoot,
           path: "/tmp/automation-worktree",
           force: true,
+          reclaimTemporaryBranch: true,
         },
       ]);
 
@@ -1034,6 +1040,7 @@ layer("AutomationService", (it) => {
           cwd: project.workspaceRoot,
           path: "/tmp/automation-worktree",
           force: true,
+          reclaimTemporaryBranch: true,
         },
       ]);
       assert.strictEqual(

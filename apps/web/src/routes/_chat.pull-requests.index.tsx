@@ -77,6 +77,7 @@ import {
 } from "~/rightDockStore.logic";
 import { useStore } from "~/store";
 import { PR_FINE_TEXT_CLASS_NAME } from "~/components/pullRequest/pullRequestText";
+import { useAppSettings } from "~/appSettings";
 
 export interface PullRequestsSearch {
   involvement: PullRequestInvolvement;
@@ -146,6 +147,7 @@ const STATE_TABS: ReadonlyArray<{ value: PullRequestState; label: string }> = [
 ];
 
 function PullRequestsRouteView() {
+  const { settings } = useAppSettings();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const trafficLightGutter = useDesktopTopBarTrafficLightGutterClassName();
@@ -496,6 +498,7 @@ function PullRequestsRouteView() {
                 <PullRequestList
                   entries={entries}
                   grouped={grouped}
+                  showDiffColors={settings.showPullRequestDiffColors}
                   selectedProjectId={search.selectedProjectId}
                   selectedRepo={search.selectedRepo}
                   selectedNumber={search.number}

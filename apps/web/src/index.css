@@ -104,8 +104,8 @@
   .app-sidebar-surface {
     background: var(--app-sidebar-surface, var(--card));
     box-shadow: var(--app-sidebar-shadow, none);
-    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
     -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
+    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
 
   /* Small circular icon badges that sit directly on the sidebar surface inside
@@ -218,8 +218,8 @@
      hidden by nested scroll containers. */
   .app-settings-surface {
     background: var(--app-settings-surface, var(--color-background-surface));
-    backdrop-filter: var(--app-settings-backdrop-filter, none);
     -webkit-backdrop-filter: var(--app-settings-backdrop-filter, none);
+    backdrop-filter: var(--app-settings-backdrop-filter, none);
   }
 
   /* Animate terminal run state in CSS so many open terminals don't schedule JS timers. */
@@ -424,7 +424,7 @@
   --app-shell-background: transparent;
   --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
   --app-sidebar-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.025);
-  --app-sidebar-surface: color-mix(in srgb, var(--card) 64%, transparent);
+  --app-sidebar-surface: color-mix(in srgb, var(--card) 48%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -535,7 +535,7 @@
     --sidebar-ring: var(--ring);
     --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
     --app-sidebar-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.024);
-    --app-sidebar-surface: color-mix(in srgb, var(--card) 72%, transparent);
+    --app-sidebar-surface: color-mix(in srgb, var(--card) 56%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
@@ -1122,6 +1122,28 @@ label:has(> select#reasoning-effort) select {
   font-family: inherit !important;
 }
 
+.editor-file-editor {
+  min-height: 0;
+  flex: 1;
+  resize: none;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  padding: 1rem;
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.editor-file-editor:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 45%, transparent);
+}
+
 /* Line-number gutter for the read-only file preview. Rendered via CSS counters
    on the per-line spans (Shiki and the plain fallback both emit .line), so the
    numbers stay out of text selection, clipboard copies, and the selection
@@ -1422,8 +1444,8 @@ label:has(> select#reasoning-effort) select {
   background: color-mix(in srgb, var(--background) 88%, transparent);
   color: var(--foreground);
   text-decoration: none;
-  backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   transition:
     background-color 120ms ease,
     color 120ms ease,
@@ -2338,8 +2360,8 @@ label:has(> select#reasoning-effort) select {
   font-weight: 500;
   letter-spacing: 0.01em;
   line-height: 1;
-  backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   text-decoration: none;
   user-select: none;
 }
@@ -2524,17 +2546,67 @@ diffs-container {
   border-top-right-radius: 0;
 }
 
-/* Stacked rail above the composer input: the composer's own surface color at
-   half opacity, so the rail reads as a lighter continuation of the input shell
-   rather than a differently-colored block. */
+/* Composer glass — the same material as the floating menus/pickers
+   (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`) and the sidebar.
+
+   The blur lives on a `::before` at `z-index: -1` rather than on the element itself,
+   exactly like the popup primitive: `backdrop-filter` on the element would make it a
+   containing block and clip the composer's anchored pickers (which rely on
+   `overflow-visible`). Painted behind the element's own translucent fill, the layer
+   frosts the transcript scrolling underneath (see composerOverlay.ts).
+
+   Fill comes from the SAME token the floating menus use (`--popover`, via
+   `--app-composer-picker-surface`), not from `--composer-surface`. In dark mode
+   `--composer-surface` resolves to `--color-background-control-opaque`, which sits
+   within a couple of RGB steps of the chat background — thinning a color to 72% of
+   the color already behind it is a no-op, so the composer read as a flat slab even
+   with the blur running. `--popover` is the elevated token the handoff menu and the
+   pickers are built from, so the composer now lifts off the transcript exactly the
+   way they do.
+
+   `--composer-glass-opacity` keeps every composer-family surface on one knob. */
+:root {
+  --composer-glass-opacity: 55%;
+  --composer-glass-stacked-opacity: calc(var(--composer-glass-opacity) / 2);
+  --composer-glass-filter: blur(40px) saturate(150%);
+  /* Same base as `.composer-picker-menu-surface`, kept opaque here so the shared
+     `--composer-glass-opacity` knob is the only thing thinning it. */
+  --composer-glass-surface: var(--popover);
+}
+
+.chat-composer-surface,
 .chat-composer-stacked-top {
-  background: color-mix(in srgb, var(--composer-surface) 50%, transparent);
+  position: relative;
+}
+
+.chat-composer-surface::before,
+.chat-composer-stacked-top::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  -webkit-backdrop-filter: var(--composer-glass-filter);
+  backdrop-filter: var(--composer-glass-filter);
+}
+
+/* Stacked rail above the composer input: the elevated glass surface at its
+   dedicated opacity, so the rail reads as a lighter continuation of the input. */
+.chat-composer-stacked-top {
+  background: color-mix(
+    in srgb,
+    var(--composer-glass-surface) var(--composer-glass-stacked-opacity),
+    transparent
+  );
 }
 
 .chat-composer-surface {
-  background: var(--composer-surface);
-  backdrop-filter: var(--app-composer-backdrop-filter, none);
-  -webkit-backdrop-filter: var(--app-composer-backdrop-filter, none);
+  background: color-mix(
+    in srgb,
+    var(--composer-glass-surface) var(--composer-glass-opacity),
+    transparent
+  );
 }
 
 /* Recessed track: a hairline border + faint inner shadow read the base as a sunken
@@ -2544,8 +2616,8 @@ diffs-container {
   border: 1px solid color-mix(in oklab, var(--color-text-foreground) 7%, transparent);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06) !important;
   filter: none !important;
-  backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
 .dark .sidebar-segmented-picker {
@@ -2599,8 +2671,8 @@ diffs-container {
     --app-composer-picker-surface,
     color-mix(in oklab, var(--popover) 70%, transparent)
   );
-  backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
   -webkit-backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
+  backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
 }
 
 /* Density tokens per size modifier (--normal / --small). Width is opt-in below. */
