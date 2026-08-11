@@ -794,6 +794,131 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.messages.find((message) => message.id === messageId)?.text).toBe("streamed once");
   });
 
+  it("marks streamed assistant text segments at tool-intervention boundaries", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-segment-interleave");
+    const itemId = asItemId("item-segment-interleave");
+    const threadId = asThreadId("thread-1");
+    const push = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+    const eventId = (suffix: string) => asEventId(`evt-segment-${suffix}`);
+    // Plan text before any tool activity.
+    await push({
+      type: "content.delta",
+      eventId: eventId("1"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:00.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Plan: " },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("2"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:01.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "scan files." },
+    });
+    // A tool call runs between the second and third text deltas.
+    const toolItemId = asItemId("tool-segment-interleave");
+    await push({
+      type: "item.started",
+      eventId: eventId("3"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:05.000Z",
+      threadId,
+      turnId,
+      itemId: toolItemId,
+      payload: { itemType: "command_execution", status: "inProgress", title: "fd" },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("4"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:20.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Found the file: " },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("5"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:21.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "a.test.ts" },
+    });
+    await push({
+      type: "item.completed",
+      eventId: eventId("6"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:30.000Z",
+      threadId,
+      turnId,
+      itemId: toolItemId,
+      payload: { itemType: "command_execution", status: "completed", title: "fd" },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("7"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:40.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Done." },
+    });
+    await push({
+      type: "item.completed",
+      eventId: eventId("8"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:45.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === "assistant:item-segment-interleave" && message.streaming === false,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry) => entry.id === "assistant:item-segment-interleave",
+    );
+    expect(message?.text).toBe("Plan: scan files.Found the file: a.test.tsDone.");
+    expect(message?.textSegments).toEqual([
+      {
+        startedAt: "2026-07-14T00:10:00.000Z",
+        // Buffered turns flush all segments at the terminal event, so the
+        // emit-time is the completion's time; only startedAt drives the
+        // interleaved timeline position.
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Plan: scan files.",
+      },
+      {
+        startedAt: "2026-07-14T00:10:20.000Z",
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Found the file: a.test.ts",
+      },
+      {
+        startedAt: "2026-07-14T00:10:40.000Z",
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Done.",
+      },
+    ]);
+  });
+
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

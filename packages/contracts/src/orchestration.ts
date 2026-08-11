@@ -475,10 +475,22 @@ export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+export const OrchestrationMessageTextSegment = Schema.Struct({
+  startedAt: IsoDateTime,
+  endedAt: IsoDateTime,
+  text: Schema.String,
+});
+export type OrchestrationMessageTextSegment = typeof OrchestrationMessageTextSegment.Type;
+
+// One contiguous run of assistant text deltas between row-making provider
+// events (tool calls, warnings, ...). The web timeline interleaves these
+// segments with tool rows so streamed reasoning renders in execution order
+// instead of one block above every tool call.
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
+  textSegments: Schema.optional(Schema.Array(OrchestrationMessageTextSegment)),
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
@@ -1535,6 +1547,10 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   messageId: MessageId,
   delta: Schema.String,
   turnId: Schema.optional(TurnId),
+  // Present only when this delta starts a NEW text segment: a row-making
+  // provider event (tool call, warning, ...) intervened since the previous
+  // assistant delta. Positions the segment in the merged timeline.
+  segmentStartedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
 });
 
@@ -1891,6 +1907,10 @@ export const ThreadMessageSentPayload = Schema.Struct({
   messageId: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
+  // Mirrors ThreadMessageAssistantDeltaCommand.segmentStartedAt: set on the
+  // first delta of a new text segment (after a row-making event). The message
+  // projection persists segment boundaries into the message's textSegments.
+  segmentStartedAt: Schema.optional(IsoDateTime),
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),

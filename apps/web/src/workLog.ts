@@ -182,6 +182,16 @@ export type TimelineEntry =
       message: ChatMessage;
     }
   | {
+      // One slice of a streamed assistant message that had tool calls inside
+      // its text span; positioned at the slice's own start time so reasoning
+      // interleaves with the tool rows instead of one block above them.
+      id: string;
+      kind: "message-segment";
+      createdAt: string;
+      message: ChatMessage;
+      segmentIndex: number;
+    }
+  | {
       id: string;
       kind: "proposed-plan";
       createdAt: string;
@@ -2132,7 +2142,7 @@ export function deriveTimelineEntries(
   const proposedPlanTurnIds = new Set(
     proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
   );
-  const messageRows: TimelineEntry[] = messages.flatMap((message) => {
+  const messageRows: TimelineEntry[] = messages.flatMap((message): TimelineEntry[] => {
     const displayMessage =
       message.role === "assistant" && message.turnId && proposedPlanTurnIds.has(message.turnId)
         ? { ...message, text: stripProposedPlanBlocksFromText(message.text) }
@@ -2144,6 +2154,26 @@ export function deriveTimelineEntries(
       proposedPlanTurnIds.has(displayMessage.turnId)
     ) {
       return [];
+    }
+    // Completed assistant messages whose streamed text was interleaved with
+    // tool rows render as one row per text segment, each positioned at its own
+    // start time, so the merged timeline shows reasoning next to the tool that
+    // interrupted it instead of one block above every tool. While the message
+    // is still streaming, keep the single live row (the streaming surface).
+    const textSegments = displayMessage.textSegments;
+    if (
+      displayMessage.role === "assistant" &&
+      !displayMessage.streaming &&
+      textSegments !== undefined &&
+      textSegments.length > 1
+    ) {
+      return textSegments.map((segment, segmentIndex) => ({
+        id: `${displayMessage.id}#seg:${segmentIndex}`,
+        kind: "message-segment" as const,
+        createdAt: segment.startedAt,
+        message: displayMessage,
+        segmentIndex,
+      }));
     }
     return [
       {

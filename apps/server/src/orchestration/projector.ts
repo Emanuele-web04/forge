@@ -4,6 +4,7 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  type OrchestrationMessageTextSegment,
 } from "@synara/contracts";
 import {
   addPinnedMessage,
@@ -300,6 +301,67 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     threads: [],
     updatedAt: nowIso,
   };
+}
+
+/**
+ * Mirrors the SQLite message_text_segments projection in the in-memory read
+ * model: streamed assistant deltas accumulate into the current segment, a
+ * row-making provider event between deltas starts a new segment at its own
+ * time (segmentStartedAt), and completion keeps the boundaries when the
+ * collated segment text matches the final text (otherwise it collapses into a
+ * single whole-text segment, e.g. edits/rewrites/imports).
+ */
+function deriveNextMessageTextSegments(
+  previous: ReadonlyArray<OrchestrationMessageTextSegment> | undefined,
+  input: {
+    readonly text: string;
+    readonly streaming: boolean;
+    readonly segmentStartedAt: string | undefined;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  },
+): ReadonlyArray<OrchestrationMessageTextSegment> | undefined {
+  if (input.streaming) {
+    if (input.segmentStartedAt) {
+      return [
+        ...(previous ?? []),
+        { startedAt: input.segmentStartedAt, endedAt: input.updatedAt, text: input.text },
+      ];
+    }
+    if (previous && previous.length > 0) {
+      const tail = previous[previous.length - 1]!;
+      return [
+        ...previous.slice(0, -1),
+        { ...tail, text: `${tail.text}${input.text}`, endedAt: input.updatedAt },
+      ];
+    }
+    return [{ startedAt: input.createdAt, endedAt: input.updatedAt, text: input.text }];
+  }
+
+  // Completion / edit / rewrite / import.
+  if (previous && previous.length > 0) {
+    const collatedSegmentText = previous.map((segment) => segment.text).join("");
+    if (collatedSegmentText === input.text || input.text.length === 0) {
+      const tail = previous[previous.length - 1]!;
+      return [...previous.slice(0, -1), { ...tail, endedAt: input.updatedAt }];
+    }
+    return [
+      {
+        startedAt: input.segmentStartedAt ?? input.createdAt,
+        endedAt: input.updatedAt,
+        text: input.text,
+      },
+    ];
+  }
+  return input.text.length > 0
+    ? [
+        {
+          startedAt: input.segmentStartedAt ?? input.createdAt,
+          endedAt: input.updatedAt,
+          text: input.text,
+        },
+      ]
+    : undefined;
 }
 
 export function projectEvent(
@@ -934,14 +996,28 @@ export function projectEvent(
         let cappedMessages: ReadonlyArray<OrchestrationMessage>;
         if (existingIndex >= 0) {
           const entry = thread.messages[existingIndex]!;
+          const resolvedText = message.streaming
+            ? `${entry.text}${message.text}`
+            : message.text.length > 0
+              ? message.text
+              : entry.text;
+          const nextSegments =
+            message.role === "assistant"
+              ? deriveNextMessageTextSegments(entry.textSegments, {
+                  // For streaming deltas the segment owns only this delta's
+                  // text (resolvedText is the whole accumulated message).
+                  text: message.streaming ? message.text : resolvedText,
+                  streaming: message.streaming,
+                  segmentStartedAt: payload.segmentStartedAt,
+                  createdAt: payload.createdAt,
+                  updatedAt: payload.updatedAt,
+                })
+              : undefined;
           const nextMessages = thread.messages.slice();
           nextMessages[existingIndex] = {
             ...entry,
-            text: message.streaming
-              ? `${entry.text}${message.text}`
-              : message.text.length > 0
-                ? message.text
-                : entry.text,
+            text: resolvedText,
+            ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
             streaming: message.streaming,
             source: message.source,
             updatedAt: message.updatedAt,
@@ -955,13 +1031,26 @@ export function projectEvent(
           };
           cappedMessages = nextMessages;
         } else {
+          const nextSegments =
+            message.role === "assistant"
+              ? deriveNextMessageTextSegments(undefined, {
+                  text: message.text,
+                  streaming: message.streaming,
+                  segmentStartedAt: payload.segmentStartedAt,
+                  createdAt: payload.createdAt,
+                  updatedAt: payload.updatedAt,
+                })
+              : undefined;
           cappedMessages =
             thread.messages.length >= MAX_THREAD_MESSAGES
               ? [
                   ...thread.messages.slice(thread.messages.length - MAX_THREAD_MESSAGES + 1),
-                  message,
+                  { ...message, ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}) },
                 ]
-              : [...thread.messages, message];
+              : [
+                  ...thread.messages,
+                  { ...message, ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}) },
+                ];
         }
 
         return {

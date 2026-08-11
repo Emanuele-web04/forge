@@ -58,7 +58,10 @@ import {
   type ProjectionThreadMessageDbRow,
 } from "../../persistence/projectionThreadMessageRow.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
-import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
+import {
+  ProjectionThreadMessageSegmentDbRow,
+  type ProjectionThreadMessageTextSegment,
+} from "../../persistence/Services/ProjectionThreadMessages.ts";import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
@@ -502,6 +505,34 @@ function collectProjectedMessages(rows: ReadonlyArray<ProjectionThreadMessageDbR
     pushGrouped(byThread, row.threadId, orchestrationMessageFromProjectionRow(row));
   }
   return { byThread, updatedAt };
+}
+
+function attachThreadMessageSegments(
+  rows: ReadonlyArray<ProjectionThreadMessageDbRow>,
+  segmentRows: ReadonlyArray<ProjectionThreadMessageSegmentDbRow>,
+): ReadonlyArray<ProjectionThreadMessageDbRow> {
+  if (segmentRows.length === 0) {
+    return rows;
+  }
+  const segmentsByMessage = new Map<string, ProjectionThreadMessageTextSegment[]>();
+  for (const segment of segmentRows) {
+    const key = `${segment.threadId}:${segment.messageId}`;
+    const entry = {
+      startedAt: segment.startedAt,
+      endedAt: segment.endedAt,
+      text: segment.text,
+    };
+    const existing = segmentsByMessage.get(key);
+    if (existing) {
+      existing.push(entry);
+    } else {
+      segmentsByMessage.set(key, [entry]);
+    }
+  }
+  return rows.map((row) => {
+    const rowSegments = segmentsByMessage.get(`${row.threadId}:${row.messageId}`);
+    return rowSegments ? { ...row, textSegments: rowSegments } : row;
+  });
 }
 
 function collectProjectedProposedPlans(rows: ReadonlyArray<ProjectionThreadProposedPlanDbRow>): {
@@ -989,6 +1020,40 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sequence ASC,
           created_at ASC,
           message_id ASC
+      `,
+  });
+
+  const listThreadMessageSegmentRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadMessageSegmentDbRow,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          started_at AS "startedAt",
+          ended_at AS "endedAt",
+          text
+        FROM message_text_segments
+        WHERE thread_id IN (SELECT thread_id FROM projection_threads WHERE deleted_at IS NULL)
+        ORDER BY started_at ASC, message_id ASC
+      `,
+  });
+
+  const listThreadMessageSegmentRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadMessageSegmentDbRow,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          started_at AS "startedAt",
+          ended_at AS "endedAt",
+          text
+        FROM message_text_segments
+        WHERE thread_id = ${threadId}
+        ORDER BY started_at ASC, message_id ASC
       `,
   });
 
@@ -1885,6 +1950,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             projectRows,
             threadRows,
             messageRows,
+            segmentRows,
             proposedPlanRows,
             activityRows,
             pendingInteractionRows,
@@ -1934,6 +2000,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listThreadMessages:query",
                   "ProjectionSnapshotQuery.getSnapshot:listThreadMessages:decodeRows",
+                ),
+              ),
+            ),
+            listThreadMessageSegmentRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getSnapshot:listThreadMessageSegments:query",
+                  "ProjectionSnapshotQuery.getSnapshot:listThreadMessageSegments:decodeRows",
                 ),
               ),
             ),
@@ -1995,7 +2069,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ]);
 
-          const messages = collectProjectedMessages(messageRows);
+          const messages = collectProjectedMessages(
+            attachThreadMessageSegments(messageRows, segmentRows),
+          );
           const proposedPlans = collectProjectedProposedPlans(proposedPlanRows);
           const activities = collectProjectedActivities(activityRows);
           const pendingInteractions = collectPendingInteractions(pendingInteractionRows);
@@ -2702,6 +2778,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
       const [
         messageRows,
+        segmentRows,
         proposedPlanRows,
         activityRows,
         pendingInteractionRows,
@@ -2714,6 +2791,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             toPersistenceSqlOrDecodeError(
               `${options.tracePrefix}:listMessages:query`,
               `${options.tracePrefix}:listMessages:decodeRows`,
+            ),
+          ),
+        ),
+        listThreadMessageSegmentRowsByThread({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              `${options.tracePrefix}:listMessageSegments:query`,
+              `${options.tracePrefix}:listMessageSegments:decodeRows`,
             ),
           ),
         ),
@@ -2773,7 +2858,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           onNone: () => null,
           onSome: (row) => toProjectedLatestTurn(row),
         }),
-        messages: messageRows.map(orchestrationMessageFromProjectionRow),
+        messages: attachThreadMessageSegments(messageRows, segmentRows).map(
+          orchestrationMessageFromProjectionRow,
+        ),
         proposedPlans: proposedPlanRows.map((row) => toProjectedProposedPlan(row)),
         activities: activityRows.map((row) => toProjectedActivity(row)),
         pendingInteractions: pendingInteractionRows,

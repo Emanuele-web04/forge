@@ -776,6 +776,184 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-ide
   },
 );
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-text-segment-scope-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("keeps interleaved assistant text segments through streaming deltas and completion", () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const projectId = ProjectId.makeUnsafe("project-text-segments");
+        const threadId = ThreadId.makeUnsafe("thread-text-segments");
+        const messageId = MessageId.makeUnsafe("assistant-text-segment-message");
+
+        const append = (input: {
+          readonly eventId: string;
+          readonly commandId: string;
+          readonly occurredAt: string;
+          readonly text: string;
+          readonly streaming: boolean;
+          readonly segmentStartedAt?: string;
+        }) =>
+          eventStore.append({
+            type: "thread.message-sent",
+            eventId: EventId.makeUnsafe(input.eventId),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: input.occurredAt,
+            commandId: CommandId.makeUnsafe(input.commandId),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe(input.commandId),
+            metadata: {},
+            payload: {
+              threadId,
+              messageId,
+              role: "assistant" as const,
+              text: input.text,
+              ...(input.segmentStartedAt
+                ? { segmentStartedAt: input.segmentStartedAt }
+                : {}),
+              turnId: null,
+              streaming: input.streaming,
+              createdAt: input.occurredAt,
+              updatedAt: input.occurredAt,
+            },
+          });
+
+        yield* eventStore.append({
+          type: "project.created",
+          eventId: EventId.makeUnsafe("evt-text-segments-project"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: "2026-07-14T10:00:00.000Z",
+          commandId: CommandId.makeUnsafe("cmd-text-segments-project"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-text-segments-project"),
+          metadata: {},
+          payload: {
+            projectId,
+            title: "Text Segments",
+            workspaceRoot: "/tmp/text-segments",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-07-14T10:00:00.000Z",
+            updatedAt: "2026-07-14T10:00:00.000Z",
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.created",
+          eventId: EventId.makeUnsafe("evt-text-segments-thread"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-07-14T10:00:01.000Z",
+          commandId: CommandId.makeUnsafe("cmd-text-segments-thread"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-text-segments-thread"),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId,
+            title: "Text Segments Thread",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: "2026-07-14T10:00:01.000Z",
+            updatedAt: "2026-07-14T10:00:01.000Z",
+          },
+        });
+        // Delta 1 starts the message and its first segment.
+        yield* append({
+          eventId: "evt-text-segments-delta-1",
+          commandId: "cmd-text-segments-delta-1",
+          occurredAt: "2026-07-14T10:00:02.000Z",
+          text: "Plan: ",
+          streaming: true,
+          segmentStartedAt: "2026-07-14T10:00:02.000Z",
+        });
+        // Delta 2 continues segment 1 (no row event in between).
+        yield* append({
+          eventId: "evt-text-segments-delta-2",
+          commandId: "cmd-text-segments-delta-2",
+          occurredAt: "2026-07-14T10:00:03.000Z",
+          text: "scan files.",
+          streaming: true,
+        });
+        // Delta 3 starts a new segment: a tool row ran in between.
+        yield* append({
+          eventId: "evt-text-segments-delta-3",
+          commandId: "cmd-text-segments-delta-3",
+          occurredAt: "2026-07-14T10:00:20.000Z",
+          text: "Found the largest test file: ",
+          streaming: true,
+          segmentStartedAt: "2026-07-14T10:00:20.000Z",
+        });
+        // Delta 4 continues segment 2.
+        yield* append({
+          eventId: "evt-text-segments-delta-4",
+          commandId: "cmd-text-segments-delta-4",
+          occurredAt: "2026-07-14T10:00:21.000Z",
+          text: "ClaudeAdapter.test.ts (~357KB).",
+          streaming: true,
+        });
+        // Completion collapses nothing: boundaries persist, tail endedAt advances.
+        yield* append({
+          eventId: "evt-text-segments-complete",
+          commandId: "cmd-text-segments-complete",
+          occurredAt: "2026-07-14T10:00:25.000Z",
+          text: "Plan: scan files.Found the largest test file: ClaudeAdapter.test.ts (~357KB).",
+          streaming: false,
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const segmentRows = yield* sql<{
+          readonly messageId: string;
+          readonly startedAt: string;
+          readonly endedAt: string;
+          readonly text: string;
+        }>`
+          SELECT
+            message_id AS "messageId",
+            started_at AS "startedAt",
+            ended_at AS "endedAt",
+            text
+          FROM message_text_segments
+          WHERE thread_id = ${threadId}
+          ORDER BY started_at ASC
+        `;
+        assert.deepEqual(segmentRows, [
+          {
+            messageId,
+            startedAt: "2026-07-14T10:00:02.000Z",
+            endedAt: "2026-07-14T10:00:03.000Z",
+            text: "Plan: scan files.",
+          },
+          {
+            messageId,
+            startedAt: "2026-07-14T10:00:20.000Z",
+            endedAt: "2026-07-14T10:00:25.000Z",
+            text: "Found the largest test file: ClaudeAdapter.test.ts (~357KB).",
+          },
+        ]);
+
+        const messageRow = yield* sql<{ readonly text: string }>`
+          SELECT text
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId}
+            AND message_id = ${messageId}
+        `;
+        assert.deepEqual(messageRow, [
+          {
+            text: "Plan: scan files.Found the largest test file: ClaudeAdapter.test.ts (~357KB).",
+          },
+        ]);
+      }),
+    );
+  },
+);
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-approval-identity-scope-")))(
   "OrchestrationProjectionPipeline",
   (it) => {

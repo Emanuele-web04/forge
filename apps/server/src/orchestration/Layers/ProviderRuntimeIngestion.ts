@@ -301,6 +301,34 @@ export function appendCappedBufferedText(existing: string, delta: string, limit:
   )}${BUFFERED_TEXT_TRUNCATION_MARKER}`;
 }
 
+/**
+ * True when a provider runtime event renders as its own row in the web
+ * timeline (tool lifecycle, warnings, approvals, command output). Such an
+ * event between two assistant text deltas closes the current text segment,
+ * so the next delta starts a new interleave-positioned segment.
+ */
+function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  switch (event.type) {
+    case "item.started":
+    case "item.updated":
+    case "item.completed": {
+      const itemType = event.payload.itemType;
+      return itemType !== undefined && itemType !== "assistant_message" && itemType !== "reasoning";
+    }
+    case "runtime.warning":
+    case "user-input.requested":
+    case "user-input.resolved":
+      return true;
+    case "content.delta":
+      return (
+        event.payload.streamKind === "command_output" ||
+        event.payload.streamKind === "file_change_output"
+      );
+    default:
+      return false;
+  }
+}
+
 function reasoningSummaryBufferKey(
   event: ProviderRuntimeEvent,
   threadId = event.threadId,
@@ -1161,7 +1189,11 @@ const make = Effect.gen(function* () {
   };
 
   const clearAssistantMessageState = (messageId: MessageId) =>
-    Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
+    Effect.gen(function* () {
+      bufferedTextSegmentsByMessageId.delete(messageId);
+      bufferedTextSpilledByMessageId.delete(messageId);
+      yield* Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
+    });
 
   const resolveAssistantCompletionMessageId = (input: {
     event: ProviderRuntimeEvent;
@@ -1223,6 +1255,60 @@ const make = Effect.gen(function* () {
       return MessageId.makeUnsafe(`assistant:${input.event.eventId}`);
     });
 
+  /**
+   * Dispatches the final buffered assistant text. When the turn buffered its
+   * streamed deltas (default delivery mode) and no spill split the buffer, each
+   * recorded text segment is fanned back out as its own delta carrying its
+   * boundary start time, so the projection keeps the interleaved timeline
+   * (reasoning next to the tool rows that interrupted it). Oversized/spilled
+   * buffers fall back to a single delta with the first segment's start.
+   */
+  const dispatchFinalAssistantTextSegments = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    messageId: MessageId;
+    turnId?: TurnId;
+    createdAt: string;
+    tagBase: string;
+    text: string;
+  }) =>
+    Effect.gen(function* () {
+      const segments = bufferedTextSegmentsByMessageId.get(input.messageId) ?? [];
+      bufferedTextSegmentsByMessageId.delete(input.messageId);
+      const spilled = bufferedTextSpilledByMessageId.has(input.messageId);
+      bufferedTextSpilledByMessageId.delete(input.messageId);
+      if (segments.length > 1 && !spilled) {
+        for (const [segmentIndex, segment] of segments.entries()) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: providerCommandId(
+              input.event,
+              `${input.tagBase}-segment-${segmentIndex}`,
+              input.messageId,
+            ),
+            threadId: input.threadId,
+            messageId: input.messageId,
+            delta: segment.text,
+            ...(input.turnId ? { turnId: input.turnId } : {}),
+            ...(segment.startedAt ? { segmentStartedAt: segment.startedAt } : {}),
+            createdAt: input.createdAt,
+          });
+        }
+        return;
+      }
+      const bufferedSegmentStartedAt = segments[0]?.startedAt;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: providerCommandId(input.event, input.tagBase, input.messageId),
+        threadId: input.threadId,
+        messageId: input.messageId,
+        delta: input.text,
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+        ...(bufferedSegmentStartedAt ? { segmentStartedAt: bufferedSegmentStartedAt } : {}),
+        createdAt: input.createdAt,
+      });
+    });
+
   const flushBufferedAssistantMessageDelta = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1234,17 +1320,19 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
       if (!hasRenderableAssistantText(bufferedText)) {
+        bufferedTextSegmentsByMessageId.delete(input.messageId);
+        bufferedTextSpilledByMessageId.delete(input.messageId);
         return false;
       }
 
-      yield* orchestrationEngine.dispatch({
-        type: "thread.message.assistant.delta",
-        commandId: providerCommandId(input.event, input.commandTag, input.messageId),
+      yield* dispatchFinalAssistantTextSegments({
+        event: input.event,
         threadId: input.threadId,
         messageId: input.messageId,
-        delta: bufferedText,
         ...(input.turnId ? { turnId: input.turnId } : {}),
         createdAt: input.createdAt,
+        tagBase: input.commandTag,
+        text: bufferedText,
       });
       return true;
     });
@@ -1320,15 +1408,18 @@ const make = Effect.gen(function* () {
             : "";
 
       if (hasRenderableAssistantText(text)) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.message.assistant.delta",
-          commandId: providerCommandId(input.event, input.finalDeltaCommandTag, input.messageId),
+        yield* dispatchFinalAssistantTextSegments({
+          event: input.event,
           threadId: input.threadId,
           messageId: input.messageId,
-          delta: text,
           ...(input.turnId ? { turnId: input.turnId } : {}),
           createdAt: input.createdAt,
+          tagBase: input.finalDeltaCommandTag,
+          text,
         });
+      } else {
+        bufferedTextSegmentsByMessageId.delete(input.messageId);
+        bufferedTextSpilledByMessageId.delete(input.messageId);
       }
 
       yield* orchestrationEngine.dispatch({
@@ -1757,9 +1848,34 @@ const make = Effect.gen(function* () {
       }
     });
 
+  // Text-segment tracking for streamed assistant text: per message, the last
+  // assistant delta time and the last row-making provider event time. Row events
+  // (tool calls, warnings, ...) that land between two deltas start a new segment
+  // on the next delta. In buffered delivery, bufferedTextSegmentsByMessageId
+  // accumulates one text slice per segment so the final flush can fan the
+  // segments back out as separate deltas (bufferedTextSpilledByMessageId marks
+  // turns whose spill boundary invalidated that fan-out).
+  const segmentStateByMessageKey = new Map<
+    string,
+    { lastTextDeltaAt: string | null; lastRowEventAt: string | null }
+  >();
+  const bufferedTextSegmentsByMessageId = new Map<
+    MessageId,
+    ReadonlyArray<{ readonly startedAt: string; readonly text: string }>
+  >();
+  const bufferedTextSpilledByMessageId = new Set<MessageId>();
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       const now = event.createdAt;
+      const markRowEvent = () => {
+        for (const state of segmentStateByMessageKey.values()) {
+          state.lastRowEventAt = now;
+        }
+      };
+      if (isRowMakingProviderRuntimeEvent(event)) {
+        markRowEvent();
+      }
       // Load the full (heavy) detail only when this event's handlers actually read
       // thread.messages / proposedPlans / checkpoints; otherwise use the cheap
       // shell so high-frequency streaming events don't re-decode the whole
@@ -2199,9 +2315,45 @@ const make = Effect.gen(function* () {
           thread.id,
           turnId ?? activeTurnId ?? undefined,
         );
+        // First delta of a message, or a row-making event since the last
+        // delta, starts a new segment positioned at this event's time.
+        const segmentKey = `${event.threadId}:${assistantMessageId}`;
+        const segmentState = segmentStateByMessageKey.get(segmentKey) ?? {
+          lastTextDeltaAt: null,
+          lastRowEventAt: null,
+        };
+        segmentStateByMessageKey.set(segmentKey, segmentState);
+        const startsNewSegment =
+          segmentState.lastTextDeltaAt === null ||
+          (segmentState.lastRowEventAt !== null &&
+            segmentState.lastRowEventAt > segmentState.lastTextDeltaAt);
+        const segmentStartedAt = startsNewSegment ? now : undefined;
+        segmentState.lastTextDeltaAt = now;
         if (assistantDeliveryMode === "buffered") {
+          // Buffer the delta as part of the current segment: a row-making
+          // provider event between deltas closes the current segment and the
+          // next delta starts a new one at its own time. On final flush the
+          // segments fan out as separate deltas so the projection keeps the
+          // interleaved boundaries instead of one whole-text blob.
+          const existingSegments = bufferedTextSegmentsByMessageId.get(assistantMessageId);
+          const tail = existingSegments?.[existingSegments.length - 1];
+          if (segmentStartedAt === undefined && tail !== undefined) {
+            bufferedTextSegmentsByMessageId.set(assistantMessageId, [
+              ...existingSegments!.slice(0, -1),
+              { startedAt: tail.startedAt, text: `${tail.text}${assistantDelta}` },
+            ]);
+          } else {
+            bufferedTextSegmentsByMessageId.set(assistantMessageId, [
+              ...(existingSegments ?? []),
+              { startedAt: segmentStartedAt ?? now, text: assistantDelta },
+            ]);
+          }
           const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
           if (spillChunk.length > 0) {
+            // Oversized turn: the spill boundary splits the buffered text, so
+            // per-segment fan-out can no longer reproduce the cache's
+            // truncation. Fall back to the single-delta flush at completion.
+            bufferedTextSpilledByMessageId.add(assistantMessageId);
             yield* orchestrationEngine.dispatch({
               type: "thread.message.assistant.delta",
               commandId: providerCommandId(
@@ -2224,6 +2376,7 @@ const make = Effect.gen(function* () {
             messageId: assistantMessageId,
             delta: assistantDelta,
             ...(turnId ? { turnId } : {}),
+            ...(segmentStartedAt ? { segmentStartedAt } : {}),
             createdAt: now,
           });
         }
