@@ -8,6 +8,7 @@ import { cn } from "~/lib/utils";
 const APP_ICON_OPTIONS = [
   { value: "default", label: "Default icon", src: "/app-icons/default.png" },
   { value: "icon", label: "Icon", src: "/app-icons/icon-group-600-macos.png" },
+  { value: "dark", label: "Dark icon", src: "/app-icons/dark.png" },
 ] as const satisfies ReadonlyArray<{
   value: DesktopAppIcon;
   label: string;

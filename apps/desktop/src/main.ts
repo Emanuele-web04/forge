@@ -1938,7 +1938,7 @@ function applyDesktopAppIcon(icon: DesktopAppIcon): void {
   const resourceName = desktopAppIconResourceName({
     icon,
     platform: process.platform,
-    useLegacyMacDefault: usesLegacyMacDockIcon(),
+    isDarkAppearance: process.platform === "darwin" && nativeTheme.shouldUseDarkColors,
   });
   const iconPath = resolveResourcePath(resourceName);
   if (!iconPath) return;
@@ -1958,10 +1958,22 @@ function applyInitialMacDockIcon(): void {
     return;
   }
   const icon = readDesktopAppIcon();
-  if (icon === "default" && !usesLegacyMacDockIcon()) {
+  if (icon === "default" && !usesLegacyMacDockIcon() && !nativeTheme.shouldUseDarkColors) {
     return;
   }
   applyDesktopAppIcon(icon);
+}
+
+function registerMacAppearanceIconSync(): void {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  // The bundled ICNS is the light artwork; macOS does not swap third-party dock
+  // icons when the system appearance changes, so re-apply the persisted
+  // preference so the default icon follows light/dark mode at runtime.
+  nativeTheme.on("updated", () => {
+    applyDesktopAppIcon(readDesktopAppIcon());
+  });
 }
 
 function readLaunchVersionRecordContents(): string | null {
@@ -3948,7 +3960,7 @@ function getIconOption(): { icon: string } | Record<string, never> {
   const resourceName = desktopAppIconResourceName({
     icon: readDesktopAppIcon(),
     platform: process.platform,
-    useLegacyMacDefault: false,
+    isDarkAppearance: false,
   });
   const iconPath = resolveResourcePath(resourceName);
   return iconPath ? { icon: iconPath } : {};
@@ -4478,6 +4490,7 @@ if (hasSingleInstanceLock) {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
       applyInitialMacDockIcon();
+      registerMacAppearanceIconSync();
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       initializeDesktopAppSnap();
