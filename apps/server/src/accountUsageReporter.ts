@@ -966,7 +966,7 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
           // sustained rate limit, could keep it from ever reaching the later
           // chunks). Sound because both streams enumerate minutes ascending —
           // everything before the recorded minute is durably on the account.
-          if (index < pushCount - 1) {
+          if (index < pushCount - 1 && currentIdentity != null) {
             const progressMs = Math.min(
               chunkProgressMs(modelChunks, index),
               chunkProgressMs(skillChunks, index),
@@ -981,7 +981,9 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
       // Full success: everything through the newest fully elapsed minute (as
       // of flush start) is durably on the account. The still-growing current
       // minute is re-covered by the safety lap on the next flush.
-      await writeSuccess(minuteStartIso(flushStartedAtMs - 60_000), currentIdentity);
+      if (currentIdentity != null) {
+        await writeSuccess(minuteStartIso(flushStartedAtMs - 60_000), currentIdentity);
+      }
       failureStreak = 0;
     } catch (error) {
       failureStreak += 1;

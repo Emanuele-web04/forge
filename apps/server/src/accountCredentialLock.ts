@@ -74,13 +74,12 @@ function makeOwnerToken(): string {
  * breaker (and everyone else) must still win the exclusive-create race in
  * {@link tryCreateLock} to enter the critical section.
  *
- * The rename is what makes reclamation a compare-and-swap. Of all contenders
- * racing the same stale lock, exactly one rename succeeds — the rest get
- * ENOENT and fall through to the normal acquire-wait. The previous design
- * (rename a fresh temp file OVER the lock, then read the token back) let two
- * contenders each read their own token in turn as the renames landed one
- * after the other, putting both inside the critical section and
- * double-spending the single-use refresh token.
+ * The rename is what makes the break atomic. Of all contenders racing the
+ * same stale lock, exactly one rename succeeds — the rest get ENOENT and
+ * fall through to the normal acquire-wait. The renamed lock is always
+ * deleted; if it was accidentally fresh (broken between another contender's
+ * break and re-acquire), that displaced holder's owner-checked release will
+ * harmlessly no-op, and they will need to re-acquire.
  */
 async function breakStaleLock(lockPath: string): Promise<void> {
   const stalePath = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
@@ -90,21 +89,6 @@ async function breakStaleLock(lockPath: string): Promise<void> {
     // Another contender renamed it aside first (or the holder released):
     // the stale lock is already gone, nothing left to break.
     return;
-  }
-  // Verify what was actually renamed. This contender judged staleness from a
-  // stat taken BEFORE the rename; in between, a faster contender may have
-  // broken the stale lock and already re-acquired, in which case the file
-  // just renamed aside is the new owner's FRESH lock. Rename preserves
-  // mtime, so freshness is still readable on the renamed file — restore it
-  // with an exclusive link (never clobbering a newer lock) and back off.
-  const stat = await fs.stat(stalePath).catch(() => undefined);
-  if (stat && Date.now() - stat.mtimeMs <= STALE_LOCK_MS) {
-    await fs.link(stalePath, lockPath).catch(() => {
-      // EEXIST: yet another contender created a lock meanwhile; the
-      // displaced owner's release is owner-checked, so nothing is deleted
-      // out from under anyone. This is a microsecond triple-interleaving
-      // window, down from the old always-on takeover race.
-    });
   }
   await fs.rm(stalePath, { force: true }).catch(() => {});
 }
