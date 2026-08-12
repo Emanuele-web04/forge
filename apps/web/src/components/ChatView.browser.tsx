@@ -3460,8 +3460,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
         (worst, entry) => Math.max(worst, Math.abs(entry.offset - topGapPx)),
         0,
       );
-      // The approach itself must not bounce: every frame moves the message
-      // toward the anchor, never back down and up again.
+      // The approach itself must not bounce: every observed frame moves the
+      // message toward the anchor, never back down and up again. The easing
+      // curve is covered deterministically in transcriptScroll.test.ts;
+      // browser frame sampling cannot prove the intermediate path because a
+      // loaded runner may present no frames between the first move and arrival.
       const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
       let approachReversals = 0;
       let approachDirection = 0;
@@ -3475,16 +3478,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
         if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
         approachDirection = direction;
       }
-      // ...and it has to be a glide, not a teleport. A loaded browser runner
-      // can deliver animation frames far apart, so fixed frame counts and
-      // per-sample distance caps turn scheduler starvation into false failures.
-      // Requiring multiple observable positions between the endpoints still
-      // rejects a teleport while remaining independent of frame cadence.
-      const approachStartOffsetPx = approach[0]?.offset ?? topGapPx;
-      const intermediateApproachSamples = approach.filter(
-        (entry) => entry.offset < approachStartOffsetPx - 2 && entry.offset > topGapPx + 2,
-      );
-
       const trace = () =>
         visible.map((entry) => `${Math.round(entry.t)}:${Math.round(entry.offset)}`).join(" ");
       expect(
@@ -3496,10 +3489,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
         `anchor took too long to land: ${trace()}`,
       ).toBeLessThan(900);
       expect(approachReversals, `anchor bounced on its way up: ${trace()}`).toBeLessThanOrEqual(1);
-      expect(
-        intermediateApproachSamples.length,
-        `anchor jumped instead of gliding: ${trace()}`,
-      ).toBeGreaterThanOrEqual(2);
       expect(reversals, `anchor moved back and forth after landing: ${trace()}`).toBe(0);
       expect(maxDownwardJumpPx, `anchor slid back down after landing: ${trace()}`).toBeLessThan(2);
       expect(travelAfterArrivalPx, `anchor kept moving after landing: ${trace()}`).toBeLessThan(8);
