@@ -1488,7 +1488,7 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
-  it.effect("markRunCompletionResult preserves archive/read state from the current row", () =>
+  it.effect("markRunResultPreservingTriage preserves archive/read state from the current row", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
       yield* runMigrations();
@@ -1525,7 +1525,7 @@ layer("AutomationRepository", (it) => {
 
       // A background completion evaluation lands afterwards, carrying stale triage
       // fields (unarchived / unread) in its result payload.
-      const merged = yield* repository.markRunCompletionResult({
+      const merged = yield* repository.markRunResultPreservingTriage({
         id: AutomationRunId.makeUnsafe("run-completion-merge"),
         result: {
           outcome: "no-findings",
@@ -1552,7 +1552,7 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
-  it.effect("markRunCompletionResult preserves a read run that was not archived", () =>
+  it.effect("markRunResultPreservingTriage preserves a read run that was not archived", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
       yield* runMigrations();
@@ -1587,7 +1587,7 @@ layer("AutomationRepository", (it) => {
       });
 
       // A background completion eval lands with stale triage fields (unread: true).
-      const merged = yield* repository.markRunCompletionResult({
+      const merged = yield* repository.markRunResultPreservingTriage({
         id: AutomationRunId.makeUnsafe("run-read-merge"),
         result: {
           outcome: "no-findings",

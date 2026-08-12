@@ -1047,11 +1047,11 @@ const makeAutomationRepository = Effect.gen(function* () {
   });
 
   // Writes a new result but carries the triage fields (archivedAt/unread) over from the
-  // existing row atomically, so a background completion evaluation can never clobber a
-  // concurrent user archive/mark-read landing between the run reload and this write.
+  // existing row atomically, so a background update can never clobber a concurrent user
+  // archive/mark-read landing between the run reload and this write.
   // unread is round-tripped through json() so it stays a JSON boolean rather than the
   // 0/1 that json_extract yields.
-  const markRunCompletionResultRow = SqlSchema.void({
+  const markRunResultPreservingTriageRow = SqlSchema.void({
     Request: MarkAutomationRunResultInput,
     execute: ({ id, result, updatedAt }) =>
       result === null
@@ -1890,13 +1890,16 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunResult")),
     );
 
-  const markRunCompletionResult: AutomationRepositoryShape["markRunCompletionResult"] = (input) =>
-    markRunCompletionResultRow(input).pipe(
-      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunCompletionResult:update")),
-      Effect.flatMap(() =>
-        requireRunById(input.id, "AutomationRepository.markRunCompletionResult"),
-      ),
-    );
+  const markRunResultPreservingTriage: AutomationRepositoryShape["markRunResultPreservingTriage"] =
+    (input) =>
+      markRunResultPreservingTriageRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("AutomationRepository.markRunResultPreservingTriage:update"),
+        ),
+        Effect.flatMap(() =>
+          requireRunById(input.id, "AutomationRepository.markRunResultPreservingTriage"),
+        ),
+      );
 
   const markRunInterrupted: AutomationRepositoryShape["markRunInterrupted"] = (input) =>
     markRunInterruptedRow(input).pipe(
@@ -2150,7 +2153,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     markRunSkipped,
     markRunSucceeded,
     markRunResult,
-    markRunCompletionResult,
+    markRunResultPreservingTriage,
     markRunInterrupted,
     markRunWaitingForApproval,
     cancelRun,

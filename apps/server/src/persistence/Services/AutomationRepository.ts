@@ -410,10 +410,10 @@ export interface AutomationRepositoryShape {
   /**
    * Like {@link markRunResult}, but preserves the run's triage fields
    * (`archivedAt`/`unread`) from the current row instead of from the supplied
-   * result. Background completion-evaluation must not clobber a concurrent user
-   * archive/mark-read; this write merges those fields atomically, SQL-side.
+   * result. Background result updates must not clobber a concurrent user
+   * archive/mark-read, so this write merges those fields atomically in SQL.
    */
-  readonly markRunCompletionResult: (
+  readonly markRunResultPreservingTriage: (
     input: MarkAutomationRunResultInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
   readonly markRunInterrupted: (

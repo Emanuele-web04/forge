@@ -4239,6 +4239,59 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("restarts an exhausted failure-disabled loop when the user re-enables it", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-reenable-failure-at-cap");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          maxIterations: 1,
+          stopAfterConsecutiveFailures: 1,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const initialRuns = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const initialRun = initialRuns.find((entry) => entry.run.automationId === automationId)?.run;
+      if (!initialRun) {
+        assert.fail("Expected the first scheduled automation run.");
+      }
+      yield* reconcileAutomationRun({
+        service,
+        run: initialRun,
+        state: "error",
+        error: "failure at iteration cap",
+      });
+
+      const reenabled = yield* service.update({ id: automationId, enabled: true });
+      assert.isTrue(reenabled.enabled);
+      assert.strictEqual(reenabled.iterationCount, 0);
+      assert.strictEqual(reenabled.consecutiveFailureCount, 0);
+      assert.isNull(reenabled.disabledReason);
+      const nextRunAt = reenabled.nextRunAt;
+      if (nextRunAt === null) {
+        assert.fail("Expected the re-enabled automation to have a next run time.");
+      }
+
+      const resumedRuns = yield* service.runDueOnce({
+        now: nextRunAt,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const resumedRun = resumedRuns.find((entry) => entry.run.automationId === automationId)?.run;
+      assert.strictEqual(resumedRun?.status, "running");
+    }),
+  );
+
   it.effect("does not restart an exhausted automation disabled by failures", () =>
     Effect.gen(function* () {
       resetHarness();

@@ -512,6 +512,10 @@ function mergeDefinitionUpdate(
   const enabled = input.enabled ?? current.enabled;
   const userDisabled = current.enabled && !enabled;
   const userReenabled = !current.enabled && enabled;
+  const userRestartedExhaustedLoop =
+    userReenabled &&
+    (current.disabledReason === "max-iterations" ||
+      (maxIterations !== null && current.iterationCount >= maxIterations));
   const currentFailureThreshold =
     current.stopAfterConsecutiveFailures === undefined
       ? DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES
@@ -555,8 +559,7 @@ function mergeDefinitionUpdate(
     retryPolicy: input.retryPolicy ?? current.retryPolicy,
     misfirePolicy: input.misfirePolicy ?? current.misfirePolicy,
     acknowledgedRisks: input.acknowledgedRisks ?? current.acknowledgedRisks,
-    iterationCount:
-      userReenabled && current.disabledReason === "max-iterations" ? 0 : current.iterationCount,
+    iterationCount: userRestartedExhaustedLoop ? 0 : current.iterationCount,
     updatedAt: now,
   };
 
@@ -1487,7 +1490,7 @@ export const AutomationServiceLive = Layer.effect(
         const latestRun = yield* latestRunForCompletionResult(input.run);
         const updatedAt = isoNow();
         const updated = yield* automationRepository
-          .markRunCompletionResult({
+          .markRunResultPreservingTriage({
             id: latestRun.id,
             result: automationCompletionRunResult({
               baseResult: latestRun.result,
@@ -1844,7 +1847,7 @@ export const AutomationServiceLive = Layer.effect(
         return Effect.void;
       }
       return automationRepository
-        .markRunResult({
+        .markRunResultPreservingTriage({
           id: run.id,
           result: {
             ...baseResult,
