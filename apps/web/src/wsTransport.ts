@@ -344,12 +344,37 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   // the socket. Tearing the whole transport down for them interrupts every
   // unrelated in-flight request while fixing nothing — the same fence is
   // re-read on the next connect. RESNAPSHOT retries in place with a fresh
-  // snapshot request; STALLED / STATE_INCOMPLETE are server-diagnosed dead
-  // ends that must surface as stream failures, not reconnect loops.
+  // snapshot request; STALLED / STATE_INCOMPLETE surface as stream failures
+  // and recover via the slow snapshot-fault retry (see startStream).
   "ORCHESTRATION_RESNAPSHOT_REQUIRED",
   "ORCHESTRATION_SNAPSHOT_STALLED",
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
 ]);
+
+// Server-diagnosed snapshot faults: the projection fence is stalled or
+// underivable, and only server-side recovery (a restart's bootstrap replay, a
+// repair, or the deferred catch-up advancing the fence) can clear them. The
+// stream must neither die permanently — the shell stream has no route-level
+// fallback, so a dead stream means a silently stale sidebar — nor hammer the
+// server; a slow in-place retry converges as soon as the server heals.
+const SNAPSHOT_FAULT_ERROR_CODES = new Set([
+  "ORCHESTRATION_SNAPSHOT_STALLED",
+  "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
+]);
+export const SNAPSHOT_FAULT_RETRY_MS = 30_000;
+
+export function getSnapshotFaultRetryDelayMs(cause: Cause.Cause<unknown>): number | null {
+  for (const reason of cause.reasons) {
+    if (!Cause.isFailReason(reason)) continue;
+    const error = reason.error;
+    if (!error || typeof error !== "object") continue;
+    const code = "code" in error ? error.code : undefined;
+    if (typeof code === "string" && SNAPSHOT_FAULT_ERROR_CODES.has(code)) {
+      return SNAPSHOT_FAULT_RETRY_MS;
+    }
+  }
+  return null;
+}
 const TERMINAL_COMPATIBILITY_ERROR_CODES = new Set([
   "WS_NEGOTIATION_REQUIRED",
   "WS_PROTOCOL_INCOMPATIBLE",
@@ -1718,6 +1743,23 @@ export class WsTransport {
                 code: getStreamFailureCode(exit.cause),
                 error,
               });
+            }
+            // Server-diagnosed snapshot faults clear only when the server
+            // heals (restart bootstrap, repair, deferred catch-up). Surfacing
+            // the failure above is not enough for streams with no route-level
+            // fallback (the shell stream): keep a slow in-place retry armed so
+            // the subscription recovers without user action once the fence
+            // advances, without hammering a server that said "stop retrying".
+            if (restart && getSnapshotFaultRetryDelayMs(exit.cause) !== null) {
+              this.clearStreamCapacityRetryTimer(key);
+              const timeoutId = window.setTimeout(() => {
+                if (this.streamCapacityRetryTimers.get(key) !== timeoutId) return;
+                this.streamCapacityRetryTimers.delete(key);
+                if (!this.disposed && !this.streamCleanups.has(key)) {
+                  restart();
+                }
+              }, SNAPSHOT_FAULT_RETRY_MS);
+              this.streamCapacityRetryTimers.set(key, timeoutId);
             }
           }
         },

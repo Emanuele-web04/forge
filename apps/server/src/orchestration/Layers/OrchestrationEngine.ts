@@ -377,8 +377,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       // the journal between bootstraps and scoring them would report a healthy
       // system as permanently degraded. Missing rows are still checked across
       // the full repair set — absence is abnormal regardless of phase. A read
-      // failure degrades to empty lag data rather than failing the health
-      // probe that asks for it.
+      // failure must not masquerade as health: the probe still answers (a
+      // failing /health body is worse than a degraded one), but reports
+      // state "unknown" so a database outage is distinguishable from both a
+      // healthy system and a diagnosed lag.
       const lag = yield* Effect.gen(function* () {
         const highWaterSequence = yield* eventStore.getHighWaterSequence();
         const stateRows = yield* sql<{
@@ -410,10 +412,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             }
           }
         }
-        return { highWaterSequence, lagByProjector, missingProjectors };
+        return { probeFailed: false, highWaterSequence, lagByProjector, missingProjectors };
       }).pipe(
         Effect.catch(() =>
           Effect.succeed({
+            probeFailed: true,
             highWaterSequence: 0,
             lagByProjector: {} as Record<string, number>,
             missingProjectors: [] as string[],
@@ -423,7 +426,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const degraded =
         dirty || lag.missingProjectors.length > 0 || Object.keys(lag.lagByProjector).length > 0;
       return {
-        state: degraded ? "degraded" : "healthy",
+        // A failed probe with the dirty flag set is still a known degradation;
+        // "unknown" is reserved for a failed probe with no other evidence.
+        state: degraded ? "degraded" : lag.probeFailed ? "unknown" : "healthy",
         inFlight,
         retryAttempts,
         lastFailure,

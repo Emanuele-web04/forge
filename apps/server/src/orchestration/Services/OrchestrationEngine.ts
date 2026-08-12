@@ -30,7 +30,12 @@ export interface OrchestrationDispatchContext {
 }
 
 export interface OrchestrationProjectionCatchUpStatus {
-  readonly state: "healthy" | "degraded";
+  /**
+   * "unknown" means the lag probe itself failed (journal or cursor read
+   * error): the projection may be fine or badly broken, and reporting either
+   * extreme would mislead — a monitor must treat it as not-healthy.
+   */
+  readonly state: "healthy" | "degraded" | "unknown";
   readonly inFlight: boolean;
   readonly retryAttempts: number;
   readonly lastFailure: string | null;

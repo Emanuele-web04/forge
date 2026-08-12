@@ -32,6 +32,8 @@ import {
   makeFeatureSocketUrl,
   makeNegotiateHttpUrl,
   getResnapshotRetryDelayMs,
+  getSnapshotFaultRetryDelayMs,
+  SNAPSHOT_FAULT_RETRY_MS,
   isRuntimeInterruptFailure,
   makeRequestAbortScope,
   negotiateOverHttp,
@@ -501,15 +503,99 @@ describe("WsTransport", () => {
         restart,
       );
       await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS - 1);
 
       expect(reconnect).not.toHaveBeenCalled();
       expect(restart).not.toHaveBeenCalled();
       expect(failures).toHaveLength(1);
       expect(failures[0]?.code).toBe("ORCHESTRATION_SNAPSHOT_STALLED");
+
+      // A snapshot fault clears only when the server heals; a slow in-place
+      // retry converges then without the user resubscribing.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("slow-retries a shell stream killed by a projection-state fault instead of leaving it dead", async () => {
+    // The shell stream has no route-level fallback: without a retry the
+    // sidebar silently freezes until an unrelated explicit resubscribe.
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.shell";
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(restart).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending snapshot-fault retry when the stream is stopped", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.shell";
+      const restart = vi.fn();
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await internals.stopStream(key);
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS * 2);
+
+      expect(restart).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies snapshot faults for the slow retry and nothing else", () => {
+    expect(
+      getSnapshotFaultRetryDelayMs(
+        Cause.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+      ),
+    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
+    expect(
+      getSnapshotFaultRetryDelayMs(
+        Cause.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
+      ),
+    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
+    // RESNAPSHOT has its own bounded fast retry; generic errors get neither.
+    expect(
+      getSnapshotFaultRetryDelayMs(
+        Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
+      ),
+    ).toBeNull();
+    expect(getSnapshotFaultRetryDelayMs(Cause.fail(new Error("transient")))).toBeNull();
   });
 
   it("classifies transport-runtime interrupts as retryable typed failures", () => {
