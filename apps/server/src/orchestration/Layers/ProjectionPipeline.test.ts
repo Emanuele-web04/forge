@@ -1291,6 +1291,138 @@ it.effect("rebuilds a deleted hot cursor and advances a stalled projector on boo
   ),
 );
 
+it.effect("replays a backlog larger than one commit batch without losing rows or cursors", () =>
+  Effect.gen(function* () {
+    // Bootstrap replay commits in batches (BOOTSTRAP_REPLAY_BATCH_SIZE = 500)
+    // to amortize fsync. A backlog spanning multiple batches, with the final
+    // batch partially filled, must still converge: every event applied, the
+    // cursor at the journal head, and — because rows and cursor share each
+    // batch transaction — never a committed cursor ahead of committed rows.
+    const { dbPath } = yield* ServerConfig;
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const projectionLayer = OrchestrationProjectionPipelineLive.pipe(
+      Layer.provideMerge(OrchestrationEventStoreLive),
+      Layer.provideMerge(persistenceLayer),
+    );
+    const projectId = ProjectId.makeUnsafe("project-batched-replay");
+    const threadId = ThreadId.makeUnsafe("thread-batched-replay");
+    const createdAt = "2026-08-12T08:00:00.000Z";
+    const messageCount = 1_200;
+
+    yield* Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-batched-replay-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-batched-replay-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-batched-replay-project"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Batched replay project",
+          workspaceRoot: "/tmp/project-batched-replay",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-batched-replay-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-batched-replay-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-batched-replay-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Batched replay thread",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-5-20250929",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      for (let index = 0; index < messageCount; index += 1) {
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe(`evt-batched-replay-message-${index}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe(`cmd-batched-replay-message-${index}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-batched-replay-message-${index}`),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.makeUnsafe(`message-batched-replay-${index}`),
+            role: "user",
+            text: `message ${index}`,
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+      }
+      // No cursors, no rows: the entire backlog replays through bootstrap.
+      yield* sql`DELETE FROM projection_state`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+    }).pipe(Effect.provide(projectionLayer));
+
+    const { stateRows, projectedCount, highWater } = yield* Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      yield* projectionPipeline.bootstrap;
+      const stateRows = yield* sql<{
+        readonly projector: string;
+        readonly lastAppliedSequence: number;
+      }>`
+        SELECT projector, last_applied_sequence AS "lastAppliedSequence"
+        FROM projection_state
+      `;
+      const [countRow] = yield* sql<{ readonly projectedCount: number }>`
+        SELECT COUNT(*) AS "projectedCount" FROM projection_thread_messages
+      `;
+      const highWater = yield* eventStore.getHighWaterSequence();
+      return { stateRows, projectedCount: countRow?.projectedCount ?? 0, highWater };
+    }).pipe(Effect.provide(projectionLayer));
+
+    assert.equal(projectedCount, messageCount);
+    const cursorByProjector = new Map(
+      stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
+    );
+    assert.equal(cursorByProjector.get(ORCHESTRATION_PROJECTOR_NAMES.threadMessages), highWater);
+    assert.equal(cursorByProjector.get(ORCHESTRATION_PROJECTOR_NAMES.hot), highWater);
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "synara-projection-pipeline-batched-replay-",
+        }),
+        NodeServices.layer,
+      ),
+    ),
+  ),
+);
+
 it.effect("drains 2,501 file-backed events to a captured high-water fence", () =>
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;
