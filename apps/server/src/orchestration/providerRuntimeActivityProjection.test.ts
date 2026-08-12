@@ -47,8 +47,8 @@ function decodeActivityAppendCommand(activity: OrchestrationThreadActivity): unk
   });
 }
 
-function expectSchemaValidActivities(event: ProviderRuntimeEvent): void {
-  const activities = projectProviderRuntimeActivities(event);
+function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequence?: number): void {
+  const activities = projectProviderRuntimeActivities(event, sessionSequence);
   expect(activities.length).toBeGreaterThan(0);
   for (const activity of activities) {
     expect(() => decodeActivityAppendCommand(activity)).not.toThrow();
@@ -154,9 +154,9 @@ describe("projected activities satisfy the orchestration command schema", () => 
         type: "turn.steered",
         eventId: "turn-steered-fractional-sequence",
         turnId: TURN_ID,
-        sessionSequence: 12.5,
         payload: { message: "keep going" },
       }),
+      12.5,
     );
   });
 

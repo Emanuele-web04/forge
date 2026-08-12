@@ -92,6 +92,7 @@ import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNo
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
+import { ProjectionStateIncompleteError } from "./persistence/Errors";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
@@ -147,7 +148,10 @@ import {
   shouldRejectUntrustedRequestOrigin,
 } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
-import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
+import {
+  makeCursorSafeSnapshotLiveStream,
+  makeResnapshotEscalationTracker,
+} from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 import {
@@ -278,14 +282,30 @@ function readDescendantProcesses(rootPid: number): Promise<ProcessTableRow[]> {
 }
 
 function toWsRpcError(cause: unknown, fallbackMessage: string) {
-  return Schema.is(WsRpcError)(cause)
-    ? cause
-    : new WsRpcError({
-        message:
-          cause instanceof Error && cause.message.length > 0 ? cause.message : fallbackMessage,
-        cause,
-      });
+  if (Schema.is(WsRpcError)(cause)) {
+    return cause;
+  }
+  // Missing projector cursors make the snapshot fence underivable. Mark the
+  // failure non-retryable with its own code so clients surface a diagnosable
+  // fault instead of restarting the stream into the same condition forever.
+  if (Schema.is(ProjectionStateIncompleteError)(cause)) {
+    return new WsRpcError({
+      message: cause.message,
+      code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
+      retryable: false,
+      cause,
+    });
+  }
+  return new WsRpcError({
+    message: cause instanceof Error && cause.message.length > 0 ? cause.message : fallbackMessage,
+    cause,
+  });
 }
+
+// Process-wide so a subscriber's restart chain survives its own reconnects
+// (the client id is stable across a socket reconnect), but keyed per
+// subscriber inside the tracker — see makeResnapshotEscalationTracker.
+const resnapshotEscalationTracker = makeResnapshotEscalationTracker();
 
 const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
   Effect.fail(
@@ -936,6 +956,12 @@ const makeWsRpcHandlersLayer = () =>
             clientId,
             { key: "orchestration.shell" },
             makeCursorSafeSnapshotLiveStream({
+              // Keyed per subscriber: concurrent clients hitting the same
+              // stale fence are independent first offenses, not one chain.
+              resnapshotEscalation: {
+                streamKey: `${clientId}:orchestration.shell`,
+                tracker: resnapshotEscalationTracker,
+              },
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
                 Effect.map((stream) =>
                   bufferLiveUiStream(stream.pipe(Stream.filter(isShellRelevantEvent)), {
@@ -985,6 +1011,12 @@ const makeWsRpcHandlersLayer = () =>
               threadId: input.threadId,
             },
             makeCursorSafeSnapshotLiveStream({
+              // Keyed per subscriber: concurrent clients hitting the same
+              // stale fence are independent first offenses, not one chain.
+              resnapshotEscalation: {
+                streamKey: `${clientId}:orchestration.thread:${input.threadId}`,
+                tracker: resnapshotEscalationTracker,
+              },
               // Cursor resume: a client holding cached detail replays only the
               // gap. Out-of-range cursors (negative or overflowing gap) fall
               // back to the snapshot inside the stream factory.

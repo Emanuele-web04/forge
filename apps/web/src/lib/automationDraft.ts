@@ -8,10 +8,10 @@ import { DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS } from "@synara/contrac
 import type {
   AutomationMode,
   AutomationSchedule,
+  AutomationInteractionMode,
   AutomationWorktreeMode,
   ModelSelection,
   ProjectId,
-  ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
@@ -56,7 +56,7 @@ export interface AutomationCreationDraft {
   readonly projectId: ProjectId;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode;
+  readonly interactionMode: AutomationInteractionMode;
   readonly worktreeMode: AutomationWorktreeMode;
   readonly maxIterations: number | null;
   readonly stopOnError: boolean;

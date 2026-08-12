@@ -1,4 +1,4 @@
-import type { GitBranch, ProviderKind } from "@synara/contracts";
+import type { GitBranch, ProviderInteractionMode, ProviderKind } from "@synara/contracts";
 import {
   BUILT_IN_COMPOSER_SLASH_COMMANDS,
   isBuiltInComposerSlashCommandName,
@@ -82,6 +82,8 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   command: ComposerSlashCommand,
 ): boolean {
   return (
+    command === "debug" ||
+    command === "default" ||
     command === "automation" ||
     command === "export" ||
     command === "feedback" ||
@@ -98,6 +100,8 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
   const appCommandIsAvailable = options.availableAppCommands?.has(normalizedCommand) ?? true;
   return (
     normalizedCommand === "automation" ||
+    normalizedCommand === "debug" ||
+    normalizedCommand === "default" ||
     (normalizedCommand === "export" && appCommandIsAvailable) ||
     (normalizedCommand === "feedback" && appCommandIsAvailable) ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && normalizedCommand === "review")
@@ -155,6 +159,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "plan",
     label: "/plan",
     description: "Switch this thread into plan mode",
+    source: "app",
+  },
+  debug: {
+    command: "debug",
+    label: "/debug",
+    description: "Switch this thread into evidence-first debug mode",
     source: "app",
   },
   default: {
@@ -271,7 +281,7 @@ export function canOfferForkSlashCommand(input: {
   terminalContextCount: number;
   selectedSkillCount: number;
   selectedMentionCount: number;
-  interactionMode: "default" | "plan";
+  interactionMode: ProviderInteractionMode;
 }): boolean {
   return (
     !hasMeaningfulComposerText(input.prompt) &&
@@ -289,7 +299,7 @@ export function canOfferSideSlashCommand(input: {
   terminalContextCount: number;
   selectedSkillCount: number;
   selectedMentionCount: number;
-  interactionMode: "default" | "plan";
+  interactionMode: ProviderInteractionMode;
   isSidechat: boolean;
 }): boolean {
   return (
@@ -404,6 +414,7 @@ export function getAvailableComposerSlashCommands(input: {
           "model",
           ...(input.supportsFastSlashCommand ? (["fast"] as const) : []),
           "plan",
+          "debug",
           "default",
           ...(input.canOfferReviewCommand ? (["review"] as const) : []),
           ...(input.canOfferForkCommand ? (["fork"] as const) : []),
@@ -421,6 +432,8 @@ export function getAvailableComposerSlashCommands(input: {
           // happens in the app rather than being forwarded to Claude's native /export.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
+          "debug",
+          "default",
           "feedback",
           "automation",
         ];

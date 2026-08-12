@@ -51,6 +51,26 @@ it.effect("defaults automation runtime mode to approval-required", () =>
   }),
 );
 
+it.effect("rejects debug interaction mode for automations", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decode(AutomationCreateInput, {
+        name: "Debug recurring failures",
+        projectId: "project-1",
+        prompt: "Investigate the latest failure.",
+        schedule: { type: "manual" },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: "debug",
+      }),
+    );
+
+    assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
 it.effect("decodes legacy automation definitions without completion policies", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(AutomationDefinition, {

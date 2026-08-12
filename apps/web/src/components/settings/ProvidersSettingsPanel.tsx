@@ -30,6 +30,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type MouseEvent, type ReactNode, useCallback, useMemo, useState } from "react";
 
 import type { AppSettings, AppSettingsBinding } from "~/appSettings";
+import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { CentralIcon } from "~/lib/central-icons";
 import { DownloadIcon, ExternalLinkIcon, Loader2Icon } from "~/lib/icons";
 import {
@@ -803,6 +804,7 @@ export function ProvidersSettingsPanel({
 }: ProvidersSettingsPanelProps) {
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const localProviderStatuses = useProviderStatusesForLocalConfig();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
     () => createProviderInstallDisclosureState(settings),
@@ -832,9 +834,8 @@ export function ProvidersSettingsPanel({
   );
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const providerStatusByProvider = useMemo(
-    () =>
-      new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
-    [serverConfigQuery.data?.providers],
+    () => new Map(localProviderStatuses.map((status) => [status.provider, status])),
+    [localProviderStatuses],
   );
   const availableProviderCount = orderedProviderVisibilityOptions.filter(
     (option) => providerStatusByProvider.get(option.provider)?.available === true,

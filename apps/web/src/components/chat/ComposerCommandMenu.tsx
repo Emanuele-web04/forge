@@ -72,6 +72,8 @@ function commandMenuTitle(
       return "Fast Mode";
     case "plan":
       return "Plan Mode";
+    case "debug":
+      return "Debug Mode";
     case "default":
       return "Default Mode";
     case "review":
@@ -453,6 +455,7 @@ const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   model: BrainIcon,
   fast: FastModeIcon,
   plan: ListTodoIcon,
+  debug: BugIcon,
   default: MessageCircleIcon,
   review: BugIcon,
   fork: GitForkIcon,

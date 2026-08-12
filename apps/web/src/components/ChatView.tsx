@@ -98,11 +98,13 @@ import {
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import {
+  hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
   serverQueryKeys,
   serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import {
   composerMentionPathNeedsQuoting,
@@ -311,6 +313,7 @@ import {
 import PlanSidebar from "./PlanSidebar";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import {
+  BugIcon,
   ChevronDownIcon,
   ComposerSendArrowIcon,
   LayoutSidebarIcon,
@@ -2226,13 +2229,16 @@ export default function ChatView({
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const localProviderStatuses = useProviderStatusesForLocalConfig();
   const preferredDraftProvider =
     selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
   const selectedProvider: ProviderKind =
     lockedProvider ??
     resolveAvailableProviderPreference({
       preferredProvider: preferredDraftProvider,
-      statuses: serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES,
+      statuses: hasReconciledServerProviderStatuses(queryClient)
+        ? localProviderStatuses
+        : EMPTY_PROVIDER_STATUSES,
       providerOrder: settings.providerOrder,
       hiddenProviders: settings.hiddenProviders,
     });
@@ -4998,7 +5004,7 @@ export default function ChatView({
             .catch((error) => {
               toastManager.add({
                 type: "error",
-                title: "Could not update plan mode",
+                title: "Could not update interaction mode",
                 description:
                   error instanceof Error ? error.message : "An unexpected error occurred.",
               });
@@ -5020,6 +5026,9 @@ export default function ChatView({
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
+  const resetInteractionMode = useCallback(() => {
+    handleInteractionModeChange("default");
+  }, [handleInteractionModeChange]);
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
@@ -5031,12 +5040,6 @@ export default function ChatView({
       return !open;
     });
   }, [activeTaskList?.turnId, sidebarProposedPlan?.turnId]);
-  const setPlanMode = useCallback(
-    (enabled: boolean) => {
-      handleInteractionModeChange(enabled ? "plan" : "default");
-    },
-    [handleInteractionModeChange],
-  );
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
       threadId: ThreadId;
@@ -10965,7 +10968,7 @@ export default function ChatView({
         fastModeEnabled={composerTraitSelection.fastModeEnabled}
         onAddAttachments={addComposerAttachments}
         onToggleFastMode={toggleFastMode}
-        onSetPlanMode={setPlanMode}
+        onInteractionModeChange={handleInteractionModeChange}
       />
       {!isVoiceRecording && !isVoiceTranscribing ? (
         <RuntimeUsageControls
@@ -11494,17 +11497,23 @@ export default function ChatView({
 
                       {!isVoiceRecording && !isVoiceTranscribing ? (
                         <>
-                          {interactionMode === "plan" ? (
+                          {interactionMode !== "default" ? (
                             <Button
                               variant="ghost"
                               className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
                               size="sm"
                               type="button"
-                              onClick={toggleInteractionMode}
-                              title="Plan mode — click to return to normal build mode"
+                              onClick={resetInteractionMode}
+                              title={`${interactionMode === "plan" ? "Plan" : "Debug"} mode — click to return to normal build mode`}
                             >
-                              <GoTasklist className="size-3.5" />
-                              <span className="sr-only sm:not-sr-only">Plan</span>
+                              {interactionMode === "plan" ? (
+                                <GoTasklist className="size-3.5" />
+                              ) : (
+                                <BugIcon className="size-3.5" />
+                              )}
+                              <span className="sr-only sm:not-sr-only">
+                                {interactionMode === "plan" ? "Plan" : "Debug"}
+                              </span>
                             </Button>
                           ) : null}
 

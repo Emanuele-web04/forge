@@ -469,15 +469,14 @@ function sessionApprovalAvailable(
 
 export function projectProviderRuntimeActivities(
   event: ProviderRuntimeEvent,
+  sessionSequence?: number,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  const maybeSequence = (() => {
-    const sequence = (event as ProviderRuntimeEvent & { sessionSequence?: number }).sessionSequence;
-    // Activity `sequence` is a NonNegativeInt. A fractional or negative runtime
-    // counter has to be dropped: carrying it invalidates the whole command.
-    return typeof sequence === "number" && Number.isInteger(sequence) && sequence >= 0
-      ? { sequence }
+  // Activity `sequence` is a NonNegativeInt. A fractional or negative runtime
+  // counter has to be dropped: carrying it invalidates the whole command.
+  const maybeSequence =
+    typeof sessionSequence === "number" && Number.isInteger(sessionSequence) && sessionSequence >= 0
+      ? { sequence: sessionSequence }
       : {};
-  })();
   // Codex and Antigravity only render completed reasoning items with a readable summary.
   // Empty starts/completions are private/encrypted reasoning boundaries, not
   // transcript rows. Waiting for the authoritative completion also avoids

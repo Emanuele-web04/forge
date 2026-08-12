@@ -242,6 +242,15 @@ export type MessagesTimelineRow =
       revertTurnCount?: number | undefined;
     }
   | {
+      // One slice of a completed assistant message whose streamed text was
+      // interleaved with tool rows; rendered compactly at its own start time.
+      kind: "message-segment";
+      id: string;
+      createdAt: string;
+      message: ChatMessage;
+      segmentIndex: number;
+    }
+  | {
       kind: "proposed-plan";
       id: string;
       createdAt: string;
@@ -575,6 +584,21 @@ export function deriveMessagesTimelineRows(input: {
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         proposedPlan: timelineEntry.proposedPlan,
+      });
+      continue;
+    }
+
+    if (timelineEntry.kind === "message-segment") {
+      // Interleaved slice of assistant text, already alternating with the tool
+      // rows in timeline order. Do not merge pending work into it: segment
+      // boundaries ARE tool interventions, so each segment stands alone.
+      flushPendingWorkGroup({ attachToPreviousAssistant: false });
+      nextRows.push({
+        kind: "message-segment",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        message: timelineEntry.message,
+        segmentIndex: timelineEntry.segmentIndex,
       });
       continue;
     }
@@ -1103,6 +1127,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount
       );
+    }
+
+    case "message-segment": {
+      const bm = b as typeof a;
+      return a.message === bm.message && a.segmentIndex === bm.segmentIndex;
     }
   }
 }

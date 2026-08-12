@@ -4278,6 +4278,23 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("normalizes Debug callers to the default automation interaction mode", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent", { interactionMode: "debug" }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: { name: "monitor children", prompt: "check the child threads", everyMinutes: 5 },
+      });
+
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.equal(harness.automationCreates[0]?.interactionMode, "default");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("creates standalone automations with the additive full schedule shape", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
