@@ -61,6 +61,7 @@ import {
   startSsoCallbackListener,
   type SsoCallbackListener,
 } from "./accountSsoCallback";
+import { nudgeAccountUsageReporter } from "./accountUsageReporterRegistry";
 
 const SIGNED_OUT: AccountStatus = { state: "signed-out" };
 
@@ -337,6 +338,10 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     // this line — the status `/me` below included — can fail without losing
     // the sign-in; `status()` recovers it from the file.
     context.onPersisted?.();
+
+    // A fresh session means the machine's EXISTING local history can sync:
+    // the reporter's first flush has no watermark and backfills everything.
+    nudgeAccountUsageReporter();
 
     // Not redundant on the common path: scoping's probe `/me` ran against the
     // org-less token and was refused, so this is the first `/me` the scoped

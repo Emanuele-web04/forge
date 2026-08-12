@@ -43,8 +43,20 @@ import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profile
 const DEFAULT_DEBOUNCE_MS = 5_000;
 /** After a failed push, nothing retries until activity arrives past this. */
 const DEFAULT_FAILURE_BACKOFF_MS = 60_000;
-/** First sync (no watermark) backfills this much recent history, not all of it. */
-const DEFAULT_BACKFILL_DAYS = 7;
+/**
+ * First sync (no watermark) backfills ALL local history: signing in on a
+ * machine with months of existing traces must bring the stats those traces
+ * already earned. The bound exists only as an injectable test seam; the
+ * default reaches back before any real installation.
+ */
+const DEFAULT_BACKFILL_DAYS = 20 * 365;
+
+/**
+ * Pause between pushes when a flush needs many of them (a first-sync
+ * backfill). The service budgets ~30 usage pushes a minute per client;
+ * pacing keeps a large history under it instead of burning retries on 429s.
+ */
+const MULTI_PUSH_PACE_MS = 2_100;
 /**
  * Recompute overlap behind the watermark. Buckets are absolute and upserted,
  * so re-deriving already-pushed minutes is free — the lap absorbs projection
@@ -677,6 +689,11 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
         const skillChunks = chunk(skills, USAGE_PUSH_MAX_BUCKETS);
         const pushCount = Math.max(modelChunks.length, skillChunks.length);
         for (let index = 0; index < pushCount; index += 1) {
+          // Paced under the service's per-client push budget; a single-push
+          // flush (the steady state) never waits.
+          if (index > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, MULTI_PUSH_PACE_MS));
+          }
           await push({
             environmentId,
             models: modelChunks[index] ?? [],

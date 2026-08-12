@@ -75,6 +75,7 @@ import {
   createAccountUsageReporter,
   isAccountUsageRelevantEventType,
 } from "./accountUsageReporter";
+import { registerAccountUsageReporterNudge } from "./accountUsageReporterRegistry";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -423,7 +424,13 @@ const makeServerProgram = (input: CliInput) =>
       baseDir: config.baseDir,
       ...(config.devUrl ? { devUrl: config.devUrl } : {}),
     });
-    yield* Effect.addFinalizer(() => Effect.sync(() => accountUsageReporter.stop()));
+    registerAccountUsageReporterNudge(() => accountUsageReporter.notifyActivity());
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        registerAccountUsageReporterNudge(undefined);
+        accountUsageReporter.stop();
+      }),
+    );
     yield* Effect.forkChild(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
         isAccountUsageRelevantEventType(event.type)
