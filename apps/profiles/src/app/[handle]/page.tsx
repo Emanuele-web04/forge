@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Heatmap } from "../../components/Heatmap";
+import { ActiveHours } from "../../components/ActiveHours";
 import { ModelSplit } from "../../components/ModelSplit";
-import { compactNumber, initial, memberSince } from "../../lib/format";
+import { compactNumber, formatStreak, initial, memberSince } from "../../lib/format";
 import { fetchPublicProfile } from "../../lib/publicProfile";
 
 type Params = { params: Promise<{ handle: string }> };
@@ -84,15 +85,17 @@ export default async function ProfilePage({ params }: Params) {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
+          gridTemplateColumns: "repeat(5, 1fr)",
           gap: 12,
         }}
       >
         {(
           [
-            ["Tokens", profile.lifetimeTokens],
-            ["Prompts", profile.lifetimePrompts],
-            ["Turns", profile.lifetimeTurns],
+            ["Lifetime tokens", compactNumber(profile.lifetimeTokens)],
+            ["Peak day", profile.peakDay ? compactNumber(profile.peakDay.tokens) : "—"],
+            ["Prompts", compactNumber(profile.lifetimePrompts)],
+            ["Current streak", formatStreak(profile.currentStreakDays)],
+            ["Longest streak", formatStreak(profile.longestStreakDays)],
           ] as const
         ).map(([label, value]) => (
           <div
@@ -104,7 +107,7 @@ export default async function ProfilePage({ params }: Params) {
               padding: "14px 16px",
             }}
           >
-            <div style={{ fontSize: 24, fontWeight: 650 }}>{compactNumber(value)}</div>
+            <div style={{ fontSize: 24, fontWeight: 650 }}>{value}</div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{label}</div>
           </div>
         ))}
@@ -112,6 +115,7 @@ export default async function ProfilePage({ params }: Params) {
 
       <Heatmap days={profile.heatmap} />
       <ModelSplit models={profile.models} lifetimeTokens={profile.lifetimeTokens} />
+      <ActiveHours hours={profile.hours} />
 
       <footer style={{ fontSize: 12, color: "var(--muted)" }}>
         Powered by{" "}

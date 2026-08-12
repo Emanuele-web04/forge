@@ -30,6 +30,10 @@ export type PublicProfile = {
   lifetimeTurns: number;
   models: PublicProfileModelUsage[];
   heatmap: PublicProfileHeatmapDay[];
+  peakDay: { day: string; tokens: number } | null;
+  hours: { hour: number; prompts: number }[];
+  currentStreakDays: number;
+  longestStreakDays: number;
 };
 
 /**

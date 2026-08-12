@@ -76,6 +76,9 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
         handle,
         displayName: name.trim(),
         avatarColor,
+        // Stored so the public profile buckets days/hours in the owner's
+        // timezone from the very first save.
+        utcOffsetMinutes: -new Date().getTimezoneOffset(),
         ...(workspaceName.trim().length > 0 && workspaceName.trim() !== me.organization.name
           ? { workspaceName: workspaceName.trim() }
           : {}),

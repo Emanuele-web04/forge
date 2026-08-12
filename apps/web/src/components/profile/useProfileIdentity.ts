@@ -53,6 +53,9 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
         displayName: next.name.trim().length > 0 ? next.name.trim() : name,
         avatarColor: next.avatarColor,
         ...(next.isPublic !== undefined ? { public: next.isPublic } : {}),
+        // Every save refreshes the stored offset so the PUBLIC profile
+        // buckets days/hours in the owner's current timezone.
+        utcOffsetMinutes: -new Date().getTimezoneOffset(),
       });
     }
     setName(next.name);

@@ -18,3 +18,9 @@ export function initial(name: string): string {
   const first = [...name.trim()][0];
   return first ? first.toUpperCase() : "?";
 }
+
+/** "12 days" / "1 day" / em dash before any activity. */
+export function formatStreak(days: number): string {
+  if (days <= 0) return "\u2014";
+  return days === 1 ? "1 day" : `${days} days`;
+}
