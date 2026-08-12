@@ -1,10 +1,6 @@
-import { assert, describe, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 
-import {
-  type PtyTerminal,
-  waitForFirstPtyData,
-  waitForSuccessfulPtyExit,
-} from "./node-pty-smoke.ts";
+import { type PtyTerminal, waitForPtyData, waitForSuccessfulPtyExit } from "./node-pty-smoke.ts";
 
 class FakePtyTerminal implements PtyTerminal {
   private dataListener: (chunk: string) => void = () => {};
@@ -61,19 +57,23 @@ describe("waitForSuccessfulPtyExit", () => {
   });
 });
 
-describe("waitForFirstPtyData", () => {
-  it("does not signal readiness until the PTY emits data", async () => {
+describe("waitForPtyData", () => {
+  it("resolves with the first non-empty PTY output", async () => {
     const terminal = new FakePtyTerminal();
-    let ready = false;
-    const result = waitForFirstPtyData({ terminal, timeoutMs: 1_000 }).then(() => {
-      ready = true;
-    });
+    const result = waitForPtyData({ terminal, timeoutMs: 1_000 });
 
-    await Promise.resolve();
-    assert.isFalse(ready);
-
+    terminal.emitData("");
     terminal.emitData("ready");
-    await result;
-    assert.isTrue(ready);
+
+    assert.equal(await result, "ready");
+  });
+
+  it("rejects when the PTY exits before producing output", async () => {
+    const terminal = new FakePtyTerminal();
+    const result = waitForPtyData({ terminal, timeoutMs: 1_000 });
+
+    terminal.emitExit(1);
+
+    await expect(result).rejects.toThrow("PTY process exited with code 1");
   });
 });
