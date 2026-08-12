@@ -4696,7 +4696,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               callID: "task-call-1",
               state: {
                 status: "running",
-                title: "Find changelog implementation",
+                title: "\nFind changelog implementation\n",
                 input: {
                   description: "Find changelog implementation",
                   prompt: "Explore changelog files.",

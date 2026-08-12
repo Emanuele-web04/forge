@@ -2459,7 +2459,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               rememberRelatedOpenCodeSession(context, part);
               const itemType = toToolLifecycleItemType(part.tool);
               const title =
-                part.state.status === "running" ? (part.state.title ?? part.tool) : part.tool;
+                part.state.status === "running" ? part.state.title?.trim() || part.tool : part.tool;
               const detail = detailFromToolPart(part);
               const payload = {
                 itemType,
