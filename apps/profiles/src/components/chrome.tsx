@@ -3,6 +3,7 @@
 
 import type { ReactNode } from "react";
 import { SynaraLogo } from "@synara/profile-ui/logo";
+import { ThemeToggle } from "./ThemeToggle";
 
 export function SiteNav() {
   return (
@@ -11,12 +12,15 @@ export function SiteNav() {
         <SynaraLogo className="h-[22px] w-auto" aria-label="Synara" />
         <span className="font-display text-lg leading-none">Synara</span>
       </a>
-      <a
-        href="https://trysynara.com"
-        className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        Get Synara
-      </a>
+      <div className="flex items-center gap-2">
+        <ThemeToggle />
+        <a
+          href="https://trysynara.com/install"
+          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Get Synara
+        </a>
+      </div>
     </nav>
   );
 }
