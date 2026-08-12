@@ -131,6 +131,11 @@ beforeAll(() => {
       classList,
       offsetHeight: 0,
     },
+    // flushStorageBeforePageHide registers visibilitychange at module load of
+    // the MessagesTimeline import chain (via composerDraftStore).
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    visibilityState: "visible",
   });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
