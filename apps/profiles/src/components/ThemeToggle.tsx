@@ -1,12 +1,12 @@
 "use client";
 
-// The light/dark toggle, mirroring the marketing site's: writes the shared
-// `dpcode-theme` localStorage key and flips `.dark` on <html>. The only
-// client component this app has — everything else stays SSR.
+// The light/dark toggle: writes the `synara-theme` localStorage key and
+// flips `.dark` on <html>. The only client component this app has —
+// everything else stays SSR.
 
 import { useEffect, useState } from "react";
 
-const THEME_KEY = "dpcode-theme";
+const THEME_KEY = "synara-theme";
 
 function isDarkNow(): boolean {
   return document.documentElement.classList.contains("dark");

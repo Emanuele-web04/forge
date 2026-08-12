@@ -4,11 +4,11 @@
    (lg:grid-cols-5, dark:…) are never generated and layouts silently degrade. */
 @source "../../../../packages/profile-ui/src";
 
-/* Class-based dark mode, matching the marketing site: an inline theme-init
-   script applies `.dark` from the shared `dpcode-theme` localStorage key
-   (falling back to the system preference), and — because the /@handle rewrite
-   serves this app on the same trysynara.com origin — a theme chosen on the
-   marketing site carries over here and vice versa. */
+/* Class-based dark mode: an inline theme-init script applies `.dark` from
+   the `synara-theme` localStorage key (falling back to the system
+   preference). Because the /@handle rewrite serves this app on the same
+   trysynara.com origin as the marketing site, the theme carries across
+   surfaces once the marketing site persists under the same key. */
 @custom-variant dark (&:is(.dark, .dark *));
 
 @theme inline {
