@@ -73,14 +73,23 @@ export function flushStorageBeforePageHide(
     document: typeof document !== "undefined" ? document : undefined,
   },
 ): void {
-  env.window?.addEventListener("beforeunload", flush);
-  env.window?.addEventListener("pagehide", flush);
+  // Guard each capability separately: SSR-style test environments stub partial
+  // globals (e.g. a `document` with only `documentElement`), and this runs at
+  // module scope in store files — a missing listener API must degrade to a
+  // no-op, never crash module evaluation.
+  const win = env.window;
+  if (typeof win?.addEventListener === "function") {
+    win.addEventListener("beforeunload", flush);
+    win.addEventListener("pagehide", flush);
+  }
   const doc = env.document;
-  doc?.addEventListener("visibilitychange", () => {
-    if (doc.visibilityState === "hidden") {
-      flush();
-    }
-  });
+  if (typeof doc?.addEventListener === "function") {
+    doc.addEventListener("visibilitychange", () => {
+      if (doc.visibilityState === "hidden") {
+        flush();
+      }
+    });
+  }
 }
 
 export function createDeferredPersistStorage<State, Persisted = State>(options: {
