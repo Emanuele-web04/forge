@@ -1734,7 +1734,9 @@ const make = Effect.gen(function* () {
 
           const messageIds = yield* Cache.getOption(turnMessageIdsByTurnKey, key);
           if (Option.isSome(messageIds)) {
-            yield* Effect.forEach(messageIds.value, clearAssistantMessageState);
+            yield* Effect.forEach(messageIds.value, (messageId) =>
+              clearAssistantMessageState(threadId, messageId),
+            );
           }
 
           yield* Cache.invalidate(turnMessageIdsByTurnKey, key);
@@ -2731,12 +2733,9 @@ const make = Effect.gen(function* () {
             : event.type === "item.updated" && toolOutputKey
               ? withBufferedToolOutputData(event, yield* getBufferedToolOutput(toolOutputKey))
               : event;
-      const sequencedActivityEvent = {
-        ...activityEvent,
-        sessionSequence: runtimeSequence,
-      } as ProviderRuntimeEvent;
-      yield* Effect.forEach(projectProviderRuntimeActivities(sequencedActivityEvent), (activity) =>
-        dispatchActivityUpdate(sequencedActivityEvent, thread.id, activity),
+      yield* Effect.forEach(
+        projectProviderRuntimeActivities(activityEvent, runtimeSequence),
+        (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
       );
 
       if (isTerminalTurnEvent) {
