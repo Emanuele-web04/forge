@@ -467,7 +467,8 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.detail = detail;
     }
   }
-  const outputDetail = summarizeToolPayloadOutput(payload);
+  const outputDetail =
+    activity.kind === "provider.event.unmapped" ? null : summarizeToolPayloadOutput(payload);
   if (outputDetail && (!entry.detail || toolStatus === "failed")) {
     entry.detail = outputDetail;
   }

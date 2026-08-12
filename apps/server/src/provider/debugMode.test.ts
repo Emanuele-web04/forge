@@ -20,7 +20,7 @@ describe("provider Debug mode prompt", () => {
     const twice = withProviderDebugModePrompt({ text: once, interactionMode: "debug" });
 
     expect(once).toContain("observe -> reproduce -> investigate -> fix -> verify");
-    expect(once).toContain('"Reproduzi", "Não consegui reproduzir", and "Cancelar"');
+    expect(once).toContain('"Reproduced", "Could not reproduce", and "Cancel"');
     expect(once).toContain("send the same instructions as normal text");
     expect(once.split(PROVIDER_DEBUG_MODE_PROMPT_PREFIX)).toHaveLength(2);
     expect(twice).toBe(once);

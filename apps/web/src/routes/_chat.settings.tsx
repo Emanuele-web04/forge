@@ -181,9 +181,8 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
-  const shouldShowFontSmoothing = isMacPlatform(
-    typeof navigator === "undefined" ? "" : navigator.platform,
-  );
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const shouldShowFontSmoothing = isMacPlatform(platform);
   const visibleTerminalFontFamilySuggestions = useMemo(() => {
     const query = settings.terminalFontFamily.trim().toLowerCase();
     if (!query) return TERMINAL_FONT_FAMILY_SUGGESTIONS;
@@ -657,6 +656,7 @@ function SettingsRouteView() {
             }
             control={
               <AppIconPicker
+                platform={platform}
                 value={settings.desktopAppIcon}
                 onValueChange={(desktopAppIcon) => updateSettings({ desktopAppIcon })}
               />
