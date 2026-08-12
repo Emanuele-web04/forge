@@ -207,7 +207,6 @@ describe("deriveWorkLogEntries", () => {
         kind: "turn.tasks.updated",
         summary: "Tasks updated",
         tone: "info",
-        turnId: null,
         payload: { tasks: [{ task: "First turn work", status: "completed" }] },
       }),
       makeActivity({
@@ -216,7 +215,6 @@ describe("deriveWorkLogEntries", () => {
         kind: "turn.tasks.updated",
         summary: "Tasks updated",
         tone: "info",
-        turnId: null,
         payload: { tasks: [{ task: "Later turn work", status: "inProgress" }] },
       }),
     ];
