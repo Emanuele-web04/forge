@@ -67,6 +67,23 @@ export const profiles = pgTable("profiles", {
   // The owner's UTC offset at last profile save, so public day/hour
   // bucketing shows the owner's rhythm rather than the viewer's clock.
   utcOffsetMinutes: integer("utc_offset_minutes").notNull().default(0),
+  // Where the avatar comes from. 'sso' mirrors the identity provider's
+  // picture, 'uploaded' serves the object behind avatar_key, 'placeholder'
+  // shows no image at all (the client renders initials on avatar_color).
+  // 'uploaded' is only ever written by the upload route — PUT /profile may
+  // not claim it, or a caller could point at a key no upload created.
+  avatarSource: text("avatar_source", { enum: ["sso", "uploaded", "placeholder"] })
+    .notNull()
+    .default("sso"),
+  // Object key of the uploaded avatar in S3-compatible storage, or NULL when
+  // nothing was uploaded. Content-addressed (hash of the bytes), so replacing
+  // an avatar writes a new key and best-effort deletes this one.
+  avatarKey: text("avatar_key"),
+  // Write-behind cache of the identity provider's avatar URL, refreshed on
+  // /me whenever it drifts. Exists so the PUBLIC profile route can serve an
+  // 'sso' avatar without ever calling the identity provider — the public
+  // read must stay provider-free.
+  avatarSsoUrl: text("avatar_sso_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

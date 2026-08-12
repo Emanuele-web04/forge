@@ -1,22 +1,25 @@
 import type { AccountErrorBody } from "@synara/contracts";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type pg from "pg";
+import { createAvatarStorage } from "./avatarStorage";
 import type { ApiConfig } from "./config";
 import { createDb } from "./db";
 import { createIdentityAdapters } from "./identity";
 import type { IdentityAdapters } from "./identity/interfaces";
-import { createV1Routes } from "./routes/v1";
+import { AVATAR_MAX_BYTES, createV1Routes } from "./routes/v1";
 
 /**
- * The largest request body any /api/v1 route accepts. Every payload this API
- * takes is small structured JSON — an email address, a token, a profile, a
- * host record whose contract-level field bounds sum to a few tens of KB — so
- * 64 KB is comfortably above any honest request while stopping an
+ * The largest request body any JSON /api/v1 route accepts. Every JSON payload
+ * this API takes is small structured data — an email address, a token, a
+ * profile, a host record whose contract-level field bounds sum to a few tens
+ * of KB — so 64 KB is comfortably above any honest request while stopping an
  * unauthenticated caller from making `c.req.json()` buffer megabytes before
  * schema validation ever runs. The middleware rejects both an oversized
  * `Content-Length` up front and a streaming body the moment it crosses the
- * limit.
+ * limit. The one binary route — the avatar upload — gets its own, larger
+ * limit below, aligned with the route's own byte cap.
  */
 export const API_MAX_BODY_BYTES = 64 * 1024;
 
@@ -31,18 +34,25 @@ export async function createApp(
   // Before the routes, so no handler ever parses an oversized body. 413 in
   // the documented error shape: `validation_failed` because the cure is the
   // caller's (shrink the request), and the client already renders that code.
+  const oversizedBody = (c: Context) => {
+    const body: AccountErrorBody = {
+      error: "validation_failed",
+      message: "Request body is too large",
+    };
+    return c.json(body, 413);
+  };
+  // The avatar upload is the one binary route and legitimately exceeds the
+  // JSON cap. Its transport limit sits ABOVE the route's own AVATAR_MAX_BYTES
+  // so the documented cap answers as the route's 400 (with the actionable
+  // message), and this middleware only stops grossly oversized streams.
   app.use(
-    "/api/*",
-    bodyLimit({
-      maxSize: API_MAX_BODY_BYTES,
-      onError: (c) => {
-        const body: AccountErrorBody = {
-          error: "validation_failed",
-          message: "Request body is too large",
-        };
-        return c.json(body, 413);
-      },
-    }),
+    "/api/v1/profile/avatar",
+    bodyLimit({ maxSize: AVATAR_MAX_BYTES + API_MAX_BODY_BYTES, onError: oversizedBody }),
+  );
+  app.use("/api/*", async (c, next) =>
+    c.req.path === "/api/v1/profile/avatar"
+      ? next()
+      : bodyLimit({ maxSize: API_MAX_BODY_BYTES, onError: oversizedBody })(c, next),
   );
 
   app.route(
@@ -53,6 +63,7 @@ export async function createApp(
       deviceCredentials: identity.deviceCredentials,
       environments: identity.environments,
       db,
+      ...(config.avatarStorage ? { avatarStorage: createAvatarStorage(config.avatarStorage) } : {}),
       trustedProxyHops: config.trustedProxyHops,
     }),
   );

@@ -137,6 +137,13 @@ export const PublicProfile = Schema.Struct({
   handle: Schema.String,
   displayName: Schema.String,
   avatarColor: Schema.String,
+  /**
+   * The avatar image URL, or null when the owner chose a placeholder (or has
+   * an sso avatar the service has not seen yet). Always resolvable without an
+   * identity-provider call: sso avatars are served from a URL cached at the
+   * owner's own /me reads, because the public route must stay provider-free.
+   */
+  avatarUrl: Schema.NullOr(Schema.String),
   /** When the profile was created, ISO-8601 — "member since". */
   createdAt: Schema.String,
   lifetimeTokens: NonNegativeInt,

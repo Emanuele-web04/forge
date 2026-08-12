@@ -40,6 +40,8 @@ import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { createHash } from "node:crypto";
+import type { AvatarStorage } from "../avatarStorage";
 import {
   clientIp,
   DEFAULT_TRUSTED_PROXY_HOPS,
@@ -121,6 +123,22 @@ export const USAGE_PUSH_RATE_LIMIT_PER_MINUTE = 30;
  */
 export const PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE = 60;
 
+/**
+ * Byte cap on an uploaded avatar. Avatars render at most ~128px in every
+ * surface Synara has, and a well-encoded 512×512 WebP — already 4× the
+ * largest display size — lands well under 100KB; 300KB is triple that
+ * headroom while keeping the write amplification of a hostile client's
+ * repeated uploads bounded.
+ */
+export const AVATAR_MAX_BYTES = 300 * 1024;
+
+/** The image types an avatar upload may carry, mapped to the stored extension. */
+const AVATAR_CONTENT_TYPES: Record<string, string> = {
+  "image/webp": "webp",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+};
+
 type ProfileRow = typeof profiles.$inferSelect;
 
 function errorResponse(
@@ -139,12 +157,14 @@ function errorResponse(
  * failed the check here would be a schema drift no read path can repair, and
  * refusing to serve someone their own profile is the worse answer.
  */
-function toAccountProfile(row: ProfileRow): AccountProfile {
+function toAccountProfile(row: ProfileRow, avatarUrl: string | null): AccountProfile {
   return {
     handle: row.handle as AccountProfileHandle,
     displayName: row.displayName,
     avatarColor: row.avatarColor as AccountProfileAvatarColor,
     public: row.public,
+    avatarUrl,
+    avatarSource: row.avatarSource,
   };
 }
 
@@ -196,12 +216,19 @@ export function createV1Routes(deps: {
   environments: EnvironmentRegistry;
   db: NodePgDatabase<typeof schema>;
   /**
+   * Object storage for uploaded avatars, injected like the identity adapters
+   * so tests can pass a fake. Undefined when the deployment has no
+   * S3-compatible storage configured — the avatar upload routes answer 503
+   * and every other route is unaffected.
+   */
+  avatarStorage?: AvatarStorage;
+  /**
    * How many proxies in front of this service append to `x-forwarded-for`;
    * see clientIp.ts. Defaults to the deployed shape (Railway, one hop).
    */
   trustedProxyHops?: number;
 }): Hono {
-  const { verifier, grants, deviceCredentials, environments, db } = deps;
+  const { verifier, grants, deviceCredentials, environments, db, avatarStorage } = deps;
   const trustedProxyHops = deps.trustedProxyHops ?? DEFAULT_TRUSTED_PROXY_HOPS;
   const v1 = new Hono();
 
@@ -372,32 +399,66 @@ export function createV1Routes(deps: {
     };
   }
 
-  /**
-   * The caller's profile, or null when they have not onboarded. Read on every
-   * `/me` and after every profile write, so it is one indexed primary-key
-   * lookup by design.
-   */
-  async function readProfile(userId: string): Promise<AccountProfile | null> {
+  /** The caller's profile row, or null when they have not onboarded. */
+  async function readProfileRow(userId: string): Promise<ProfileRow | null> {
     const [row] = await db.select().from(profiles).where(eq(profiles.userId, userId)).limit(1);
-    return row ? toAccountProfile(row) : null;
+    return row ?? null;
   }
 
   /**
-   * The `/me` body. Built in one place because three routes answer with it —
-   * `/me`, the profile write, and the workspace rename — and a client that saw
-   * a different shape from any of them would have to special-case it.
+   * The one avatar resolution both the owner's `/me` and the public profile
+   * use, so the two reads can never disagree about whose face is on a
+   * profile. `ssoUrl` is whatever sso-sourced URL the caller has — the live
+   * identity-provider value on `/me`, the cached `avatar_sso_url` column on
+   * the public route, which must stay provider-free.
+   */
+  function resolvedAvatarUrl(row: ProfileRow, ssoUrl: string | null | undefined): string | null {
+    switch (row.avatarSource) {
+      case "uploaded":
+        // A missing key or unconfigured storage cannot serve an image; null
+        // (placeholder rendering) beats a URL that 404s.
+        return row.avatarKey && avatarStorage ? avatarStorage.publicUrl(row.avatarKey) : null;
+      case "sso":
+        return ssoUrl ?? null;
+      case "placeholder":
+        return null;
+    }
+  }
+
+  /**
+   * The `/me` body. Built in one place because several routes answer with it
+   * — `/me`, the profile and avatar writes, and the workspace rename — and a
+   * client that saw a different shape from any of them would have to
+   * special-case it.
+   *
+   * Also where the identity provider's avatar URL is cached write-behind
+   * into `avatar_sso_url`: `/me` is the only read that sees both the profile
+   * row and the live provider user, and the public route serves sso avatars
+   * from that cache precisely so it never has to call the provider itself.
    */
   async function accountMe(
     user: IdentityUser,
     organization: OrganizationSummary,
   ): Promise<AccountMe> {
+    const row = await readProfileRow(user.id);
+    if (row && row.avatarSource === "sso" && row.avatarSsoUrl !== (user.avatarUrl ?? null)) {
+      // Cheap and best-effort by design: the response already carries the
+      // live URL, so a failed cache write only delays the public route.
+      await db
+        .update(profiles)
+        .set({ avatarSsoUrl: user.avatarUrl ?? null })
+        .where(eq(profiles.userId, user.id))
+        .catch((error: unknown) => {
+          console.error("[api] avatar sso-url cache write failed:", error);
+        });
+    }
     return {
       id: user.id,
       name: user.name ?? user.email,
       email: user.email,
       ...(user.avatarUrl ? { image: user.avatarUrl } : {}),
       organization,
-      profile: await readProfile(user.id),
+      profile: row ? toAccountProfile(row, resolvedAvatarUrl(row, user.avatarUrl)) : null,
     };
   }
 
@@ -467,7 +528,7 @@ export function createV1Routes(deps: {
     const user = await loadSessionUser(c, session.userId);
     if (user instanceof Response) return user;
 
-    const existing = await readProfile(session.userId);
+    const existing = await readProfileRow(session.userId);
     if (existing && existing.handle !== parsed.handle) {
       return errorResponse(
         c,
@@ -493,6 +554,9 @@ export function createV1Routes(deps: {
           // first write — the safe default either way.
           ...(parsed.public !== undefined ? { public: parsed.public } : {}),
           ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
+          // Only 'sso'/'placeholder' can arrive here (the contract excludes
+          // 'uploaded'); the upload route is the sole writer of that state.
+          ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
         })
         // Only the editable columns are updated. `handle` is excluded rather
         // than written back identically: the guard above already refused a
@@ -505,6 +569,7 @@ export function createV1Routes(deps: {
             avatarColor: parsed.avatarColor,
             ...(parsed.public !== undefined ? { public: parsed.public } : {}),
             ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
+            ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
             updatedAt: new Date(),
           },
         });
@@ -515,6 +580,128 @@ export function createV1Routes(deps: {
         return errorResponse(c, 409, "handle_taken", "That handle is already taken");
       }
       throw error;
+    }
+
+    return c.json(await accountMe(user, session.organization));
+  });
+
+  /**
+   * Uploads a profile avatar: the raw image bytes as the request body, typed
+   * by Content-Type. The key is content-addressed (a hash of the bytes), so
+   * the object is immutable, a re-upload of the same image is a no-op write,
+   * and a changed image is a new key — which is what lets the stored object
+   * carry a year-long immutable cache lifetime.
+   *
+   * The route is the ONLY writer of `avatar_source = 'uploaded'`: it is the
+   * one path that guarantees a stored object backs the claim.
+   */
+  v1.put("/profile/avatar", async (c) => {
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
+
+    if (!avatarStorage) {
+      return errorResponse(
+        c,
+        503,
+        "internal_error",
+        "Avatar storage is not configured on this deployment — S3-compatible object storage (the S3_* environment variables) is required for avatar uploads",
+      );
+    }
+
+    const contentType = c.req.header("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+    const extension = AVATAR_CONTENT_TYPES[contentType];
+    if (!extension) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        "Avatars must be image/webp, image/jpeg, or image/png",
+      );
+    }
+
+    const body = new Uint8Array(await c.req.arrayBuffer());
+    if (body.byteLength === 0) {
+      return errorResponse(c, 400, "validation_failed", "The avatar image body is empty");
+    }
+    if (body.byteLength > AVATAR_MAX_BYTES) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        `Avatars are limited to ${Math.floor(AVATAR_MAX_BYTES / 1024)}KB — resize or re-encode the image`,
+      );
+    }
+
+    const user = await loadSessionUser(c, session.userId);
+    if (user instanceof Response) return user;
+
+    // The avatar hangs off the profile row; without one there is nothing to
+    // attach it to, and onboarding (PUT /profile) is the cure.
+    const existing = await readProfileRow(session.userId);
+    if (!existing) {
+      return errorResponse(
+        c,
+        404,
+        "profile_not_found",
+        "Create your profile before uploading an avatar",
+      );
+    }
+
+    // 16 hex chars ≈ 64 bits of the digest: enough that a collision within
+    // one user's uploads is not a real event, short enough to keep keys tidy.
+    const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
+    const key = `avatars/${session.userId}/${digest}.${extension}`;
+
+    try {
+      await avatarStorage.put(key, body, contentType);
+    } catch (error) {
+      console.error("[api] avatar upload failed:", error);
+      return errorResponse(c, 502, "internal_error", "Storing the avatar failed — try again");
+    }
+
+    await db
+      .update(profiles)
+      .set({ avatarSource: "uploaded", avatarKey: key, updatedAt: new Date() })
+      .where(eq(profiles.userId, session.userId));
+
+    // Best-effort cleanup of the replaced object, after the new state is
+    // durable: a failed delete costs cents of storage, a failed upload must
+    // never have cost the user their previous avatar.
+    if (existing.avatarKey && existing.avatarKey !== key) {
+      await avatarStorage.delete(existing.avatarKey).catch((error: unknown) => {
+        console.error("[api] previous avatar delete failed:", error);
+      });
+    }
+
+    return c.json(await accountMe(user, session.organization));
+  });
+
+  /**
+   * Removes the uploaded avatar (best-effort in storage, authoritative in the
+   * database) and falls back to the identity provider's picture — the same
+   * default a brand-new profile has.
+   */
+  v1.delete("/profile/avatar", async (c) => {
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
+
+    const user = await loadSessionUser(c, session.userId);
+    if (user instanceof Response) return user;
+
+    const existing = await readProfileRow(session.userId);
+    if (!existing) {
+      return errorResponse(c, 404, "profile_not_found", "You have no profile yet");
+    }
+
+    await db
+      .update(profiles)
+      .set({ avatarSource: "sso", avatarKey: null, updatedAt: new Date() })
+      .where(eq(profiles.userId, session.userId));
+
+    if (existing.avatarKey && avatarStorage) {
+      await avatarStorage.delete(existing.avatarKey).catch((error: unknown) => {
+        console.error("[api] avatar delete failed:", error);
+      });
     }
 
     return c.json(await accountMe(user, session.organization));
@@ -1047,6 +1234,9 @@ export function createV1Routes(deps: {
       handle: row.handle,
       displayName: row.displayName,
       avatarColor: row.avatarColor,
+      // Provider-free by construction: an sso avatar is served from the URL
+      // cached at the owner's /me reads, never from a live provider call.
+      avatarUrl: resolvedAvatarUrl(row, row.avatarSsoUrl),
       createdAt: row.createdAt.toISOString(),
       lifetimeTokens: modelRows.reduce((total, entry) => total + entry.tokens, 0),
       lifetimePrompts: modelRows.reduce((total, entry) => total + entry.prompts, 0),

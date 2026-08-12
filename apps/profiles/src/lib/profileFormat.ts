@@ -10,7 +10,6 @@ export function memberSince(createdAt: string): string {
   return date.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-
 /** "12 days" / "1 day" via profile-ui's formatDays; em dash before any activity. */
 export function formatStreak(days: number): string {
   return days <= 0 ? "—" : formatDays(days);

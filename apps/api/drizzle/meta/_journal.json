@@ -50,6 +50,13 @@
       "when": 1786531897508,
       "tag": "0006_profile_utc_offset",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786541443592,
+      "tag": "0007_profile_avatars",
+      "breakpoints": true
     }
   ]
 }

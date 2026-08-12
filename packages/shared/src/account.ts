@@ -190,6 +190,15 @@ export interface AccountClient {
   me(token: string): Promise<AccountMe>;
   /** Upserts the caller's profile. Rejects a changed handle; V1 handles are immutable. */
   updateProfile(token: string, request: UpdateProfileRequest): Promise<AccountMe>;
+  /**
+   * Uploads a profile avatar image (webp/jpeg/png, ≤300KB on the service
+   * side) and switches the avatar source to "uploaded". Rejects with a 503
+   * AccountApiError when the deployment has no S3-compatible avatar storage
+   * configured, and 404 `profile_not_found` before onboarding.
+   */
+  uploadAvatar(token: string, bytes: Uint8Array, contentType: string): Promise<AccountMe>;
+  /** Removes the uploaded avatar and reverts the source to "sso". */
+  deleteAvatar(token: string): Promise<AccountMe>;
   /** Renames the workspace — the WorkOS organization the token is scoped to. */
   updateOrganization(token: string, request: UpdateOrganizationRequest): Promise<AccountMe>;
   listHosts(token: string): Promise<ListHostsResponse>;
@@ -423,6 +432,28 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           headers: { ...authHeaders(token), "content-type": "application/json" },
           body: JSON.stringify(request),
         },
+        AccountMeSchema,
+      );
+    },
+
+    async uploadAvatar(token, bytes, contentType) {
+      return requestJson(
+        "/api/v1/profile/avatar",
+        {
+          method: "PUT",
+          headers: { ...authHeaders(token), "content-type": contentType },
+          // A plain ArrayBuffer-backed copy: fetch implementations disagree
+          // about Uint8Array views over SharedArrayBuffer or offset views.
+          body: bytes.slice().buffer as ArrayBuffer,
+        },
+        AccountMeSchema,
+      );
+    },
+
+    async deleteAvatar(token) {
+      return requestJson(
+        "/api/v1/profile/avatar",
+        { method: "DELETE", headers: authHeaders(token) },
         AccountMeSchema,
       );
     },

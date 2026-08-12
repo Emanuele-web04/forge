@@ -94,6 +94,25 @@ export const AccountProfileAvatarColor = Schema.String.check(Schema.isPattern(/^
 export type AccountProfileAvatarColor = typeof AccountProfileAvatarColor.Type;
 
 /**
+ * Where a profile's avatar image comes from:
+ *
+ *   sso         — mirror the identity provider's picture (the default).
+ *   uploaded    — serve the image the owner uploaded via PUT /profile/avatar.
+ *   placeholder — no image at all; clients render initials on `avatarColor`.
+ */
+export const AccountProfileAvatarSource = Schema.Literals(["sso", "uploaded", "placeholder"]);
+export type AccountProfileAvatarSource = typeof AccountProfileAvatarSource.Type;
+
+/**
+ * The avatar sources PUT /profile may set. Deliberately excludes "uploaded":
+ * only the upload route may claim it, because it is the only writer that
+ * guarantees a stored object actually backs the claim — a profile write that
+ * could say "uploaded" would dangle a key nobody wrote.
+ */
+export const UpdatableAvatarSource = Schema.Literals(["sso", "placeholder"]);
+export type UpdatableAvatarSource = typeof UpdatableAvatarSource.Type;
+
+/**
  * The part of a user's identity Synara owns, as opposed to what WorkOS knows.
  * Its existence is what "onboarding is finished" means — there is no separate
  * flag, so a profile row and a completed onboarding are the same fact.
@@ -109,6 +128,15 @@ export const AccountProfile = Schema.Struct({
    * private, which is also the default for every new profile.
    */
   public: Schema.optional(Schema.Boolean),
+  /**
+   * The resolved avatar image URL — an uploaded object's public URL, the
+   * identity provider's picture, or null for a placeholder (and for an sso
+   * source when the provider has no picture). Optional for wire compat with
+   * pre-avatar servers; absent reads the same as null.
+   */
+  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Where the avatar comes from. Optional for wire compat; absent means "sso". */
+  avatarSource: Schema.optional(AccountProfileAvatarSource),
 });
 export type AccountProfile = typeof AccountProfile.Type;
 
@@ -146,6 +174,14 @@ export const UpdateProfileRequest = Schema.Struct({
    * shows them. Refreshed on every profile save; optional for old clients.
    */
   utcOffsetMinutes: Schema.optional(Schema.Int),
+  /**
+   * Switches the avatar to the identity provider's picture or a placeholder.
+   * "uploaded" is deliberately not accepted here — see
+   * {@link UpdatableAvatarSource}; uploads go through PUT /profile/avatar,
+   * which is what sets the source to "uploaded". Absent leaves the source
+   * alone.
+   */
+  avatarSource: Schema.optional(UpdatableAvatarSource),
 });
 export type UpdateProfileRequest = typeof UpdateProfileRequest.Type;
 

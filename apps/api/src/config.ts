@@ -1,9 +1,32 @@
 import { resolveTrustedProxyHops } from "./clientIp";
 
+/**
+ * Where uploaded profile avatars live: any S3-compatible object store
+ * (Cloudflare R2, MinIO, AWS S3, …), addressed path-style through a single
+ * endpoint. All five variables are optional as a set — when any is missing
+ * the avatar upload routes answer 503 and everything else runs unaffected,
+ * so a deployment without object storage is a smaller deployment, not a
+ * broken one.
+ */
+export type AvatarStorageConfig = {
+  /** S3 endpoint origin, e.g. https://<account>.r2.cloudflarestorage.com — no trailing slash. */
+  endpoint: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  /** Public origin the bucket is served from (CDN/custom domain), no trailing slash. */
+  publicBaseUrl: string;
+};
+
 export type ApiConfigBase = {
   databaseUrl: string;
   baseUrl: string;
   port: number;
+  /**
+   * S3-compatible avatar storage, or undefined when the deployment has none
+   * configured (uploads answer 503; everything else works).
+   */
+  avatarStorage?: AvatarStorageConfig;
   /**
    * How many proxies in front of this service append to `x-forwarded-for`,
    * from TRUSTED_PROXY_HOPS. The rate limiter keys on the address the
@@ -121,6 +144,41 @@ function requireVars(env: Env, names: readonly string[]): void {
   }
 }
 
+/** The five S3_* variables, valid only as a complete set. */
+const AVATAR_STORAGE_VARS = [
+  "S3_ENDPOINT",
+  "S3_BUCKET",
+  "S3_ACCESS_KEY_ID",
+  "S3_SECRET_ACCESS_KEY",
+  "S3_PUBLIC_BASE_URL",
+] as const;
+
+/**
+ * The avatar-storage config, or undefined when none of the S3_* variables are
+ * set. A PARTIAL set is refused loudly rather than treated as absent: an
+ * operator who set four of five variables was configuring storage, and a
+ * silent 503 in production would hide the typo indefinitely.
+ */
+export function loadAvatarStorageConfig(env: Env): AvatarStorageConfig | undefined {
+  const present = AVATAR_STORAGE_VARS.filter((name) => env[name]);
+  if (present.length === 0) return undefined;
+  if (present.length < AVATAR_STORAGE_VARS.length) {
+    const missing = AVATAR_STORAGE_VARS.filter((name) => !env[name]);
+    throw new ApiConfigError(
+      `Avatar storage is partially configured — missing: ${missing.join(", ")}. ` +
+        "Set all of S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, " +
+        "and S3_PUBLIC_BASE_URL, or unset them all to run without avatar uploads.",
+    );
+  }
+  return {
+    endpoint: (env.S3_ENDPOINT as string).replace(/\/+$/, ""),
+    bucket: env.S3_BUCKET as string,
+    accessKeyId: env.S3_ACCESS_KEY_ID as string,
+    secretAccessKey: env.S3_SECRET_ACCESS_KEY as string,
+    publicBaseUrl: (env.S3_PUBLIC_BASE_URL as string).replace(/\/+$/, ""),
+  };
+}
+
 export function loadApiConfig(env: Env): ApiConfig {
   const identityProvider = env.IDENTITY_PROVIDER ?? "workos";
   if (identityProvider !== "workos" && identityProvider !== "dev") {
@@ -131,6 +189,7 @@ export function loadApiConfig(env: Env): ApiConfig {
 
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : 8788;
   const trustedProxyHops = resolveTrustedProxyHops(env.TRUSTED_PROXY_HOPS);
+  const avatarStorage = loadAvatarStorageConfig(env);
 
   if (identityProvider === "dev") {
     assertDevIdentityAllowed(env);
@@ -141,6 +200,7 @@ export function loadApiConfig(env: Env): ApiConfig {
       baseUrl: env.ACCOUNT_BASE_URL as string,
       port,
       trustedProxyHops,
+      ...(avatarStorage ? { avatarStorage } : {}),
     };
   }
 
@@ -153,6 +213,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     baseUrl: env.ACCOUNT_BASE_URL as string,
     port,
     trustedProxyHops,
+    ...(avatarStorage ? { avatarStorage } : {}),
     workosApiKey: env.WORKOS_API_KEY as string,
     workosClientId,
     workosApiUrl,

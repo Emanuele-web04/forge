@@ -19,8 +19,10 @@ import { createDeviceCredentialStore } from "../identity/deviceCredentialStore";
 import { createEnvironmentRegistry } from "../identity/environmentRegistry";
 import { clearOrgCache } from "../identity/orgProvisioning";
 import { createWorkosIdentityProvider } from "../identity/workos";
+import type { AvatarStorage } from "../avatarStorage";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
 import {
+  AVATAR_MAX_BYTES,
   createV1Routes,
   OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
   OTP_SEND_RATE_LIMIT_PER_MINUTE,
@@ -92,11 +94,35 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     return { token, userId: user.id };
   }
 
+  /**
+   * An in-memory stand-in for the avatar storage seam, mirroring how the
+   * identity adapters are injected: routes see the interface, tests see the
+   * objects that were written.
+   */
+  function fakeAvatarStorage() {
+    const objects = new Map<string, { body: Uint8Array; contentType: string }>();
+    const deleted: string[] = [];
+    const storage: AvatarStorage = {
+      async put(key, body, contentType) {
+        objects.set(key, { body, contentType });
+      },
+      async delete(key) {
+        deleted.push(key);
+        objects.delete(key);
+      },
+      publicUrl(key) {
+        return `https://avatars.example.com/${key}`;
+      },
+    };
+    return { storage, objects, deleted };
+  }
+
   /** Routes wired to a full adapter set built from `config`. */
   function routesFor(
     db: ReturnType<typeof createDb>["db"],
     forConfig: WorkosApiConfig,
     trustedProxyHops?: number,
+    avatarStorage?: AvatarStorage,
   ) {
     const { verifier, grants } = createWorkosIdentityProvider(forConfig);
     return createV1Routes({
@@ -105,14 +131,15 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       deviceCredentials: createDeviceCredentialStore(db),
       environments: createEnvironmentRegistry(db),
       db,
+      ...(avatarStorage !== undefined ? { avatarStorage } : {}),
       ...(trustedProxyHops !== undefined ? { trustedProxyHops } : {}),
     });
   }
 
-  function buildApp(options: { trustedProxyHops?: number } = {}) {
+  function buildApp(options: { trustedProxyHops?: number; avatarStorage?: AvatarStorage } = {}) {
     const { db } = createDb(databaseUrl);
     const app = new Hono();
-    app.route("/api/v1", routesFor(db, config, options.trustedProxyHops));
+    app.route("/api/v1", routesFor(db, config, options.trustedProxyHops, options.avatarStorage));
     return { app, db };
   }
 
@@ -1811,6 +1838,292 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
       expect(res.status).toBe(404);
       expect(await res.json()).toMatchObject({ error: "profile_not_found" });
+    });
+  });
+
+  describe("profile avatars", () => {
+    /** A signed-in user, optionally with an identity-provider picture. */
+    async function signInWithPicture(pictureUrl?: string) {
+      const user = workos.addUser({
+        first_name: "Ada",
+        last_name: "Lovelace",
+        ...(pictureUrl ? { profile_picture_url: pictureUrl } : {}),
+      });
+      const organization = workos.addOrganization({ name: `Workspace ${user.id}` });
+      workos.addMembership(organization.id, user.id);
+      const token = await workos.signAccessToken({
+        sub: user.id,
+        sid: `session_${randomUUID()}`,
+        orgId: organization.id,
+      });
+      return { token, userId: user.id };
+    }
+
+    async function onboard(
+      app: Hono,
+      token: string,
+      overrides: Record<string, unknown> = {},
+    ): Promise<string> {
+      const handle = `ava-${randomUUID().slice(0, 8)}`;
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify({
+          handle,
+          displayName: "Ada Lovelace",
+          avatarColor: "#22c55e",
+          ...overrides,
+        }),
+      });
+      expect(res.status).toBe(200);
+      return handle;
+    }
+
+    async function putAvatar(
+      app: Hono,
+      token: string,
+      body: Uint8Array,
+      contentType = "image/webp",
+    ): Promise<Response> {
+      return await app.request("/api/v1/profile/avatar", {
+        method: "PUT",
+        headers: { authorization: `Bearer ${token}`, "content-type": contentType },
+        body: body.slice().buffer as ArrayBuffer,
+      });
+    }
+
+    const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+
+    it("uploads an avatar, stores it immutably, and answers the /me body", async () => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const { token, userId } = await signInWithPicture();
+      await onboard(app, token);
+
+      const res = await putAvatar(app, token, PNG_BYTES, "image/png");
+      expect(res.status).toBe(200);
+      const me = (await res.json()) as {
+        profile: { avatarSource: string; avatarUrl: string | null };
+      };
+      expect(me.profile.avatarSource).toBe("uploaded");
+      // Key shape: avatars/{userId}/{16 hex of sha256}.png, served from the
+      // fake's public origin.
+      expect(me.profile.avatarUrl).toMatch(
+        new RegExp(`^https://avatars\\.example\\.com/avatars/${userId}/[0-9a-f]{16}\\.png$`),
+      );
+
+      // The object really landed, with the type it was uploaded as.
+      expect(fake.objects.size).toBe(1);
+      const [key, stored] = [...fake.objects.entries()][0]!;
+      expect(me.profile.avatarUrl).toBe(`https://avatars.example.com/${key}`);
+      expect(stored.contentType).toBe("image/png");
+      expect(stored.body).toEqual(PNG_BYTES);
+
+      // /me reads the same resolution back.
+      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await meRes.json()).toMatchObject({
+        profile: { avatarSource: "uploaded", avatarUrl: me.profile.avatarUrl },
+      });
+    });
+
+    it("best-effort deletes the replaced object when a different image lands", async () => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
+
+      await putAvatar(app, token, PNG_BYTES, "image/png");
+      const firstKey = [...fake.objects.keys()][0]!;
+      const second = await putAvatar(app, token, new Uint8Array([9, 9, 9]), "image/webp");
+      expect(second.status).toBe(200);
+
+      expect(fake.deleted).toEqual([firstKey]);
+      expect(fake.objects.size).toBe(1);
+      expect([...fake.objects.keys()][0]).not.toBe(firstKey);
+    });
+
+    it("refuses an oversized body with 400 before touching storage", async () => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
+
+      const res = await putAvatar(app, token, new Uint8Array(AVATAR_MAX_BYTES + 1));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+      expect(fake.objects.size).toBe(0);
+    });
+
+    it.each([["image/gif"], ["image/svg+xml"], ["application/octet-stream"], ["text/plain"]])(
+      "refuses a %s upload",
+      async (contentType) => {
+        const fake = fakeAvatarStorage();
+        const { app } = buildApp({ avatarStorage: fake.storage });
+        const { token } = await signInWithPicture();
+        await onboard(app, token);
+
+        const res = await putAvatar(app, token, PNG_BYTES, contentType);
+        expect(res.status).toBe(400);
+        expect(await res.json()).toMatchObject({ error: "validation_failed" });
+        expect(fake.objects.size).toBe(0);
+      },
+    );
+
+    it("answers 503 with a clear message when storage is not configured", async () => {
+      const { app } = buildApp(); // no avatarStorage
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
+
+      const res = await putAvatar(app, token, PNG_BYTES);
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as AccountErrorBody;
+      expect(body.error).toBe("internal_error");
+      expect(body.message).toContain("Avatar storage is not configured");
+    });
+
+    it("answers 404 profile_not_found before onboarding", async () => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const { token } = await signInWithPicture();
+
+      const res = await putAvatar(app, token, PNG_BYTES);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ error: "profile_not_found" });
+      expect(fake.objects.size).toBe(0);
+    });
+
+    it("requires authentication on both avatar routes", async () => {
+      const { app } = buildApp({ avatarStorage: fakeAvatarStorage().storage });
+      expect((await putAvatar(app, "not-a-jwt", PNG_BYTES)).status).toBe(401);
+      const del = await app.request("/api/v1/profile/avatar", { method: "DELETE" });
+      expect(del.status).toBe(401);
+    });
+
+    it("serves the sso avatar on /me and caches it for the public route", async () => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const pictureUrl = "https://cdn.example.com/ada-sso.png";
+      const { token } = await signInWithPicture(pictureUrl);
+      const handle = await onboard(app, token, { public: true });
+
+      // Fresh profile: source defaults to sso, resolved from the live user.
+      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await meRes.json()).toMatchObject({
+        profile: { avatarSource: "sso", avatarUrl: pictureUrl },
+      });
+
+      // The /me read cached the URL, so the PUBLIC route serves it without
+      // ever calling the identity provider.
+      const before = workos.requests.length;
+      const pub = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.119.1" },
+      });
+      expect(pub.status).toBe(200);
+      expect(((await pub.json()) as PublicProfile).avatarUrl).toBe(pictureUrl);
+      expect(workos.requests.length).toBe(before);
+    });
+
+    it("serves null for an sso source when the provider has no picture", async () => {
+      const { app } = buildApp({ avatarStorage: fakeAvatarStorage().storage });
+      const { token } = await signInWithPicture(); // no picture
+      const handle = await onboard(app, token, { public: true });
+
+      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await meRes.json()).toMatchObject({
+        profile: { avatarSource: "sso", avatarUrl: null },
+      });
+
+      const pub = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.119.2" },
+      });
+      expect(pub.status).toBe(200);
+      expect(((await pub.json()) as PublicProfile).avatarUrl).toBeNull();
+    });
+
+    it("serves the uploaded avatar on the public route", async () => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const { token } = await signInWithPicture();
+      const handle = await onboard(app, token, { public: true });
+      const upload = await putAvatar(app, token, PNG_BYTES, "image/png");
+      const uploaded = (await upload.json()) as { profile: { avatarUrl: string } };
+
+      const pub = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.119.3" },
+      });
+      expect(pub.status).toBe(200);
+      expect(((await pub.json()) as PublicProfile).avatarUrl).toBe(uploaded.profile.avatarUrl);
+    });
+
+    it("hides the avatar on both reads with avatarSource: 'placeholder'", async () => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const pictureUrl = "https://cdn.example.com/ada-sso3.png";
+      const { token } = await signInWithPicture(pictureUrl);
+      const handle = await onboard(app, token, { public: true });
+      // Cache the sso URL first, so the placeholder below is a real override
+      // of an available image, not an accident of nothing being cached.
+      await app.request("/api/v1/me", { headers: authHeaders(token) });
+
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify({
+          handle,
+          displayName: "Ada Lovelace",
+          avatarColor: "#22c55e",
+          avatarSource: "placeholder",
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        profile: { avatarSource: "placeholder", avatarUrl: null },
+      });
+
+      const pub = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.119.4" },
+      });
+      expect(((await pub.json()) as PublicProfile).avatarUrl).toBeNull();
+    });
+
+    it("rejects avatarSource: 'uploaded' through PUT /profile", async () => {
+      const { app } = buildApp({ avatarStorage: fakeAvatarStorage().storage });
+      const { token } = await signInWithPicture();
+      const handle = await onboard(app, token);
+
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify({
+          handle,
+          displayName: "Ada Lovelace",
+          avatarColor: "#22c55e",
+          avatarSource: "uploaded",
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+    });
+
+    it("DELETE reverts to the sso avatar and best-effort deletes the object", async () => {
+      const fake = fakeAvatarStorage();
+      const { app } = buildApp({ avatarStorage: fake.storage });
+      const pictureUrl = "https://cdn.example.com/ada-sso4.png";
+      const { token } = await signInWithPicture(pictureUrl);
+      await onboard(app, token);
+      await putAvatar(app, token, PNG_BYTES, "image/png");
+      const uploadedKey = [...fake.objects.keys()][0]!;
+
+      const res = await app.request("/api/v1/profile/avatar", {
+        method: "DELETE",
+        headers: authHeaders(token),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        profile: { avatarSource: "sso", avatarUrl: pictureUrl },
+      });
+      expect(fake.deleted).toContain(uploadedKey);
+      expect(fake.objects.size).toBe(0);
     });
   });
 
