@@ -1231,6 +1231,78 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("paginates stacks larger than the GraphQL page size", () =>
+    Effect.gen(function* () {
+      const makeEntry = (position: number) => ({
+        position,
+        pullRequest: {
+          number: 1_000 + position,
+          title: `Stack entry ${position}`,
+          url: `https://github.com/acme/app/pull/${1_000 + position}`,
+          headRefName: `feature/stack-${position}`,
+          baseRefName: position === 1 ? "main" : `feature/stack-${position - 1}`,
+          state: "OPEN",
+          isDraft: false,
+          mergedAt: null,
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "CLEAN",
+        },
+      });
+      const makeResponse = (
+        nodes: ReadonlyArray<ReturnType<typeof makeEntry>>,
+        pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null },
+      ) =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                stackEntry: { position: 101 },
+                stack: {
+                  number: 29,
+                  size: 101,
+                  baseRefName: "main",
+                  entries: { totalCount: 101, nodes, pageInfo },
+                },
+              },
+            },
+          },
+        });
+
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: makeResponse(
+            Array.from({ length: 100 }, (_, index) => makeEntry(index + 1)),
+            { hasNextPage: true, endCursor: "cursor-100" },
+          ),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: makeResponse([makeEntry(101)], { hasNextPage: false, endCursor: null }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const gh = yield* GitHubCli;
+      const result = yield* gh.getPullRequestStack({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 1_101,
+      });
+
+      expect(result?.entries).toHaveLength(101);
+      expect(result?.entries.at(-1)).toMatchObject({ position: 101, number: 1_101 });
+      expect(mockedRunProcess).toHaveBeenCalledTimes(2);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual(
+        expect.arrayContaining(["-F", "after=cursor-100"]),
+      );
+    }),
+  );
+
   it.effect("falls back to the legacy merge path when async merge is unavailable", () =>
     Effect.gen(function* () {
       mockedRunProcess

@@ -64,13 +64,15 @@ export function makePullRequestOperations(dependencies: {
                 Effect.succeed({ comments: [], truncated: false, incomplete: true }),
               ),
             ),
-          dependencies.withGitHubRead(
-            dependencies.github.getPullRequestStack({
-              cwd: project.workspaceRoot,
-              repository,
-              number,
-            }),
-          ),
+          dependencies
+            .withGitHubRead(
+              dependencies.github.getPullRequestStack({
+                cwd: project.workspaceRoot,
+                repository,
+                number,
+              }),
+            )
+            .pipe(Effect.catch(() => Effect.succeed(null))),
         ],
         { concurrency: 4 },
       );

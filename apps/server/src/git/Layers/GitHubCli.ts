@@ -316,7 +316,7 @@ const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!
   }
 }`;
 
-const PULL_REQUEST_STACK_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $first: Int!) {
+const PULL_REQUEST_STACK_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $first: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       stackEntry { position }
@@ -324,7 +324,7 @@ const PULL_REQUEST_STACK_QUERY = `query($owner: String!, $repo: String!, $number
         number
         size
         baseRefName
-        entries(first: $first) {
+        entries(first: $first, after: $after) {
           totalCount
           nodes {
             position
@@ -340,6 +340,10 @@ const PULL_REQUEST_STACK_QUERY = `query($owner: String!, $repo: String!, $number
               mergeable
               mergeStateStatus
             }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
           }
         }
       }
@@ -481,6 +485,14 @@ const RawPullRequestStackResponseSchema = Schema.Struct({
                                 Schema.Array(Schema.NullOr(RawPullRequestStackEntrySchema)),
                               ),
                             ),
+                            pageInfo: Schema.optional(
+                              Schema.NullOr(
+                                Schema.Struct({
+                                  hasNextPage: Schema.optional(Schema.NullOr(Schema.Boolean)),
+                                  endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+                                }),
+                              ),
+                            ),
                           }),
                         }),
                       ),
@@ -495,6 +507,9 @@ const RawPullRequestStackResponseSchema = Schema.Struct({
     ),
   ),
 });
+
+type RawPullRequestStackEntry = Schema.Schema.Type<typeof RawPullRequestStackEntrySchema>;
+type RawPullRequestStackResponse = Schema.Schema.Type<typeof RawPullRequestStackResponseSchema>;
 
 const RawPullRequestStackSummarySchema = Schema.Struct({
   stackEntry: Schema.optional(Schema.NullOr(Schema.Struct({ position: PositiveInt }))),
@@ -849,8 +864,9 @@ function getPullRequestReviewThreadsPageInfo(
 }
 
 function normalizePullRequestStack(
-  raw: Schema.Schema.Type<typeof RawPullRequestStackResponseSchema>,
+  raw: RawPullRequestStackResponse,
   selectedPullRequestNumber: number,
+  rawEntries = raw.data?.repository?.pullRequest?.stack?.entries.nodes ?? [],
 ): Effect.Effect<PullRequestStack | null, GitHubCliError> {
   const graphQlErrorDetail = getGraphQlErrorDetail(raw);
   if (graphQlErrorDetail) {
@@ -877,7 +893,7 @@ function normalizePullRequestStack(
     );
   }
 
-  const entries = (stack.entries.nodes ?? [])
+  const entries = rawEntries
     .flatMap((entry) => {
       const member = entry?.pullRequest;
       if (!entry || !member) return [];
@@ -921,6 +937,17 @@ function normalizePullRequestStack(
     baseBranch: stack.baseRefName,
     entries,
   });
+}
+
+function getPullRequestStackPageInfo(raw: RawPullRequestStackResponse): {
+  hasNextPage: boolean;
+  endCursor: string | null;
+} {
+  const pageInfo = raw.data?.repository?.pullRequest?.stack?.entries.pageInfo;
+  return {
+    hasNextPage: pageInfo?.hasNextPage === true,
+    endCursor: pageInfo?.endCursor?.trim() || null,
+  };
 }
 
 function normalizePullRequestStackSummaries(
@@ -1591,39 +1618,76 @@ const makeGitHubCli = Effect.sync(() => {
         Effect.map(normalizePullRequestDetail),
       ),
     getPullRequestStack: (input) =>
-      validateRepository(input.repository, "getPullRequestStack").pipe(
-        Effect.flatMap((repository) => {
-          const [owner = "", repo = ""] = repository.split("/");
-          return execute({
-            cwd: input.cwd,
-            args: [
-              "api",
-              "graphql",
-              "--hostname",
-              GITHUB_HOST,
-              "-f",
-              `query=${PULL_REQUEST_STACK_QUERY}`,
-              "-F",
-              `owner=${owner}`,
-              "-F",
-              `repo=${repo}`,
-              "-F",
-              `number=${input.number}`,
-              "-F",
-              `first=${PULL_REQUEST_STACK_ENTRY_LIMIT}`,
-            ],
+      Effect.gen(function* () {
+        const repository = yield* validateRepository(input.repository, "getPullRequestStack");
+        const [owner = "", repo = ""] = repository.split("/");
+        const loadPage = (after: string | null) =>
+          Effect.gen(function* () {
+            const result = yield* execute({
+              cwd: input.cwd,
+              args: [
+                "api",
+                "graphql",
+                "--hostname",
+                GITHUB_HOST,
+                "-f",
+                `query=${PULL_REQUEST_STACK_QUERY}`,
+                "-F",
+                `owner=${owner}`,
+                "-F",
+                `repo=${repo}`,
+                "-F",
+                `number=${input.number}`,
+                "-F",
+                `first=${PULL_REQUEST_STACK_ENTRY_LIMIT}`,
+                ...(after ? ["-F", `after=${after}`] : []),
+              ],
+            });
+            const page = yield* decodeGitHubJson(
+              result.stdout.trim(),
+              RawPullRequestStackResponseSchema,
+              "getPullRequestStack",
+              "GitHub CLI returned invalid pull request stack JSON.",
+            );
+            const graphQlErrorDetail = getGraphQlErrorDetail(page);
+            if (graphQlErrorDetail) {
+              return yield* Effect.fail(
+                new GitHubCliError({
+                  operation: "getPullRequestStack",
+                  detail: graphQlErrorDetail,
+                  reason: "other",
+                }),
+              );
+            }
+            return page;
           });
-        }),
-        Effect.flatMap((result) =>
-          decodeGitHubJson(
-            result.stdout.trim(),
-            RawPullRequestStackResponseSchema,
-            "getPullRequestStack",
-            "GitHub CLI returned invalid pull request stack JSON.",
-          ),
-        ),
-        Effect.flatMap((raw) => normalizePullRequestStack(raw, input.number)),
-      ),
+
+        const firstPage = yield* loadPage(null);
+        const entries: Array<RawPullRequestStackEntry | null> = [];
+        const seenCursors = new Set<string>();
+        let page = firstPage;
+
+        while (true) {
+          entries.push(...(page.data?.repository?.pullRequest?.stack?.entries.nodes ?? []));
+          const pageInfo = getPullRequestStackPageInfo(page);
+          if (!pageInfo.hasNextPage) {
+            break;
+          }
+          if (pageInfo.endCursor === null || seenCursors.has(pageInfo.endCursor)) {
+            return yield* Effect.fail(
+              new GitHubCliError({
+                operation: "getPullRequestStack",
+                detail: "GitHub returned invalid pull request stack pagination metadata.",
+                reason: "other",
+              }),
+            );
+          }
+          seenCursors.add(pageInfo.endCursor);
+          page = yield* loadPage(pageInfo.endCursor);
+        }
+
+        return yield* normalizePullRequestStack(firstPage, input.number, entries);
+      }),
     getRepositoryMergeCapabilities: (input) =>
       validateRepository(input.repository, "getRepositoryMergeCapabilities").pipe(
         Effect.flatMap((repository) =>
