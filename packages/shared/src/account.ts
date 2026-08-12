@@ -444,7 +444,8 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           headers: { ...authHeaders(token), "content-type": contentType },
           // A plain ArrayBuffer-backed copy: fetch implementations disagree
           // about Uint8Array views over SharedArrayBuffer or offset views.
-          body: bytes.slice().buffer as ArrayBuffer,
+          // Extract the exact slice to avoid sending pooled Buffer backing stores.
+          body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
         },
         AccountMeSchema,
       );

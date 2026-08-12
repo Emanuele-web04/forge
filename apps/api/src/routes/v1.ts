@@ -543,6 +543,15 @@ export function createV1Routes(deps: {
         parsed.utcOffsetMinutes !== undefined
           ? Math.max(-720, Math.min(840, parsed.utcOffsetMinutes))
           : undefined;
+
+      // When switching from "uploaded" to "sso" or "placeholder", clean up the
+      // old avatarKey and delete the stored object — same as DELETE /profile/avatar.
+      const shouldClearAvatar =
+        parsed.avatarSource !== undefined &&
+        existing &&
+        existing.avatarSource === "uploaded" &&
+        existing.avatarKey;
+
       await db
         .insert(profiles)
         .values({
@@ -570,9 +579,18 @@ export function createV1Routes(deps: {
             ...(parsed.public !== undefined ? { public: parsed.public } : {}),
             ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
             ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
+            // Clear avatarKey when switching away from "uploaded".
+            ...(shouldClearAvatar ? { avatarKey: null } : {}),
             updatedAt: new Date(),
           },
         });
+
+      // Best-effort cleanup of the replaced object, same as DELETE /profile/avatar.
+      if (shouldClearAvatar && avatarStorage) {
+        await avatarStorage.delete(existing.avatarKey!).catch((error: unknown) => {
+          console.error("[api] previous avatar delete failed:", error);
+        });
+      }
     } catch (error) {
       // The unique index on `handle` is the reservation; a violation here means
       // somebody else holds it, including when two first-time writes race.
