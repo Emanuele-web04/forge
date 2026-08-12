@@ -474,9 +474,12 @@ describe("when: branch is behind upstream", () => {
     const quick = resolveQuickAction(status({ behindCount: 2 }), false);
     assert.equal(shouldShowHeaderPullAction({ quickAction: quick, isPullRunning: false }), true);
     assert.equal(shouldPromotePullAction({ quickAction: quick, isPullRunning: false }), true);
-    assert.deepEqual(resolvePromotedPullPresentation({ quickAction: quick, isPullRunning: false }), {
-      label: "Pull",
-    });
+    assert.deepEqual(
+      resolvePromotedPullPresentation({ quickAction: quick, isPullRunning: false }),
+      {
+        label: "Pull",
+      },
+    );
   });
 
   it("shouldShowEnvironmentPanelPullRow keeps the Pull row visible while pulling", () => {
