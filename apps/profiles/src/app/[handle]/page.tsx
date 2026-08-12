@@ -98,15 +98,13 @@ export default async function ProfilePage({ params }: Params) {
 
 function ActivitySection({ heatmap }: { heatmap: PublicProfile["heatmap"] }) {
   // No renderTooltip: ActivityHeatmap falls back to a native `title`, keeping the
-  // page free of client JS. Fixed 13px cells over a full year overflow the 720px
-  // column, so the grid scrolls horizontally, latest weeks first in view.
+  // page free of client JS. Fill mode with the app's window length, so the grid
+  // renders exactly like the in-app Activity section — no horizontal scroll.
   const cells = buildHeatmapCells(heatmap);
   return (
     <section aria-label="Activity" className="flex min-w-0 flex-col gap-3">
       <h2 className="text-sm font-medium">Activity</h2>
-      <div className="flex min-w-0 flex-row-reverse overflow-x-auto pb-1">
-        <ActivityHeatmap cells={cells} cellSize={13} gap={3} showMonths monthsPosition="bottom" />
-      </div>
+      <ActivityHeatmap cells={cells} fill radius={5} gap={3} showMonths monthsPosition="bottom" />
     </section>
   );
 }
