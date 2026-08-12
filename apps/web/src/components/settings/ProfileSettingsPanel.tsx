@@ -46,15 +46,18 @@ import { SettingsSegmentedControl } from "./SettingControls";
 type StatsScope = "device" | "account";
 
 const SCOPE_OPTIONS = [
-  { value: "device", label: "This device" },
   { value: "account", label: "Account" },
+  { value: "device", label: "This device" },
 ] as const satisfies readonly { value: StatsScope; label: string }[];
 
 export function ProfileSettingsPanel() {
   const coreQuery = useQuery(serverProfileStatsQueryOptions());
   const tokenQuery = useQuery(serverProfileTokenStatsQueryOptions());
   const { me } = useAccount();
-  const [scope, setScope] = useState<StatsScope>("device");
+  // Account-first for signed-in users: the synced cross-device view is the
+  // primary one; the device view is the drill-down. Signed out there is no
+  // account, so the state is moot (the render below pins "device").
+  const [scope, setScope] = useState<StatsScope>("account");
 
   if (coreQuery.isPending) {
     return <ProfileSkeleton />;
