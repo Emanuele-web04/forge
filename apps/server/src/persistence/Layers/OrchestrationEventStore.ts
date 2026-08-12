@@ -336,6 +336,66 @@ function inferActorKind(
   return "client";
 }
 
+/**
+ * Builds the paged projector-replay query. Exported so tests can pin its query
+ * plan with EXPLAIN QUERY PLAN.
+ *
+ * Every predicate below the sequence range uses SQLite's unary + to stay
+ * ineligible for index selection. Without it the planner turns the boundary OR
+ * into a MULTI-INDEX OR that scans the whole event_type index and re-sorts
+ * through a temp b-tree for every page, which makes projector bootstrap
+ * quadratic in event-log size (minutes of startup on multi-GB logs). The +
+ * keeps the integer-primary-key range scan: a sparse filter can still walk a
+ * long sequence interval to fill one page, but the whole replay stays linear
+ * in the covered range (each row visited once), and rows already come back
+ * in sequence order with no sort step.
+ */
+export const buildReadEventRowsFromSequenceQuery = (
+  sql: SqlClient.SqlClient,
+  request: typeof ReadFromSequenceRequestSchema.Type,
+) => {
+  const activityKindFilter =
+    request.activityKinds.length === 0
+      ? sql``
+      : sql`
+          AND (
+            +event_type <> 'thread.activity-appended'
+            OR json_extract(payload_json, '$.activity.kind') IN ${sql.in(request.activityKinds)}
+          )
+        `;
+  const filteredEventPredicate =
+    request.eventTypes.length === 0
+      ? sql`0`
+      : sql`(+event_type IN ${sql.in(request.eventTypes)} ${activityKindFilter})`;
+  const replayFilter = !request.filterEnabled
+    ? sql``
+    : request.includeBoundaryEvent
+      ? sql`AND (+sequence = ${request.throughSequenceInclusive} OR ${filteredEventPredicate})`
+      : sql`
+          AND ${filteredEventPredicate}
+        `;
+  return sql`
+    SELECT
+      sequence,
+      event_id AS "eventId",
+      event_type AS "type",
+      aggregate_kind AS "aggregateKind",
+      stream_id AS "aggregateId",
+      occurred_at AS "occurredAt",
+      command_id AS "commandId",
+      causation_event_id AS "causationEventId",
+      correlation_id AS "correlationId",
+      payload_json AS "payloadJson",
+      metadata_json AS "metadataJson"
+    FROM orchestration_events
+    WHERE sequence > ${request.sequenceExclusive}
+      AND sequence <= ${request.throughSequenceInclusive}
+      ${replayFilter}
+    ORDER BY sequence ASC
+    LIMIT ${request.limit}
+  `;
+};
+
 const makeEventStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -400,48 +460,7 @@ const makeEventStore = Effect.gen(function* () {
   const readEventRowsFromSequence = SqlSchema.findAll({
     Request: ReadFromSequenceRequestSchema,
     Result: RawPersistedEventRowSchema,
-    execute: (request) => {
-      const activityKindFilter =
-        request.activityKinds.length === 0
-          ? sql``
-          : sql`
-              AND (
-                event_type <> 'thread.activity-appended'
-                OR json_extract(payload_json, '$.activity.kind') IN ${sql.in(request.activityKinds)}
-              )
-            `;
-      const filteredEventPredicate =
-        request.eventTypes.length === 0
-          ? sql`0`
-          : sql`(event_type IN ${sql.in(request.eventTypes)} ${activityKindFilter})`;
-      const replayFilter = !request.filterEnabled
-        ? sql``
-        : request.includeBoundaryEvent
-          ? sql`AND (sequence = ${request.throughSequenceInclusive} OR ${filteredEventPredicate})`
-          : sql`
-              AND ${filteredEventPredicate}
-            `;
-      return sql`
-        SELECT
-          sequence,
-          event_id AS "eventId",
-          event_type AS "type",
-          aggregate_kind AS "aggregateKind",
-          stream_id AS "aggregateId",
-          occurred_at AS "occurredAt",
-          command_id AS "commandId",
-          causation_event_id AS "causationEventId",
-          correlation_id AS "correlationId",
-          payload_json AS "payloadJson",
-          metadata_json AS "metadataJson"
-        FROM orchestration_events
-        WHERE sequence > ${request.sequenceExclusive}
-          AND sequence <= ${request.throughSequenceInclusive}
-          ${replayFilter}
-        ORDER BY sequence ASC
-        LIMIT ${request.limit}
-      `;
-    },
+    execute: (request) => buildReadEventRowsFromSequenceQuery(sql, request),
   });
 
   const readThreadEventRowsFromSequence = SqlSchema.findAll({

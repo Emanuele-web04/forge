@@ -5,7 +5,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { PersistenceDecodeError } from "../Errors.ts";
 import { OrchestrationEventStore } from "../Services/OrchestrationEventStore.ts";
-import { OrchestrationEventStoreLive } from "./OrchestrationEventStore.ts";
+import {
+  buildReadEventRowsFromSequenceQuery,
+  OrchestrationEventStoreLive,
+} from "./OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 
 const layer = it.layer(
@@ -13,6 +16,91 @@ const layer = it.layer(
 );
 
 layer("OrchestrationEventStore", (it) => {
+  it.effect("projector replay pages keep the primary-key range scan for every filter shape", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const baseRequest = {
+        sequenceExclusive: 10,
+        throughSequenceInclusive: 1_000,
+        limit: 500,
+      };
+      // One request per replayFilter branch in buildReadEventRowsFromSequenceQuery.
+      const requests = [
+        {
+          ...baseRequest,
+          filterEnabled: false,
+          includeBoundaryEvent: false,
+          eventTypes: [],
+          activityKinds: [],
+        },
+        {
+          ...baseRequest,
+          filterEnabled: true,
+          includeBoundaryEvent: true,
+          eventTypes: ["thread.activity-appended", "thread.created"],
+          activityKinds: [],
+        },
+        {
+          ...baseRequest,
+          filterEnabled: true,
+          includeBoundaryEvent: true,
+          eventTypes: ["thread.activity-appended"],
+          activityKinds: ["approval.requested"],
+        },
+        // Empty eventTypes yields the constant-0 predicate (checkpoints projector).
+        {
+          ...baseRequest,
+          filterEnabled: true,
+          includeBoundaryEvent: true,
+          eventTypes: [],
+          activityKinds: [],
+        },
+        {
+          ...baseRequest,
+          filterEnabled: true,
+          includeBoundaryEvent: false,
+          eventTypes: ["thread.activity-appended"],
+          activityKinds: ["approval.requested"],
+        },
+      ];
+
+      for (const request of requests) {
+        const [query, params] = buildReadEventRowsFromSequenceQuery(sql, request).compile();
+        const plan = yield* sql.unsafe<{ readonly detail: string }>(
+          `EXPLAIN QUERY PLAN ${query}`,
+          params,
+        );
+        const details = plan.map((row) => row.detail).join("\n");
+        // The boundary OR must never demote the sequence cursor to a
+        // MULTI-INDEX OR plan: with a large event log that plan rescans the
+        // whole event_type index per page and turns projection bootstrap
+        // into minutes of startup time.
+        //
+        // EXPLAIN QUERY PLAN text is not a stable format across SQLite
+        // releases, so assert independent fragments of the required plan
+        // (table search, integer PK usage, both rowid range bounds) instead
+        // of one exact phrase.
+        for (const fragment of [
+          /SEARCH orchestration_events/,
+          /USING INTEGER PRIMARY KEY/,
+          /rowid>/,
+          /rowid</,
+        ]) {
+          assert.match(
+            details,
+            fragment,
+            `expected PK range scan (${fragment}), got plan:\n${details}\nfor request: ${JSON.stringify(request)}`,
+          );
+        }
+        assert.notMatch(
+          details,
+          /MULTI-INDEX OR|TEMP B-TREE/,
+          `plan regressed to index-OR or temp sort:\n${details}\nfor request: ${JSON.stringify(request)}`,
+        );
+      }
+    }),
+  );
+
   it.effect("reads stable newest-first pages from one thread stream", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;

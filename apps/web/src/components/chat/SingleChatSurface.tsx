@@ -803,6 +803,12 @@ export function SingleChatSurface(props: {
               pane={pane}
               pollingEnabled={context.isVisible}
               onClose={() => closePane(props.threadId, pane.id)}
+              onSelectPullRequest={(number) =>
+                updatePane(props.threadId, pane.id, {
+                  pullRequestNumber: number,
+                  pullRequestInitialTab: "summary",
+                })
+              }
             />
           </Suspense>
         );
