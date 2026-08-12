@@ -507,7 +507,8 @@ export function createV1Routes(deps: {
    * failure a client can act on.
    */
   v1.put("/profile", async (c) => {
-    const session = await requireOrgSession(c);
+    // Mutating and user-visible: membership resolved live, never off the cache.
+    const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
 
     const json = await c.req.json().catch(() => null);
@@ -598,6 +599,24 @@ export function createV1Routes(deps: {
         return errorResponse(c, 409, "handle_taken", "That handle is already taken");
       }
       throw error;
+    }
+
+    // Re-read and verify the handle actually stored. Two concurrent
+    // first-time submits can interleave so the loser's upsert lands as an
+    // update (which never writes `handle`) — without this check the loser
+    // would be told their handle saved while the winner's stands.
+    const [stored] = await db
+      .select({ handle: profiles.handle })
+      .from(profiles)
+      .where(eq(profiles.userId, session.userId))
+      .limit(1);
+    if (stored && stored.handle !== parsed.handle) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        "Your handle cannot be changed once it is set",
+      );
     }
 
     return c.json(await accountMe(user, session.organization));
@@ -820,7 +839,10 @@ export function createV1Routes(deps: {
       const { host, created } = await environments.register(session.orgId, session.userId, parsed);
       // Registering is also the (re-)link that rotates the host's credential:
       // any previously issued token is revoked and the fresh one returned —
-      // shown exactly once.
+      // shown exactly once. Concurrent re-links of the same environment are
+      // last-wins BY DESIGN: one-active-token-per-host means someone must
+      // lose, and the loser's next `synara auth` recovers exactly like a
+      // lost-token re-link — the scenario rotation exists to serve.
       const hostToken = await deviceCredentials.rotate(host.id);
 
       const body: RegisterHostResponse = { host, hostToken };
@@ -906,6 +928,13 @@ export function createV1Routes(deps: {
       return errorResponse(c, 429, "rate_limited", "Too many usage pushes — slow down");
     }
 
+    // DELIBERATE cache acceptance, unlike the other mutating routes: pushes
+    // are event-driven and frequent (a busy machine sends several per
+    // minute), so a live provider round trip per push would put WorkOS on
+    // the hot path for no security gain — the worst a just-revoked member
+    // can do inside the ≤60s TTL is attribute more usage counters to
+    // themselves under the stale workspace, which leaks nothing and grants
+    // nothing.
     const session = await requireOrgSession(c);
     if (session instanceof Response) return session;
 
