@@ -9,6 +9,11 @@ import {
 } from "@synara/contracts";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
+import {
+  sanitizeUnmappedProviderData,
+  sanitizeUnmappedProviderDetail,
+} from "../provider/unmappedProviderEvents.ts";
+
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
@@ -1111,6 +1116,32 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             ...normalizedPayload,
             status,
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "event.unmapped": {
+      const payload = runtimePayloadRecord(event);
+      const nativeType = asString(payload?.nativeType);
+      if (!nativeType) {
+        return [];
+      }
+      const detail = asString(payload?.detail);
+      const rawData = payload?.data;
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "provider.event.unmapped",
+          summary: nativeType,
+          payload: toActivityPayload({
+            nativeEventType: nativeType,
+            ...(detail ? { detail: sanitizeUnmappedProviderDetail(detail) } : {}),
+            ...(rawData !== undefined ? { data: sanitizeUnmappedProviderData(rawData) } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

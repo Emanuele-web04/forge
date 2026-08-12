@@ -639,4 +639,53 @@ describe("provider runtime activity projection", () => {
       Object.keys((turn?.payload as { modelUsage?: Record<string, unknown> }).modelUsage ?? {}),
     ).toEqual(["claude-fable-5"]);
   });
+
+  it("projects unmapped passthrough events instead of dropping them", () => {
+    const oversizedDiagnostic = "x".repeat(64_000);
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "event.unmapped",
+        eventId: "unmapped-native-event",
+        turnId: TURN_ID,
+        payload: {
+          nativeType: "item/agentMessage/completed",
+          detail: "Finished the refactor",
+          data: {
+            secretKey: "must-not-reach-the-activity-snapshot",
+            note: "api_key=another-secret",
+            output: oversizedDiagnostic,
+          },
+        },
+      }),
+    );
+    expect(activity).toMatchObject({
+      tone: "info",
+      kind: "provider.event.unmapped",
+      // Raw native type/label is the row title.
+      summary: "item/agentMessage/completed",
+      turnId: TURN_ID,
+      payload: {
+        nativeEventType: "item/agentMessage/completed",
+        detail: "Finished the refactor",
+        data: expect.objectContaining({ __synaraTruncated: true }),
+      },
+    });
+    const serializedPayload = JSON.stringify(activity?.payload);
+    expect(serializedPayload.length).toBeLessThan(17_000);
+    expect(serializedPayload).not.toContain("must-not-reach-the-activity-snapshot");
+    expect(serializedPayload).not.toContain("another-secret");
+    // The activity must survive the schema of the command that carries it.
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+    // A passthrough event without a native type is the one case still dropped.
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "event.unmapped",
+          eventId: "unmapped-without-type",
+          payload: { detail: "no type" },
+        }),
+      ),
+    ).toEqual([]);
+  });
 });
