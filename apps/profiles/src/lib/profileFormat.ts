@@ -10,11 +10,6 @@ export function memberSince(createdAt: string): string {
   return date.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-/** First grapheme of the display name, uppercased — the avatar fallback glyph. */
-export function initial(name: string): string {
-  const first = [...name.trim()][0];
-  return first ? first.toUpperCase() : "?";
-}
 
 /** "12 days" / "1 day" via profile-ui's formatDays; em dash before any activity. */
 export function formatStreak(days: number): string {

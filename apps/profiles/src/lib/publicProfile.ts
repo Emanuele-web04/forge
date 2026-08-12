@@ -48,7 +48,7 @@ export async function fetchPublicProfile(handle: string): Promise<PublicProfile 
     // Freshness over caching, but not per-request: usage pushes land every
     // few seconds, and a minute-stale profile is indistinguishable to a
     // visitor while keeping the API out of every page load.
-    { next: { revalidate: 60 } },
+    { next: { revalidate: 15 } },
   );
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Profile request failed with ${response.status}`);

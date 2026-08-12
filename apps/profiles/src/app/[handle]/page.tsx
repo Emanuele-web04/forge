@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
 import { ActivityHeatmap } from "@synara/profile-ui/heatmap";
-import { formatCompact, formatHourLabel } from "@synara/profile-ui/formatting";
+import { deriveInitials, formatCompact, formatHourLabel } from "@synara/profile-ui/formatting";
 import {
   PROVIDER_GLYPHS,
   providerIconToneClassName,
@@ -11,7 +11,7 @@ import {
 import { InsightRow, ModelUsageRow, StatTileGrid } from "@synara/profile-ui/sections";
 import { PageShell } from "../../components/chrome";
 import { buildHeatmapCells } from "../../lib/heatmapCells";
-import { formatStreak, initial, memberSince } from "../../lib/profileFormat";
+import { formatStreak, memberSince } from "../../lib/profileFormat";
 import { fetchPublicProfile, type PublicProfile } from "../../lib/publicProfile";
 
 type Params = { params: Promise<{ handle: string }> };
@@ -57,7 +57,7 @@ export default async function ProfilePage({ params }: Params) {
       {/* Identity */}
       <header className="flex items-center gap-5">
         <ProfileAvatar
-          initials={initial(profile.displayName)}
+          initials={deriveInitials(profile.displayName)}
           color={profile.avatarColor}
           className="size-[72px] shadow-sm"
           textClassName="text-2xl"
