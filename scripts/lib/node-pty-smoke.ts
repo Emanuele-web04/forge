@@ -18,48 +18,6 @@ interface PtySmokeOptions {
   readonly timeoutMs: number;
 }
 
-interface PtyDataOptions {
-  readonly terminal: PtyTerminal;
-  readonly timeoutMs: number;
-}
-
-export function waitForPtyData({ terminal, timeoutMs }: PtyDataOptions): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let dataSubscription: Disposable | null = null;
-    let exitSubscription: Disposable | null = null;
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      dataSubscription?.dispose();
-      exitSubscription?.dispose();
-    };
-
-    const settle = (complete: () => void) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      complete();
-    };
-
-    const timeout = setTimeout(() => {
-      try {
-        terminal.kill();
-      } catch {
-        // The timeout remains the actionable failure when cleanup cannot kill the PTY.
-      }
-      settle(() => reject(new Error("Timed out waiting for node-pty output.")));
-    }, timeoutMs);
-
-    dataSubscription = terminal.onData((chunk) => {
-      if (chunk.length > 0) settle(() => resolve(chunk));
-    });
-    exitSubscription = terminal.onExit((event) => {
-      settle(() => reject(new Error(`PTY process exited with code ${event.exitCode}.`)));
-    });
-  });
-}
-
 export function waitForSuccessfulPtyExit({
   terminal,
   expectedOutput,

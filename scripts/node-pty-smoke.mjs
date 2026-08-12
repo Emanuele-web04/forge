@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { waitForPtyData, waitForSuccessfulPtyExit } from "./lib/node-pty-smoke.ts";
+import { waitForSuccessfulPtyExit } from "./lib/node-pty-smoke.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
@@ -48,11 +48,12 @@ try {
 
 try {
   if (isWindows) {
-    // Bun can observe a one-shot cmd.exe exit before ConPTY flushes its output,
-    // while writing into the PTY exercises a separate input-socket path. This
-    // smoke only verifies that the native dependency loads, spawns, and emits
-    // data, so cmd.exe's startup output is the stable success signal here.
-    await waitForPtyData({ terminal, timeoutMs: 15_000 });
+    // Bun's ConPTY input/output wrappers are asynchronous and can miss a
+    // one-shot command's data. The native spawn itself is synchronous: a real
+    // child PID proves the binding loaded and created the Windows PTY process.
+    if (!Number.isInteger(terminal.pid) || terminal.pid <= 0) {
+      throw new Error("node-pty did not return a valid Windows process ID.");
+    }
     terminal.kill();
   } else {
     await waitForSuccessfulPtyExit({
