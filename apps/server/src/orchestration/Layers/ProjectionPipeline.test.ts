@@ -1139,6 +1139,158 @@ it.effect("fast-forwards lagging hot projector cursors before restart replay", (
   ),
 );
 
+it.effect("rebuilds a deleted hot cursor and advances a stalled projector on bootstrap", () =>
+  Effect.gen(function* () {
+    // Field regression: an interrupted repair deletes projection.hot together
+    // with most per-projector cursors, and one surviving cursor can be stuck
+    // hundreds of thousands of events behind. Bootstrap must replay the
+    // stalled projector to the journal head and recreate projection.hot so the
+    // snapshot sequence becomes derivable again.
+    const { dbPath } = yield* ServerConfig;
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const projectionLayer = OrchestrationProjectionPipelineLive.pipe(
+      Layer.provideMerge(OrchestrationEventStoreLive),
+      Layer.provideMerge(persistenceLayer),
+    );
+    const projectId = ProjectId.makeUnsafe("project-hot-cursor-repair");
+    const threadId = ThreadId.makeUnsafe("thread-hot-cursor-repair");
+    const createdAt = "2026-08-11T10:00:00.000Z";
+
+    const latestSequence = yield* Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-hot-cursor-repair-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-hot-cursor-repair-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-hot-cursor-repair-project"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Hot cursor repair project",
+          workspaceRoot: "/tmp/project-hot-cursor-repair",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-hot-cursor-repair-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-hot-cursor-repair-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-hot-cursor-repair-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Hot cursor repair thread",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-5-20250929",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      let latestSequence = 0;
+      for (let index = 0; index < 5; index += 1) {
+        const occurredAt = `2026-08-11T10:00:${String(index + 1).padStart(2, "0")}.000Z`;
+        const savedEvent = yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe(`evt-hot-cursor-repair-message-${index}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt,
+          commandId: CommandId.makeUnsafe(`cmd-hot-cursor-repair-message-${index}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-hot-cursor-repair-message-${index}`),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.makeUnsafe(`message-hot-cursor-repair-${index}`),
+            role: "user",
+            text: `message ${index}`,
+            turnId: null,
+            streaming: false,
+            createdAt: occurredAt,
+            updatedAt: occurredAt,
+          },
+        });
+        latestSequence = savedEvent.sequence;
+        yield* projectionPipeline.projectEvent(savedEvent);
+      }
+
+      // Reproduce the interrupted-repair shape: no hot cursor, and one
+      // projector stalled behind the journal head.
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.hot}
+      `;
+      yield* sql`
+        UPDATE projection_state
+        SET last_applied_sequence = 2
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}
+      `;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      return latestSequence;
+    }).pipe(Effect.provide(projectionLayer));
+
+    const { stateRows, messageCount } = yield* Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      yield* projectionPipeline.bootstrap;
+      const stateRows = yield* sql<{
+        readonly projector: string;
+        readonly lastAppliedSequence: number;
+      }>`
+        SELECT projector, last_applied_sequence AS "lastAppliedSequence"
+        FROM projection_state
+        ORDER BY projector ASC
+      `;
+      const [countRow] = yield* sql<{ readonly messageCount: number }>`
+        SELECT COUNT(*) AS "messageCount" FROM projection_thread_messages
+      `;
+      return { stateRows, messageCount: countRow?.messageCount ?? 0 };
+    }).pipe(Effect.provide(projectionLayer));
+
+    const cursorByProjector = new Map(
+      stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
+    );
+    assert.equal(cursorByProjector.get(ORCHESTRATION_PROJECTOR_NAMES.hot), latestSequence);
+    assert.equal(
+      cursorByProjector.get(ORCHESTRATION_PROJECTOR_NAMES.threadMessages),
+      latestSequence,
+    );
+    // The stalled projector actually replayed its backlog, not just its cursor.
+    assert.equal(messageCount, 5);
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "synara-projection-pipeline-hot-cursor-repair-",
+        }),
+        NodeServices.layer,
+      ),
+    ),
+  ),
+);
+
 it.effect("drains 2,501 file-backed events to a captured high-water fence", () =>
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;

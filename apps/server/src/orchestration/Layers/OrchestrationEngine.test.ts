@@ -1293,11 +1293,12 @@ describe("OrchestrationEngine", () => {
     expect(deferredCalls).toBeGreaterThanOrEqual(1);
     expect(bootstrapCalls).toBe(4);
     await vi.waitFor(async () => {
-      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toEqual({
+      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toMatchObject({
         state: "healthy",
         inFlight: false,
         retryAttempts: 0,
         lastFailure: null,
+        missingProjectors: [],
       });
     });
 

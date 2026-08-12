@@ -40,6 +40,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import {
   isPersistenceError,
+  ProjectionStateIncompleteError,
   toPersistenceDecodeError,
   toPersistenceSqlOrDecodeError,
   toPersistenceSqlError,
@@ -718,28 +719,51 @@ function toProjectedThread(input: {
   };
 }
 
+/**
+ * Derive the snapshot fence from projector cursor rows.
+ *
+ * An empty cursor table is a fresh database, whose fence is legitimately 0. A
+ * non-empty table missing a required cursor is a different situation entirely:
+ * the fence is unknown, and mapping it to 0 would report the snapshot as
+ * "high-water events behind" forever — every stream (re)start would demand a
+ * resnapshot that can never succeed. That state is only reachable through an
+ * interrupted projection repair, so it fails with a typed
+ * ProjectionStateIncompleteError instead of silently degrading. The projection
+ * bootstrap reconstructs the hot cursor on startup (see
+ * initializeHotProjectionCursor), so the error also self-heals on restart.
+ */
 function computeSnapshotSequence(
   stateRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionStateDbRowSchema>>,
-): number {
+): Effect.Effect<number, ProjectionStateIncompleteError> {
   if (stateRows.length === 0) {
-    return 0;
+    return Effect.succeed(0);
   }
   const sequenceByProjector = new Map(
     stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
   );
 
   let minSequence = Number.POSITIVE_INFINITY;
+  const missingProjectors: string[] = [];
   for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
     const sequence = sequenceByProjector.get(projector);
     if (sequence === undefined) {
-      return 0;
+      missingProjectors.push(projector);
+      continue;
     }
     if (sequence < minSequence) {
       minSequence = sequence;
     }
   }
+  if (missingProjectors.length > 0) {
+    return Effect.fail(
+      new ProjectionStateIncompleteError({
+        missingProjectors,
+        knownProjectors: stateRows.map((row) => row.projector),
+      }),
+    );
+  }
 
-  return Number.isFinite(minSequence) ? minSequence : 0;
+  return Effect.succeed(Number.isFinite(minSequence) ? minSequence : 0);
 }
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
@@ -2053,7 +2077,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           );
 
           const snapshot = {
-            snapshotSequence: computeSnapshotSequence(stateRows),
+            snapshotSequence: yield* computeSnapshotSequence(stateRows),
             spaces: spaceRows.map(toProjectedSpace),
             projects,
             threads,
@@ -2197,7 +2221,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           );
 
           return yield* decodeReadModel({
-            snapshotSequence: computeSnapshotSequence(stateRows),
+            snapshotSequence: yield* computeSnapshotSequence(stateRows),
             spaces: spaceRows.map(toProjectedSpace),
             projects,
             threads,
@@ -2311,7 +2335,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             : false;
 
           const snapshot = {
-            snapshotSequence: computeSnapshotSequence(stateRows),
+            snapshotSequence: yield* computeSnapshotSequence(stateRows),
             requiresEmptyProjectShellRepair,
             spaces: spaceRows.filter((row) => row.deletedAt === null).map(toProjectedSpaceShell),
             projects: projectRows
@@ -2407,10 +2431,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           "ProjectionSnapshotQuery.getSnapshotSequence:decodeRows",
         ),
       ),
-      Effect.map(
-        (stateRows): ProjectionSnapshotSequence => ({
-          snapshotSequence: computeSnapshotSequence(stateRows),
-        }),
+      Effect.flatMap((stateRows) =>
+        computeSnapshotSequence(stateRows).pipe(
+          Effect.map((snapshotSequence): ProjectionSnapshotSequence => ({ snapshotSequence })),
+        ),
       ),
     );
 
@@ -2907,14 +2931,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           if (Option.isNone(threadDetail)) {
             return Effect.succeed(Option.none<OrchestrationThreadDetailSnapshot>());
           }
-          return decodeThreadDetailSnapshot({
-            snapshotSequence: computeSnapshotSequence(stateRows),
-            thread: threadDetail.value,
-          }).pipe(
-            Effect.map((snapshot) => Option.some(snapshot)),
-            Effect.mapError(
-              toPersistenceDecodeError(
-                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:decodeSnapshot",
+          return computeSnapshotSequence(stateRows).pipe(
+            Effect.flatMap((snapshotSequence) =>
+              decodeThreadDetailSnapshot({
+                snapshotSequence,
+                thread: threadDetail.value,
+              }).pipe(
+                Effect.map((snapshot) => Option.some(snapshot)),
+                Effect.mapError(
+                  toPersistenceDecodeError(
+                    "ProjectionSnapshotQuery.getThreadDetailSnapshotById:decodeSnapshot",
+                  ),
+                ),
               ),
             ),
           );

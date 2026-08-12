@@ -2058,10 +2058,25 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         .filter((projector) => projector.phase === "hot")
         .map((projector) => projector.name),
     );
-    const sourceRows = (yield* projectionStateRepository.listAll()).filter((row) =>
+    const stateRows = yield* projectionStateRepository.listAll();
+    const sourceRows = stateRows.filter((row) =>
       hotProjectorNames.has(row.projector as ProjectorName),
     );
     if (sourceRows.length === 0) {
+      // A fully empty cursor table is a fresh database and needs no hot row:
+      // the empty table itself reads as sequence 0. A non-empty table with no
+      // hot-phase rows can only mean an empty journal (bootstrap just replayed
+      // every projector, and any journal with at least one event leaves a
+      // cursor row per projector via the boundary-event skip path), so a zero
+      // hot cursor is the exact fence. Without it the snapshot sequence would
+      // be underivable and the engine could not load its command read model.
+      if (stateRows.length > 0) {
+        yield* projectionStateRepository.upsert({
+          projector: ORCHESTRATION_PROJECTOR_NAMES.hot,
+          lastAppliedSequence: 0,
+          updatedAt: new Date().toISOString(),
+        });
+      }
       return;
     }
 
@@ -2258,13 +2273,66 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
+  // Surface per-projector lag instead of letting a stalled or missing cursor
+  // manifest as unrelated stream failures. `phase` distinguishes the report
+  // taken before replay (how far behind did we start?) from the one after
+  // (did replay actually converge? — it must, so any residual lag is an error).
+  const reportProjectorLag = (phase: "before-replay" | "after-replay", highWaterSequence: number) =>
+    Effect.gen(function* () {
+      const stateRows = yield* projectionStateRepository.listAll();
+      if (stateRows.length === 0) {
+        // Fresh database: no cursors exist yet and nothing can lag.
+        return;
+      }
+      const sequenceByProjector = new Map(
+        stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
+      );
+      const lagByProjector: Record<string, number> = {};
+      const missingProjectors: string[] = [];
+      for (const projector of projectors) {
+        const sequence = sequenceByProjector.get(projector.name);
+        if (sequence === undefined) {
+          missingProjectors.push(projector.name);
+          continue;
+        }
+        const lag = highWaterSequence - sequence;
+        if (lag > 0) {
+          lagByProjector[projector.name] = lag;
+        }
+      }
+      const laggingCount = Object.keys(lagByProjector).length;
+      if (laggingCount === 0 && missingProjectors.length === 0) {
+        return;
+      }
+      const annotations = {
+        phase,
+        highWaterSequence,
+        lagByProjector,
+        missingProjectors,
+      };
+      // Missing rows before replay are normal on a fresh database; residual lag
+      // after a successful replay is not — it means a projector silently failed
+      // to reach the head this bootstrap claims to have replayed through.
+      if (phase === "after-replay") {
+        yield* Effect.logError("orchestration projectors lag the journal after bootstrap").pipe(
+          Effect.annotateLogs(annotations),
+        );
+        return;
+      }
+      yield* Effect.logWarning("orchestration projectors lag the journal at bootstrap").pipe(
+        Effect.annotateLogs(annotations),
+      );
+    });
+
   const bootstrap: OrchestrationProjectionPipelineShape["bootstrap"] = Effect.gen(function* () {
     yield* fastForwardHotProjectorCursors;
     const highWaterSequence = yield* eventStore.getHighWaterSequence();
+    yield* reportProjectorLag("before-replay", highWaterSequence);
     yield* Effect.forEach(projectors, (projector) =>
       bootstrapProjector(projector, highWaterSequence),
     );
     yield* initializeHotProjectionCursor;
+    yield* reportProjectorLag("after-replay", highWaterSequence);
   }).pipe(
     Effect.tap(() =>
       Effect.log("orchestration projection pipeline bootstrapped").pipe(
