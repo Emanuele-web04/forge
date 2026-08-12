@@ -589,13 +589,51 @@ describe("WsTransport", () => {
         Cause.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
       ),
     ).toBe(SNAPSHOT_FAULT_RETRY_MS);
-    // RESNAPSHOT has its own bounded fast retry; generic errors get neither.
+    // RESNAPSHOT reaches this classifier only after its bounded fast retries
+    // are exhausted (the admission-retry path returns first): an advancing
+    // fence that has not yet closed a large gap must keep slow-retrying
+    // instead of dying while recovery is succeeding.
     expect(
       getSnapshotFaultRetryDelayMs(
         Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
       ),
-    ).toBeNull();
+    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
     expect(getSnapshotFaultRetryDelayMs(Cause.fail(new Error("transient")))).toBeNull();
+  });
+
+  it("keeps slow-retrying an exhausted resnapshot demand instead of leaving the stream dead", async () => {
+    // A projector catching up through a backlog larger than the replay limit
+    // advances the fence on every request without closing the gap: the server
+    // keeps answering RESNAPSHOT_REQUIRED (progress is real, so it never
+    // escalates to STALLED). Once the fast retries are spent, the stream must
+    // fall back to the slow recovery path rather than dying while the server
+    // is actively healing.
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.shell";
+      internals.streamResnapshotRetries.set(key, MAX_RESNAPSHOT_RETRY_ATTEMPTS);
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS - 1);
+      expect(restart).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("classifies transport-runtime interrupts as retryable typed failures", () => {

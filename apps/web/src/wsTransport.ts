@@ -351,15 +351,26 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
 ]);
 
+const RESNAPSHOT_REQUIRED_ERROR_CODE = "ORCHESTRATION_RESNAPSHOT_REQUIRED";
+
 // Server-diagnosed snapshot faults: the projection fence is stalled or
 // underivable, and only server-side recovery (a restart's bootstrap replay, a
 // repair, or the deferred catch-up advancing the fence) can clear them. The
 // stream must neither die permanently — the shell stream has no route-level
 // fallback, so a dead stream means a silently stale sidebar — nor hammer the
 // server; a slow in-place retry converges as soon as the server heals.
+//
+// RESNAPSHOT_REQUIRED belongs here too, but only as a fallback: this
+// classifier is consulted after the bounded fast retries are exhausted (the
+// admission-retry path returns first), which is precisely the
+// advancing-but-still-behind fence — a projector working through a backlog
+// larger than the replay limit. The server keeps that demand retryable
+// because progress is real, so the stream must keep slow-retrying until the
+// gap closes rather than dying while recovery is succeeding.
 const SNAPSHOT_FAULT_ERROR_CODES = new Set([
   "ORCHESTRATION_SNAPSHOT_STALLED",
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
+  RESNAPSHOT_REQUIRED_ERROR_CODE,
 ]);
 export const SNAPSHOT_FAULT_RETRY_MS = 30_000;
 
@@ -529,7 +540,6 @@ export function getThreadSnapshotBootstrapRetryDelayMs(
   return null;
 }
 
-const RESNAPSHOT_REQUIRED_ERROR_CODE = "ORCHESTRATION_RESNAPSHOT_REQUIRED";
 const DEFAULT_RESNAPSHOT_RETRY_MS = 250;
 export const MAX_RESNAPSHOT_RETRY_ATTEMPTS = 2;
 
