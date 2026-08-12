@@ -375,8 +375,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       // per-projector cursor only when its predicate matches (checkpoints
       // rejects every live event), so individual cursors legitimately trail
       // the journal between bootstraps and scoring them would report a healthy
-      // system as permanently degraded. Missing rows are still checked across
-      // the full repair set — absence is abnormal regardless of phase. A read
+      // system as permanently degraded. Missing rows follow that same fence
+      // scope: predicate-specific cursors are legitimately absent until their
+      // first matching event, while a missing required fence cursor makes the
+      // snapshot sequence incomplete. A read
       // failure must not masquerade as health: the probe still answers (a
       // failing /health body is worse than a degraded one), but reports
       // state "unknown" so a database outage is distinguishable from both a
@@ -406,7 +408,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
         }
         if (stateRows.length > 0) {
-          for (const projector of REQUIRED_REPAIR_PROJECTORS) {
+          for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
             if (!sequenceByProjector.has(projector)) {
               missingProjectors.push(projector);
             }
