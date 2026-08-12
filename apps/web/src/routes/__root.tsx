@@ -105,7 +105,7 @@ import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopT
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
-import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
+import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
@@ -2101,18 +2101,15 @@ function DesktopProjectBootstrap() {
       .getShellSnapshot()
       .then((snapshot) => {
         if (!ownsAttempt()) return;
-        const needsRepair =
-          (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
-          hasLiveThreadsWithMissingProjects(snapshot);
+        const needsRepair = shouldRepairDesktopProjectSnapshot(snapshot);
         if (!needsRepair) {
           if (!ownsAttempt() || !attempt.complete()) return;
           useStore.getState().syncServerShellSnapshot(snapshot);
-          return snapshot;
+          return;
         }
         return api.orchestration.repairState().then((repairedSnapshot) => {
           if (!ownsAttempt() || !attempt.complete()) return;
           syncServerReadModel(repairedSnapshot);
-          return repairedSnapshot;
         });
       })
       .catch(() => {

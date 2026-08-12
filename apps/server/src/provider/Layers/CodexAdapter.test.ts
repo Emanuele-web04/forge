@@ -1557,6 +1557,95 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.status, "inProgress");
     }),
   );
+
+  it.effect(
+    "surfaces previously-unmapped native events with bounded redacted diagnostics instead of raw payloads",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+        // `item/agentMessage/completed` has no explicit mapping (only the
+        // `item/agentMessage/delta` stream does); before the passthrough
+        // fallback this event produced no runtime event at all.
+        lifecycleManager.emit("event", {
+          id: asEventId("evt-unmapped-agent-message-completed"),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method: "item/agentMessage/completed",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("agent_message_9"),
+          payload: {
+            apiKey: "must-not-reach-the-runtime-journal",
+            note: "Authorization: Bearer private-token",
+            msg: {
+              type: "item/agentMessage/completed",
+              item_id: "agent_message_9",
+              summary: "Finished the refactor",
+            },
+            output: "x".repeat(64_000),
+          },
+        } satisfies ProviderEvent);
+
+        const firstEvent = yield* Fiber.join(firstEventFiber);
+        assert.equal(firstEvent._tag, "Some");
+        if (firstEvent._tag !== "Some") {
+          return;
+        }
+        assert.equal(firstEvent.value.type, "event.unmapped");
+        if (firstEvent.value.type !== "event.unmapped") {
+          return;
+        }
+        // Raw native type/label is carried as the title source.
+        assert.equal(firstEvent.value.payload.nativeType, "item/agentMessage/completed");
+        assert.equal(firstEvent.value.payload.detail, "Finished the refactor");
+        const serialized = JSON.stringify(firstEvent.value);
+        assert.equal(serialized.includes("must-not-reach-the-runtime-journal"), false);
+        assert.equal(serialized.includes("private-token"), false);
+        assert.ok(serialized.length < 17_000);
+        assert.deepEqual(firstEvent.value.raw?.payload, {
+          synaraSanitized: true,
+        });
+        // Provider refs still resolved from the raw event.
+        assert.equal(firstEvent.value.itemId, "agent_message_9");
+        assert.equal(firstEvent.value.providerRefs?.providerItemId, "agent_message_9");
+      }),
+  );
+
+  it.effect("coalesces repeated unmapped burst events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const emit = (id: string, method: string) =>
+        lifecycleManager.emit("event", {
+          id: asEventId(id),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method,
+          threadId: asThreadId("thread-unmapped-burst"),
+          turnId: asTurnId("turn-unmapped-burst"),
+          payload: { summary: method },
+        } satisfies ProviderEvent);
+
+      emit("evt-unmapped-delta-1", "item/future/outputDelta");
+      emit("evt-unmapped-delta-2", "item/future/outputDelta");
+      emit("evt-unmapped-completed", "item/future/completed");
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) =>
+          event.type === "event.unmapped" ? event.payload.nativeType : event.type,
+        ),
+        ["item/future/outputDelta", "item/future/completed"],
+      );
+    }),
+  );
 });
 
 afterAll(() => {

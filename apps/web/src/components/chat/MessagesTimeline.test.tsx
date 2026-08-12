@@ -131,6 +131,11 @@ beforeAll(() => {
       classList,
       offsetHeight: 0,
     },
+    // flushStorageBeforePageHide registers visibilitychange at module load of
+    // the MessagesTimeline import chain (via composerDraftStore).
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    visibilityState: "visible",
   });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
@@ -138,7 +143,18 @@ beforeAll(() => {
   });
 });
 
+// Warm the component module once: the first dynamic import pays the whole
+// component-graph transform, which exceeds the 5s per-test timeout on slow CI
+// runners (observed >10s under a full parallel suite). beforeAll keeps that
+// cost off any single test's clock; the explicit timeout keeps it off the
+// default 10s hook clock too.
+beforeAll(async () => {
+  await import("./MessagesTimeline");
+}, 120_000);
+
 describe("MessagesTimeline", () => {
+  // The first test pays the full dynamic-import cost of the MessagesTimeline
+  // module graph, which can exceed 10s under CI thread contention.
   it("renders an accent deep link to the immediate fork source", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -161,7 +177,7 @@ describe("MessagesTimeline", () => {
     expect(markup.indexOf('data-fork-source-divider="true"')).toBeLessThan(
       markup.indexOf("Fork-only turn"),
     );
-  });
+  }, 30_000);
 
   it("keeps the divider after imported history while waiting for the first fork turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -221,11 +237,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-index="0"');
     expect(markup).not.toContain('class="relative" style="height:');
     expect(markup).toContain('data-timeline-row-kind="message"');
-    // First test in the file pays the full dynamic-import cost of the
-    // MessagesTimeline module graph, which exceeds 10s under CI thread
-    // contention (observed flaking on 4-thread runners while passing in
-    // ~2s locally).
-  }, 30_000);
+  });
 
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");

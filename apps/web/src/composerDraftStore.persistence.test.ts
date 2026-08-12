@@ -118,6 +118,38 @@ describe("composerDraftStore persisted-state hydration", () => {
     expect(hydrated.draftsByThreadId[threadId]?.runtimeMode).toBe("auto");
     expect(hydrated.draftThreadsByThreadId[threadId]?.runtimeMode).toBe("auto");
   });
+
+  it("preserves Debug mode in composer and draft-thread state during hydration", () => {
+    const projectId = ProjectId.makeUnsafe("project-debug-mode");
+    const threadId = ThreadId.makeUnsafe("thread-debug-mode");
+
+    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "Reproduce the crash",
+          attachments: [],
+          interactionMode: "debug",
+        },
+      },
+      draftThreadsByThreadId: {
+        [threadId]: {
+          projectId,
+          createdAt: "2026-08-11T00:00:00.000Z",
+          runtimeMode: "approval-required",
+          interactionMode: "debug",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          workingDirectory: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {},
+    });
+
+    expect(hydrated.draftsByThreadId[threadId]?.interactionMode).toBe("debug");
+    expect(hydrated.draftThreadsByThreadId[threadId]?.interactionMode).toBe("debug");
+  });
 });
 
 describe("composerDraftStore restored source proposed plan", () => {
@@ -555,7 +587,14 @@ describe("composerDraftStore queued follow-ups", () => {
       name: "queued.png",
     });
     const store = useComposerDraftStore.getState();
-    store.enqueueQueuedTurn(threadId, makeQueuedChatTurn("queued-chat-1", queuedImage));
+    const queuedChatTurn = makeQueuedChatTurn("queued-chat-1", queuedImage);
+    if (queuedChatTurn.kind !== "chat") {
+      throw new Error("Expected a queued chat turn fixture");
+    }
+    store.enqueueQueuedTurn(threadId, {
+      ...queuedChatTurn,
+      interactionMode: "debug",
+    });
 
     const persistApi = useComposerDraftStore.persist as unknown as {
       getOptions: () => {
@@ -589,6 +628,7 @@ describe("composerDraftStore queued follow-ups", () => {
           planId: "plan-1",
         },
         terminalContexts: [{ text: "git status\nOn branch main" }],
+        interactionMode: "debug",
       },
     ]);
   });

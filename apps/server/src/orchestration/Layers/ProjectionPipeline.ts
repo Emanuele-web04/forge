@@ -2226,10 +2226,25 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         .filter((projector) => projector.phase === "hot")
         .map((projector) => projector.name),
     );
-    const sourceRows = (yield* projectionStateRepository.listAll()).filter((row) =>
+    const stateRows = yield* projectionStateRepository.listAll();
+    const sourceRows = stateRows.filter((row) =>
       hotProjectorNames.has(row.projector as ProjectorName),
     );
     if (sourceRows.length === 0) {
+      // A fully empty cursor table is a fresh database and needs no hot row:
+      // the empty table itself reads as sequence 0. A non-empty table with no
+      // hot-phase rows can only mean an empty journal (bootstrap just replayed
+      // every projector, and any journal with at least one event leaves a
+      // cursor row per projector via the boundary-event skip path), so a zero
+      // hot cursor is the exact fence. Without it the snapshot sequence would
+      // be underivable and the engine could not load its command read model.
+      if (stateRows.length > 0) {
+        yield* projectionStateRepository.upsert({
+          projector: ORCHESTRATION_PROJECTOR_NAMES.hot,
+          lastAppliedSequence: 0,
+          updatedAt: new Date().toISOString(),
+        });
+      }
       return;
     }
 
@@ -2280,15 +2295,73 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     );
   });
 
-  const advanceProjectorStateToEvent = (
+  // Replay batching amortizes SQLite commit fsyncs, which dominate a large
+  // catch-up: one transaction per event costs ~0.5ms of commit overhead each,
+  // so a multi-hundred-thousand-event backlog takes minutes on fsync alone.
+  // Committing the batch's applied rows and a single tail-cursor upsert
+  // together keeps the invariant that a committed cursor never runs ahead of
+  // its committed rows; a mid-batch crash merely re-applies up to one batch of
+  // idempotent events on the next start. Live projection is untouched — it
+  // stays one transaction per event, atomic with the journal append.
+  const BOOTSTRAP_REPLAY_BATCH_SIZE = 500;
+
+  const applyBootstrapReplayBatch = (
     projector: ProjectorDefinition,
-    event: OrchestrationEvent,
+    events: ReadonlyArray<OrchestrationEvent>,
   ) =>
-    projectionStateRepository.upsert({
-      projector: projector.name,
-      lastAppliedSequence: event.sequence,
-      updatedAt: event.occurredAt,
-    });
+    Effect.gen(function* () {
+      const lastEvent = events[events.length - 1];
+      if (lastEvent === undefined) {
+        return;
+      }
+      const attachmentSideEffects: AttachmentSideEffects = {
+        deletedThreadIds: new Set<string>(),
+        prunedThreadRelativePaths: new Map<string, Set<string>>(),
+      };
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          for (const event of events) {
+            if (projector.shouldApply?.(event) ?? true) {
+              yield* projector.apply(event, attachmentSideEffects);
+            }
+          }
+          // The tail event advances the cursor whether or not it matched the
+          // predicate, subsuming the old skipped-event cursor preservation.
+          yield* projectionStateRepository.upsert({
+            projector: projector.name,
+            lastAppliedSequence: lastEvent.sequence,
+            updatedAt: lastEvent.occurredAt,
+          });
+          // Mirror runProjectorsForEventCore: cleanup markers commit with the
+          // rows that made the attachments unreferenced.
+          for (const threadId of attachmentSideEffects.deletedThreadIds) {
+            yield* managedAttachments.markCleanupByThread({
+              ownerThreadId: threadId,
+              reason: "thread-deleted",
+              requestedAt: lastEvent.occurredAt,
+            });
+          }
+          for (const [threadId, relativePaths] of attachmentSideEffects.prunedThreadRelativePaths) {
+            yield* managedAttachments.markUnreferencedClaimedForCleanup({
+              ownerThreadId: threadId,
+              retainedAttachmentIds: [...relativePaths]
+                .map(parseAttachmentIdFromRelativePath)
+                .filter(
+                  (attachmentId): attachmentId is string =>
+                    attachmentId?.startsWith("att_v2_") === true,
+                ),
+              reason: "projection-pruned",
+              requestedAt: lastEvent.occurredAt,
+            });
+          }
+        }),
+      );
+      yield* runProjectorAttachmentSideEffects([projector], lastEvent, attachmentSideEffects);
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ServerConfig, serverConfig),
+    );
 
   const bootstrapProjector = (projector: ProjectorDefinition, highWaterSequence: number) =>
     projectionStateRepository
@@ -2297,11 +2370,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       })
       .pipe(
         Effect.flatMap((stateRow) =>
-          Effect.gen(function* () {
-            let pendingSkippedEvent: OrchestrationEvent | null = null;
-
-            yield* Stream.runForEach(
-              eventStore.readFromSequence(
+          Stream.runForEach(
+            eventStore
+              .readFromSequence(
                 Option.isSome(stateRow) ? stateRow.value.lastAppliedSequence : 0,
                 Number.MAX_SAFE_INTEGER,
                 highWaterSequence,
@@ -2309,24 +2380,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   ...projector.replayFilter,
                   includeBoundaryEvent: true,
                 },
-              ),
-              (event) => {
-                if (!(projector.shouldApply?.(event) ?? true)) {
-                  pendingSkippedEvent = event;
-                  return Effect.void;
-                }
-
-                pendingSkippedEvent = null;
-                return runProjectorsForEvent([projector], event);
-              },
-            );
-
-            // Preserve the replay cursor across trailing non-matching events without paying the
-            // full projector transaction/apply cost for bootstrap no-ops.
-            if (pendingSkippedEvent) {
-              yield* advanceProjectorStateToEvent(projector, pendingSkippedEvent);
-            }
-          }),
+              )
+              .pipe(Stream.grouped(BOOTSTRAP_REPLAY_BATCH_SIZE)),
+            (events) => applyBootstrapReplayBatch(projector, events),
+          ),
         ),
       );
 
@@ -2426,13 +2483,66 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
+  // Surface per-projector lag instead of letting a stalled or missing cursor
+  // manifest as unrelated stream failures. `phase` distinguishes the report
+  // taken before replay (how far behind did we start?) from the one after
+  // (did replay actually converge? — it must, so any residual lag is an error).
+  const reportProjectorLag = (phase: "before-replay" | "after-replay", highWaterSequence: number) =>
+    Effect.gen(function* () {
+      const stateRows = yield* projectionStateRepository.listAll();
+      if (stateRows.length === 0) {
+        // Fresh database: no cursors exist yet and nothing can lag.
+        return;
+      }
+      const sequenceByProjector = new Map(
+        stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
+      );
+      const lagByProjector: Record<string, number> = {};
+      const missingProjectors: string[] = [];
+      for (const projector of projectors) {
+        const sequence = sequenceByProjector.get(projector.name);
+        if (sequence === undefined) {
+          missingProjectors.push(projector.name);
+          continue;
+        }
+        const lag = highWaterSequence - sequence;
+        if (lag > 0) {
+          lagByProjector[projector.name] = lag;
+        }
+      }
+      const laggingCount = Object.keys(lagByProjector).length;
+      if (laggingCount === 0 && missingProjectors.length === 0) {
+        return;
+      }
+      const annotations = {
+        phase,
+        highWaterSequence,
+        lagByProjector,
+        missingProjectors,
+      };
+      // Missing rows before replay are normal on a fresh database; residual lag
+      // after a successful replay is not — it means a projector silently failed
+      // to reach the head this bootstrap claims to have replayed through.
+      if (phase === "after-replay") {
+        yield* Effect.logError("orchestration projectors lag the journal after bootstrap").pipe(
+          Effect.annotateLogs(annotations),
+        );
+        return;
+      }
+      yield* Effect.logWarning("orchestration projectors lag the journal at bootstrap").pipe(
+        Effect.annotateLogs(annotations),
+      );
+    });
+
   const bootstrap: OrchestrationProjectionPipelineShape["bootstrap"] = Effect.gen(function* () {
     yield* fastForwardHotProjectorCursors;
     const highWaterSequence = yield* eventStore.getHighWaterSequence();
+    yield* reportProjectorLag("before-replay", highWaterSequence);
     yield* Effect.forEach(projectors, (projector) =>
       bootstrapProjector(projector, highWaterSequence),
     );
     yield* initializeHotProjectionCursor;
+    yield* reportProjectorLag("after-replay", highWaterSequence);
   }).pipe(
     Effect.tap(() =>
       Effect.log("orchestration projection pipeline bootstrapped").pipe(

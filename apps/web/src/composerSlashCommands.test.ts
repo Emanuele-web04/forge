@@ -25,6 +25,7 @@ describe("composerSlashCommands", () => {
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
     expect(isBuiltInComposerSlashCommand("export")).toBe(true);
     expect(isBuiltInComposerSlashCommand("feedback")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("debug")).toBe(true);
     expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
   });
 
@@ -35,6 +36,7 @@ describe("composerSlashCommands", () => {
       "automation",
     ]);
     expect(filterComposerSlashCommands("feed").map((entry) => entry.command)).toEqual(["feedback"]);
+    expect(filterComposerSlashCommands("debug").map((entry) => entry.command)).toEqual(["debug"]);
   });
 
   it("ranks slash command name matches before description-only matches", () => {
@@ -64,6 +66,10 @@ describe("composerSlashCommands", () => {
     });
     expect(parseComposerSlashInvocation("/feedback")).toEqual({
       command: "feedback",
+      args: "",
+    });
+    expect(parseComposerSlashInvocation("/debug")).toEqual({
+      command: "debug",
       args: "",
     });
     expect(parseComposerSlashInvocation("review")).toBeNull();
@@ -289,17 +295,17 @@ describe("composerSlashCommands", () => {
   });
 
   it("only exposes Synara-owned app commands for claude", () => {
-    expect(
-      getAvailableComposerSlashCommands({
-        provider: "claudeAgent",
-        supportsFastSlashCommand: true,
-        canOfferCompactCommand: true,
-        canOfferReviewCommand: true,
-        canOfferForkCommand: true,
-        canOfferSideCommand: true,
-        canOfferExportCommand: true,
-      }),
-    ).toEqual(["side", "export", "feedback", "automation"]);
+    const commands = getAvailableComposerSlashCommands({
+      provider: "claudeAgent",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+      canOfferExportCommand: true,
+    });
+
+    expect(commands).toEqual(["side", "export", "debug", "default", "feedback", "automation"]);
   });
 
   it("offers the app-level /export command on every provider", () => {
@@ -403,6 +409,7 @@ describe("composerSlashCommands", () => {
       "clear",
       "model",
       "plan",
+      "debug",
       "default",
       "review",
       "fork",
