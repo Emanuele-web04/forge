@@ -424,7 +424,7 @@ const makeServerProgram = (input: CliInput) =>
       baseDir: config.baseDir,
       ...(config.devUrl ? { devUrl: config.devUrl } : {}),
     });
-    registerAccountUsageReporterNudge(() => accountUsageReporter.notifyActivity());
+    registerAccountUsageReporterNudge(() => void accountUsageReporter.flushNow());
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         registerAccountUsageReporterNudge(undefined);

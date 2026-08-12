@@ -689,10 +689,12 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
         const skillChunks = chunk(skills, USAGE_PUSH_MAX_BUCKETS);
         const pushCount = Math.max(modelChunks.length, skillChunks.length);
         for (let index = 0; index < pushCount; index += 1) {
+          if (stopped) return;
           // Paced under the service's per-client push budget; a single-push
           // flush (the steady state) never waits.
           if (index > 0) {
             await new Promise<void>((resolve) => setTimeout(resolve, MULTI_PUSH_PACE_MS));
+            if (stopped) return;
           }
           await push({
             environmentId,
