@@ -102,12 +102,21 @@ function initialsOf(displayName: string): string {
 /** Week columns (7 rows each) for the trailing window, Sunday-first. */
 function heatmapColumns(profile: PublicProfile): number[][] {
   const cells = buildHeatmapCells(profile.heatmap);
-  // Trim to whole weeks ending on the last cell so no partial column renders.
+  // Pad leading slots so the first cell aligns to its weekday (0 = Sunday),
+  // matching ActivityHeatmap's Sunday-first week columns.
+  const slots: number[] = [];
+  for (let index = 0; index < cells[0]!.weekday; index += 1) {
+    slots.push(0);
+  }
+  for (const cell of cells) {
+    slots.push(cell.intensity);
+  }
+  // Trim to whole weeks ending on the last slot so no partial column renders.
   const total = HEATMAP_WEEKS * 7;
-  const trailing = cells.slice(-total);
+  const trailing = slots.slice(-total);
   const columns: number[][] = [];
   for (let index = 0; index < trailing.length; index += 7) {
-    columns.push(trailing.slice(index, index + 7).map((cell) => cell.intensity));
+    columns.push(trailing.slice(index, index + 7));
   }
   return columns;
 }
