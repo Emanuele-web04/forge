@@ -75,5 +75,14 @@ export function formatShortDate(day: string | null): string | null {
   return MONTH_DAY_FORMATTER.format(new Date(Date.UTC(year, month - 1, date)));
 }
 
+// 13 → "1 PM" — the hour label used by "Most active hour" on the profile panel,
+// the shareable card, and the public profile page.
+export function formatHourLabel(hour: number): string {
+  const normalized = ((hour % 24) + 24) % 24;
+  if (normalized === 0) return "12 AM";
+  if (normalized === 12) return "12 PM";
+  return normalized < 12 ? `${normalized} AM` : `${normalized - 12} PM`;
+}
+
 const WHOLE_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const MONTH_DAY_FORMATTER = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });

@@ -24,6 +24,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { ActivityHeatmap, heatmapTooltipText } from "@synara/profile-ui/heatmap";
 import { InsightRow, ModelUsageRow, StatTileGrid } from "@synara/profile-ui/sections";
+import { providerLabel } from "@synara/profile-ui/provider-icon";
 import {
   selectProfileHeatmap,
   selectProfileModelUsage,
@@ -36,6 +37,7 @@ import { ProfileAvatar } from "@synara/profile-ui/avatar";
 import {
   formatCompact,
   formatDays,
+  formatHourLabel,
   formatNumber,
   toDisplayName,
 } from "@synara/profile-ui/formatting";
@@ -228,7 +230,7 @@ function DeviceStatsBody({
             {
               label: "Most used provider",
               value: topProvider.provider
-                ? `${formatProviderLabel(topProvider.provider)}${
+                ? `${providerLabel(topProvider.provider)}${
                     topProvider.percent !== null ? ` · ${topProvider.percent}%` : ""
                   }`
                 : "—",
@@ -314,7 +316,7 @@ function AccountStatsBody() {
             {
               label: "Most used provider",
               value: view.topProvider.provider
-                ? `${formatProviderLabel(view.topProvider.provider)}${
+                ? `${providerLabel(view.topProvider.provider)}${
                     view.topProvider.percent !== null ? ` · ${view.topProvider.percent}%` : ""
                   }`
                 : "—",
@@ -487,15 +489,8 @@ function ModelUsageSection({
 
 // ── Small pieces ───────────────────────────────────────────────────────
 
-function formatHour(hour: number): string {
-  const normalized = ((hour % 24) + 24) % 24;
-  if (normalized === 0) return "12 AM";
-  if (normalized === 12) return "12 PM";
-  return normalized < 12 ? `${normalized} AM` : `${normalized - 12} PM`;
-}
-
 function formatPeakHourLabel(startHour: number | null): string {
-  return startHour === null ? "—" : formatHour(startHour);
+  return startHour === null ? "—" : formatHourLabel(startHour);
 }
 
 function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]): string {
@@ -504,29 +499,6 @@ function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]
   }
   const promptLabel = project.promptCount === 1 ? "prompt" : "prompts";
   return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
-}
-
-function formatProviderLabel(provider: ProviderKind): string {
-  switch (provider) {
-    case "codex":
-      return "Codex";
-    case "claudeAgent":
-      return "Claude";
-    case "cursor":
-      return "Cursor";
-    case "antigravity":
-      return "Antigravity";
-    case "grok":
-      return "Grok";
-    case "droid":
-      return "Droid";
-    case "kilo":
-      return "Kilo";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "Pi";
-  }
 }
 
 function ProfileSkeleton() {

@@ -1,16 +1,18 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { Heatmap } from "../../components/Heatmap";
-import { ActiveHours } from "../../components/ActiveHours";
-import { ModelSplit } from "../../components/ModelSplit";
+import { ProfileAvatar } from "@synara/profile-ui/avatar";
+import { ActivityHeatmap } from "@synara/profile-ui/heatmap";
+import { formatCompact, formatHourLabel } from "@synara/profile-ui/formatting";
 import {
-  compactNumber,
-  formatHourLabel,
-  formatStreak,
-  initial,
-  memberSince,
-} from "../../lib/format";
-import { fetchPublicProfile } from "../../lib/publicProfile";
+  PROVIDER_GLYPHS,
+  providerIconToneClassName,
+  providerLabel,
+} from "@synara/profile-ui/provider-icon";
+import { InsightRow, ModelUsageRow, StatTileGrid } from "@synara/profile-ui/sections";
+import { PageShell } from "../../components/chrome";
+import { buildHeatmapCells } from "../../lib/heatmapCells";
+import { formatStreak, initial, memberSince } from "../../lib/profileFormat";
+import { fetchPublicProfile, type PublicProfile } from "../../lib/publicProfile";
 
 type Params = { params: Promise<{ handle: string }> };
 
@@ -31,7 +33,7 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   if (!handle) return {};
   const profile = await fetchPublicProfile(handle).catch(() => null);
   if (!profile) return {};
-  const description = `${compactNumber(profile.lifetimeTokens)} tokens · ${compactNumber(profile.lifetimePrompts)} prompts on Synara`;
+  const description = `${formatCompact(profile.lifetimeTokens)} tokens · ${formatCompact(profile.lifetimePrompts)} prompts on Synara`;
   return {
     title: `${profile.displayName} (@${profile.handle}) · Synara`,
     description,
@@ -51,95 +53,67 @@ export default async function ProfilePage({ params }: Params) {
   const since = memberSince(profile.createdAt);
 
   return (
-    <main
-      style={{
-        maxWidth: 720,
-        margin: "0 auto",
-        padding: "48px 24px 64px",
-        display: "flex",
-        flexDirection: "column",
-        gap: 28,
-      }}
-    >
-      <header style={{ display: "flex", alignItems: "center", gap: 16 }}>
-        <div
-          aria-hidden
-          style={{
-            width: 64,
-            height: 64,
-            borderRadius: "50%",
-            background: profile.avatarColor || "var(--accent-fallback)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 26,
-            fontWeight: 600,
-            color: "#0a0a0b",
-          }}
-        >
-          {initial(profile.displayName)}
-        </div>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 650 }}>{profile.displayName}</h1>
-          <p style={{ margin: "2px 0 0", color: "var(--muted)", fontSize: 14 }}>
+    <PageShell>
+      {/* Identity */}
+      <header className="flex items-center gap-5">
+        <ProfileAvatar
+          initials={initial(profile.displayName)}
+          color={profile.avatarColor}
+          className="size-[72px] shadow-sm"
+          textClassName="text-2xl"
+        />
+        <div className="min-w-0">
+          <h1 className="truncate text-[28px] font-semibold leading-tight tracking-tight">
+            {profile.displayName}
+          </h1>
+          <p className="mt-1 truncate text-sm text-muted-foreground">
             @{profile.handle}
             {since ? ` · on Synara since ${since}` : ""}
           </p>
         </div>
       </header>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(5, 1fr)",
-          gap: 12,
-        }}
-      >
-        {(
-          [
-            ["Lifetime tokens", compactNumber(profile.lifetimeTokens)],
-            ["Peak day", profile.peakDay ? compactNumber(profile.peakDay.tokens) : "—"],
-            ["Prompts", compactNumber(profile.lifetimePrompts)],
-            ["Current streak", formatStreak(profile.currentStreakDays)],
-            ["Longest streak", formatStreak(profile.longestStreakDays)],
-          ] as const
-        ).map(([label, value]) => (
-          <div
-            key={label}
-            style={{
-              background: "var(--panel)",
-              border: "1px solid var(--border)",
-              borderRadius: 12,
-              padding: "14px 16px",
-            }}
-          >
-            <div style={{ fontSize: 24, fontWeight: 650 }}>{value}</div>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{label}</div>
-          </div>
-        ))}
-      </section>
+      <StatTileGrid
+        tiles={[
+          { label: "Lifetime tokens", value: formatCompact(profile.lifetimeTokens) },
+          {
+            label: "Peak day",
+            value: profile.peakDay ? formatCompact(profile.peakDay.tokens) : "—",
+          },
+          { label: "Prompts", value: formatCompact(profile.lifetimePrompts) },
+          { label: "Current streak", value: formatStreak(profile.currentStreakDays) },
+          { label: "Longest streak", value: formatStreak(profile.longestStreakDays) },
+        ]}
+      />
 
-      <Heatmap days={profile.heatmap} />
-      <Insights profile={profile} />
-      <ModelSplit models={profile.models} lifetimeTokens={profile.lifetimeTokens} />
-      <ActiveHours hours={profile.hours} />
-
-      <footer style={{ fontSize: 12, color: "var(--muted)" }}>
-        Powered by{" "}
-        <a href="https://trysynara.com" style={{ color: "inherit" }}>
-          Synara
-        </a>{" "}
-        — the open workspace for coding agents.
-      </footer>
-    </main>
+      <ActivitySection heatmap={profile.heatmap} />
+      <InsightsSection profile={profile} />
+      <ModelUsageSection models={profile.models} lifetimeTokens={profile.lifetimeTokens} />
+      <ActiveHoursSection hours={profile.hours} />
+    </PageShell>
   );
 }
 
-function Insights({
-  profile,
-}: {
-  profile: Awaited<ReturnType<typeof fetchPublicProfile>> & object;
-}) {
+// ── Activity ───────────────────────────────────────────────────────────
+
+function ActivitySection({ heatmap }: { heatmap: PublicProfile["heatmap"] }) {
+  // No renderTooltip: ActivityHeatmap falls back to a native `title`, keeping the
+  // page free of client JS. Fixed 13px cells over a full year overflow the 720px
+  // column, so the grid scrolls horizontally, latest weeks first in view.
+  const cells = buildHeatmapCells(heatmap);
+  return (
+    <section aria-label="Activity" className="flex min-w-0 flex-col gap-3">
+      <h2 className="text-sm font-medium">Activity</h2>
+      <div className="flex min-w-0 flex-row-reverse overflow-x-auto pb-1">
+        <ActivityHeatmap cells={cells} cellSize={13} gap={3} showMonths monthsPosition="bottom" />
+      </div>
+    </section>
+  );
+}
+
+// ── Activity insights ──────────────────────────────────────────────────
+
+function InsightsSection({ profile }: { profile: PublicProfile }) {
   const byProvider = new Map<string, number>();
   const byReasoning = new Map<string, number>();
   for (const row of profile.models) {
@@ -148,7 +122,7 @@ function Insights({
       byReasoning.set(row.reasoning, (byReasoning.get(row.reasoning) ?? 0) + row.turns);
     }
   }
-  const total = Math.max(1, profile.lifetimeTokens);
+  const totalTokens = Math.max(1, profile.lifetimeTokens);
   const totalTurns = Math.max(
     1,
     profile.models.reduce((sum, row) => sum + row.turns, 0),
@@ -163,52 +137,112 @@ function Insights({
     null,
   );
 
-  const rows: [string, string][] = [
-    [
-      "Most used provider",
-      topProvider
-        ? `${providerLabel(topProvider[0])} · ${Math.round((topProvider[1] / total) * 100)}%`
+  const rows: { label: string; value: string }[] = [
+    {
+      label: "Most used provider",
+      value: topProvider
+        ? `${providerLabel(topProvider[0])} · ${Math.round((topProvider[1] / totalTokens) * 100)}%`
         : "—",
-    ],
-    [
-      "Most used reasoning",
-      topReasoning
-        ? `${topReasoning[0][0].toUpperCase()}${topReasoning[0].slice(1)} · ${Math.round((topReasoning[1] / totalTurns) * 100)}%`
+    },
+    {
+      label: "Most used reasoning",
+      value: topReasoning
+        ? `${capitalize(topReasoning[0])} · ${Math.round((topReasoning[1] / totalTurns) * 100)}%`
         : "—",
-    ],
-    ["Most active hour", topHour ? formatHourLabel(topHour.hour) : "—"],
+    },
+    { label: "Most active hour", value: topHour ? formatHourLabel(topHour.hour) : "—" },
   ];
 
   return (
-    <section
-      aria-label="Activity insights"
-      style={{ display: "flex", flexDirection: "column", gap: 10 }}
-    >
-      <span style={{ fontSize: 14, fontWeight: 500 }}>Activity insights</span>
-      <dl style={{ margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-        {rows.map(([label, value]) => (
-          <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <dt style={{ fontSize: 14, color: "var(--muted)" }}>{label}</dt>
-            <dd style={{ margin: 0, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{value}</dd>
-          </div>
+    <section aria-label="Activity insights" className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">Activity insights</h2>
+      <dl className="flex flex-col gap-2.5">
+        {rows.map((row) => (
+          <InsightRow key={row.label} label={row.label} value={row.value} />
         ))}
       </dl>
     </section>
   );
 }
 
-/** Synara's provider keys → human labels, mirroring the in-app spelling. */
-function providerLabel(provider: string): string {
-  const labels: Record<string, string> = {
-    codex: "Codex",
-    claudeAgent: "Claude",
-    cursor: "Cursor",
-    antigravity: "Antigravity",
-    grok: "Grok",
-    droid: "Droid",
-    kilo: "Kilo",
-    opencode: "OpenCode",
-    pi: "Pi",
-  };
-  return labels[provider] ?? provider;
+function capitalize(value: string): string {
+  return value.length > 0 ? value[0]!.toUpperCase() + value.slice(1) : value;
+}
+
+// ── Model usage ────────────────────────────────────────────────────────
+
+function ModelUsageSection({
+  models,
+  lifetimeTokens,
+}: {
+  models: PublicProfile["models"];
+  lifetimeTokens: number;
+}) {
+  if (models.length === 0) return null;
+  const total = Math.max(1, lifetimeTokens);
+
+  return (
+    <section aria-label="Model usage" className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">Model usage</h2>
+      <ul className="flex flex-col gap-3">
+        {models.map((row) => {
+          const percent = Math.round((row.tokens / total) * 100);
+          const Glyph = (
+            PROVIDER_GLYPHS as Partial<Record<string, (typeof PROVIDER_GLYPHS)["codex"]>>
+          )[row.provider];
+          return (
+            <ModelUsageRow
+              key={`${row.provider}/${row.model}/${row.reasoning ?? ""}`}
+              icon={
+                Glyph ? (
+                  <Glyph
+                    aria-hidden
+                    className={`size-3.5 shrink-0 ${providerIconToneClassName(row.provider)}`}
+                  />
+                ) : (
+                  <span aria-hidden className="size-3.5 shrink-0 rounded-sm bg-muted" />
+                )
+              }
+              model={row.model}
+              detail={`${providerLabel(row.provider)}${row.reasoning ? ` · ${row.reasoning}` : ""}`}
+              percent={percent}
+              stat={`${formatCompact(row.tokens)} · ${percent}%`}
+            />
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+// ── Active hours ───────────────────────────────────────────────────────
+
+function ActiveHoursSection({ hours }: { hours: PublicProfile["hours"] }) {
+  if (hours.length === 0) return null;
+  const byHour = new Map(hours.map((entry) => [entry.hour, entry.prompts]));
+  const max = Math.max(1, ...hours.map((entry) => entry.prompts));
+
+  return (
+    <section aria-label="Active hours" className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">Active hours</h2>
+      <div className="flex h-14 items-end gap-1">
+        {Array.from({ length: 24 }, (_, hour) => {
+          const prompts = byHour.get(hour) ?? 0;
+          return (
+            <div
+              key={hour}
+              title={`${prompts.toLocaleString()} ${prompts === 1 ? "prompt" : "prompts"} at ${formatHourLabel(hour)}`}
+              className={`flex-1 rounded-[3px] ${prompts > 0 ? "bg-[var(--info)]" : "bg-muted"}`}
+              style={{ height: `${Math.max(4, Math.round((prompts / max) * 100))}%` }}
+            />
+          );
+        })}
+      </div>
+      <div className="flex justify-between text-[10px] leading-none text-muted-foreground">
+        {["12 AM", "6 AM", "12 PM", "6 PM", "11 PM"].map((label) => (
+          <span key={label}>{label}</span>
+        ))}
+      </div>
+    </section>
+  );
 }

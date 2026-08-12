@@ -1,26 +1,88 @@
+@import "tailwindcss";
+/* profile-ui renders with Tailwind classes but lives outside this app's
+   auto-detected content — without this, its responsive/variant classes
+   (lg:grid-cols-5, dark:…) are never generated and layouts silently degrade. */
+@source "../../../../packages/profile-ui/src";
+
+/* Public page: no .dark class machinery, so `dark:` stays Tailwind v4's default
+   prefers-color-scheme variant and the token block below flips on the same media
+   query. */
+
+@theme inline {
+  --animate-skeleton: skeleton 2s -1s infinite linear;
+  --font-sans: var(--font-ui-family);
+  --font-display: var(--font-display-family);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  @keyframes skeleton {
+    to {
+      background-position: -200% 0;
+    }
+  }
+}
+
+/* Tokens derived from apps/web/src/index.css `:root` / `@variant dark` — the same
+   values profile-ui's classes resolve against in the app, restricted to the roles
+   this page uses. Cal Sans is optional: no webfont ships here, the display stack
+   falls back to the UI stack when it isn't installed. */
 :root {
-  color-scheme: dark;
-  --bg: #0a0a0b;
-  --panel: #131316;
-  --border: #26262b;
-  --text: #f4f4f5;
-  --muted: #8b8b93;
-  --accent-fallback: #22c55e;
+  color-scheme: light;
+  --radius: 0.625rem;
+  --font-ui-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-display-family: "Cal Sans", var(--font-ui-family);
+  --background: #fcfcfc;
+  --foreground: var(--color-neutral-800);
+  --card: var(--color-white);
+  --card-foreground: var(--color-neutral-800);
+  --secondary: --alpha(var(--color-black) / 4%);
+  --secondary-foreground: var(--color-neutral-800);
+  --muted: --alpha(var(--color-black) / 4%);
+  --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
+  --border: --alpha(var(--color-black) / 5%);
+  --info: var(--color-blue-500);
+  --info-foreground: #526fff;
 }
 
-* {
-  box-sizing: border-box;
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: #0e0e0e;
+    --foreground: var(--color-neutral-100);
+    --card: color-mix(in srgb, var(--background) 99%, var(--color-white));
+    --card-foreground: var(--color-neutral-100);
+    --secondary: --alpha(var(--color-white) / 4%);
+    --secondary-foreground: var(--color-neutral-100);
+    --muted: --alpha(var(--color-white) / 4%);
+    --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
+    --border: --alpha(var(--color-white) / 4%);
+    --info: var(--color-blue-500);
+    --info-foreground: #6073cc;
+  }
 }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    /* Match apps/web: let the system font use its own optical metrics. */
+    letter-spacing: normal;
+  }
 }

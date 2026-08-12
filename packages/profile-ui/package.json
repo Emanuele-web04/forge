@@ -24,6 +24,10 @@
       "types": "./src/sections.tsx",
       "import": "./src/sections.tsx"
     },
+    "./provider-icon": {
+      "types": "./src/providerIcon.tsx",
+      "import": "./src/providerIcon.tsx"
+    },
     "./skeleton": {
       "types": "./src/skeleton.tsx",
       "import": "./src/skeleton.tsx"

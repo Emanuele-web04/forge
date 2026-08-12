@@ -50,20 +50,29 @@ export function ModelUsageRow({
   icon,
   model,
   percent,
+  detail,
+  stat,
 }: {
   /** Leading provider/model icon, e.g. the web app's `<ProviderIcon />`. */
   icon: ReactNode;
   model: string;
   percent: number;
+  /** Optional muted context after the model name, e.g. "Codex · xhigh". */
+  detail?: string;
+  /** Right-hand stat label; defaults to "{percent}%" (public page passes "17bn · 42%"). */
+  stat?: string;
 }) {
   return (
     <li className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-3 text-sm">
         <span className="flex min-w-0 items-center gap-2">
           {icon}
-          <span className="truncate">{model}</span>
+          <span className="truncate">
+            {model}
+            {detail ? <span className="text-muted-foreground"> · {detail}</span> : null}
+          </span>
         </span>
-        <span className="shrink-0 tabular-nums text-muted-foreground">{percent}%</span>
+        <span className="shrink-0 tabular-nums text-muted-foreground">{stat ?? `${percent}%`}</span>
       </div>
       <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
         <div
