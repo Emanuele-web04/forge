@@ -1,8 +1,10 @@
 // FILE: EditProfileDialog.tsx
-// Purpose: "Edit profile" modal — edits the local display name, @handle, avatar photo, and
+// Purpose: "Edit profile" modal — edits the display name, @handle, avatar photo, and
 // accent color. The photo is compressed on-device before it's handed back. Drafts are held
 // locally and only committed on Save.
-// Layer: web profile feature (all changes persist to localStorage via the parent hooks).
+// Layer: web profile feature. Signed out, changes persist to localStorage via the parent
+// hooks; signed in, name/color/visibility write through the account (the parent's onSave
+// does the RPC) and the handle is immutable. The avatar photo is always local-only.
 
 import { type ReactNode, useRef, useState } from "react";
 import { Dialog, DialogClose, DialogPopup, DialogTitle } from "~/components/ui/dialog";
@@ -13,7 +15,9 @@ import {
   InputGroupInput,
   InputGroupText,
 } from "~/components/ui/input-group";
+import { Switch } from "~/components/ui/switch";
 import { CentralIcon } from "~/lib/central-icons";
+import { accountErrorMessage, publicProfileDisplayUrl } from "~/lib/accountLogic";
 import { cn } from "~/lib/utils";
 import { normalizeHandle } from "./profileFormatting";
 import { PROFILE_AVATAR_COLORS } from "./useProfileAvatarColor";
@@ -34,12 +38,23 @@ interface EditProfileDialogProps {
   readonly handle: string;
   readonly avatarColor: string;
   readonly avatarImage: string | null;
+  /**
+   * The account-backed profile, when signed in with one. Its presence locks
+   * the handle (immutable server-side) and reveals the "Public profile"
+   * visibility switch.
+   */
+  readonly accountProfile: {
+    readonly handle: string;
+    readonly public?: boolean | undefined;
+  } | null;
+  /** Commits the draft. May reject (account write failure) — the dialog stays open and shows the error. */
   readonly onSave: (next: {
     name: string;
     handle: string;
     avatarColor: string;
     avatarImage: string | null;
-  }) => void;
+    isPublic?: boolean;
+  }) => Promise<void>;
 }
 
 export function EditProfileDialog({
@@ -50,6 +65,7 @@ export function EditProfileDialog({
   handle,
   avatarColor,
   avatarImage,
+  accountProfile,
   onSave,
 }: EditProfileDialogProps) {
   return (
@@ -65,6 +81,7 @@ export function EditProfileDialog({
           handle={handle}
           avatarColor={avatarColor}
           avatarImage={avatarImage}
+          accountProfile={accountProfile}
           onSave={onSave}
         />
       </DialogPopup>
@@ -79,15 +96,18 @@ function EditProfileDialogContent({
   handle,
   avatarColor,
   avatarImage,
+  accountProfile,
   onSave,
 }: Omit<EditProfileDialogProps, "open">) {
   const [draftName, setDraftName] = useState(name);
   const [draftHandle, setDraftHandle] = useState(handle.replace(/^@+/, ""));
   const [draftColor, setDraftColor] = useState(avatarColor);
   const [draftImage, setDraftImage] = useState<string | null>(avatarImage);
+  const [draftPublic, setDraftPublic] = useState(accountProfile?.public === true);
   const [showEditor, setShowEditor] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handlePickFile = async (file: File | undefined) => {
@@ -105,14 +125,28 @@ function EditProfileDialogContent({
     }
   };
 
+  // Promise chain instead of async/try-catch: React Compiler does not yet
+  // support try/catch|finally and would skip this component (same reason as
+  // ShareDialog's handlers).
   const handleSave = () => {
-    onSave({
+    setSaving(true);
+    setError(null);
+    return onSave({
       name: draftName.trim(),
       handle: normalizeHandle(draftHandle),
       avatarColor: draftColor,
       avatarImage: draftImage,
-    });
-    onOpenChange(false);
+      ...(accountProfile ? { isPublic: draftPublic } : {}),
+    })
+      .then(() => {
+        onOpenChange(false);
+      })
+      .catch((cause: unknown) => {
+        setError(accountErrorMessage(cause, "Could not save your profile. Try again."));
+      })
+      .finally(() => {
+        setSaving(false);
+      });
   };
 
   return (
@@ -225,13 +259,17 @@ function EditProfileDialogContent({
               />
             </InputGroup>
           </Field>
-          <Field label="Username">
+          <Field
+            label="Username"
+            hint={accountProfile ? "Handles can’t be changed once set." : undefined}
+          >
             <InputGroup className={fieldControlClassName}>
               <InputGroupAddon>
                 <InputGroupText>@</InputGroupText>
               </InputGroupAddon>
               <InputGroupInput
                 value={draftHandle}
+                disabled={accountProfile !== null}
                 onChange={(event) =>
                   setDraftHandle(event.target.value.replace(/^@+/, "").replace(/\s+/g, ""))
                 }
@@ -239,6 +277,24 @@ function EditProfileDialogContent({
               />
             </InputGroup>
           </Field>
+          {accountProfile && (
+            <Field
+              label="Public profile"
+              hint={
+                draftPublic
+                  ? `Anyone can see your profile at ${publicProfileDisplayUrl(accountProfile.handle)}.`
+                  : "Only you can see your profile."
+              }
+            >
+              <div className="flex justify-end">
+                <Switch
+                  checked={draftPublic}
+                  onCheckedChange={setDraftPublic}
+                  aria-label="Public profile"
+                />
+              </div>
+            </Field>
+          )}
         </div>
       </div>
 
@@ -252,21 +308,32 @@ function EditProfileDialogContent({
           variant="default"
           size="default"
           className={dialogButtonClassName}
-          onClick={handleSave}
-          disabled={processing}
+          onClick={() => void handleSave()}
+          disabled={processing || saving}
         >
-          Save
+          {saving ? "Saving…" : "Save"}
         </Button>
       </div>
     </>
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string | undefined;
+  children: ReactNode;
+}) {
   return (
-    <div className="flex items-center justify-between gap-4 px-3.5 py-3">
-      <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
-      <div className="w-56 shrink-0">{children}</div>
+    <div className="flex flex-col gap-1 px-3.5 py-3">
+      <div className="flex items-center justify-between gap-4">
+        <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
+        <div className="w-56 shrink-0">{children}</div>
+      </div>
+      {hint && <p className="text-xs leading-snug text-muted-foreground/80">{hint}</p>}
     </div>
   );
 }

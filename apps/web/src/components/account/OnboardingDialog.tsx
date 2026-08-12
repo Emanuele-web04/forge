@@ -26,6 +26,7 @@ import {
   accountErrorMessage,
   accountInitial,
   handleFormatError,
+  publicProfileDisplayUrl,
   readAccountErrorCode,
   sanitizeHandleInput,
 } from "~/lib/accountLogic";
@@ -82,7 +83,7 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
       toastManager.add({
         type: "success",
         title: "You're all set",
-        description: `Your public profile is trysynara.com/profile/@${handle}.`,
+        description: `Your public profile is ${publicProfileDisplayUrl(handle)}.`,
       });
       onFinished();
     } catch (cause) {
@@ -178,7 +179,7 @@ function OnboardingDialogContent({ me, onFinished }: Omit<OnboardingDialogProps,
               id={handleHelpId}
               className="text-[length:var(--app-font-size-ui-sm,11px)] leading-snug text-muted-foreground"
             >
-              Your public profile: trysynara.com/profile/@{handle || "handle"}
+              Your public profile: {publicProfileDisplayUrl(handle || "handle")}
             </span>
           )}
         </label>

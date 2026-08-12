@@ -1,11 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { type AccountErrorBody, InstanceInfo, OrganizationRequiredBody } from "@synara/contracts";
+import {
+  type AccountErrorBody,
+  InstanceInfo,
+  OrganizationRequiredBody,
+  PublicProfile,
+  USAGE_PUSH_MAX_BUCKETS,
+} from "@synara/contracts";
+import { eq } from "drizzle-orm";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkosApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
+import { usageModelStats, usageSkillStats } from "../db/schema";
 import { createDeviceCredentialStore } from "../identity/deviceCredentialStore";
 import { createEnvironmentRegistry } from "../identity/environmentRegistry";
 import { clearOrgCache } from "../identity/orgProvisioning";
@@ -16,6 +24,7 @@ import {
   OTP_AUTHENTICATE_RATE_LIMIT_PER_MINUTE,
   OTP_SEND_RATE_LIMIT_PER_MINUTE,
   PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR,
+  PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE,
   REFRESH_RATE_LIMIT_PER_MINUTE,
 } from "./v1";
 
@@ -1209,6 +1218,512 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         body: JSON.stringify(profileBody()),
       });
       expect(res.status).toBe(401);
+    });
+  });
+
+  /** Auth headers plus a per-test client IP, so usage budgets never couple tests. */
+  function usageHeaders(token: string, clientIp: string): Record<string, string> {
+    return { ...authHeaders(token), "x-forwarded-for": clientIp };
+  }
+
+  /** A UTC minute bucket key, ISO-8601 with seconds zeroed, offset from now. */
+  function minuteIso(offsetMinutes = 0): string {
+    const now = Date.now() + offsetMinutes * 60_000;
+    return new Date(Math.floor(now / 60_000) * 60_000).toISOString();
+  }
+
+  function modelBucket(overrides: Record<string, unknown> = {}) {
+    return {
+      minute: minuteIso(),
+      provider: "claudeAgent",
+      model: "claude-fable-5",
+      reasoning: null,
+      tokens: 1000,
+      turns: 2,
+      prompts: 1,
+      ...overrides,
+    };
+  }
+
+  function usageBody(environmentId: string, overrides: Record<string, unknown> = {}) {
+    return { environmentId, models: [], skills: [], ...overrides };
+  }
+
+  function pushUsage(app: Hono, token: string, body: unknown, clientIp: string) {
+    return app.request("/api/v1/usage", {
+      method: "POST",
+      headers: usageHeaders(token, clientIp),
+      body: JSON.stringify(body),
+    });
+  }
+
+  describe("POST /usage", () => {
+    it("rejects unauthenticated pushes", async () => {
+      const { app } = buildApp();
+      const res = await app.request("/api/v1/usage", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": "203.0.116.1" },
+        body: JSON.stringify(usageBody(randomUUID())),
+      });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error: "unauthorized" });
+    });
+
+    it("writes model and skill buckets and reports the count", async () => {
+      const { app, db } = buildApp();
+      const { token, userId, orgId } = await signIn();
+      const environmentId = randomUUID();
+
+      const res = await pushUsage(
+        app,
+        token,
+        usageBody(environmentId, {
+          models: [
+            modelBucket(),
+            modelBucket({ model: "claude-opus-4.8", reasoning: "high", tokens: 500 }),
+          ],
+          skills: [{ minute: minuteIso(), name: "code-review", kind: "skill", runs: 3 }],
+        }),
+        "203.0.116.2",
+      );
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({ written: 3 });
+
+      const modelRows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(modelRows).toHaveLength(2);
+      expect(modelRows.every((row) => row.orgId === orgId)).toBe(true);
+      expect(modelRows.every((row) => row.environmentId === environmentId)).toBe(true);
+
+      const skillRows = await db
+        .select()
+        .from(usageSkillStats)
+        .where(eq(usageSkillStats.userId, userId));
+      expect(skillRows).toHaveLength(1);
+      expect(skillRows[0]).toMatchObject({ name: "code-review", kind: "skill", runs: 3 });
+    });
+
+    // Buckets carry ABSOLUTE values: re-pushing the same key with grown
+    // counters must replace, not add — that is what makes retries idempotent.
+    it("upserts absolutely: a re-pushed grown bucket replaces, never sums", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const environmentId = randomUUID();
+      const minute = minuteIso();
+
+      const first = await pushUsage(
+        app,
+        token,
+        usageBody(environmentId, {
+          models: [modelBucket({ minute, tokens: 100, turns: 1, prompts: 1 })],
+          skills: [{ minute, name: "code-review", kind: "skill", runs: 1 }],
+        }),
+        "203.0.116.3",
+      );
+      expect(first.status).toBe(202);
+
+      const second = await pushUsage(
+        app,
+        token,
+        usageBody(environmentId, {
+          models: [modelBucket({ minute, tokens: 250, turns: 3, prompts: 2 })],
+          skills: [{ minute, name: "code-review", kind: "skill", runs: 4 }],
+        }),
+        "203.0.116.3",
+      );
+      expect(second.status).toBe(202);
+
+      const modelRows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(modelRows).toHaveLength(1);
+      // The grown values, not 350/4/3.
+      expect(modelRows[0]).toMatchObject({ tokens: 250, turns: 3, prompts: 2 });
+
+      const skillRows = await db
+        .select()
+        .from(usageSkillStats)
+        .where(eq(usageSkillStats.userId, userId));
+      expect(skillRows).toHaveLength(1);
+      expect(skillRows[0]).toMatchObject({ runs: 4 });
+    });
+
+    // Reasoning is part of the key: the same model with and without a
+    // reasoning setting is two buckets, not one.
+    it("keeps null and 'high' reasoning as distinct buckets", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const minute = minuteIso();
+
+      const res = await pushUsage(
+        app,
+        token,
+        usageBody(randomUUID(), {
+          models: [
+            modelBucket({ minute, reasoning: null, tokens: 100 }),
+            modelBucket({ minute, reasoning: "high", tokens: 200 }),
+          ],
+        }),
+        "203.0.116.4",
+      );
+      expect(res.status).toBe(202);
+
+      const rows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(rows).toHaveLength(2);
+      expect(rows.map((row) => row.reasoning).toSorted()).toEqual(["", "high"]);
+    });
+
+    // The ''-sentinel regression case: NULLs are distinct under a Postgres
+    // unique index, so a NULL-stored reasoning would duplicate the bucket on
+    // every push. Stored as '' it must conflict — one row, updated in place.
+    it("does not duplicate a null-reasoning bucket pushed twice", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const environmentId = randomUUID();
+      const minute = minuteIso();
+
+      for (const tokens of [100, 300]) {
+        const res = await pushUsage(
+          app,
+          token,
+          usageBody(environmentId, {
+            models: [modelBucket({ minute, reasoning: null, tokens })],
+          }),
+          "203.0.116.5",
+        );
+        expect(res.status).toBe(202);
+      }
+
+      const rows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ reasoning: "", tokens: 300 });
+    });
+
+    it("keeps the same minute from two environments as separate rows", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const minute = minuteIso();
+      const environmentA = randomUUID();
+      const environmentB = randomUUID();
+
+      for (const [environmentId, tokens] of [
+        [environmentA, 100],
+        [environmentB, 200],
+      ] as const) {
+        const res = await pushUsage(
+          app,
+          token,
+          usageBody(environmentId, { models: [modelBucket({ minute, tokens })] }),
+          "203.0.116.6",
+        );
+        expect(res.status).toBe(202);
+      }
+
+      const rows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(rows).toHaveLength(2);
+      expect(rows.map((row) => row.environmentId).toSorted()).toEqual(
+        [environmentA, environmentB].toSorted(),
+      );
+    });
+
+    it.each([
+      ["a missing environment id", () => ({ models: [], skills: [] })],
+      [
+        "a loose minute spelling",
+        () =>
+          usageBody(randomUUID(), { models: [modelBucket({ minute: "2026-08-11T21:34:05Z" })] }),
+      ],
+      [
+        "a negative counter",
+        () => usageBody(randomUUID(), { models: [modelBucket({ tokens: -1 })] }),
+      ],
+      ["a non-array models field", () => usageBody(randomUUID(), { models: {} })],
+    ] as const)("answers 400 validation_failed for %s", async (_label, makeBody) => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+
+      const res = await pushUsage(app, token, makeBody(), "203.0.116.7");
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+    });
+
+    it("refuses a batch past USAGE_PUSH_MAX_BUCKETS", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+
+      const minute = minuteIso();
+      const oversized = Array.from({ length: USAGE_PUSH_MAX_BUCKETS + 1 }, (_, index) =>
+        modelBucket({ minute, model: `model-${index}` }),
+      );
+      const res = await pushUsage(
+        app,
+        token,
+        usageBody(randomUUID(), { models: oversized }),
+        "203.0.116.8",
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+
+      // Refused before the transaction: nothing landed.
+      const rows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe("GET /profiles/:handle", () => {
+    /** A signed-in user with an onboarded profile, public or not. */
+    async function onboardedUser(app: Hono, options: { public?: boolean } = {}) {
+      const session = await signIn();
+      const handle = `pub-${randomUUID().slice(0, 8)}`;
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(session.token),
+        body: JSON.stringify({
+          handle,
+          displayName: "Ada Lovelace",
+          avatarColor: "#22c55e",
+          ...(options.public !== undefined ? { public: options.public } : {}),
+        }),
+      });
+      expect(res.status).toBe(200);
+      return { ...session, handle };
+    }
+
+    function getProfile(app: Hono, handle: string, clientIp: string) {
+      return app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": clientIp },
+      });
+    }
+
+    it("answers the same 404 for an unknown handle and a private profile", async () => {
+      const { app } = buildApp();
+      const privateProfile = await onboardedUser(app); // public defaults to false
+
+      const unknownRes = await getProfile(app, `ghost-${randomUUID().slice(0, 8)}`, "203.0.117.1");
+      const privateRes = await getProfile(app, privateProfile.handle, "203.0.117.1");
+
+      expect(unknownRes.status).toBe(404);
+      expect(privateRes.status).toBe(404);
+      const unknownBody = (await unknownRes.json()) as AccountErrorBody;
+      const privateBody = (await privateRes.json()) as AccountErrorBody;
+      expect(unknownBody.error).toBe("profile_not_found");
+      // Indistinguishable: an existence probe learns nothing from the body.
+      expect(privateBody).toEqual(unknownBody);
+    });
+
+    it("serves identity, cross-environment aggregates, lifetime totals, and the heatmap", async () => {
+      const { app } = buildApp();
+      const owner = await onboardedUser(app, { public: true });
+      const minute = minuteIso();
+
+      // The same bucket key from two environments: the public view must sum
+      // them without ever naming either environment.
+      for (const [environmentId, tokens, turns, prompts] of [
+        [randomUUID(), 100, 2, 1],
+        [randomUUID(), 250, 3, 2],
+      ] as const) {
+        const res = await pushUsage(
+          app,
+          owner.token,
+          usageBody(environmentId, {
+            models: [modelBucket({ minute, reasoning: "high", tokens, turns, prompts })],
+          }),
+          "203.0.117.2",
+        );
+        expect(res.status).toBe(202);
+      }
+
+      const res = await getProfile(app, owner.handle, "203.0.117.3");
+      expect(res.status).toBe(200);
+      const body = Schema.decodeUnknownSync(PublicProfile)(await res.json());
+
+      expect(body.handle).toBe(owner.handle);
+      expect(body.displayName).toBe("Ada Lovelace");
+      expect(body.avatarColor).toBe("#22c55e");
+      expect(Number.isNaN(Date.parse(body.createdAt))).toBe(false);
+
+      expect(body.models).toEqual([
+        {
+          provider: "claudeAgent",
+          model: "claude-fable-5",
+          reasoning: "high",
+          tokens: 350,
+          turns: 5,
+          prompts: 3,
+        },
+      ]);
+      expect(body.lifetimeTokens).toBe(350);
+      expect(body.lifetimeTurns).toBe(5);
+      expect(body.lifetimePrompts).toBe(3);
+
+      const day = minute.slice(0, 10);
+      expect(body.heatmap).toEqual([{ day, tokens: 350, prompts: 3 }]);
+
+      // Environment ids never appear anywhere in a public payload.
+      expect(JSON.stringify(body)).not.toContain("environment");
+    });
+
+    it("serves ''-stored reasoning back as null", async () => {
+      const { app } = buildApp();
+      const owner = await onboardedUser(app, { public: true });
+
+      const push = await pushUsage(
+        app,
+        owner.token,
+        usageBody(randomUUID(), { models: [modelBucket({ reasoning: null })] }),
+        "203.0.117.4",
+      );
+      expect(push.status).toBe(202);
+
+      const res = await getProfile(app, owner.handle, "203.0.117.5");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as PublicProfile;
+      expect(body.models).toHaveLength(1);
+      expect(body.models[0]?.reasoning).toBeNull();
+    });
+
+    // Which skills someone runs reveals what they work on. Skill rows exist
+    // for this user; the public payload must not carry a trace of them.
+    it("never serves skill data, even when skill rows exist", async () => {
+      const { app, db } = buildApp();
+      const owner = await onboardedUser(app, { public: true });
+      const skillName = `secret-skill-${randomUUID().slice(0, 8)}`;
+
+      const push = await pushUsage(
+        app,
+        owner.token,
+        usageBody(randomUUID(), {
+          models: [modelBucket()],
+          skills: [{ minute: minuteIso(), name: skillName, kind: "skill", runs: 7 }],
+        }),
+        "203.0.117.6",
+      );
+      expect(push.status).toBe(202);
+      // The rows are really there — the absence below is filtering, not a
+      // write that never happened.
+      const skillRows = await db
+        .select()
+        .from(usageSkillStats)
+        .where(eq(usageSkillStats.userId, owner.userId));
+      expect(skillRows).toHaveLength(1);
+
+      const res = await getProfile(app, owner.handle, "203.0.117.7");
+      expect(res.status).toBe(200);
+      const raw = await res.text();
+      expect(raw).not.toContain(skillName);
+      expect(raw).not.toContain("skill");
+      expect(Object.keys(JSON.parse(raw) as Record<string, unknown>)).not.toContain("skills");
+    });
+
+    // The public URL spells it /@handle, and people type handles in any case.
+    it("tolerates a leading @ and uppercase in the lookup", async () => {
+      const { app } = buildApp();
+      const owner = await onboardedUser(app, { public: true });
+
+      const res = await getProfile(app, `@${owner.handle.toUpperCase()}`, "203.0.117.8");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as PublicProfile;
+      expect(body.handle).toBe(owner.handle);
+    });
+
+    it("rate limits reads past the public profile budget", async () => {
+      const { app } = buildApp();
+      const clientIp = "203.0.117.9";
+      const handle = `ghost-${randomUUID().slice(0, 8)}`;
+
+      for (let i = 0; i < PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect((await getProfile(app, handle, clientIp)).status).toBe(404);
+      }
+      const limited = await getProfile(app, handle, clientIp);
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ error: "rate_limited" });
+
+      // Another client is unaffected.
+      expect((await getProfile(app, handle, "203.0.117.10")).status).toBe(404);
+    });
+  });
+
+  describe("PUT /profile public flag", () => {
+    function profilePut(app: Hono, token: string, body: Record<string, unknown>) {
+      return app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify(body),
+      });
+    }
+
+    it("flips visibility on, /me echoes it, and omitting it later leaves it alone", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      const handle = `flag-${randomUUID().slice(0, 8)}`;
+      const base = { handle, displayName: "Ada Lovelace", avatarColor: "#22c55e" };
+
+      // First write without the flag: private by default, so the public
+      // route does not serve it.
+      const created = await profilePut(app, token, base);
+      expect(created.status).toBe(200);
+      expect(await created.json()).toMatchObject({ profile: { public: false } });
+      const hidden = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.118.1" },
+      });
+      expect(hidden.status).toBe(404);
+
+      // public: true flips visibility.
+      const published = await profilePut(app, token, { ...base, public: true });
+      expect(published.status).toBe(200);
+      expect(await published.json()).toMatchObject({ profile: { public: true } });
+      const visible = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.118.2" },
+      });
+      expect(visible.status).toBe(200);
+
+      // A later update that omits the flag leaves visibility unchanged.
+      const renamed = await profilePut(app, token, { ...base, displayName: "Ada L." });
+      expect(renamed.status).toBe(200);
+      expect(await renamed.json()).toMatchObject({
+        profile: { displayName: "Ada L.", public: true },
+      });
+      const stillVisible = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.118.3" },
+      });
+      expect(stillVisible.status).toBe(200);
+
+      // And /me reports the flag.
+      const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
+      expect(await meRes.json()).toMatchObject({ profile: { public: true } });
+    });
+
+    it("flips visibility back off with public: false", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      const handle = `flag-${randomUUID().slice(0, 8)}`;
+      const base = { handle, displayName: "Ada Lovelace", avatarColor: "#22c55e" };
+
+      await profilePut(app, token, { ...base, public: true });
+      const unpublished = await profilePut(app, token, { ...base, public: false });
+      expect(unpublished.status).toBe(200);
+      expect(await unpublished.json()).toMatchObject({ profile: { public: false } });
+
+      const res = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.118.4" },
+      });
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ error: "profile_not_found" });
     });
   });
 

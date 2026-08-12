@@ -22,6 +22,11 @@ import {
   type OtpSendResponse,
   OtpSendResponse as OtpSendResponseSchema,
   RefreshTokenResponse as RefreshTokenResponseSchema,
+  type PublicProfile,
+  PublicProfile as PublicProfileSchema,
+  type PushUsageRequest,
+  type PushUsageResponse,
+  PushUsageResponse as PushUsageResponseSchema,
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
@@ -189,6 +194,20 @@ export interface AccountClient {
   registerHost(token: string, request: RegisterHostRequest): Promise<RegisterHostResponse>;
   updateHost(hostToken: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
   deleteHost(token: string, hostId: string): Promise<void>;
+  /**
+   * Pushes a batch of per-minute usage buckets. Buckets carry ABSOLUTE
+   * values and the service upserts, so re-pushing a bucket — a retry, or the
+   * same minute growing across pushes — is idempotent. Authenticated with
+   * the user access token: usage accrues to the person, not the machine.
+   */
+  pushUsage(token: string, request: PushUsageRequest): Promise<PushUsageResponse>;
+  /**
+   * The public profile behind a handle, or an AccountApiError with status
+   * 404 when the handle is unknown OR its owner keeps the profile private —
+   * deliberately indistinguishable, so this route is not a handle oracle
+   * beyond what the owner chose to publish.
+   */
+  getPublicProfile(handle: string): Promise<PublicProfile>;
   /**
    * Asks the account service for the provider's PKCE authorize URL — the
    * desktop SSO path. Only the S256 challenge and state travel; the verifier
@@ -451,6 +470,26 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
         method: "DELETE",
         headers: authHeaders(token),
       });
+    },
+
+    async pushUsage(token, request) {
+      return requestJson(
+        "/api/v1/usage",
+        {
+          method: "POST",
+          headers: { ...authHeaders(token), "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        PushUsageResponseSchema,
+      );
+    },
+
+    async getPublicProfile(handle) {
+      return requestJson(
+        `/api/v1/profiles/${encodeURIComponent(handle)}`,
+        { method: "GET" },
+        PublicProfileSchema,
+      );
     },
 
     async refreshAccessToken(refreshOptions) {

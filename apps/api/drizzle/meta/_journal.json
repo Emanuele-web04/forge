@@ -36,6 +36,13 @@
       "when": 1786437326222,
       "tag": "0004_host_token_active_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786479664343,
+      "tag": "0005_profiles_public_usage_stats",
+      "breakpoints": true
     }
   ]
 }

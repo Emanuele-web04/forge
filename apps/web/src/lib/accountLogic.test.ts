@@ -13,6 +13,8 @@ import {
   formatResendCountdown,
   handleFormatError,
   isSignInCancellation,
+  profileShareUrl,
+  publicProfileDisplayUrl,
   publicProfileUrl,
   readAccountErrorCode,
   sanitizeHandleInput,
@@ -200,6 +202,15 @@ describe("display derivations", () => {
   });
 
   it("builds the public profile URL from the handle", () => {
-    expect(publicProfileUrl("ada")).toBe("https://trysynara.com/profile/@ada");
+    expect(publicProfileUrl("ada")).toBe("https://trysynara.com/@ada");
+    expect(publicProfileDisplayUrl("ada")).toBe("trysynara.com/@ada");
+  });
+
+  it("only yields a share URL for a profile that is explicitly public", () => {
+    expect(profileShareUrl({ handle: "ada", public: true })).toBe("https://trysynara.com/@ada");
+    expect(profileShareUrl({ handle: "ada", public: false })).toBeNull();
+    expect(profileShareUrl({ handle: "ada" })).toBeNull();
+    expect(profileShareUrl(null)).toBeNull();
+    expect(profileShareUrl(undefined)).toBeNull();
   });
 });

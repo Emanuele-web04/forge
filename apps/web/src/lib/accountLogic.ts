@@ -8,6 +8,7 @@ import {
   AccountProfileHandle,
   type AccountErrorCode,
   type AccountMe,
+  type AccountProfile,
 } from "@synara/contracts";
 import { Schema } from "effect";
 
@@ -137,6 +138,25 @@ export function accountFirstName(me: AccountMe): string {
   return display.trim().split(/\s+/)[0] ?? display;
 }
 
+/** Where public profiles are served. Single source for the URL and its copy. */
+const PUBLIC_PROFILE_HOST = "trysynara.com";
+
 export function publicProfileUrl(handle: string): string {
-  return `https://trysynara.com/profile/@${handle}`;
+  return `https://${PUBLIC_PROFILE_HOST}/@${handle}`;
+}
+
+/** Schemeless form for inline copy ("trysynara.com/@ada"). */
+export function publicProfileDisplayUrl(handle: string): string {
+  return `${PUBLIC_PROFILE_HOST}/@${handle}`;
+}
+
+/**
+ * The URL worth sharing for a profile: the real public page when the profile
+ * exists AND is public, `null` otherwise (a link to a private profile is a
+ * 404 dressed up as a share).
+ */
+export function profileShareUrl(
+  profile: Pick<AccountProfile, "handle" | "public"> | null | undefined,
+): string | null {
+  return profile?.public === true ? publicProfileUrl(profile.handle) : null;
 }

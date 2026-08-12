@@ -4,7 +4,8 @@ Status: implemented
 Date: 2026-08-03 (identity section revised 2026-08-05; rewritten 2026-08-10
 for in-app OTP auth, the identity adapter seam, and maintainer feedback;
 simplified 2026-08-11: CLI device grant and the in-app email-verification
-challenge flow removed, Apple SSO added)
+challenge flow removed, Apple SSO added; extended 2026-08-11: public
+profiles and per-minute usage sync)
 Branch base: `feat/remote-hosts` (implementation on a new worktree branch)
 
 ## Pivot notes
@@ -322,28 +323,46 @@ until webhook cleanup exists (future work).
 - `host_tokens`: `id` · `hostId` fk cascade · `tokenHash` · `createdAt` ·
   `lastUsedAt` · `revokedAt` nullable.
 - `profiles`: `userId` (provider user id, pk) · `handle` (unique, immutable
-  in V1) · `displayName` · `avatarColor` · timestamps. A row existing is what
-  "onboarding completed" means; there is deliberately no separate flag.
+  in V1) · `displayName` · `avatarColor` · `public` (default false — the
+  profile is served at trysynara.com/@handle exactly when this is on) ·
+  timestamps. A row existing is what "onboarding completed" means; there is
+  deliberately no separate flag.
+- `usage_model_stats`: per-minute model-attributed counters — key
+  `(userId, environmentId, minute, provider, model, reasoning)`, counters
+  `tokens`/`turns`/`prompts`, plus a denormalized `orgId`. Rows hold
+  ABSOLUTE values and are upserted, never incremented: one environment is
+  the sole writer of its own buckets and re-pushes them as they grow, so
+  `ON CONFLICT DO UPDATE` makes retries and mid-minute re-pushes idempotent
+  where increments would double-count. "No reasoning" is stored as `''`
+  (unique indexes treat NULLs as distinct); the wire says null.
+- `usage_skill_stats`: the same shape for skill/agent runs — key
+  `(userId, environmentId, minute, name, kind)`, counter `runs`. Synced for
+  the owner's own dashboard and NEVER served publicly: which skills someone
+  runs reveals what they work on, where the model mix only reveals how much.
+  No content of any kind travels on either table — a row is a key plus
+  counters, never a trace.
 
 Request/response contracts live in `packages/contracts` (schema-only).
 
 ## API surface (`/api/v1`)
 
-| Endpoint                      | Auth           | Purpose                                                                       |
-| ----------------------------- | -------------- | ----------------------------------------------------------------------------- |
-| `GET /me`                     | access token   | Identity, workspace, and profile (or null pre-onboarding)                     |
-| `PUT /profile`                | access token   | Upsert profile; handle immutable; answers the `/me` body                      |
-| `PATCH /organization`         | access token   | Rename the workspace; answers the `/me` body                                  |
-| `GET /hosts`                  | access token   | List the workspace's hosts with endpoints + lastSeenAt                        |
-| `POST /hosts`                 | access token   | Register this machine; returns record + one-time host token                   |
-| `PATCH /hosts/:id`            | host token     | Update name/endpoints/version; bumps lastSeenAt                               |
-| `DELETE /hosts/:id`           | access or host | Unlink (owner removal or self-removal)                                        |
-| `POST /auth/otp/send`         | none (2/min)   | Email a 6-digit sign-in code; 202 regardless of account                       |
-| `POST /auth/otp/authenticate` | none (5/min)   | Redeem the code for a token pair; signs up on first use                       |
-| `POST /auth/authorize`        | none (10/min)  | Build the PKCE authorize URL (SSO); loopback redirects only                   |
-| `POST /auth/authorize/token`  | none (5/min)   | Exchange the authorization code + PKCE verifier for a token pair              |
-| `POST /auth/refresh`          | none (10/min)  | Redeem a refresh token for a rotated, optionally workspace-scoped pair        |
-| `GET /instance`               | none           | Version + what the verifier publishes (auth mode, client id, provider origin) |
+| Endpoint                      | Auth            | Purpose                                                                           |
+| ----------------------------- | --------------- | --------------------------------------------------------------------------------- |
+| `GET /me`                     | access token    | Identity, workspace, and profile (or null pre-onboarding)                         |
+| `PUT /profile`                | access token    | Upsert profile; handle immutable; answers the `/me` body                          |
+| `PATCH /organization`         | access token    | Rename the workspace; answers the `/me` body                                      |
+| `GET /hosts`                  | access token    | List the workspace's hosts with endpoints + lastSeenAt                            |
+| `POST /hosts`                 | access token    | Register this machine; returns record + one-time host token                       |
+| `PATCH /hosts/:id`            | host token      | Update name/endpoints/version; bumps lastSeenAt                                   |
+| `DELETE /hosts/:id`           | access or host  | Unlink (owner removal or self-removal)                                            |
+| `POST /auth/otp/send`         | none (2/min)    | Email a 6-digit sign-in code; 202 regardless of account                           |
+| `POST /auth/otp/authenticate` | none (5/min)    | Redeem the code for a token pair; signs up on first use                           |
+| `POST /auth/authorize`        | none (10/min)   | Build the PKCE authorize URL (SSO); loopback redirects only                       |
+| `POST /auth/authorize/token`  | none (5/min)    | Exchange the authorization code + PKCE verifier for a token pair                  |
+| `POST /usage`                 | access (30/min) | Ingest a batch of absolute per-minute usage buckets (upsert)                      |
+| `GET /profiles/:handle`       | none (60/min)   | Public profile: identity + model splits + heatmap; 404 covers unknown AND private |
+| `POST /auth/refresh`          | none (10/min)   | Redeem a refresh token for a rotated, optionally workspace-scoped pair            |
+| `GET /instance`               | none            | Version + what the verifier publishes (auth mode, client id, provider origin)     |
 
 Errors: typed codes in contracts with correct HTTP status; clients branch on
 code. Upstream provider failures answer 502 with an opaque message and a
@@ -374,6 +393,31 @@ literal union as more provider families ship.
   WebSocket; the web app renders the sign-in dialog (SSO buttons, email →
   code boxes), onboarding (handle, display name, avatar color), and the
   sidebar account menu. All sign-in paths converge on `establishSession`.
+
+## Usage sync and public profiles (2026-08-11)
+
+**Event-driven, no idle traffic.** The server derives per-minute buckets
+from the same local sources the profile dashboard reads (token deltas off
+`context-window.updated` activities, model+reasoning attribution off
+`thread.turn-start-requested`, prompts, skill runs) and pushes them when
+work happens: activity marks buckets dirty, a short debounce coalesces a
+burst, one batched `POST /usage` sends absolute values, and a
+watermark+dirty set in the server's SQLite makes offline periods catch up on
+the next activity or startup — never on a timer. Inert without a signed-in
+session. Usage is authenticated with the USER token: it accrues to the
+person, and a machine whose session expired stops accruing.
+
+**Public profiles are opt-in.** `PUT /profile` carries `public`;
+`GET /profiles/:handle` serves identity plus usage aggregated across every
+environment — provider/model/reasoning splits and a daily heatmap — and
+answers the same 404 for an unknown handle and a private profile. Skill
+stats and environment ids never appear in a public payload.
+
+**The page.** `apps/profiles` is a deliberately tiny Next.js app (own
+Vercel project) server-rendering `trysynara.com/@handle` from the public
+JSON. The domain stays on the marketing project, which carries one rewrite
+(`/@:handle` → the profiles deployment) — the domain's routing seam; future
+sub-apps get their own rewrite the same way.
 
 ## Local dev, deployment
 

@@ -16,6 +16,11 @@ import {
   type OtpSendResponse,
   OtpAuthenticateRequest,
   OtpSendRequest,
+  type PublicProfile,
+  type PublicProfileHeatmapDay,
+  type PublicProfileModelUsage,
+  PushUsageRequest,
+  type PushUsageResponse,
   type RegisterHostResponse,
   RegisterHostRequest,
   RefreshTokenRequest,
@@ -24,7 +29,7 @@ import {
   UpdateOrganizationRequest,
   UpdateProfileRequest,
 } from "@synara/contracts";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Schema } from "effect";
 import { Hono } from "hono";
@@ -37,7 +42,7 @@ import {
   sanitizeForwardableUserAgent,
 } from "../clientIp";
 import type * as schema from "../db/schema";
-import { profiles } from "../db/schema";
+import { profiles, usageModelStats, usageSkillStats } from "../db/schema";
 import { isUniqueViolation } from "../identity/environmentRegistry";
 import {
   EnvironmentAlreadyLinkedError,
@@ -96,6 +101,21 @@ export const PER_EMAIL_SEND_RATE_LIMIT_PER_HOUR = 10;
  */
 export const REFRESH_RATE_LIMIT_PER_MINUTE = 10;
 
+/**
+ * Usage pushes allowed per client per minute. Pushes are event-driven with a
+ * client-side debounce, so a healthy machine sends a few per minute even
+ * under heavy parallel work; the budget only needs to stop pathological
+ * hammering — the route is authenticated, so this is belt-and-braces.
+ */
+export const USAGE_PUSH_RATE_LIMIT_PER_MINUTE = 30;
+
+/**
+ * Public profile reads allowed per client per minute. Unauthenticated and
+ * cheap (indexed aggregates), but unauthenticated is exactly what needs a
+ * budget; generous enough for a page render plus retries.
+ */
+export const PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE = 60;
+
 type ProfileRow = typeof profiles.$inferSelect;
 
 function errorResponse(
@@ -119,6 +139,7 @@ function toAccountProfile(row: ProfileRow): AccountProfile {
     handle: row.handle as AccountProfileHandle,
     displayName: row.displayName,
     avatarColor: row.avatarColor as AccountProfileAvatarColor,
+    public: row.public,
   };
 }
 
@@ -220,6 +241,16 @@ export function createV1Routes(deps: {
 
   const refreshRateLimiter = createRateLimiter({
     limit: REFRESH_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
+  const usagePushRateLimiter = createRateLimiter({
+    limit: USAGE_PUSH_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
+  const publicProfileRateLimiter = createRateLimiter({
+    limit: PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
@@ -449,6 +480,9 @@ export function createV1Routes(deps: {
           handle: parsed.handle,
           displayName: parsed.displayName,
           avatarColor: parsed.avatarColor,
+          // Absent means "leave visibility alone" on update and "private" on
+          // first write — the safe default either way.
+          ...(parsed.public !== undefined ? { public: parsed.public } : {}),
         })
         // Only the editable columns are updated. `handle` is excluded rather
         // than written back identically: the guard above already refused a
@@ -459,6 +493,7 @@ export function createV1Routes(deps: {
           set: {
             displayName: parsed.displayName,
             avatarColor: parsed.avatarColor,
+            ...(parsed.public !== undefined ? { public: parsed.public } : {}),
             updatedAt: new Date(),
           },
         });
@@ -635,6 +670,195 @@ export function createV1Routes(deps: {
     if (!deleted) return errorResponse(c, 404, "host_not_found", "Host not found");
 
     return c.body(null, 204);
+  });
+
+  /**
+   * Ingests a batch of per-minute usage buckets — the account-side mirror of
+   * the local profile stats, at the same depth and with NO content. Buckets
+   * carry ABSOLUTE values and are upserted: one environment is the sole
+   * writer of its own buckets and re-pushes them as they grow, so conflicts
+   * replace rather than add, which is what makes retries and mid-minute
+   * re-pushes idempotent.
+   *
+   * Authenticated with the user access token: usage accrues to the person,
+   * and a machine whose session expired stops accruing to them. The
+   * environment id is self-reported and scoped per user in the unique key,
+   * so one user cannot write into another's buckets whatever they claim.
+   */
+  v1.post("/usage", async (c) => {
+    if (!usagePushRateLimiter.tryConsume(callerIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many usage pushes — slow down");
+    }
+
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
+
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+
+    let parsed: PushUsageRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(PushUsageRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    // One transaction for the whole batch: a push either lands entirely or
+    // not at all, so the client's dirty-set bookkeeping stays truthful.
+    await db.transaction(async (tx) => {
+      for (const bucket of parsed.models) {
+        await tx
+          .insert(usageModelStats)
+          .values({
+            userId: session.userId,
+            orgId: session.orgId,
+            environmentId: parsed.environmentId,
+            minute: new Date(bucket.minute),
+            provider: bucket.provider,
+            model: bucket.model,
+            // '' is the stored spelling of "no reasoning setting": NULL would
+            // be distinct-per-row under the unique index and duplicate the
+            // bucket on every push.
+            reasoning: bucket.reasoning ?? "",
+            tokens: bucket.tokens,
+            turns: bucket.turns,
+            prompts: bucket.prompts,
+          })
+          // Absolute replace, not increment — see the route comment.
+          .onConflictDoUpdate({
+            target: [
+              usageModelStats.userId,
+              usageModelStats.environmentId,
+              usageModelStats.minute,
+              usageModelStats.provider,
+              usageModelStats.model,
+              usageModelStats.reasoning,
+            ],
+            set: {
+              tokens: bucket.tokens,
+              turns: bucket.turns,
+              prompts: bucket.prompts,
+              orgId: session.orgId,
+              updatedAt: new Date(),
+            },
+          });
+      }
+      for (const bucket of parsed.skills) {
+        await tx
+          .insert(usageSkillStats)
+          .values({
+            userId: session.userId,
+            orgId: session.orgId,
+            environmentId: parsed.environmentId,
+            minute: new Date(bucket.minute),
+            name: bucket.name,
+            kind: bucket.kind,
+            runs: bucket.runs,
+          })
+          .onConflictDoUpdate({
+            target: [
+              usageSkillStats.userId,
+              usageSkillStats.environmentId,
+              usageSkillStats.minute,
+              usageSkillStats.name,
+              usageSkillStats.kind,
+            ],
+            set: { runs: bucket.runs, orgId: session.orgId, updatedAt: new Date() },
+          });
+      }
+    });
+
+    const body: PushUsageResponse = { written: parsed.models.length + parsed.skills.length };
+    return c.json(body, 202);
+  });
+
+  /**
+   * The public profile behind a handle. Unauthenticated by design — it is
+   * the page at trysynara.com/@handle — and served ONLY when the owner made
+   * the profile public. An unknown handle and a private profile answer the
+   * same 404, so the route reveals nothing the owner did not publish.
+   *
+   * The payload is identity plus usage aggregated across every environment:
+   * per provider/model/reasoning splits and a daily heatmap. Skill stats and
+   * environment ids never appear — which skills someone runs reveals what
+   * they work on, and which machines they own is nobody's business.
+   */
+  v1.get("/profiles/:handle", async (c) => {
+    if (!publicProfileRateLimiter.tryConsume(callerIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many requests — slow down");
+    }
+
+    // Handles are stored lowercase; fold the lookup so /profiles/@Dylan and
+    // a bare /profiles/dylan both resolve. A leading @ is tolerated because
+    // the public URL spells it that way.
+    const handle = c.req.param("handle").replace(/^@/, "").toLowerCase();
+    const [row] = await db.select().from(profiles).where(eq(profiles.handle, handle)).limit(1);
+    if (!row || !row.public) {
+      return errorResponse(c, 404, "profile_not_found", "No public profile by that handle");
+    }
+
+    const models = await db
+      .select({
+        provider: usageModelStats.provider,
+        model: usageModelStats.model,
+        reasoning: usageModelStats.reasoning,
+        tokens: sql<string>`COALESCE(SUM(${usageModelStats.tokens}), 0)`,
+        turns: sql<string>`COALESCE(SUM(${usageModelStats.turns}), 0)`,
+        prompts: sql<string>`COALESCE(SUM(${usageModelStats.prompts}), 0)`,
+      })
+      .from(usageModelStats)
+      .where(eq(usageModelStats.userId, row.userId))
+      .groupBy(usageModelStats.provider, usageModelStats.model, usageModelStats.reasoning)
+      .orderBy(sql`SUM(${usageModelStats.tokens}) DESC`);
+
+    const heatmap = await db
+      .select({
+        day: sql<string>`to_char(${usageModelStats.minute} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`,
+        tokens: sql<string>`COALESCE(SUM(${usageModelStats.tokens}), 0)`,
+        prompts: sql<string>`COALESCE(SUM(${usageModelStats.prompts}), 0)`,
+      })
+      .from(usageModelStats)
+      .where(
+        and(
+          eq(usageModelStats.userId, row.userId),
+          // A year of days bounds the payload however long the account lives.
+          sql`${usageModelStats.minute} >= now() - interval '366 days'`,
+        ),
+      )
+      .groupBy(sql`to_char(${usageModelStats.minute} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`);
+
+    const modelRows: PublicProfileModelUsage[] = models.map((entry) => ({
+      provider: entry.provider,
+      model: entry.model,
+      // '' is the stored spelling of "no reasoning setting"; the wire says null.
+      reasoning: entry.reasoning === "" ? null : entry.reasoning,
+      tokens: Number(entry.tokens),
+      turns: Number(entry.turns),
+      prompts: Number(entry.prompts),
+    }));
+    const heatmapRows: PublicProfileHeatmapDay[] = heatmap.map((entry) => ({
+      day: entry.day,
+      tokens: Number(entry.tokens),
+      prompts: Number(entry.prompts),
+    }));
+
+    const body: PublicProfile = {
+      handle: row.handle,
+      displayName: row.displayName,
+      avatarColor: row.avatarColor,
+      createdAt: row.createdAt.toISOString(),
+      lifetimeTokens: modelRows.reduce((total, entry) => total + entry.tokens, 0),
+      lifetimePrompts: modelRows.reduce((total, entry) => total + entry.prompts, 0),
+      lifetimeTurns: modelRows.reduce((total, entry) => total + entry.turns, 0),
+      models: modelRows,
+      heatmap: heatmapRows,
+    };
+    return c.json(body);
   });
 
   v1.get("/instance", (c) => {

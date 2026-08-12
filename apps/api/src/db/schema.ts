@@ -1,5 +1,15 @@
 import { sql } from "drizzle-orm";
-import { jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import {
+  bigint,
+  boolean,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 export type HostEndpoint = { url: string; transport: "lan" | "tailscale" | "public" };
 
@@ -50,9 +60,87 @@ export const profiles = pgTable("profiles", {
   handle: text("handle").notNull().unique(),
   displayName: text("display_name").notNull(),
   avatarColor: text("avatar_color").notNull(),
+  // Opt-in, default private: a profile is served at trysynara.com/@handle
+  // exactly when its owner flipped this on.
+  public: boolean("public").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Per-minute model-attributed usage counters — the account-side mirror of the
+ * local profile stats, at the same depth (provider, model, reasoning) and
+ * with NO content: a row is a key plus counters, never a trace.
+ *
+ * Rows hold ABSOLUTE values and are upserted, not incremented: one
+ * environment is the only writer of its own minute-buckets and re-pushes a
+ * bucket as it grows, so `ON CONFLICT DO UPDATE` makes retries and
+ * mid-minute re-pushes idempotent where increments would double-count.
+ *
+ * `reasoning` is part of the key, so "no reasoning" is stored as the empty
+ * string rather than NULL — Postgres unique indexes treat NULLs as
+ * distinct, which would let duplicate no-reasoning buckets accumulate. The
+ * route maps the wire's null to '' on write and back on read.
+ */
+export const usageModelStats = pgTable(
+  "usage_model_stats",
+  {
+    userId: text("user_id").notNull(),
+    // Denormalized from the pushing session so future team views can
+    // aggregate by workspace without a WorkOS round trip per row.
+    orgId: text("org_id").notNull(),
+    environmentId: text("environment_id").notNull(),
+    minute: timestamp("minute", { withTimezone: true }).notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    /** '' means "ran without a reasoning setting"; see the table comment. */
+    reasoning: text("reasoning").notNull().default(""),
+    tokens: bigint("tokens", { mode: "number" }).notNull().default(0),
+    turns: bigint("turns", { mode: "number" }).notNull().default(0),
+    prompts: bigint("prompts", { mode: "number" }).notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("usage_model_stats_bucket_unique").on(
+      table.userId,
+      table.environmentId,
+      table.minute,
+      table.provider,
+      table.model,
+      table.reasoning,
+    ),
+    index("usage_model_stats_user_minute").on(table.userId, table.minute),
+  ],
+);
+
+/**
+ * Per-minute skill/agent run counters. Synced for the owner's own
+ * account-side dashboard and NEVER served publicly: which skills someone
+ * runs reveals what they work on, where the model mix only reveals how much.
+ */
+export const usageSkillStats = pgTable(
+  "usage_skill_stats",
+  {
+    userId: text("user_id").notNull(),
+    orgId: text("org_id").notNull(),
+    environmentId: text("environment_id").notNull(),
+    minute: timestamp("minute", { withTimezone: true }).notNull(),
+    name: text("name").notNull(),
+    kind: text("kind", { enum: ["skill", "agent"] }).notNull(),
+    runs: bigint("runs", { mode: "number" }).notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("usage_skill_stats_bucket_unique").on(
+      table.userId,
+      table.environmentId,
+      table.minute,
+      table.name,
+      table.kind,
+    ),
+    index("usage_skill_stats_user_minute").on(table.userId, table.minute),
+  ],
+);
 
 export const hostTokens = pgTable(
   "host_tokens",

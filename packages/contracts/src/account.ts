@@ -102,6 +102,13 @@ export const AccountProfile = Schema.Struct({
   handle: AccountProfileHandle,
   displayName: TrimmedNonEmptyString,
   avatarColor: AccountProfileAvatarColor,
+  /**
+   * Whether the profile is served publicly at trysynara.com/@handle.
+   * Optional-with-default rather than required so a client built before
+   * visibility existed still decodes a server's answer; absent means
+   * private, which is also the default for every new profile.
+   */
+  public: Schema.optional(Schema.Boolean),
 });
 export type AccountProfile = typeof AccountProfile.Type;
 
@@ -131,6 +138,8 @@ export const UpdateProfileRequest = Schema.Struct({
   handle: AccountProfileHandle,
   displayName: AccountNameString,
   avatarColor: AccountProfileAvatarColor,
+  /** Optional so pre-visibility clients keep writing profiles unchanged. */
+  public: Schema.optional(Schema.Boolean),
 });
 export type UpdateProfileRequest = typeof UpdateProfileRequest.Type;
 
@@ -191,6 +200,12 @@ export type InstanceInfo = typeof InstanceInfo.Type;
 export const AccountErrorCode = Schema.Literals([
   "unauthorized",
   "host_not_found",
+  /**
+   * The public-profile read for a handle that is unknown OR private —
+   * deliberately one code for both, so the route reveals nothing an owner
+   * did not publish.
+   */
+  "profile_not_found",
   "token_revoked",
   "organization_required",
   "environment_already_linked",

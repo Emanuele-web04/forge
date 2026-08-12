@@ -24,10 +24,7 @@ import {
 } from "../profile/profileSelectors";
 import { ShareDialog } from "../profile/ShareDialog";
 import { EditProfileDialog } from "../profile/EditProfileDialog";
-import { useProfileHandle } from "../profile/useProfileHandle";
-import { useProfileName } from "../profile/useProfileName";
-import { useProfileAvatarColor } from "../profile/useProfileAvatarColor";
-import { useProfileAvatarImage } from "../profile/useProfileAvatarImage";
+import { useProfileIdentity } from "../profile/useProfileIdentity";
 import { ProfileAvatar } from "../profile/ProfileAvatar";
 import {
   formatCompact,
@@ -76,10 +73,10 @@ function ProfileContent({
   const [editOpen, setEditOpen] = useState(false);
 
   const defaultName = toDisplayName(stats.identity.homeDirBasename);
-  const { name, setName } = useProfileName(defaultName);
-  const { handle, setHandle } = useProfileHandle(stats.identity.defaultHandle);
-  const { color: avatarColor, setColor: setAvatarColor } = useProfileAvatarColor();
-  const { image: avatarImage, setImage: setAvatarImage } = useProfileAvatarImage();
+  const { name, handle, avatarColor, avatarImage, accountProfile, save } = useProfileIdentity({
+    name: defaultName,
+    handle: stats.identity.defaultHandle,
+  });
 
   // Tokens/day when available, prompts/day otherwise — shared with ShareCard.
   const heatmap = selectProfileHeatmap(stats, tokenStats);
@@ -254,6 +251,7 @@ function ProfileContent({
         handle={handle}
         avatarColor={avatarColor}
         avatarImage={avatarImage}
+        accountProfile={accountProfile}
         open={shareOpen}
         onOpenChange={setShareOpen}
       />
@@ -266,17 +264,8 @@ function ProfileContent({
         handle={handle}
         avatarColor={avatarColor}
         avatarImage={avatarImage}
-        onSave={({
-          name: nextName,
-          handle: nextHandle,
-          avatarColor: nextColor,
-          avatarImage: nextImage,
-        }) => {
-          setName(nextName);
-          setHandle(nextHandle);
-          setAvatarColor(nextColor);
-          setAvatarImage(nextImage);
-        }}
+        accountProfile={accountProfile}
+        onSave={save}
       />
     </div>
   );
