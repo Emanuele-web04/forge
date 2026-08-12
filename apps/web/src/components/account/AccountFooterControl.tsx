@@ -61,6 +61,11 @@ function SignedInFooter() {
   const profile = me.profile ?? null;
   const displayName = profile?.displayName ?? me.name;
   const avatarColor = profile?.avatarColor ?? DEFAULT_MENU_AVATAR_COLOR;
+  // With a profile, its resolved avatarUrl is the one source of truth (it
+  // already reflects the chosen source: uploaded object, provider picture,
+  // or null for the initials placeholder). Pre-onboarding there is no
+  // profile yet, so the provider picture is the best available image.
+  const avatarImage = profile ? (profile.avatarUrl ?? null) : (me.image ?? null);
 
   const handleSignOut = async () => {
     try {
@@ -92,7 +97,7 @@ function SignedInFooter() {
         <ProfileAvatar
           initials={accountInitial(displayName)}
           color={avatarColor}
-          image={me.image ?? null}
+          image={avatarImage}
           className="size-5 shrink-0"
           textClassName="text-[10px]"
         />

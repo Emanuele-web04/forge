@@ -32,6 +32,7 @@ import type {
   AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
   InstanceInfo,
   UsageSummary,
 } from "@synara/contracts";
@@ -145,6 +146,15 @@ export interface AccountSession {
   /** Abandons a pending SSO attempt, closing its loopback listener. */
   cancelSso(input: AccountCompleteSsoInput): Promise<void>;
   updateProfile(input: AccountUpdateProfileInput): Promise<AccountMe>;
+  /**
+   * Uploads a profile avatar: decodes the base64 the WS protocol carried and
+   * forwards the raw bytes to the account service, which stores the image
+   * and switches the avatar source to "uploaded". Answers the refreshed
+   * `/me` like every profile write.
+   */
+  uploadAvatar(input: AccountUploadAvatarInput): Promise<AccountMe>;
+  /** Removes the uploaded avatar; the service reverts the source to "sso". */
+  deleteAvatar(): Promise<AccountMe>;
   /**
    * The account-wide usage summary — the "Account" side of the usage tab's
    * device/account toggle. Runs against the stored session with the usual
@@ -550,6 +560,17 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         }
         return written;
       });
+    },
+
+    async uploadAvatar(input) {
+      // Base64 → bytes here, not in the shared client: the wire format is a
+      // WS-protocol concern, and the client's contract is plain bytes.
+      const bytes = Uint8Array.from(Buffer.from(input.bytes, "base64"));
+      return withSession((token, client) => client.uploadAvatar(token, bytes, input.contentType));
+    },
+
+    async deleteAvatar() {
+      return withSession((token, client) => client.deleteAvatar(token));
     },
 
     async usageSummary(input) {

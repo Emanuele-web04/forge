@@ -13,6 +13,7 @@ import {
   AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
 } from "./account";
 import { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import {
@@ -1205,6 +1206,18 @@ export const WsAccountUpdateProfileRpc = Rpc.make(WS_METHODS.accountUpdateProfil
   error: WsRpcError,
 });
 
+export const WsAccountUploadAvatarRpc = Rpc.make(WS_METHODS.accountUploadAvatar, {
+  payload: AccountUploadAvatarInput,
+  success: AccountMe,
+  error: WsRpcError,
+});
+
+export const WsAccountDeleteAvatarRpc = Rpc.make(WS_METHODS.accountDeleteAvatar, {
+  payload: Schema.Struct({}),
+  success: AccountMe,
+  error: WsRpcError,
+});
+
 export const WsAccountSignOutRpc = Rpc.make(WS_METHODS.accountSignOut, {
   payload: Schema.Struct({}),
   success: Schema.Void,
@@ -1402,6 +1415,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAccountCancelSsoRpc,
   WsAccountUsageSummaryRpc,
   WsAccountUpdateProfileRpc,
+  WsAccountUploadAvatarRpc,
+  WsAccountDeleteAvatarRpc,
   WsAccountSignOutRpc,
   WsAccountOpenVerificationUrlRpc,
   WsAutomationListRpc,

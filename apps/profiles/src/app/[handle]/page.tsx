@@ -41,6 +41,9 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
       title: `${profile.displayName} (@${profile.handle})`,
       description,
     },
+    // The file-convention opengraph-image registers itself; the card type is
+    // the only twitter-specific bit the route can't infer.
+    twitter: { card: "summary_large_image" },
   };
 }
 
@@ -59,6 +62,7 @@ export default async function ProfilePage({ params }: Params) {
         <ProfileAvatar
           initials={deriveInitials(profile.displayName)}
           color={profile.avatarColor}
+          image={profile.avatarUrl ?? null}
           className="size-[72px] shadow-sm"
           textClassName="text-2xl"
         />

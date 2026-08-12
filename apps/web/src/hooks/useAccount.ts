@@ -10,6 +10,7 @@ import type {
   AccountSendOtpInput,
   AccountStatus,
   AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -100,6 +101,31 @@ export function useAccount() {
     },
   });
 
+  // The avatar mutations answer the refreshed `me` like updateProfile, so
+  // every avatar render (footer, settings header, edit dialog) updates from
+  // one cache write with no refetch round trip.
+  const uploadAvatar = useMutation({
+    ...statusFence,
+    mutationFn: async (input: AccountUploadAvatarInput) => {
+      const api = ensureNativeApi();
+      return api.account.uploadAvatar(input);
+    },
+    onSuccess: (me: AccountMe) => {
+      setStatus({ state: "signed-in", me });
+    },
+  });
+
+  const deleteAvatar = useMutation({
+    ...statusFence,
+    mutationFn: async () => {
+      const api = ensureNativeApi();
+      return api.account.deleteAvatar();
+    },
+    onSuccess: (me: AccountMe) => {
+      setStatus({ state: "signed-in", me });
+    },
+  });
+
   const signOut = useMutation({
     ...statusFence,
     mutationFn: async () => {
@@ -128,6 +154,8 @@ export function useAccount() {
     completeSso,
     cancelSso,
     updateProfile,
+    uploadAvatar,
+    deleteAvatar,
     signOut,
     openVerificationUrl,
   } as const;

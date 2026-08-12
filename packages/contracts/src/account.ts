@@ -543,6 +543,37 @@ export const AccountUpdateProfileInput = Schema.Struct({
 export type AccountUpdateProfileInput = typeof AccountUpdateProfileInput.Type;
 
 /**
+ * Byte budget of an avatar upload as it crosses the WS JSON protocol: the
+ * service caps the raw image at 300KB (`AVATAR_MAX_BYTES` in the API), and
+ * base64 inflates bytes 4/3 — 400k characters decode to at most 300,000
+ * bytes, so the schema refuses anything the service would refuse anyway
+ * before it is decoded or forwarded. The web app's compressor produces
+ * ~5–12KB images, nowhere near the bound.
+ */
+export const ACCOUNT_AVATAR_BASE64_MAX_LENGTH = 400_000;
+
+/** The image types PUT /profile/avatar accepts, mirrored client-side. */
+export const AccountAvatarContentType = Schema.Literals(["image/webp", "image/jpeg", "image/png"]);
+export type AccountAvatarContentType = typeof AccountAvatarContentType.Type;
+
+/**
+ * The avatar upload as the web app hands it to the server: the compressed
+ * image bytes base64-encoded (the WS protocol is JSON, and at ≤300KB raw the
+ * 4/3 inflation is a fine trade for staying on the one transport), plus the
+ * content type the compressor produced. The server decodes and forwards the
+ * raw bytes to PUT /profile/avatar, which is the only writer of
+ * `avatarSource: "uploaded"`.
+ */
+export const AccountUploadAvatarInput = Schema.Struct({
+  bytes: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(ACCOUNT_AVATAR_BASE64_MAX_LENGTH),
+  ),
+  contentType: AccountAvatarContentType,
+});
+export type AccountUploadAvatarInput = typeof AccountUploadAvatarInput.Type;
+
+/**
  * The URL to hand to the system browser. Constrained to the authorize URL of
  * an SSO attempt this server just started: the server refuses anything else,
  * so this method can never become a general "open any URL for me" primitive.

@@ -11,6 +11,7 @@ import type {
   AccountSendOtpResult,
   AccountStatus,
   AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
 } from "./account";
 import type { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import type {
@@ -882,6 +883,14 @@ export interface NativeApi {
     usageSummary: (input: AccountUsageSummaryInput) => Promise<UsageSummary>;
     /** Writes the profile, and renames the workspace when `workspaceName` differs. */
     updateProfile: (input: AccountUpdateProfileInput) => Promise<AccountMe>;
+    /**
+     * Uploads a compressed avatar image (base64 over the WS JSON protocol)
+     * and switches the avatar source to "uploaded". Answers the refreshed
+     * `/me`, exactly like updateProfile.
+     */
+    uploadAvatar: (input: AccountUploadAvatarInput) => Promise<AccountMe>;
+    /** Removes the uploaded avatar; the source reverts to "sso" server-side. */
+    deleteAvatar: () => Promise<AccountMe>;
     signOut: () => Promise<void>;
     /** Opens an SSO authorize page this server issued in the system browser. */
     openVerificationUrl: (input: AccountOpenVerificationUrlInput) => Promise<void>;

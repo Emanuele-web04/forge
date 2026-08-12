@@ -20,6 +20,8 @@ const accountApiMock = {
   completeSso: vi.fn(),
   cancelSso: vi.fn(),
   updateProfile: vi.fn(),
+  uploadAvatar: vi.fn(),
+  deleteAvatar: vi.fn(),
   signOut: vi.fn(),
   openVerificationUrl: vi.fn(),
 };
@@ -137,6 +139,64 @@ describe("useAccount", () => {
       displayName: "Ada",
       avatarColor: "#22c55e",
     });
+
+    expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
+      state: "signed-in",
+      me: after,
+    });
+  });
+
+  it("writes the updated `me` into the cache after an avatar upload", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), {
+      state: "signed-in",
+      me: makeMe(),
+    });
+    const after = makeMe({
+      handle: "ada-l",
+      displayName: "Ada",
+      avatarColor: "#22c55e",
+      avatarSource: "uploaded",
+      avatarUrl: "https://cdn.example.com/avatars/user_1/abc.webp",
+    });
+    accountApiMock.uploadAvatar.mockResolvedValue(after);
+
+    const account = renderUseAccount(queryClient);
+    await account.uploadAvatar.mutateAsync({ bytes: "aGVsbG8=", contentType: "image/webp" });
+
+    expect(accountApiMock.uploadAvatar).toHaveBeenCalledWith({
+      bytes: "aGVsbG8=",
+      contentType: "image/webp",
+    });
+    expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
+      state: "signed-in",
+      me: after,
+    });
+  });
+
+  it("writes the updated `me` into the cache after an avatar delete", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), {
+      state: "signed-in",
+      me: makeMe({
+        handle: "ada-l",
+        displayName: "Ada",
+        avatarColor: "#22c55e",
+        avatarSource: "uploaded",
+        avatarUrl: "https://cdn.example.com/avatars/user_1/abc.webp",
+      }),
+    });
+    const after = makeMe({
+      handle: "ada-l",
+      displayName: "Ada",
+      avatarColor: "#22c55e",
+      avatarSource: "sso",
+      avatarUrl: null,
+    });
+    accountApiMock.deleteAvatar.mockResolvedValue(after);
+
+    const account = renderUseAccount(queryClient);
+    await account.deleteAvatar.mutateAsync();
 
     expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
       state: "signed-in",

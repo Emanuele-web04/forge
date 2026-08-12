@@ -8,6 +8,7 @@ import {
   AccountOpenVerificationUrlInput,
   AccountSendOtpInput,
   AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
 } from "./account";
 import { AccountUsageSummaryInput } from "./accountUsage";
 import {
@@ -290,6 +291,8 @@ export const WS_METHODS = {
   accountCancelSso: "account.cancelSso",
   accountUsageSummary: "account.usageSummary",
   accountUpdateProfile: "account.updateProfile",
+  accountUploadAvatar: "account.uploadAvatar",
+  accountDeleteAvatar: "account.deleteAvatar",
   accountSignOut: "account.signOut",
   accountOpenVerificationUrl: "account.openVerificationUrl",
 
@@ -498,6 +501,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.accountCancelSso, AccountCompleteSsoInput),
   tagRequestBody(WS_METHODS.accountUsageSummary, AccountUsageSummaryInput),
   tagRequestBody(WS_METHODS.accountUpdateProfile, AccountUpdateProfileInput),
+  tagRequestBody(WS_METHODS.accountUploadAvatar, AccountUploadAvatarInput),
+  tagRequestBody(WS_METHODS.accountDeleteAvatar, Schema.Struct({})),
   tagRequestBody(WS_METHODS.accountSignOut, Schema.Struct({})),
   tagRequestBody(WS_METHODS.accountOpenVerificationUrl, AccountOpenVerificationUrlInput),
 

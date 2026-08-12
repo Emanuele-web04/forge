@@ -811,6 +811,8 @@ export function createWsNativeApi(): NativeApi {
       cancelSso: (input) => transport.request(WS_METHODS.accountCancelSso, input),
       usageSummary: (input) => transport.request(WS_METHODS.accountUsageSummary, input),
       updateProfile: (input) => transport.request(WS_METHODS.accountUpdateProfile, input),
+      uploadAvatar: (input) => transport.request(WS_METHODS.accountUploadAvatar, input),
+      deleteAvatar: () => transport.request(WS_METHODS.accountDeleteAvatar),
       signOut: () => transport.request(WS_METHODS.accountSignOut),
       openVerificationUrl: (input) =>
         transport.request(WS_METHODS.accountOpenVerificationUrl, input),

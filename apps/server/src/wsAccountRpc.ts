@@ -118,6 +118,16 @@ export function makeAccountRpcHandlers({ accountSession, openBrowser }: AccountR
         () => Effect.tryPromise(() => accountSession.updateProfile(input)),
         "Failed to save your profile",
       ),
+    [WS_METHODS.accountUploadAvatar]: (input: Parameters<AccountSession["uploadAvatar"]>[0]) =>
+      ownerAccountRpc(
+        () => Effect.tryPromise(() => accountSession.uploadAvatar(input)),
+        "Failed to upload your avatar",
+      ),
+    [WS_METHODS.accountDeleteAvatar]: () =>
+      ownerAccountRpc(
+        () => Effect.tryPromise(() => accountSession.deleteAvatar()),
+        "Failed to remove your avatar",
+      ),
     [WS_METHODS.accountSignOut]: () =>
       ownerAccountRpc(
         () => Effect.tryPromise(() => accountSession.signOut()),

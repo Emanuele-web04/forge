@@ -442,10 +442,11 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
         {
           method: "PUT",
           headers: { ...authHeaders(token), "content-type": contentType },
-          // A plain ArrayBuffer-backed copy: fetch implementations disagree
-          // about Uint8Array views over SharedArrayBuffer or offset views.
-          // Extract the exact slice to avoid sending pooled Buffer backing stores.
-          body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+          // A plain ArrayBuffer-backed copy of exactly the view's bytes:
+          // fetch implementations disagree about Uint8Array views over
+          // SharedArrayBuffer or offset views, and slicing the view (not its
+          // buffer) never leaks a pooled Buffer's neighboring bytes.
+          body: new Uint8Array(bytes).buffer,
         },
         AccountMeSchema,
       );

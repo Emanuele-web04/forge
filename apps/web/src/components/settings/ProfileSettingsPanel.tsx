@@ -99,7 +99,17 @@ function ProfileContent({
   const [editOpen, setEditOpen] = useState(false);
 
   const defaultName = toDisplayName(stats.identity.homeDirBasename);
-  const { name, handle, avatarColor, avatarImage, accountProfile, save } = useProfileIdentity({
+  const {
+    name,
+    handle,
+    avatarColor,
+    avatarImage,
+    ssoImage,
+    accountProfile,
+    save,
+    uploadAvatarPhoto,
+    removeUploadedAvatar,
+  } = useProfileIdentity({
     name: defaultName,
     handle: stats.identity.defaultHandle,
   });
@@ -181,7 +191,10 @@ function ProfileContent({
         handle={handle}
         avatarColor={avatarColor}
         avatarImage={avatarImage}
+        ssoImage={ssoImage}
         accountProfile={accountProfile}
+        onUploadPhoto={uploadAvatarPhoto}
+        onRemoveUploadedPhoto={removeUploadedAvatar}
         onSave={save}
       />
     </div>

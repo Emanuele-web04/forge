@@ -24,6 +24,12 @@ export type PublicProfile = {
   handle: string;
   displayName: string;
   avatarColor: string;
+  /**
+   * The resolved avatar image URL (uploaded object or cached sso picture),
+   * or null when the owner chose the initials placeholder. Optional so the
+   * page keeps rendering against a pre-avatar API.
+   */
+  avatarUrl?: string | null;
   createdAt: string;
   lifetimeTokens: number;
   lifetimePrompts: number;

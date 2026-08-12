@@ -50,6 +50,8 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     authenticateOtp: unimplemented("authenticateOtp"),
     me: unimplemented("me"),
     updateProfile: unimplemented("updateProfile"),
+    uploadAvatar: unimplemented("uploadAvatar"),
+    deleteAvatar: unimplemented("deleteAvatar"),
     updateOrganization: unimplemented("updateOrganization"),
     listHosts: unimplemented("listHosts"),
     registerHost: unimplemented("registerHost"),
@@ -680,6 +682,39 @@ describe("updateProfile", () => {
         workspaceName: ORGANIZATION.name,
       }),
     ).resolves.toBeDefined();
+  });
+});
+
+describe("avatar", () => {
+  it("decodes the base64 payload and forwards raw bytes with the content type", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+    let received: { bytes: Uint8Array; contentType: string } | null = null;
+    const session = sessionFor(
+      baseDir,
+      makeClient({
+        uploadAvatar: (_token, bytes, contentType) => {
+          received = { bytes, contentType };
+          return Promise.resolve(meResponse());
+        },
+      }),
+    );
+
+    // "hello" as the stand-in image body; the session must not reinterpret it.
+    await session.uploadAvatar({ bytes: "aGVsbG8=", contentType: "image/webp" });
+
+    expect(received).not.toBeNull();
+    expect(new TextDecoder().decode(received!.bytes)).toBe("hello");
+    expect(received!.contentType).toBe("image/webp");
+  });
+
+  it("deletes the avatar through the stored session", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+    const me = meResponse();
+    const session = sessionFor(baseDir, makeClient({ deleteAvatar: () => Promise.resolve(me) }));
+
+    expect(await session.deleteAvatar()).toEqual(me);
   });
 });
 

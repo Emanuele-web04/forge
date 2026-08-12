@@ -23,6 +23,8 @@ const SAMPLE_INPUTS: Record<string, unknown> = {
     avatarColor: "emerald",
   },
   [WS_METHODS.accountUsageSummary]: { utcOffsetMinutes: 0 },
+  [WS_METHODS.accountUploadAvatar]: { bytes: "aGVsbG8=", contentType: "image/webp" },
+  [WS_METHODS.accountDeleteAvatar]: undefined,
   [WS_METHODS.accountSignOut]: undefined,
   [WS_METHODS.accountOpenVerificationUrl]: { url: "https://auth.example.com/device?code=x" },
 };
@@ -62,6 +64,20 @@ function spySession(): { session: AccountSession; calls: () => string[] } {
       environments: [],
     }),
     updateProfile: record("updateProfile", {
+      id: "user_1",
+      name: "Ada",
+      email: "ada@example.com",
+      organization: { id: "org_1", name: "Workspace" },
+      profile: null,
+    }),
+    uploadAvatar: record("uploadAvatar", {
+      id: "user_1",
+      name: "Ada",
+      email: "ada@example.com",
+      organization: { id: "org_1", name: "Workspace" },
+      profile: null,
+    }),
+    deleteAvatar: record("deleteAvatar", {
       id: "user_1",
       name: "Ada",
       email: "ada@example.com",
