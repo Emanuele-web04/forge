@@ -122,10 +122,10 @@ function verifyCanonicalIdentity(): void {
 }
 
 function verifyReleaseWorkflowSafety(): void {
-  const workflow = readFileSync(resolve(repoRoot, ".github/workflows/release.yml"), "utf8").replaceAll(
-    "\r\n",
-    "\n",
-  );
+  const workflow = readFileSync(
+    resolve(repoRoot, ".github/workflows/release.yml"),
+    "utf8",
+  ).replaceAll("\r\n", "\n");
   assertContains(
     workflow,
     "\npermissions: {}\n",
