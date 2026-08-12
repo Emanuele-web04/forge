@@ -1987,32 +1987,34 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect((await getProfile(app, handle, "203.0.117.10")).status).toBe(404);
     });
 
-    // The profiles web app fetches server-side, so every visitor shares its
-    // egress IP; it forwards the real viewer as x-synara-viewer-ip, which
-    // must key the budget — otherwise one busy profile page 429s everyone.
-    it("keys the budget on a valid x-synara-viewer-ip over the caller ip", async () => {
+    // Rate limiting keys on caller IP (trusted, from proxy headers) only.
+    // The x-synara-viewer-ip header is ignored because it's client-controlled
+    // and spoofable — accepting it would allow bypassing rate limits.
+    it("keys the budget on caller IP, ignoring x-synara-viewer-ip", async () => {
       const { app } = buildApp();
-      const egressIp = "203.0.117.11";
+      const callerIp = "203.0.117.11";
       const handle = `ghost-${randomUUID().slice(0, 8)}`;
 
-      const getAsViewer = (viewerIp: string) =>
+      const getWithHeaders = (viewerIpHeader: string) =>
         app.request(`/api/v1/profiles/${handle}`, {
-          headers: { "x-forwarded-for": egressIp, "x-synara-viewer-ip": viewerIp },
+          headers: { "x-forwarded-for": callerIp, "x-synara-viewer-ip": viewerIpHeader },
         });
 
+      // Exhaust the budget for this caller IP
       for (let i = 0; i < PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE; i += 1) {
-        expect((await getAsViewer("198.51.100.1")).status).toBe(404);
+        expect((await getWithHeaders("198.51.100.1")).status).toBe(404);
       }
-      expect((await getAsViewer("198.51.100.1")).status).toBe(429);
 
-      // A different viewer behind the same egress IP has its own budget.
-      expect((await getAsViewer("198.51.100.2")).status).toBe(404);
+      // Now rate-limited, regardless of x-synara-viewer-ip value
+      expect((await getWithHeaders("198.51.100.1")).status).toBe(429);
+      expect((await getWithHeaders("198.51.100.2")).status).toBe(429);
+      expect((await getWithHeaders("completely-different")).status).toBe(429);
 
-      // A garbage header value falls back to the caller ip.
-      const junk = await app.request(`/api/v1/profiles/${handle}`, {
-        headers: { "x-forwarded-for": egressIp, "x-synara-viewer-ip": "not an ip" },
+      // A different caller IP has its own budget
+      const differentCaller = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": "203.0.117.99" },
       });
-      expect(junk.status).toBe(404);
+      expect(differentCaller.status).toBe(404);
     });
   });
 

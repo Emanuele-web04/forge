@@ -194,6 +194,57 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
   return chunks;
 }
 
+/**
+ * Chunks buckets by complete minutes to preserve the minute-replacement
+ * contract: each chunk must contain ALL buckets for any minute it mentions,
+ * never splitting a minute's buckets across chunks. Starts a new chunk when
+ * adding the next complete minute would exceed `maxBuckets`.
+ */
+function chunkByMinute<T extends { readonly minute: string }>(
+  buckets: readonly T[],
+  maxBuckets: number,
+): T[][] {
+  const chunks: T[][] = [];
+  let currentChunk: T[] = [];
+  let currentMinute: string | undefined;
+  const minuteGroup: T[] = [];
+
+  for (const bucket of buckets) {
+    if (currentMinute !== bucket.minute) {
+      // Flush the completed minute group to the current chunk if it fits
+      if (minuteGroup.length > 0) {
+        if (currentChunk.length + minuteGroup.length > maxBuckets && currentChunk.length > 0) {
+          // Current chunk would overflow; finalize it and start fresh
+          chunks.push(currentChunk);
+          currentChunk = [...minuteGroup];
+        } else {
+          currentChunk.push(...minuteGroup);
+        }
+        minuteGroup.length = 0;
+      }
+      currentMinute = bucket.minute;
+    }
+    minuteGroup.push(bucket);
+  }
+
+  // Flush the final minute group
+  if (minuteGroup.length > 0) {
+    if (currentChunk.length + minuteGroup.length > maxBuckets && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = [...minuteGroup];
+    } else {
+      currentChunk.push(...minuteGroup);
+    }
+  }
+
+  // Finalize the last chunk
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  return chunks;
+}
+
 // ── Bucket derivation ──────────────────────────────────────────────────
 
 /**
@@ -857,8 +908,8 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
       if (models.length > 0 || skills.length > 0) {
         cachedEnvironmentId ??= await resolveEnvironment();
         const environmentId = EnvironmentId.makeUnsafe(cachedEnvironmentId);
-        const modelChunks = chunk(models, USAGE_PUSH_MAX_BUCKETS);
-        const skillChunks = chunk(skills, USAGE_PUSH_MAX_BUCKETS);
+        const modelChunks = chunkByMinute(models, USAGE_PUSH_MAX_BUCKETS);
+        const skillChunks = chunkByMinute(skills, USAGE_PUSH_MAX_BUCKETS);
         const pushCount = Math.max(modelChunks.length, skillChunks.length);
         // The newest minute known fully pushed for one stream after its chunk
         // `index` lands: the minute just before the NEXT chunk's first bucket.

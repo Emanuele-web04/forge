@@ -1185,17 +1185,11 @@ export function createV1Routes(deps: {
    * machines they own is nobody's business.
    */
   v1.get("/profiles/:handle", async (c) => {
-    // The profiles web app fetches server-side, so every visitor arrives on
-    // its one egress IP — keyed on callerIp alone, one popular profile page
-    // would exhaust the budget for all visitors. It forwards the real
-    // viewer's address as `x-synara-viewer-ip`, preferred here when it looks
-    // like an IP. Safe to trust for THIS purpose only: the header picks the
-    // rate-limit bucket and nothing else, so the worst a spoofer achieves is
-    // partitioning their own budget — never use it for authorization.
-    const forwardedViewerIp = sanitizeForwardableIp(
-      c.req.header("x-synara-viewer-ip")?.trim() ?? "unknown",
-    );
-    if (!publicProfileRateLimiter.tryConsume(forwardedViewerIp ?? callerIp(c))) {
+    // Rate-limit by caller IP (trusted, derived from proxy headers). The
+    // profiles web app fetches server-side and forwards x-synara-viewer-ip,
+    // but that header is client-controlled and must not influence rate
+    // limiting — rotating forged values would bypass the limit entirely.
+    if (!publicProfileRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many requests — slow down");
     }
 
