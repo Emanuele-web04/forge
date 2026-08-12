@@ -138,6 +138,13 @@ beforeAll(() => {
   });
 });
 
+// Warm the component module once: the first dynamic import pays the whole
+// component-graph transform, which exceeds the 5s per-test timeout on slow CI
+// runners. beforeAll time does not count against any single test.
+beforeAll(async () => {
+  await import("./MessagesTimeline");
+});
+
 describe("MessagesTimeline", () => {
   // The first test pays the full dynamic-import cost of the MessagesTimeline
   // module graph, which can exceed 10s under CI thread contention.
