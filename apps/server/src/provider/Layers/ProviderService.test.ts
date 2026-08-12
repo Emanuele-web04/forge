@@ -18,6 +18,7 @@ import type {
   ProviderTurnStartResult,
 } from "@synara/contracts";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   ApprovalRequestId,
   EventId,
   type ProviderKind,
@@ -133,6 +134,7 @@ function makeFakeCodexAdapter(
         const now = new Date().toISOString();
         const session: ProviderSession = {
           provider,
+          profileId: input.profileId ?? DEFAULT_PROVIDER_PROFILE_ID,
           status: "ready",
           runtimeMode: input.runtimeMode,
           threadId: input.threadId,
@@ -2064,6 +2066,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         cwd: "/tmp/project-claude-send-turn",
         modelSelection: {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
           options: {
             effort: "max",
@@ -2097,6 +2100,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.cwd, "/tmp/project-claude-send-turn");
         assert.deepEqual(startPayload.modelSelection, {
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "claude-opus-4-6",
           options: {
             effort: "max",
@@ -2225,6 +2229,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.lastRuntimeEvent, "turn.completed");
           assert.deepEqual(runtimePayload.modelSelection, {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "opencode/minimax-m2.5-free",
           });
         }
@@ -2241,9 +2246,14 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const newerTurnId = asTurnId("turn-overlapping-newer");
       const olderResumeCursor = { cursor: "older-resume" };
       const newerResumeCursor = { cursor: "newer-resume" };
-      const olderModelSelection = { provider: "codex" as const, model: "gpt-5.1-codex-mini" };
+      const olderModelSelection = {
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5.1-codex-mini",
+      };
       const newerModelSelection = {
         provider: "opencode" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "opencode/minimax-m2.5-free",
       };
       let olderDispatchStarted = false;
@@ -2370,7 +2380,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const threadId = asThreadId("thread-promote-older-success");
       const olderTurnId = asTurnId("turn-promoted-older");
       const olderCursor = { cursor: "promoted-older" };
-      const olderModelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+      const olderModelSelection = {
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5-codex",
+      };
       const newerFailure = new ProviderAdapterSessionNotFoundError({
         provider: "codex",
         threadId,
@@ -2552,6 +2566,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const resumeCursor = { cursor: "steer-resume" };
       const modelSelection = {
         provider: "opencode" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "opencode/minimax-m2.5-free",
       };
 
@@ -2590,9 +2605,14 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const reviewTurnId = asTurnId("turn-newer-review");
       const staleSteerCursor = { cursor: "stale-steer-resume" };
       const reviewCursor = { cursor: "newer-review-resume" };
-      const initialModelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+      const initialModelSelection = {
+        provider: "codex" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
+        model: "gpt-5-codex",
+      };
       const staleSteerModelSelection = {
         provider: "opencode" as const,
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "opencode/minimax-m2.5-free",
       };
       let steerStarted = false;

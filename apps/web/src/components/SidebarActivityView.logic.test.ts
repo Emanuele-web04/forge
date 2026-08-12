@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProjectId, ThreadId } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -56,7 +56,7 @@ function makeThread(input: {
     id: ThreadId.makeUnsafe(input.id),
     projectId: input.projectId ?? PROJECT_ID,
     title: `Thread ${input.id}`,
-    modelSelection: { provider: "codex", model: "gpt-5" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5" },
     interactionMode: "default",
     branch: null,
     worktreePath: null,

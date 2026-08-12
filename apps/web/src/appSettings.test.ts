@@ -3,11 +3,13 @@
 // Layer: Web settings tests
 // Exports: Vitest suites for appSettings.ts
 
+import { ProviderProfileId } from "@synara/contracts";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
+  appSettingsPatchToServerSettingsPatch,
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_FOLLOW_UP_BEHAVIOR,
@@ -233,10 +235,44 @@ describe("isGitTextGenerationSettingsDirty", () => {
     expect(isGitTextGenerationSettingsDirty(defaults, defaults)).toBe(false);
     expect(
       isGitTextGenerationSettingsDirty(
+        { ...defaults, textGenerationProfileId: ProviderProfileId.makeUnsafe("work") },
+        defaults,
+      ),
+    ).toBe(true);
+    expect(
+      isGitTextGenerationSettingsDirty(
         { ...defaults, textGenerationProvider: "opencode", textGenerationModel: "custom/model" },
         defaults,
       ),
     ).toBe(true);
+  });
+});
+
+describe("appSettingsPatchToServerSettingsPatch", () => {
+  it("preserves the current provider and model for a profile-only patch", () => {
+    expect(
+      appSettingsPatchToServerSettingsPatch({
+        textGenerationProfileId: ProviderProfileId.makeUnsafe("work"),
+      }),
+    ).toEqual({
+      textGenerationModelSelection: {
+        profileId: ProviderProfileId.makeUnsafe("work"),
+      },
+    });
+  });
+
+  it("does not attach a default profile to model-only patches", () => {
+    expect(
+      appSettingsPatchToServerSettingsPatch({
+        textGenerationProvider: "opencode",
+        textGenerationModel: "openai/gpt-5",
+      }),
+    ).toEqual({
+      textGenerationModelSelection: {
+        provider: "opencode",
+        model: "openai/gpt-5",
+      },
+    });
   });
 });
 

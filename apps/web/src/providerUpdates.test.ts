@@ -3,6 +3,7 @@
 // Layer: Web utility tests
 // Exports: Vitest suites for providerUpdates.ts
 
+import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
 import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -58,7 +59,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     enableProviderUpdateChecks: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
-    textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    textGenerationModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.4-mini" },
     providers: {
       codex: { ...provider, binaryPath: "codex", homePath: "" },
       claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
-import { ProviderSendTurnInput, ProviderSessionStartInput } from "./provider";
+import {
+  ProviderEvent,
+  ProviderSendTurnInput,
+  ProviderSession,
+  ProviderSessionStartInput,
+} from "./provider";
 
 const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSessionStartInput);
 const decodeProviderSendTurnInput = Schema.decodeUnknownSync(ProviderSendTurnInput);
@@ -85,6 +90,41 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.providerOptions?.claudeAgent?.permissionMode).toBe("plan");
     expect(parsed.providerOptions?.claudeAgent?.maxThinkingTokens).toBe(12_000);
     expect(parsed.runtimeMode).toBe("full-access");
+  });
+
+  it("carries explicit profile identity through start and session payloads", () => {
+    const start = decodeProviderSessionStartInput({
+      threadId: "thread-profile",
+      provider: "codex",
+      profileId: "work",
+      runtimeMode: "full-access",
+    });
+    const session = Schema.decodeUnknownSync(ProviderSession)({
+      provider: "codex",
+      profileId: "work",
+      status: "ready",
+      runtimeMode: "full-access",
+      threadId: "thread-profile",
+      createdAt: "2026-08-10T00:00:00.000Z",
+      updatedAt: "2026-08-10T00:00:00.000Z",
+    });
+
+    expect(start.profileId).toBe("work");
+    expect(session.profileId).toBe("work");
+  });
+
+  it("keeps profile identity observable on native provider events", () => {
+    const event = Schema.decodeUnknownSync(ProviderEvent)({
+      id: "event-profile",
+      kind: "session",
+      provider: "codex",
+      profileId: "work",
+      threadId: "thread-profile",
+      createdAt: "2026-08-10T00:00:00.000Z",
+      method: "session.started",
+    });
+
+    expect(event.profileId).toBe("work");
   });
 });
 

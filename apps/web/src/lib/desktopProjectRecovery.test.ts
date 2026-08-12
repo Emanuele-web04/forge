@@ -2,6 +2,7 @@
 // Purpose: Verifies desktop startup detects snapshots where threads outlive visible project rows.
 
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   ProjectId,
   ThreadId,
   type OrchestrationReadModel,
@@ -24,6 +25,7 @@ function makeProject(
     workspaceRoot: "/tmp/project",
     defaultModelSelection: {
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.3-codex",
     },
     scripts: [],
@@ -43,6 +45,7 @@ function makeThread(
     title: "Thread",
     modelSelection: {
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5.3-codex",
     },
     runtimeMode: "approval-required",

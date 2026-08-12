@@ -4,6 +4,7 @@
 // Exports: createOrRecoverProjectFromPath
 
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   type NativeApi,
   type OrchestrationShellSnapshot,
   type ProjectId,
@@ -70,6 +71,7 @@ export async function createOrRecoverProjectFromPath(input: {
       createWorkspaceRootIfMissing: input.createIfMissing === true,
       defaultModelSelection: {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: getDefaultModel("codex"),
       },
       // A project created while a space is active belongs to that space — filing it

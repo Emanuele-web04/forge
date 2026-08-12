@@ -15,6 +15,7 @@ import type {
 import {
   AutomationId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  DEFAULT_PROVIDER_PROFILE_ID,
   EventId,
   MessageId,
   ModelSelection,
@@ -88,7 +89,7 @@ function makeThreadShell(
     id: ThreadId.makeUnsafe(id),
     projectId: PROJECT_ID,
     title: `Thread ${id}`,
-    modelSelection: { provider: "codex", model: "gpt-5.5" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.5" },
     runtimeMode: "approval-required",
     interactionMode: "default",
     envMode: "local",
@@ -195,7 +196,7 @@ function makeAutomationDefinition(
     schedule: { type: "interval", everySeconds: 300 },
     enabled: true,
     nextRunAt: NOW,
-    modelSelection: { provider: "codex", model: "gpt-5.5" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.5" },
     runtimeMode: "approval-required",
     interactionMode: "default",
     worktreeMode: "local",
@@ -1642,7 +1643,11 @@ describe("AgentGateway", () => {
       for (const construction of Object.values(targetConstruction)) {
         const exampleTarget = construction.exampleTarget;
         if (exampleTarget === null || exampleTarget === undefined) continue;
-        assert.deepEqual(Schema.decodeUnknownSync(ModelSelection)(exampleTarget), exampleTarget);
+        assert.equal("profileId" in exampleTarget, false);
+        assert.equal(
+          Schema.decodeUnknownSync(ModelSelection)(exampleTarget).profileId,
+          DEFAULT_PROVIDER_PROFILE_ID,
+        );
       }
 
       const serialized = JSON.stringify(payload);
@@ -1716,7 +1721,7 @@ describe("AgentGateway", () => {
         }),
         makeThreadShell("thread-other", {
           title: "Unrelated task",
-          modelSelection: { provider: "claudeAgent", model: "opus-4.8" },
+          modelSelection: { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "opus-4.8" },
           updatedAt: "2026-02-01T10:00:00.000Z",
         }),
       ];
@@ -3087,6 +3092,7 @@ describe("AgentGateway", () => {
       if (create?.type === "thread.create") {
         assert.deepEqual(create.modelSelection, {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.6-terra",
           options: { reasoningEffort: "low" },
         });
@@ -3829,10 +3835,11 @@ describe("AgentGateway", () => {
             index === 0
               ? {
                   provider: "codex",
+                  profileId: DEFAULT_PROVIDER_PROFILE_ID,
                   model: "gpt-5.6-terra",
                   options: { reasoningEffort: "low" },
                 }
-              : { provider: "claudeAgent", model: "claude-sonnet-5" },
+              : { provider: "claudeAgent", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "claude-sonnet-5" },
           latestTurn: {
             turnId: runId,
             state: "completed",
@@ -3909,10 +3916,15 @@ describe("AgentGateway", () => {
         [
           {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5.6-terra",
             options: { reasoningEffort: "low" },
           },
-          { provider: "claudeAgent", model: "claude-sonnet-5" },
+          {
+            provider: "claudeAgent",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
+            model: "claude-sonnet-5",
+          },
         ],
       );
     }).pipe(Effect.provide(gatewayLayer));

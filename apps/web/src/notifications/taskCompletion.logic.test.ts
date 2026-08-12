@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   ApprovalRequestId,
   EventId,
   MessageId,
@@ -26,7 +27,7 @@ function makeThread(overrides: Partial<Thread>): Thread {
     codexThreadId: null,
     projectId: "project-1" as ProjectId,
     title: "Polish notifications",
-    modelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5.4-mini" },
     runtimeMode: "full-access",
     interactionMode: "default",
     session: {

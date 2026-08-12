@@ -1,4 +1,8 @@
-import { DEFAULT_MODEL_BY_PROVIDER, type ModelSelection } from "@synara/contracts";
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER_PROFILE_ID,
+  type ModelSelection,
+} from "@synara/contracts";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
 import type { Project } from "../types";
@@ -104,6 +108,7 @@ export function resolveFirstSendTarget(input: {
         createWorkspaceRootIfMissing: true,
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: DEFAULT_MODEL_BY_PROVIDER.codex,
         },
       },
@@ -130,6 +135,7 @@ export function resolveFirstSendTarget(input: {
       createWorkspaceRootIfMissing: false,
       defaultModelSelection: {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: DEFAULT_MODEL_BY_PROVIDER.codex,
       },
     },

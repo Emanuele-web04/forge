@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -161,6 +162,7 @@ describe("OrchestrationEngine", () => {
         title: "Engine quiesce thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -289,6 +291,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-1",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -303,6 +306,7 @@ describe("OrchestrationEngine", () => {
         title: "Thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -378,7 +382,7 @@ describe("OrchestrationEngine", () => {
         projectId: asProjectId("project-managed-attachment"),
         title: "Managed attachment project",
         workspaceRoot: "/tmp/project-managed-attachment",
-        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+        defaultModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
         createdAt,
       }),
     );
@@ -389,7 +393,7 @@ describe("OrchestrationEngine", () => {
         threadId,
         projectId: asProjectId("project-managed-attachment"),
         title: "Managed attachment thread",
-        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
@@ -510,6 +514,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-replay",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -524,6 +529,7 @@ describe("OrchestrationEngine", () => {
         title: "replay",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -568,6 +574,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-stream",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -592,6 +599,7 @@ describe("OrchestrationEngine", () => {
           title: "domain-stream",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -629,6 +637,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-turn-diff",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -643,6 +652,7 @@ describe("OrchestrationEngine", () => {
         title: "Turn diff thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -747,12 +757,12 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-flaky",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
       }),
     );
-
     await expect(
       runtime.runPromise(
         engine.dispatch({
@@ -763,6 +773,7 @@ describe("OrchestrationEngine", () => {
           title: "flaky-fail",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -783,6 +794,7 @@ describe("OrchestrationEngine", () => {
         title: "flaky-ok",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -846,6 +858,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-atomic",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -860,6 +873,7 @@ describe("OrchestrationEngine", () => {
         title: "atomic",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -993,6 +1007,7 @@ describe("OrchestrationEngine", () => {
           workspaceRoot: "/tmp/project-defect-1",
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt,
@@ -1010,6 +1025,7 @@ describe("OrchestrationEngine", () => {
           workspaceRoot: "/tmp/project-defect-2",
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt,
@@ -1111,6 +1127,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-sync",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1125,6 +1142,7 @@ describe("OrchestrationEngine", () => {
         title: "sync-before",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1246,6 +1264,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-deferred-recovery",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1260,6 +1279,7 @@ describe("OrchestrationEngine", () => {
         title: "deferred-recovery",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1363,6 +1383,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/readd-project",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1379,6 +1400,7 @@ describe("OrchestrationEngine", () => {
           workspaceRoot: "/tmp/readd-project",
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt,
@@ -1411,6 +1433,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/active-project",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1425,6 +1448,7 @@ describe("OrchestrationEngine", () => {
         title: "active",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1445,6 +1469,7 @@ describe("OrchestrationEngine", () => {
           workspaceRoot: "/tmp/active-project",
           defaultModelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           createdAt,
@@ -1673,6 +1698,7 @@ describe("OrchestrationEngine", () => {
         workspaceRoot: "/tmp/project-duplicate",
         defaultModelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         createdAt,
@@ -1688,6 +1714,7 @@ describe("OrchestrationEngine", () => {
         title: "duplicate",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1708,6 +1735,7 @@ describe("OrchestrationEngine", () => {
           title: "duplicate",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

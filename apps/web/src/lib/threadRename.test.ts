@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 const dispatchCommand = vi.fn<(command: unknown) => Promise<void>>();
@@ -42,6 +43,7 @@ describe("dispatchThreadRename", () => {
         projectId: "project-chat" as never,
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5",
         },
         runtimeMode: "full-access",

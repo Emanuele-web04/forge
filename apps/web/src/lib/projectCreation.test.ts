@@ -4,6 +4,7 @@
 // Depends on: projectCreation helper plus mocked NativeApi orchestration calls.
 
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   type NativeApi,
   type OrchestrationShellSnapshot,
   type ProjectId,
@@ -25,6 +26,7 @@ function makeProject(id: string, workspaceRoot = WORKSPACE_ROOT) {
     workspaceRoot,
     defaultModelSelection: {
       provider: "codex" as const,
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5",
     },
     scripts: [],

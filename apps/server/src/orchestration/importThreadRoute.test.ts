@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   type OrchestrationCommand,
   type OrchestrationThread,
   ProjectId,
@@ -25,7 +26,11 @@ function makeCodexThread(): OrchestrationThread {
     id: threadId,
     projectId,
     title: "Imported thread",
-    modelSelection: { provider: "codex", model: "gpt-5.5" },
+    modelSelection: {
+      provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
+      model: "gpt-5.5",
+    },
     runtimeMode: "full-access",
     interactionMode: "default",
     envMode: "local",
@@ -122,7 +127,11 @@ it.effect("imports Codex history through a provider-owned fork", () =>
       {
         threadId,
         provider: "codex",
-        modelSelection: { provider: "codex", model: "gpt-5.5" },
+        modelSelection: {
+          provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
+          model: "gpt-5.5",
+        },
         forkSourceResumeCursor: { threadId: externalId },
         runtimeMode: "full-access",
       },

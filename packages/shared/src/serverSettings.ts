@@ -1,5 +1,6 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER_PROFILE_ID,
   type ModelSelection,
   type ProviderStartOptions,
   type ServerSettings,
@@ -10,7 +11,17 @@ import { deepMerge, type DeepPartial } from "./Struct";
 function shouldReplaceTextGenerationModelSelection(
   patch: ServerSettingsPatch["textGenerationModelSelection"] | undefined,
 ): boolean {
-  return Boolean(patch && (patch.provider !== undefined || patch.model !== undefined));
+  return Boolean(
+    patch &&
+      (patch.provider !== undefined || patch.profileId !== undefined || patch.model !== undefined),
+  );
+}
+
+function changesTextGenerationProvider(
+  current: ModelSelection,
+  patch: NonNullable<ServerSettingsPatch["textGenerationModelSelection"]>,
+): boolean {
+  return patch.provider !== undefined && patch.provider !== current.provider;
 }
 
 export function applyServerSettingsPatch(
@@ -24,12 +35,19 @@ export function applyServerSettingsPatch(
   }
 
   const provider = selectionPatch.provider ?? current.textGenerationModelSelection.provider;
+  const providerChanged = changesTextGenerationProvider(
+    current.textGenerationModelSelection,
+    selectionPatch,
+  );
+  const profileId =
+    selectionPatch.profileId ??
+    (providerChanged
+      ? DEFAULT_PROVIDER_PROFILE_ID
+      : current.textGenerationModelSelection.profileId);
   const model =
     selectionPatch.model ??
-    (selectionPatch.provider &&
-    selectionPatch.provider !== "pi" &&
-    selectionPatch.provider !== current.textGenerationModelSelection.provider
-      ? DEFAULT_MODEL_BY_PROVIDER[selectionPatch.provider]
+    (providerChanged && provider !== "pi"
+      ? DEFAULT_MODEL_BY_PROVIDER[provider]
       : current.textGenerationModelSelection.model);
   const options = shouldReplaceTextGenerationModelSelection(selectionPatch)
     ? selectionPatch.options
@@ -39,6 +57,7 @@ export function applyServerSettingsPatch(
     ...next,
     textGenerationModelSelection: {
       provider,
+      profileId,
       model,
       ...(options !== undefined ? { options } : {}),
     } as ModelSelection,

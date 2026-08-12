@@ -2,7 +2,7 @@
 // Purpose: Verifies legacy array-shaped modelSelection options are repaired before strict decode.
 // Layer: Persistence migration test
 
-import { ModelSelection } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ModelSelection } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -381,31 +381,37 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
 
       assert.deepStrictEqual(decodeModelSelection(projectSelection), {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5.5",
         options: { reasoningEffort: "medium" },
       });
       assert.deepStrictEqual(decodeModelSelection(threadSelections.get("claude-opus-4-6")), {
         provider: "claudeAgent",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "claude-opus-4-6",
         options: { effort: "high", fastMode: true },
       });
       assert.deepStrictEqual(decodeModelSelection(threadSelections.get("openai/gpt-5.4")), {
         provider: "opencode",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "openai/gpt-5.4",
         options: { agent: "plan", variant: "fast" },
       });
       assert.deepStrictEqual(decodeModelSelection(threadSelections.get("gpt-5.4")), {
         provider: "cursor",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5.4",
         options: { reasoningEffort: "high" },
       });
       assert.deepStrictEqual(decodeModelSelection(projectEventPayload.defaultModelSelection), {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5.5",
         options: { reasoningEffort: "low" },
       });
       assert.deepStrictEqual(decodeModelSelection(threadEventPayload.modelSelection), {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5.5",
         options: { reasoningEffort: "xhigh" },
       });
@@ -413,6 +419,7 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
         decodeModelSelection(JSON.parse(pagedProjectRows[0]!.modelSelection) as unknown),
         {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.5",
           options: { reasoningEffort: "high" },
         },
@@ -421,6 +428,7 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
         decodeModelSelection(JSON.parse(pagedThreadRows[0]!.modelSelection) as unknown),
         {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.5",
           options: { reasoningEffort: "high" },
         },
@@ -430,6 +438,7 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
       };
       assert.deepStrictEqual(decodeModelSelection(pagedEventPayload.modelSelection), {
         provider: "codex",
+        profileId: DEFAULT_PROVIDER_PROFILE_ID,
         model: "gpt-5.5",
         options: { reasoningEffort: "high" },
       });

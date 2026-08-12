@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   CommandId,
   ProjectId,
   ThreadId,
@@ -41,6 +42,7 @@ function makeThreadCreateCommand(threadId = "thread-promote") {
     title: "Promoted thread",
     modelSelection: {
       provider: "codex",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "gpt-5",
     },
     runtimeMode: "full-access",
@@ -114,6 +116,7 @@ describe("threadCreatePromotion", () => {
           title: "Promoted thread",
           modelSelection: {
             provider: "codex",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "gpt-5",
           },
           runtimeMode: "full-access",

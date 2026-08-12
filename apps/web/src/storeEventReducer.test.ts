@@ -2,6 +2,7 @@
 // Purpose: Exercises orchestration domain-event reduction and batching.
 
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -262,6 +263,7 @@ describe("store event reducer", () => {
             workspaceRoot: "/tmp/live-project",
             defaultModelSelection: {
               provider: "codex",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "gpt-5-codex",
             },
             scripts: [],
@@ -1972,6 +1974,7 @@ describe("store event reducer", () => {
         title: "Stale archived thread",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,

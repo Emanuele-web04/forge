@@ -3,6 +3,7 @@ import {
   type AutomationSchedule,
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER_PROFILE_ID,
   EventId,
   MessageId,
   type ModelSelection,
@@ -1825,6 +1826,7 @@ export default function ChatView({
             draftThread,
             fallbackDraftProject?.defaultModelSelection ?? {
               provider: "codex",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: DEFAULT_MODEL_BY_PROVIDER.codex,
             },
             localDraftError,

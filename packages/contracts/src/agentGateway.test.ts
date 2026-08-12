@@ -9,6 +9,7 @@ import {
   SynaraWaitForThreadsInput,
   SynaraWaitForThreadsResult,
 } from "./agentGateway";
+import { DEFAULT_PROVIDER_PROFILE_ID } from "./providerProfile";
 
 const decodeCreate = Schema.decodeUnknownSync(SynaraCreateThreadsInput);
 const decodeWait = Schema.decodeUnknownSync(SynaraWaitForThreadsInput);
@@ -17,6 +18,7 @@ const thread = {
   prompt: "Explain this repository",
   target: {
     provider: "codex",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model: "gpt-5.6-terra",
     options: { reasoningEffort: "low" },
   },

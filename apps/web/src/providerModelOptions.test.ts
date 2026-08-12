@@ -3,10 +3,12 @@
 // Layer: Web unit tests
 // Depends on: providerModelOptions shared formatting helpers.
 
+import { DEFAULT_PROVIDER_PROFILE_ID, ProviderProfileId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   buildModelSelection,
+  buildModelSelectionForTarget,
   buildNextProviderOptions,
   buildProviderOptionPatch,
   formatProviderModelOptionName,
@@ -29,6 +31,7 @@ describe("Antigravity model options", () => {
     expect(options).toEqual({ reasoningEffort: "high" });
     expect(buildModelSelection("antigravity", "Gemini 3.5 Flash", options)).toEqual({
       provider: "antigravity",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "Gemini 3.5 Flash",
       options: { reasoningEffort: "high" },
     });
@@ -39,8 +42,54 @@ describe("Claude model selections", () => {
   it("preserves the discovered Auto capability with the selected model", () => {
     expect(buildModelSelection("claudeAgent", "claude-haiku-4-5", undefined, false)).toEqual({
       provider: "claudeAgent",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "claude-haiku-4-5",
       supportsAutoMode: false,
+    });
+  });
+
+  it("builds selections for an explicit provider profile", () => {
+    expect(
+      buildModelSelectionForTarget({
+        target: {
+          provider: "claudeAgent",
+          profileId: ProviderProfileId.makeUnsafe("work"),
+        },
+        model: "claude-haiku-4-5",
+        supportsAutoMode: true,
+      }),
+    ).toEqual({
+      provider: "claudeAgent",
+      profileId: "work",
+      model: "claude-haiku-4-5",
+      supportsAutoMode: true,
+    });
+  });
+
+  it("keeps an existing non-default target when rebuilding an edited selection", () => {
+    const existingSelection = buildModelSelectionForTarget({
+      target: {
+        provider: "claudeAgent",
+        profileId: ProviderProfileId.makeUnsafe("work"),
+      },
+      model: "claude-haiku-4-5",
+      options: { effort: "high" },
+    });
+
+    expect(
+      buildModelSelectionForTarget({
+        target: {
+          provider: existingSelection.provider,
+          profileId: existingSelection.profileId,
+        },
+        model: "claude-sonnet-5",
+        options: { effort: "max" },
+      }),
+    ).toEqual({
+      provider: "claudeAgent",
+      profileId: ProviderProfileId.makeUnsafe("work"),
+      model: "claude-sonnet-5",
+      options: { effort: "max" },
     });
   });
 });

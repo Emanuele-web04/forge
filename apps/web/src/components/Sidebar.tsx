@@ -77,6 +77,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type AutomationDefinition,
   type AutomationListResult,
+  DEFAULT_PROVIDER_PROFILE_ID,
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
@@ -2692,6 +2693,7 @@ export default function Sidebar() {
           : providerDefaultModel
             ? {
                 provider,
+                profileId: DEFAULT_PROVIDER_PROFILE_ID,
                 model: providerDefaultModel,
               }
             : null;
@@ -3337,6 +3339,7 @@ export default function Sidebar() {
                     newProjectSpaceId: value.spaceId,
                     defaultModelSelection: {
                       provider: "codex",
+                      profileId: DEFAULT_PROVIDER_PROFILE_ID,
                       model: getDefaultModel("codex"),
                     },
                     createdAt: new Date().toISOString(),

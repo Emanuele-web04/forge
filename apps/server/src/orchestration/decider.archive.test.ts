@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   ProjectId,
@@ -30,6 +31,7 @@ function makeThread(input: {
     title: `Thread ${input.id}`,
     modelSelection: {
       provider: "claudeAgent",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "claude-opus-4-6",
       supportsAutoMode: true,
     },

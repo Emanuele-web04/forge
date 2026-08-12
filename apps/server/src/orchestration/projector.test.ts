@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DEFAULT_PROVIDER_PROFILE_ID,
   EventId,
   ProjectId,
   SpaceId,
@@ -160,6 +161,7 @@ describe("orchestration projector", () => {
         title: "demo",
         modelSelection: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "gpt-5-codex",
         },
         runtimeMode: "full-access",
@@ -261,6 +263,7 @@ describe("orchestration projector", () => {
 
     expect(next.threads[0]?.modelSelection).toEqual({
       provider: "pi",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "openai/gpt-5.5",
     });
     expect(next.threads[0]?.runtimeMode).toBe("approval-required");
@@ -337,6 +340,7 @@ describe("orchestration projector", () => {
 
     expect(next.threads[0]?.modelSelection).toEqual({
       provider: "opencode",
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: "openai/gpt-5",
     });
     expect(next.threads[0]?.session).toMatchObject({

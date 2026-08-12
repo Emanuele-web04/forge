@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { MessageId, ProjectId, ThreadId } from "@synara/contracts";
@@ -26,7 +27,7 @@ const summaryA = {
   id: threadIdA,
   projectId,
   title: "A",
-  modelSelection: { provider: "codex", model: "gpt-5-codex" },
+  modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
   session: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   latestUserMessageAt: null,

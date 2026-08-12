@@ -5,6 +5,7 @@
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import { DEFAULT_PROVIDER_PROFILE_ID } from "@synara/contracts";
 import { Duration, Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { beforeEach, expect } from "vitest";
@@ -142,6 +143,7 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
 
 const DEFAULT_TEST_MODEL_SELECTION = {
   provider: "opencode" as const,
+  profileId: DEFAULT_PROVIDER_PROFILE_ID,
   model: "openai/gpt-5",
 };
 
@@ -398,6 +400,7 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
         message: "which model are you",
         modelSelection: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model: "opencode/big-pickle",
           options: {
             agent: "build",

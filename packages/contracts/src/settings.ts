@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
+import { DEFAULT_PROVIDER_PROFILE_ID, ProviderProfileId } from "./providerProfile";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
@@ -98,6 +99,7 @@ export const ServerSettings = Schema.Struct({
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
       provider: "codex" as const,
+      profileId: DEFAULT_PROVIDER_PROFILE_ID,
       model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
     })),
   ),
@@ -129,6 +131,7 @@ export const DEFAULT_SERVER_SETTINGS_VIEW: ServerSettingsView = Schema.decodeSyn
 
 const ModelSelectionPatch = Schema.Struct({
   provider: Schema.optionalKey(ProviderKind),
+  profileId: Schema.optionalKey(ProviderProfileId),
   model: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
   options: Schema.optionalKey(Schema.Unknown),
 });

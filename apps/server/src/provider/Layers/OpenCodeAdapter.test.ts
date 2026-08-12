@@ -1,4 +1,4 @@
-import { ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
+import { DEFAULT_PROVIDER_PROFILE_ID, ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type {
   Agent,
@@ -1127,7 +1127,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             threadId,
             input: "coordinate work",
             attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+            modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
           });
         }
         yield* adapter.stopSession(firstThread);
@@ -1195,14 +1195,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId: firstThread,
           input: "coordinate first",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
         });
         const secondTurn = yield* adapter
           .sendTurn({
             threadId: secondThread,
             input: "coordinate second",
             attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+            modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
           })
           .pipe(Effect.forkChild);
         yield* Effect.sleep(20);
@@ -1325,7 +1325,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             threadId,
             input: "first attempt",
             attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+            modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
           })
           .pipe(Effect.exit);
         expect(Exit.isFailure(failed)).toBe(false);
@@ -1335,7 +1335,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "second attempt",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
         });
         expect(runtime.promptCalls).toHaveLength(2);
         yield* adapter.interruptTurn(threadId);
@@ -1378,7 +1378,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "coordinate work",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
         });
       }).pipe(
         Effect.provide(
@@ -1454,7 +1454,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "perform a long-running task",
           attachments: [],
-          modelSelection: { provider: "kilo", model: "openai/gpt-5" },
+          modelSelection: { provider: "kilo", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
         });
         yield* adapter.stopSession(threadId);
       }).pipe(
@@ -1500,14 +1500,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId: firstThread,
           input: "coordinate first",
           attachments: [],
-          modelSelection: { provider: "kilo", model: "openai/gpt-5" },
+          modelSelection: { provider: "kilo", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
         });
         const secondTurn = yield* adapter
           .sendTurn({
             threadId: secondThread,
             input: "coordinate second",
             attachments: [],
-            modelSelection: { provider: "kilo", model: "openai/gpt-5" },
+            modelSelection: { provider: "kilo", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5" },
           })
           .pipe(Effect.forkChild);
         yield* Effect.sleep(20);
@@ -1780,7 +1780,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "Implement the change",
           attachments: [],
           interactionMode: "default",
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
       }).pipe(
         Effect.provide(
@@ -2010,6 +2010,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           runtimeMode: "full-access",
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "opencode/big-pickle",
             options: {
               agent: "build",
@@ -2063,6 +2064,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
             options: {
               variant: "high",
@@ -2153,7 +2155,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "wait in the visible browser",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
 
         const interruptFiber = yield* adapter
@@ -2222,6 +2224,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -2358,6 +2361,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -2497,6 +2501,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -2585,6 +2590,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -2632,6 +2638,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           ],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -2680,6 +2687,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -2720,6 +2728,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
             options: {
               agent: "plan",
@@ -2763,6 +2772,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
             options: {
               agent: "reviewer",
@@ -2819,6 +2829,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -2915,6 +2926,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -2996,6 +3008,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -3053,6 +3066,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -3121,6 +3135,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -3206,6 +3221,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -3280,6 +3296,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -3374,7 +3391,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "Plan the change",
           attachments: [],
           interactionMode: "plan",
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
         yield* adapter.interruptTurn(threadId);
         yield* adapter.sendTurn({
@@ -3382,7 +3399,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "Implement the change",
           attachments: [],
           interactionMode: "default",
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
       }).pipe(
         Effect.provide(
@@ -3432,7 +3449,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Delegate a read-only check",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
         eventQueue.push({
           type: "permission.asked",
@@ -3624,7 +3641,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Run a command",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
         eventQueue.push({
           type: "permission.asked",
@@ -3693,6 +3710,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -3814,6 +3832,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -3962,6 +3981,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -4041,7 +4061,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Search the web",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
 
         const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
@@ -4215,7 +4235,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Inspect status",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
         const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
           Effect.forkChild,
@@ -4315,7 +4335,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Inspect status",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
         eventQueue.push({ type: "permission.asked", properties: permission });
         yield* Fiber.join(openedFiber);
@@ -4400,7 +4420,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Inspect status",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
         const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
           Effect.forkChild,
@@ -4498,7 +4518,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "Search docs",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
         const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
           Effect.forkChild,
@@ -4577,6 +4597,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -4680,6 +4701,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -4810,6 +4832,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -4906,6 +4929,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             attachments: [],
             modelSelection: {
               provider: "opencode",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "opencode/claude-opus-4-7",
             },
           })
@@ -4967,6 +4991,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             attachments: [],
             modelSelection: {
               provider: "opencode",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model: "opencode/claude-opus-4-7",
             },
           }),
@@ -5037,6 +5062,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           attachments: [],
           modelSelection: {
             provider: "opencode",
+            profileId: DEFAULT_PROVIDER_PROFILE_ID,
             model: "openai/gpt-5.4",
           },
         });
@@ -5135,7 +5161,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "hello",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
 
         messageSnapshot = [
@@ -5266,7 +5292,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "hello",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
 
         eventQueue.push({
@@ -5361,7 +5387,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "plan this",
           interactionMode: "plan",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
 
         eventQueue.push({
@@ -5485,7 +5511,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "plan this",
           interactionMode: "plan",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
 
         const finalInfo = {
@@ -5626,7 +5652,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "first",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
         eventQueue.push({
           type: "session.idle",
@@ -5651,7 +5677,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           input: "second",
           attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+          modelSelection: { provider: "opencode", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "openai/gpt-5.4" },
         });
 
         yield* Effect.sync(() => {

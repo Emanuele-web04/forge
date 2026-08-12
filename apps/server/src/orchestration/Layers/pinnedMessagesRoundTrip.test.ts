@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_PROFILE_ID,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
@@ -61,7 +62,7 @@ describe("pinned messages round-trip", () => {
           projectId,
           title: "Pins project",
           workspaceRoot: "/tmp/project-pins",
-          defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+          defaultModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           createdAt,
         }),
       );
@@ -72,7 +73,7 @@ describe("pinned messages round-trip", () => {
           threadId,
           projectId,
           title: "Pins thread",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: null,
@@ -165,7 +166,7 @@ describe("pinned messages round-trip", () => {
           projectId,
           title: "Markers project",
           workspaceRoot: "/tmp/project-markers",
-          defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+          defaultModelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           createdAt,
         }),
       );
@@ -176,7 +177,7 @@ describe("pinned messages round-trip", () => {
           threadId,
           projectId,
           title: "Markers thread",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { provider: "codex", profileId: DEFAULT_PROVIDER_PROFILE_ID, model: "gpt-5-codex" },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: null,

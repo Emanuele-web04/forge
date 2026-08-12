@@ -6,6 +6,7 @@ import {
   CodexModelOptions,
   type CursorModelOptions,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER_PROFILE_ID,
   type OpenCodeModelOptions,
   type ProviderModelDescriptor,
   ProjectId,
@@ -103,6 +104,7 @@ async function mountClaudePicker(props?: {
         : {
             claudeAgent: {
               provider: "claudeAgent",
+              profileId: DEFAULT_PROVIDER_PROFILE_ID,
               model,
               ...(claudeOptions && Object.keys(claudeOptions).length > 0
                 ? { options: claudeOptions }
@@ -125,6 +127,7 @@ async function mountClaudePicker(props?: {
     props?.fallbackModelOptions !== undefined
       ? ({
           provider: "claudeAgent",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model,
           options: props.fallbackModelOptions ?? undefined,
         } satisfies ModelSelection)
@@ -351,6 +354,7 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
       modelSelectionByProvider: {
         codex: {
           provider: "codex",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model,
           ...(props.options ? { options: props.options } : {}),
         },
@@ -696,6 +700,7 @@ async function mountOpenCodePicker(props?: {
       modelSelectionByProvider: {
         opencode: {
           provider: "opencode",
+          profileId: DEFAULT_PROVIDER_PROFILE_ID,
           model,
           ...(props?.options ? { options: props.options } : {}),
         },
@@ -715,6 +720,7 @@ async function mountOpenCodePicker(props?: {
   document.body.append(host);
   const fallbackModelSelection: ModelSelection = {
     provider: "opencode",
+    profileId: DEFAULT_PROVIDER_PROFILE_ID,
     model,
     ...(props?.fallbackModelOptions ? { options: props.fallbackModelOptions } : {}),
   };
