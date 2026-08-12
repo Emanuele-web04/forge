@@ -164,6 +164,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size. compact comfortable",
   },
   {
+    id: "appearance:chat-width",
+    section: "appearance",
+    title: "Chat width",
+    keywords:
+      "Control how wide the chat column grows so tables and wide content get more room. standard wide full",
+  },
+  {
     id: "appearance:base-font-size",
     section: "appearance",
     title: "Base font size",

@@ -13,6 +13,7 @@ import {
   type AppSettings,
   type FollowUpBehavior,
   DEFAULT_UI_DENSITY,
+  DEFAULT_CHAT_WIDTH,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
@@ -85,6 +86,7 @@ import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavi
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
+import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
 import { isElectron } from "../env";
 import { RotateCcwIcon } from "../lib/icons";
 import { cn, isMacPlatform } from "../lib/utils";
@@ -118,6 +120,28 @@ const UI_DENSITY_OPTIONS = [
   },
 ] as const satisfies ReadonlyArray<{
   value: UiDensity;
+  label: string;
+  description: string;
+}>;
+
+const CHAT_WIDTH_OPTIONS = [
+  {
+    value: "standard",
+    label: "Standard",
+    description: "Keeps the chat column at the default reading width (46rem).",
+  },
+  {
+    value: "wide",
+    label: "Wide",
+    description: "Gives tables and wide content more room (72rem).",
+  },
+  {
+    value: "full",
+    label: "Full",
+    description: "Lets the chat column use the full window width.",
+  },
+] as const satisfies ReadonlyArray<{
+  value: ChatWidthMode;
   label: string;
   description: string;
 }>;
@@ -221,6 +245,7 @@ function SettingsRouteView() {
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
+    ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
     ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
@@ -709,6 +734,36 @@ function SettingsRouteView() {
               }}
               ariaLabel="UI density"
               options={UI_DENSITY_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Chat width"
+          description="Control how wide the chat column grows. Wide and Full give tables and wide content more room."
+          resetAction={
+            settings.chatWidth !== defaults.chatWidth ? (
+              <SettingResetButton
+                label="chat width"
+                onClick={() =>
+                  updateSettings({
+                    chatWidth: DEFAULT_CHAT_WIDTH,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.chatWidth}
+              onValueChange={(value) => {
+                if (!isChatWidthMode(value)) {
+                  return;
+                }
+                updateSettings({ chatWidth: value });
+              }}
+              ariaLabel="Chat width"
+              options={CHAT_WIDTH_OPTIONS}
             />
           }
         />

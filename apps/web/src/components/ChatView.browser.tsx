@@ -6845,6 +6845,44 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("applies the selected chat width to the transcript column", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ chatWidth: "wide" }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-chat-width-test" as MessageId,
+        targetText: "chat width test",
+      }),
+    });
+
+    try {
+      // The hook must surface the preset as a root CSS variable.
+      await vi.waitFor(
+        () => {
+          expect(document.documentElement.style.getPropertyValue("--app-chat-max-width")).toBe(
+            "72rem",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // The transcript column frame must pick up the wider max width.
+      await vi.waitFor(
+        () => {
+          const row = document.querySelector(
+            "[data-timeline-row-kind='message'][data-message-role='assistant']",
+          ) as HTMLElement | null;
+          expect(row).not.toBeNull();
+          expect(row?.className ?? "").toContain("max-w-[var(--app-chat-max-width,46rem)]");
+          expect(getComputedStyle(row!).maxWidth).toBe("1152px"); // 72rem at 16px root
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a new thread from the global chat.new shortcut", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
