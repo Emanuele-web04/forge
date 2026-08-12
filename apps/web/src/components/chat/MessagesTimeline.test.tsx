@@ -1575,6 +1575,50 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("data-work-entry-action-word");
   });
 
+  it("renders the complete task-list progress heading", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-task-progress");
+    const timelineEntries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-live",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: activeTurnId,
+          payload: {
+            tasks: [
+              { task: "Implement inline editing", status: "completed" },
+              { task: "Run verification", status: "inProgress" },
+              { task: "Ship", status: "pending" },
+            ],
+          },
+        }),
+      ],
+      activeTurnId,
+    ).map((entry) => ({
+      id: entry.id,
+      kind: "work" as const,
+      createdAt: entry.createdAt,
+      entry,
+    }));
+
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-05-09T16:31:20.000Z"
+        timelineEntries={timelineEntries}
+      />,
+    );
+
+    expect(markup).toContain(
+      '<span data-work-entry-display-text="true">1 out of 3 tasks completed Run verification</span>',
+    );
+  });
+
   it("renders Claude agent task output through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

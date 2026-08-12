@@ -106,6 +106,45 @@ export function findProviderStatus(
   return statuses.find((status) => status.provider === provider) ?? null;
 }
 
+export function resolveAvailableProviderPreference(input: {
+  readonly preferredProvider: ProviderKind;
+  readonly statuses: readonly ServerProviderStatus[];
+  readonly providerOrder?: readonly ProviderKind[];
+  readonly hiddenProviders?: readonly ProviderKind[];
+}): ProviderKind {
+  if (input.statuses.length === 0) {
+    return input.preferredProvider;
+  }
+
+  const preferredStatus = findProviderStatus(input.statuses, input.preferredProvider);
+  if (preferredStatus?.available) {
+    return input.preferredProvider;
+  }
+
+  const hiddenProviders = new Set(input.hiddenProviders ?? []);
+  const providerOrder = input.providerOrder ?? [];
+  const orderedStatuses = input.statuses.toSorted((left, right) => {
+    const leftIndex = providerOrder.indexOf(left.provider);
+    const rightIndex = providerOrder.indexOf(right.provider);
+    const normalizedLeft = leftIndex >= 0 ? leftIndex : Number.MAX_SAFE_INTEGER;
+    const normalizedRight = rightIndex >= 0 ? rightIndex : Number.MAX_SAFE_INTEGER;
+    return normalizedLeft - normalizedRight;
+  });
+  const visibleInstalled = orderedStatuses.filter(
+    (status) => status.available && !hiddenProviders.has(status.provider),
+  );
+  const installed =
+    visibleInstalled.length > 0
+      ? visibleInstalled
+      : orderedStatuses.filter((status) => status.available);
+
+  return (
+    installed.find((status) => status.authStatus !== "unauthenticated")?.provider ??
+    installed[0]?.provider ??
+    input.preferredProvider
+  );
+}
+
 // Shared send gate used by chat, Kanban, shortcuts, and handoff flows.
 export function resolveProviderSendAvailability(input: {
   readonly provider: ProviderKind;

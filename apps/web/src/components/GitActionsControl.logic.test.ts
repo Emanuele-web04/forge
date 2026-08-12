@@ -16,10 +16,13 @@ import {
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
+  resolvePromotedPullPresentation,
   resolvePullActionAvailability,
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
+  shouldPromotePullAction,
   shouldShowEnvironmentPanelPullRow,
+  shouldShowHeaderPullAction,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 
@@ -467,6 +470,18 @@ describe("when: branch is behind upstream", () => {
     );
   });
 
+  it("shouldShowHeaderPullAction surfaces Pull next to Hand off while behind", () => {
+    const quick = resolveQuickAction(status({ behindCount: 2 }), false);
+    assert.equal(shouldShowHeaderPullAction({ quickAction: quick, isPullRunning: false }), true);
+    assert.equal(shouldPromotePullAction({ quickAction: quick, isPullRunning: false }), true);
+    assert.deepEqual(
+      resolvePromotedPullPresentation({ quickAction: quick, isPullRunning: false }),
+      {
+        label: "Pull",
+      },
+    );
+  });
+
   it("shouldShowEnvironmentPanelPullRow keeps the Pull row visible while pulling", () => {
     const busyQuickAction = resolveQuickAction(status({ behindCount: 2 }), true);
     assert.equal(
@@ -475,6 +490,32 @@ describe("when: branch is behind upstream", () => {
         isPullRunning: true,
       }),
       true,
+    );
+    assert.equal(
+      shouldShowHeaderPullAction({
+        quickAction: busyQuickAction,
+        isPullRunning: true,
+      }),
+      true,
+    );
+    assert.deepEqual(
+      resolvePromotedPullPresentation({
+        quickAction: busyQuickAction,
+        isPullRunning: true,
+      }),
+      { label: "Pulling..." },
+    );
+  });
+
+  it("resolvePromotedPullPresentation does not use the busy Commit hint", () => {
+    const busyQuickAction = resolveQuickAction(status({ behindCount: 2 }), true);
+    assert.deepInclude(busyQuickAction, { label: "Commit", kind: "show_hint", disabled: true });
+    assert.equal(
+      resolvePromotedPullPresentation({
+        quickAction: busyQuickAction,
+        isPullRunning: false,
+      }),
+      null,
     );
   });
 
@@ -551,6 +592,11 @@ describe("when: branch is up to date", () => {
     assert.equal(
       shouldShowEnvironmentPanelPullRow({ quickAction: quick, isPullRunning: false }),
       false,
+    );
+    assert.equal(shouldShowHeaderPullAction({ quickAction: quick, isPullRunning: false }), false);
+    assert.equal(
+      resolvePromotedPullPresentation({ quickAction: quick, isPullRunning: false }),
+      null,
     );
   });
 });

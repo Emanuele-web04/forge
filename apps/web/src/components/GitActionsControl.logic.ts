@@ -644,14 +644,47 @@ export function resolvePullActionAvailability(input: {
   return { canRun: true, hint: null };
 }
 
-/** Environment panel should promote Pull while it is available or already running. */
-export function shouldShowEnvironmentPanelPullRow(input: {
+/** Promote Pull as the primary git affordance while it is available or already running. */
+export function shouldPromotePullAction(input: {
   quickAction: GitQuickAction;
   isPullRunning: boolean;
 }): boolean {
   return (
     input.isPullRunning || (input.quickAction.kind === "run_pull" && !input.quickAction.disabled)
   );
+}
+
+export interface PromotedPullPresentation {
+  label: string;
+}
+
+/**
+ * Chrome for a promoted Pull control. `resolveQuickAction` collapses to a disabled
+ * "Commit" hint while any git action is running, so callers must not use that label
+ * while Pull is the promoted affordance.
+ */
+export function resolvePromotedPullPresentation(input: {
+  quickAction: GitQuickAction;
+  isPullRunning: boolean;
+}): PromotedPullPresentation | null {
+  if (!shouldPromotePullAction(input)) return null;
+  return { label: input.isPullRunning ? "Pulling..." : "Pull" };
+}
+
+/** Environment panel should promote Pull while it is available or already running. */
+export function shouldShowEnvironmentPanelPullRow(input: {
+  quickAction: GitQuickAction;
+  isPullRunning: boolean;
+}): boolean {
+  return shouldPromotePullAction(input);
+}
+
+/** Header Environment mode should surface Pull next to Hand off / Add action. */
+export function shouldShowHeaderPullAction(input: {
+  quickAction: GitQuickAction;
+  isPullRunning: boolean;
+}): boolean {
+  return shouldPromotePullAction(input);
 }
 
 export function shouldOfferCreateBranchPrompt(input: {

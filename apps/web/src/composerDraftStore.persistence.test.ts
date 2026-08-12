@@ -10,7 +10,11 @@ import {
   modelSelection,
   resetComposerDraftStore,
 } from "./composerDraftStoreTestFixtures";
-import { createDeferredPersistStorage, flushStorageBeforePageHide } from "./lib/storage";
+import {
+  createDeferredPersistStorage,
+  flushStorageBeforePageHide,
+  type FlushBeforePageHideEnv,
+} from "./lib/storage";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   insertInlineTerminalContextPlaceholder,
@@ -867,5 +871,19 @@ describe("flushStorageBeforePageHide", () => {
     harness.setVisibility("visible");
     harness.fireDocument("visibilitychange");
     expect(flush).not.toHaveBeenCalled();
+  });
+
+  it("no-ops on partial DOM stubs without listener APIs", () => {
+    // SSR-style test environments stub `window`/`document` with only the
+    // fields under test (e.g. `{ documentElement }`); wiring must not crash
+    // module evaluation of stores that call this at import time.
+    expect(() =>
+      flushStorageBeforePageHide(vi.fn(), {
+        window: {} as unknown as NonNullable<FlushBeforePageHideEnv["window"]>,
+        document: { documentElement: {} } as unknown as NonNullable<
+          FlushBeforePageHideEnv["document"]
+        >,
+      }),
+    ).not.toThrow();
   });
 });

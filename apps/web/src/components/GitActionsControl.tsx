@@ -13,7 +13,7 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   ChevronDownIcon,
   CloudSyncIcon,
@@ -44,7 +44,7 @@ import {
   resolveCreatePrExecution,
   resolveQuickAction,
   resolvePullActionAvailability,
-  shouldShowEnvironmentPanelPullRow,
+  resolvePromotedPullPresentation,
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
@@ -57,6 +57,7 @@ import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import { formatClockDuration } from "~/session-logic";
 import { Button } from "~/components/ui/button";
 import {
+  ChatHeaderButton,
   ChatHeaderSplitDivider,
   ChatHeaderSplitGroup,
   CHAT_HEADER_CONTROL_CLASS_NAME,
@@ -120,6 +121,10 @@ interface GitActionsControlProps {
   // `header` renders the split quick-action button; `panel` collapses git actions into
   // an Environment row + dropdown, promoting Pull as the primary row when behind upstream.
   variant?: "header" | "panel";
+  // `always` (default) keeps the control mounted. `pull-available` hides the header
+  // control unless Pull is the current action or a pull is already running — used
+  // next to Hand off / Add action while Environment owns the rest of git actions.
+  visibleWhen?: "always" | "pull-available";
   // Lets a parent capture "run commit & push for this instance's repo" so a global
   // keyboard shortcut can trigger it without duplicating the action logic. Called with
   // `null` on unmount/dependency change so a stale trigger never lingers.
@@ -359,11 +364,14 @@ export default function GitActionsControl({
   activeThreadId,
   hideQuickActionLabel: hideQuickActionLabelProp,
   variant: variantProp,
+  visibleWhen: visibleWhenProp,
   onRegisterCommitAndPushTrigger,
 }: GitActionsControlProps) {
   const hideQuickActionLabel = hideQuickActionLabelProp ?? false;
   const variant = variantProp ?? "header";
+  const visibleWhen = visibleWhenProp ?? "always";
   const isPanel = variant === "panel";
+  const createBranchNameFieldId = useId();
   const { settings } = useAppSettings();
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
@@ -1390,6 +1398,9 @@ export default function GitActionsControl({
 
   useEffect(() => {
     if (!onRegisterCommitAndPushTrigger) return;
+    // Pull-only header instances must not steal the Environment panel's commit &
+    // push shortcut registration, including while they are hidden.
+    if (visibleWhen === "pull-available") return;
     const target = findRunnableCommitPushMenuItem(gitActionMenuItems);
     if (!target) {
       onRegisterCommitAndPushTrigger(null);
@@ -1397,7 +1408,7 @@ export default function GitActionsControl({
     }
     onRegisterCommitAndPushTrigger(() => openDialogForMenuItem(target));
     return () => onRegisterCommitAndPushTrigger(null);
-  }, [gitActionMenuItems, onRegisterCommitAndPushTrigger, openDialogForMenuItem]);
+  }, [gitActionMenuItems, onRegisterCommitAndPushTrigger, openDialogForMenuItem, visibleWhen]);
 
   const gitPickerMenuItems = useMemo<GitPickerMenuItem[]>(() => {
     const items: GitPickerMenuItem[] = [];
@@ -1565,6 +1576,33 @@ export default function GitActionsControl({
   );
 
   if (!gitCwd) return null;
+
+  const promotedPull = resolvePromotedPullPresentation({
+    quickAction,
+    isPullRunning,
+  });
+  const showPromotedPullAction = promotedPull !== null;
+  if (visibleWhen === "pull-available") {
+    if (!promotedPull) return null;
+    // Pull-only chrome: Environment already owns commit/push/PR dialogs, so this
+    // instance must not mount a second copy of them beside the panel control.
+    return (
+      <ChatHeaderButton
+        type="button"
+        tone="outline"
+        className={hideQuickActionLabel ? "gap-1" : "gap-1.5"}
+        aria-label={promotedPull.label}
+        title={promotedPull.label}
+        disabled={isGitActionRunning}
+        onClick={runSyncWithRemote}
+      >
+        <GitActionGlyph name="sync" />
+        {!hideQuickActionLabel ? (
+          <span className="truncate font-normal">{promotedPull.label}</span>
+        ) : null}
+      </ChatHeaderButton>
+    );
+  }
 
   const hasRunnableCommitPushAction = findRunnableCommitPushMenuItem(gitActionMenuItems) !== null;
   const shouldDimPanelCommitPushRow = isGitActionRunning || !hasRunnableCommitPushAction;
@@ -1892,12 +1930,12 @@ export default function GitActionsControl({
               }}
             >
               <div className="space-y-1.5">
-                <label className="block font-medium text-sm" htmlFor="create-branch-name">
+                <label className="block font-medium text-sm" htmlFor={createBranchNameFieldId}>
                   Branch name
                 </label>
                 <Input
                   autoFocus
-                  id="create-branch-name"
+                  id={createBranchNameFieldId}
                   placeholder="feature/my-change"
                   value={createBranchName}
                   onChange={(event) => setCreateBranchName(event.target.value)}
@@ -1934,10 +1972,7 @@ export default function GitActionsControl({
   );
 
   if (isPanel) {
-    const showPanelPullRow = shouldShowEnvironmentPanelPullRow({
-      quickAction,
-      isPullRunning,
-    });
+    const showPanelPullRow = showPromotedPullAction;
     const panelGitActionsMenu = (
       <Menu
         onOpenChange={(open) => {
@@ -2001,14 +2036,14 @@ export default function GitActionsControl({
             <button
               type="button"
               className={cn(ENVIRONMENT_ROW_CLASS_NAME, "min-w-0 flex-1")}
-              aria-label="Pull"
-              title="Pull"
+              aria-label={promotedPull?.label ?? "Pull"}
+              title={promotedPull?.label ?? "Pull"}
               disabled={isGitActionRunning}
-              onClick={runQuickAction}
+              onClick={runSyncWithRemote}
             >
               <EnvironmentRowBody
                 icon={<GitActionGlyph name="sync" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-                label={isPullRunning ? "Pulling..." : "Pull"}
+                label={promotedPull?.label ?? "Pull"}
               />
             </button>
             {panelGitActionsMenu}
@@ -2035,7 +2070,28 @@ export default function GitActionsControl({
         </Button>
       ) : (
         <ChatHeaderSplitGroup label="Git actions">
-          {quickActionDisabledReason ? (
+          {promotedPull ? (
+            <Button
+              variant="chrome-outline"
+              size={hideQuickActionLabel ? "icon-xs" : "xs"}
+              className={cn(
+                hideQuickActionLabel
+                  ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
+                  : CHAT_HEADER_CONTROL_CLASS_NAME,
+                CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+                CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+              )}
+              disabled={isGitActionRunning}
+              aria-label={promotedPull.label}
+              title={promotedPull.label}
+              onClick={runSyncWithRemote}
+            >
+              <GitActionGlyph name="sync" />
+              {!hideQuickActionLabel ? (
+                <span className="font-normal">{promotedPull.label}</span>
+              ) : null}
+            </Button>
+          ) : quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
                 openOnHover
