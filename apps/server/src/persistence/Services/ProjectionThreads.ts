@@ -18,6 +18,7 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadCreationSource,
   ThreadEnvironmentMode,
   ThreadId,
   TurnId,
@@ -46,9 +47,9 @@ export const ProjectionThread = Schema.Struct({
   createBranchFlowCompleted: Schema.Boolean,
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  creationSource: Schema.optional(
-    Schema.NullOr(Schema.Literals(["synara_mcp", "external_mcp", "provider_native"])),
-  ).pipe(Schema.withDecodingDefault(() => null)),
+  creationSource: Schema.optional(Schema.NullOr(ThreadCreationSource)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),

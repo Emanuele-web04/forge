@@ -8,10 +8,13 @@ import {
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
   createProjectLastActivityAtSelector,
+  createSidebarDisplayThreadsSelector,
+  createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
   createThreadShellsSelector,
   createThreadWorkspaceMetadataSelector,
+  isSidebarThreadVisible,
 } from "./storeSelectors";
 import type { SidebarThreadSummary, ThreadShell } from "./types";
 
@@ -90,6 +93,62 @@ describe("createThreadShellsSelector", () => {
 
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
+  });
+});
+
+describe("sidebar thread visibility", () => {
+  const threadIdC = "thread-c" as ThreadId;
+  const runSummary = { ...summaryA, creationSource: "automation_run" } as SidebarThreadSummary;
+  const pinnedRunSummary = {
+    ...summaryA,
+    id: threadIdB,
+    title: "B",
+    creationSource: "automation_run",
+    isPinned: true,
+  } as SidebarThreadSummary;
+  const normalSummary = { ...summaryA, id: threadIdC, title: "C" } as SidebarThreadSummary;
+  const state = makeState({
+    threadIds: [threadIdA, threadIdB, threadIdC],
+    sidebarThreadSummaryById: {
+      [threadIdA]: runSummary,
+      [threadIdB]: pinnedRunSummary,
+      [threadIdC]: normalSummary,
+    },
+  });
+
+  it("keeps every thread when the hide option is off", () => {
+    expect(isSidebarThreadVisible(runSummary)).toBe(true);
+    expect(isSidebarThreadVisible(runSummary, {})).toBe(true);
+    expect(isSidebarThreadVisible(runSummary, { hideAutomationRunThreads: false })).toBe(true);
+  });
+
+  it("hides only unpinned automation-run threads when the option is on", () => {
+    const options = { hideAutomationRunThreads: true };
+    expect(isSidebarThreadVisible(runSummary, options)).toBe(false);
+    expect(isSidebarThreadVisible(pinnedRunSummary, options)).toBe(true);
+    expect(isSidebarThreadVisible(normalSummary, options)).toBe(true);
+  });
+
+  it("filters run threads out of the display and tree selectors", () => {
+    const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
+    const selectTree = createSidebarTreeThreadsSelector({ hideAutomationRunThreads: true });
+
+    expect(selectDisplay(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
+    expect(selectTree(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
+  });
+
+  it("keeps run threads in the selectors when the option is unset", () => {
+    const selectDisplay = createSidebarDisplayThreadsSelector();
+    expect(selectDisplay(state).map((thread) => thread.id)).toEqual([
+      threadIdA,
+      threadIdB,
+      threadIdC,
+    ]);
+  });
+
+  it("stays reference-stable while the underlying summaries do not change", () => {
+    const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
+    expect(selectDisplay(state)).toBe(selectDisplay(state));
   });
 });
 

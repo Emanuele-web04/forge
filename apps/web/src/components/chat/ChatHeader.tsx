@@ -170,7 +170,9 @@ function EditorChatHistoryMenu(props: {
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const { settings } = useAppSettings();
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
+    hideAutomationRunThreads: !settings.showAutomationRunThreads,
+  });
   const displayThreads = useStore(selectDisplayThreads);
   const historyThreads = sortThreadsForSidebar(
     displayThreads.filter((thread) => thread.projectId === props.projectId),
@@ -255,7 +257,9 @@ function EditorRailTabs(props: {
         ];
   });
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
+    hideAutomationRunThreads: !settings.showAutomationRunThreads,
+  });
   const displayThreads = useStore(selectDisplayThreads);
   const currentChatTab: EditorRailChatTab = {
     id: props.activeThreadId,

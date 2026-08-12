@@ -557,6 +557,28 @@ describe("store projection", () => {
     expect(thread?.sourceThreadId).toBe(sourceThreadId);
   });
 
+  it("carries creationSource onto the sidebar summary and rebuilds it when only that field changes", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const initial = syncServerReadModel(
+      makeState(makeThread({ id: threadId })),
+      makeReadModel(makeReadModelThread({ id: threadId })),
+    );
+    const before = initial.sidebarThreadSummaryById[threadId];
+    expect(before?.creationSource).toBeNull();
+
+    const next = syncServerReadModel(
+      initial,
+      makeReadModel(makeReadModelThread({ id: threadId, creationSource: "automation_run" })),
+    );
+    const after = next.sidebarThreadSummaryById[threadId];
+
+    expect(after?.creationSource).toBe("automation_run");
+    // The equality function must treat creationSource as significant: a snapshot changing
+    // only this field (the 091 backfill replaying into a live client) must produce a fresh
+    // summary object instead of reusing the stale one.
+    expect(after).not.toBe(before);
+  });
+
   it("evicts high-cardinality thread detail while preserving its shell and sidebar summary", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const hydrated = syncServerReadModel(

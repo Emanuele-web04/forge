@@ -124,6 +124,7 @@ import {
   createSidebarDisplayThreadsSelector,
   createSidebarThreadSummariesSelector,
   createSidebarTreeThreadsSelector,
+  isSidebarThreadVisible,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { useThreadPullRequests, type ThreadPullRequest } from "../hooks/useThreadPullRequests";
@@ -1635,7 +1636,11 @@ export default function Sidebar() {
   const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
-  const selectSidebarTreeThreads = useMemo(() => createSidebarTreeThreadsSelector(), []);
+  const hideAutomationRunThreads = !appSettings.showAutomationRunThreads;
+  const selectSidebarTreeThreads = useMemo(
+    () => createSidebarTreeThreadsSelector({ hideAutomationRunThreads }),
+    [hideAutomationRunThreads],
+  );
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
@@ -1654,10 +1659,20 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
       [sidebarTreeThreads, studioProjectIdSet],
     );
+  // Activity view + unread bell read the same visibility-filtered list, so the
+  // bell can never point at a row the Activity list is hiding.
+  const visibleNonStudioSidebarThreads = useMemo(
+    () =>
+      nonStudioSidebarThreads.filter((thread) =>
+        isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+      ),
+    [hideAutomationRunThreads, nonStudioSidebarThreads],
+  );
   // Drives the unread dot on the header Activity bell.
   const hasUnreadActivity = useMemo(
-    () => hasUnreadActivityOutsideActiveThread(nonStudioSidebarThreads, activeSidebarThreadId),
-    [activeSidebarThreadId, nonStudioSidebarThreads],
+    () =>
+      hasUnreadActivityOutsideActiveThread(visibleNonStudioSidebarThreads, activeSidebarThreadId),
+    [activeSidebarThreadId, visibleNonStudioSidebarThreads],
   );
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
@@ -2035,8 +2050,14 @@ export default function Sidebar() {
   }, [optimisticPinnedStateByProjectId, projects]);
   const focusMostRecentThreadForProject = useCallback(
     (projectId: ProjectId) => {
+      // Only navigate to threads the sidebar actually shows — focusing a hidden
+      // automation-run thread would select a row the user can't see.
       const latestThread = sortThreadsForSidebar(
-        sidebarThreads.filter((thread) => thread.projectId === projectId),
+        sidebarThreads.filter(
+          (thread) =>
+            thread.projectId === projectId &&
+            isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+        ),
         appSettings.sidebarThreadSortOrder,
       )[0];
       if (!latestThread) return;
@@ -2046,7 +2067,7 @@ export default function Sidebar() {
         params: { threadId: latestThread.id },
       });
     },
-    [appSettings.sidebarThreadSortOrder, navigate, sidebarThreads],
+    [appSettings.sidebarThreadSortOrder, hideAutomationRunThreads, navigate, sidebarThreads],
   );
 
   const openOrCreateProjectThreadFromSnapshot = useCallback(
@@ -2232,7 +2253,14 @@ export default function Sidebar() {
   const handleOpenProjectFromSearch = useCallback(
     (projectId: string) => {
       const typedProjectId = ProjectId.makeUnsafe(projectId);
-      const hasProjectThread = sidebarThreads.some((thread) => thread.projectId === typedProjectId);
+      // Match focusMostRecentThreadForProject's visibility filter: if a project's only
+      // threads are hidden automation runs, fall through to creating a fresh thread
+      // instead of focusing nothing.
+      const hasProjectThread = sidebarThreads.some(
+        (thread) =>
+          thread.projectId === typedProjectId &&
+          isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+      );
       if (hasProjectThread) {
         focusMostRecentThreadForProject(typedProjectId);
         return;
@@ -2248,6 +2276,7 @@ export default function Sidebar() {
       appSettings.defaultThreadEnvMode,
       focusMostRecentThreadForProject,
       handleNewThread,
+      hideAutomationRunThreads,
       sidebarThreads,
     ],
   );
@@ -2315,8 +2344,8 @@ export default function Sidebar() {
   );
 
   const resolveBackToThreadsTarget = useCallback(
-    () => resolveBackTargetForThreads(nonStudioSidebarThreads, nonStudioDraftThreadIds),
-    [nonStudioDraftThreadIds, nonStudioSidebarThreads, resolveBackTargetForThreads],
+    () => resolveBackTargetForThreads(visibleNonStudioSidebarThreads, nonStudioDraftThreadIds),
+    [nonStudioDraftThreadIds, resolveBackTargetForThreads, visibleNonStudioSidebarThreads],
   );
 
   // Navigates to a resolved settings-back / segment-switch target. Returns whether it navigated
@@ -5907,7 +5936,7 @@ export default function Sidebar() {
               ) : activityViewEnabled ? (
                 <SidebarGroup className="px-1.5 py-1.5">
                   <SidebarActivityView
-                    threads={nonStudioSidebarThreads}
+                    threads={visibleNonStudioSidebarThreads}
                     projectById={projectById}
                     activeThreadId={visualActiveSidebarThreadId}
                     pinnedThreadIdSet={pinnedThreadIdSet}
@@ -6674,6 +6703,8 @@ function SidebarSearchPaletteController(props: {
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
+  // Search is deliberately unfiltered: typing a query is intent-driven retrieval, and
+  // search is the durable escape hatch for automation-run threads hidden elsewhere.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
     queries: (["codex", "claudeAgent", "cursor", "kilo", "opencode"] as const).map((provider) =>

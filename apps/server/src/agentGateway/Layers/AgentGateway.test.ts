@@ -202,7 +202,10 @@ function makeAutomationDefinition(
     mode: "heartbeat",
     targetThreadId: ThreadId.makeUnsafe("thread-parent"),
     maxIterations: 50,
-    stopOnError: true,
+    stopAfterConsecutiveFailures: 3,
+    consecutiveFailureCount: 0,
+    disabledReason: null,
+    disabledAt: null,
     completionPolicyVersion: 0,
     completionPolicyUpdatedAt: NOW,
     minimumIntervalSeconds: 60,
@@ -1494,6 +1497,7 @@ describe("AgentGateway", () => {
         createAutomationProperties?.prompt?.description ?? "",
         "notifying the user versus staying silent",
       );
+      assert.property(createAutomationProperties, "stopAfterConsecutiveFailures");
       const updateAutomationMemory = tools.find(
         (tool) => tool.name === "synara_update_automation_memory",
       );
@@ -1520,6 +1524,7 @@ describe("AgentGateway", () => {
         updateAutomationProperties?.prompt?.description,
         createAutomationProperties?.prompt?.description,
       );
+      assert.property(updateAutomationProperties, "stopAfterConsecutiveFailures");
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -4271,6 +4276,7 @@ describe("AgentGateway", () => {
       assert.equal(created.targetThreadId, "thread-parent");
       assert.deepEqual(created.schedule, { type: "interval", everySeconds: 300 });
       assert.equal(created.maxIterations, 50);
+      assert.equal(created.stopAfterConsecutiveFailures, 3);
       // Local-checkout targets must carry the matching environment + risk
       // acknowledgement so AutomationService policy checks stay enforced.
       assert.equal(created.worktreeMode, "local");
@@ -4483,8 +4489,13 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("views run history through the automation-scoped query", () => {
-    const definition = makeAutomationDefinition();
+  it.effect("views run history and durable disable state through the automation query", () => {
+    const definition = makeAutomationDefinition({
+      enabled: false,
+      consecutiveFailureCount: 3,
+      disabledReason: "failures",
+      disabledAt: "2026-07-01T12:05:00.000Z",
+    });
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [definition], {
       automationRuns: [
         { id: "target-newest", automationId: definition.id },
@@ -4507,6 +4518,10 @@ describe("AgentGateway", () => {
       assert.deepEqual(toolResultJson(response.result).runs, [
         { id: "target-newest", automationId: definition.id },
       ]);
+      assert.equal(
+        (toolResultJson(response.result).definition as Record<string, unknown>).disabledReason,
+        "failures",
+      );
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -4687,6 +4702,7 @@ describe("AgentGateway", () => {
           schedule: { type: "interval", everySeconds: 600 },
           enabled: true,
           maxIterations: null,
+          stopAfterConsecutiveFailures: 5,
           notificationPolicy: "failed-runs-only",
           completionPolicy: { type: "none" },
         },
@@ -4700,6 +4716,7 @@ describe("AgentGateway", () => {
         schedule: { type: "interval", everySeconds: 600 },
         enabled: true,
         maxIterations: null,
+        stopAfterConsecutiveFailures: 5,
         notificationPolicy: "failed-runs-only",
         completionPolicy: { type: "none" },
         acknowledgedRisks: ["local-checkout"],

@@ -221,6 +221,9 @@ function SettingsRouteView() {
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
+    ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
+      ? ["Automation runs"]
+      : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
@@ -511,6 +514,15 @@ function SettingsRouteView() {
           description: "Show the Studio tab in the sidebar switcher.",
           resetLabel: "studio section",
           ariaLabel: "Show the Studio section in the sidebar",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showAutomationRunThreads",
+          title: "Automation runs",
+          description:
+            "Show the thread each standalone automation run creates. Runs stay listed on the automation's page either way; threads owned by dedicated or heartbeat automations always stay visible.",
+          resetLabel: "automation runs",
+          ariaLabel: "Show automation run threads in the sidebar",
         })}
       </SettingsSection>
 

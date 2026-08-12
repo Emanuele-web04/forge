@@ -13,7 +13,7 @@
 // these predicates instead of comparing the mode literal, so adding a mode cannot leave
 // one dispatch site behind.
 
-import type { AutomationMode, ThreadId } from "@synara/contracts";
+import type { AutomationMode, ThreadCreationSource, ThreadId } from "@synara/contracts";
 
 /** Runs append a turn to a thread that already exists instead of creating one. */
 export function automationContinuesThread(mode: AutomationMode): boolean {
@@ -40,4 +40,15 @@ export function automationContinuationThreadId(definition: {
   readonly targetThreadId: ThreadId | null;
 }): ThreadId | null {
   return automationContinuesThread(definition.mode) ? definition.targetThreadId : null;
+}
+
+/**
+ * The thread is a per-run artifact a standalone automation created, not a conversation the
+ * user started. Dedicated/heartbeat continuation threads are never marked (see the
+ * ThreadCreationSource contract), so this stays false for them.
+ */
+export function isAutomationRunThread(thread: {
+  readonly creationSource?: ThreadCreationSource | null;
+}): boolean {
+  return thread.creationSource === "automation_run";
 }

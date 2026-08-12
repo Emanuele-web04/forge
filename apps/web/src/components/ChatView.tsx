@@ -464,10 +464,8 @@ import {
   formatCadence,
   automationsForThread,
   isFormSubmittable,
-  providerOptionsForAutomationEdit,
   projectModelSelection as automationProjectModelSelection,
   type AutomationFormState,
-  updateInputFromForm,
 } from "../routes/-automations.shared";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
@@ -3015,11 +3013,8 @@ export default function ChatView({
     automationProjects,
     automationThreads,
     automationData,
-    automationUpdateMutation,
     automationDraftForm,
     setAutomationDraftForm,
-    automationEditingDefinition,
-    setAutomationEditingDefinition,
     automationDraftWarnings,
     setAutomationDraftWarnings,
     setAutomationDraftWarningContext,
@@ -3041,10 +3036,8 @@ export default function ChatView({
     toggleAutomationWarning,
     updateAutomationDraftForm,
     resetAutomationDraftState,
-    openAutomationEditDialog,
   } = useChatAutomationSetup({
     threadId,
-    activeProjectId,
     hasLiveTurn,
     promptRef,
     setComposerDraftPrompt,
@@ -7073,74 +7066,8 @@ export default function ChatView({
     ],
   );
 
-  const updateAutomationFromForm = useCallback(
-    async (input: {
-      readonly definition: AutomationDefinition;
-      readonly form: AutomationFormState;
-      readonly warnings: readonly AutomationDraftWarning[];
-      readonly acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>;
-      readonly providerOptions?: ProviderStartOptions;
-    }): Promise<boolean> => {
-      if (automationDraftSubmittingRef.current) {
-        return false;
-      }
-      if (!isFormSubmittable(input.form)) {
-        return false;
-      }
-      if (hasBlockingAutomationDraftWarnings(input.warnings, input.acknowledgedWarningIds)) {
-        return false;
-      }
-      const acknowledgedRisks = acknowledgedRiskIdsForFormWarnings(
-        input.warnings,
-        input.acknowledgedWarningIds,
-      );
-      automationDraftSubmittingRef.current = true;
-      setIsAutomationDraftSubmitting(true);
-      return await (async () => {
-        const providerOptions =
-          input.providerOptions ??
-          providerOptionsForAutomationEdit(
-            input.definition,
-            input.form,
-            providerOptionsForDispatch,
-          );
-        const updated = await automationUpdateMutation.mutateAsync(
-          updateInputFromForm(input.definition, input.form, providerOptions, acknowledgedRisks),
-        );
-        resetAutomationDraftState();
-        toastManager.add({
-          type: "success",
-          title: "Automation updated",
-          description: `${updated.name} - ${formatCadence(updated.schedule)}`,
-        });
-        return true;
-      })()
-        .catch(() => false)
-        .finally(() => {
-          automationDraftSubmittingRef.current = false;
-          setIsAutomationDraftSubmitting(false);
-        });
-    },
-    [
-      automationDraftSubmittingRef,
-      automationUpdateMutation,
-      providerOptionsForDispatch,
-      resetAutomationDraftState,
-      setIsAutomationDraftSubmitting,
-    ],
-  );
-
   const submitAutomationDraft = useCallback(async () => {
     if (!automationDraftForm) {
-      return;
-    }
-    if (automationEditingDefinition) {
-      await updateAutomationFromForm({
-        definition: automationEditingDefinition,
-        form: automationDraftForm,
-        warnings: automationDraftWarnings,
-        acknowledgedWarningIds: acknowledgedAutomationWarnings,
-      });
       return;
     }
     if (
@@ -7161,12 +7088,10 @@ export default function ChatView({
     });
   }, [
     acknowledgedAutomationWarnings,
-    automationEditingDefinition,
     automationDraftForm,
     automationDraftWarnings,
     createAutomationFromForm,
     prepareAutomationFormForCreate,
-    updateAutomationFromForm,
   ]);
 
   const restoreQueuedTurnToComposer = useCallback(
@@ -7613,7 +7538,6 @@ export default function ChatView({
             promptRef.current = restoredPrompt;
             setComposerDraftPrompt(activeThread.id, restoredPrompt);
           }
-          setAutomationEditingDefinition(null);
           setAutomationDraftWarningContext(automationDraft.warningContext);
           setAutomationDraftForm(automationDraft.form);
           setAutomationDraftWarnings(automationDraft.warnings);
@@ -11144,7 +11068,7 @@ export default function ChatView({
     onProjectInstructionsChange: setProjectInstructions,
     onCopyProjectInstructionsToNotes: handleCopyProjectInstructionsToNotes,
     onToggleDiff,
-    onOpenAutomation: openAutomationEditDialog,
+    onOpenAutomation: (definition: AutomationDefinition) => onOpenAutomation(definition.id),
     onOpenGithubRepository: openBrowserUrl,
     onJumpToPinnedMessage: handleJumpToPinnedMessage,
     onTogglePinnedMessageDone: handleTogglePinnedMessageDone,
@@ -11868,7 +11792,6 @@ export default function ChatView({
       {automationDraftForm ? (
         <AutomationDialog
           open={automationDraftOpen}
-          editing={automationEditingDefinition !== null}
           form={automationDraftForm}
           projects={automationProjects}
           threads={automationThreads}
@@ -11878,7 +11801,7 @@ export default function ChatView({
           onOpenChange={setAutomationDraftDialogOpen}
           onFormChange={updateAutomationDraftForm}
           onSubmit={submitAutomationDraft}
-          busy={isAutomationDraftSubmitting || automationUpdateMutation.isPending}
+          busy={isAutomationDraftSubmitting}
         />
       ) : null}
 

@@ -38,9 +38,9 @@ import {
   isTriageRun,
   maxIterationOptions,
   modelSelectionForProjectChange,
-  providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
   reconcileAutomationFormAutoModeSupport,
+  rollbackAutomationDefinitionPatch,
   runResultSummary,
   runResultTitle,
   scheduleKindFromSchedule,
@@ -154,7 +154,10 @@ const baseDefinition: AutomationDefinition = {
   mode: "standalone",
   targetThreadId: null,
   maxIterations: null,
-  stopOnError: true,
+  stopAfterConsecutiveFailures: 3,
+  consecutiveFailureCount: 0,
+  disabledReason: null,
+  disabledAt: null,
   completionPolicy: { type: "none" },
   completionPolicyVersion: 1,
   completionPolicyUpdatedAt: "2026-06-19T10:00:00.000Z",
@@ -618,9 +621,13 @@ describe("automation shared route helpers", () => {
     });
     const form = formFromDefinition(definition, "project-1");
 
-    expect(providerOptionsForAutomationEdit(definition, form, currentProviderOptions)).toEqual(
-      savedProviderOptions,
-    );
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        form.modelSelection,
+        currentProviderOptions,
+      ),
+    ).toEqual(savedProviderOptions);
   });
 
   it("uses current provider options when an automation edit changes models", () => {
@@ -953,5 +960,61 @@ describe("automation shared route helpers", () => {
     );
 
     expect(updated.memories).toEqual([memory]);
+  });
+});
+
+describe("rollbackAutomationDefinitionPatch", () => {
+  it("restores only the failed patch's fields, keeping a concurrent edit's merge intact", () => {
+    // The name patch failed while a prompt patch (still in flight) had already merged
+    // optimistically. Rolling back the name must not also revert the prompt.
+    const current = {
+      definitions: [definitionWith({ name: "Optimistic name", prompt: "Optimistic prompt." })],
+      runs: [],
+      memories: [],
+    };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, name: "Optimistic name" },
+      baseDefinition,
+    );
+
+    expect(rolledBack.definitions[0]).toMatchObject({
+      name: baseDefinition.name,
+      prompt: "Optimistic prompt.",
+    });
+  });
+
+  it("removes input-only keys the definition never had instead of restoring them", () => {
+    const merged = {
+      ...definitionWith({}),
+      stopOnError: true,
+    } as AutomationDefinition;
+    const current = { definitions: [merged], runs: [], memories: [] };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, stopOnError: true },
+      baseDefinition,
+    );
+
+    expect("stopOnError" in rolledBack.definitions[0]!).toBe(false);
+  });
+
+  it("leaves other definitions untouched", () => {
+    const other = definitionWith({ id: automationId("automation-2"), name: "Other" });
+    const current = {
+      definitions: [definitionWith({ name: "Optimistic name" }), other],
+      runs: [],
+      memories: [],
+    };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, name: "Optimistic name" },
+      baseDefinition,
+    );
+
+    expect(rolledBack.definitions[1]).toBe(other);
   });
 });

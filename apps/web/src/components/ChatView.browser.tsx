@@ -6,6 +6,7 @@ import {
   type AutomationCreateInput,
   type AutomationDefinition,
   CheckpointRef,
+  DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES,
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
@@ -575,7 +576,13 @@ function createAutomationDefinitionFromCreateRequest(
     mode: input.mode ?? "standalone",
     targetThreadId: input.targetThreadId ?? null,
     maxIterations: input.maxIterations ?? null,
-    stopOnError: input.stopOnError ?? true,
+    stopAfterConsecutiveFailures:
+      input.stopAfterConsecutiveFailures === undefined
+        ? DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES
+        : input.stopAfterConsecutiveFailures,
+    consecutiveFailureCount: 0,
+    disabledReason: null,
+    disabledAt: null,
     completionPolicy: input.completionPolicy ?? { type: "none" },
     completionPolicyVersion: 1,
     completionPolicyUpdatedAt: NOW_ISO,

@@ -241,10 +241,14 @@ export const DEFAULT_TURN_DISPATCH_MODE: TurnDispatchMode = "queue";
 // Absent is treated as "user"; only server-dispatched turns carry the flag.
 export const MessageDispatchOrigin = Schema.Literals(["user", "automation", "agent"]);
 export type MessageDispatchOrigin = typeof MessageDispatchOrigin.Type;
+// "automation_run" marks only the per-run throwaway threads standalone automations
+// create. Dedicated automations' own threads stay unmarked: they are persistent
+// conversations the user keeps, not run artifacts.
 export const ThreadCreationSource = Schema.Literals([
   "synara_mcp",
   "external_mcp",
   "provider_native",
+  "automation_run",
 ]);
 export type ThreadCreationSource = typeof ThreadCreationSource.Type;
 export const ProviderReviewTarget = Schema.Union([

@@ -331,6 +331,7 @@ export interface SidebarThreadSummary {
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;

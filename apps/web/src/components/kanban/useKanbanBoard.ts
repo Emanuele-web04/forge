@@ -36,14 +36,16 @@ const OPTIMISTIC_DISPATCH_TIMEOUT_MS = 30_000;
 const OPTIMISTIC_DISPATCH_EXPIRY_CHECK_MS = 5_000;
 
 export function useKanbanBoard(): KanbanBoard {
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
+  const { settings } = useAppSettings();
+  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
+    hideAutomationRunThreads: !settings.showAutomationRunThreads,
+  });
   const threads = useStore(selectDisplayThreads);
   const allProjects = useStore((state) => state.projects);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
-  const { settings } = useAppSettings();
   const projectSortOrder = settings.sidebarProjectSortOrder;
 
   // Mirror the sidebar's grouping: projects in the user's sidebar sort order, then one

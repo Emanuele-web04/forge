@@ -216,6 +216,10 @@ export const AppSettingsSchema = Schema.Struct({
   // optional Studio tab in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Whether the per-run threads standalone automations create appear in the sidebar
+  // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
+  // listed on the automation's page and findable via search either way.
+  showAutomationRunThreads: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences: which optional sections of the chat Environment panel are
   // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
   // toggle the sections beneath it via the panel header's gear menu.
