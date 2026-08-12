@@ -215,11 +215,18 @@ describe("production Effect HTTP routes", () => {
     await withEffectServer(makeConfig(), { kind: "health", readiness }, async (origin) => {
       const response = await fetch(`${origin}/health`);
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({
+      const body = (await response.json()) as {
+        readonly projection: Record<string, unknown>;
+      };
+      expect(body).toMatchObject({
         status: "ok",
         startupReady: false,
         pushBusReady: true,
+        projection: { state: "healthy", hasFailure: false },
       });
+      // /health is unauthenticated: failure detail (which can embed raw event
+      // payloads via pretty-printed decode causes) must never cross this route.
+      expect(body.projection).not.toHaveProperty("lastFailure");
     });
   });
 

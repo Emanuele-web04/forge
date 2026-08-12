@@ -254,7 +254,20 @@ export function makeHealthEffectRouteLayer(readiness: ServerReadiness) {
           keybindingsReady: snapshot.keybindingsReady,
           terminalSubscriptionsReady: snapshot.terminalSubscriptionsReady,
           orchestrationSubscriptionsReady: snapshot.orchestrationSubscriptionsReady,
-          projection,
+          // /health is unauthenticated, so only shape-level diagnostics may
+          // leave the process. lastFailure carries pretty-printed causes whose
+          // schema-decode issues can embed raw event payloads (user prompts);
+          // it stays server-side — the log line that recorded the failure is
+          // where operators read the detail.
+          projection: {
+            state: projection.state,
+            inFlight: projection.inFlight,
+            retryAttempts: projection.retryAttempts,
+            hasFailure: projection.lastFailure !== null,
+            highWaterSequence: projection.highWaterSequence,
+            lagByProjector: projection.lagByProjector,
+            missingProjectors: projection.missingProjectors,
+          },
         },
         { status: 200 },
       );
