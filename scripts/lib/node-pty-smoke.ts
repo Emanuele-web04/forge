@@ -18,6 +18,41 @@ interface PtySmokeOptions {
   readonly timeoutMs: number;
 }
 
+interface PtyReadinessOptions {
+  readonly terminal: PtyTerminal;
+  readonly timeoutMs: number;
+}
+
+export function waitForFirstPtyData({ terminal, timeoutMs }: PtyReadinessOptions): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let dataSubscription: Disposable | null = null;
+    let exitSubscription: Disposable | null = null;
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      dataSubscription?.dispose();
+      exitSubscription?.dispose();
+    };
+
+    const settle = (complete: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      complete();
+    };
+
+    const timeout = setTimeout(() => {
+      settle(() => reject(new Error("Timed out waiting for the PTY to accept input.")));
+    }, timeoutMs);
+
+    dataSubscription = terminal.onData(() => settle(resolve));
+    exitSubscription = terminal.onExit(() => {
+      settle(() => reject(new Error("PTY exited before accepting input.")));
+    });
+  });
+}
+
 export function waitForSuccessfulPtyExit({
   terminal,
   expectedOutput,

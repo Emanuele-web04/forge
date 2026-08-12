@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { waitForSuccessfulPtyExit } from "./lib/node-pty-smoke.ts";
+import { waitForFirstPtyData, waitForSuccessfulPtyExit } from "./lib/node-pty-smoke.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
@@ -52,6 +52,9 @@ try {
     expectedOutput,
     timeoutMs: isWindows ? 15_000 : 5_000,
   });
+  if (isWindows) {
+    await waitForFirstPtyData({ terminal, timeoutMs: 5_000 });
+  }
   terminal.write(
     isWindows ? `echo ${expectedOutput}\r\nexit\r\n` : `printf '${expectedOutput}'\nexit\n`,
   );

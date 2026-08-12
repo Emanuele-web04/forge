@@ -1,6 +1,10 @@
 import { assert, describe, it } from "vitest";
 
-import { type PtyTerminal, waitForSuccessfulPtyExit } from "./node-pty-smoke.ts";
+import {
+  type PtyTerminal,
+  waitForFirstPtyData,
+  waitForSuccessfulPtyExit,
+} from "./node-pty-smoke.ts";
 
 class FakePtyTerminal implements PtyTerminal {
   private dataListener: (chunk: string) => void = () => {};
@@ -54,5 +58,22 @@ describe("waitForSuccessfulPtyExit", () => {
     terminal.emitExit(0);
 
     assert.equal(await result, "synara-node-pty-smoke");
+  });
+});
+
+describe("waitForFirstPtyData", () => {
+  it("does not signal readiness until the PTY emits data", async () => {
+    const terminal = new FakePtyTerminal();
+    let ready = false;
+    const result = waitForFirstPtyData({ terminal, timeoutMs: 1_000 }).then(() => {
+      ready = true;
+    });
+
+    await Promise.resolve();
+    assert.isFalse(ready);
+
+    terminal.emitData("ready");
+    await result;
+    assert.isTrue(ready);
   });
 });
