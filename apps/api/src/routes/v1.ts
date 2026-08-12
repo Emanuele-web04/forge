@@ -633,7 +633,7 @@ export function createV1Routes(deps: {
    * one path that guarantees a stored object backs the claim.
    */
   v1.put("/profile/avatar", async (c) => {
-    const session = await requireOrgSession(c);
+    const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
 
     if (!avatarStorage) {
@@ -719,7 +719,7 @@ export function createV1Routes(deps: {
    * default a brand-new profile has.
    */
   v1.delete("/profile/avatar", async (c) => {
-    const session = await requireOrgSession(c);
+    const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
 
     const user = await loadSessionUser(c, session.userId);
