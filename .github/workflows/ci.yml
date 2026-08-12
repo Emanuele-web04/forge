@@ -115,6 +115,8 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
       - name: Verify Windows terminal PTY native dependency under Bun
