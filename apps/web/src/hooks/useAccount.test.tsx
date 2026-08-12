@@ -204,36 +204,36 @@ describe("useAccount", () => {
     });
   });
 
-  // The usage-summary cache key carries no user identity, so an identity
-  // change (sign-out, or a fresh sign-in) must REMOVE it — not merely
-  // invalidate — or the next user would render the previous user's usage.
+  // An identity change (sign-out, or a fresh sign-in) must REMOVE the cached
+  // usage summary — not merely invalidate — so the departed identity's data
+  // (which includes private skill names) leaves memory instead of lingering.
   it("removes cached account usage after signOut", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), {
       state: "signed-in",
       me: makeMe(),
     });
-    queryClient.setQueryData(accountQueryKeys.usageSummary(120), { lifetimeTokens: 42 });
+    queryClient.setQueryData(accountQueryKeys.usageSummary("user_1", 120), { lifetimeTokens: 42 });
     accountApiMock.signOut.mockResolvedValue(undefined);
 
     const account = renderUseAccount(queryClient);
     await account.signOut.mutateAsync();
 
-    expect(queryClient.getQueryData(accountQueryKeys.usageSummary(120))).toBeUndefined();
+    expect(queryClient.getQueryData(accountQueryKeys.usageSummary("user_1", 120))).toBeUndefined();
   });
 
   it("removes cached account usage before a fresh OTP sign-in renders", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), { state: "signed-out" });
     // Left behind by a previous identity (sign-out via another client, say).
-    queryClient.setQueryData(accountQueryKeys.usageSummary(120), { lifetimeTokens: 42 });
+    queryClient.setQueryData(accountQueryKeys.usageSummary("user_0", 120), { lifetimeTokens: 42 });
     const me = makeMe();
     accountApiMock.authenticateOtp.mockResolvedValue({ state: "signed-in", me });
 
     const account = renderUseAccount(queryClient);
     await account.authenticateOtp.mutateAsync({ email: "ada@example.com", code: "654321" });
 
-    expect(queryClient.getQueryData(accountQueryKeys.usageSummary(120))).toBeUndefined();
+    expect(queryClient.getQueryData(accountQueryKeys.usageSummary("user_0", 120))).toBeUndefined();
     expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
       state: "signed-in",
       me,
@@ -242,14 +242,16 @@ describe("useAccount", () => {
 
   it("removes cached account usage before a fresh SSO sign-in renders", async () => {
     const queryClient = new QueryClient();
-    queryClient.setQueryData(accountQueryKeys.usageSummary(-330), { lifetimeTokens: 42 });
+    queryClient.setQueryData(accountQueryKeys.usageSummary("user_0", -330), {
+      lifetimeTokens: 42,
+    });
     const me = makeMe();
     accountApiMock.completeSso.mockResolvedValue({ state: "signed-in", me });
 
     const account = renderUseAccount(queryClient);
     await account.completeSso.mutateAsync({ ssoId: "sso_1" });
 
-    expect(queryClient.getQueryData(accountQueryKeys.usageSummary(-330))).toBeUndefined();
+    expect(queryClient.getQueryData(accountQueryKeys.usageSummary("user_0", -330))).toBeUndefined();
     expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
       state: "signed-in",
       me,

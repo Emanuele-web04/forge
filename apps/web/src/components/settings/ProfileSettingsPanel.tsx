@@ -8,14 +8,23 @@
 // Layer: web profile feature (settings panel body).
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { type ProfileStats, type ProfileTokenStats, type ProviderKind } from "@synara/contracts";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  type ProfileStats,
+  type ProfileTokenStats,
+  type ProviderKind,
+  type UsageSummary,
+} from "@synara/contracts";
 import {
   serverProfileStatsQueryOptions,
   serverProfileTokenStatsQueryOptions,
 } from "~/lib/serverReactQuery";
 import { accountUsageSummaryQueryOptions } from "~/lib/accountReactQuery";
-import { localDayKey, selectAccountUsageView } from "~/lib/accountUsageAdapter";
+import {
+  type AccountUsageView,
+  localDayKey,
+  selectAccountUsageView,
+} from "~/lib/accountUsageAdapter";
 import { useAccount } from "~/hooks/useAccount";
 import { CentralIcon } from "~/lib/central-icons";
 import { ProviderIcon } from "~/components/ProviderIcon";
@@ -26,6 +35,8 @@ import { ActivityHeatmap, heatmapTooltipText } from "@synara/profile-ui/heatmap"
 import { InsightRow, ModelUsageRow, StatTileGrid } from "@synara/profile-ui/sections";
 import { providerLabel } from "@synara/profile-ui/provider-icon";
 import {
+  selectAccountShareCardStats,
+  selectDeviceShareCardStats,
   selectProfileHeatmap,
   selectProfileModelUsage,
   selectProfileTopProvider,
@@ -78,6 +89,7 @@ export function ProfileSettingsPanel() {
       stats={coreQuery.data}
       tokenStats={tokenQuery.data ?? null}
       tokensPending={tokenQuery.isPending}
+      userId={me?.id ?? null}
       // Signed out: no toggle, the device view is the whole panel.
       scope={me ? scope : "device"}
       onScopeChange={me ? setScope : null}
@@ -89,21 +101,43 @@ function ProfileContent({
   stats,
   tokenStats,
   tokensPending,
+  userId,
   scope,
   onScopeChange,
 }: {
   stats: ProfileStats;
   tokenStats: ProfileTokenStats | null;
   tokensPending: boolean;
+  userId: string | null;
   scope: StatsScope;
   onScopeChange: ((scope: StatsScope) => void) | null;
 }) {
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
 
+  // Hoisted above AccountStatsBody so the share card can render the SAME
+  // scope the panel shows: with Account selected, the exported card must
+  // carry the account-wide numbers, not this device's.
+  const usageQuery = useQuery(
+    accountUsageSummaryQueryOptions({ userId, enabled: scope === "account" }),
+  );
+  const accountView =
+    scope === "account" && usageQuery.data
+      ? selectAccountUsageView(usageQuery.data, localDayKey())
+      : null;
+  // Null exactly while the Account scope's data hasn't loaded — the Share
+  // button waits rather than silently exporting This-device numbers.
+  const cardStats =
+    scope === "account"
+      ? accountView
+        ? selectAccountShareCardStats(accountView)
+        : null
+      : selectDeviceShareCardStats(stats, tokenStats);
+
   const defaultName = toDisplayName(stats.identity.homeDirBasename);
   const {
     name,
+    initials,
     handle,
     avatarColor,
     avatarImage,
@@ -136,7 +170,12 @@ function ProfileContent({
           />
         ) : null}
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={cardStats === null}
+            onClick={() => setShareOpen(true)}
+          >
             <CentralIcon name="share-os" />
             Share
           </Button>
@@ -150,7 +189,7 @@ function ProfileContent({
       {/* Centered identity header */}
       <header className="flex flex-col items-center gap-3 text-center">
         <ProfileAvatar
-          initials={stats.identity.initials}
+          initials={initials}
           color={avatarColor}
           image={avatarImage}
           className="size-16 shadow-sm"
@@ -169,27 +208,29 @@ function ProfileContent({
       </header>
 
       {scope === "account" ? (
-        <AccountStatsBody />
+        <AccountStatsBody usageQuery={usageQuery} view={accountView} />
       ) : (
         <DeviceStatsBody stats={stats} tokenStats={tokenStats} tokensPending={tokensPending} />
       )}
 
-      <ShareDialog
-        stats={stats}
-        tokenStats={tokenStats}
-        displayName={name}
-        handle={handle}
-        avatarColor={avatarColor}
-        avatarImage={avatarImage}
-        accountProfile={accountProfile}
-        open={shareOpen}
-        onOpenChange={setShareOpen}
-      />
+      {cardStats && (
+        <ShareDialog
+          cardStats={cardStats}
+          initials={initials}
+          displayName={name}
+          handle={handle}
+          avatarColor={avatarColor}
+          avatarImage={avatarImage}
+          accountProfile={accountProfile}
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+        />
+      )}
 
       <EditProfileDialog
         open={editOpen}
         onOpenChange={setEditOpen}
-        initials={stats.identity.initials}
+        initials={initials}
         name={name}
         handle={handle}
         avatarColor={avatarColor}
@@ -289,26 +330,29 @@ function DeviceStatsBody({
 
 // ── Account ────────────────────────────────────────────────────────────
 
-function AccountStatsBody() {
-  const usageQuery = useQuery(accountUsageSummaryQueryOptions());
-
-  if (usageQuery.isPending) {
+function AccountStatsBody({
+  usageQuery,
+  view,
+}: {
+  // Owned by ProfileContent so the share card can reuse the same answer.
+  usageQuery: UseQueryResult<UsageSummary>;
+  view: AccountUsageView | null;
+}) {
+  if (usageQuery.isPending || !view) {
+    if (usageQuery.isError) {
+      // Retryable error state; the scope toggle above always lets the user
+      // flip back to This device.
+      return (
+        <div className="flex flex-col items-center gap-3 py-16 text-center">
+          <p className="text-sm text-muted-foreground">Couldn’t load your account stats.</p>
+          <Button variant="outline" size="sm" onClick={() => void usageQuery.refetch()}>
+            Try again
+          </Button>
+        </div>
+      );
+    }
     return <AccountStatsSkeleton />;
   }
-  if (usageQuery.isError || !usageQuery.data) {
-    // Retryable error state; the scope toggle above always lets the user
-    // flip back to This device.
-    return (
-      <div className="flex flex-col items-center gap-3 py-16 text-center">
-        <p className="text-sm text-muted-foreground">Couldn’t load your account stats.</p>
-        <Button variant="outline" size="sm" onClick={() => void usageQuery.refetch()}>
-          Try again
-        </Button>
-      </div>
-    );
-  }
-
-  const view = selectAccountUsageView(usageQuery.data, localDayKey());
 
   return (
     <>

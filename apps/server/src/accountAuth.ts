@@ -853,44 +853,58 @@ export interface LogoutOptions {
 
 export async function runAuthLogout(options: LogoutOptions): Promise<void> {
   const stdout = options.stdout ?? defaultStdout;
-  // Deliberately the raw file, not a live session: a user whose session
-  // expired still has a host registration to tear down and a file to delete.
-  const credentials = await readAccountFile(options.baseDir);
-  if (!credentials) {
-    // A file that exists but does not parse as v2 is a leftover from a
-    // previous version or a corrupt write. Deleting it is the whole point of
-    // logout, and leaving it behind would also keep `synara auth` from ever
-    // reporting a clean "Not signed in".
-    const stale = await deleteAccountCredentialsIfPresent(options.baseDir);
-    stdout(
-      stale
-        ? "Removed stale credentials from a previous version. The host record may need manual removal.\n"
-        : "Not signed in — nothing to do.\n",
-    );
-    return;
-  }
-
-  // Every remote call here is best effort: local credentials must be dropped
-  // even when the account server is unreachable, otherwise a user with a dead
-  // network can never sign out.
-  const client = clientFor(credentials.accountUrl, options.client);
-
-  if (credentials.hostToken && credentials.hostId) {
-    try {
-      await client.deleteHost(credentials.hostToken, credentials.hostId);
-      stdout(`Removed host ${credentials.hostId} from the account.\n`);
-    } catch (error) {
-      stdout(`Could not remove host ${credentials.hostId}: ${describeError(error)}\n`);
+  // The whole logout — read, remote host teardown, file deletion — runs
+  // under the credential-file lock. Deleting the file without it lets a
+  // concurrent slow refresh (or a host-registration save) that read the file
+  // before the deletion write its result afterwards, silently recreating the
+  // credentials logout just reported deleted. Ordering inside the lock
+  // matters too: the host token is re-read and the remote host deleted
+  // *inside* the critical section, so the host torn down is the one on disk
+  // at that moment (a racing registration or rotation commits either before
+  // this section — and its result is what gets torn down — or after the file
+  // is gone, where every writer's own locked re-read makes it bail). The
+  // remote call is bounded by the client's request timeout, far inside the
+  // lock's stale threshold, so holding the lock across it is safe.
+  await withLockedAccountFile(options.baseDir, async () => {
+    // Deliberately the raw file, not a live session: a user whose session
+    // expired still has a host registration to tear down and a file to delete.
+    const credentials = await readAccountFile(options.baseDir);
+    if (!credentials) {
+      // A file that exists but does not parse as v2 is a leftover from a
+      // previous version or a corrupt write. Deleting it is the whole point of
+      // logout, and leaving it behind would also keep `synara auth` from ever
+      // reporting a clean "Not signed in".
+      const stale = await deleteAccountCredentialsIfPresent(options.baseDir);
+      stdout(
+        stale
+          ? "Removed stale credentials from a previous version. The host record may need manual removal.\n"
+          : "Not signed in — nothing to do.\n",
+      );
+      return;
     }
-  }
 
-  // The account service no longer brokers session listing or revocation —
-  // WorkOS owns sessions, and the access token is short-lived. Dropping the
-  // local credentials is what sign-out means here.
-  await deleteAccountCredentials(options.baseDir);
-  stdout(
-    `Signed out of ${credentials.accountUrl}. Local credentials deleted.\nThe browser session at the identity provider expires on its own.\n`,
-  );
+    // Every remote call here is best effort: local credentials must be dropped
+    // even when the account server is unreachable, otherwise a user with a dead
+    // network can never sign out.
+    const client = clientFor(credentials.accountUrl, options.client);
+
+    if (credentials.hostToken && credentials.hostId) {
+      try {
+        await client.deleteHost(credentials.hostToken, credentials.hostId);
+        stdout(`Removed host ${credentials.hostId} from the account.\n`);
+      } catch (error) {
+        stdout(`Could not remove host ${credentials.hostId}: ${describeError(error)}\n`);
+      }
+    }
+
+    // The account service no longer brokers session listing or revocation —
+    // WorkOS owns sessions, and the access token is short-lived. Dropping the
+    // local credentials is what sign-out means here.
+    await deleteAccountCredentials(options.baseDir);
+    stdout(
+      `Signed out of ${credentials.accountUrl}. Local credentials deleted.\nThe browser session at the identity provider expires on its own.\n`,
+    );
+  });
 }
 
 export interface StatusOptions {

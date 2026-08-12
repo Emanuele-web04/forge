@@ -610,67 +610,78 @@ export function createV1Routes(deps: {
       );
     }
 
+    let displacedAvatarKey: string | null = null;
     try {
       const clampedOffset =
         parsed.utcOffsetMinutes !== undefined
           ? Math.max(-720, Math.min(840, parsed.utcOffsetMinutes))
           : undefined;
 
-      // When switching from "uploaded" to "sso" or "placeholder", clean up the
-      // old avatarKey and delete the stored object — same as DELETE /profile/avatar.
-      const shouldClearAvatar =
-        parsed.avatarSource !== undefined &&
-        existing &&
-        existing.avatarSource === "uploaded" &&
-        existing.avatarKey;
+      // The upsert runs in a transaction behind a SELECT ... FOR UPDATE so
+      // the avatar key it displaces is read under the row lock: a snapshot
+      // read (like `existing` above) can race a concurrent avatar write and
+      // schedule cleanup of a key that write already displaced — orphaning
+      // the key THIS write displaced forever.
+      displacedAvatarKey = await db.transaction(async (tx) => {
+        const [locked] = await tx
+          .select({ avatarSource: profiles.avatarSource, avatarKey: profiles.avatarKey })
+          .from(profiles)
+          .where(eq(profiles.userId, session.userId))
+          .limit(1)
+          .for("update");
 
-      await db
-        .insert(profiles)
-        .values({
-          userId: session.userId,
-          handle: parsed.handle,
-          displayName: parsed.displayName,
-          avatarColor: parsed.avatarColor,
-          // Absent means "leave visibility alone" on update and "private" on
-          // first write — the safe default either way.
-          ...(parsed.public !== undefined ? { public: parsed.public } : {}),
-          ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
-          // Only 'sso'/'placeholder' can arrive here (the contract excludes
-          // 'uploaded'); the upload route is the sole writer of that state.
-          ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
-        })
-        // Only the editable columns are updated. `handle` is excluded rather
-        // than written back identically: the guard above already refused a
-        // change, and leaving it out of the statement means a future guard bug
-        // cannot rewrite someone's handle through this path.
-        .onConflictDoUpdate({
-          target: profiles.userId,
-          set: {
+        // When switching from "uploaded" to "sso" or "placeholder", clean up
+        // the old avatarKey and delete the stored object — same as DELETE
+        // /profile/avatar.
+        const shouldClearAvatar =
+          parsed.avatarSource !== undefined &&
+          locked !== undefined &&
+          locked.avatarSource === "uploaded" &&
+          locked.avatarKey !== null;
+
+        await tx
+          .insert(profiles)
+          .values({
+            userId: session.userId,
+            handle: parsed.handle,
             displayName: parsed.displayName,
             avatarColor: parsed.avatarColor,
+            // Absent means "leave visibility alone" on update and "private" on
+            // first write — the safe default either way.
             ...(parsed.public !== undefined ? { public: parsed.public } : {}),
             ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
+            // Only 'sso'/'placeholder' can arrive here (the contract excludes
+            // 'uploaded'); the upload route is the sole writer of that state.
             ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
-            // Clear avatarKey when switching away from "uploaded".
-            ...(shouldClearAvatar ? { avatarKey: null } : {}),
-            updatedAt: new Date(),
-          },
-          // Only when the stored handle matches the request. Two racing
-          // first-time PUTs with different handles interleave so the loser's
-          // upsert lands as this UPDATE; unconditional, it would overwrite
-          // the winner's display name/visibility/etc. before the post-upsert
-          // check rejects it — a rejected request that still mutated. With
-          // the guard the loser's statement is a no-op and the re-read below
-          // reports the conflict with nothing changed.
-          setWhere: sql`${profiles.handle} = excluded.handle`,
-        });
+          })
+          // Only the editable columns are updated. `handle` is excluded rather
+          // than written back identically: the guard above already refused a
+          // change, and leaving it out of the statement means a future guard bug
+          // cannot rewrite someone's handle through this path.
+          .onConflictDoUpdate({
+            target: profiles.userId,
+            set: {
+              displayName: parsed.displayName,
+              avatarColor: parsed.avatarColor,
+              ...(parsed.public !== undefined ? { public: parsed.public } : {}),
+              ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
+              ...(parsed.avatarSource !== undefined ? { avatarSource: parsed.avatarSource } : {}),
+              // Clear avatarKey when switching away from "uploaded".
+              ...(shouldClearAvatar ? { avatarKey: null } : {}),
+              updatedAt: new Date(),
+            },
+            // Only when the stored handle matches the request. Two racing
+            // first-time PUTs with different handles interleave so the loser's
+            // upsert lands as this UPDATE; unconditional, it would overwrite
+            // the winner's display name/visibility/etc. before the post-upsert
+            // check rejects it — a rejected request that still mutated. With
+            // the guard the loser's statement is a no-op and the re-read below
+            // reports the conflict with nothing changed.
+            setWhere: sql`${profiles.handle} = excluded.handle`,
+          });
 
-      // Deferred cleanup of the replaced object, same as DELETE
-      // /profile/avatar — see scheduleAvatarObjectDelete for the cache-window
-      // reasoning.
-      if (shouldClearAvatar) {
-        scheduleAvatarObjectDelete(session.userId, existing.avatarKey!);
-      }
+        return shouldClearAvatar ? locked.avatarKey : null;
+      });
     } catch (error) {
       // The unique index on `handle` is the reservation; a violation here means
       // somebody else holds it, including when two first-time writes race.
@@ -678,6 +689,15 @@ export function createV1Routes(deps: {
         return errorResponse(c, 409, "handle_taken", "That handle is already taken");
       }
       throw error;
+    }
+
+    // Deferred cleanup of the object this write actually displaced (read
+    // under the row lock), same as DELETE /profile/avatar — see
+    // scheduleAvatarObjectDelete for the cache-window reasoning. If the
+    // upsert was a no-op (handle mismatch), the fire-time re-check sees the
+    // key still current and leaves it alone.
+    if (displacedAvatarKey !== null) {
+      scheduleAvatarObjectDelete(session.userId, displacedAvatarKey);
     }
 
     // Re-read and verify the handle actually stored. Two concurrent
@@ -775,17 +795,31 @@ export function createV1Routes(deps: {
       return errorResponse(c, 502, "internal_error", "Storing the avatar failed — try again");
     }
 
-    await db
-      .update(profiles)
-      .set({ avatarSource: "uploaded", avatarKey: key, updatedAt: new Date() })
-      .where(eq(profiles.userId, session.userId));
+    // The displaced key is read under a row lock in the same transaction as
+    // the write: two concurrent uploads (or an upload racing the delete
+    // route) serialized on the lock each see the key THEIR write displaced.
+    // Off a snapshot read (`existing`) both racers would see the same old
+    // key and the loser's interim object would be orphaned forever.
+    const displacedKey = await db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ avatarKey: profiles.avatarKey })
+        .from(profiles)
+        .where(eq(profiles.userId, session.userId))
+        .limit(1)
+        .for("update");
+      await tx
+        .update(profiles)
+        .set({ avatarSource: "uploaded", avatarKey: key, updatedAt: new Date() })
+        .where(eq(profiles.userId, session.userId));
+      return locked?.avatarKey ?? null;
+    });
 
     // Deferred cleanup of the replaced object, after the new state is
     // durable: a failed delete costs cents of storage, a failed upload must
     // never have cost the user their previous avatar. Deferred rather than
     // immediate — see scheduleAvatarObjectDelete.
-    if (existing.avatarKey && existing.avatarKey !== key) {
-      scheduleAvatarObjectDelete(session.userId, existing.avatarKey);
+    if (displacedKey && displacedKey !== key) {
+      scheduleAvatarObjectDelete(session.userId, displacedKey);
     }
 
     return c.json(await accountMe(user, session.organization));
@@ -808,15 +842,26 @@ export function createV1Routes(deps: {
       return errorResponse(c, 404, "profile_not_found", "You have no profile yet");
     }
 
-    await db
-      .update(profiles)
-      .set({ avatarSource: "sso", avatarKey: null, updatedAt: new Date() })
-      .where(eq(profiles.userId, session.userId));
+    // Same locked read-then-write as the upload route: the key scheduled for
+    // cleanup must be the one THIS write displaced, not a stale snapshot.
+    const displacedKey = await db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ avatarKey: profiles.avatarKey })
+        .from(profiles)
+        .where(eq(profiles.userId, session.userId))
+        .limit(1)
+        .for("update");
+      await tx
+        .update(profiles)
+        .set({ avatarSource: "sso", avatarKey: null, updatedAt: new Date() })
+        .where(eq(profiles.userId, session.userId));
+      return locked?.avatarKey ?? null;
+    });
 
     // Deferred, not immediate — cached pages still reference the old URL for
     // up to 15s; see scheduleAvatarObjectDelete.
-    if (existing.avatarKey) {
-      scheduleAvatarObjectDelete(session.userId, existing.avatarKey);
+    if (displacedKey) {
+      scheduleAvatarObjectDelete(session.userId, displacedKey);
     }
 
     return c.json(await accountMe(user, session.organization));
@@ -1401,6 +1446,9 @@ export function createV1Routes(deps: {
       lifetimeTurns: modelRows.reduce((total, entry) => total + entry.turns, 0),
       models: modelRows,
       heatmap: heatmapRows,
+      // The owner-local window anchor: consumers must not substitute their
+      // own clock — see the contract's localToday doc.
+      localToday: ownerToday,
       peakDay: peak,
       hours: hourRows,
       currentStreakDays,

@@ -9,6 +9,7 @@
 // Layer: web profile feature.
 
 import type { AccountProfile, UpdatableAvatarSource } from "@synara/contracts";
+import { deriveInitials } from "@synara/profile-ui/formatting";
 import { useAccount } from "~/hooks/useAccount";
 import { avatarDataUrlToUpload } from "./avatarImage";
 import { useProfileAvatarColor } from "./useProfileAvatarColor";
@@ -44,6 +45,12 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
   const accountProfile: AccountProfile | null = account.me?.profile ?? null;
 
   const name = accountProfile?.displayName ?? localName;
+  // Placeholder-avatar initials from the RESOLVED name — the account display
+  // name may differ from the machine-local default, and initials derived from
+  // the home-dir identity would not match it. deriveInitials is the canonical
+  // algorithm (shared with the server and the public page), so the local-only
+  // case yields the same glyphs as stats.identity.initials.
+  const initials = deriveInitials(name);
   const handle = accountProfile ? `@${accountProfile.handle}` : localHandle;
   const avatarColor = accountProfile?.avatarColor ?? localColor;
   // Signed in, every avatar render uses the account's resolved URL (uploaded
@@ -103,6 +110,8 @@ export function useProfileIdentity(defaults: { name: string; handle: string }) {
 
   return {
     name,
+    /** Placeholder-avatar glyphs derived from the resolved `name`. */
+    initials,
     handle,
     avatarColor,
     avatarImage,

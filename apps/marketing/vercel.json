@@ -6,6 +6,10 @@
       "destination": "https://synara-profiles.vercel.app/@:handle"
     },
     {
+      "source": "/@:handle/:path*",
+      "destination": "https://synara-profiles.vercel.app/@:handle/:path*"
+    },
+    {
       "source": "/profiles-assets/:path*",
       "destination": "https://synara-profiles.vercel.app/:path*"
     }

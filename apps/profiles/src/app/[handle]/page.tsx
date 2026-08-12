@@ -90,7 +90,7 @@ export default async function ProfilePage({ params }: Params) {
         ]}
       />
 
-      <ActivitySection heatmap={profile.heatmap} />
+      <ActivitySection heatmap={profile.heatmap} localToday={profile.localToday} />
       <InsightsSection profile={profile} />
       <ModelUsageSection models={profile.models} lifetimeTokens={profile.lifetimeTokens} />
       <ActiveHoursSection hours={profile.hours} />
@@ -100,11 +100,17 @@ export default async function ProfilePage({ params }: Params) {
 
 // ── Activity ───────────────────────────────────────────────────────────
 
-function ActivitySection({ heatmap }: { heatmap: PublicProfile["heatmap"] }) {
+function ActivitySection({
+  heatmap,
+  localToday,
+}: {
+  heatmap: PublicProfile["heatmap"];
+  localToday: PublicProfile["localToday"];
+}) {
   // No renderTooltip: ActivityHeatmap falls back to a native `title`, keeping the
   // page free of client JS. Fill mode with the app's window length, so the grid
   // renders exactly like the in-app Activity section — no horizontal scroll.
-  const cells = buildHeatmapCells(heatmap);
+  const cells = buildHeatmapCells(heatmap, localToday);
   return (
     <section aria-label="Activity" className="flex min-w-0 flex-col gap-3">
       <h2 className="text-sm font-medium">Activity</h2>

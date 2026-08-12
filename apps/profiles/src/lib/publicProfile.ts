@@ -48,6 +48,12 @@ export type PublicProfile = {
   lifetimeTurns: number;
   models: PublicProfileModelUsage[];
   heatmap: PublicProfileHeatmapDay[];
+  /**
+   * Today in the owner's stored UTC offset, YYYY-MM-DD — the heatmap window's
+   * anchor. Optional so the page keeps rendering against a pre-localToday
+   * API; absent, the grid falls back to the server's UTC today.
+   */
+  localToday?: string;
   peakDay: { day: string; tokens: number } | null;
   hours: { hour: number; prompts: number }[];
   currentStreakDays: number;

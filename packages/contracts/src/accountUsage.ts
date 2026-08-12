@@ -164,6 +164,13 @@ export const PublicProfile = Schema.Struct({
   models: Schema.Array(PublicProfileModelUsage),
   /** Most recent days first is NOT guaranteed; consumers sort by day. */
   heatmap: Schema.Array(PublicProfileHeatmapDay),
+  /**
+   * Today in the OWNER's stored UTC offset, YYYY-MM-DD — the anchor for the
+   * heatmap's trailing window. Heatmap days are owner-local, so anchoring the
+   * window on the viewer's or server's clock instead skews the grid by a day
+   * around midnight for offsets far from UTC.
+   */
+  localToday: Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/)),
   /** The busiest day's tokens and when, or null before any usage. */
   peakDay: Schema.NullOr(
     Schema.Struct({

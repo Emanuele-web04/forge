@@ -24,6 +24,7 @@ import {
   selectOrganization,
   SessionExpiredError,
   withFreshAccessToken,
+  withLockedAccountFile,
   WORKSPACE_CHANGED_MESSAGE,
   WorkspaceAccessChangedError,
   writeAccountCredentials,
@@ -1110,6 +1111,69 @@ describe("runAuthLogout", () => {
       client: makeClient({}),
     });
     expect(stdout.text()).toContain("Not signed in");
+  });
+
+  it("waits for a concurrent credential-lock holder and tears down what it stored", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(
+      baseDir,
+      credentials({ hostToken: "host-token-old", hostId: "host_1" }),
+    );
+
+    // A slow refresh/host-registration holding the lock mid-flight. If logout
+    // deleted the file without the lock, this holder's write would land after
+    // the deletion and silently recreate the credentials logout just reported
+    // deleted.
+    let releaseHolder!: () => void;
+    const released = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderAcquired!: () => void;
+    const acquired = new Promise<void>((resolve) => {
+      holderAcquired = resolve;
+    });
+    const holder = withLockedAccountFile(baseDir, async () => {
+      holderAcquired();
+      await released;
+      await writeAccountCredentials(
+        baseDir,
+        credentials({
+          accessToken: "access-2",
+          refreshToken: "refresh-2",
+          hostToken: "host-token-new",
+          hostId: "host_2",
+        }),
+      );
+    });
+    await acquired;
+
+    const deleted: Array<[string, string]> = [];
+    const stdout = makeStdout();
+    const logout = runAuthLogout({
+      baseDir,
+      stdout: stdout.write,
+      client: makeClient({
+        deleteHost: (token, hostId) => {
+          deleted.push([token, hostId]);
+          return Promise.resolve();
+        },
+      }),
+    });
+
+    // While the holder owns the lock, logout must be queued behind it — no
+    // host teardown, no file deletion mid-flight.
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    expect(deleted).toEqual([]);
+    expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(true);
+
+    releaseHolder();
+    await Promise.all([holder, logout]);
+
+    // Logout re-read inside the lock, so the host it tore down is the one the
+    // holder committed — not the stale pre-rotation snapshot.
+    expect(deleted).toEqual([["host-token-new", "host_2"]]);
+    expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
+    expect(stdout.text()).toContain("Signed out");
   });
 });
 

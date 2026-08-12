@@ -1977,6 +1977,64 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(Object.keys(JSON.parse(raw) as Record<string, unknown>)).not.toContain("skills");
     });
 
+    // localToday is the heatmap window's anchor and must be the OWNER's
+    // local date, not the server's UTC date: around midnight the two differ
+    // by a day for offsets far from UTC and the public grid would disagree
+    // with the in-app grid.
+    it("serves localToday in the owner's stored offset, not server UTC", async () => {
+      const { app } = buildApp();
+
+      // UTC+14 (Line Islands) just before UTC midnight: the owner's today is
+      // the server's tomorrow.
+      const plus14 = await onboardedUser(app, { public: true });
+      const update = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(plus14.token),
+        body: JSON.stringify({
+          handle: plus14.handle,
+          displayName: "Ada Lovelace",
+          avatarColor: "#22c55e",
+          utcOffsetMinutes: 840,
+        }),
+      });
+      expect(update.status).toBe(200);
+
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-12T23:30:00Z"));
+      try {
+        const res = await getProfile(app, plus14.handle, "203.0.119.1");
+        expect(res.status).toBe(200);
+        const body = Schema.decodeUnknownSync(PublicProfile)(await res.json());
+        expect(body.localToday).toBe("2026-08-13");
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      // UTC-12 just after UTC midnight: the owner's today is the server's
+      // yesterday.
+      const minus12 = await onboardedUser(app, { public: true });
+      const update2 = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(minus12.token),
+        body: JSON.stringify({
+          handle: minus12.handle,
+          displayName: "Ada Lovelace",
+          avatarColor: "#22c55e",
+          utcOffsetMinutes: -720,
+        }),
+      });
+      expect(update2.status).toBe(200);
+
+      const nowSpy2 = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-12T00:30:00Z"));
+      try {
+        const res = await getProfile(app, minus12.handle, "203.0.119.2");
+        expect(res.status).toBe(200);
+        const body = Schema.decodeUnknownSync(PublicProfile)(await res.json());
+        expect(body.localToday).toBe("2026-08-11");
+      } finally {
+        nowSpy2.mockRestore();
+      }
+    });
+
     // The public URL spells it /@handle, and people type handles in any case.
     it("tolerates a leading @ and uppercase in the lookup", async () => {
       const { app } = buildApp();
@@ -2353,6 +2411,62 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(fake.deleted).toHaveLength(1);
       expect(fake.deleted).not.toContain(originalKey);
       expect(fake.objects.has(originalKey)).toBe(true);
+    });
+
+    // Each write must schedule the key IT displaced — read under the row
+    // lock, not off a pre-write snapshot. Off a snapshot, two racing uploads
+    // can both read the same old key and both schedule it, orphaning the
+    // interim object forever. The A→B→C chain captures the contract: B
+    // displaced A, C displaced B, and C — current — is never scheduled.
+    it("schedules exactly the displaced key across successive replacements", async () => {
+      const fake = fakeAvatarStorage();
+      const scheduler = capturedScheduler();
+      const { app } = buildApp({
+        avatarStorage: fake.storage,
+        scheduleDeferred: scheduler.schedule,
+      });
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
+
+      await putAvatar(app, token, PNG_BYTES, "image/png");
+      const keyA = [...fake.objects.keys()][0]!;
+      await putAvatar(app, token, new Uint8Array([9, 9, 9]), "image/webp");
+      const keyB = [...fake.objects.keys()].find((key) => key !== keyA)!;
+      await putAvatar(app, token, new Uint8Array([8, 8, 8]), "image/jpeg");
+      const keyC = [...fake.objects.keys()].find((key) => key !== keyA && key !== keyB)!;
+
+      // One deferred task per displaced key: A (displaced by B), B (by C).
+      expect(scheduler.tasks).toHaveLength(2);
+      await scheduler.fire();
+      expect(fake.deleted.sort()).toEqual([keyA, keyB].sort());
+      expect(fake.deleted).not.toContain(keyC);
+      expect([...fake.objects.keys()]).toEqual([keyC]);
+    });
+
+    // DELETE /profile/avatar must likewise schedule the key its own write
+    // displaced, read under the same row lock as the clearing update.
+    it("schedules the key the delete route itself displaced", async () => {
+      const fake = fakeAvatarStorage();
+      const scheduler = capturedScheduler();
+      const { app } = buildApp({
+        avatarStorage: fake.storage,
+        scheduleDeferred: scheduler.schedule,
+      });
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
+
+      await putAvatar(app, token, PNG_BYTES, "image/png");
+      const key = [...fake.objects.keys()][0]!;
+      const res = await app.request("/api/v1/profile/avatar", {
+        method: "DELETE",
+        headers: authHeaders(token),
+      });
+      expect(res.status).toBe(200);
+
+      expect(scheduler.tasks).toHaveLength(1);
+      await scheduler.fire();
+      expect(fake.deleted).toEqual([key]);
+      expect(fake.objects.size).toBe(0);
     });
 
     it("refuses an oversized body with 400 before touching storage", async () => {

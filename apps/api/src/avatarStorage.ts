@@ -27,6 +27,13 @@ export interface AvatarStorage {
 const SIGV4_SERVICE = "s3";
 
 /**
+ * Abort deadline on every storage request, mirroring the identity provider's
+ * bounded fetches (WORKOS_REQUEST_TIMEOUT_MS): a stalling endpoint must fail
+ * the RPC, never hang it. Generous for the payload — avatars are ≤2MB.
+ */
+export const AVATAR_STORAGE_TIMEOUT_MS = 30_000;
+
+/**
  * Uploaded avatars are immutable by construction — the key contains the
  * content hash, so a changed avatar is a new key — which is what makes a
  * year-long immutable cache lifetime safe.
@@ -50,6 +57,9 @@ function hmac(key: Uint8Array | string, data: string): Buffer {
 export function createAvatarStorage(
   config: AvatarStorageConfig,
   fetchFn: typeof fetch = fetch,
+  // Overridable the same way the identity provider's request timeout is —
+  // production always takes the default; tests shrink it.
+  timeoutMs: number = AVATAR_STORAGE_TIMEOUT_MS,
 ): AvatarStorage {
   const endpoint = new URL(config.endpoint);
   const region = config.region;
@@ -112,16 +122,29 @@ export function createAvatarStorage(
     );
     const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");
 
-    const response = await fetchFn(`${endpoint.origin}${canonicalPath}`, {
-      method,
-      headers: {
-        ...headers,
-        authorization:
-          `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${credentialScope}, ` +
-          `SignedHeaders=${signedHeaders}, Signature=${signature}`,
-      },
-      ...(body !== undefined ? { body } : {}),
-    });
+    let response: Response;
+    try {
+      response = await fetchFn(`${endpoint.origin}${canonicalPath}`, {
+        method,
+        headers: {
+          ...headers,
+          authorization:
+            `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${credentialScope}, ` +
+            `SignedHeaders=${signedHeaders}, Signature=${signature}`,
+        },
+        ...(body !== undefined ? { body } : {}),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      // Surface the abort as the same error shape a failed status throws, so
+      // callers keep one storage-failure path; the cause carries the detail.
+      if (error instanceof DOMException && error.name === "TimeoutError") {
+        throw new Error(`avatar storage ${method} ${key} timed out after ${timeoutMs}ms`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
     // Deletes of a missing key answer 404 on some stores and 204 on others;
     // both mean "the object is gone", which is all a caller ever wants.
     if (!response.ok && !(method === "DELETE" && response.status === 404)) {

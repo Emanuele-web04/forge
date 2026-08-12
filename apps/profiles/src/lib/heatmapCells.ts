@@ -43,15 +43,25 @@ function utcMsOf(day: string): number {
 }
 
 /**
- * The trailing ~274-day cell grid, tokens per UTC day, ending on the owner's most
- * recent day. Usage pushes land in the owner's local day buckets, so the window ends
- * at the later of the newest bucket and today's UTC date — the grid is always full
- * and never truncates a bucket the owner already has.
+ * The trailing ~274-day cell grid, tokens per owner-local day, ending on the
+ * owner's most recent day. Usage pushes land in the owner's local day
+ * buckets, so the window's anchor must be the owner's local today
+ * (`localToday` off the API) — the server's UTC today skews by a day around
+ * midnight for offsets far from UTC (extra not-yet-local day at UTC-12,
+ * missing current day at UTC+14). The window still ends at the later of that
+ * anchor and the newest bucket, so the grid never truncates a bucket the
+ * owner already has; the anchor falls back to the server's UTC today against
+ * a pre-localToday API.
  */
-export function buildHeatmapCells(days: readonly PublicProfileHeatmapDay[]): HeatmapCell[] {
+export function buildHeatmapCells(
+  days: readonly PublicProfileHeatmapDay[],
+  localToday?: string,
+): HeatmapCell[] {
   const tokensByDay = new Map(days.map((entry) => [entry.day, entry.tokens]));
   const now = new Date();
-  const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const todayMs = localToday
+    ? utcMsOf(localToday)
+    : Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const newestBucketMs = days.reduce((max, entry) => Math.max(max, utcMsOf(entry.day)), 0);
   const endMs = Math.max(todayMs, newestBucketMs);
   const startMs = endMs - (WINDOW_DAYS - 1) * DAY_MS;

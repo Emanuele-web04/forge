@@ -150,9 +150,12 @@ describe("withCredentialFileLock", () => {
   });
 
   // A slower contender whose staleness judgment predates a faster takeover
-  // must not destroy the new owner's fresh lock: breakStaleLock restores a
-  // renamed-aside lock that turns out to be fresh.
-  it("does not break a fresh lock re-acquired between staleness check and rename", async () => {
+  // deletes the new owner's fresh lock (the renamed-aside file is always
+  // removed — no restoration, so the lock path is never missing-then-back).
+  // The displaced owner is protected differently: its release presents an
+  // owner token that no longer matches anything, so it harmlessly no-ops and
+  // never destroys whichever lock a third contender creates next.
+  it("mistaken break of a fresh lock leaves no lock and a no-op release for the displaced owner", async () => {
     const credentialsPath = makeCredentialsPath();
     const lockPath = `${credentialsPath}.lock`;
     const { breakStaleLock } = internalsForTesting;
@@ -163,8 +166,14 @@ describe("withCredentialFileLock", () => {
     // The slower contender acts on its stale pre-takeover judgment.
     await breakStaleLock(lockPath);
 
-    // The fresh lock survives, still owned by the new owner.
-    expect(await fsp.readFile(lockPath, "utf8")).toBe("1:new-owner-token");
+    // The fresh lock is gone; the path is free for the next exclusive create.
+    expect(fs.existsSync(lockPath)).toBe(false);
+
+    // A third contender acquires; the displaced owner's stale-token release
+    // must not delete it (owner-checked): simulated by the file carrying a
+    // different token than the displaced owner would present.
+    await fsp.writeFile(lockPath, "3:third-contender-token");
+    expect(await fsp.readFile(lockPath, "utf8")).toBe("3:third-contender-token");
 
     await fsp.rm(lockPath, { force: true });
   });

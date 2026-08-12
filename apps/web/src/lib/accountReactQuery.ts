@@ -3,16 +3,22 @@
 // Layer: Web data-fetching (see serverReactQuery.ts for the conventions).
 
 import type { AccountStatus, UsageSummary } from "@synara/contracts";
-import { queryOptions, type QueryClient } from "@tanstack/react-query";
+import { hashKey, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 
 export const accountQueryKeys = {
   all: ["account"] as const,
   status: () => ["account", "status"] as const,
-  /** Prefix of every usageSummary key, whatever the caller's UTC offset. */
+  /** Prefix of every usageSummary key, whatever the owner or UTC offset. */
   usageSummaryAll: () => ["account", "usageSummary"] as const,
-  usageSummary: (utcOffsetMinutes: number) =>
-    ["account", "usageSummary", utcOffsetMinutes] as const,
+  /**
+   * Keyed by the authenticated user id so one identity's cached usage can
+   * never render for another: a sign-in switch that this client only observes
+   * through a status refetch (another renderer signed out A and in B against
+   * the shared server) lands on a DIFFERENT key than the stale entry.
+   */
+  usageSummary: (userId: string, utcOffsetMinutes: number) =>
+    ["account", "usageSummary", userId, utcOffsetMinutes] as const,
 };
 
 /**
@@ -37,15 +43,20 @@ export function accountStatusQueryOptions() {
 
 /**
  * The account-wide usage summary — the "Account" side of the profile panel's
- * device/account toggle. The client passes its own fixed UTC offset so the
- * service buckets days/hours to the caller's LOCAL day, exactly like the
- * local profile-stats RPCs (see serverProfileStatsQueryOptions).
+ * device/account toggle. Keyed by the owning user id (see accountQueryKeys)
+ * and disabled while signed out (`userId: null`). The client passes its own
+ * fixed UTC offset so the service buckets days/hours to the caller's LOCAL
+ * day, exactly like the local profile-stats RPCs (see
+ * serverProfileStatsQueryOptions).
  */
-export function accountUsageSummaryQueryOptions(input: { enabled?: boolean } = {}) {
+export function accountUsageSummaryQueryOptions(input: {
+  userId: string | null;
+  enabled?: boolean;
+}) {
   const utcOffsetMinutes = -new Date().getTimezoneOffset();
   return queryOptions({
-    queryKey: accountQueryKeys.usageSummary(utcOffsetMinutes),
-    enabled: input.enabled ?? true,
+    queryKey: accountQueryKeys.usageSummary(input.userId ?? "", utcOffsetMinutes),
+    enabled: input.userId !== null && (input.enabled ?? true),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     retry: 1,
@@ -67,16 +78,47 @@ export async function invalidateAccountStatus(queryClient: QueryClient): Promise
 }
 
 /**
- * Removes every cached account-scoped answer (the usage summary today). The
- * cache key carries no user identity — only the UTC offset — so data cached
- * for one signed-in user would otherwise render for the NEXT one: a fresh
- * sign-in (or the signed-out state after sign-out) must never show the
- * previous user's usage, which includes private skill names. Removal, not
- * invalidation: invalidation keeps the stale data renderable and merely
+ * Removes every cached account-scoped answer (the usage summary today). A
+ * fresh sign-in (or the signed-out state after sign-out) must never show the
+ * previous user's usage, which includes private skill names — the per-user
+ * cache key already keeps identities apart at render time, and this removal
+ * frees the departed identity's data instead of leaving it resident. Removal,
+ * not invalidation: invalidation keeps the stale data renderable and merely
  * refetches, and while signed out there is nothing to refetch at all.
  */
 export function removeAccountScopedQueries(queryClient: QueryClient): void {
   queryClient.removeQueries({ queryKey: accountQueryKeys.usageSummaryAll() });
+}
+
+/**
+ * Watches the status cache for identity changes this client did NOT initiate.
+ * The mutation paths (sign-in/sign-out in useAccount) already evict
+ * account-scoped queries, but an account switch can also arrive through a
+ * plain status refetch: another renderer signs out A and signs in B against
+ * the shared server, and this client's reconnect/window-focus refetch simply
+ * writes the new identity into the cache. Whenever the authenticated user id
+ * in `account.status` changes — by any writer — the previous identity's
+ * account-scoped data is removed. Returns the unsubscribe function; the app
+ * keeps one watcher alive for the QueryClient's lifetime (see router.ts).
+ */
+export function watchAccountIdentityChanges(queryClient: QueryClient): () => void {
+  const statusHash = hashKey(accountQueryKeys.status());
+  const userIdOf = (data: unknown): string | null => {
+    const status = data as AccountStatus | undefined;
+    return status?.state === "signed-in" ? status.me.id : null;
+  };
+  let knownUserId = userIdOf(queryClient.getQueryData(accountQueryKeys.status()));
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== "updated" || event.query.queryHash !== statusHash) {
+      return;
+    }
+    const nextUserId = userIdOf(event.query.state.data);
+    if (nextUserId === knownUserId) {
+      return;
+    }
+    knownUserId = nextUserId;
+    removeAccountScopedQueries(queryClient);
+  });
 }
 
 /**

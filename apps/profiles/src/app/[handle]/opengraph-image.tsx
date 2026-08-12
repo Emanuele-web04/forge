@@ -101,7 +101,7 @@ function initialsOf(displayName: string): string {
 
 /** Week columns (7 rows each) for the trailing window, Sunday-first. */
 function heatmapColumns(profile: PublicProfile): number[][] {
-  const cells = buildHeatmapCells(profile.heatmap);
+  const cells = buildHeatmapCells(profile.heatmap, profile.localToday);
   // Pad leading slots so the first cell aligns to its weekday (0 = Sunday),
   // matching ActivityHeatmap's Sunday-first week columns.
   const slots: number[] = [];
