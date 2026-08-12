@@ -14,11 +14,14 @@ export type ClientIpSource = {
 
 /**
  * How many proxies in front of this service are trusted to have appended to
- * `x-forwarded-for`. Railway terminates TLS and appends exactly one hop, so
- * the deployed default is 1; a self-hoster with no proxy sets 0 to ignore the
- * header entirely.
+ * `x-forwarded-for`. The default is 0 — trust only the socket address — the
+ * one value that is safe for the direct/Docker self-host path, where any
+ * nonzero default would let a caller mint fresh rate-limit buckets by
+ * rotating a forged header. Proxied deployments opt in explicitly:
+ * TRUSTED_PROXY_HOPS=1 for Railway and similar single TLS-terminating
+ * proxies (see .env.example).
  */
-export const DEFAULT_TRUSTED_PROXY_HOPS = 1;
+export const DEFAULT_TRUSTED_PROXY_HOPS = 0;
 
 /**
  * Resolves a rate-limiting key from a request.
@@ -76,7 +79,8 @@ export function clientIp(c: Context, trustedProxyHops: number): string {
 /**
  * The trusted-proxy hop count from the environment. `TRUSTED_PROXY_HOPS`
  * accepts a small non-negative integer; anything else (including absence)
- * yields the deployed default of {@link DEFAULT_TRUSTED_PROXY_HOPS}.
+ * yields the safe no-proxy default of {@link DEFAULT_TRUSTED_PROXY_HOPS} —
+ * a deployment behind a proxy must set the variable explicitly.
  */
 export function resolveTrustedProxyHops(value: string | undefined): number {
   if (value === undefined || value.trim().length === 0) return DEFAULT_TRUSTED_PROXY_HOPS;

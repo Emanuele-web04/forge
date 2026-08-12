@@ -288,18 +288,20 @@ trusting an instance against real WorkOS, confirm by hand:
 
 ## Environment variables
 
-| Variable            | Required | Default                  | Purpose                                                                                                        |
-| ------------------- | -------- | ------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`      | yes      | —                        | Postgres connection string for the host registry.                                                              |
-| `WORKOS_API_KEY`    | yes      | —                        | WorkOS secret key (`sk_…`). Server-side only.                                                                  |
-| `WORKOS_CLIENT_ID`  | yes      | —                        | WorkOS AuthKit client id (`client_…`).                                                                         |
-| `ACCOUNT_BASE_URL`  | yes      | —                        | Public origin of this instance.                                                                                |
-| `PORT`              | no       | `8788`                   | HTTP listen port.                                                                                              |
-| `WORKOS_API_URL`    | no       | `https://api.workos.com` | WorkOS API origin. Override only to point at a stand-in.                                                       |
-| `WORKOS_JWKS_URL`   | no       | discovered (`jwks_uri`)  | Full JWKS URL. Override only to point at a stand-in.                                                           |
-| `WORKOS_ISSUER`     | no       | discovered (`issuer`)    | Expected `iss` claim. Set only for a custom auth domain.                                                       |
-| `IDENTITY_PROVIDER` | no       | `workos`                 | `dev` selects the offline dev identity provider. Refused with `NODE_ENV=production` or a set `WORKOS_API_KEY`. |
-| `TEST_DATABASE_URL` | tests    | —                        | Database the Vitest suites use. Without it they skip.                                                          |
+| Variable               | Required | Default                  | Purpose                                                                                                                                              |
+| ---------------------- | -------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`         | yes      | —                        | Postgres connection string for the host registry.                                                                                                    |
+| `WORKOS_API_KEY`       | yes      | —                        | WorkOS secret key (`sk_…`). Server-side only.                                                                                                        |
+| `WORKOS_CLIENT_ID`     | yes      | —                        | WorkOS AuthKit client id (`client_…`).                                                                                                               |
+| `ACCOUNT_BASE_URL`     | yes      | —                        | Public origin of this instance.                                                                                                                      |
+| `PORT`                 | no       | `8788`                   | HTTP listen port.                                                                                                                                    |
+| `WORKOS_API_URL`       | no       | `https://api.workos.com` | WorkOS API origin. Override only to point at a stand-in.                                                                                             |
+| `WORKOS_JWKS_URL`      | no       | discovered (`jwks_uri`)  | Full JWKS URL. Override only to point at a stand-in.                                                                                                 |
+| `WORKOS_ISSUER`        | no       | discovered (`issuer`)    | Expected `iss` claim. Set only for a custom auth domain.                                                                                             |
+| `IDENTITY_PROVIDER`    | no       | `workos`                 | `dev` selects the offline dev identity provider. Refused with `NODE_ENV=production` or a set `WORKOS_API_KEY`.                                       |
+| `TRUSTED_PROXY_HOPS`   | no       | `0`                      | Proxies trusted to append to `x-forwarded-for`. `0` (no proxy) keys rate limits on the socket; Railway and similar TLS-terminating proxies need `1`. |
+| `PROFILE_PROXY_SECRET` | no       | unset                    | Shared secret from the profiles SSR deployment; when matched, public-profile rate limits key on the forwarded viewer IP. Keying only, not auth.      |
+| `TEST_DATABASE_URL`    | tests    | —                        | Database the Vitest suites use. Without it they skip.                                                                                                |
 
 A missing required variable fails the boot with an explicit
 `Missing required environment variables: …` rather than starting half-configured.
@@ -314,7 +316,11 @@ The service runs TypeScript directly under Bun, with no build step at all.
   the monorepo root, since this is a workspace package).
 - **Variables:** set `DATABASE_URL`, `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, and
   `ACCOUNT_BASE_URL` (to the Railway public domain) at minimum. Leave `PORT` to
-  Railway — it injects one, and `loadApiConfig` honours it.
+  Railway — it injects one, and `loadApiConfig` honours it. Set
+  `TRUSTED_PROXY_HOPS=1`: Railway terminates TLS in front of the service and
+  appends exactly one `x-forwarded-for` hop; without it every caller shares the
+  proxy's rate-limit bucket. Set `PROFILE_PROXY_SECRET` to the same value as
+  the profiles deployment's, so public-profile rate limits key per visitor.
 
 For Postgres, either add Railway's own Postgres plugin or point at
 **PlanetScale**. A PlanetScale Postgres `DATABASE_URL` must include TLS:

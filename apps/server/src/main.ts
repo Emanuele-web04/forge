@@ -67,6 +67,7 @@ import {
   ACCOUNT_URL_ENV_NAME,
   refreshHostRegistration,
   resolveAccountUrl,
+  resolveAuthLoginAccountUrl,
   runAuthLogin,
   runAuthLogout,
   runStatus,
@@ -686,7 +687,24 @@ const authCommand = baseAuthCommand.pipe(
     Effect.gen(function* () {
       const root = yield* baseServerCommand;
       const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
-      const resolved = yield* requireAccountUrl(accountUrl);
+      // Once a session exists, the URL stored at sign-in wins (as refresh,
+      // status, and logout already do): the stored tokens belong to THAT
+      // service, and a conflicting explicit URL is refused rather than
+      // silently sending them elsewhere. Only with no session does the
+      // explicit flag/env requirement below apply.
+      const sessionUrl = yield* Effect.tryPromise({
+        try: () =>
+          resolveAuthLoginAccountUrl({
+            baseDir,
+            explicitUrl: resolveAccountUrl({ flag: Option.getOrUndefined(accountUrl) }),
+          }),
+        catch: (cause) =>
+          new StartupError({
+            message: cause instanceof Error ? cause.message : "Host registration failed.",
+            cause,
+          }),
+      });
+      const resolved = sessionUrl !== undefined ? sessionUrl : yield* requireAccountUrl(accountUrl);
       yield* Effect.tryPromise({
         try: () =>
           runAuthLogin({

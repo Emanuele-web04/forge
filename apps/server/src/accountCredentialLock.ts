@@ -69,69 +69,103 @@ function makeOwnerToken(): string {
 }
 
 /**
- * Takes over a stale lock by atomically replacing it with our owner token,
- * then re-reading to verify we actually own it: two processes racing the same
- * stale lock both rename, the last write wins, and only the process that
- * reads its own token back may proceed. The rename also resets the lock's
- * mtime, so the loser sees a fresh lock and waits instead of re-breaking it.
+ * Breaks a stale lock by atomically renaming it aside to a unique
+ * per-contender path and deleting it. Breaking confers NO ownership: the
+ * breaker (and everyone else) must still win the exclusive-create race in
+ * {@link tryCreateLock} to enter the critical section.
+ *
+ * The rename is what makes reclamation a compare-and-swap. Of all contenders
+ * racing the same stale lock, exactly one rename succeeds — the rest get
+ * ENOENT and fall through to the normal acquire-wait. The previous design
+ * (rename a fresh temp file OVER the lock, then read the token back) let two
+ * contenders each read their own token in turn as the renames landed one
+ * after the other, putting both inside the critical section and
+ * double-spending the single-use refresh token.
  */
-async function takeOverStaleLock(lockPath: string, ownerToken: string): Promise<boolean> {
-  const tempPath = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
+async function breakStaleLock(lockPath: string): Promise<void> {
+  const stalePath = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
   try {
-    await fs.writeFile(tempPath, ownerToken);
-    await fs.rename(tempPath, lockPath);
+    await fs.rename(lockPath, stalePath);
   } catch {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
+    // Another contender renamed it aside first (or the holder released):
+    // the stale lock is already gone, nothing left to break.
+    return;
+  }
+  // Verify what was actually renamed. This contender judged staleness from a
+  // stat taken BEFORE the rename; in between, a faster contender may have
+  // broken the stale lock and already re-acquired, in which case the file
+  // just renamed aside is the new owner's FRESH lock. Rename preserves
+  // mtime, so freshness is still readable on the renamed file — restore it
+  // with an exclusive link (never clobbering a newer lock) and back off.
+  const stat = await fs.stat(stalePath).catch(() => undefined);
+  if (stat && Date.now() - stat.mtimeMs <= STALE_LOCK_MS) {
+    await fs.link(stalePath, lockPath).catch(() => {
+      // EEXIST: yet another contender created a lock meanwhile; the
+      // displaced owner's release is owner-checked, so nothing is deleted
+      // out from under anyone. This is a microsecond triple-interleaving
+      // window, down from the old always-on takeover race.
+    });
+  }
+  await fs.rm(stalePath, { force: true }).catch(() => {});
+}
+
+/**
+ * One exclusive-create acquisition attempt. `true` means this call created
+ * the lock file and owns the lock: O_EXCL create is atomic on every
+ * filesystem this runs on, so a lock file existing = the lock is held. The
+ * read-back is defence in depth, not protocol — with exclusive creation the
+ * token on disk must be ours.
+ */
+async function tryCreateLock(lockPath: string, ownerToken: string): Promise<boolean> {
+  try {
+    await fs.writeFile(lockPath, ownerToken, { flag: "wx" });
+  } catch {
     return false;
   }
   const content = await fs.readFile(lockPath, "utf8").catch(() => undefined);
   return content === ownerToken;
 }
 
+/**
+ * Test-only handles on the acquisition primitives, so the stale-takeover
+ * interleaving can be driven deterministically (two contenders on one stale
+ * lock) without racing real timers.
+ */
+export const internalsForTesting = { breakStaleLock, tryCreateLock };
+
 /** Acquires the lock, resolving to the owner token release must present. */
 async function acquireCrossProcessLock(lockPath: string): Promise<string> {
   const ownerToken = makeOwnerToken();
   const deadline = Date.now() + ACQUIRE_TIMEOUT_MS;
   for (;;) {
-    try {
-      // O_EXCL create is atomic on every filesystem this runs on.
-      const handle = await fs.open(lockPath, "wx");
-      try {
-        await handle.writeFile(ownerToken);
-      } finally {
-        await handle.close();
-      }
-      return ownerToken;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        // The directory may not exist yet (fresh install, nothing stored).
-        // The caller's own read/write will surface the real problem; do not
-        // let the lock be the thing that fails first.
-        await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(() => {});
-        const retry = await fs.open(lockPath, "wx").catch(() => undefined);
-        if (retry) {
-          await retry.writeFile(ownerToken).catch(() => {});
-          await retry.close();
-          return ownerToken;
-        }
-      }
-      // Held by someone. Take it over if stale, otherwise wait and retry.
-      const stat = await fs.stat(lockPath).catch(() => undefined);
-      if (stat && Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
-        if (await takeOverStaleLock(lockPath, ownerToken)) return ownerToken;
-        continue;
-      }
-      if (Date.now() > deadline) {
-        // Never fall through to unlocked execution — running the critical
-        // section without the lock is the exact double-spend race this
-        // module exists to prevent. A wedged lock fails the operation
-        // instead; the stale break above bounds how long that can last.
-        throw new Error(
-          `Timed out after ${ACQUIRE_TIMEOUT_MS}ms waiting for the credential lock at ${lockPath}`,
-        );
-      }
-      await sleep(RETRY_DELAY_MS);
+    if (await tryCreateLock(lockPath, ownerToken)) return ownerToken;
+
+    // The directory may not exist yet (fresh install, nothing stored). The
+    // caller's own read/write will surface any real problem; do not let the
+    // lock be the thing that fails first.
+    const stat = await fs.stat(lockPath).catch(() => undefined);
+    if (!stat) {
+      await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(() => {});
+      if (await tryCreateLock(lockPath, ownerToken)) return ownerToken;
     }
+
+    // Held by someone. If it is stale (crashed holder), break it aside —
+    // then loop and race the exclusive create like everyone else; the
+    // break itself grants nothing. Otherwise wait and retry.
+    if (stat && Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
+      await breakStaleLock(lockPath);
+      continue;
+    }
+    if (Date.now() > deadline) {
+      // Never fall through to unlocked execution — running the critical
+      // section without the lock is the exact double-spend race this
+      // module exists to prevent. A wedged lock fails the operation
+      // instead; the stale break above bounds how long that can last.
+      throw new Error(
+        `Timed out after ${ACQUIRE_TIMEOUT_MS}ms waiting for the credential lock at ${lockPath}`,
+      );
+    }
+    await sleep(RETRY_DELAY_MS);
   }
 }
 

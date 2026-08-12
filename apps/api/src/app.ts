@@ -65,6 +65,7 @@ export async function createApp(
       db,
       ...(config.avatarStorage ? { avatarStorage: createAvatarStorage(config.avatarStorage) } : {}),
       trustedProxyHops: config.trustedProxyHops,
+      ...(config.profileProxySecret ? { profileProxySecret: config.profileProxySecret } : {}),
     }),
   );
 

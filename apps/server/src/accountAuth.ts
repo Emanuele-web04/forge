@@ -68,6 +68,13 @@ export interface StoredAccountFile {
   readonly workosClientId: string;
   readonly workosApiUrl: string;
   readonly organizationId?: string;
+  /**
+   * The signed-in user's id, recorded so machine-local state keyed to the
+   * session (the usage reporter's watermark identity) can tell two users of
+   * the same workspace apart. Optional: files written before it existed lack
+   * it, and the next sign-in or token rotation backfills it.
+   */
+  readonly userId?: string;
   readonly accessToken?: string;
   readonly refreshToken?: string;
   readonly hostToken?: string;
@@ -130,6 +137,7 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
       ...(typeof record.organizationId === "string"
         ? { organizationId: record.organizationId }
         : {}),
+      ...(typeof record.userId === "string" ? { userId: record.userId } : {}),
       ...(typeof record.accessToken === "string" ? { accessToken: record.accessToken } : {}),
       ...(typeof record.refreshToken === "string" ? { refreshToken: record.refreshToken } : {}),
       ...(typeof record.hostToken === "string" ? { hostToken: record.hostToken } : {}),
@@ -383,6 +391,7 @@ function withoutSession(credentials: StoredAccountFile): StoredAccountFile {
     accessToken: _accessToken,
     refreshToken: _refreshToken,
     organizationId: _organizationId,
+    userId: _userId,
     ...rest
   } = credentials;
   return rest;
@@ -507,6 +516,9 @@ async function renewSession(
       ...current,
       accessToken: refreshed.accessToken,
       refreshToken: refreshed.refreshToken,
+      // Backfills files written before userId existed; on current files this
+      // rewrites the same id.
+      userId: refreshed.user.id,
     });
     return { kind: "renewed", accessToken: refreshed.accessToken };
   });
@@ -665,6 +677,34 @@ async function registerThisHost(
 }
 
 /**
+ * Which account URL `synara auth` must register the host against.
+ *
+ * Once a session exists, the URL persisted at sign-in wins — exactly as
+ * refresh, status, and logout resolve theirs — because the stored tokens were
+ * minted by THAT service and registering through any other URL would send
+ * them somewhere they do not belong. An explicit `--account-url`/env value
+ * that CONTRADICTS the stored one is refused loudly rather than silently
+ * overridden in either direction: the user asked for a service the session
+ * does not belong to, and only signing out resolves that.
+ *
+ * With no session stored, the explicit value (possibly `undefined`) is
+ * returned unchanged — the caller keeps its configured-URL requirement.
+ */
+export async function resolveAuthLoginAccountUrl(options: {
+  readonly baseDir: string;
+  readonly explicitUrl: string | undefined;
+}): Promise<string | undefined> {
+  const stored = await readAccountCredentials(options.baseDir);
+  if (!stored) return options.explicitUrl;
+  if (options.explicitUrl !== undefined && options.explicitUrl !== stored.accountUrl) {
+    throw new Error(
+      `This machine is signed in to ${stored.accountUrl}, but ${options.explicitUrl} was requested. Run \`synara auth logout\` first to link against a different account service.`,
+    );
+  }
+  return stored.accountUrl;
+}
+
+/**
  * `synara auth` — links this machine as a host using the app's signed-in
  * session. Sign-in itself is app-only (email OTP or SSO in the Synara UI);
  * the CLI and the app share the credentials file, so once the app has signed
@@ -692,11 +732,13 @@ export async function runAuthLogin(options: AccountFlowOptions): Promise<void> {
   await registerThisHost(options, client, stdout);
 }
 
-/** A scoped session: tokens that name a workspace, and which one. */
+/** A scoped session: tokens that name a workspace, which one, and whose. */
 export interface ScopedSessionTokens {
   readonly accessToken: string;
   readonly refreshToken: string;
   readonly organizationId: string;
+  /** The signed-in user's id, persisted alongside the session. */
+  readonly userId: string;
 }
 
 export interface ScopeTokenToWorkspaceOptions {
@@ -734,7 +776,12 @@ export async function scopeTokenToWorkspace(
   let organizations: readonly OrganizationSummary[];
   try {
     const me = await client.me(token.accessToken);
-    return { ...token, organizationId: me.organization.id };
+    return {
+      accessToken: token.accessToken,
+      refreshToken: token.refreshToken,
+      organizationId: me.organization.id,
+      userId: me.id,
+    };
   } catch (error) {
     if (!(error instanceof OrganizationRequiredError)) throw error;
     organizations = error.organizations;
@@ -754,6 +801,7 @@ export async function scopeTokenToWorkspace(
     accessToken: refreshed.accessToken,
     refreshToken: refreshed.refreshToken,
     organizationId: organization.id,
+    userId: refreshed.user.id,
   };
 }
 

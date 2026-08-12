@@ -117,12 +117,23 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     return { storage, objects, deleted };
   }
 
-  /** Routes wired to a full adapter set built from `config`. */
+  type BuildAppOptions = {
+    trustedProxyHops?: number;
+    avatarStorage?: AvatarStorage;
+    profileProxySecret?: string;
+    scheduleDeferred?: (task: () => void, delayMs: number) => void;
+  };
+
+  /**
+   * Routes wired to a full adapter set built from `config`. One trusted hop
+   * unless a test says otherwise: synthetic requests have no socket, so
+   * per-test client IPs travel in x-forwarded-for — the proxied deployment
+   * shape, opted into explicitly the way production sets TRUSTED_PROXY_HOPS.
+   */
   function routesFor(
     db: ReturnType<typeof createDb>["db"],
     forConfig: WorkosApiConfig,
-    trustedProxyHops?: number,
-    avatarStorage?: AvatarStorage,
+    options: BuildAppOptions = {},
   ) {
     const { verifier, grants } = createWorkosIdentityProvider(forConfig);
     return createV1Routes({
@@ -131,15 +142,21 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       deviceCredentials: createDeviceCredentialStore(db),
       environments: createEnvironmentRegistry(db),
       db,
-      ...(avatarStorage !== undefined ? { avatarStorage } : {}),
-      ...(trustedProxyHops !== undefined ? { trustedProxyHops } : {}),
+      trustedProxyHops: options.trustedProxyHops ?? 1,
+      ...(options.avatarStorage !== undefined ? { avatarStorage: options.avatarStorage } : {}),
+      ...(options.profileProxySecret !== undefined
+        ? { profileProxySecret: options.profileProxySecret }
+        : {}),
+      ...(options.scheduleDeferred !== undefined
+        ? { scheduleDeferred: options.scheduleDeferred }
+        : {}),
     });
   }
 
-  function buildApp(options: { trustedProxyHops?: number; avatarStorage?: AvatarStorage } = {}) {
+  function buildApp(options: BuildAppOptions = {}) {
     const { db } = createDb(databaseUrl);
     const app = new Hono();
-    app.route("/api/v1", routesFor(db, config, options.trustedProxyHops, options.avatarStorage));
+    app.route("/api/v1", routesFor(db, config, options));
     return { app, db };
   }
 
@@ -2016,6 +2033,95 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
       expect(differentCaller.status).toBe(404);
     });
+
+    // The authenticated exception: the SSR proxy proves itself with the
+    // shared secret, and only then does the viewer header pick the bucket —
+    // per-visitor budgets instead of one bucket for the proxy's egress IP.
+    it("keys per viewer when the proxy secret matches", async () => {
+      const { app } = buildApp({ profileProxySecret: "proxy-s3cret" });
+      const callerIp = "203.0.118.1";
+      const handle = `ghost-${randomUUID().slice(0, 8)}`;
+
+      const getAsProxy = (viewer: string) =>
+        app.request(`/api/v1/profiles/${handle}`, {
+          headers: {
+            "x-forwarded-for": callerIp,
+            "x-synara-proxy-secret": "proxy-s3cret",
+            "x-synara-viewer-ip": viewer,
+          },
+        });
+
+      // One visitor exhausts THEIR budget…
+      for (let i = 0; i < PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect((await getAsProxy("198.51.100.1")).status).toBe(404);
+      }
+      expect((await getAsProxy("198.51.100.1")).status).toBe(429);
+
+      // …while another visitor through the same proxy is unaffected.
+      expect((await getAsProxy("198.51.100.2")).status).toBe(404);
+    });
+
+    // A wrong or absent secret means the viewer header is an unauthenticated
+    // claim and must not move the bucket — everything shares the caller's.
+    it("falls back to the caller bucket on a wrong or absent secret", async () => {
+      const { app } = buildApp({ profileProxySecret: "proxy-s3cret" });
+      const callerIp = "203.0.118.2";
+      const handle = `ghost-${randomUUID().slice(0, 8)}`;
+
+      const get = (headers: Record<string, string>) =>
+        app.request(`/api/v1/profiles/${handle}`, {
+          headers: { "x-forwarded-for": callerIp, ...headers },
+        });
+
+      for (let i = 0; i < PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect(
+          (
+            await get({
+              "x-synara-proxy-secret": "wrong",
+              "x-synara-viewer-ip": `198.51.101.${i + 1}`,
+            })
+          ).status,
+        ).toBe(404);
+      }
+      // Rotating viewer values escapes nothing: wrong secret, absent secret,
+      // and a wrong-length secret all stay in the caller's exhausted bucket.
+      expect(
+        (await get({ "x-synara-proxy-secret": "wrong", "x-synara-viewer-ip": "198.51.101.200" }))
+          .status,
+      ).toBe(429);
+      expect((await get({ "x-synara-viewer-ip": "198.51.101.201" })).status).toBe(429);
+      expect(
+        (
+          await get({
+            "x-synara-proxy-secret": "proxy-s3cret-but-longer",
+            "x-synara-viewer-ip": "198.51.101.202",
+          })
+        ).status,
+      ).toBe(429);
+    });
+
+    // No secret configured (the default deployment) means there is no
+    // authenticated channel at all: even a "correct-looking" header pair is
+    // client-controlled noise.
+    it("ignores the viewer header entirely when no secret is configured", async () => {
+      const { app } = buildApp();
+      const callerIp = "203.0.118.3";
+      const handle = `ghost-${randomUUID().slice(0, 8)}`;
+
+      const get = (viewer: string) =>
+        app.request(`/api/v1/profiles/${handle}`, {
+          headers: {
+            "x-forwarded-for": callerIp,
+            "x-synara-proxy-secret": "anything",
+            "x-synara-viewer-ip": viewer,
+          },
+        });
+
+      for (let i = 0; i < PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect((await get(`198.51.102.${i + 1}`)).status).toBe(404);
+      }
+      expect((await get("198.51.102.200")).status).toBe(429);
+    });
   });
 
   describe("PUT /profile public flag", () => {
@@ -2172,9 +2278,35 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       });
     });
 
-    it("best-effort deletes the replaced object when a different image lands", async () => {
+    /**
+     * A captured stand-in for the deferred-delete timer: replacement tests
+     * assert scheduling (not immediate deletion — the profiles app caches
+     * responses carrying the old URL for 15s) and then fire the tasks
+     * themselves to observe the delete.
+     */
+    function capturedScheduler() {
+      const tasks: (() => void)[] = [];
+      return {
+        schedule: (task: () => void) => {
+          tasks.push(task);
+        },
+        tasks,
+        // The scheduled task's async body has no handle to await; a
+        // microtask drain after firing lets its DB re-read and delete land.
+        async fire() {
+          for (const task of tasks.splice(0)) task();
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        },
+      };
+    }
+
+    it("defers deleting the replaced object past the response-cache window", async () => {
       const fake = fakeAvatarStorage();
-      const { app } = buildApp({ avatarStorage: fake.storage });
+      const scheduler = capturedScheduler();
+      const { app } = buildApp({
+        avatarStorage: fake.storage,
+        scheduleDeferred: scheduler.schedule,
+      });
       const { token } = await signInWithPicture();
       await onboard(app, token);
 
@@ -2183,9 +2315,44 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       const second = await putAvatar(app, token, new Uint8Array([9, 9, 9]), "image/webp");
       expect(second.status).toBe(200);
 
+      // Scheduled, not deleted: pages cached before the replacement still
+      // reference the old URL and must keep rendering.
+      expect(fake.deleted).toEqual([]);
+      expect(scheduler.tasks).toHaveLength(1);
+      expect(fake.objects.size).toBe(2);
+
+      await scheduler.fire();
       expect(fake.deleted).toEqual([firstKey]);
       expect(fake.objects.size).toBe(1);
       expect([...fake.objects.keys()][0]).not.toBe(firstKey);
+    });
+
+    // Content-hashed keys mean re-uploading the original image within the
+    // window makes the "old" key current again — the deferred delete must
+    // re-check the row and leave it alone.
+    it("skips the deferred delete when the key became current again", async () => {
+      const fake = fakeAvatarStorage();
+      const scheduler = capturedScheduler();
+      const { app } = buildApp({
+        avatarStorage: fake.storage,
+        scheduleDeferred: scheduler.schedule,
+      });
+      const { token } = await signInWithPicture();
+      await onboard(app, token);
+
+      await putAvatar(app, token, PNG_BYTES, "image/png");
+      const originalKey = [...fake.objects.keys()][0]!;
+      // Replace, then re-upload the original bytes before the delete fires:
+      // the same content hashes to the same key, which is current again.
+      await putAvatar(app, token, new Uint8Array([9, 9, 9]), "image/webp");
+      await putAvatar(app, token, PNG_BYTES, "image/png");
+      expect(scheduler.tasks).toHaveLength(2);
+
+      await scheduler.fire();
+      // The interim webp object went; the original — current again — survived.
+      expect(fake.deleted).toHaveLength(1);
+      expect(fake.deleted).not.toContain(originalKey);
+      expect(fake.objects.has(originalKey)).toBe(true);
     });
 
     it("refuses an oversized body with 400 before touching storage", async () => {
@@ -2351,9 +2518,13 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(await res.json()).toMatchObject({ error: "validation_failed" });
     });
 
-    it("DELETE reverts to the sso avatar and best-effort deletes the object", async () => {
+    it("DELETE reverts to the sso avatar and defers deleting the object", async () => {
       const fake = fakeAvatarStorage();
-      const { app } = buildApp({ avatarStorage: fake.storage });
+      const scheduler = capturedScheduler();
+      const { app } = buildApp({
+        avatarStorage: fake.storage,
+        scheduleDeferred: scheduler.schedule,
+      });
       const pictureUrl = "https://cdn.example.com/ada-sso4.png";
       const { token } = await signInWithPicture(pictureUrl);
       await onboard(app, token);
@@ -2368,6 +2539,9 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(await res.json()).toMatchObject({
         profile: { avatarSource: "sso", avatarUrl: pictureUrl },
       });
+      // Deferred like a replacement: cached pages carry the old URL for 15s.
+      expect(fake.deleted).toEqual([]);
+      await scheduler.fire();
       expect(fake.deleted).toContain(uploadedKey);
       expect(fake.objects.size).toBe(0);
     });

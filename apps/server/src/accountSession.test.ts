@@ -240,6 +240,9 @@ describe("OTP sign-in", () => {
     });
     expect(await readAccountFile(baseDir)).toMatchObject({
       organizationId: ORGANIZATION.id,
+      // The user id rides along with the session: the usage reporter keys
+      // its watermark identity on it (multi-member orgs).
+      userId: "user_1",
       accessToken: "access-1",
       refreshToken: "refresh-1",
     });

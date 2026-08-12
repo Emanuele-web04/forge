@@ -16,6 +16,7 @@ import {
   readAccountFile,
   refreshHostRegistration,
   resolveAccountUrl,
+  resolveAuthLoginAccountUrl,
   resolveEnvironmentId,
   runAuthLogin,
   runAuthLogout,
@@ -98,6 +99,7 @@ function credentials(overrides: Record<string, unknown> = {}) {
     workosClientId: CLIENT_ID,
     workosApiUrl: WORKOS_API_URL,
     organizationId: ORGANIZATION.id,
+    userId: "user_1",
     accessToken: "access-1",
     refreshToken: "refresh-1",
     ...overrides,
@@ -723,6 +725,67 @@ describe("resolveAccountUrl", () => {
     expect(resolveAccountUrl({ env: { SYNARA_ACCOUNT_URL: " https://env " } })).toBe("https://env");
     expect(resolveAccountUrl({ env: {} })).toBeUndefined();
     expect(resolveAccountUrl({ flag: "  ", env: { SYNARA_ACCOUNT_URL: "" } })).toBeUndefined();
+  });
+});
+
+describe("resolveAuthLoginAccountUrl", () => {
+  // The signed-in session already recorded which service minted its tokens;
+  // `synara auth` must use it even with no env/flag configured at all.
+  it("uses the persisted session's accountUrl when no explicit URL is given", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    await expect(resolveAuthLoginAccountUrl({ baseDir, explicitUrl: undefined })).resolves.toBe(
+      "https://accounts.example.com",
+    );
+  });
+
+  it("accepts an explicit URL that matches the persisted session", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    await expect(
+      resolveAuthLoginAccountUrl({ baseDir, explicitUrl: "https://accounts.example.com" }),
+    ).resolves.toBe("https://accounts.example.com");
+  });
+
+  // Sending the stored token to a DIFFERENT service is exactly what this
+  // resolution exists to prevent: refuse loudly, do not pick either side.
+  it("refuses a conflicting explicit URL instead of sending the stored token elsewhere", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, credentials());
+
+    await expect(
+      resolveAuthLoginAccountUrl({ baseDir, explicitUrl: "https://other.example.com" }),
+    ).rejects.toThrow(/signed in to https:\/\/accounts\.example\.com.*synara auth logout/su);
+  });
+
+  it("passes the explicit URL through unchanged when no session exists", async () => {
+    const baseDir = makeBaseDir();
+
+    await expect(
+      resolveAuthLoginAccountUrl({ baseDir, explicitUrl: "https://accounts.example.com" }),
+    ).resolves.toBe("https://accounts.example.com");
+    await expect(
+      resolveAuthLoginAccountUrl({ baseDir, explicitUrl: undefined }),
+    ).resolves.toBeUndefined();
+  });
+
+  // A session-less file (host fields only, or expired session) is not a
+  // session: the explicit-URL requirement stays in force.
+  it("ignores a stored file that carries no usable session", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://accounts.example.com",
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+
+    await expect(
+      resolveAuthLoginAccountUrl({ baseDir, explicitUrl: undefined }),
+    ).resolves.toBeUndefined();
   });
 });
 

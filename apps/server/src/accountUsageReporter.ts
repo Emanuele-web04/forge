@@ -109,8 +109,9 @@ export interface AccountUsageReporterDeps {
   /** Environment id seam; default resolves/persists `<stateDir>/environment-id`. */
   readonly environmentId?: () => Promise<string>;
   /**
-   * Signed-in identity seam (`${accountUrl}#${organizationId}`); default
-   * derives it from the credential file. Null when it cannot be determined.
+   * Signed-in identity seam (`${accountUrl}#${organizationId}#${userId}`);
+   * default derives it from the credential file. Null when it cannot be
+   * determined.
    */
   readonly accountIdentity?: () => Promise<string | null>;
   readonly debounceMs?: number;
@@ -186,64 +187,76 @@ function modelBucketKey(
   return [minute, provider, model, reasoning ?? "\u0000"].join("\u0000");
 }
 
-function chunk<T>(items: readonly T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks;
-}
+/**
+ * Serialized-byte budget for ONE stream's chunk (models or skills). The API
+ * rejects non-avatar bodies over 64 KiB (apps/api API_MAX_BODY_BYTES), and a
+ * bucket-count cap alone does not bound bytes: 500 model buckets with long
+ * provider/model/reasoning strings serialize past 64 KiB and would 413
+ * forever, wedging the watermark. Derivation: 64 KiB transport cap, minus
+ * headroom for the JSON envelope (environmentId, field names, array
+ * brackets) and the fact that one push carries BOTH streams — models and
+ * skills each get this budget, so the joint payload stays ≤ 2 × 24 KiB + a
+ * small envelope, comfortably under the cap.
+ */
+const USAGE_PUSH_MAX_STREAM_BYTES = 24 * 1024;
 
 /**
  * Chunks buckets by complete minutes to preserve the minute-replacement
- * contract: each chunk must contain ALL buckets for any minute it mentions,
- * never splitting a minute's buckets across chunks. Starts a new chunk when
- * adding the next complete minute would exceed `maxBuckets`.
+ * contract: each chunk must contain ALL buckets for any minute it mentions —
+ * splitting a minute across two requests would let the second request's
+ * minute-replacement delete the first half. Starts a new chunk when adding
+ * the next complete minute would exceed `maxBuckets` OR `maxBytes` (estimated
+ * as the JSON serialization of the bucket rows plus array separators, which
+ * is exactly how they ship). A single minute that alone exceeds either limit
+ * is still sent as its own chunk: oversized single minutes are theoretical
+ * (hundreds of distinct model combos inside one minute), and dropping data is
+ * worse than one oversized request the API may refuse.
  */
 function chunkByMinute<T extends { readonly minute: string }>(
   buckets: readonly T[],
   maxBuckets: number,
+  maxBytes: number = USAGE_PUSH_MAX_STREAM_BYTES,
 ): T[][] {
+  const bucketBytes = (bucket: T): number =>
+    // +1 for the comma/bracket a serialized array spends per element.
+    Buffer.byteLength(JSON.stringify(bucket)) + 1;
+
   const chunks: T[][] = [];
   let currentChunk: T[] = [];
-  let currentMinute: string | undefined;
-  const minuteGroup: T[] = [];
+  let currentChunkBytes = 0;
 
+  const appendMinuteGroup = (group: readonly T[], groupBytes: number): void => {
+    const overflows =
+      currentChunk.length + group.length > maxBuckets || currentChunkBytes + groupBytes > maxBytes;
+    if (overflows && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = [...group];
+      currentChunkBytes = groupBytes;
+    } else {
+      currentChunk.push(...group);
+      currentChunkBytes += groupBytes;
+    }
+  };
+
+  let minuteGroup: T[] = [];
+  let minuteGroupBytes = 0;
   for (const bucket of buckets) {
-    if (currentMinute !== bucket.minute) {
-      // Flush the completed minute group to the current chunk if it fits
-      if (minuteGroup.length > 0) {
-        if (currentChunk.length + minuteGroup.length > maxBuckets && currentChunk.length > 0) {
-          // Current chunk would overflow; finalize it and start fresh
-          chunks.push(currentChunk);
-          currentChunk = [...minuteGroup];
-        } else {
-          currentChunk.push(...minuteGroup);
-        }
-        minuteGroup.length = 0;
-      }
-      currentMinute = bucket.minute;
+    if (minuteGroup.length > 0 && minuteGroup[0]?.minute !== bucket.minute) {
+      appendMinuteGroup(minuteGroup, minuteGroupBytes);
+      minuteGroup = [];
+      minuteGroupBytes = 0;
     }
     minuteGroup.push(bucket);
+    minuteGroupBytes += bucketBytes(bucket);
   }
-
-  // Flush the final minute group
-  if (minuteGroup.length > 0) {
-    if (currentChunk.length + minuteGroup.length > maxBuckets && currentChunk.length > 0) {
-      chunks.push(currentChunk);
-      currentChunk = [...minuteGroup];
-    } else {
-      currentChunk.push(...minuteGroup);
-    }
-  }
-
-  // Finalize the last chunk
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
+  if (minuteGroup.length > 0) appendMinuteGroup(minuteGroup, minuteGroupBytes);
+  if (currentChunk.length > 0) chunks.push(currentChunk);
 
   return chunks;
 }
+
+/** Exported for direct chunking tests; not part of the reporter's surface. */
+export const chunkingForTesting = { chunkByMinute, USAGE_PUSH_MAX_STREAM_BYTES };
 
 // ── Bucket derivation ──────────────────────────────────────────────────
 
@@ -805,16 +818,24 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
     deps.environmentId ?? (() => resolveEnvironmentId(baseDir, deps.devUrl));
 
   // The identity the watermark belongs to. The watermark claims "this account
-  // has everything up to minute X" — a claim about one account and workspace,
-  // so it is keyed by both: sign out of A, sign in to B, and B must NOT
-  // inherit A's watermark (it would skip the full-history backfill it never
-  // received). Same URL resolution as the default push above.
+  // has everything up to minute X" — a claim about one account, workspace,
+  // AND user (usage rows are keyed per user, and organizations are
+  // multi-member: user B signing in to the SAME org on the same machine has
+  // received none of A's rows), so it is keyed by all three: any switch means
+  // the stored watermark proves nothing and the flush must take the
+  // full-backfill path. Same URL resolution as the default push above.
+  //
+  // The identity string's format changing (the user segment was added later)
+  // is deliberately fine without a migration: account_identity is an opaque
+  // text column, so existing installs mismatch exactly once and re-run a full
+  // backfill — harmless, because buckets are absolute per-minute replacements
+  // and re-pushing history is idempotent.
   const resolveAccountIdentity =
     deps.accountIdentity ??
     (async (): Promise<string | null> => {
       const stored = await readAccountFile(baseDir);
-      if (!stored?.organizationId) return null;
-      return `${stored.accountUrl}#${stored.organizationId}`;
+      if (!stored?.organizationId || !stored.userId) return null;
+      return `${stored.accountUrl}#${stored.organizationId}#${stored.userId}`;
     });
 
   const push =

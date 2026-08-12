@@ -7,6 +7,16 @@ import { headers } from "next/headers";
 
 export const ACCOUNT_API_URL = process.env.ACCOUNT_API_URL ?? "https://api.synara.vrbty.dev";
 
+/**
+ * Shared secret proving to the account API that a request came from this SSR
+ * deployment — the same value as the API's PROFILE_PROXY_SECRET. Sent as
+ * `x-synara-proxy-secret` so the API can trust the forwarded viewer IP for
+ * rate-limit keying (per-visitor budgets instead of one shared bucket for
+ * this deployment's egress IP). Optional: without it the API keys on the
+ * egress IP, exactly as before.
+ */
+const PROFILE_PROXY_SECRET = process.env.PROFILE_PROXY_SECRET;
+
 export type PublicProfileModelUsage = {
   provider: string;
   model: string;
@@ -79,8 +89,12 @@ async function viewerIp(): Promise<string | null> {
  */
 export async function fetchPublicProfile(handle: string): Promise<PublicProfile | null> {
   const ip = await viewerIp();
+  const headers = {
+    ...(ip ? { "x-synara-viewer-ip": ip } : {}),
+    ...(PROFILE_PROXY_SECRET ? { "x-synara-proxy-secret": PROFILE_PROXY_SECRET } : {}),
+  };
   const response = await fetch(`${ACCOUNT_API_URL}/api/v1/profiles/${encodeURIComponent(handle)}`, {
-    ...(ip ? { headers: { "x-synara-viewer-ip": ip } } : {}),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
     // Freshness over caching, but not per-request: usage pushes land every
     // few seconds, and a minute-stale profile is indistinguishable to a
     // visitor while keeping the API out of every page load.

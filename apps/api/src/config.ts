@@ -37,9 +37,20 @@ export type ApiConfigBase = {
    * How many proxies in front of this service append to `x-forwarded-for`,
    * from TRUSTED_PROXY_HOPS. The rate limiter keys on the address the
    * outermost trusted proxy saw; 0 means "no proxy — trust only the socket".
-   * Defaults to 1, the deployed Railway shape (one TLS-terminating hop).
+   * Defaults to 0, the direct/Docker self-host shape — any nonzero default
+   * would let a direct caller forge the header and rotate rate-limit
+   * buckets. Proxied deployments (Railway: one TLS-terminating hop) must
+   * set TRUSTED_PROXY_HOPS=1 explicitly.
    */
   trustedProxyHops: number;
+  /**
+   * Shared secret the profiles SSR deployment sends as
+   * `x-synara-proxy-secret`, from PROFILE_PROXY_SECRET. When set and matched,
+   * the public-profile rate limit keys on the forwarded viewer IP instead of
+   * the SSR deployment's egress IP. Undefined disables the channel — the
+   * viewer header is ignored entirely.
+   */
+  profileProxySecret?: string;
 };
 
 /**
@@ -197,6 +208,7 @@ export function loadApiConfig(env: Env): ApiConfig {
 
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : 8788;
   const trustedProxyHops = resolveTrustedProxyHops(env.TRUSTED_PROXY_HOPS);
+  const profileProxySecret = env.PROFILE_PROXY_SECRET?.trim() || undefined;
   const avatarStorage = loadAvatarStorageConfig(env);
 
   if (identityProvider === "dev") {
@@ -208,6 +220,7 @@ export function loadApiConfig(env: Env): ApiConfig {
       baseUrl: env.ACCOUNT_BASE_URL as string,
       port,
       trustedProxyHops,
+      ...(profileProxySecret ? { profileProxySecret } : {}),
       ...(avatarStorage ? { avatarStorage } : {}),
     };
   }
@@ -221,6 +234,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     baseUrl: env.ACCOUNT_BASE_URL as string,
     port,
     trustedProxyHops,
+    ...(profileProxySecret ? { profileProxySecret } : {}),
     ...(avatarStorage ? { avatarStorage } : {}),
     workosApiKey: env.WORKOS_API_KEY as string,
     workosClientId,

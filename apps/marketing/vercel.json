@@ -4,6 +4,10 @@
     {
       "source": "/@:handle",
       "destination": "https://synara-profiles.vercel.app/@:handle"
+    },
+    {
+      "source": "/profiles-assets/:path*",
+      "destination": "https://synara-profiles.vercel.app/:path*"
     }
   ]
 }

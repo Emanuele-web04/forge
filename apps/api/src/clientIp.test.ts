@@ -93,21 +93,23 @@ describe("resolveClientIp", () => {
 });
 
 describe("resolveTrustedProxyHops", () => {
-  it("defaults to one hop when unset or blank", () => {
-    expect(resolveTrustedProxyHops(undefined)).toBe(1);
-    expect(resolveTrustedProxyHops("")).toBe(1);
-    expect(resolveTrustedProxyHops("  ")).toBe(1);
+  // The no-proxy default: a direct/Docker self-host must never key rate
+  // limits on a header any caller can forge — proxies opt in explicitly.
+  it("defaults to zero hops when unset or blank", () => {
+    expect(resolveTrustedProxyHops(undefined)).toBe(0);
+    expect(resolveTrustedProxyHops("")).toBe(0);
+    expect(resolveTrustedProxyHops("  ")).toBe(0);
   });
 
   it("accepts explicit non-negative integers", () => {
-    expect(resolveTrustedProxyHops("0")).toBe(0);
+    expect(resolveTrustedProxyHops("1")).toBe(1);
     expect(resolveTrustedProxyHops("2")).toBe(2);
   });
 
   it("rejects malformed values back to the default", () => {
-    expect(resolveTrustedProxyHops("-1")).toBe(1);
-    expect(resolveTrustedProxyHops("two")).toBe(1);
-    expect(resolveTrustedProxyHops("1.5")).toBe(1);
+    expect(resolveTrustedProxyHops("-1")).toBe(0);
+    expect(resolveTrustedProxyHops("two")).toBe(0);
+    expect(resolveTrustedProxyHops("1.5")).toBe(0);
   });
 });
 

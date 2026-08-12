@@ -12,7 +12,11 @@ import path from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-import { STALE_LOCK_MS, withCredentialFileLock } from "./accountCredentialLock";
+import {
+  internalsForTesting,
+  STALE_LOCK_MS,
+  withCredentialFileLock,
+} from "./accountCredentialLock";
 
 const temporaryDirectories: string[] = [];
 
@@ -113,6 +117,80 @@ describe("withCredentialFileLock", () => {
     // Inside the section the lock carried OUR token (pid-prefixed), not the
     // crashed owner's; afterwards the owner-checked release removed it.
     expect(observedOwner).toMatch(new RegExp(`^${process.pid}:`, "u"));
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  // The reclamation CAS, driven deterministically: two contenders see the
+  // same stale lock; both break, both race the exclusive create — exactly one
+  // create succeeds, so exactly one enters the critical section.
+  it("stale takeover is mutually exclusive: two contenders, one acquisition", async () => {
+    const credentialsPath = makeCredentialsPath();
+    const lockPath = `${credentialsPath}.lock`;
+    const { breakStaleLock, tryCreateLock } = internalsForTesting;
+
+    await fsp.writeFile(lockPath, "1234:crashed-owner-token");
+    await backdateLock(lockPath, STALE_LOCK_MS + 5_000);
+
+    // Interleave the worst ordering explicitly: A breaks, B breaks (no-op —
+    // the rename already carried the stale file aside), THEN both attempt
+    // the exclusive create. The old rename-over-and-read-back design let
+    // both read their own token in this ordering.
+    await breakStaleLock(lockPath);
+    await breakStaleLock(lockPath);
+    const [aAcquired, bAcquired] = await Promise.all([
+      tryCreateLock(lockPath, "1:contender-a"),
+      tryCreateLock(lockPath, "2:contender-b"),
+    ]);
+
+    expect([aAcquired, bAcquired].filter(Boolean)).toHaveLength(1);
+    const winner = aAcquired ? "1:contender-a" : "2:contender-b";
+    expect(await fsp.readFile(lockPath, "utf8")).toBe(winner);
+
+    await fsp.rm(lockPath, { force: true });
+  });
+
+  // A slower contender whose staleness judgment predates a faster takeover
+  // must not destroy the new owner's fresh lock: breakStaleLock restores a
+  // renamed-aside lock that turns out to be fresh.
+  it("does not break a fresh lock re-acquired between staleness check and rename", async () => {
+    const credentialsPath = makeCredentialsPath();
+    const lockPath = `${credentialsPath}.lock`;
+    const { breakStaleLock } = internalsForTesting;
+
+    // The faster contender already took over: the lock on disk is FRESH.
+    await fsp.writeFile(lockPath, "1:new-owner-token");
+
+    // The slower contender acts on its stale pre-takeover judgment.
+    await breakStaleLock(lockPath);
+
+    // The fresh lock survives, still owned by the new owner.
+    expect(await fsp.readFile(lockPath, "utf8")).toBe("1:new-owner-token");
+
+    await fsp.rm(lockPath, { force: true });
+  });
+
+  // End-to-end: many concurrent waiters on one stale lock still serialize —
+  // no two critical sections overlap.
+  it("serializes concurrent critical sections across a stale takeover", async () => {
+    const credentialsPath = makeCredentialsPath();
+    const lockPath = `${credentialsPath}.lock`;
+    await fsp.writeFile(lockPath, "1234:crashed-owner-token");
+    await backdateLock(lockPath, STALE_LOCK_MS + 5_000);
+
+    let inside = 0;
+    let maxInside = 0;
+    await Promise.all(
+      Array.from({ length: 5 }, () =>
+        withCredentialFileLock(credentialsPath, async () => {
+          inside += 1;
+          maxInside = Math.max(maxInside, inside);
+          await sleep(10);
+          inside -= 1;
+        }),
+      ),
+    );
+
+    expect(maxInside).toBe(1);
     expect(fs.existsSync(lockPath)).toBe(false);
   });
 });

@@ -203,6 +203,7 @@ async function clearStoredSession(baseDir: string): Promise<void> {
       accessToken: _accessToken,
       refreshToken: _refreshToken,
       organizationId: _organizationId,
+      userId: _userId,
       ...rest
     } = stored;
     await writeAccountCredentials(baseDir, rest);
@@ -339,6 +340,7 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         workosClientId: instance.clientId,
         workosApiUrl: instance.workosApiUrl,
         organizationId: scoped.organizationId,
+        userId: scoped.userId,
         accessToken: scoped.accessToken,
         refreshToken: scoped.refreshToken,
         ...(sameAccountAndWorkspace && previous?.hostToken

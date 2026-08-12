@@ -744,4 +744,64 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(stop.mock.calls.length, 0);
     }),
   );
+
+  // `synara auth` with a stored session must never send the stored token to a
+  // DIFFERENT service: a conflicting explicit --account-url fails before any
+  // request is made, pointing at `synara auth logout`.
+  it.effect("refuses `synara auth` against a URL conflicting with the stored session", () =>
+    Effect.gen(function* () {
+      const homeDir = makeTempHome("synara-main-auth-conflict-");
+      fs.writeFileSync(
+        path.join(homeDir, "account-credentials.json"),
+        JSON.stringify({
+          accountUrl: "https://accounts.example.com",
+          workosClientId: "client_01ABC",
+          workosApiUrl: "https://api.workos.example",
+          organizationId: "org_1",
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+        }),
+      );
+
+      const exit = yield* Effect.exit(
+        runCli(["auth", "--home-dir", homeDir, "--account-url", "https://other.example.com"]),
+      );
+
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        const rendered = Cause.pretty(exit.cause);
+        assert.include(rendered, "signed in to https://accounts.example.com");
+        assert.include(rendered, "synara auth logout");
+      }
+      assert.equal(start.mock.calls.length, 0);
+    }),
+  );
+
+  // With a stored session and NO explicit URL anywhere, `synara auth` resolves
+  // the persisted accountUrl instead of failing "not configured". The session
+  // here is already registered, so the command answers locally — succeeding
+  // at all proves the URL requirement was satisfied from the file.
+  it.effect("lets `synara auth` use the persisted accountUrl with no env or flag", () =>
+    Effect.gen(function* () {
+      const homeDir = makeTempHome("synara-main-auth-persisted-");
+      fs.writeFileSync(
+        path.join(homeDir, "account-credentials.json"),
+        JSON.stringify({
+          accountUrl: "https://accounts.example.com",
+          workosClientId: "client_01ABC",
+          workosApiUrl: "https://api.workos.example",
+          organizationId: "org_1",
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+          hostToken: "host-token",
+          hostId: "host_1",
+        }),
+      );
+
+      const exit = yield* Effect.exit(runCli(["auth", "--home-dir", homeDir]));
+
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.equal(start.mock.calls.length, 0);
+    }),
+  );
 });

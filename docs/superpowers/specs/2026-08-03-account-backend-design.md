@@ -415,9 +415,12 @@ stats and environment ids never appear in a public payload.
 
 **The page.** `apps/profiles` is a deliberately tiny Next.js app (own
 Vercel project) server-rendering `trysynara.com/@handle` from the public
-JSON. The domain stays on the marketing project, which carries one rewrite
-(`/@:handle` → the profiles deployment) — the domain's routing seam; future
-sub-apps get their own rewrite the same way.
+JSON. The domain stays on the marketing project, which carries two rewrites
+(`/@:handle` → the profiles deployment, and `/profiles-assets/:path*` → the
+same deployment for its static assets — only the document is proxied, so the
+profiles app must set `PROFILES_ASSET_PREFIX` in production or its
+root-relative `/_next` assets 404 against the marketing project) — the
+domain's routing seam; future sub-apps get their own rewrite the same way.
 
 ## Local dev, deployment
 

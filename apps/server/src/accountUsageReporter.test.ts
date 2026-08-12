@@ -12,6 +12,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vitest";
 
 import {
+  chunkingForTesting,
   collectUsageBuckets,
   createAccountUsageReporter,
   isAccountUsageRelevantEventType,
@@ -441,6 +442,100 @@ describe("collectUsageBuckets", () => {
   });
 });
 
+describe("chunkByMinute", () => {
+  const { chunkByMinute } = chunkingForTesting;
+
+  const bucket = (minute: string, padding = 0) => ({
+    minute,
+    provider: "codex",
+    model: `gpt-5-codex${"x".repeat(padding)}`,
+    reasoning: null,
+    tokens: 1000,
+    turns: 1,
+    prompts: 1,
+  });
+
+  it("splits on the bucket-count cap at complete minute boundaries", () => {
+    const buckets = [
+      bucket("2026-08-10T00:00:00Z"),
+      bucket("2026-08-10T00:00:00Z", 1),
+      bucket("2026-08-10T00:01:00Z"),
+      bucket("2026-08-10T00:01:00Z", 1),
+      bucket("2026-08-10T00:02:00Z"),
+    ];
+
+    const chunks = chunkByMinute(buckets, 3, Number.POSITIVE_INFINITY);
+
+    // Minute 00:01 does not fit next to minute 00:00's two buckets under a
+    // cap of 3 — it moves WHOLE to the next chunk, never split.
+    expect(chunks.map((chunk) => chunk.map((item) => item.minute))).toEqual([
+      ["2026-08-10T00:00:00Z", "2026-08-10T00:00:00Z"],
+      ["2026-08-10T00:01:00Z", "2026-08-10T00:01:00Z", "2026-08-10T00:02:00Z"],
+    ]);
+  });
+
+  it("splits on the byte budget before the count cap is reached", () => {
+    // Four one-bucket minutes, each ~large; a budget of ~2.5 buckets' bytes
+    // forces two per chunk even though the count cap (500) is nowhere near.
+    const oneBucketBytes = Buffer.byteLength(JSON.stringify(bucket("2026-08-10T00:00:00Z"))) + 1;
+    const buckets = [
+      bucket("2026-08-10T00:00:00Z"),
+      bucket("2026-08-10T00:01:00Z"),
+      bucket("2026-08-10T00:02:00Z"),
+      bucket("2026-08-10T00:03:00Z"),
+    ];
+
+    const chunks = chunkByMinute(buckets, 500, Math.floor(oneBucketBytes * 2.5));
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toHaveLength(2);
+    expect(chunks[1]).toHaveLength(2);
+  });
+
+  it("never splits one minute across chunks even when it alone busts the byte budget", () => {
+    // A single enormous minute (many buckets) exceeding the budget must ship
+    // as ONE oversized chunk: splitting it would let the API's
+    // minute-replacement delete the first half, and dropping it loses data.
+    const buckets = [
+      bucket("2026-08-10T00:00:00Z"),
+      ...Array.from({ length: 10 }, (_, index) => bucket("2026-08-10T00:01:00Z", index)),
+      bucket("2026-08-10T00:02:00Z"),
+    ];
+
+    const chunks = chunkByMinute(buckets, 500, 300);
+
+    for (const chunk of chunks) {
+      expect(new Set(chunk.map((item) => item.minute)).size).toBeGreaterThan(0);
+    }
+    const oversized = chunks.find((chunk) =>
+      chunk.some((item) => item.minute === "2026-08-10T00:01:00Z"),
+    );
+    expect(oversized?.filter((item) => item.minute === "2026-08-10T00:01:00Z")).toHaveLength(10);
+    // The neighbouring minutes were not dropped either.
+    expect(chunks.flat()).toHaveLength(12);
+  });
+
+  it("500 buckets of realistic size would overflow the transport cap without the byte budget", () => {
+    // The regression this exists for: USAGE_PUSH_MAX_BUCKETS (500) buckets
+    // with plausible dimension strings serialize past 64 KiB. The byte
+    // budget must split them even though the count cap alone would not.
+    const buckets = Array.from({ length: 500 }, (_, index) =>
+      bucket(minuteStartIso(Date.parse("2026-08-10T00:00:00Z") + index * 60_000), 20),
+    );
+    expect(Buffer.byteLength(JSON.stringify(buckets))).toBeGreaterThan(64 * 1024);
+
+    const chunks = chunkByMinute(buckets, 500);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(JSON.stringify(chunk))).toBeLessThanOrEqual(
+        chunkingForTesting.USAGE_PUSH_MAX_STREAM_BYTES,
+      );
+    }
+    expect(chunks.flat()).toHaveLength(500);
+  });
+});
+
 describe("createAccountUsageReporter", () => {
   it("pushes absolute buckets and advances the watermark only on success", async () => {
     await runReporterTest(
@@ -566,6 +661,46 @@ describe("createAccountUsageReporter", () => {
     );
   });
 
+  // Organizations are multi-member, so the identity carries the USER too:
+  // user B signing in to the SAME org on the same machine has received none
+  // of A's usage rows (they are keyed per user on the service) and must not
+  // inherit A's watermark. Same user signing back in stays incremental.
+  it("re-backfills when a different user signs in to the same workspace, but not for the same user", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedUsageFixture(sql);
+
+        const flushedAt = Date.parse("2026-08-12T12:00:00.000Z");
+        let identity = "https://accounts.example.com#org_1#user_a";
+        const { reporter, pushes } = makeReporterHarness(sql, {
+          now: () => flushedAt,
+          accountIdentity: async () => identity,
+        });
+
+        // User A syncs everything.
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(pushes).toHaveLength(1);
+
+        // Same user again: incremental — the quiet window pushes nothing.
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(pushes).toHaveLength(1);
+
+        // User B, same accountUrl and organization: A's watermark says
+        // nothing about B's rows — full backfill.
+        identity = "https://accounts.example.com#org_1#user_b";
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(pushes).toHaveLength(2);
+        expect(pushes[1]?.request.models).toHaveLength(3);
+        expect((yield* readSyncState(sql))?.accountIdentity).toBe(
+          "https://accounts.example.com#org_1#user_b",
+        );
+
+        reporter.stop();
+      }),
+    );
+  });
+
   // A watermark with no recorded identity (a row written before the identity
   // column existed) proves nothing about the current account either.
   it("treats a NULL stored identity with a watermark as a mismatch and re-backfills", async () => {
@@ -618,7 +753,7 @@ describe("createAccountUsageReporter", () => {
     );
   });
 
-  it("splits more than 500 buckets across multiple pushes", async () => {
+  it("splits more than 500 buckets across multiple byte- and count-bounded pushes", async () => {
     await runReporterTest(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -640,10 +775,28 @@ describe("createAccountUsageReporter", () => {
         });
         yield* Effect.promise(() => reporter.flushNow());
 
-        expect(pushes).toHaveLength(2);
-        expect(pushes[0]?.request.models).toHaveLength(500);
-        expect(pushes[1]?.request.models).toHaveLength(1);
-        expect(pushes[1]?.request.skills).toHaveLength(0);
+        // Every bucket lands exactly once, in minute order, across several
+        // pushes — the exact split is byte-driven, not a count of 500.
+        expect(pushes.length).toBeGreaterThan(1);
+        const allModels = pushes.flatMap((push) => push.request.models);
+        expect(allModels).toHaveLength(501);
+        for (const push of pushes) {
+          const { models } = push.request;
+          expect(models.length).toBeGreaterThan(0);
+          expect(models.length).toBeLessThanOrEqual(500);
+          // Each chunk's serialized rows respect the per-stream byte budget.
+          expect(Buffer.byteLength(JSON.stringify(models))).toBeLessThanOrEqual(
+            chunkingForTesting.USAGE_PUSH_MAX_STREAM_BYTES,
+          );
+          expect(push.request.skills).toHaveLength(0);
+        }
+        // Chunks never share a minute: each push starts strictly after the
+        // previous one's last minute (minute-replacement safety).
+        for (let index = 1; index < pushes.length; index += 1) {
+          const previousLast = pushes[index - 1]?.request.models.at(-1)?.minute ?? "";
+          const nextFirst = pushes[index]?.request.models[0]?.minute ?? "";
+          expect(nextFirst > previousLast).toBe(true);
+        }
 
         reporter.stop();
       }),
@@ -686,21 +839,36 @@ describe("createAccountUsageReporter", () => {
         // First flush: chunk 1 lands, chunk 2 hits the rate limit.
         yield* Effect.promise(() => reporter.flushNow());
         expect(pushes).toHaveLength(1);
-        expect(pushes[0]?.models).toHaveLength(500);
+        const deliveredCount = pushes[0]?.models.length ?? 0;
+        expect(deliveredCount).toBeGreaterThan(0);
         const afterFailure = yield* readSyncState(sql);
         // The watermark reflects the last successful chunk: the newest
-        // minute fully covered before chunk 2's first bucket.
-        expect(afterFailure?.watermarkMinute).toBe(minuteStartIso(baseMs + 499 * 60_000));
+        // minute fully covered before chunk 2's first bucket (one bucket per
+        // minute here, so that is the minute before bucket `deliveredCount`).
+        expect(afterFailure?.watermarkMinute).toBe(
+          minuteStartIso(baseMs + (deliveredCount - 1) * 60_000),
+        );
         expect(afterFailure?.lastFailureAt).not.toBeNull();
 
         // Next flush resumes from the failed chunk: only the watermark's
-        // safety lap plus the unpushed tail, nowhere near the 500 already
-        // delivered.
+        // safety lap plus the unpushed tail, never replaying everything
+        // already delivered.
         failFromPush = Number.POSITIVE_INFINITY;
         yield* Effect.promise(() => reporter.flushNow());
-        expect(pushes).toHaveLength(2);
-        expect(pushes[1]?.models.length).toBeLessThanOrEqual(4);
-        expect(pushes[1]?.models[0]?.minute).toBe(minuteStartIso(baseMs + 497 * 60_000));
+        expect(pushes.length).toBeGreaterThan(1);
+        // The resume starts at the safety lap behind the watermark — two
+        // minutes of overlap, not the start of history.
+        expect(pushes[1]?.models[0]?.minute).toBe(
+          minuteStartIso(baseMs + (deliveredCount - 3) * 60_000),
+        );
+        const resumed = pushes.slice(1).flatMap((request) => request.models);
+        expect(resumed.length).toBeLessThanOrEqual(501 - deliveredCount + 3);
+        // Everything is on the account exactly where a fully successful
+        // flush would have put it.
+        const deliveredMinutes = new Set(
+          pushes.flatMap((request) => request.models.map((bucket) => bucket.minute)),
+        );
+        expect(deliveredMinutes.size).toBe(501);
         const afterSuccess = yield* readSyncState(sql);
         // Final state matches a fully successful flush exactly.
         expect(afterSuccess?.watermarkMinute).toBe(minuteStartIso(baseMs + 501 * 60_000));

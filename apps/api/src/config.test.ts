@@ -70,6 +70,21 @@ describe("loadApiConfig", () => {
     expect(config.workosIssuer).toBe("https://auth.example.com");
   });
 
+  // The no-proxy default: a direct/Docker self-host must not trust a header
+  // any caller can forge. Proxied deployments (Railway) opt in with 1.
+  it("defaults trusted proxy hops to zero and honours an explicit value", () => {
+    expect(loadApiConfig(base).trustedProxyHops).toBe(0);
+    expect(loadApiConfig({ ...base, TRUSTED_PROXY_HOPS: "1" }).trustedProxyHops).toBe(1);
+  });
+
+  it("leaves the profile proxy secret unset by default and reads a configured one", () => {
+    expect(loadApiConfig(base).profileProxySecret).toBeUndefined();
+    expect(loadApiConfig({ ...base, PROFILE_PROXY_SECRET: "" }).profileProxySecret).toBeUndefined();
+    expect(loadApiConfig({ ...base, PROFILE_PROXY_SECRET: "s3cret" }).profileProxySecret).toBe(
+      "s3cret",
+    );
+  });
+
   it("ignores a trailing slash on the API url so derived paths stay single-slashed", () => {
     const config = loadWorkosConfig({ ...base, WORKOS_API_URL: "https://api.workos.com/" });
     expect(config.workosApiUrl).toBe("https://api.workos.com");

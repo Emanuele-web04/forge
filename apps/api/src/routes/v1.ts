@@ -40,7 +40,7 @@ import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { AvatarStorage } from "../avatarStorage";
 import {
   clientIp,
@@ -139,6 +139,29 @@ const AVATAR_CONTENT_TYPES: Record<string, string> = {
   "image/png": "png",
 };
 
+/**
+ * How long a replaced avatar object outlives its replacement. The profiles
+ * app caches public-profile responses — old avatarUrl included — for 15s, so
+ * an immediate delete breaks images and social cards rendered from that
+ * cache; 60s is comfortably past the window.
+ */
+export const AVATAR_DELETE_DELAY_MS = 60_000;
+
+/**
+ * Constant-time comparison for the profile-proxy secret. A length mismatch
+ * returns early — the length is not the confidential part — and equal
+ * lengths go through `timingSafeEqual` so the comparison cannot leak how
+ * many leading bytes matched.
+ */
+function secretHeaderMatches(expected: string, presented: string | undefined): boolean {
+  if (!presented) return false;
+  const expectedBytes = Buffer.from(expected);
+  const presentedBytes = Buffer.from(presented);
+  return (
+    expectedBytes.length === presentedBytes.length && timingSafeEqual(expectedBytes, presentedBytes)
+  );
+}
+
 type ProfileRow = typeof profiles.$inferSelect;
 
 function errorResponse(
@@ -224,13 +247,61 @@ export function createV1Routes(deps: {
   avatarStorage?: AvatarStorage;
   /**
    * How many proxies in front of this service append to `x-forwarded-for`;
-   * see clientIp.ts. Defaults to the deployed shape (Railway, one hop).
+   * see clientIp.ts. Defaults to 0 (no proxy — trust only the socket);
+   * proxied deployments set TRUSTED_PROXY_HOPS explicitly.
    */
   trustedProxyHops?: number;
+  /**
+   * Shared secret authenticating the profiles SSR deployment, from
+   * PROFILE_PROXY_SECRET. When set, a public-profile read carrying a
+   * matching `x-synara-proxy-secret` header has its rate limit keyed on the
+   * viewer IP it forwards. Undefined disables the channel entirely.
+   */
+  profileProxySecret?: string;
+  /**
+   * Test seam over `setTimeout` for the deferred avatar-object deletes;
+   * production uses the real timer (unref'd, so it never holds the process
+   * open).
+   */
+  scheduleDeferred?: (task: () => void, delayMs: number) => void;
 }): Hono {
   const { verifier, grants, deviceCredentials, environments, db, avatarStorage } = deps;
   const trustedProxyHops = deps.trustedProxyHops ?? DEFAULT_TRUSTED_PROXY_HOPS;
+  const profileProxySecret = deps.profileProxySecret;
+  const scheduleDeferred =
+    deps.scheduleDeferred ??
+    ((task: () => void, delayMs: number) => {
+      setTimeout(task, delayMs).unref?.();
+    });
   const v1 = new Hono();
+
+  /**
+   * Deletes a replaced avatar object AFTER the profiles app's response cache
+   * has expired: pages rendered from that cache still reference the old URL
+   * for up to 15s, and an immediate delete breaks their images and social
+   * cards. Fire-and-forget by design — a process restart during the window
+   * leaks one orphaned object, harmless under content-hashed capability keys
+   * and preferable to a broken render. At fire time the row's CURRENT key is
+   * re-read: keys are content-hashed, so re-uploading the same image within
+   * the window makes the "old" key current again and it must survive.
+   */
+  function scheduleAvatarObjectDelete(userId: string, key: string): void {
+    const storage = avatarStorage;
+    if (!storage) return;
+    scheduleDeferred(() => {
+      void (async () => {
+        const [row] = await db
+          .select({ avatarKey: profiles.avatarKey })
+          .from(profiles)
+          .where(eq(profiles.userId, userId))
+          .limit(1);
+        if (row?.avatarKey === key) return;
+        await storage.delete(key);
+      })().catch((error: unknown) => {
+        console.error("[api] deferred avatar delete failed:", error);
+      });
+    }, AVATAR_DELETE_DELAY_MS);
+  }
 
   /** The rate-limiting caller identity for this deployment's proxy shape. */
   const callerIp = (c: Context): string => clientIp(c, trustedProxyHops);
@@ -594,11 +665,11 @@ export function createV1Routes(deps: {
           setWhere: sql`${profiles.handle} = excluded.handle`,
         });
 
-      // Best-effort cleanup of the replaced object, same as DELETE /profile/avatar.
-      if (shouldClearAvatar && avatarStorage) {
-        await avatarStorage.delete(existing.avatarKey!).catch((error: unknown) => {
-          console.error("[api] previous avatar delete failed:", error);
-        });
+      // Deferred cleanup of the replaced object, same as DELETE
+      // /profile/avatar — see scheduleAvatarObjectDelete for the cache-window
+      // reasoning.
+      if (shouldClearAvatar) {
+        scheduleAvatarObjectDelete(session.userId, existing.avatarKey!);
       }
     } catch (error) {
       // The unique index on `handle` is the reservation; a violation here means
@@ -709,13 +780,12 @@ export function createV1Routes(deps: {
       .set({ avatarSource: "uploaded", avatarKey: key, updatedAt: new Date() })
       .where(eq(profiles.userId, session.userId));
 
-    // Best-effort cleanup of the replaced object, after the new state is
+    // Deferred cleanup of the replaced object, after the new state is
     // durable: a failed delete costs cents of storage, a failed upload must
-    // never have cost the user their previous avatar.
+    // never have cost the user their previous avatar. Deferred rather than
+    // immediate — see scheduleAvatarObjectDelete.
     if (existing.avatarKey && existing.avatarKey !== key) {
-      await avatarStorage.delete(existing.avatarKey).catch((error: unknown) => {
-        console.error("[api] previous avatar delete failed:", error);
-      });
+      scheduleAvatarObjectDelete(session.userId, existing.avatarKey);
     }
 
     return c.json(await accountMe(user, session.organization));
@@ -743,10 +813,10 @@ export function createV1Routes(deps: {
       .set({ avatarSource: "sso", avatarKey: null, updatedAt: new Date() })
       .where(eq(profiles.userId, session.userId));
 
-    if (existing.avatarKey && avatarStorage) {
-      await avatarStorage.delete(existing.avatarKey).catch((error: unknown) => {
-        console.error("[api] avatar delete failed:", error);
-      });
+    // Deferred, not immediate — cached pages still reference the old URL for
+    // up to 15s; see scheduleAvatarObjectDelete.
+    if (existing.avatarKey) {
+      scheduleAvatarObjectDelete(session.userId, existing.avatarKey);
     }
 
     return c.json(await accountMe(user, session.organization));
@@ -1185,11 +1255,28 @@ export function createV1Routes(deps: {
    * machines they own is nobody's business.
    */
   v1.get("/profiles/:handle", async (c) => {
-    // Rate-limit by caller IP (trusted, derived from proxy headers). The
-    // profiles web app fetches server-side and forwards x-synara-viewer-ip,
-    // but that header is client-controlled and must not influence rate
-    // limiting — rotating forged values would bypass the limit entirely.
-    if (!publicProfileRateLimiter.tryConsume(callerIp(c))) {
+    // Rate-limit by caller IP (trusted, derived from proxy headers) — with
+    // one authenticated exception. The profiles web app fetches server-side,
+    // so every visitor arrives from the SSR deployment's one egress IP and
+    // would share one budget; it forwards the actual visitor as
+    // x-synara-viewer-ip. That header alone is client-controlled and must
+    // not influence keying (rotating forged values would bypass the limit
+    // entirely), so it is honoured ONLY when the request also carries the
+    // PROFILE_PROXY_SECRET shared secret — which authenticates that the
+    // request came from our own SSR proxy. Rate-limit keying only, never
+    // authentication; anything else falls back to the caller IP.
+    const rateKey = (() => {
+      if (
+        profileProxySecret !== undefined &&
+        secretHeaderMatches(profileProxySecret, c.req.header("x-synara-proxy-secret"))
+      ) {
+        const viewer = c.req.header("x-synara-viewer-ip");
+        const forwardable = viewer ? sanitizeForwardableIp(viewer) : undefined;
+        if (forwardable) return `viewer:${forwardable}`;
+      }
+      return callerIp(c);
+    })();
+    if (!publicProfileRateLimiter.tryConsume(rateKey)) {
       return errorResponse(c, 429, "rate_limited", "Too many requests — slow down");
     }
 
