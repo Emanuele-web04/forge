@@ -13,6 +13,7 @@ COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/desktop/package.json apps/desktop/package.json
 COPY apps/marketing/package.json apps/marketing/package.json
+COPY apps/profiles/package.json apps/profiles/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/shared/package.json packages/shared/package.json
 COPY scripts/package.json scripts/package.json
