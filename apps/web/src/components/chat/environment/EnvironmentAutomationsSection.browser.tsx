@@ -66,7 +66,7 @@ describe("EnvironmentAutomationsSection", () => {
     expect(page.getByText("Every 3m")).toBeInTheDocument();
 
     await page
-      .getByRole("button", { name: "Edit automation Monitor PR #220 Codex review" })
+      .getByRole("button", { name: "Open automation Monitor PR #220 Codex review" })
       .click();
 
     expect(onOpenAutomation).toHaveBeenCalledWith(definition);

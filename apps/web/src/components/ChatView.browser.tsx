@@ -100,6 +100,7 @@ const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' heig
 let attachmentResponseDelayMs = 0;
 let attachmentUploadSequence = 0;
 let attachmentUploadBarrier: Promise<void> | null = null;
+let attachmentCancelBarrier: Promise<void> | null = null;
 
 interface WsRequestEnvelope {
   id: string;
@@ -1440,9 +1441,10 @@ const worker = setupWorker(
       { status: 201 },
     );
   }),
-  http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, () =>
-    HttpResponse.json({ cancelled: true }, { status: 200 }),
-  ),
+  http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, async () => {
+    await attachmentCancelBarrier;
+    return HttpResponse.json({ cancelled: true }, { status: 200 });
+  }),
   http.get("*/attachments/:attachmentId", async () => {
     if (attachmentResponseDelayMs > 0) {
       await new Promise<void>((resolve) => {
@@ -2076,6 +2078,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
+    attachmentCancelBarrier = null;
     localStorage.clear();
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
@@ -6425,8 +6428,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
   it("keeps worktree setup resolvable while attachments upload", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let releaseAttachmentUpload = () => {};
+    let releaseAttachmentCancel = () => {};
     attachmentUploadBarrier = new Promise<void>((resolve) => {
       releaseAttachmentUpload = resolve;
+    });
+    attachmentCancelBarrier = new Promise<void>((resolve) => {
+      releaseAttachmentCancel = resolve;
     });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -6480,6 +6487,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await cancelButton.click();
       await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();
+      releaseAttachmentCancel();
+      attachmentCancelBarrier = null;
       releaseAttachmentUpload();
       attachmentUploadBarrier = null;
 
@@ -6495,6 +6504,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      releaseAttachmentCancel();
+      attachmentCancelBarrier = null;
       releaseAttachmentUpload();
       attachmentUploadBarrier = null;
       await mounted.cleanup();
