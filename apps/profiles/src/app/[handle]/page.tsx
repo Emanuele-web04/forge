@@ -3,7 +3,13 @@ import { notFound } from "next/navigation";
 import { Heatmap } from "../../components/Heatmap";
 import { ActiveHours } from "../../components/ActiveHours";
 import { ModelSplit } from "../../components/ModelSplit";
-import { compactNumber, formatStreak, initial, memberSince } from "../../lib/format";
+import {
+  compactNumber,
+  formatHourLabel,
+  formatStreak,
+  initial,
+  memberSince,
+} from "../../lib/format";
 import { fetchPublicProfile } from "../../lib/publicProfile";
 
 type Params = { params: Promise<{ handle: string }> };
@@ -114,6 +120,7 @@ export default async function ProfilePage({ params }: Params) {
       </section>
 
       <Heatmap days={profile.heatmap} />
+      <Insights profile={profile} />
       <ModelSplit models={profile.models} lifetimeTokens={profile.lifetimeTokens} />
       <ActiveHours hours={profile.hours} />
 
@@ -126,4 +133,82 @@ export default async function ProfilePage({ params }: Params) {
       </footer>
     </main>
   );
+}
+
+function Insights({
+  profile,
+}: {
+  profile: Awaited<ReturnType<typeof fetchPublicProfile>> & object;
+}) {
+  const byProvider = new Map<string, number>();
+  const byReasoning = new Map<string, number>();
+  for (const row of profile.models) {
+    byProvider.set(row.provider, (byProvider.get(row.provider) ?? 0) + row.tokens);
+    if (row.reasoning) {
+      byReasoning.set(row.reasoning, (byReasoning.get(row.reasoning) ?? 0) + row.turns);
+    }
+  }
+  const total = Math.max(1, profile.lifetimeTokens);
+  const totalTurns = Math.max(
+    1,
+    profile.models.reduce((sum, row) => sum + row.turns, 0),
+  );
+  const top = (entries: Map<string, number>) =>
+    [...entries.entries()].sort((a, b) => b[1] - a[1])[0];
+  const topProvider = top(byProvider);
+  const topReasoning = top(byReasoning);
+  const topHour = profile.hours.reduce<{ hour: number; prompts: number } | null>(
+    (best, entry) =>
+      entry.prompts > 0 && (best === null || entry.prompts > best.prompts) ? entry : best,
+    null,
+  );
+
+  const rows: [string, string][] = [
+    [
+      "Most used provider",
+      topProvider
+        ? `${providerLabel(topProvider[0])} · ${Math.round((topProvider[1] / total) * 100)}%`
+        : "—",
+    ],
+    [
+      "Most used reasoning",
+      topReasoning
+        ? `${topReasoning[0][0].toUpperCase()}${topReasoning[0].slice(1)} · ${Math.round((topReasoning[1] / totalTurns) * 100)}%`
+        : "—",
+    ],
+    ["Most active hour", topHour ? formatHourLabel(topHour.hour) : "—"],
+  ];
+
+  return (
+    <section
+      aria-label="Activity insights"
+      style={{ display: "flex", flexDirection: "column", gap: 10 }}
+    >
+      <span style={{ fontSize: 14, fontWeight: 500 }}>Activity insights</span>
+      <dl style={{ margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+        {rows.map(([label, value]) => (
+          <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <dt style={{ fontSize: 14, color: "var(--muted)" }}>{label}</dt>
+            <dd style={{ margin: 0, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+/** Synara's provider keys → human labels, mirroring the in-app spelling. */
+function providerLabel(provider: string): string {
+  const labels: Record<string, string> = {
+    codex: "Codex",
+    claudeAgent: "Claude",
+    cursor: "Cursor",
+    antigravity: "Antigravity",
+    grok: "Grok",
+    droid: "Droid",
+    kilo: "Kilo",
+    opencode: "OpenCode",
+    pi: "Pi",
+  };
+  return labels[provider] ?? provider;
 }

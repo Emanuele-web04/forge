@@ -24,3 +24,10 @@ export function formatStreak(days: number): string {
   if (days <= 0) return "\u2014";
   return days === 1 ? "1 day" : `${days} days`;
 }
+
+/** 13 → "1 PM" — the hour label the in-app insight uses. */
+export function formatHourLabel(hour: number): string {
+  if (hour === 0) return "12 AM";
+  if (hour === 12) return "12 PM";
+  return hour < 12 ? `${hour} AM` : `${hour - 12} PM`;
+}
