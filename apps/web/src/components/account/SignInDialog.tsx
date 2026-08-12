@@ -14,7 +14,7 @@ import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { useAccount } from "~/hooks/useAccount";
 import { useNowMs } from "~/hooks/useNowMs";
 import {

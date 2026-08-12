@@ -140,6 +140,12 @@ export const UpdateProfileRequest = Schema.Struct({
   avatarColor: AccountProfileAvatarColor,
   /** Optional so pre-visibility clients keep writing profiles unchanged. */
   public: Schema.optional(Schema.Boolean),
+  /**
+   * The owner's UTC offset, stored so the PUBLIC profile buckets days and
+   * hours in the owner's time — the page shows the same rhythm the app
+   * shows them. Refreshed on every profile save; optional for old clients.
+   */
+  utcOffsetMinutes: Schema.optional(Schema.Int),
 });
 export type UpdateProfileRequest = typeof UpdateProfileRequest.Type;
 

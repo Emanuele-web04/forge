@@ -8,7 +8,7 @@ import { memo } from "react";
 
 import type { WorkLogSynaraThreadCreation } from "../../session-logic";
 import { ProviderIcon } from "../ProviderIcon";
-import { SynaraLogo } from "../SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { Button } from "../ui/button";
 
 function threadMeta(thread: WorkLogSynaraThreadCreation["threads"][number]): string {

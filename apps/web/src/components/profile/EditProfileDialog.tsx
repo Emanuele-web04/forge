@@ -19,10 +19,10 @@ import { Switch } from "~/components/ui/switch";
 import { CentralIcon } from "~/lib/central-icons";
 import { accountErrorMessage, publicProfileDisplayUrl } from "~/lib/accountLogic";
 import { cn } from "~/lib/utils";
-import { normalizeHandle } from "./profileFormatting";
+import { normalizeHandle } from "@synara/profile-ui/formatting";
 import { PROFILE_AVATAR_COLORS } from "./useProfileAvatarColor";
 import { AvatarImageError, compressAvatarImage } from "./avatarImage";
-import { ProfileAvatar } from "./ProfileAvatar";
+import { ProfileAvatar } from "@synara/profile-ui/avatar";
 
 // Inputs and footer buttons share one fixed height + radius so every control in
 // the dialog reads as the same size. The visible border keeps the fields legible

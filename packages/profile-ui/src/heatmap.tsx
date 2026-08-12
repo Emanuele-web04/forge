@@ -1,14 +1,25 @@
-// FILE: ActivityHeatmap.tsx
-// Purpose: GitHub-style contribution heatmap shared by the Profile page and the
-// shareable card. Renders columns of week × weekday cells with pre-bucketed
-// intensity. Sizing uses inline px so html-to-image reproduces it exactly.
-// Layer: web profile feature.
+// FILE: heatmap.tsx
+// Purpose: GitHub-style contribution heatmap shared by the Profile page, the
+// shareable card, and the public profile page. Renders columns of week × weekday
+// cells with pre-bucketed intensity. Sizing uses inline px so html-to-image
+// reproduces it exactly. Hover tooltips are pluggable: consumers pass
+// `renderTooltip` to wrap cells in their own tooltip primitive (the web app uses
+// Base UI); the default is a native `title` attribute.
+// Layer: profile-ui shared component.
 
-import { type CSSProperties } from "react";
-import type { ProfileHeatmapCell } from "@synara/contracts";
-import { cn } from "~/lib/utils";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { formatCompact, formatShortDate } from "./profileFormatting";
+import { Fragment, type CSSProperties, type ReactElement, type ReactNode } from "react";
+import { cn } from "./cn";
+import { formatCompact, formatShortDate } from "./formatting";
+
+// Structural mirror of `ProfileHeatmapCell` from @synara/contracts. Declared locally so
+// this package stays free of Effect/contracts dependencies; the contracts type is
+// assignable to it at every call site.
+export interface HeatmapCell {
+  readonly day: string;
+  readonly count: number;
+  readonly weekday: number;
+  readonly intensity: number;
+}
 
 // Single-hue ramp built from the theme accent (`--info`, defaults to blue-500) for the
 // in-app page (level 0 → 4). Mixes toward transparent so it sits well on light/dark.
@@ -48,7 +59,7 @@ const MONTH_LABELS = [
 ];
 
 interface ActivityHeatmapProps {
-  readonly cells: ReadonlyArray<ProfileHeatmapCell>;
+  readonly cells: ReadonlyArray<HeatmapCell>;
   readonly cellSize?: number;
   readonly gap?: number;
   readonly radius?: number;
@@ -68,14 +79,18 @@ interface ActivityHeatmapProps {
    * grid never overflows horizontally.
    */
   readonly maxCellSize?: number;
-  /** Show a styled tooltip on hover. Leave off for the exported card (html-to-image). */
-  readonly tooltip?: boolean;
-  /** Noun used in the tooltip, e.g. "prompts" or "tokens". */
-  readonly tooltipUnit?: string;
+  /**
+   * Wrap each day cell in a styled tooltip. Receives the cell data and the ready-made
+   * cell element (classes + inline sizing applied); return it wrapped in your tooltip
+   * primitive. Leave unset for a native `title` attribute — the right choice for the
+   * exported card (html-to-image) and static pages.
+   */
+  readonly renderTooltip?: (cell: HeatmapCell, cellNode: ReactElement) => ReactNode;
   readonly className?: string;
 }
 
-function heatmapTooltipText(cell: ProfileHeatmapCell, unit: string): string {
+/** Human tooltip label for a heatmap day, e.g. "1.2k prompts on Apr 3". */
+export function heatmapTooltipText(cell: HeatmapCell, unit: string): string {
   const date = formatShortDate(cell.day) ?? cell.day;
   if (cell.count <= 0) {
     return `No ${unit} on ${date}`;
@@ -85,7 +100,7 @@ function heatmapTooltipText(cell: ProfileHeatmapCell, unit: string): string {
 }
 
 type Slot =
-  | { readonly kind: "cell"; readonly cell: ProfileHeatmapCell }
+  | { readonly kind: "cell"; readonly cell: HeatmapCell }
   | { readonly kind: "pad"; readonly id: string };
 
 interface Column {
@@ -104,8 +119,7 @@ export function ActivityHeatmap({
   monthLabelClassName,
   fill: fillProp,
   maxCellSize,
-  tooltip: tooltipProp,
-  tooltipUnit: tooltipUnitProp,
+  renderTooltip,
   className,
 }: ActivityHeatmapProps) {
   const cellSize = cellSizeProp ?? 13;
@@ -115,8 +129,6 @@ export function ActivityHeatmap({
   const showMonths = showMonthsProp ?? false;
   const monthsPosition = monthsPositionProp ?? "top";
   const fill = fillProp ?? false;
-  const tooltip = tooltipProp ?? false;
-  const tooltipUnit = tooltipUnitProp ?? "prompts";
   const columns: Column[] = [];
   if (cells.length > 0) {
     const slots: Slot[] = [];
@@ -229,7 +241,7 @@ export function ActivityHeatmap({
                 cellClass,
                 intensityClasses[slot.cell.intensity] ?? intensityClasses[0],
               );
-              if (!tooltip) {
+              if (!renderTooltip) {
                 return (
                   <div
                     key={slot.cell.day}
@@ -240,16 +252,9 @@ export function ActivityHeatmap({
                 );
               }
               return (
-                <Tooltip key={slot.cell.day}>
-                  {/* delay={0}: heatmap tooltips open instantly on hover (no Base UI 600ms default). */}
-                  <TooltipTrigger
-                    delay={0}
-                    render={<div className={cellClassName} style={cellStyle} />}
-                  />
-                  <TooltipPopup side="top" sideOffset={6}>
-                    {heatmapTooltipText(slot.cell, tooltipUnit)}
-                  </TooltipPopup>
-                </Tooltip>
+                <Fragment key={slot.cell.day}>
+                  {renderTooltip(slot.cell, <div className={cellClassName} style={cellStyle} />)}
+                </Fragment>
               );
             })}
           </div>

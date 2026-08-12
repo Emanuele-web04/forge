@@ -21,7 +21,7 @@ import {
   SidebarContextMenuIcon,
 } from "~/components/sidebarContextMenuStyles";
 import { SidebarMenuButton } from "~/components/ui/sidebar";
-import { ProfileAvatar } from "~/components/profile/ProfileAvatar";
+import { ProfileAvatar } from "@synara/profile-ui/avatar";
 import { ChevronUpIcon, ExternalLinkIcon, SettingsIcon } from "~/lib/icons";
 import { openExternalLink } from "~/lib/linkChips";
 import { cn, isMacPlatform } from "~/lib/utils";

@@ -88,6 +88,13 @@ export const PushUsageResponse = Schema.Struct({
 });
 export type PushUsageResponse = typeof PushUsageResponse.Type;
 
+/** Prompt count per localized hour of day, 0–23; the active-hours chart. */
+export const UsageSummaryHour = Schema.Struct({
+  hour: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(23)),
+  prompts: NonNegativeInt,
+});
+export type UsageSummaryHour = typeof UsageSummaryHour.Type;
+
 // ── Public profile ───────────────────────────────────────────────────
 
 /**
@@ -116,8 +123,15 @@ export type PublicProfileHeatmapDay = typeof PublicProfileHeatmapDay.Type;
 
 /**
  * What `GET /api/v1/profiles/:handle` serves for a profile whose owner made
- * it public. Identity plus aggregated usage — never skills, never
- * environments, never anything content-shaped.
+ * it public. Identity plus aggregated usage at the SAME depth as the owner's
+ * own view — the deliberate exclusions are skills (what someone works on)
+ * and environment ids (which machines they own); everything else is an
+ * aggregate of already-public numbers and hiding it would just make the
+ * page thinner than the app for no privacy gain.
+ *
+ * Days and hours are bucketed with the profile owner's `utcOffsetMinutes`
+ * (stored on the profile at update time), not the viewer's: the page shows
+ * one truth about the owner's rhythm, the same one their app shows them.
  */
 export const PublicProfile = Schema.Struct({
   handle: Schema.String,
@@ -131,6 +145,18 @@ export const PublicProfile = Schema.Struct({
   models: Schema.Array(PublicProfileModelUsage),
   /** Most recent days first is NOT guaranteed; consumers sort by day. */
   heatmap: Schema.Array(PublicProfileHeatmapDay),
+  /** The busiest day's tokens and when, or null before any usage. */
+  peakDay: Schema.NullOr(
+    Schema.Struct({
+      day: Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/)),
+      tokens: NonNegativeInt,
+    }),
+  ),
+  /** Prompt count per hour of day (owner-local), 0-23; the active-hours chart. */
+  hours: Schema.Array(UsageSummaryHour),
+  /** Current/longest consecutive active days, derived from the heatmap. */
+  currentStreakDays: NonNegativeInt,
+  longestStreakDays: NonNegativeInt,
 });
 export type PublicProfile = typeof PublicProfile.Type;
 
@@ -150,13 +176,6 @@ export const UsageSummaryDay = Schema.Struct({
   turns: NonNegativeInt,
 });
 export type UsageSummaryDay = typeof UsageSummaryDay.Type;
-
-/** Prompt count per localized hour of day, 0–23; the active-hours chart. */
-export const UsageSummaryHour = Schema.Struct({
-  hour: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(23)),
-  prompts: NonNegativeInt,
-});
-export type UsageSummaryHour = typeof UsageSummaryHour.Type;
 
 /** Lifetime skill/agent runs, owner-only — never part of a public payload. */
 export const UsageSummarySkill = Schema.Struct({

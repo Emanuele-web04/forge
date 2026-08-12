@@ -1,10 +1,10 @@
-// FILE: ProfileAvatar.tsx
+// FILE: avatar.tsx
 // Purpose: Single source of truth for the profile avatar — renders the user's photo when
 // set, otherwise the accent-colored circle with initials. Shared by the Profile header,
-// the Edit dialog, and the shareable card so the three never drift.
-// Layer: web profile feature.
+// the Edit dialog, the shareable card, and the public profile page so they never drift.
+// Layer: profile-ui shared component.
 
-import { cn } from "~/lib/utils";
+import { cn } from "./cn";
 
 interface ProfileAvatarProps {
   readonly initials: string;

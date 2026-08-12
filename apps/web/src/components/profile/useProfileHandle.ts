@@ -5,7 +5,7 @@
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { Schema } from "effect";
-import { normalizeHandle } from "./profileFormatting";
+import { normalizeHandle } from "@synara/profile-ui/formatting";
 
 const PROFILE_HANDLE_STORAGE_KEY = "synara:profile:handle:v1";
 

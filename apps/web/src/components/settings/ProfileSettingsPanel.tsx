@@ -21,7 +21,9 @@ import { CentralIcon } from "~/lib/central-icons";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { ActivityHeatmap } from "../profile/ActivityHeatmap";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { ActivityHeatmap, heatmapTooltipText } from "@synara/profile-ui/heatmap";
+import { InsightRow, ModelUsageRow, StatTileGrid } from "@synara/profile-ui/sections";
 import {
   selectProfileHeatmap,
   selectProfileModelUsage,
@@ -30,13 +32,13 @@ import {
 import { ShareDialog } from "../profile/ShareDialog";
 import { EditProfileDialog } from "../profile/EditProfileDialog";
 import { useProfileIdentity } from "../profile/useProfileIdentity";
-import { ProfileAvatar } from "../profile/ProfileAvatar";
+import { ProfileAvatar } from "@synara/profile-ui/avatar";
 import {
   formatCompact,
   formatDays,
   formatNumber,
   toDisplayName,
-} from "../profile/profileFormatting";
+} from "@synara/profile-ui/formatting";
 import { SettingsSegmentedControl } from "./SettingControls";
 
 type StatsScope = "device" | "account";
@@ -362,16 +364,6 @@ function AccountStatsSkeleton() {
 
 // ── Shared sections (device + account views) ──────────────────────────
 
-function StatTileGrid({ tiles }: { tiles: readonly { label: string; value: string | null }[] }) {
-  return (
-    <div className="grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
-      {tiles.map((tile) => (
-        <StatTile key={tile.label} label={tile.label} value={tile.value} />
-      ))}
-    </div>
-  );
-}
-
 function HeatmapSection({
   pending,
   cells,
@@ -392,8 +384,15 @@ function HeatmapSection({
           fill
           radius={5}
           gap={3}
-          tooltip
-          tooltipUnit={unit}
+          renderTooltip={(cell, cellNode) => (
+            <Tooltip>
+              {/* delay={0}: heatmap tooltips open instantly on hover (no Base UI 600ms default). */}
+              <TooltipTrigger delay={0} render={cellNode} />
+              <TooltipPopup side="top" sideOffset={6}>
+                {heatmapTooltipText(cell, unit)}
+              </TooltipPopup>
+            </Tooltip>
+          )}
           showMonths
           monthsPosition="bottom"
         />
@@ -467,7 +466,13 @@ function ModelUsageSection({
           {entries.slice(0, 6).map((entry) => (
             <ModelUsageRow
               key={`${entry.provider}:${entry.model}`}
-              provider={entry.provider}
+              icon={
+                entry.provider !== "unknown" ? (
+                  <ProviderIcon provider={entry.provider} className="size-3.5 shrink-0" />
+                ) : (
+                  <CentralIcon name="chart-2" className="size-3.5 shrink-0 text-muted-foreground" />
+                )
+              }
               model={entry.model}
               percent={entry.percent}
             />
@@ -481,30 +486,6 @@ function ModelUsageSection({
 }
 
 // ── Small pieces ───────────────────────────────────────────────────────
-
-function StatTile({ label, value }: { label: string; value: string | null }) {
-  return (
-    <div className="flex flex-col items-center gap-0.5 px-3 py-3">
-      {value === null ? (
-        <Skeleton className="h-4 w-12" />
-      ) : (
-        <span className="text-sm font-normal tabular-nums text-foreground">{value}</span>
-      )}
-      <span className="text-sm font-normal text-muted-foreground">{label}</span>
-    </div>
-  );
-}
-
-function InsightRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="shrink-0 text-sm text-muted-foreground">{label}</dt>
-      <dd className="truncate text-sm font-normal tabular-nums" title={value}>
-        {value}
-      </dd>
-    </div>
-  );
-}
 
 function formatHour(hour: number): string {
   const normalized = ((hour % 24) + 24) % 24;
@@ -546,38 +527,6 @@ function formatProviderLabel(provider: ProviderKind): string {
     case "pi":
       return "Pi";
   }
-}
-
-function ModelUsageRow({
-  provider,
-  model,
-  percent,
-}: {
-  provider: ProviderKind | "unknown";
-  model: string;
-  percent: number;
-}) {
-  return (
-    <li className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="flex min-w-0 items-center gap-2">
-          {provider !== "unknown" ? (
-            <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
-          ) : (
-            <CentralIcon name="chart-2" className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate">{model}</span>
-        </span>
-        <span className="shrink-0 tabular-nums text-muted-foreground">{percent}%</span>
-      </div>
-      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full rounded-full bg-[var(--info)]"
-          style={{ width: `${Math.min(100, Math.max(2, percent))}%` }}
-        />
-      </div>
-    </li>
-  );
 }
 
 function ProfileSkeleton() {

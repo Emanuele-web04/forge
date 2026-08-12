@@ -19,7 +19,7 @@ import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
 import { toastManager } from "~/components/ui/toast";
 import { dialogFieldLabelClassName } from "~/components/ui/dialog";
-import { ProfileAvatar } from "~/components/profile/ProfileAvatar";
+import { ProfileAvatar } from "@synara/profile-ui/avatar";
 import { PROFILE_AVATAR_COLORS } from "~/components/profile/useProfileAvatarColor";
 import { useAccount } from "~/hooks/useAccount";
 import {

@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -63,6 +64,9 @@ export const profiles = pgTable("profiles", {
   // Opt-in, default private: a profile is served at trysynara.com/@handle
   // exactly when its owner flipped this on.
   public: boolean("public").notNull().default(false),
+  // The owner's UTC offset at last profile save, so public day/hour
+  // bucketing shows the owner's rhythm rather than the viewer's clock.
+  utcOffsetMinutes: integer("utc_offset_minutes").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

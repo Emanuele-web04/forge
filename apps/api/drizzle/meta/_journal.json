@@ -43,6 +43,13 @@
       "when": 1786479664343,
       "tag": "0005_profiles_public_usage_stats",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786531897508,
+      "tag": "0006_profile_utc_offset",
+      "breakpoints": true
     }
   ]
 }

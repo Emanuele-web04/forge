@@ -300,7 +300,7 @@ import {
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
 } from "../lib/runtimeMode";
-import { SynaraLogo } from "./SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import {
   formatShortcutLabel,

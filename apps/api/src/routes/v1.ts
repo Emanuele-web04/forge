@@ -478,6 +478,10 @@ export function createV1Routes(deps: {
     }
 
     try {
+      const clampedOffset =
+        parsed.utcOffsetMinutes !== undefined
+          ? Math.max(-720, Math.min(840, parsed.utcOffsetMinutes))
+          : undefined;
       await db
         .insert(profiles)
         .values({
@@ -488,6 +492,7 @@ export function createV1Routes(deps: {
           // Absent means "leave visibility alone" on update and "private" on
           // first write — the safe default either way.
           ...(parsed.public !== undefined ? { public: parsed.public } : {}),
+          ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
         })
         // Only the editable columns are updated. `handle` is excluded rather
         // than written back identically: the guard above already refused a
@@ -499,6 +504,7 @@ export function createV1Routes(deps: {
             displayName: parsed.displayName,
             avatarColor: parsed.avatarColor,
             ...(parsed.public !== undefined ? { public: parsed.public } : {}),
+            ...(clampedOffset !== undefined ? { utcOffsetMinutes: clampedOffset } : {}),
             updatedAt: new Date(),
           },
         });
@@ -916,10 +922,13 @@ export function createV1Routes(deps: {
    * the profile public. An unknown handle and a private profile answer the
    * same 404, so the route reveals nothing the owner did not publish.
    *
-   * The payload is identity plus usage aggregated across every environment:
-   * per provider/model/reasoning splits and a daily heatmap. Skill stats and
-   * environment ids never appear — which skills someone runs reveals what
-   * they work on, and which machines they own is nobody's business.
+   * The payload is identity plus usage aggregated across every environment,
+   * at the SAME depth the owner's own view has: model/reasoning splits, a
+   * daily heatmap, peak day, hour histogram, and streaks — all bucketed in
+   * the OWNER's stored UTC offset, so the page shows the rhythm their app
+   * shows them. The deliberate exclusions are skill stats and environment
+   * ids — which skills someone runs reveals what they work on, and which
+   * machines they own is nobody's business.
    */
   v1.get("/profiles/:handle", async (c) => {
     if (!publicProfileRateLimiter.tryConsume(callerIp(c))) {
@@ -934,6 +943,13 @@ export function createV1Routes(deps: {
     if (!row || !row.public) {
       return errorResponse(c, 404, "profile_not_found", "No public profile by that handle");
     }
+
+    // The OWNER's offset, stored at profile save — inlined for the same
+    // SELECT/GROUP BY reason as the summary route, safe because it is a
+    // clamped integer column.
+    const ownerLocalMinute = sql`(${usageModelStats.minute} + make_interval(mins => ${sql.raw(
+      String(row.utcOffsetMinutes),
+    )}))`;
 
     const models = await db
       .select({
@@ -951,7 +967,7 @@ export function createV1Routes(deps: {
 
     const heatmap = await db
       .select({
-        day: sql<string>`to_char(${usageModelStats.minute} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`,
+        day: sql<string>`to_char(${ownerLocalMinute} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`,
         tokens: sql<string>`COALESCE(SUM(${usageModelStats.tokens}), 0)`,
         prompts: sql<string>`COALESCE(SUM(${usageModelStats.prompts}), 0)`,
       })
@@ -963,7 +979,16 @@ export function createV1Routes(deps: {
           sql`${usageModelStats.minute} >= now() - interval '366 days'`,
         ),
       )
-      .groupBy(sql`to_char(${usageModelStats.minute} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`);
+      .groupBy(sql`to_char(${ownerLocalMinute} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`);
+
+    const hours = await db
+      .select({
+        hour: sql<string>`extract(hour from ${ownerLocalMinute} AT TIME ZONE 'UTC')`,
+        prompts: sql<string>`COALESCE(SUM(${usageModelStats.prompts}), 0)`,
+      })
+      .from(usageModelStats)
+      .where(eq(usageModelStats.userId, row.userId))
+      .groupBy(sql`extract(hour from ${ownerLocalMinute} AT TIME ZONE 'UTC')`);
 
     const modelRows: PublicProfileModelUsage[] = models.map((entry) => ({
       provider: entry.provider,
@@ -979,6 +1004,44 @@ export function createV1Routes(deps: {
       tokens: Number(entry.tokens),
       prompts: Number(entry.prompts),
     }));
+    const hourRows = hours.map((entry) => ({
+      hour: Number(entry.hour),
+      prompts: Number(entry.prompts),
+    }));
+
+    // Peak day and streaks derive from the (owner-local) heatmap days. The
+    // current streak is anchored on the owner's local today; an active
+    // yesterday keeps it alive, matching the in-app derivation.
+    const peak = heatmapRows.reduce<PublicProfile["peakDay"]>(
+      (best, entry) =>
+        entry.tokens > 0 && (best === null || entry.tokens > best.tokens)
+          ? { day: entry.day, tokens: entry.tokens }
+          : best,
+      null,
+    );
+    const activeDays = heatmapRows
+      .filter((entry) => entry.tokens > 0 || entry.prompts > 0)
+      .map((entry) => entry.day)
+      .sort();
+    const dayMs = 24 * 60 * 60 * 1000;
+    let longestStreakDays = 0;
+    let run = 0;
+    let previous: number | null = null;
+    for (const day of activeDays) {
+      const at = Date.parse(`${day}T00:00:00Z`);
+      run = previous !== null && at - previous === dayMs ? run + 1 : 1;
+      longestStreakDays = Math.max(longestStreakDays, run);
+      previous = at;
+    }
+    const ownerToday = new Date(Date.now() + row.utcOffsetMinutes * 60_000)
+      .toISOString()
+      .slice(0, 10);
+    const lastActive = activeDays[activeDays.length - 1];
+    const currentStreakDays =
+      lastActive !== undefined &&
+      Date.parse(`${ownerToday}T00:00:00Z`) - Date.parse(`${lastActive}T00:00:00Z`) <= dayMs
+        ? run
+        : 0;
 
     const body: PublicProfile = {
       handle: row.handle,
@@ -990,6 +1053,10 @@ export function createV1Routes(deps: {
       lifetimeTurns: modelRows.reduce((total, entry) => total + entry.turns, 0),
       models: modelRows,
       heatmap: heatmapRows,
+      peakDay: peak,
+      hours: hourRows,
+      currentStreakDays,
+      longestStreakDays,
     };
     return c.json(body);
   });
