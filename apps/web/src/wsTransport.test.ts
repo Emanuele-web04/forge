@@ -636,6 +636,16 @@ describe("WsTransport", () => {
     }
   });
 
+  it("forgets resnapshot retry state when a stream is explicitly stopped", async () => {
+    const { internals } = makeBareTransport();
+    const key = "orchestration.thread:stopped-resnapshot";
+    internals.streamResnapshotRetries.set(key, MAX_RESNAPSHOT_RETRY_ATTEMPTS);
+
+    await internals.stopStream(key);
+
+    expect(internals.streamResnapshotRetries.has(key)).toBe(false);
+  });
+
   it("classifies transport-runtime interrupts as retryable typed failures", () => {
     expect(isRuntimeInterruptFailure(new Error("All fibers interrupted without error"))).toBe(true);
     expect(isRuntimeInterruptFailure(new Error("Missing runtime for WebSocket RPC client"))).toBe(

@@ -1789,6 +1789,7 @@ export class WsTransport {
       this.streamCapacityRetries.delete(key);
       this.streamDuplicateRetries.delete(key);
       this.streamThreadBootstrapRetries.delete(key);
+      this.streamResnapshotRetries.delete(key);
     }
     this.streamCompletionRetries.delete(key);
     this.activeThreadStreamInputs.delete(key);
