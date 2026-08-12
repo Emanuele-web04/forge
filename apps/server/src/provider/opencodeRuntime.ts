@@ -7,7 +7,12 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@synara/contracts";
+import type {
+  ChatAttachment,
+  ProviderApprovalDecision,
+  ProviderInteractionMode,
+  RuntimeMode,
+} from "@synara/contracts";
 import {
   type ConsoleState,
   createOpencodeClient,
@@ -778,7 +783,7 @@ export function toOpenCodeFileParts(input: {
 
 export function buildOpenCodePermissionRules(
   runtimeMode: RuntimeMode,
-  interactionMode: "default" | "plan" = "default",
+  interactionMode: ProviderInteractionMode = "default",
 ): PermissionRuleset {
   if (interactionMode === "plan") {
     // OpenCode evaluates the last matching rule. Start closed, then allow only

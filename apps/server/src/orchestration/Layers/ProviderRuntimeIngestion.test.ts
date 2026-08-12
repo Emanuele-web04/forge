@@ -794,6 +794,220 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.messages.find((message) => message.id === messageId)?.text).toBe("streamed once");
   });
 
+  it("marks streamed assistant text segments at tool-intervention boundaries", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-segment-interleave");
+    const itemId = asItemId("item-segment-interleave");
+    const threadId = asThreadId("thread-1");
+    const push = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+    const eventId = (suffix: string) => asEventId(`evt-segment-${suffix}`);
+    // Plan text before any tool activity.
+    await push({
+      type: "content.delta",
+      eventId: eventId("1"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:00.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Plan: " },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("2"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:01.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "scan files." },
+    });
+    // A tool call runs between the second and third text deltas.
+    const toolItemId = asItemId("tool-segment-interleave");
+    await push({
+      type: "item.started",
+      eventId: eventId("3"),
+      provider: "pi",
+      // Provider events can share the same millisecond. The causal event
+      // boundary must still split assistant text around the tool row.
+      createdAt: "2026-07-14T00:10:01.000Z",
+      threadId,
+      turnId,
+      itemId: toolItemId,
+      payload: { itemType: "command_execution", status: "inProgress", title: "fd" },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("4"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:01.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Found the file: " },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("5"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:21.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "a.test.ts" },
+    });
+    await push({
+      type: "item.completed",
+      eventId: eventId("6"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:30.000Z",
+      threadId,
+      turnId,
+      itemId: toolItemId,
+      payload: { itemType: "command_execution", status: "completed", title: "fd" },
+    });
+    await push({
+      type: "content.delta",
+      eventId: eventId("7"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:40.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "Done." },
+    });
+    await push({
+      type: "item.completed",
+      eventId: eventId("8"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:10:45.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === "assistant:item-segment-interleave" && message.streaming === false,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry) => entry.id === "assistant:item-segment-interleave",
+    );
+    const toolStarted = thread.activities.find((activity) => activity.kind === "tool.started");
+    expect(message?.text).toBe("Plan: scan files.Found the file: a.test.tsDone.");
+    expect(
+      message?.textSegments?.map(({ startedAt, endedAt, text }) => ({
+        startedAt,
+        endedAt,
+        text,
+      })),
+    ).toEqual([
+      {
+        startedAt: "2026-07-14T00:10:00.000Z",
+        // Buffered turns flush all segments at the terminal event, so the
+        // emit-time is the completion's time; only startedAt drives the
+        // interleaved timeline position.
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Plan: scan files.",
+      },
+      {
+        startedAt: "2026-07-14T00:10:01.000Z",
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Found the file: a.test.ts",
+      },
+      {
+        startedAt: "2026-07-14T00:10:40.000Z",
+        endedAt: "2026-07-14T00:10:45.000Z",
+        text: "Done.",
+      },
+    ]);
+    expect(message?.textSegments?.[0]?.sequence).toBeLessThan(toolStarted?.sequence ?? -1);
+    expect(toolStarted?.sequence).toBeLessThan(message?.textSegments?.[1]?.sequence ?? -1);
+  });
+
+  it("does not split assistant text for a row emitted by another thread", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-07-14T00:20:00.000Z";
+    const secondThreadId = asThreadId("thread-2");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-2-create"),
+        threadId: secondThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Second Thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const firstThreadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-thread-scoped-segments");
+    const itemId = asItemId("item-thread-scoped-segments");
+    const push = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+    await push({
+      type: "content.delta",
+      eventId: asEventId("evt-thread-scoped-segment-1"),
+      provider: "pi",
+      createdAt,
+      threadId: firstThreadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "One " },
+    });
+    await push({
+      type: "runtime.warning",
+      eventId: asEventId("evt-thread-scoped-warning"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:20:01.000Z",
+      threadId: secondThreadId,
+      payload: { message: "Unrelated warning" },
+    });
+    await push({
+      type: "content.delta",
+      eventId: asEventId("evt-thread-scoped-segment-2"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:20:02.000Z",
+      threadId: firstThreadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: "message." },
+    });
+    await push({
+      type: "item.completed",
+      eventId: asEventId("evt-thread-scoped-complete"),
+      provider: "pi",
+      createdAt: "2026-07-14T00:20:03.000Z",
+      threadId: firstThreadId,
+      turnId,
+      itemId,
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === "assistant:item-thread-scoped-segments" && message.streaming === false,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry) => entry.id === "assistant:item-thread-scoped-segments",
+    );
+    expect(message?.text).toBe("One message.");
+    expect(message?.textSegments).toBeUndefined();
+  });
+
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -4362,6 +4576,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.text.length).toBe(oversizedText.length);
     expect(message?.text).toBe(oversizedText);
     expect(message?.streaming).toBe(false);
+    expect(message?.textSegments).toBeUndefined();
   });
 
   it("does not duplicate assistant completion when item.completed is followed by turn.completed", async () => {

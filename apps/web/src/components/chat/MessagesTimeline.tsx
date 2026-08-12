@@ -1261,7 +1261,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           ? "pb-1"
           : row.kind === "work" ||
               row.kind === "working-header" ||
-              (row.kind === "message" && row.message.role === "assistant")
+              (row.kind === "message" && row.message.role === "assistant") ||
+              row.kind === "message-segment"
             ? "pb-2"
             : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -1379,6 +1380,27 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           );
         })()}
 
+      {row.kind === "message-segment" &&
+        (() => {
+          const segmentText =
+            row.message.textSegments?.[row.segmentIndex]?.text ?? row.message.text;
+          if (segmentText.trim().length === 0) {
+            return null;
+          }
+          return (
+            <div className="chat-message-segment flex flex-col gap-1.5 pl-[2px] pr-[2px]">
+              <div className="text-muted-foreground/80">
+                <ChatMarkdown
+                  text={segmentText}
+                  cwd={markdownCwd}
+                  isStreaming={false}
+                  style={chatTypographyStyle}
+                  onImageExpand={onImageExpand}
+                />
+              </div>
+            </div>
+          );
+        })()}
       {row.kind === "message" &&
         row.message.role === "user" &&
         (() => {

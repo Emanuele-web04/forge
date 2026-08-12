@@ -9,6 +9,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "compact",
   "model",
   "plan",
+  "debug",
   "default",
   "review",
   "fork",

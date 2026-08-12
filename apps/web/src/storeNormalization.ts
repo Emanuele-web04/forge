@@ -213,6 +213,50 @@ export function arraysShallowEqual<T>(
   return true;
 }
 
+/**
+ * Structural equality for the message's text-segment list (streamed assistant
+ * slices). Used on the normalize fast path so segment updates propagate when
+ * deltas extend or re-slice a message.
+ */
+export function textSegmentArraysEqual(
+  left:
+    | ReadonlyArray<{
+        readonly sequence: number;
+        readonly startedAt: string;
+        readonly endedAt: string;
+        readonly text: string;
+      }>
+    | undefined,
+  right:
+    | ReadonlyArray<{
+        readonly sequence: number;
+        readonly startedAt: string;
+        readonly endedAt: string;
+        readonly text: string;
+      }>
+    | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftSegment = left[index]!;
+    const rightSegment = right[index]!;
+    if (
+      leftSegment.sequence !== rightSegment.sequence ||
+      leftSegment.startedAt !== rightSegment.startedAt ||
+      leftSegment.endedAt !== rightSegment.endedAt ||
+      leftSegment.text !== rightSegment.text
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function providerReferenceArraysEqual(
   left:
     | ReadonlyArray<Pick<NonNullable<ChatMessage["mentions"]>[number], "name" | "path">>
@@ -495,6 +539,7 @@ export function normalizeChatMessage(
     previous.source === incoming.source &&
     previous.completedAt === completedAt &&
     previous.attachments === attachments &&
+    textSegmentArraysEqual(previous.textSegments, incoming.textSegments) &&
     providerReferenceArraysEqual(previousSkills, skills) &&
     providerReferenceArraysEqual(previousMentions, mentions)
   ) {
@@ -505,6 +550,9 @@ export function normalizeChatMessage(
     id: incoming.id,
     role: incoming.role,
     text: incoming.text,
+    ...(incoming.textSegments !== undefined && incoming.textSegments.length > 0
+      ? { textSegments: [...incoming.textSegments] }
+      : {}),
     ...(incoming.dispatchMode ? { dispatchMode: incoming.dispatchMode } : {}),
     ...(incoming.dispatchOrigin ? { dispatchOrigin: incoming.dispatchOrigin } : {}),
     turnId: incoming.turnId,

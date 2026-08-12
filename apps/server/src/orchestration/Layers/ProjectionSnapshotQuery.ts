@@ -40,6 +40,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import {
   isPersistenceError,
+  ProjectionStateIncompleteError,
   toPersistenceDecodeError,
   toPersistenceSqlOrDecodeError,
   toPersistenceSqlError,
@@ -58,6 +59,10 @@ import {
   type ProjectionThreadMessageDbRow,
 } from "../../persistence/projectionThreadMessageRow.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
+import {
+  ProjectionThreadMessageSegmentDbRow,
+  type ProjectionThreadMessageTextSegment,
+} from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
@@ -168,6 +173,9 @@ const ProjectionStateDbRowSchema = ProjectionState;
 const ProjectionCountsRowSchema = Schema.Struct({
   projectCount: Schema.Number,
   threadCount: Schema.Number,
+});
+const EmptyProjectShellRepairRowSchema = Schema.Struct({
+  required: Schema.Number,
 });
 const WorkspaceRootLookupInput = Schema.Struct({
   workspaceRoot: Schema.String,
@@ -328,7 +336,7 @@ function decodeProjectionThreadOption(
   );
 }
 
-const REQUIRED_SNAPSHOT_PROJECTORS = [
+export const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.hot,
   ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
 ] as const;
@@ -502,6 +510,35 @@ function collectProjectedMessages(rows: ReadonlyArray<ProjectionThreadMessageDbR
     pushGrouped(byThread, row.threadId, orchestrationMessageFromProjectionRow(row));
   }
   return { byThread, updatedAt };
+}
+
+function attachThreadMessageSegments(
+  rows: ReadonlyArray<ProjectionThreadMessageDbRow>,
+  segmentRows: ReadonlyArray<ProjectionThreadMessageSegmentDbRow>,
+): ReadonlyArray<ProjectionThreadMessageDbRow> {
+  if (segmentRows.length === 0) {
+    return rows;
+  }
+  const segmentsByMessage = new Map<string, ProjectionThreadMessageTextSegment[]>();
+  for (const segment of segmentRows) {
+    const key = JSON.stringify([segment.threadId, segment.messageId]);
+    const entry = {
+      sequence: segment.sequence,
+      startedAt: segment.startedAt,
+      endedAt: segment.endedAt,
+      text: segment.text,
+    };
+    const existing = segmentsByMessage.get(key);
+    if (existing) {
+      existing.push(entry);
+    } else {
+      segmentsByMessage.set(key, [entry]);
+    }
+  }
+  return rows.map((row) => {
+    const rowSegments = segmentsByMessage.get(JSON.stringify([row.threadId, row.messageId]));
+    return rowSegments ? { ...row, textSegments: rowSegments } : row;
+  });
 }
 
 function collectProjectedProposedPlans(rows: ReadonlyArray<ProjectionThreadProposedPlanDbRow>): {
@@ -715,28 +752,51 @@ function toProjectedThread(input: {
   };
 }
 
+/**
+ * Derive the snapshot fence from projector cursor rows.
+ *
+ * An empty cursor table is a fresh database, whose fence is legitimately 0. A
+ * non-empty table missing a required cursor is a different situation entirely:
+ * the fence is unknown, and mapping it to 0 would report the snapshot as
+ * "high-water events behind" forever — every stream (re)start would demand a
+ * resnapshot that can never succeed. That state is only reachable through an
+ * interrupted projection repair, so it fails with a typed
+ * ProjectionStateIncompleteError instead of silently degrading. The projection
+ * bootstrap reconstructs the hot cursor on startup (see
+ * initializeHotProjectionCursor), so the error also self-heals on restart.
+ */
 function computeSnapshotSequence(
   stateRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionStateDbRowSchema>>,
-): number {
+): Effect.Effect<number, ProjectionStateIncompleteError> {
   if (stateRows.length === 0) {
-    return 0;
+    return Effect.succeed(0);
   }
   const sequenceByProjector = new Map(
     stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
   );
 
   let minSequence = Number.POSITIVE_INFINITY;
+  const missingProjectors: string[] = [];
   for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
     const sequence = sequenceByProjector.get(projector);
     if (sequence === undefined) {
-      return 0;
+      missingProjectors.push(projector);
+      continue;
     }
     if (sequence < minSequence) {
       minSequence = sequence;
     }
   }
+  if (missingProjectors.length > 0) {
+    return Effect.fail(
+      new ProjectionStateIncompleteError({
+        missingProjectors,
+        knownProjectors: stateRows.map((row) => row.projector),
+      }),
+    );
+  }
 
-  return Number.isFinite(minSequence) ? minSequence : 0;
+  return Effect.succeed(Number.isFinite(minSequence) ? minSequence : 0);
 }
 
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
@@ -992,6 +1052,42 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listThreadMessageSegmentRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadMessageSegmentDbRow,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          sequence,
+          started_at AS "startedAt",
+          ended_at AS "endedAt",
+          text
+        FROM message_text_segments
+        WHERE thread_id IN (SELECT thread_id FROM projection_threads WHERE deleted_at IS NULL)
+        ORDER BY sequence ASC, message_id ASC
+      `,
+  });
+
+  const listThreadMessageSegmentRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadMessageSegmentDbRow,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          sequence,
+          started_at AS "startedAt",
+          ended_at AS "endedAt",
+          text
+        FROM message_text_segments
+        WHERE thread_id = ${threadId}
+        ORDER BY sequence ASC, message_id ASC
+      `,
+  });
+
   const listThreadProposedPlanRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadProposedPlanDbRowSchema,
@@ -1243,6 +1339,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_applied_sequence AS "lastAppliedSequence",
           updated_at AS "updatedAt"
         FROM projection_state
+      `,
+  });
+
+  const readEmptyProjectShellRepair = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: EmptyProjectShellRepairRowSchema,
+    execute: () =>
+      sql`
+        SELECT EXISTS (
+          SELECT 1
+          FROM orchestration_events AS created
+          WHERE created.aggregate_kind = 'project'
+            AND created.event_type = 'project.created'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM orchestration_events AS deleted
+              WHERE deleted.aggregate_kind = 'project'
+                AND deleted.stream_id = created.stream_id
+                AND deleted.event_type = 'project.deleted'
+                AND deleted.sequence > created.sequence
+            )
+        ) AS required
       `,
   });
 
@@ -1885,6 +2003,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             projectRows,
             threadRows,
             messageRows,
+            segmentRows,
             proposedPlanRows,
             activityRows,
             pendingInteractionRows,
@@ -1934,6 +2053,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listThreadMessages:query",
                   "ProjectionSnapshotQuery.getSnapshot:listThreadMessages:decodeRows",
+                ),
+              ),
+            ),
+            listThreadMessageSegmentRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getSnapshot:listThreadMessageSegments:query",
+                  "ProjectionSnapshotQuery.getSnapshot:listThreadMessageSegments:decodeRows",
                 ),
               ),
             ),
@@ -1995,7 +2122,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ]);
 
-          const messages = collectProjectedMessages(messageRows);
+          const messages = collectProjectedMessages(
+            attachThreadMessageSegments(messageRows, segmentRows),
+          );
           const proposedPlans = collectProjectedProposedPlans(proposedPlanRows);
           const activities = collectProjectedActivities(activityRows);
           const pendingInteractions = collectPendingInteractions(pendingInteractionRows);
@@ -2028,7 +2157,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           );
 
           const snapshot = {
-            snapshotSequence: computeSnapshotSequence(stateRows),
+            snapshotSequence: yield* computeSnapshotSequence(stateRows),
             spaces: spaceRows.map(toProjectedSpace),
             projects,
             threads,
@@ -2172,7 +2301,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           );
 
           return yield* decodeReadModel({
-            snapshotSequence: computeSnapshotSequence(stateRows),
+            snapshotSequence: yield* computeSnapshotSequence(stateRows),
             spaces: spaceRows.map(toProjectedSpace),
             projects,
             threads,
@@ -2270,8 +2399,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updatedAt = maxOptionalIso(updatedAt, latestTurns.updatedAt);
           updatedAt = maxOptionalIso(updatedAt, sessions.updatedAt);
 
+          const shellIsEmpty =
+            !projectRows.some((row) => row.deletedAt === null) &&
+            !threadRows.some((row) => row.deletedAt === null);
+          const requiresEmptyProjectShellRepair = shellIsEmpty
+            ? yield* readEmptyProjectShellRepair(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getShellSnapshot:emptyProjectShellRepair:query",
+                    "ProjectionSnapshotQuery.getShellSnapshot:emptyProjectShellRepair:decodeRow",
+                  ),
+                ),
+                Effect.map((row) => row.required > 0),
+              )
+            : false;
+
           const snapshot = {
-            snapshotSequence: computeSnapshotSequence(stateRows),
+            snapshotSequence: yield* computeSnapshotSequence(stateRows),
+            requiresEmptyProjectShellRepair,
             spaces: spaceRows.filter((row) => row.deletedAt === null).map(toProjectedSpaceShell),
             projects: projectRows
               .filter((row) => row.deletedAt === null)
@@ -2366,10 +2511,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           "ProjectionSnapshotQuery.getSnapshotSequence:decodeRows",
         ),
       ),
-      Effect.map(
-        (stateRows): ProjectionSnapshotSequence => ({
-          snapshotSequence: computeSnapshotSequence(stateRows),
-        }),
+      Effect.flatMap((stateRows) =>
+        computeSnapshotSequence(stateRows).pipe(
+          Effect.map((snapshotSequence): ProjectionSnapshotSequence => ({ snapshotSequence })),
+        ),
       ),
     );
 
@@ -2702,6 +2847,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
       const [
         messageRows,
+        segmentRows,
         proposedPlanRows,
         activityRows,
         pendingInteractionRows,
@@ -2714,6 +2860,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             toPersistenceSqlOrDecodeError(
               `${options.tracePrefix}:listMessages:query`,
               `${options.tracePrefix}:listMessages:decodeRows`,
+            ),
+          ),
+        ),
+        listThreadMessageSegmentRowsByThread({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              `${options.tracePrefix}:listMessageSegments:query`,
+              `${options.tracePrefix}:listMessageSegments:decodeRows`,
             ),
           ),
         ),
@@ -2773,7 +2927,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           onNone: () => null,
           onSome: (row) => toProjectedLatestTurn(row),
         }),
-        messages: messageRows.map(orchestrationMessageFromProjectionRow),
+        messages: attachThreadMessageSegments(messageRows, segmentRows).map(
+          orchestrationMessageFromProjectionRow,
+        ),
         proposedPlans: proposedPlanRows.map((row) => toProjectedProposedPlan(row)),
         activities: activityRows.map((row) => toProjectedActivity(row)),
         pendingInteractions: pendingInteractionRows,
@@ -2866,14 +3022,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           if (Option.isNone(threadDetail)) {
             return Effect.succeed(Option.none<OrchestrationThreadDetailSnapshot>());
           }
-          return decodeThreadDetailSnapshot({
-            snapshotSequence: computeSnapshotSequence(stateRows),
-            thread: threadDetail.value,
-          }).pipe(
-            Effect.map((snapshot) => Option.some(snapshot)),
-            Effect.mapError(
-              toPersistenceDecodeError(
-                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:decodeSnapshot",
+          return computeSnapshotSequence(stateRows).pipe(
+            Effect.flatMap((snapshotSequence) =>
+              decodeThreadDetailSnapshot({
+                snapshotSequence,
+                thread: threadDetail.value,
+              }).pipe(
+                Effect.map((snapshot) => Option.some(snapshot)),
+                Effect.mapError(
+                  toPersistenceDecodeError(
+                    "ProjectionSnapshotQuery.getThreadDetailSnapshotById:decodeSnapshot",
+                  ),
+                ),
               ),
             ),
           );

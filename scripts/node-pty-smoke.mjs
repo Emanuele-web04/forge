@@ -47,6 +47,7 @@ try {
   fail("Failed to spawn node-pty process.", error instanceof Error ? error.stack : String(error));
 }
 
+const outputTimeoutMs = isWindows ? 15_000 : 5_000;
 const timeout = setTimeout(() => {
   try {
     terminal.kill();
@@ -54,7 +55,7 @@ const timeout = setTimeout(() => {
     // Best-effort cleanup; the failure below is the useful signal.
   }
   fail("Timed out waiting for node-pty output.", output);
-}, 5_000);
+}, outputTimeoutMs);
 
 const dataSubscription = terminal.onData((chunk) => {
   output += chunk;

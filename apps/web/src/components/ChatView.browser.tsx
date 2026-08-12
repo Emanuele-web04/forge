@@ -7115,13 +7115,51 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       await page.getByLabelText("Composer extras").click();
-      await page.getByText("Plan mode").click();
+      await page.getByText("Mode").click();
+      await page.getByRole("menuitemradio", { name: "Plan" }).click();
 
       await vi.waitFor(() => {
         expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode).toBe(
           "plan",
         );
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("activates Debug with /debug and returns to Default from the badge and /default", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-debug-mode-test" as MessageId,
+        targetText: "debug mode test",
+      }),
+    });
+
+    try {
+      const readInteractionMode = () =>
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode ?? "default";
+      const runSlashCommand = async (command: string) => {
+        useComposerDraftStore.getState().setPrompt(THREAD_ID, command);
+        const composerEditor = await waitForComposerEditor();
+        await vi.waitFor(() => expect(composerEditor.textContent ?? "").toContain(command));
+        const sendButton = await waitForSendButton();
+        expect(sendButton.disabled).toBe(false);
+        sendButton.click();
+      };
+
+      await runSlashCommand("/debug");
+      await vi.waitFor(() => expect(readInteractionMode()).toBe("debug"));
+      const debugBadge = page.getByTitle("Debug mode — click to return to normal build mode");
+      await expect.element(debugBadge).toBeInTheDocument();
+      await debugBadge.click();
+      await vi.waitFor(() => expect(readInteractionMode()).toBe("default"));
+
+      await runSlashCommand("/debug");
+      await vi.waitFor(() => expect(readInteractionMode()).toBe("debug"));
+      await runSlashCommand("/default");
+      await vi.waitFor(() => expect(readInteractionMode()).toBe("default"));
     } finally {
       await mounted.cleanup();
     }

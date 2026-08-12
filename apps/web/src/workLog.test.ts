@@ -25,6 +25,49 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
+  it("does not expose unmapped diagnostic data as a transcript preview", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unmapped-provider-event",
+          kind: "provider.event.unmapped",
+          summary: "item/future/completed",
+          payload: {
+            nativeEventType: "item/future/completed",
+            detail: "Safe provider summary",
+            data: { arbitrary: "must-not-render" },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe("Safe provider summary");
+    expect(entry?.preview).toBeUndefined();
+  });
+
+  it("does not derive unmapped details from generic raw tool output", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unmapped-provider-output",
+          kind: "provider.event.unmapped",
+          summary: "item/future/completed",
+          payload: {
+            nativeEventType: "item/future/completed",
+            data: {
+              rawOutput: { stdout: "must-not-render", error: "must-not-render-error" },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBeUndefined();
+    expect(entry?.preview).toBeUndefined();
+  });
+
   it("omits task start and completion lifecycle entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -3338,6 +3381,105 @@ describe("deriveTimelineEntries", () => {
     );
 
     expect(entries.map((entry) => entry.kind)).toEqual(["proposed-plan"]);
+  });
+
+  it("splits completed assistant messages with interleaved text segments into per-segment rows", () => {
+    const messageId = MessageId.makeUnsafe("assistant-segmented");
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: messageId,
+          role: "assistant",
+          text: "Plan: scan files.Found the largest test file: ClaudeAdapter.test.ts (~357KB).",
+          textSegments: [
+            {
+              sequence: 10,
+              startedAt: "2026-02-23T00:00:01.000Z",
+              endedAt: "2026-02-23T00:00:03.000Z",
+              text: "Plan: scan files.",
+            },
+            {
+              startedAt: "2026-02-23T00:00:01.000Z",
+              endedAt: "2026-02-23T00:00:25.000Z",
+              sequence: 30,
+              text: "Found the largest test file: ClaudeAdapter.test.ts (~357KB).",
+            },
+          ],
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "work-fd",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          sequence: 20,
+          label: "fd",
+          tone: "tool",
+        },
+        {
+          id: "work-wc",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          sequence: 40,
+          label: "wc",
+          tone: "tool",
+        },
+      ],
+    );
+
+    // The whole-message row is replaced by one row per segment, each anchored
+    // at its own start time, and the tool rows interleave between them exactly
+    // like the CLI execution order.
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "message-segment",
+      "work",
+      "message-segment",
+      "work",
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: "message-segment",
+      segmentIndex: 0,
+      createdAt: "2026-02-23T00:00:01.000Z",
+      message: { id: messageId },
+    });
+    expect(entries[2]).toMatchObject({
+      kind: "message-segment",
+      segmentIndex: 1,
+      createdAt: "2026-02-23T00:00:01.000Z",
+      message: { id: messageId },
+    });
+  });
+
+  it("keeps a single live message row while segments are still streaming", () => {
+    const messageId = MessageId.makeUnsafe("assistant-streaming-segmented");
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: messageId,
+          role: "assistant",
+          text: "partial",
+          textSegments: [
+            {
+              sequence: 10,
+              startedAt: "2026-02-23T00:00:01.000Z",
+              endedAt: "2026-02-23T00:00:03.000Z",
+              text: "partial",
+            },
+          ],
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: true,
+        },
+      ],
+      [],
+      [],
+    );
+
+    expect(entries.map((entry) => entry.kind)).toEqual(["message"]);
+    expect(entries[0]).toMatchObject({
+      kind: "message",
+      message: { id: messageId, streaming: true },
+    });
   });
 });
 

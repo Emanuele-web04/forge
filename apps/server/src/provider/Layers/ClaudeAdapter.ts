@@ -36,6 +36,7 @@ import {
   type CanonicalRequestType,
   EventId,
   type ProviderApprovalDecision,
+  type ProviderInteractionMode,
   ProviderItemId,
   type ProviderRuntimeEvent,
   type ProviderRuntimeTurnStatus,
@@ -192,7 +193,7 @@ interface ClaudeResumeState {
 interface ClaudeTurnState {
   readonly turnId: TurnId;
   readonly startedAt: string;
-  readonly interactionMode: "default" | "plan";
+  readonly interactionMode: ProviderInteractionMode;
   // True for auto-started turns that wrap assistant output arriving without an
   // active turn (background agent/subagent responses between user prompts).
   // Synthetic turns are never steered: a sendTurn auto-closes them, and a
@@ -328,7 +329,7 @@ interface ClaudeSessionContext {
   // longer prove the CLI's mode, so every turn re-sends `setPermissionMode`
   // unconditionally.
   firstTurnSpawnModeAuthoritative: boolean;
-  lastInteractionMode: "default" | "plan" | undefined;
+  lastInteractionMode: ProviderInteractionMode | undefined;
   currentApiModelId: string | undefined;
   resumeSessionId: string | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
@@ -5489,7 +5490,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       context: ClaudeSessionContext,
       threadId: ThreadId,
       interactionMode: ProviderSendTurnInput["interactionMode"],
-    ): Effect.Effect<"default" | "plan", ProviderAdapterError> =>
+    ): Effect.Effect<ProviderInteractionMode, ProviderAdapterError> =>
       Effect.gen(function* () {
         const effectiveInteractionMode = interactionMode ?? "default";
         const desiredPermissionMode: PermissionMode | undefined =

@@ -7,6 +7,7 @@ import { Cause, Effect, Exit, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ORCHESTRATION_WS_METHODS,
+  ThreadId,
   WS_CHANNELS,
   WS_METHODS,
   WS_COMPATIBILITY_QUERY,
@@ -30,9 +31,14 @@ import {
   isTerminalCompatibilityFailure,
   makeFeatureSocketUrl,
   makeNegotiateHttpUrl,
+  getResnapshotRetryDelayMs,
+  getSnapshotFaultRetryDelayMs,
+  SNAPSHOT_FAULT_RETRY_MS,
+  isRuntimeInterruptFailure,
   makeRequestAbortScope,
   negotiateOverHttp,
   serverIdentityChanged,
+  MAX_RESNAPSHOT_RETRY_ATTEMPTS,
   MAX_STREAM_DUPLICATE_RETRY_ATTEMPTS,
   MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS,
   resolveStreamAdmissionRetry,
@@ -41,6 +47,11 @@ import {
   WsTransport,
   type WsThreadStreamFailure,
 } from "./wsTransport";
+import {
+  advanceThreadDetailResumeCursor,
+  hasThreadDetailResumeCursor,
+  resetThreadDetailResumeCursorsForTests,
+} from "./threadDetailResumeCursors";
 import {
   addWsCompatibilityIssueListener,
   emitWsCompatibilityIssue,
@@ -133,6 +144,7 @@ interface WsTransportInternals {
   readonly streamCapacityRetries: Map<string, number>;
   readonly streamDuplicateRetries: Map<string, number>;
   readonly streamThreadBootstrapRetries: Map<string, number>;
+  readonly streamResnapshotRetries: Map<string, number>;
   readonly streamCapacityRetryTimers: Map<string, number>;
   readonly streamCompletionRetries: Map<string, number>;
   readonly streamCompletionRetryTimers: Map<string, number>;
@@ -174,6 +186,7 @@ function makeBareTransport(): {
     streamCapacityRetries: new Map(),
     streamDuplicateRetries: new Map(),
     streamThreadBootstrapRetries: new Map(),
+    streamResnapshotRetries: new Map(),
     streamCapacityRetryTimers: new Map(),
     streamCompletionRetries: new Map(),
     streamCompletionRetryTimers: new Map(),
@@ -381,6 +394,287 @@ describe("WsTransport", () => {
         retryable: false,
       }),
     ).toBe(true);
+  });
+
+  it("does not reconnect the socket for snapshot-fence failures", () => {
+    // Regression: ORCHESTRATION_RESNAPSHOT_REQUIRED used to fall through to a
+    // full transport reconnect, interrupting every unrelated in-flight unary
+    // RPC on a 500ms loop while a stalled projector kept the condition alive.
+    expect(
+      shouldReconnectAfterStreamFailure(
+        Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldReconnectAfterStreamFailure(
+        Cause.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldReconnectAfterStreamFailure(
+        Cause.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
+      ),
+    ).toBe(false);
+  });
+
+  it("retries resnapshot demands in place with bounded attempts", () => {
+    const resnapshot = Cause.fail({
+      code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
+      retryable: true,
+    });
+
+    expect(getResnapshotRetryDelayMs(resnapshot, 0)).toBe(250);
+    expect(getResnapshotRetryDelayMs(resnapshot, MAX_RESNAPSHOT_RETRY_ATTEMPTS)).toBeNull();
+    // The server's escalated stall verdict is final; no in-place retry.
+    expect(
+      getResnapshotRetryDelayMs(
+        Cause.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+        0,
+      ),
+    ).toBeNull();
+    expect(getResnapshotRetryDelayMs(Cause.fail(new Error("transient")), 0)).toBeNull();
+
+    expect(resolveStreamAdmissionRetry(resnapshot, 0, 0, 0, 0)).toEqual({
+      kind: "resnapshot",
+      attempt: 1,
+      delayMs: 250,
+    });
+    expect(resolveStreamAdmissionRetry(resnapshot, 0, 0, 0, MAX_RESNAPSHOT_RETRY_ATTEMPTS)).toBe(
+      null,
+    );
+  });
+
+  it("clears the thread resume cursor and retries in place on a resnapshot demand", async () => {
+    // The retried subscription must request a fresh full snapshot: resending
+    // the stale cursor would demand the same overflowing gap replay again.
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    resetThreadDetailResumeCursorsForTests();
+    try {
+      const { internals } = makeBareTransport();
+      const threadId = "thread-resnapshot";
+      const key = `orchestration.thread:${threadId}`;
+      advanceThreadDetailResumeCursor(ThreadId.makeUnsafe(threadId), 100);
+      internals.threadSubscriptions.set(threadId, { threadId, afterSequence: 100 });
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(hasThreadDetailResumeCursor(ThreadId.makeUnsafe(threadId))).toBe(false);
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(restart).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      resetThreadDetailResumeCursorsForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces a stalled-snapshot verdict as a thread stream failure without reconnecting", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const threadId = "thread-stalled";
+      const key = `orchestration.thread:${threadId}`;
+      internals.threadSubscriptions.set(threadId, { threadId });
+      const failures: WsThreadStreamFailure[] = [];
+      internals.threadStreamFailureListeners.add((failure) => failures.push(failure));
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS - 1);
+
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(restart).not.toHaveBeenCalled();
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.code).toBe("ORCHESTRATION_SNAPSHOT_STALLED");
+
+      // A snapshot fault clears only when the server heals; a slow in-place
+      // retry converges then without the user resubscribing.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("slow-retries a shell stream killed by a projection-state fault instead of leaving it dead", async () => {
+    // The shell stream has no route-level fallback: without a retry the
+    // sidebar silently freezes until an unrelated explicit resubscribe.
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.shell";
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(restart).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending snapshot-fault retry when the stream is stopped", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.shell";
+      const restart = vi.fn();
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await internals.stopStream(key);
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS * 2);
+
+      expect(restart).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies snapshot faults for the slow retry and nothing else", () => {
+    expect(
+      getSnapshotFaultRetryDelayMs(
+        Cause.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
+      ),
+    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
+    expect(
+      getSnapshotFaultRetryDelayMs(
+        Cause.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
+      ),
+    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
+    // RESNAPSHOT reaches this classifier only after its bounded fast retries
+    // are exhausted (the admission-retry path returns first): an advancing
+    // fence that has not yet closed a large gap must keep slow-retrying
+    // instead of dying while recovery is succeeding.
+    expect(
+      getSnapshotFaultRetryDelayMs(
+        Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
+      ),
+    ).toBe(SNAPSHOT_FAULT_RETRY_MS);
+    expect(getSnapshotFaultRetryDelayMs(Cause.fail(new Error("transient")))).toBeNull();
+  });
+
+  it("keeps slow-retrying an exhausted resnapshot demand instead of leaving the stream dead", async () => {
+    // A projector catching up through a backlog larger than the replay limit
+    // advances the fence on every request without closing the gap: the server
+    // keeps answering RESNAPSHOT_REQUIRED (progress is real, so it never
+    // escalates to STALLED). Once the fast retries are spent, the stream must
+    // fall back to the slow recovery path rather than dying while the server
+    // is actively healing.
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    try {
+      const { internals } = makeBareTransport();
+      const key = "orchestration.shell";
+      internals.streamResnapshotRetries.set(key, MAX_RESNAPSHOT_RETRY_ATTEMPTS);
+      const restart = vi.fn();
+      const reconnect = vi.mocked(internals.reconnect);
+
+      internals.startStream(
+        {},
+        key,
+        Stream.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
+        () => undefined,
+        restart,
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_FAULT_RETRY_MS - 1);
+      expect(restart).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forgets resnapshot retry state when a stream is explicitly stopped", async () => {
+    const { internals } = makeBareTransport();
+    const key = "orchestration.thread:stopped-resnapshot";
+    internals.streamResnapshotRetries.set(key, MAX_RESNAPSHOT_RETRY_ATTEMPTS);
+
+    await internals.stopStream(key);
+
+    expect(internals.streamResnapshotRetries.has(key)).toBe(false);
+  });
+
+  it("classifies transport-runtime interrupts as retryable typed failures", () => {
+    expect(isRuntimeInterruptFailure(new Error("All fibers interrupted without error"))).toBe(true);
+    expect(isRuntimeInterruptFailure(new Error("Missing runtime for WebSocket RPC client"))).toBe(
+      true,
+    );
+    expect(isRuntimeInterruptFailure(new Error("ManagedRuntime disposed"))).toBe(true);
+    expect(isRuntimeInterruptFailure(new Error("boom"))).toBe(false);
+    expect(isRuntimeInterruptFailure("All fibers interrupted without error")).toBe(false);
+  });
+
+  it("rejects an in-flight unary request with a typed retryable error across a reconnect", async () => {
+    // Regression for "sign-in is broken": a transport reconnect used to leak
+    // the raw squashed interrupt (`Error("All fibers interrupted without
+    // error")`) to unary callers, indistinguishable from a server error.
+    const { transport, internals } = makeBareTransport();
+    const client = { "some.method": () => Effect.never };
+    Object.assign(internals, {
+      getClient: vi.fn(async () => client),
+      getClientRuntime: () => ({
+        runPromise: () => Promise.reject(new Error("All fibers interrupted without error")),
+      }),
+    });
+
+    await expect(transport.request("some.method", {}, { timeoutMs: null })).rejects.toMatchObject({
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_RECONNECTED",
+      method: "some.method",
+      retryable: true,
+    });
   });
 
   it("retries capacity-rejected streams in place with the server-provided delay", () => {
