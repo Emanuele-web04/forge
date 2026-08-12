@@ -1,6 +1,6 @@
 import type { ServerExternalSessionSummary } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { ExternalSessionPicker } from "~/components/ExternalSessionPicker";
 import { useStore } from "~/store";
@@ -23,12 +23,19 @@ export function ImportThreadsStep(props: {
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
 
   const isPending = claudeQuery.isPending || codexQuery.isPending;
-  const sessions = sortExternalSessions([
-    ...(claudeQuery.data?.sessions ?? []),
-    ...(codexQuery.data?.sessions ?? []),
-  ]);
+  const sessions = useMemo(
+    () =>
+      sortExternalSessions([
+        ...(claudeQuery.data?.sessions ?? []),
+        ...(codexQuery.data?.sessions ?? []),
+      ]),
+    [claudeQuery.data?.sessions, codexQuery.data?.sessions],
+  );
 
-  const projectTargets = projects.map((project) => ({ id: project.id, cwd: project.cwd }));
+  const projectTargets = useMemo(
+    () => projects.map((project) => ({ id: project.id, cwd: project.cwd })),
+    [projects],
+  );
 
   const initializedSelectionRef = useRef(false);
   const bothSettled =
@@ -37,11 +44,17 @@ export function ImportThreadsStep(props: {
     (claudeQuery.isSuccess || codexQuery.isSuccess);
   const { onSelectionChange, onSessionsResolved } = props;
   useEffect(() => {
+    if (!bothSettled) {
+      return;
+    }
+    onSessionsResolved(sessions);
+  }, [bothSettled, onSessionsResolved, sessions]);
+
+  useEffect(() => {
     if (initializedSelectionRef.current || !bothSettled) {
       return;
     }
     initializedSelectionRef.current = true;
-    onSessionsResolved(sessions);
     onSelectionChange(
       new Set(
         sessions
@@ -49,7 +62,7 @@ export function ImportThreadsStep(props: {
           .map((session) => session.sessionId),
       ),
     );
-  }, [bothSettled, onSelectionChange, onSessionsResolved, projectTargets, sessions]);
+  }, [bothSettled, onSelectionChange, projectTargets, sessions]);
 
   const disabledReasonById = new Map<string, string>();
   for (const session of sessions) {

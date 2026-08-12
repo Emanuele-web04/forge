@@ -6,8 +6,8 @@ interface ForkLineageThread {
   readonly id: string;
   readonly projectId: string;
   readonly title: string;
-  readonly forkSourceThreadId?: string | null;
-  readonly sidechatSourceThreadId?: string | null;
+  readonly forkSourceThreadId?: string | null | undefined;
+  readonly sidechatSourceThreadId?: string | null | undefined;
 }
 
 interface LineageRoot {

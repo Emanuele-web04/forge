@@ -12,7 +12,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "~/components/ui/dialog";
-import { APP_DISPLAY_NAME } from "~/branding";
+import { APP_BASE_NAME } from "~/branding";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { importExternalThread } from "~/lib/threadImport";
 import { readNativeApi } from "~/nativeApi";
@@ -35,9 +35,10 @@ import { OnboardingStepFooter } from "./OnboardingStepFooter";
 import { ImportProjectsStep } from "./steps/ImportProjectsStep";
 import { ImportThreadsStep } from "./steps/ImportThreadsStep";
 import { ProvidersStep } from "./steps/ProvidersStep";
+import { WelcomeStep } from "./steps/WelcomeStep";
 
 const STEP_TITLES: Record<OnboardingStep, string> = {
-  welcome: `Welcome to ${APP_DISPLAY_NAME}`,
+  welcome: `Welcome to ${APP_BASE_NAME}!`,
   providers: "Connect your agents",
   projects: "Import your projects",
   threads: "Import your threads",
@@ -45,7 +46,7 @@ const STEP_TITLES: Record<OnboardingStep, string> = {
 };
 
 const STEP_DESCRIPTIONS: Record<OnboardingStep, string> = {
-  welcome: "One home for every coding agent you already use.",
+  welcome: "",
   providers: "Synara drives the agent CLIs installed on this machine.",
   projects: "Pick the folders you already work in.",
   threads: "Continue conversations you started in Claude Code or Codex.",
@@ -188,24 +189,27 @@ function OnboardingFlow(props: { onComplete: () => void }) {
             }
           : { label: "Continue", onPrimary: goNext };
       case "done":
-        return { label: `Open ${APP_DISPLAY_NAME}`, onPrimary: props.onComplete };
+        return { label: `Start using ${APP_BASE_NAME}`, onPrimary: props.onComplete };
     }
   })();
 
   return (
     <div className="flex flex-col outline-none" tabIndex={-1}>
-      <DialogHeader className="px-5 pt-5">
-        {step === "welcome" ? <SynaraLogo aria-hidden className="mb-4 size-10" /> : null}
-        <DialogTitle>{STEP_TITLES[step]}</DialogTitle>
-        <DialogDescription>{STEP_DESCRIPTIONS[step]}</DialogDescription>
-      </DialogHeader>
-      <DialogPanel className="px-5 py-4">
+      <DialogHeader className={step === "welcome" ? "px-6 pt-6 pb-3" : "px-5 pt-5"}>
         {step === "welcome" ? (
-          <p className="text-sm text-muted-foreground">
-            The next steps check which agent CLIs are ready, then let you bring in the projects and
-            threads you already have. Everything here is optional and available later from Settings.
-          </p>
-        ) : null}
+          <div className="flex items-center gap-5 pr-8">
+            <SynaraLogo aria-hidden className="size-9" />
+            <DialogTitle>{STEP_TITLES[step]}</DialogTitle>
+          </div>
+        ) : (
+          <>
+            <DialogTitle>{STEP_TITLES[step]}</DialogTitle>
+            <DialogDescription>{STEP_DESCRIPTIONS[step]}</DialogDescription>
+          </>
+        )}
+      </DialogHeader>
+      <DialogPanel className={step === "welcome" ? "px-6 pt-2 pb-5" : "px-5 py-4"}>
+        {step === "welcome" ? <WelcomeStep /> : null}
         {step === "providers" ? <ProvidersStep /> : null}
         {step === "projects" ? (
           <ImportProjectsStep

@@ -8,7 +8,6 @@
  */
 import {
   type ChatAttachment,
-  type CanonicalItemType,
   type CanonicalRequestType,
   type ModelSelection,
   type ProviderComposerCapabilities,
@@ -61,11 +60,11 @@ import {
   codexGeneratedImageArtifact,
   extractCodexGeneratedImageReference,
   firstStringValue,
-  isCodexGeneratedImageItemType,
   sanitizeNestedCodexGeneratedImagePayloads,
 } from "../../codexGeneratedImages.ts";
 import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
 import {
+  codexItemStatus,
   itemDetail,
   itemTitle,
   reasoningSummaryDetail,
@@ -332,19 +331,6 @@ function toTurnStatus(value: unknown): "completed" | "failed" | "cancelled" | "i
     default:
       return "completed";
   }
-}
-
-function itemStatus(
-  lifecycle: "item.started" | "item.updated" | "item.completed",
-  rawStatus: unknown,
-): "inProgress" | "completed" | "failed" | "declined" | undefined {
-  if (lifecycle === "item.started") {
-    return "inProgress";
-  }
-  if (lifecycle === "item.updated") {
-    return undefined;
-  }
-  return rawStatus === "failed" || rawStatus === "declined" ? rawStatus : "completed";
 }
 
 function toRequestTypeFromMethod(method: string): CanonicalRequestType {
@@ -740,7 +726,7 @@ function mapItemLifecycle(
   // may contain model trace data and must not leak into transcript activities.
   const detail =
     itemType === "reasoning" ? reasoningSummaryDetail(source) : itemDetail(source, payload ?? {});
-  const status = itemStatus(lifecycle, source.status);
+  const status = codexItemStatus(lifecycle, source.status);
 
   return {
     ...(generatedImageReference

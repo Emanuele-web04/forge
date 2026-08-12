@@ -2,9 +2,11 @@ import type { ProviderKind } from "@synara/contracts";
 import { useEffect, useRef } from "react";
 
 import ThreadTerminalDrawer from "~/components/ThreadTerminalDrawer";
+import { disposeAndCloseTerminalSession } from "~/components/terminal/terminalSession";
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { readNativeApi } from "~/nativeApi";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
+import { useTerminalStateStore } from "~/terminalStateStore";
 import { onboardingTerminalThreadId } from "../onboardingTerminalScope";
 
 const CONNECT_TERMINAL_HEIGHT = 280;
@@ -17,6 +19,20 @@ export function ProviderConnectTerminal(props: {
   const scopeId = onboardingTerminalThreadId(props.provider);
   const terminal = useTerminalSurfaceController(scopeId);
   const { terminalState, openTerminalThreadPage } = terminal;
+  const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
+  const terminalIdsRef = useRef(terminalState.terminalIds);
+  terminalIdsRef.current = terminalState.terminalIds;
+
+  useEffect(
+    () => () => {
+      const api = readNativeApi();
+      for (const terminalId of terminalIdsRef.current) {
+        disposeAndCloseTerminalSession({ api, threadId: scopeId, terminalId });
+      }
+      clearTerminalState(scopeId);
+    },
+    [clearTerminalState, scopeId],
+  );
 
   useEffect(() => {
     if (terminalState.terminalOpen) {

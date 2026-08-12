@@ -589,7 +589,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     customPiModels: settings.providers.pi.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
-    onboardingCompletedAt: settings.onboardingCompletedAt,
+    onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
 

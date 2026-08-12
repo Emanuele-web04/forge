@@ -23,6 +23,7 @@ import { resolveBaseCodexHomePath } from "./codexHomePaths";
 import { ServerConfig } from "./config";
 import { loadClaudeAgentSdk } from "./provider/claudeAgentSdk";
 import { listRecentCodexSessionFiles, mapWithConcurrency, safeStat } from "./providerUsageSnapshot";
+import { ServerSettingsService } from "./serverSettings";
 
 const EXTERNAL_SESSIONS_CACHE_TTL_MS = 30_000;
 const EXTERNAL_SESSIONS_SCAN_LIMIT = 500;
@@ -390,6 +391,7 @@ export async function buildProjectCandidates(input: {
 
 async function aggregateProjectCandidates(input: {
   worktreesDir: string;
+  codexHomePath?: string;
   forceRefresh?: boolean;
   projects: ReadonlyArray<{ readonly id: ProjectId; readonly workspaceRoot: string }>;
 }): Promise<ServerListExternalProjectCandidatesResult> {
@@ -402,6 +404,7 @@ async function aggregateProjectCandidates(input: {
     getCachedExternalSessions({
       provider: "codex",
       worktreesDir: input.worktreesDir,
+      ...(input.codexHomePath ? { homePath: input.codexHomePath } : {}),
       ...(input.forceRefresh !== undefined ? { forceRefresh: input.forceRefresh } : {}),
     }),
   ]);
@@ -415,9 +418,13 @@ async function aggregateProjectCandidates(input: {
 
 export const listExternalSessions = Effect.fn(function* (input: ServerListExternalSessionsInput) {
   const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const settings = yield* serverSettings.getSettings;
+  const homePath =
+    input.provider === "codex" ? (input.homePath ?? settings.providers.codex.homePath) : undefined;
   return yield* Effect.promise(() =>
     listExternalSessionsPage({
-      request: input,
+      request: homePath ? { ...input, homePath } : input,
       worktreesDir: serverConfig.worktreesDir,
     }).catch((): ServerListExternalSessionsResult => ({ sessions: [], hasMore: false })),
   );
@@ -428,9 +435,13 @@ export const listExternalProjectCandidates = Effect.fn(function* (input: {
   readonly projects: ReadonlyArray<{ readonly id: ProjectId; readonly workspaceRoot: string }>;
 }) {
   const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const settings = yield* serverSettings.getSettings;
+  const codexHomePath = settings.providers.codex.homePath;
   return yield* Effect.promise(() =>
     aggregateProjectCandidates({
       worktreesDir: serverConfig.worktreesDir,
+      ...(codexHomePath ? { codexHomePath } : {}),
       ...(input.forceRefresh !== undefined ? { forceRefresh: input.forceRefresh } : {}),
       projects: input.projects,
     }).catch((): ServerListExternalProjectCandidatesResult => ({ candidates: [] })),

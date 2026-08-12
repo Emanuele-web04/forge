@@ -51,6 +51,7 @@ export function useOnboarding(): UseOnboardingResult {
     const resolved = resolveOnboardingGate({
       threadsHydrated,
       settingsSettled,
+      settingsAvailable: settingsQuery.isSuccess,
       projectCount,
       serverCompletedAt,
       localCompletedAt,
@@ -60,7 +61,14 @@ export function useOnboarding(): UseOnboardingResult {
     }
     latchedRef.current = true;
     setGate(resolved);
-  }, [threadsHydrated, settingsSettled, projectCount, serverCompletedAt, localCompletedAt]);
+  }, [
+    threadsHydrated,
+    settingsSettled,
+    settingsQuery.isSuccess,
+    projectCount,
+    serverCompletedAt,
+    localCompletedAt,
+  ]);
 
   const complete = () => {
     const completedAt = new Date().toISOString();

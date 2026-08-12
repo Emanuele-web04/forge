@@ -1,4 +1,4 @@
-import type { CanonicalItemType } from "@synara/contracts";
+import type { CanonicalItemType, RuntimeItemStatus } from "@synara/contracts";
 
 import { isCodexGeneratedImageItemType } from "../codexGeneratedImages.ts";
 
@@ -44,6 +44,19 @@ export function toCanonicalItemType(raw: unknown): CanonicalItemType {
   if (type.includes("compact")) return "context_compaction";
   if (type.includes("error")) return "error";
   return "unknown";
+}
+
+export function codexItemStatus(
+  lifecycle: "item.started" | "item.updated" | "item.completed",
+  rawStatus: unknown,
+): RuntimeItemStatus | undefined {
+  if (lifecycle === "item.started") {
+    return "inProgress";
+  }
+  if (lifecycle === "item.updated") {
+    return undefined;
+  }
+  return rawStatus === "failed" || rawStatus === "declined" ? rawStatus : "completed";
 }
 
 export function itemTitle(itemType: CanonicalItemType): string | undefined {

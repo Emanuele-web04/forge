@@ -15,11 +15,11 @@ import {
 
 import {
   classifyToolItemType,
-  isClientSurfacedClaudeTool,
   summarizeToolRequest,
   titleForTool,
 } from "../provider/claudeToolClassification.ts";
 import {
+  codexItemStatus,
   itemDetail,
   itemTitle,
   reasoningSummaryDetail,
@@ -142,6 +142,7 @@ export function mapCodexSnapshotTranscript(input: {
       if (!isToolLifecycleItemType(canonicalItemType)) return;
       const title = itemTitle(canonicalItemType);
       const detail = itemDetail(candidate, {});
+      const status = codexItemStatus("item.completed", candidate.status) ?? "completed";
       activities.push({
         id: activityId,
         tone: "tool",
@@ -149,7 +150,7 @@ export function mapCodexSnapshotTranscript(input: {
         summary: title ?? "Tool",
         payload: toActivityPayload({
           itemType: canonicalItemType,
-          status: "completed",
+          status,
           ...(title ? { title } : {}),
           ...(detail ? { detail: truncateDetail(detail) } : {}),
           data: boundActivityData(candidate),
@@ -252,7 +253,6 @@ export function mapClaudeSessionTranscript(input: {
         }
         if (block.type === "tool_use" && typeof block.id === "string") {
           const toolName = typeof block.name === "string" ? block.name : "Tool";
-          if (isClientSurfacedClaudeTool(toolName)) return;
           const toolInput =
             block.input && typeof block.input === "object" && !Array.isArray(block.input)
               ? (block.input as Record<string, unknown>)

@@ -16,6 +16,7 @@ export type OnboardingGate = "pending" | "show" | "hidden";
 export interface OnboardingGateInputs {
   readonly threadsHydrated: boolean;
   readonly settingsSettled: boolean;
+  readonly settingsAvailable: boolean;
   readonly projectCount: number;
   readonly serverCompletedAt: string | null;
   readonly localCompletedAt: string | null;
@@ -25,7 +26,9 @@ export function resolveOnboardingGate(input: OnboardingGateInputs): OnboardingGa
   if (!input.threadsHydrated || !input.settingsSettled) {
     return "pending";
   }
-  const alreadyCompleted = input.serverCompletedAt !== null || input.localCompletedAt !== null;
+  const alreadyCompleted = input.settingsAvailable
+    ? input.serverCompletedAt !== null
+    : input.localCompletedAt !== null;
   return !alreadyCompleted && input.projectCount === 0 ? "show" : "hidden";
 }
 

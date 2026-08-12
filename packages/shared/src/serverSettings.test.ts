@@ -1,7 +1,7 @@
 import { DEFAULT_SERVER_SETTINGS, ProviderSessionStartInput } from "@synara/contracts";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { applyServerSettingsPatch, providerStartOptionsFromServerSettings } from "./serverSettings";
+import { providerStartOptionsFromServerSettings } from "./serverSettings";
 
 const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSessionStartInput);
 
@@ -105,27 +105,5 @@ describe("providerStartOptionsFromServerSettings", () => {
       serverUrl: "http://127.0.0.1:4096",
       experimentalWebSockets: true,
     });
-  });
-});
-
-describe("onboardingCompletedAt", () => {
-  it("defaults to null when decoding empty settings", () => {
-    expect(DEFAULT_SERVER_SETTINGS.onboardingCompletedAt).toBeNull();
-  });
-
-  it("is set and cleared through the generic settings patch", () => {
-    const completed = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
-      onboardingCompletedAt: "2026-08-07T12:00:00.000Z",
-    });
-    expect(completed.onboardingCompletedAt).toBe("2026-08-07T12:00:00.000Z");
-    expect(completed.enableAssistantStreaming).toBe(
-      DEFAULT_SERVER_SETTINGS.enableAssistantStreaming,
-    );
-
-    const cleared = applyServerSettingsPatch(completed, { onboardingCompletedAt: null });
-    expect(cleared.onboardingCompletedAt).toBeNull();
-
-    const untouched = applyServerSettingsPatch(completed, {});
-    expect(untouched.onboardingCompletedAt).toBe("2026-08-07T12:00:00.000Z");
   });
 });
