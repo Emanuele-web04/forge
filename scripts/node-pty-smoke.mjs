@@ -53,9 +53,7 @@ try {
     timeoutMs: isWindows ? 15_000 : 5_000,
   });
   terminal.write(
-    isWindows
-      ? `echo ${expectedOutput}\r\nexit\r\n`
-      : `printf '${expectedOutput}'\nexit\n`,
+    isWindows ? `echo ${expectedOutput}\r\nexit\r\n` : `printf '${expectedOutput}'\nexit\n`,
   );
   await smokeResult;
   console.log("[node-pty-smoke] node-pty loaded and spawned successfully.");
