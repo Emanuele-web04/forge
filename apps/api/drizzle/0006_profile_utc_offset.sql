@@ -1,0 +1,1 @@
+ALTER TABLE "profiles" ADD COLUMN "utc_offset_minutes" integer DEFAULT 0 NOT NULL;

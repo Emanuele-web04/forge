@@ -33,6 +33,23 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+/**
+ * Splits a `compressAvatarImage` data URL into the raw base64 payload and its
+ * content type, as the account upload RPC wants them. Only the compressor's
+ * own outputs (webp/jpeg base64 data URLs) are valid input; anything else is
+ * a programming error surfaced as an AvatarImageError.
+ */
+export function avatarDataUrlToUpload(dataUrl: string): {
+  bytes: string;
+  contentType: "image/webp" | "image/jpeg";
+} {
+  const match = /^data:(image\/webp|image\/jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+  if (!match) {
+    throw new AvatarImageError("Could not encode that image for upload.");
+  }
+  return { bytes: match[2]!, contentType: match[1] as "image/webp" | "image/jpeg" };
+}
+
 // Resize + center-crop to a square and re-encode (WebP, JPEG fallback) at low quality.
 export async function compressAvatarImage(file: File): Promise<string> {
   if (!file.type.startsWith("image/")) {

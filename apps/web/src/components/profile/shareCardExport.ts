@@ -16,6 +16,11 @@ const SHARE_URL = "https://trysynara.com";
 
 export type ShareTarget = "x" | "linkedin" | "reddit";
 
+/** What a share links to: the user's public profile page when they have one, the bare site otherwise. */
+export function shareLinkUrl(publicProfileUrl: string | null): string {
+  return publicProfileUrl ?? SHARE_URL;
+}
+
 // Renders the given node to a PNG blob entirely on-device (canvas serialization).
 // Passing explicit width/height keeps the export deterministic and free of trailing
 // whitespace regardless of layout measurement quirks.
@@ -61,15 +66,19 @@ export function openExternalUrl(url: string): void {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-export function shareIntentUrl(target: ShareTarget): string {
+export function shareIntentUrl(target: ShareTarget, linkUrl: string = SHARE_URL): string {
   switch (target) {
     case "x":
-      return `https://x.com/intent/tweet?text=${encodeURIComponent(SHARE_TWEET_TEXT)}`;
+      // The tweet carries no URL by default; a public profile page is worth
+      // the characters, the bare site is not.
+      return `https://x.com/intent/tweet?text=${encodeURIComponent(
+        linkUrl === SHARE_URL ? SHARE_TWEET_TEXT : `${SHARE_TWEET_TEXT} ${linkUrl}`,
+      )}`;
     case "linkedin":
-      return `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(SHARE_URL)}`;
+      return `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(linkUrl)}`;
     case "reddit":
       return `https://www.reddit.com/submit?url=${encodeURIComponent(
-        SHARE_URL,
+        linkUrl,
       )}&title=${encodeURIComponent("My Synara dev stats")}`;
   }
 }

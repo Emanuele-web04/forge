@@ -292,10 +292,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [88, "ProjectionThreadsSettledAt"],
         [89, "RecoverRetentionHiddenThreads"],
         [90, "ProjectionThreadMessageTextSegments"],
+        [91, "AccountUsageSync"],
+        [92, "AccountUsageSyncIdentity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-36), [
+      assert.deepStrictEqual(tracker.slice(-38), [
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
         { migration_id: 57, name: "ThreadScopedProjectionMessageIdentity" },
@@ -332,6 +334,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 88, name: "ProjectionThreadsSettledAt" },
         { migration_id: 89, name: "RecoverRetentionHiddenThreads" },
         { migration_id: 90, name: "ProjectionThreadMessageTextSegments" },
+        { migration_id: 91, name: "AccountUsageSync" },
+        { migration_id: 92, name: "AccountUsageSyncIdentity" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
@@ -414,6 +418,8 @@ agentGatewayRetentionLegacyLayer(
           [88, "ProjectionThreadsSettledAt"],
           [89, "RecoverRetentionHiddenThreads"],
           [90, "ProjectionThreadMessageTextSegments"],
+          [91, "AccountUsageSync"],
+          [92, "AccountUsageSyncIdentity"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -499,11 +505,13 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [88, "ProjectionThreadsSettledAt"],
         [89, "RecoverRetentionHiddenThreads"],
         [90, "ProjectionThreadMessageTextSegments"],
+        [91, "AccountUsageSync"],
+        [92, "AccountUsageSyncIdentity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-20).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-22).map((row) => [row.migration_id, row.name]),
         [
           [71, "ProjectionThreadsGatewayProvenance"],
           [72, "AgentGatewayOperationRetention"],
@@ -525,6 +533,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [88, "ProjectionThreadsSettledAt"],
           [89, "RecoverRetentionHiddenThreads"],
           [90, "ProjectionThreadMessageTextSegments"],
+          [91, "AccountUsageSync"],
+          [92, "AccountUsageSyncIdentity"],
         ],
       );
 
@@ -605,11 +615,13 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [88, "ProjectionThreadsSettledAt"],
         [89, "RecoverRetentionHiddenThreads"],
         [90, "ProjectionThreadMessageTextSegments"],
+        [91, "AccountUsageSync"],
+        [92, "AccountUsageSyncIdentity"],
       ]);
 
       const tracker = yield* trackerRows(sql);
       assert.deepStrictEqual(
-        tracker.slice(-16).map((row) => [row.migration_id, row.name]),
+        tracker.slice(-18).map((row) => [row.migration_id, row.name]),
         [
           [75, "ExternalMcpActiveCapacity"],
           [76, "ExternalMcpHardening"],
@@ -627,6 +639,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [88, "ProjectionThreadsSettledAt"],
           [89, "RecoverRetentionHiddenThreads"],
           [90, "ProjectionThreadMessageTextSegments"],
+          [91, "AccountUsageSync"],
+          [92, "AccountUsageSyncIdentity"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

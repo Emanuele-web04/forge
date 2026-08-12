@@ -7,10 +7,13 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { SiReddit, SiX } from "react-icons/si";
 import { FaLinkedinIn } from "react-icons/fa6";
-import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
+import type { AccountProfile } from "@synara/contracts";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { CopyIcon, DownloadIcon } from "~/lib/icons";
+import { profileShareUrl } from "~/lib/accountLogic";
+import { localDayKey } from "~/lib/accountUsageAdapter";
 import { cn } from "~/lib/utils";
+import type { ShareCardStats } from "./profileSelectors";
 import { SHARE_CARD_HEIGHT, SHARE_CARD_WIDTH, ShareCard } from "./ShareCard";
 import {
   copyImageToClipboard,
@@ -19,6 +22,7 @@ import {
   renderNodeToPngBlob,
   type ShareTarget,
   shareIntentUrl,
+  shareLinkUrl,
 } from "./shareCardExport";
 
 const PREVIEW_WIDTH = 480;
@@ -26,23 +30,27 @@ const CARD_EXPORT_SIZE = { width: SHARE_CARD_WIDTH, height: SHARE_CARD_HEIGHT } 
 type CopyResult = "copied" | "render-failed" | "clipboard-unavailable";
 
 interface ShareDialogProps {
-  readonly stats: ProfileStats;
-  readonly tokenStats: ProfileTokenStats | null;
+  /** The selected scope's card numbers (device or account) — see profileSelectors. */
+  readonly cardStats: ShareCardStats;
+  readonly initials: string;
   readonly displayName: string;
   readonly handle: string;
   readonly avatarColor: string;
   readonly avatarImage: string | null;
+  /** The account profile, when signed in with one — a PUBLIC profile makes shares link to its page. */
+  readonly accountProfile: Pick<AccountProfile, "handle" | "public"> | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
 
 export function ShareDialog({
-  stats,
-  tokenStats,
+  cardStats,
+  initials,
   displayName,
   handle,
   avatarColor,
   avatarImage,
+  accountProfile,
   open,
   onOpenChange,
 }: ShareDialogProps) {
@@ -112,7 +120,7 @@ export function ShareDialog({
     setStatus(null);
     return copyCardToClipboard()
       .then((copyResult) => {
-        openExternalUrl(shareIntentUrl(target));
+        openExternalUrl(shareIntentUrl(target, shareLinkUrl(profileShareUrl(accountProfile))));
         setStatus(shareStatusMessage(copyResult));
       })
       .finally(() => {
@@ -130,7 +138,7 @@ export function ShareDialog({
     return renderNodeToPngBlob(node, CARD_EXPORT_SIZE)
       .then((blob) => {
         if (blob) {
-          downloadBlob(blob, `synara-stats-${stats.timezone.today}.png`);
+          downloadBlob(blob, `synara-stats-${localDayKey()}.png`);
           setStatus("Saved PNG to your downloads.");
         } else {
           setStatus("Could not render the image.");
@@ -163,8 +171,8 @@ export function ShareDialog({
             >
               <ShareCard
                 ref={cardRef}
-                stats={stats}
-                tokenStats={tokenStats}
+                cardStats={cardStats}
+                initials={initials}
                 displayName={displayName}
                 handle={handle}
                 avatarColor={avatarColor}

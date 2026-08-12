@@ -3,6 +3,20 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import {
+  AccountAuthenticateOtpInput,
+  AccountBeginSsoInput,
+  AccountBeginSsoResult,
+  AccountCompleteSsoInput,
+  AccountMe,
+  AccountOpenVerificationUrlInput,
+  AccountSendOtpInput,
+  AccountSendOtpResult,
+  AccountStatus,
+  AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
+} from "./account";
+import { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
+import {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -1124,6 +1138,98 @@ export const WsProviderListAgentsRpc = Rpc.make(WS_METHODS.providerListAgents, {
   error: WsRpcError,
 });
 
+export const WsAccountStatusRpc = Rpc.make(WS_METHODS.accountStatus, {
+  payload: Schema.Struct({}),
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+/**
+ * Asks WorkOS to email the caller a 6-digit sign-in code. Deliberately
+ * answers the same shape whether or not the address has an account.
+ */
+export const WsAccountSendOtpRpc = Rpc.make(WS_METHODS.accountSendOtp, {
+  payload: AccountSendOtpInput,
+  success: AccountSendOtpResult,
+  error: WsRpcError,
+});
+
+/**
+ * In-app OTP sign-in — redeems the emailed 6-digit code. The payload is a
+ * credential, so it must never be logged by transport-level request tracing;
+ * see the note on {@link OtpAuthenticateRequest}.
+ */
+export const WsAccountAuthenticateOtpRpc = Rpc.make(WS_METHODS.accountAuthenticateOtp, {
+  payload: AccountAuthenticateOtpInput,
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+/**
+ * In-app email verification — redeems the emailed 6-digit code plus the
+ * pending token from an `email_verification_required` refusal. The payload is
+ * a bearer-ish secret pair, so it takes the same no-logging rule as the OTP
+ * RPC above.
+ */
+export const WsAccountBeginSsoRpc = Rpc.make(WS_METHODS.accountBeginSso, {
+  payload: AccountBeginSsoInput,
+  success: AccountBeginSsoResult,
+  error: WsRpcError,
+});
+
+/**
+ * Long-running by design: the server waits on the loopback browser callback
+ * for as long as the attempt lives. Clients must not impose their usual RPC
+ * timeout on it.
+ */
+export const WsAccountCompleteSsoRpc = Rpc.make(WS_METHODS.accountCompleteSso, {
+  payload: AccountCompleteSsoInput,
+  success: AccountStatus,
+  error: WsRpcError,
+});
+
+export const WsAccountCancelSsoRpc = Rpc.make(WS_METHODS.accountCancelSso, {
+  payload: AccountCompleteSsoInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAccountUsageSummaryRpc = Rpc.make(WS_METHODS.accountUsageSummary, {
+  payload: AccountUsageSummaryInput,
+  success: UsageSummary,
+  error: WsRpcError,
+});
+
+export const WsAccountUpdateProfileRpc = Rpc.make(WS_METHODS.accountUpdateProfile, {
+  payload: AccountUpdateProfileInput,
+  success: AccountMe,
+  error: WsRpcError,
+});
+
+export const WsAccountUploadAvatarRpc = Rpc.make(WS_METHODS.accountUploadAvatar, {
+  payload: AccountUploadAvatarInput,
+  success: AccountMe,
+  error: WsRpcError,
+});
+
+export const WsAccountDeleteAvatarRpc = Rpc.make(WS_METHODS.accountDeleteAvatar, {
+  payload: Schema.Struct({}),
+  success: AccountMe,
+  error: WsRpcError,
+});
+
+export const WsAccountSignOutRpc = Rpc.make(WS_METHODS.accountSignOut, {
+  payload: Schema.Struct({}),
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAccountOpenVerificationUrlRpc = Rpc.make(WS_METHODS.accountOpenVerificationUrl, {
+  payload: AccountOpenVerificationUrlInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
   payload: AutomationListInput,
   success: AutomationListResult,
@@ -1301,6 +1407,18 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderReadPluginRpc,
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
+  WsAccountStatusRpc,
+  WsAccountSendOtpRpc,
+  WsAccountAuthenticateOtpRpc,
+  WsAccountBeginSsoRpc,
+  WsAccountCompleteSsoRpc,
+  WsAccountCancelSsoRpc,
+  WsAccountUsageSummaryRpc,
+  WsAccountUpdateProfileRpc,
+  WsAccountUploadAvatarRpc,
+  WsAccountDeleteAvatarRpc,
+  WsAccountSignOutRpc,
+  WsAccountOpenVerificationUrlRpc,
   WsAutomationListRpc,
   WsAutomationGetMemoryRpc,
   WsAutomationCreateRpc,

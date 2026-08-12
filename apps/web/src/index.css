@@ -1,4 +1,8 @@
 @import "tailwindcss";
+/* profile-ui renders with Tailwind classes but lives outside this app's
+   auto-detected content — without this, its responsive/variant classes
+   (lg:grid-cols-5, …) are never generated and layouts silently degrade. */
+@source "../../../packages/profile-ui/src";
 
 @custom-variant dark (&:is(.dark, .dark *));
 

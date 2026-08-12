@@ -2,6 +2,16 @@ import { Schema, Struct } from "effect";
 import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 
 import {
+  AccountAuthenticateOtpInput,
+  AccountBeginSsoInput,
+  AccountCompleteSsoInput,
+  AccountOpenVerificationUrlInput,
+  AccountSendOtpInput,
+  AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
+} from "./account";
+import { AccountUsageSummaryInput } from "./accountUsage";
+import {
   AutomationCancelRunInput,
   AutomationArchiveRunInput,
   AutomationCreateInput,
@@ -272,6 +282,20 @@ export const WS_METHODS = {
   providerListModels: "provider.listModels",
   providerListAgents: "provider.listAgents",
 
+  // Account (Synara account session brokered by the server)
+  accountStatus: "account.status",
+  accountSendOtp: "account.sendOtp",
+  accountAuthenticateOtp: "account.authenticateOtp",
+  accountBeginSso: "account.beginSso",
+  accountCompleteSso: "account.completeSso",
+  accountCancelSso: "account.cancelSso",
+  accountUsageSummary: "account.usageSummary",
+  accountUpdateProfile: "account.updateProfile",
+  accountUploadAvatar: "account.uploadAvatar",
+  accountDeleteAvatar: "account.deleteAvatar",
+  accountSignOut: "account.signOut",
+  accountOpenVerificationUrl: "account.openVerificationUrl",
+
   // Automation methods
   automationList: "automation.list",
   automationGetMemory: "automation.getMemory",
@@ -467,6 +491,20 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.providerReadPlugin, ProviderReadPluginInput),
   tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
   tagRequestBody(WS_METHODS.providerListAgents, ProviderListAgentsInput),
+
+  // Account
+  tagRequestBody(WS_METHODS.accountStatus, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountSendOtp, AccountSendOtpInput),
+  tagRequestBody(WS_METHODS.accountAuthenticateOtp, AccountAuthenticateOtpInput),
+  tagRequestBody(WS_METHODS.accountBeginSso, AccountBeginSsoInput),
+  tagRequestBody(WS_METHODS.accountCompleteSso, AccountCompleteSsoInput),
+  tagRequestBody(WS_METHODS.accountCancelSso, AccountCompleteSsoInput),
+  tagRequestBody(WS_METHODS.accountUsageSummary, AccountUsageSummaryInput),
+  tagRequestBody(WS_METHODS.accountUpdateProfile, AccountUpdateProfileInput),
+  tagRequestBody(WS_METHODS.accountUploadAvatar, AccountUploadAvatarInput),
+  tagRequestBody(WS_METHODS.accountDeleteAvatar, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountSignOut, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.accountOpenVerificationUrl, AccountOpenVerificationUrlInput),
 
   // Automation methods
   tagRequestBody(WS_METHODS.automationList, AutomationListInput),

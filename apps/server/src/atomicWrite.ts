@@ -85,45 +85,47 @@ function assertSameRegularFile(descriptorStat: Stats, pathStat: Stats, tempPath:
   }
 }
 
-export const writeFileStringAtomically = (input: {
-  readonly filePath: string;
-  readonly contents: string | Uint8Array;
-  readonly mode?: number;
-}) => {
-  const directoryPath = path.dirname(input.filePath);
-  const mode = input.mode ?? PRIVATE_FILE_MODE;
+/** Writes and fsyncs a fully verified temp file next to the final path. */
+async function writeDurableTempFile(
+  directoryPath: string,
+  tempPath: string,
+  contents: string | Uint8Array,
+  mode: number,
+): Promise<void> {
+  await ensurePrivateDirectory(directoryPath);
 
-  return Effect.sync(() => `${input.filePath}.${process.pid}.${randomUUID()}.tmp`).pipe(
+  const noFollowFlag = supportsPosixPermissions() ? fsConstants.O_NOFOLLOW : 0;
+  const handle = await fs.open(
+    tempPath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag,
+    mode,
+  );
+  let descriptorStat: Stats | undefined;
+  try {
+    if (supportsPosixPermissions()) await handle.chmod(mode);
+    await handle.writeFile(contents);
+    await handle.sync();
+    descriptorStat = await handle.stat();
+  } finally {
+    await handle.close();
+  }
+
+  if (!descriptorStat) {
+    throw new Error(`Failed to inspect atomic write temporary file: ${tempPath}`);
+  }
+  const pathStat = await fs.lstat(tempPath);
+  assertSameRegularFile(descriptorStat, pathStat, tempPath);
+}
+
+const withTempFile = <A>(
+  filePath: string,
+  run: (tempPath: string) => Promise<A>,
+): Effect.Effect<A, unknown> =>
+  Effect.sync(() => `${filePath}.${process.pid}.${randomUUID()}.tmp`).pipe(
     Effect.flatMap((tempPath) =>
       Effect.uninterruptible(
         Effect.tryPromise({
-          try: async () => {
-            await ensurePrivateDirectory(directoryPath);
-
-            const noFollowFlag = supportsPosixPermissions() ? fsConstants.O_NOFOLLOW : 0;
-            const handle = await fs.open(
-              tempPath,
-              fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollowFlag,
-              mode,
-            );
-            let descriptorStat: Stats | undefined;
-            try {
-              if (supportsPosixPermissions()) await handle.chmod(mode);
-              await handle.writeFile(input.contents);
-              await handle.sync();
-              descriptorStat = await handle.stat();
-            } finally {
-              await handle.close();
-            }
-
-            if (!descriptorStat) {
-              throw new Error(`Failed to inspect atomic write temporary file: ${tempPath}`);
-            }
-            const pathStat = await fs.lstat(tempPath);
-            assertSameRegularFile(descriptorStat, pathStat, tempPath);
-            await fs.rename(tempPath, input.filePath);
-            await syncDirectoryEntry(directoryPath);
-          },
+          try: () => run(tempPath),
           catch: (cause) => cause,
         }).pipe(
           Effect.ensuring(
@@ -135,4 +137,48 @@ export const writeFileStringAtomically = (input: {
       ),
     ),
   );
+
+export const writeFileStringAtomically = (input: {
+  readonly filePath: string;
+  readonly contents: string | Uint8Array;
+  readonly mode?: number;
+}) => {
+  const directoryPath = path.dirname(input.filePath);
+  const mode = input.mode ?? PRIVATE_FILE_MODE;
+
+  return withTempFile(input.filePath, async (tempPath) => {
+    await writeDurableTempFile(directoryPath, tempPath, input.contents, mode);
+    await fs.rename(tempPath, input.filePath);
+    await syncDirectoryEntry(directoryPath);
+  });
+};
+
+/**
+ * Like {@link writeFileStringAtomically}, but only ever CREATES the file: the
+ * fully written temp file is hard-linked into place, which fails when the
+ * path already exists instead of replacing it. Resolves `true` when this call
+ * created the file and `false` when another writer got there first — the
+ * caller must then read the winner's contents. Because the link happens after
+ * the temp file is complete, a concurrent reader never observes a partial
+ * file either way.
+ */
+export const createFileStringExclusively = (input: {
+  readonly filePath: string;
+  readonly contents: string | Uint8Array;
+  readonly mode?: number;
+}) => {
+  const directoryPath = path.dirname(input.filePath);
+  const mode = input.mode ?? PRIVATE_FILE_MODE;
+
+  return withTempFile(input.filePath, async (tempPath) => {
+    await writeDurableTempFile(directoryPath, tempPath, input.contents, mode);
+    try {
+      await fs.link(tempPath, input.filePath);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw cause;
+    }
+    await syncDirectoryEntry(directoryPath);
+    return true;
+  });
 };

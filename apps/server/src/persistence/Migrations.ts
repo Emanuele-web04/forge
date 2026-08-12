@@ -106,6 +106,8 @@ import Migration0087 from "./Migrations/087_DropUnusedOrchestrationEventIndexes.
 import Migration0088 from "./Migrations/088_ProjectionThreadsSettledAt.ts";
 import Migration0089 from "./Migrations/089_RecoverRetentionHiddenThreads.ts";
 import Migration0090 from "./Migrations/090_ProjectionThreadMessageTextSegments.ts";
+import Migration0091 from "./Migrations/091_AccountUsageSync.ts";
+import Migration0092 from "./Migrations/092_AccountUsageSyncIdentity.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -211,6 +213,8 @@ export const migrationEntries = [
   [88, "ProjectionThreadsSettledAt", Migration0088],
   [89, "RecoverRetentionHiddenThreads", Migration0089],
   [90, "ProjectionThreadMessageTextSegments", Migration0090],
+  [91, "AccountUsageSync", Migration0091],
+  [92, "AccountUsageSyncIdentity", Migration0092],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -295,6 +299,16 @@ export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
     historicalName: "ProjectPullRequestPins",
     currentId: 69,
     historicalSlotRequiresRerun: false,
+  },
+  {
+    // Pre-merge feat/account-api dev builds recorded AccountUsageSync at 90;
+    // upstream landed ProjectionThreadMessageTextSegments there first, so
+    // ours moved to 91. Slot 90's new occupant has real work to do on those
+    // databases, hence the rerun.
+    historicalId: 90,
+    historicalName: "AccountUsageSync",
+    currentId: 91,
+    historicalSlotRequiresRerun: true,
   },
 ];
 

@@ -7,7 +7,19 @@
  * @module CliConfig
  */
 import OS from "node:os";
-import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceMap } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  ServiceMap,
+  Stream,
+} from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@synara/shared/Net";
 import {
@@ -51,6 +63,20 @@ import {
   serveExternalMcpStdio,
 } from "./externalMcp/bridge";
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
+import {
+  ACCOUNT_URL_ENV_NAME,
+  refreshHostRegistration,
+  resolveAccountUrl,
+  resolveAuthLoginAccountUrl,
+  runAuthLogin,
+  runAuthLogout,
+  runStatus,
+} from "./accountAuth";
+import {
+  createAccountUsageReporter,
+  isAccountUsageRelevantEventType,
+} from "./accountUsageReporter";
+import { registerAccountUsageReporterNudge } from "./accountUsageReporterRegistry";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -376,6 +402,43 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
+    // Re-advertise this host's endpoints now that server-runtime.json reflects
+    // the live bind. A machine that ran `synara auth` before its first start
+    // registered with none, and this is the only thing that fixes that. One
+    // shot, no retry: it must never delay or fail a boot.
+    yield* Effect.forkChild(
+      Effect.tryPromise(() =>
+        refreshHostRegistration({
+          baseDir: config.baseDir,
+          ...(config.devUrl ? { devUrl: config.devUrl } : {}),
+        }),
+      ).pipe(Effect.ignore),
+    );
+    // Event-driven account usage sync: every committed usage-relevant domain
+    // event nudges the reporter, which debounces, recomputes recent per-minute
+    // buckets from the local projections, and pushes absolute values to the
+    // account. Best-effort and fully inert while signed out — like the host
+    // registration above, it must never delay or fail a boot.
+    const usageReporterSql = yield* SqlClient.SqlClient;
+    const accountUsageReporter = createAccountUsageReporter({
+      sql: usageReporterSql,
+      baseDir: config.baseDir,
+      ...(config.devUrl ? { devUrl: config.devUrl } : {}),
+    });
+    registerAccountUsageReporterNudge(() => void accountUsageReporter.flushNow());
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        registerAccountUsageReporterNudge(undefined);
+        accountUsageReporter.stop();
+      }),
+    );
+    yield* Effect.forkChild(
+      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
+        isAccountUsageRelevantEventType(event.type)
+          ? Effect.sync(() => accountUsageReporter.notifyActivity())
+          : Effect.void,
+      ),
+    );
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with
     // SYNARA_CLAUDE_KEEPALIVE=1.
@@ -579,9 +642,104 @@ const mcpCommand = Command.make("mcp").pipe(
   Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
 );
 
+const accountUrlFlag = Flag.string("account-url").pipe(
+  Flag.withDescription(`Synara account server to talk to (overrides ${ACCOUNT_URL_ENV_NAME}).`),
+  Flag.optional,
+);
+
+const requireAccountUrl = (flag: Option.Option<string>) =>
+  Effect.gen(function* () {
+    const accountUrl = resolveAccountUrl({ flag: Option.getOrUndefined(flag) });
+    if (!accountUrl) {
+      return yield* new StartupError({
+        message: `Account features are not configured — set ${ACCOUNT_URL_ENV_NAME} or pass --account-url.`,
+      });
+    }
+    return accountUrl;
+  });
+
+// `--account-url` lives only on the base `auth` command: the Effect CLI rejects
+// a flag declared on both a parent and its subcommand, so `logout` reads the
+// parsed value out of the parent's context (same shape as `--home-dir` above).
+const baseAuthCommand = Command.make("auth", { accountUrl: accountUrlFlag }).pipe(
+  Command.withDescription("Register this machine as a host on the account signed in via the app."),
+);
+
+const authLogoutCommand = Command.make("logout", {}, () =>
+  Effect.gen(function* () {
+    const root = yield* baseServerCommand;
+    const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+    // No `--account-url` gate: logout uses the URL stored at login, so it must
+    // keep working after the ambient env var is unset.
+    yield* Effect.tryPromise({
+      try: () => runAuthLogout({ baseDir }),
+      catch: (cause) => new StartupError({ message: "Sign-out failed.", cause }),
+    });
+  }),
+).pipe(
+  Command.withDescription(
+    "Sign this machine out, deregistering the host and deleting credentials.",
+  ),
+);
+
+const authCommand = baseAuthCommand.pipe(
+  Command.withHandler(({ accountUrl }) =>
+    Effect.gen(function* () {
+      const root = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+      // Once a session exists, the URL stored at sign-in wins (as refresh,
+      // status, and logout already do): the stored tokens belong to THAT
+      // service, and a conflicting explicit URL is refused rather than
+      // silently sending them elsewhere. Only with no session does the
+      // explicit flag/env requirement below apply.
+      const sessionUrl = yield* Effect.tryPromise({
+        try: () =>
+          resolveAuthLoginAccountUrl({
+            baseDir,
+            explicitUrl: resolveAccountUrl({ flag: Option.getOrUndefined(accountUrl) }),
+          }),
+        catch: (cause) =>
+          new StartupError({
+            message: cause instanceof Error ? cause.message : "Host registration failed.",
+            cause,
+          }),
+      });
+      const resolved = sessionUrl !== undefined ? sessionUrl : yield* requireAccountUrl(accountUrl);
+      yield* Effect.tryPromise({
+        try: () =>
+          runAuthLogin({
+            accountUrl: resolved,
+            baseDir,
+            ...(Option.isSome(root.devUrl) ? { devUrl: root.devUrl.value } : {}),
+          }),
+        catch: (cause) => new StartupError({ message: "Host registration failed.", cause }),
+      });
+    }),
+  ),
+  Command.withSubcommands([authLogoutCommand]),
+);
+
+const statusCommand = Command.make("status", { accountUrl: accountUrlFlag }, ({ accountUrl }) =>
+  Effect.gen(function* () {
+    const parent = yield* baseServerCommand;
+    const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+    yield* Effect.tryPromise({
+      try: () =>
+        runStatus({
+          accountUrl: resolveAccountUrl({ flag: Option.getOrUndefined(accountUrl) }),
+          baseDir,
+          ...(Option.isSome(parent.devUrl) ? { devUrl: parent.devUrl.value } : {}),
+        }),
+      catch: (cause) => new StartupError({ message: "Failed to read account status.", cause }),
+    });
+  }),
+).pipe(
+  Command.withDescription("Show the signed-in account, this host, and every registered host."),
+);
+
 const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
-  Command.withSubcommands([mcpCommand]),
+  Command.withSubcommands([mcpCommand, authCommand, statusCommand]),
 );
 
 export const synaraCli = serverCommand;

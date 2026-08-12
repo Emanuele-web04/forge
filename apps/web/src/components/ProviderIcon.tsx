@@ -1,28 +1,24 @@
 /**
  * ProviderIcon - shared provider glyphs for chat, sidebar, and picker surfaces.
  *
- * Centralizes provider-to-icon mapping so new providers do not need repeated
- * branching across every UI surface.
+ * The glyph artwork itself lives in @synara/profile-ui/provider-icon (shared with the
+ * public profile page); this wrapper adds the app-only pieces — the Central-asset
+ * dark-mode swap for opencode (a public/ asset the package cannot ship) and the
+ * contracts-typed map — so new providers still need only one registration.
  */
 import { type ProviderKind } from "@synara/contracts";
+import {
+  PROVIDER_GLYPHS,
+  providerIconToneClassName,
+  type ProviderIconTone,
+} from "@synara/profile-ui/provider-icon";
 import type { ReactNode, SVGProps } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
-import {
-  AntigravityIcon,
-  ClaudeAI,
-  CursorIcon,
-  DroidIcon,
-  GrokIcon,
-  type Icon,
-  KiloIcon,
-  OpenAI,
-  OpenCodeIcon,
-  PiIcon,
-} from "./Icons";
+import type { Icon } from "./Icons";
 
-export type ProviderIconTone = "default" | "header";
+export { providerIconToneClassName, type ProviderIconTone };
 
 // The bundled SVG has a dark outer fill, so dark mode swaps to the reversed Central asset.
 // React's SVGProps has no `title`, so accept it via an explicit prop type and forward it
@@ -42,9 +38,11 @@ const OpenCodeProviderIcon = ({
       ? undefined
       : ariaLabel;
 
+  const OpenCodeGlyph = PROVIDER_GLYPHS.opencode;
+
   return (
     <>
-      <OpenCodeIcon
+      <OpenCodeGlyph
         {...svgProps}
         aria-hidden={ariaHidden}
         aria-label={ariaLabel}
@@ -64,29 +62,9 @@ const OpenCodeProviderIcon = ({
 };
 
 export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
-  codex: OpenAI,
-  claudeAgent: ClaudeAI,
-  cursor: CursorIcon,
-  antigravity: AntigravityIcon,
-  grok: GrokIcon,
-  droid: DroidIcon,
-  kilo: KiloIcon,
+  ...PROVIDER_GLYPHS,
   opencode: OpenCodeProviderIcon,
-  pi: PiIcon,
 };
-
-export function providerIconToneClassName(
-  provider: ProviderKind | null | undefined,
-  tone: ProviderIconTone = "default",
-): string {
-  if (provider === "kilo" || provider === "opencode") {
-    return "text-muted-foreground/70";
-  }
-  if (provider === "codex") {
-    return tone === "header" ? "text-muted-foreground/85" : "text-foreground";
-  }
-  return "text-foreground";
-}
 
 export type ProviderIconProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
   readonly provider: ProviderKind | null | undefined;

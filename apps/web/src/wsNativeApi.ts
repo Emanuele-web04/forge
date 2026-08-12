@@ -792,6 +792,31 @@ export function createWsNativeApi(): NativeApi {
       onShellEvent: orchestrationShellEventListeners.subscribe,
       onThreadEvent: orchestrationThreadEventListeners.subscribe,
     },
+    account: {
+      status: () => transport.request(WS_METHODS.accountStatus),
+      sendOtp: (input) => transport.request(WS_METHODS.accountSendOtp, input),
+      // The input carries the emailed code — a credential. Pass it straight
+      // through: do not wrap, retry, or log it, and do not keep it after the
+      // promise settles.
+      authenticateOtp: (input) => transport.request(WS_METHODS.accountAuthenticateOtp, input),
+      beginSso: (input) => transport.request(WS_METHODS.accountBeginSso, input),
+      // No deadline: the server waits on the browser callback for as long as
+      // the attempt lives. If the socket drops, the sign-in still completed
+      // server-side — re-querying `status` on reconnect recovers it.
+      completeSso: (input, options) =>
+        transport.request(WS_METHODS.accountCompleteSso, input, {
+          timeoutMs: null,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
+      cancelSso: (input) => transport.request(WS_METHODS.accountCancelSso, input),
+      usageSummary: (input) => transport.request(WS_METHODS.accountUsageSummary, input),
+      updateProfile: (input) => transport.request(WS_METHODS.accountUpdateProfile, input),
+      uploadAvatar: (input) => transport.request(WS_METHODS.accountUploadAvatar, input),
+      deleteAvatar: () => transport.request(WS_METHODS.accountDeleteAvatar),
+      signOut: () => transport.request(WS_METHODS.accountSignOut),
+      openVerificationUrl: (input) =>
+        transport.request(WS_METHODS.accountOpenVerificationUrl, input),
+    },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),
       getMemory: (input) => transport.request(WS_METHODS.automationGetMemory, input),

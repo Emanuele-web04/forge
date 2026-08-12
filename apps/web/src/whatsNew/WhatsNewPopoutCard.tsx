@@ -9,7 +9,7 @@ import { type KeyboardEvent } from "react";
 
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 
 import type { WhatsNewEntry } from "./logic";
 
