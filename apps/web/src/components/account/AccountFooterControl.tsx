@@ -22,7 +22,7 @@ import {
 } from "~/components/sidebarContextMenuStyles";
 import { SidebarMenuButton } from "~/components/ui/sidebar";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
-import { ChevronUpIcon, ExternalLinkIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronUpIcon, ExternalLinkIcon, GlobeIcon, SettingsIcon } from "~/lib/icons";
 import { openExternalLink } from "~/lib/linkChips";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { useAccount } from "~/hooks/useAccount";
@@ -121,14 +121,27 @@ function SignedInFooter() {
         </MenuGroup>
         <MenuSeparator />
         <MenuGroup>
+          {/* Three honest states: a public profile links to its live page, a
+              private one routes to the visibility setting (the page would
+              404), and no profile resumes onboarding. */}
           {profile ? (
-            <MenuItem
-              className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
-              onClick={() => openExternalLink(publicProfileUrl(profile.handle))}
-            >
-              <SidebarContextMenuIcon icon={ExternalLinkIcon} />
-              <span>View public profile</span>
-            </MenuItem>
+            profile.public ? (
+              <MenuItem
+                className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() => openExternalLink(publicProfileUrl(profile.handle))}
+              >
+                <SidebarContextMenuIcon icon={ExternalLinkIcon} />
+                <span>View public profile</span>
+              </MenuItem>
+            ) : (
+              <MenuItem
+                className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() => void navigate({ to: "/settings", search: { section: "profile" } })}
+              >
+                <SidebarContextMenuIcon icon={GlobeIcon} />
+                <span>Make profile public…</span>
+              </MenuItem>
+            )
           ) : (
             <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={openSignIn}>
               <SidebarContextMenuIcon icon={ExternalLinkIcon} />

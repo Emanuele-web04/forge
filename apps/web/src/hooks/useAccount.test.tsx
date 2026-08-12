@@ -5,7 +5,7 @@
 
 import type { AccountMe, AccountStatus, NativeApi } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -337,6 +337,36 @@ describe("useAccount", () => {
         state: "signed-out",
       });
     });
+  });
+
+  // The sign-in dialog keys an unmount-cleanup effect on cancelSso whose
+  // cleanup cancels the live SSO attempt server-side. If the hook handed out
+  // a fresh function each render, every ordinary rerender (a mutation
+  // settling, the waiting spinner appearing) would abort the user's in-flight
+  // browser sign-in.
+  it("returns a referentially stable cancelSso across rerenders", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), { state: "signed-out" });
+
+    const captured: Array<ReturnType<typeof useAccount>["cancelSso"]> = [];
+    function Probe() {
+      const [renderIndex, setRenderIndex] = useState(0);
+      captured.push(useAccount().cancelSso);
+      // Setting state during render forces a synchronous second pass, giving
+      // two renders to compare without a client-side test harness.
+      if (renderIndex === 0) setRenderIndex(1);
+      return null;
+    }
+    renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>{(<Probe />) as ReactNode}</QueryClientProvider>,
+    );
+
+    expect(captured).toHaveLength(2);
+    expect(captured[1]).toBe(captured[0]);
+    // Stability must not mean a no-op: the function still cancels.
+    accountApiMock.cancelSso.mockResolvedValue(undefined);
+    void captured[1]?.("sso_1");
+    expect(accountApiMock.cancelSso).toHaveBeenCalledWith({ ssoId: "sso_1" });
   });
 
   it("forwards the abort signal to completeSso", async () => {

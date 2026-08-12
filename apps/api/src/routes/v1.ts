@@ -34,7 +34,7 @@ import {
   UpdateOrganizationRequest,
   UpdateProfileRequest,
 } from "@synara/contracts";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Schema } from "effect";
 import { Hono } from "hono";
@@ -584,6 +584,14 @@ export function createV1Routes(deps: {
             ...(shouldClearAvatar ? { avatarKey: null } : {}),
             updatedAt: new Date(),
           },
+          // Only when the stored handle matches the request. Two racing
+          // first-time PUTs with different handles interleave so the loser's
+          // upsert lands as this UPDATE; unconditional, it would overwrite
+          // the winner's display name/visibility/etc. before the post-upsert
+          // check rejects it — a rejected request that still mutated. With
+          // the guard the loser's statement is a no-op and the re-read below
+          // reports the conflict with nothing changed.
+          setWhere: sql`${profiles.handle} = excluded.handle`,
         });
 
       // Best-effort cleanup of the replaced object, same as DELETE /profile/avatar.
@@ -780,9 +788,12 @@ export function createV1Routes(deps: {
     try {
       // Asking for up to 2 answers "single-member or not" in one bounded
       // request; an unanswerable count fails the request (authorization
-      // input), it does not degrade to a guess.
+      // input), it does not degrade to a guess. Exactly 1 is required: >1 is
+      // a shared team, and 0 means the caller's membership was revoked
+      // between requireOrgSession's check and this count — fail closed
+      // rather than rename with server credentials on behalf of nobody.
       const members = await grants.countOrganizationMembers(session.orgId, 2);
-      if (members > 1) {
+      if (members !== 1) {
         return errorResponse(
           c,
           403,
@@ -913,10 +924,15 @@ export function createV1Routes(deps: {
   /**
    * Ingests a batch of per-minute usage buckets — the account-side mirror of
    * the local profile stats, at the same depth and with NO content. Buckets
-   * carry ABSOLUTE values and are upserted: one environment is the sole
-   * writer of its own buckets and re-pushes them as they grow, so conflicts
-   * replace rather than add, which is what makes retries and mid-minute
-   * re-pushes idempotent.
+   * carry ABSOLUTE values and a push is MINUTE-REPLACEMENT, not row-upsert:
+   * the client always emits every bucket for any minute it includes (absolute
+   * per-minute snapshots), so for each pushed (environment, minute) pair the
+   * stored rows are deleted and the payload's rows inserted in one
+   * transaction. Row-level upserts would strand stale rows when a minute's
+   * KEYS change — a full backfill re-attributing a synced-then-deleted
+   * thread's usage to 'unknown'/'unknown' would insert new rows beside the
+   * old attributed ones and permanently double-count. Replacement keeps
+   * retries and mid-minute re-pushes idempotent AND absolute under re-keying.
    *
    * Authenticated with the user access token: usage accrues to the person,
    * and a machine whose session expired stops accruing to them. The
@@ -953,68 +969,72 @@ export function createV1Routes(deps: {
       );
     }
 
+    // Each table replaces exactly the minutes its own payload names: model
+    // and skill buckets travel in one request but need not cover the same
+    // minutes, and deleting a minute one table's payload never mentioned
+    // would drop real data.
+    const uniqueMinutes = (minutes: readonly string[]): Date[] => [
+      ...new Map(minutes.map((minute) => [new Date(minute).getTime(), new Date(minute)])).values(),
+    ];
+    const modelMinutes = uniqueMinutes(parsed.models.map((bucket) => bucket.minute));
+    const skillMinutes = uniqueMinutes(parsed.skills.map((bucket) => bucket.minute));
+
     // One transaction for the whole batch: a push either lands entirely or
     // not at all, so the client's dirty-set bookkeeping stays truthful.
+    // Delete-then-insert (minute replacement, see the route comment): a
+    // pushed minute afterwards holds exactly the payload's rows, so a
+    // re-push under different keys replaces instead of accumulating, and an
+    // identical re-push is idempotent.
     await db.transaction(async (tx) => {
-      for (const bucket of parsed.models) {
+      if (modelMinutes.length > 0) {
         await tx
-          .insert(usageModelStats)
-          .values({
-            userId: session.userId,
-            orgId: session.orgId,
-            environmentId: parsed.environmentId,
-            minute: new Date(bucket.minute),
-            provider: bucket.provider,
-            model: bucket.model,
-            // '' is the stored spelling of "no reasoning setting": NULL would
-            // be distinct-per-row under the unique index and duplicate the
-            // bucket on every push.
-            reasoning: bucket.reasoning ?? "",
-            tokens: bucket.tokens,
-            turns: bucket.turns,
-            prompts: bucket.prompts,
-          })
-          // Absolute replace, not increment — see the route comment.
-          .onConflictDoUpdate({
-            target: [
-              usageModelStats.userId,
-              usageModelStats.environmentId,
-              usageModelStats.minute,
-              usageModelStats.provider,
-              usageModelStats.model,
-              usageModelStats.reasoning,
-            ],
-            set: {
-              tokens: bucket.tokens,
-              turns: bucket.turns,
-              prompts: bucket.prompts,
-              orgId: session.orgId,
-              updatedAt: new Date(),
-            },
-          });
+          .delete(usageModelStats)
+          .where(
+            and(
+              eq(usageModelStats.userId, session.userId),
+              eq(usageModelStats.environmentId, parsed.environmentId),
+              inArray(usageModelStats.minute, modelMinutes),
+            ),
+          );
+      }
+      for (const bucket of parsed.models) {
+        await tx.insert(usageModelStats).values({
+          userId: session.userId,
+          orgId: session.orgId,
+          environmentId: parsed.environmentId,
+          minute: new Date(bucket.minute),
+          provider: bucket.provider,
+          model: bucket.model,
+          // '' is the stored spelling of "no reasoning setting": NULL would
+          // be distinct-per-row under the unique index and duplicate the
+          // bucket on every push.
+          reasoning: bucket.reasoning ?? "",
+          tokens: bucket.tokens,
+          turns: bucket.turns,
+          prompts: bucket.prompts,
+        });
+      }
+      if (skillMinutes.length > 0) {
+        await tx
+          .delete(usageSkillStats)
+          .where(
+            and(
+              eq(usageSkillStats.userId, session.userId),
+              eq(usageSkillStats.environmentId, parsed.environmentId),
+              inArray(usageSkillStats.minute, skillMinutes),
+            ),
+          );
       }
       for (const bucket of parsed.skills) {
-        await tx
-          .insert(usageSkillStats)
-          .values({
-            userId: session.userId,
-            orgId: session.orgId,
-            environmentId: parsed.environmentId,
-            minute: new Date(bucket.minute),
-            name: bucket.name,
-            kind: bucket.kind,
-            runs: bucket.runs,
-          })
-          .onConflictDoUpdate({
-            target: [
-              usageSkillStats.userId,
-              usageSkillStats.environmentId,
-              usageSkillStats.minute,
-              usageSkillStats.name,
-              usageSkillStats.kind,
-            ],
-            set: { runs: bucket.runs, orgId: session.orgId, updatedAt: new Date() },
-          });
+        await tx.insert(usageSkillStats).values({
+          userId: session.userId,
+          orgId: session.orgId,
+          environmentId: parsed.environmentId,
+          minute: new Date(bucket.minute),
+          name: bucket.name,
+          kind: bucket.kind,
+          runs: bucket.runs,
+        });
       }
     });
 
@@ -1165,7 +1185,17 @@ export function createV1Routes(deps: {
    * machines they own is nobody's business.
    */
   v1.get("/profiles/:handle", async (c) => {
-    if (!publicProfileRateLimiter.tryConsume(callerIp(c))) {
+    // The profiles web app fetches server-side, so every visitor arrives on
+    // its one egress IP — keyed on callerIp alone, one popular profile page
+    // would exhaust the budget for all visitors. It forwards the real
+    // viewer's address as `x-synara-viewer-ip`, preferred here when it looks
+    // like an IP. Safe to trust for THIS purpose only: the header picks the
+    // rate-limit bucket and nothing else, so the worst a spoofer achieves is
+    // partitioning their own budget — never use it for authorization.
+    const forwardedViewerIp = sanitizeForwardableIp(
+      c.req.header("x-synara-viewer-ip")?.trim() ?? "unknown",
+    );
+    if (!publicProfileRateLimiter.tryConsume(forwardedViewerIp ?? callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many requests — slow down");
     }
 

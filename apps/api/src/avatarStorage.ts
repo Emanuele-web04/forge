@@ -24,7 +24,6 @@ export interface AvatarStorage {
   publicUrl(key: string): string;
 }
 
-const SIGV4_REGION = "auto";
 const SIGV4_SERVICE = "s3";
 
 /**
@@ -44,14 +43,16 @@ function hmac(key: Uint8Array | string, data: string): Buffer {
 
 /**
  * An S3-compatible client speaking AWS Signature Version 4 over path-style
- * URLs (`https://{endpoint-host}/{bucket}/{key}`). Region "auto" and
- * service "s3" — the spelling R2 requires and AWS/MinIO accept.
+ * URLs (`https://{endpoint-host}/{bucket}/{key}`). The signing region comes
+ * from config (S3_REGION): "auto" by default — the spelling R2 requires and
+ * MinIO accepts — while real AWS wants the bucket's actual region.
  */
 export function createAvatarStorage(
   config: AvatarStorageConfig,
   fetchFn: typeof fetch = fetch,
 ): AvatarStorage {
   const endpoint = new URL(config.endpoint);
+  const region = config.region;
 
   async function signedRequest(
     method: "PUT" | "DELETE",
@@ -97,7 +98,7 @@ export function createAvatarStorage(
       payloadHash,
     ].join("\n");
 
-    const credentialScope = `${dateStamp}/${SIGV4_REGION}/${SIGV4_SERVICE}/aws4_request`;
+    const credentialScope = `${dateStamp}/${region}/${SIGV4_SERVICE}/aws4_request`;
     const stringToSign = [
       "AWS4-HMAC-SHA256",
       amzDate,
@@ -106,7 +107,7 @@ export function createAvatarStorage(
     ].join("\n");
 
     const signingKey = hmac(
-      hmac(hmac(hmac(`AWS4${config.secretAccessKey}`, dateStamp), SIGV4_REGION), SIGV4_SERVICE),
+      hmac(hmac(hmac(`AWS4${config.secretAccessKey}`, dateStamp), region), SIGV4_SERVICE),
       "aws4_request",
     );
     const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");

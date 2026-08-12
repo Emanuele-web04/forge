@@ -650,6 +650,67 @@ describe("createAccountUsageReporter", () => {
     );
   });
 
+  // A large first-sync backfill must not lose all progress to one mid-way
+  // 429: the watermark advances after each pushed chunk, so the next flush
+  // resumes from the failed chunk instead of replaying the whole history
+  // (which a sustained rate limit could keep from ever completing).
+  it("advances the watermark per chunk so a mid-backfill failure resumes, not replays", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedThread(sql, "thread-bulk", '{"provider":"codex","model":"gpt-5-codex"}');
+        // 501 prompts in 501 distinct minutes → 2 chunks (500 + 1).
+        const baseMs = Date.parse("2026-08-10T00:00:00.000Z");
+        for (let index = 0; index < 501; index += 1) {
+          const createdAt = new Date(baseMs + index * 60_000).toISOString();
+          yield* seedUserMessage(sql, {
+            messageId: `msg-bulk-${index}`,
+            threadId: "thread-bulk",
+            turnId: null,
+            createdAt,
+          });
+        }
+
+        let failFromPush = 2;
+        const pushes: PushUsageRequest[] = [];
+        const { reporter } = makeReporterHarness(sql, {
+          now: () => baseMs + 502 * 60_000,
+          push: async (request) => {
+            if (pushes.length + 1 >= failFromPush) {
+              throw new Error("429 too many requests");
+            }
+            pushes.push(request);
+          },
+        });
+
+        // First flush: chunk 1 lands, chunk 2 hits the rate limit.
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(pushes).toHaveLength(1);
+        expect(pushes[0]?.models).toHaveLength(500);
+        const afterFailure = yield* readSyncState(sql);
+        // The watermark reflects the last successful chunk: the newest
+        // minute fully covered before chunk 2's first bucket.
+        expect(afterFailure?.watermarkMinute).toBe(minuteStartIso(baseMs + 499 * 60_000));
+        expect(afterFailure?.lastFailureAt).not.toBeNull();
+
+        // Next flush resumes from the failed chunk: only the watermark's
+        // safety lap plus the unpushed tail, nowhere near the 500 already
+        // delivered.
+        failFromPush = Number.POSITIVE_INFINITY;
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(pushes).toHaveLength(2);
+        expect(pushes[1]?.models.length).toBeLessThanOrEqual(4);
+        expect(pushes[1]?.models[0]?.minute).toBe(minuteStartIso(baseMs + 497 * 60_000));
+        const afterSuccess = yield* readSyncState(sql);
+        // Final state matches a fully successful flush exactly.
+        expect(afterSuccess?.watermarkMinute).toBe(minuteStartIso(baseMs + 501 * 60_000));
+        expect(afterSuccess?.lastFailureAt).toBeNull();
+
+        reporter.stop();
+      }),
+    );
+  });
+
   it("stays fully inert while signed out", async () => {
     await runReporterTest(
       Effect.gen(function* () {

@@ -16,6 +16,12 @@ export type AvatarStorageConfig = {
   secretAccessKey: string;
   /** Public origin the bucket is served from (CDN/custom domain), no trailing slash. */
   publicBaseUrl: string;
+  /**
+   * SigV4 signing region, from S3_REGION. Defaults to "auto" — the spelling
+   * R2 requires and MinIO accepts — but real AWS rejects it, so an AWS
+   * deployment sets its bucket's region (e.g. us-east-1) here.
+   */
+  region: string;
 };
 
 export type ApiConfigBase = {
@@ -176,6 +182,8 @@ export function loadAvatarStorageConfig(env: Env): AvatarStorageConfig | undefin
     accessKeyId: env.S3_ACCESS_KEY_ID as string,
     secretAccessKey: env.S3_SECRET_ACCESS_KEY as string,
     publicBaseUrl: (env.S3_PUBLIC_BASE_URL as string).replace(/\/+$/, ""),
+    // Optional, outside the all-or-nothing set: absent means R2's "auto".
+    region: env.S3_REGION?.trim() || "auto",
   };
 }
 

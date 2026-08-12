@@ -66,6 +66,11 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
   const ssoAbortRef = useRef<AbortController | null>(null);
   const ssoIdRef = useRef<string | null>(null);
   const cancelSso = account.cancelSso;
+  // Ref'd for the unmount cleanup below: keying the effect on the function
+  // itself would rerun the cleanup — and cancel a LIVE attempt — whenever
+  // its identity moved, so the effect stays empty-dep and reads through here.
+  const cancelSsoRef = useRef(cancelSso);
+  cancelSsoRef.current = cancelSso;
 
   // Abort on EVERY way out of the dialog, not only the visible "Stop
   // waiting" control: this content unmounts on outer close, Escape, and
@@ -73,14 +78,16 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
   // covers them all. An explicit user close is a cancellation of the client
   // request AND of the server-side attempt; server-side completion tolerance
   // stays only for genuine transport loss (reconnect recovery via the
-  // status query).
+  // status query). Unmount-only on purpose: a rerender (mutation state
+  // settling, the waiting spinner appearing) must never cancel a live
+  // attempt, so the dependency array stays empty.
   useEffect(() => {
     return () => {
       ssoAbortRef.current?.abort();
       const ssoId = ssoIdRef.current;
-      if (ssoId) void cancelSso(ssoId).catch(() => {});
+      if (ssoId) void cancelSsoRef.current(ssoId).catch(() => {});
     };
-  }, [cancelSso]);
+  }, []);
 
   const busy = account.sendOtp.isPending || account.beginSso.isPending || ssoWait !== null;
 

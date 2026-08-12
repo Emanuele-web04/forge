@@ -860,6 +860,21 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
         const modelChunks = chunk(models, USAGE_PUSH_MAX_BUCKETS);
         const skillChunks = chunk(skills, USAGE_PUSH_MAX_BUCKETS);
         const pushCount = Math.max(modelChunks.length, skillChunks.length);
+        // The newest minute known fully pushed for one stream after its chunk
+        // `index` lands: the minute just before the NEXT chunk's first bucket.
+        // Both streams are minute-ascending (sorted in collectUsageBuckets),
+        // but a single minute's buckets can straddle a chunk boundary, so the
+        // boundary minute itself is not yet fully covered. A stream with no
+        // next chunk is complete and constrains nothing.
+        const chunkProgressMs = (
+          chunks: readonly (readonly { readonly minute: string }[])[],
+          index: number,
+        ): number => {
+          const nextMinute = chunks[index + 1]?.[0]?.minute;
+          return nextMinute === undefined
+            ? Number.POSITIVE_INFINITY
+            : Date.parse(nextMinute) - 60_000;
+        };
         for (let index = 0; index < pushCount; index += 1) {
           if (stopped) return;
           // Paced under the service's per-client push budget; a single-push
@@ -873,6 +888,21 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
             models: modelChunks[index] ?? [],
             skills: skillChunks[index] ?? [],
           });
+          // Persist backfill progress after every chunk, not only at the end:
+          // a 429 halfway through a large first sync must resume from the
+          // failed chunk, not replay the whole history (which, under a
+          // sustained rate limit, could keep it from ever reaching the later
+          // chunks). Sound because both streams enumerate minutes ascending —
+          // everything before the recorded minute is durably on the account.
+          if (index < pushCount - 1) {
+            const progressMs = Math.min(
+              chunkProgressMs(modelChunks, index),
+              chunkProgressMs(skillChunks, index),
+            );
+            if (Number.isFinite(progressMs)) {
+              await writeSuccess(minuteStartIso(progressMs), currentIdentity);
+            }
+          }
         }
       }
 

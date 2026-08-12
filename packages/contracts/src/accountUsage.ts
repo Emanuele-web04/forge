@@ -26,9 +26,21 @@ const UsageDimensionString = boundedTrimmedNonEmptyString(USAGE_DIMENSION_MAX_LE
  * A UTC minute, ISO-8601 with seconds zeroed — `2026-08-11T21:34:00Z`.
  * Fixed-format so the service can index and range-scan it without parsing
  * anything looser, and so one minute has exactly one spelling.
+ *
+ * The pattern pins the shape; the filter pins the calendar. A shape-valid
+ * impossible date (`2026-99-99T99:99:00Z`) would otherwise decode and hand
+ * the service an Invalid Date, so the value must survive a Date round trip:
+ * parse it, and require `toISOString()` to reproduce the same minute.
  */
 export const UsageMinute = Schema.String.check(
   Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00(?:\.000)?Z$/),
+  Schema.makeFilter((value: string) => {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return false;
+    // toISOString always spells milliseconds; normalize the bare-Z form.
+    const canonical = value.endsWith(".000Z") ? value : value.replace(/Z$/, ".000Z");
+    return date.toISOString() === canonical;
+  }),
 );
 export type UsageMinute = typeof UsageMinute.Type;
 

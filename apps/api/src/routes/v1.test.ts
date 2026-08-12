@@ -14,7 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { WorkosApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
-import { usageModelStats, usageSkillStats } from "../db/schema";
+import { profiles, usageModelStats, usageSkillStats } from "../db/schema";
 import { createDeviceCredentialStore } from "../identity/deviceCredentialStore";
 import { createEnvironmentRegistry } from "../identity/environmentRegistry";
 import { clearOrgCache } from "../identity/orgProvisioning";
@@ -1184,6 +1184,88 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(await res.json()).toMatchObject({ error: "validation_failed" });
     });
 
+    // The rejection must be mutation-free: a PUT carrying a different handle
+    // is refused without any of its other fields (display name, visibility,
+    // offset) landing — a rejected request that half-applied would let a
+    // buggy client silently flip a profile public.
+    it("leaves every profile field untouched when a handle change is refused", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const created = profileBody({ public: false });
+
+      await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify(created),
+      });
+
+      const res = await app.request("/api/v1/profile", {
+        method: "PUT",
+        headers: authHeaders(token),
+        body: JSON.stringify({
+          handle: `${created.handle}x`,
+          displayName: "Intruder",
+          avatarColor: "#ef4444",
+          public: true,
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "validation_failed" });
+
+      const [row] = await db.select().from(profiles).where(eq(profiles.userId, userId)).limit(1);
+      expect(row).toMatchObject({
+        handle: created.handle,
+        displayName: created.displayName,
+        avatarColor: created.avatarColor,
+        public: false,
+      });
+    });
+
+    // Two racing FIRST-TIME PUTs with different handles: both can pass the
+    // pre-upsert read, so the loser's statement lands as the conflict UPDATE.
+    // The setWhere handle guard makes that update a no-op — the loser is
+    // refused AND the winner's row survives byte for byte.
+    it("a losing racy first-time PUT is refused without mutating the winner's row", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const bodyA = profileBody({ displayName: "First Writer", public: true });
+      const bodyB = profileBody({ displayName: "Second Writer", avatarColor: "#ef4444" });
+
+      const put = (body: unknown) =>
+        app.request("/api/v1/profile", {
+          method: "PUT",
+          headers: authHeaders(token),
+          body: JSON.stringify(body),
+        });
+      const [resA, resB] = await Promise.all([put(bodyA), put(bodyB)]);
+
+      // Exactly one wins; the loser is refused (400 when the conflict is
+      // detected by the handle re-read, 409 when the unique index fires).
+      const outcomes = [
+        { res: resA, body: bodyA },
+        { res: resB, body: bodyB },
+      ];
+      const winners = outcomes.filter(({ res }) => res.status === 200);
+      const losers = outcomes.filter(({ res }) => res.status !== 200);
+      expect(winners).toHaveLength(1);
+      expect(losers).toHaveLength(1);
+      expect([400, 409]).toContain(losers[0]!.res.status);
+
+      // The stored row is exactly the winner's payload — the loser mutated
+      // nothing on its way to the error.
+      const winner = winners[0]!.body as ReturnType<typeof profileBody> & {
+        displayName: string;
+        public?: boolean;
+      };
+      const [row] = await db.select().from(profiles).where(eq(profiles.userId, userId)).limit(1);
+      expect(row).toMatchObject({
+        handle: winner.handle,
+        displayName: winner.displayName,
+        avatarColor: winner.avatarColor,
+        public: winner.public ?? false,
+      });
+    });
+
     it("answers 409 handle_taken when another user holds the handle", async () => {
       const { app } = buildApp();
       const first = await signIn();
@@ -1379,6 +1461,133 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       expect(skillRows[0]).toMatchObject({ runs: 4 });
     });
 
+    // A push is minute-replacement, not row-upsert: a re-pushed minute whose
+    // KEYS changed (a full backfill re-attributing a deleted thread's usage
+    // to 'unknown'/'unknown') must replace the old attributed rows, not
+    // accumulate beside them into a permanent double count.
+    it("replaces a re-pushed minute whose bucket keys changed", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const environmentId = randomUUID();
+      const minute = minuteIso();
+
+      const first = await pushUsage(
+        app,
+        token,
+        usageBody(environmentId, {
+          models: [modelBucket({ minute, tokens: 300 })],
+          skills: [{ minute, name: "code-review", kind: "skill", runs: 2 }],
+        }),
+        "203.0.116.9",
+      );
+      expect(first.status).toBe(202);
+
+      // The same minute re-keyed: unknown/unknown model, a renamed skill.
+      const second = await pushUsage(
+        app,
+        token,
+        usageBody(environmentId, {
+          models: [modelBucket({ minute, provider: "unknown", model: "unknown", tokens: 300 })],
+          skills: [{ minute, name: "improve", kind: "skill", runs: 2 }],
+        }),
+        "203.0.116.9",
+      );
+      expect(second.status).toBe(202);
+
+      const modelRows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(modelRows).toHaveLength(1);
+      expect(modelRows[0]).toMatchObject({ provider: "unknown", model: "unknown", tokens: 300 });
+
+      const skillRows = await db
+        .select()
+        .from(usageSkillStats)
+        .where(eq(usageSkillStats.userId, userId));
+      expect(skillRows).toHaveLength(1);
+      expect(skillRows[0]).toMatchObject({ name: "improve", runs: 2 });
+    });
+
+    // Model and skill payloads may cover DIFFERENT minute sets; each table
+    // replaces only the minutes its own payload names.
+    it("does not clear a table's minute the other table's payload names", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const environmentId = randomUUID();
+      const minute = minuteIso();
+
+      const first = await pushUsage(
+        app,
+        token,
+        usageBody(environmentId, {
+          models: [modelBucket({ minute, tokens: 100 })],
+          skills: [{ minute, name: "code-review", kind: "skill", runs: 1 }],
+        }),
+        "203.0.116.10",
+      );
+      expect(first.status).toBe(202);
+
+      // A later push carries only skills for that minute: the model rows for
+      // the same minute must survive untouched.
+      const second = await pushUsage(
+        app,
+        token,
+        usageBody(environmentId, {
+          skills: [{ minute, name: "code-review", kind: "skill", runs: 3 }],
+        }),
+        "203.0.116.10",
+      );
+      expect(second.status).toBe(202);
+
+      const modelRows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(modelRows).toHaveLength(1);
+      expect(modelRows[0]).toMatchObject({ tokens: 100 });
+
+      const skillRows = await db
+        .select()
+        .from(usageSkillStats)
+        .where(eq(usageSkillStats.userId, userId));
+      expect(skillRows).toHaveLength(1);
+      expect(skillRows[0]).toMatchObject({ runs: 3 });
+    });
+
+    it("stays idempotent when the identical payload is re-pushed", async () => {
+      const { app, db } = buildApp();
+      const { token, userId } = await signIn();
+      const environmentId = randomUUID();
+      const minute = minuteIso();
+      const body = usageBody(environmentId, {
+        models: [
+          modelBucket({ minute, tokens: 100 }),
+          modelBucket({ minute, model: "claude-opus-4.8", tokens: 50 }),
+        ],
+        skills: [{ minute, name: "code-review", kind: "skill", runs: 2 }],
+      });
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const res = await pushUsage(app, token, body, "203.0.116.11");
+        expect(res.status).toBe(202);
+      }
+
+      const modelRows = await db
+        .select()
+        .from(usageModelStats)
+        .where(eq(usageModelStats.userId, userId));
+      expect(modelRows).toHaveLength(2);
+      expect(modelRows.map((row) => row.tokens).toSorted((a, b) => a - b)).toEqual([50, 100]);
+
+      const skillRows = await db
+        .select()
+        .from(usageSkillStats)
+        .where(eq(usageSkillStats.userId, userId));
+      expect(skillRows).toHaveLength(1);
+      expect(skillRows[0]).toMatchObject({ runs: 2 });
+    });
+
     // Reasoning is part of the key: the same model with and without a
     // reasoning setting is two buckets, not one.
     it("keeps null and 'high' reasoning as distinct buckets", async () => {
@@ -1472,6 +1681,13 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         "a loose minute spelling",
         () =>
           usageBody(randomUUID(), { models: [modelBucket({ minute: "2026-08-11T21:34:05Z" })] }),
+      ],
+      // Shape-valid but calendar-impossible: without semantic validation this
+      // decodes and the route builds an Invalid Date — a 500, not a 400.
+      [
+        "an impossible calendar date",
+        () =>
+          usageBody(randomUUID(), { models: [modelBucket({ minute: "2026-99-99T99:99:00Z" })] }),
       ],
       [
         "a negative counter",
@@ -1769,6 +1985,34 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
 
       // Another client is unaffected.
       expect((await getProfile(app, handle, "203.0.117.10")).status).toBe(404);
+    });
+
+    // The profiles web app fetches server-side, so every visitor shares its
+    // egress IP; it forwards the real viewer as x-synara-viewer-ip, which
+    // must key the budget — otherwise one busy profile page 429s everyone.
+    it("keys the budget on a valid x-synara-viewer-ip over the caller ip", async () => {
+      const { app } = buildApp();
+      const egressIp = "203.0.117.11";
+      const handle = `ghost-${randomUUID().slice(0, 8)}`;
+
+      const getAsViewer = (viewerIp: string) =>
+        app.request(`/api/v1/profiles/${handle}`, {
+          headers: { "x-forwarded-for": egressIp, "x-synara-viewer-ip": viewerIp },
+        });
+
+      for (let i = 0; i < PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE; i += 1) {
+        expect((await getAsViewer("198.51.100.1")).status).toBe(404);
+      }
+      expect((await getAsViewer("198.51.100.1")).status).toBe(429);
+
+      // A different viewer behind the same egress IP has its own budget.
+      expect((await getAsViewer("198.51.100.2")).status).toBe(404);
+
+      // A garbage header value falls back to the caller ip.
+      const junk = await app.request(`/api/v1/profiles/${handle}`, {
+        headers: { "x-forwarded-for": egressIp, "x-synara-viewer-ip": "not an ip" },
+      });
+      expect(junk.status).toBe(404);
     });
   });
 
@@ -2181,6 +2425,38 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       // The name is untouched.
       const meRes = await app.request("/api/v1/me", { headers: authHeaders(token) });
       expect(await meRes.json()).toMatchObject({ organization: { id: orgId, name: orgName } });
+    });
+
+    // The guard requires EXACTLY one member: a count of 0 means the caller's
+    // membership was revoked between requireOrgSession's fresh check and the
+    // count — fail closed, never rename on behalf of nobody.
+    it("refuses to rename when the member count comes back zero", async () => {
+      const { db } = createDb(databaseUrl);
+      const { verifier, grants } = createWorkosIdentityProvider(config);
+      const renameOrganization = vi.fn();
+      const app = new Hono();
+      app.route(
+        "/api/v1",
+        createV1Routes({
+          verifier,
+          // The revoked-mid-request race, made deterministic: membership
+          // resolution still succeeds, the count then answers 0.
+          grants: { ...grants, countOrganizationMembers: async () => 0, renameOrganization },
+          deviceCredentials: createDeviceCredentialStore(db),
+          environments: createEnvironmentRegistry(db),
+          db,
+        }),
+      );
+      const { token } = await signIn();
+
+      const res = await app.request("/api/v1/organization", {
+        method: "PATCH",
+        headers: authHeaders(token),
+        body: JSON.stringify({ name: "Nobody's" }),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: "organization_rename_not_allowed" });
+      expect(renameOrganization).not.toHaveBeenCalled();
     });
 
     // Membership, not knowledge of the id, is what authorizes the rename.

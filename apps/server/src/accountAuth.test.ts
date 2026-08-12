@@ -695,6 +695,21 @@ describe("resolveEnvironmentId", () => {
     );
     expect(await resolveEnvironmentId(baseDir)).toBe(generated);
   });
+
+  // First-time creation is exclusive: `synara auth` and a starting server can
+  // both see the file missing, and last-writer-wins would leave one of them
+  // registering a host under an id nobody persisted (a phantom host).
+  it("resolves concurrent first-time callers to one persisted id", async () => {
+    const baseDir = makeBaseDir();
+    const ids = await Promise.all(Array.from({ length: 8 }, () => resolveEnvironmentId(baseDir)));
+
+    const persisted = fs
+      .readFileSync(path.join(baseDir, "userdata", "environment-id"), "utf8")
+      .trim();
+    expect(persisted).toMatch(/^[0-9a-f-]{36}$/u);
+    // Every caller — winners and losers alike — got the persisted id.
+    expect(new Set(ids)).toEqual(new Set([persisted]));
+  });
 });
 
 describe("resolveAccountUrl", () => {

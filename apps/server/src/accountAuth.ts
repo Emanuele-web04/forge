@@ -32,7 +32,7 @@ import {
 import { Effect, Path } from "effect";
 
 import { withCredentialFileLock } from "./accountCredentialLock";
-import { writeFileStringAtomically } from "./atomicWrite";
+import { createFileStringExclusively, writeFileStringAtomically } from "./atomicWrite";
 import { deriveServerPaths } from "./config";
 import { PRIVATE_FILE_MODE } from "./privatePathPermissions";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess";
@@ -210,23 +210,41 @@ export function resolveAccountUrl(input: {
  * `<stateDir>/environment-id`, generating and persisting it in the same format
  * when the server has never started. Registering a host under a different id
  * would leave the account with a phantom host once the server does start.
+ *
+ * Creation is exclusive, not last-writer-wins: `synara auth` and a starting
+ * server can both find the file missing and generate different UUIDs, and the
+ * loser of a plain overwrite would register a host under an id nobody
+ * persisted. Whoever creates the file first wins; everyone else reads the
+ * winner's id back.
  */
 export async function resolveEnvironmentId(
   baseDir: string,
   devUrl?: URL | undefined,
 ): Promise<string> {
   const { environmentIdPath } = await runWithPath(deriveServerPaths(baseDir, devUrl));
-  try {
-    const persisted = (await fs.readFile(environmentIdPath, "utf8")).trim();
-    if (persisted.length > 0) return persisted;
-  } catch {
-    // Falls through to generation below.
-  }
+  const readPersisted = async (): Promise<string | undefined> => {
+    try {
+      const persisted = (await fs.readFile(environmentIdPath, "utf8")).trim();
+      return persisted.length > 0 ? persisted : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const persisted = await readPersisted();
+  if (persisted !== undefined) return persisted;
+
   const generated = randomUUID();
-  await Effect.runPromise(
-    writeFileStringAtomically({ filePath: environmentIdPath, contents: `${generated}\n` }),
+  const created = await Effect.runPromise(
+    createFileStringExclusively({ filePath: environmentIdPath, contents: `${generated}\n` }),
   );
-  return generated;
+  if (created) return generated;
+  // Lost the creation race: the other writer's id is the persisted identity.
+  const winner = await readPersisted();
+  if (winner !== undefined) return winner;
+  // The file exists but is empty/unreadable — a truncated write from a
+  // crashed process. Fail loudly rather than mint an unpersisted id.
+  throw new Error(`Environment id file at ${environmentIdPath} exists but holds no id`);
 }
 
 const SUPPORTED_PLATFORMS: Record<string, AccountHostPlatform> = {

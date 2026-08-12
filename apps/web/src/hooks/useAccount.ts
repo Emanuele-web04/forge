@@ -13,6 +13,7 @@ import type {
   AccountUploadAvatarInput,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 import {
   accountQueryKeys,
   accountStatusQueryOptions,
@@ -97,10 +98,15 @@ export function useAccount() {
     },
   });
 
-  const cancelSso = (ssoId: string) => {
+  // Referentially stable across renders: the sign-in dialog keys an effect on
+  // this function whose CLEANUP cancels the live SSO attempt server-side. A
+  // fresh identity per render would turn every ordinary rerender (mutation
+  // state settling, the waiting spinner appearing) into a cancellation that
+  // aborts the user's in-flight browser sign-in.
+  const cancelSso = useCallback((ssoId: string) => {
     const api = ensureNativeApi();
     return api.account.cancelSso({ ssoId });
-  };
+  }, []);
 
   const updateProfile = useMutation({
     ...statusFence,
