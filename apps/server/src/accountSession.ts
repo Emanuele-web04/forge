@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AccountAuthenticateOtpInput,
+  AccountUsageSummaryInput,
   AccountBeginSsoInput,
   AccountBeginSsoResult,
   AccountCompleteSsoInput,
@@ -32,6 +33,7 @@ import type {
   AccountStatus,
   AccountUpdateProfileInput,
   InstanceInfo,
+  UsageSummary,
 } from "@synara/contracts";
 import {
   AccountApiError,
@@ -143,6 +145,12 @@ export interface AccountSession {
   /** Abandons a pending SSO attempt, closing its loopback listener. */
   cancelSso(input: AccountCompleteSsoInput): Promise<void>;
   updateProfile(input: AccountUpdateProfileInput): Promise<AccountMe>;
+  /**
+   * The account-wide usage summary — the "Account" side of the usage tab's
+   * device/account toggle. Runs against the stored session with the usual
+   * transparent refresh.
+   */
+  usageSummary(input: AccountUsageSummaryInput): Promise<UsageSummary>;
   signOut(): Promise<void>;
   /**
    * Whether `url` is the authorize URL of an SSO attempt this session
@@ -542,6 +550,10 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         }
         return written;
       });
+    },
+
+    async usageSummary(input) {
+      return withSession((token, client) => client.getUsageSummary(token, input.utcOffsetMinutes));
     },
 
     /**

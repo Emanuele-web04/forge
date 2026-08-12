@@ -1,0 +1,770 @@
+/**
+ * accountUsageReporter - event-driven sync of per-minute usage buckets to the
+ * account service (`POST /api/v1/usage`).
+ *
+ * The reporter never counts incrementally: every flush recomputes the buckets
+ * for a recent window straight from the local projections and pushes ABSOLUTE
+ * values, which the service upserts. Correctness therefore never depends on
+ * exactly-once delivery — a retry, an overlap between two flushes, or the same
+ * minute growing across pushes all land on the same rows.
+ *
+ * Fully inert when signed out, and silent best-effort when signed in: a failed
+ * push records a backoff timestamp and waits for the next activity; it can
+ * never break the server.
+ *
+ * Bucket derivation deliberately mirrors profileStats.ts (the canonical
+ * sibling for token-delta and attribution SQL) and profileStatsArchive.ts,
+ * adapted from local-day buckets to fixed UTC minutes.
+ *
+ * @module accountUsageReporter
+ */
+import { Effect } from "effect";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import {
+  EnvironmentId,
+  USAGE_DIMENSION_MAX_LENGTH,
+  USAGE_PUSH_MAX_BUCKETS,
+  type PushUsageRequest,
+  type UsageModelBucket,
+  type UsageSkillBucket,
+} from "@synara/contracts";
+import { createAccountClient, resolveAccountUrl, type AccountClient } from "@synara/shared/account";
+
+import {
+  readAccountCredentials,
+  readAccountFile,
+  resolveEnvironmentId,
+  withFreshAccessToken,
+} from "./accountAuth";
+import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profileStats";
+
+/** Activity is coalesced for this long before a flush recomputes and pushes. */
+const DEFAULT_DEBOUNCE_MS = 5_000;
+/** After a failed push, nothing retries until activity arrives past this. */
+const DEFAULT_FAILURE_BACKOFF_MS = 60_000;
+/** First sync (no watermark) backfills this much recent history, not all of it. */
+const DEFAULT_BACKFILL_DAYS = 7;
+/**
+ * Recompute overlap behind the watermark. Buckets are absolute and upserted,
+ * so re-deriving already-pushed minutes is free — the lap absorbs projection
+ * writes that landed after the minute they belong to was already pushed.
+ */
+const WATERMARK_SAFETY_LAP_MS = 2 * 60_000;
+
+// Domain events whose effects can change a usage bucket: turn starts (turns +
+// prompt/turn attribution), user messages (prompts, skills), and activity
+// records (token counters). notifyActivity is cheap and debounced, so this
+// filter only exists to skip the obviously irrelevant bulk (deltas, meta).
+const USAGE_RELEVANT_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "thread.turn-start-requested",
+  "thread.message-sent",
+  "thread.activity-appended",
+]);
+
+export function isAccountUsageRelevantEventType(eventType: string): boolean {
+  return USAGE_RELEVANT_EVENT_TYPES.has(eventType);
+}
+
+export interface AccountUsageReporter {
+  /**
+   * Signals that local usage may have changed. Debounced; never throws;
+   * a no-op while signed out or inside the failure backoff window.
+   */
+  notifyActivity(): void;
+  /**
+   * Runs a flush immediately (bypassing debounce and failure backoff).
+   * Resolves once the flush settles; never rejects — failures are recorded
+   * exactly as a scheduled flush records them.
+   */
+  flushNow(): Promise<void>;
+  /** Cancels any pending flush timer and stops scheduling new ones. */
+  stop(): void;
+}
+
+export interface AccountUsageReporterDeps {
+  readonly sql: SqlClient.SqlClient;
+  readonly baseDir: string;
+  readonly devUrl?: URL | undefined;
+  /** Configured account URL; the stored credential file's URL wins over it. */
+  readonly accountUrl?: string | undefined;
+  /** Injectable account client (tests); production builds one per flush. */
+  readonly client?: AccountClient;
+  /** Full auth+push seam for tests; default is withFreshAccessToken + pushUsage. */
+  readonly push?: (request: PushUsageRequest) => Promise<void>;
+  /** Signed-in probe; default reads the credential file. */
+  readonly isSignedIn?: () => Promise<boolean>;
+  /** Environment id seam; default resolves/persists `<stateDir>/environment-id`. */
+  readonly environmentId?: () => Promise<string>;
+  readonly debounceMs?: number;
+  readonly failureBackoffMs?: number;
+  readonly backfillDays?: number;
+  readonly now?: () => number;
+  /** One line per failure streak; default console.warn, injectable for tests. */
+  readonly log?: (message: string, data?: Record<string, unknown>) => void;
+}
+
+// ── Minute helpers ─────────────────────────────────────────────────────
+
+/** Floors a Unix-ms timestamp to its UTC minute as `YYYY-MM-DDTHH:MM:00Z`. */
+export function minuteStartIso(ms: number): string {
+  return `${new Date(ms - (ms % 60_000)).toISOString().slice(0, 17)}00Z`;
+}
+
+// ── Row shapes ─────────────────────────────────────────────────────────
+
+interface MinuteModelRow {
+  readonly minute: string | null;
+  readonly provider: string | null;
+  readonly model: string | null;
+  readonly reasoning: string | null;
+  readonly count: number | bigint;
+}
+
+interface MinuteSkillMessageRow {
+  readonly minute: string | null;
+  readonly messageId: string | null;
+  readonly text: string | null;
+  readonly skillsJson: string | null;
+  readonly mentionsJson: string | null;
+}
+
+interface SyncStateRow {
+  readonly watermarkMinute: string | null;
+  readonly lastFailureAt: string | null;
+}
+
+// ── Pure helpers ───────────────────────────────────────────────────────
+
+function toCount(value: number | bigint): number {
+  const numeric = typeof value === "bigint" ? Number(value) : value;
+  return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : 0;
+}
+
+/** Clamps an attribution dimension into the contract's bounded string. */
+function dimension(value: string | null, fallback: string): string {
+  const trimmed = value?.trim() ?? "";
+  return (trimmed.length > 0 ? trimmed : fallback).slice(0, USAGE_DIMENSION_MAX_LENGTH);
+}
+
+function reasoningDimension(value: string | null): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed.slice(0, USAGE_DIMENSION_MAX_LENGTH) : null;
+}
+
+function modelBucketKey(
+  minute: string,
+  provider: string,
+  model: string,
+  reasoning: string | null,
+): string {
+  return [minute, provider, model, reasoning ?? "\u0000"].join("\u0000");
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+// ── Bucket derivation ──────────────────────────────────────────────────
+
+/**
+ * Recomputes every model bucket and skill bucket for UTC minutes >=
+ * `fromMinute`. Exported for direct test coverage of the derivation SQL.
+ *
+ * Token deltas are computed over each thread's FULL activity history and only
+ * filtered to the window afterwards: a cumulative counter's first row inside
+ * the window would otherwise count the whole pre-window total as one delta.
+ */
+export function collectUsageBuckets(
+  sql: SqlClient.SqlClient,
+  fromMinute: string,
+): Effect.Effect<
+  { readonly models: UsageModelBucket[]; readonly skills: UsageSkillBucket[] },
+  unknown
+> {
+  return Effect.gen(function* () {
+    // Tokens per minute — the per-minute variant of profileStats.ts's
+    // queryTokenActivity (the canonical sibling); same counter-scale choice
+    // per (thread, provider, model), same LAG delta, same attribution
+    // (turn-start modelSelection via the shared CTE, thread selection as the
+    // legacy fallback), plus the reasoning dimension the account buckets key on.
+    const tokenRows = yield* sql<MinuteModelRow>`
+      WITH turn_model AS (
+        ${turnModelSelectionCte(sql)}
+      ),
+      ev AS (
+        SELECT
+          a.thread_id AS thread_id,
+          STRFTIME('%Y-%m-%dT%H:%M:00Z', a.created_at) AS minute,
+          COALESCE(
+            tm.provider,
+            json_extract(a.payload_json, '$.provider'),
+            CASE
+              WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+              THEN json_extract(th.model_selection_json, '$.provider')
+            END,
+            'unknown'
+          ) AS provider,
+          COALESCE(
+            tm.model,
+            CASE
+              WHEN th.model_selection_json IS NOT NULL
+                AND json_valid(th.model_selection_json)
+                AND (
+                  json_extract(a.payload_json, '$.provider') IS NULL
+                  OR json_extract(a.payload_json, '$.provider') =
+                    json_extract(th.model_selection_json, '$.provider')
+                )
+              THEN json_extract(th.model_selection_json, '$.model')
+            END,
+            'unknown'
+          ) AS model,
+          COALESCE(
+            tm.reasoning,
+            CASE
+              WHEN tm.model IS NULL
+                AND th.model_selection_json IS NOT NULL
+                AND json_valid(th.model_selection_json)
+              THEN COALESCE(
+                json_extract(th.model_selection_json, '$.options.reasoningEffort'),
+                json_extract(th.model_selection_json, '$.options.effort')
+              )
+            END
+          ) AS reasoning,
+          CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tp,
+          CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
+          pm.dispatch_origin AS dispatch_origin,
+          a.sequence AS sequence,
+          a.created_at AS created_at,
+          a.activity_id AS activity_id
+        FROM projection_thread_activities a
+        JOIN projection_threads th ON th.thread_id = a.thread_id
+        LEFT JOIN turn_model tm
+          ON tm.thread_id = a.thread_id
+         AND tm.turn_id = a.turn_id
+        LEFT JOIN projection_turns pt
+          ON pt.thread_id = a.thread_id
+         AND pt.turn_id = a.turn_id
+        LEFT JOIN projection_thread_messages pm
+          ON pm.thread_id = pt.thread_id
+         AND pm.message_id = pt.pending_message_id
+        WHERE a.kind = 'context-window.updated'
+          AND COALESCE(
+            json_extract(a.payload_json, '$.totalProcessedTokens'),
+            json_extract(a.payload_json, '$.usedTokens')
+          ) IS NOT NULL
+      ),
+      provider_model_scale AS (
+        SELECT thread_id, provider, model, MAX(tp IS NOT NULL) AS has_cumulative
+        FROM ev
+        GROUP BY thread_id, provider, model
+      ),
+      cumulative_delta AS (
+        SELECT
+          minute,
+          provider,
+          model,
+          reasoning,
+          dispatch_origin,
+          CASE
+            WHEN previous_tot IS NULL OR tot < previous_tot THEN tot
+            ELSE MAX(0, tot - previous_tot)
+          END AS d
+        FROM (
+          SELECT
+            minute,
+            provider,
+            model,
+            reasoning,
+            dispatch_origin,
+            tp AS tot,
+            LAG(tp) OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                sequence ASC,
+                created_at ASC,
+                activity_id ASC
+            ) AS previous_tot
+          FROM ev
+          WHERE tp IS NOT NULL
+        )
+      ),
+      used_only_delta AS (
+        SELECT
+          minute,
+          provider,
+          model,
+          reasoning,
+          dispatch_origin,
+          CASE
+            WHEN previous_tot IS NULL THEN tot
+            WHEN tot < previous_tot
+              AND (provider != previous_provider OR model != previous_model)
+            THEN tot
+            ELSE MAX(0, tot - previous_tot)
+          END AS d
+        FROM (
+          SELECT
+            ev.minute AS minute,
+            ev.provider AS provider,
+            ev.model AS model,
+            ev.reasoning AS reasoning,
+            ev.dispatch_origin AS dispatch_origin,
+            ev.ut AS tot,
+            LAG(ev.ut) OVER (
+              PARTITION BY ev.thread_id
+              ORDER BY
+                CASE WHEN ev.sequence IS NULL THEN 0 ELSE 1 END ASC,
+                ev.sequence ASC,
+                ev.created_at ASC,
+                ev.activity_id ASC
+            ) AS previous_tot,
+            LAG(ev.provider) OVER (
+              PARTITION BY ev.thread_id
+              ORDER BY
+                CASE WHEN ev.sequence IS NULL THEN 0 ELSE 1 END ASC,
+                ev.sequence ASC,
+                ev.created_at ASC,
+                ev.activity_id ASC
+            ) AS previous_provider,
+            LAG(ev.model) OVER (
+              PARTITION BY ev.thread_id
+              ORDER BY
+                CASE WHEN ev.sequence IS NULL THEN 0 ELSE 1 END ASC,
+                ev.sequence ASC,
+                ev.created_at ASC,
+                ev.activity_id ASC
+            ) AS previous_model
+          FROM ev
+          JOIN provider_model_scale pms
+            ON pms.thread_id = ev.thread_id
+           AND pms.provider = ev.provider
+           AND pms.model = ev.model
+          WHERE ev.tp IS NULL
+            AND ev.ut IS NOT NULL
+            AND NOT pms.has_cumulative
+        )
+      ),
+      all_tokens AS (
+        SELECT minute, provider, model, reasoning, d FROM cumulative_delta
+        WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
+        UNION ALL
+        SELECT minute, provider, model, reasoning, d FROM used_only_delta
+        WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
+      )
+      SELECT minute, provider, model, reasoning, SUM(d) AS count
+      FROM all_tokens
+      WHERE minute >= ${fromMinute}
+      GROUP BY minute, provider, model, reasoning
+      HAVING SUM(d) > 0
+    `;
+
+    // Turns per minute — per-minute variant of profileStats.ts's
+    // queryTurnInsights: turn-start events bucketed by their own timestamp,
+    // attributed to the event's modelSelection with the thread's current
+    // selection as the legacy fallback, agent-dispatched prompts excluded.
+    const turnRows = yield* sql<MinuteModelRow>`
+      WITH per_turn AS (
+        SELECT
+          STRFTIME('%Y-%m-%dT%H:%M:00Z', e.occurred_at) AS minute,
+          CASE
+            WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+            THEN json_extract(e.payload_json, '$.modelSelection.provider')
+            ELSE CASE
+              WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+              THEN json_extract(t.model_selection_json, '$.provider')
+            END
+          END AS provider,
+          CASE
+            WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+            THEN json_extract(e.payload_json, '$.modelSelection.model')
+            ELSE CASE
+              WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+              THEN json_extract(t.model_selection_json, '$.model')
+            END
+          END AS model,
+          CASE
+            WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+            THEN COALESCE(
+              json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+              json_extract(e.payload_json, '$.modelSelection.options.effort')
+            )
+            ELSE CASE
+              WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+              THEN COALESCE(
+                json_extract(t.model_selection_json, '$.options.reasoningEffort'),
+                json_extract(t.model_selection_json, '$.options.effort')
+              )
+            END
+          END AS reasoning
+        FROM orchestration_events e
+        JOIN projection_threads t
+          ON t.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
+        LEFT JOIN projection_thread_messages um
+          ON um.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
+         AND um.message_id = json_extract(e.payload_json, '$.messageId')
+        WHERE e.event_type = 'thread.turn-start-requested'
+          AND (um.dispatch_origin IS NULL OR um.dispatch_origin = 'user')
+      )
+      SELECT minute, provider, model, reasoning, COUNT(*) AS count
+      FROM per_turn
+      WHERE minute >= ${fromMinute}
+      GROUP BY minute, provider, model, reasoning
+    `;
+
+    // Prompts per minute — the same native-user-prompt filter as
+    // profileStats.ts's queryPromptActivity, attributed to the turn the prompt
+    // started (turn-start events carry the pending messageId) so the prompt
+    // count lands on the same bucket key as the turn it produced.
+    const promptRows = yield* sql<MinuteModelRow>`
+      WITH per_prompt AS (
+        SELECT
+          STRFTIME('%Y-%m-%dT%H:%M:00Z', m.created_at) AS minute,
+          COALESCE(
+            MAX(CASE
+              WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+              THEN json_extract(e.payload_json, '$.modelSelection.provider')
+            END),
+            CASE
+              WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+              THEN json_extract(t.model_selection_json, '$.provider')
+            END
+          ) AS provider,
+          COALESCE(
+            MAX(CASE
+              WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+              THEN json_extract(e.payload_json, '$.modelSelection.model')
+            END),
+            CASE
+              WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+              THEN json_extract(t.model_selection_json, '$.model')
+            END
+          ) AS model,
+          COALESCE(
+            MAX(CASE
+              WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+              THEN COALESCE(
+                json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+                json_extract(e.payload_json, '$.modelSelection.options.effort')
+              )
+            END),
+            CASE
+              WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+              THEN COALESCE(
+                json_extract(t.model_selection_json, '$.options.reasoningEffort'),
+                json_extract(t.model_selection_json, '$.options.effort')
+              )
+            END
+          ) AS reasoning
+        FROM projection_thread_messages m
+        JOIN projection_threads t ON t.thread_id = m.thread_id
+        LEFT JOIN orchestration_events e
+          ON e.event_type = 'thread.turn-start-requested'
+         AND COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id) = m.thread_id
+         AND json_extract(e.payload_json, '$.messageId') = m.message_id
+        WHERE m.role = 'user'
+          AND m.source = 'native'
+          AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
+          AND STRFTIME('%Y-%m-%dT%H:%M:00Z', m.created_at) >= ${fromMinute}
+        GROUP BY m.thread_id, m.message_id
+      )
+      SELECT minute, provider, model, reasoning, COUNT(*) AS count
+      FROM per_prompt
+      GROUP BY minute, provider, model, reasoning
+    `;
+
+    // Skills per minute — the same message rows profileStats.ts's
+    // querySkillUsageMessages feeds into aggregateProfileSkillUsageRows,
+    // filtered to the window (safe: skill counts have no cross-row deltas) and
+    // aggregated per minute with the exact same shared function.
+    const skillMessageRows = yield* sql<MinuteSkillMessageRow>`
+      SELECT
+        STRFTIME('%Y-%m-%dT%H:%M:00Z', m.created_at) AS minute,
+        m.message_id AS messageId,
+        CASE
+          WHEN m.text GLOB '*$[A-Za-z0-9]*'
+            OR m.text GLOB '*/[A-Za-z0-9]*'
+          THEN m.text
+          ELSE NULL
+        END AS text,
+        m.skills_json AS skillsJson,
+        m.mentions_json AS mentionsJson
+      FROM projection_thread_messages m
+      JOIN projection_threads t ON t.thread_id = m.thread_id
+      WHERE m.role = 'user'
+        AND m.source = 'native'
+        AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
+        AND STRFTIME('%Y-%m-%dT%H:%M:00Z', m.created_at) >= ${fromMinute}
+        AND (
+          (m.skills_json IS NOT NULL AND TRIM(m.skills_json) NOT IN ('', '[]'))
+          OR (m.mentions_json IS NOT NULL AND TRIM(m.mentions_json) NOT IN ('', '[]'))
+          OR m.text GLOB '*$[A-Za-z0-9]*'
+          OR m.text GLOB '*/[A-Za-z0-9]*'
+        )
+      ORDER BY m.created_at ASC, m.message_id ASC
+    `;
+
+    // Merge tokens, turns, and prompts onto one bucket key.
+    const modelBuckets = new Map<
+      string,
+      { minute: string; provider: string; model: string; reasoning: string | null } & {
+        tokens: number;
+        turns: number;
+        prompts: number;
+      }
+    >();
+    const add = (row: MinuteModelRow, field: "tokens" | "turns" | "prompts"): void => {
+      const minute = row.minute;
+      const count = toCount(row.count);
+      if (!minute || count <= 0) return;
+      const provider = dimension(row.provider, "unknown");
+      const model = dimension(row.model, "unknown");
+      const reasoning = reasoningDimension(row.reasoning);
+      const key = modelBucketKey(minute, provider, model, reasoning);
+      const bucket = modelBuckets.get(key) ?? {
+        minute,
+        provider,
+        model,
+        reasoning,
+        tokens: 0,
+        turns: 0,
+        prompts: 0,
+      };
+      bucket[field] += count;
+      modelBuckets.set(key, bucket);
+    };
+    for (const row of tokenRows) add(row, "tokens");
+    for (const row of turnRows) add(row, "turns");
+    for (const row of promptRows) add(row, "prompts");
+
+    const models: UsageModelBucket[] = [...modelBuckets.values()]
+      .toSorted((left, right) => left.minute.localeCompare(right.minute))
+      .map((bucket) => ({
+        minute: bucket.minute,
+        provider: bucket.provider,
+        model: bucket.model,
+        reasoning: bucket.reasoning,
+        tokens: bucket.tokens,
+        turns: bucket.turns,
+        prompts: bucket.prompts,
+      }));
+
+    // Group skill message rows per minute, then reuse the canonical aggregator.
+    const skillRowsByMinute = new Map<string, MinuteSkillMessageRow[]>();
+    for (const row of skillMessageRows) {
+      if (!row.minute) continue;
+      const rows = skillRowsByMinute.get(row.minute) ?? [];
+      rows.push(row);
+      skillRowsByMinute.set(row.minute, rows);
+    }
+    const skills: UsageSkillBucket[] = [...skillRowsByMinute.entries()]
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .flatMap(([minute, rows]) =>
+        aggregateProfileSkillUsageRows(rows).map((usage) => ({
+          minute,
+          name: usage.name.slice(0, USAGE_DIMENSION_MAX_LENGTH),
+          kind: usage.kind,
+          runs: usage.runCount,
+        })),
+      );
+
+    return { models, skills };
+  });
+}
+
+// ── Reporter ───────────────────────────────────────────────────────────
+
+export function createAccountUsageReporter(deps: AccountUsageReporterDeps): AccountUsageReporter {
+  const { sql, baseDir } = deps;
+  const debounceMs = deps.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const failureBackoffMs = deps.failureBackoffMs ?? DEFAULT_FAILURE_BACKOFF_MS;
+  const backfillMs = (deps.backfillDays ?? DEFAULT_BACKFILL_DAYS) * 86_400_000;
+  const now = deps.now ?? Date.now;
+  const log =
+    deps.log ??
+    ((message: string, data?: Record<string, unknown>) => {
+      console.warn(message, data ?? {});
+    });
+
+  const isSignedIn =
+    deps.isSignedIn ?? (async () => (await readAccountCredentials(baseDir)) !== undefined);
+
+  const resolveEnvironment =
+    deps.environmentId ?? (() => resolveEnvironmentId(baseDir, deps.devUrl));
+
+  const push =
+    deps.push ??
+    (async (request: PushUsageRequest) => {
+      // Same URL resolution as accountSession.ts: the URL stored at sign-in
+      // wins so the reporter always talks to the account the session belongs
+      // to, with the configured/default URL as the signed-out fallback.
+      const stored = await readAccountFile(baseDir);
+      const accountUrl = stored?.accountUrl ?? deps.accountUrl ?? resolveAccountUrl();
+      const client = deps.client ?? createAccountClient({ baseUrl: accountUrl });
+      await withFreshAccessToken({ baseDir, client }, async (accessToken) => {
+        await client.pushUsage(accessToken, request);
+      });
+    });
+
+  const readSyncState = () =>
+    Effect.runPromise(
+      sql<SyncStateRow>`
+        SELECT watermark_minute AS watermarkMinute, last_failure_at AS lastFailureAt
+        FROM account_usage_sync
+        WHERE id = 1
+      `.pipe(Effect.map((rows) => rows[0])),
+    );
+
+  const writeSuccess = (watermarkMinute: string) =>
+    Effect.runPromise(
+      sql`
+        INSERT INTO account_usage_sync (id, watermark_minute, last_failure_at)
+        VALUES (1, ${watermarkMinute}, NULL)
+        ON CONFLICT (id) DO UPDATE SET
+          watermark_minute = ${watermarkMinute},
+          last_failure_at = NULL
+      `,
+    );
+
+  const writeFailure = (lastFailureAt: string) =>
+    Effect.runPromise(
+      sql`
+        INSERT INTO account_usage_sync (id, watermark_minute, last_failure_at)
+        VALUES (1, NULL, ${lastFailureAt})
+        ON CONFLICT (id) DO UPDATE SET last_failure_at = ${lastFailureAt}
+      `,
+    );
+
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight: Promise<void> | undefined;
+  let rerunAfterFlight = false;
+  let failureStreak = 0;
+  let cachedEnvironmentId: string | undefined;
+
+  async function flush(options: { readonly bypassBackoff: boolean }): Promise<void> {
+    try {
+      if (!(await isSignedIn())) return;
+
+      const state = await readSyncState();
+      if (!options.bypassBackoff && state?.lastFailureAt) {
+        const failedAtMs = Date.parse(state.lastFailureAt);
+        if (Number.isFinite(failedAtMs) && now() - failedAtMs < failureBackoffMs) {
+          // Inside the backoff window: nothing retries until activity arrives
+          // again past it. The recompute-from-watermark design means no data
+          // is lost by skipping — the next flush covers this window too.
+          return;
+        }
+      }
+
+      const flushStartedAtMs = now();
+      const watermarkMs = state?.watermarkMinute ? Date.parse(state.watermarkMinute) : Number.NaN;
+      const fromMinute = Number.isFinite(watermarkMs)
+        ? minuteStartIso(watermarkMs - WATERMARK_SAFETY_LAP_MS)
+        : minuteStartIso(flushStartedAtMs - backfillMs);
+
+      const { models, skills } = await Effect.runPromise(collectUsageBuckets(sql, fromMinute));
+
+      if (models.length > 0 || skills.length > 0) {
+        cachedEnvironmentId ??= await resolveEnvironment();
+        const environmentId = EnvironmentId.makeUnsafe(cachedEnvironmentId);
+        const modelChunks = chunk(models, USAGE_PUSH_MAX_BUCKETS);
+        const skillChunks = chunk(skills, USAGE_PUSH_MAX_BUCKETS);
+        const pushCount = Math.max(modelChunks.length, skillChunks.length);
+        for (let index = 0; index < pushCount; index += 1) {
+          await push({
+            environmentId,
+            models: modelChunks[index] ?? [],
+            skills: skillChunks[index] ?? [],
+          });
+        }
+      }
+
+      // Full success: everything through the newest fully elapsed minute (as
+      // of flush start) is durably on the account. The still-growing current
+      // minute is re-covered by the safety lap on the next flush.
+      await writeSuccess(minuteStartIso(flushStartedAtMs - 60_000));
+      failureStreak = 0;
+    } catch (error) {
+      failureStreak += 1;
+      if (failureStreak === 1) {
+        log("account usage push failed; backing off until new activity", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        await writeFailure(new Date(now()).toISOString());
+      } catch {
+        // Even recording the failure is best-effort; the in-memory streak
+        // still throttles logging, and the next flush re-reads real state.
+      }
+    }
+  }
+
+  function runFlush(options: { readonly bypassBackoff: boolean }): Promise<void> {
+    if (inFlight) {
+      rerunAfterFlight = true;
+      return inFlight;
+    }
+    inFlight = flush(options).finally(() => {
+      inFlight = undefined;
+      if (rerunAfterFlight && !stopped) {
+        rerunAfterFlight = false;
+        schedule();
+      }
+    });
+    return inFlight;
+  }
+
+  function schedule(): void {
+    if (stopped || timer) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      void runFlush({ bypassBackoff: false });
+    }, debounceMs);
+    timer.unref?.();
+  }
+
+  const reporter: AccountUsageReporter = {
+    notifyActivity() {
+      if (stopped) return;
+      try {
+        schedule();
+      } catch {
+        // notifyActivity must never throw into event-dispatch paths.
+      }
+    },
+    async flushNow() {
+      if (stopped) return;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      await runFlush({ bypassBackoff: true });
+    },
+    stop() {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    },
+  };
+
+  // Startup catch-up: activity that happened while the server was down (or
+  // that a crash left unsynced) is behind the watermark's safety lap, so one
+  // ordinary debounced flush covers it. Only when signed in — signed out, the
+  // reporter is fully inert until something calls notifyActivity after sign-in.
+  void isSignedIn()
+    .then((signedIn) => {
+      if (signedIn) reporter.notifyActivity();
+    })
+    .catch(() => {});
+
+  return reporter;
+}

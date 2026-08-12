@@ -7,7 +7,19 @@
  * @module CliConfig
  */
 import OS from "node:os";
-import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceMap } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  ServiceMap,
+  Stream,
+} from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@synara/shared/Net";
 import {
@@ -59,6 +71,10 @@ import {
   runAuthLogout,
   runStatus,
 } from "./accountAuth";
+import {
+  createAccountUsageReporter,
+  isAccountUsageRelevantEventType,
+} from "./accountUsageReporter";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -395,6 +411,25 @@ const makeServerProgram = (input: CliInput) =>
           ...(config.devUrl ? { devUrl: config.devUrl } : {}),
         }),
       ).pipe(Effect.ignore),
+    );
+    // Event-driven account usage sync: every committed usage-relevant domain
+    // event nudges the reporter, which debounces, recomputes recent per-minute
+    // buckets from the local projections, and pushes absolute values to the
+    // account. Best-effort and fully inert while signed out — like the host
+    // registration above, it must never delay or fail a boot.
+    const usageReporterSql = yield* SqlClient.SqlClient;
+    const accountUsageReporter = createAccountUsageReporter({
+      sql: usageReporterSql,
+      baseDir: config.baseDir,
+      ...(config.devUrl ? { devUrl: config.devUrl } : {}),
+    });
+    yield* Effect.addFinalizer(() => Effect.sync(() => accountUsageReporter.stop()));
+    yield* Effect.forkChild(
+      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
+        isAccountUsageRelevantEventType(event.type)
+          ? Effect.sync(() => accountUsageReporter.notifyActivity())
+          : Effect.void,
+      ),
     );
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with

@@ -108,6 +108,11 @@ export function makeAccountRpcHandlers({ accountSession, openBrowser }: AccountR
         () => Effect.tryPromise(() => accountSession.cancelSso(input)),
         "Failed to cancel the sign-in",
       ),
+    [WS_METHODS.accountUsageSummary]: (input: Parameters<AccountSession["usageSummary"]>[0]) =>
+      ownerAccountRpc(
+        () => Effect.tryPromise(() => accountSession.usageSummary(input)),
+        "Failed to load account usage",
+      ),
     [WS_METHODS.accountUpdateProfile]: (input: Parameters<AccountSession["updateProfile"]>[0]) =>
       ownerAccountRpc(
         () => Effect.tryPromise(() => accountSession.updateProfile(input)),

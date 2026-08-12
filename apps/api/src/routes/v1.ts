@@ -782,7 +782,6 @@ export function createV1Routes(deps: {
     return c.json(body, 202);
   });
 
-
   /**
    * The signed-in owner's account-wide usage — the "Account" side of the
    * usage tab's device/account toggle. Same buckets as the public profile,
@@ -799,9 +798,7 @@ export function createV1Routes(deps: {
     // an out-of-range value is a client bug, and answering UTC beats a 400
     // that hides the whole dashboard.
     const rawOffset = Number.parseInt(c.req.query("utcOffsetMinutes") ?? "0", 10);
-    const offsetMinutes = Number.isFinite(rawOffset)
-      ? Math.max(-720, Math.min(840, rawOffset))
-      : 0;
+    const offsetMinutes = Number.isFinite(rawOffset) ? Math.max(-720, Math.min(840, rawOffset)) : 0;
     // Interval arithmetic instead of a timezone name: the client knows its
     // offset, and Postgres shifting by a fixed interval is DST-agnostic in
     // exactly the way the local dashboard's own bucketing is. Inlined rather

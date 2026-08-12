@@ -22,6 +22,7 @@ const SAMPLE_INPUTS: Record<string, unknown> = {
     displayName: "Ada",
     avatarColor: "emerald",
   },
+  [WS_METHODS.accountUsageSummary]: { utcOffsetMinutes: 0 },
   [WS_METHODS.accountSignOut]: undefined,
   [WS_METHODS.accountOpenVerificationUrl]: { url: "https://auth.example.com/device?code=x" },
 };
@@ -50,6 +51,16 @@ function spySession(): { session: AccountSession; calls: () => string[] } {
     }),
     completeSso: record("completeSso", { state: "signed-out" as const }),
     cancelSso: record("cancelSso", undefined),
+    usageSummary: record("usageSummary", {
+      lifetimeTokens: 0,
+      lifetimePrompts: 0,
+      lifetimeTurns: 0,
+      models: [],
+      days: [],
+      hours: [],
+      skills: [],
+      environments: [],
+    }),
     updateProfile: record("updateProfile", {
       id: "user_1",
       name: "Ada",

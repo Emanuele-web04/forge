@@ -1486,7 +1486,6 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     });
   });
 
-
   describe("GET /usage/summary", () => {
     it("rejects unauthenticated reads", async () => {
       const { app } = buildApp();
@@ -1507,7 +1506,13 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         usageBody(environmentId, {
           models: [
             modelBucket({ tokens: 1000, turns: 2, prompts: 1 }),
-            modelBucket({ model: "claude-opus-4.8", reasoning: "high", tokens: 400, turns: 1, prompts: 1 }),
+            modelBucket({
+              model: "claude-opus-4.8",
+              reasoning: "high",
+              tokens: 400,
+              turns: 1,
+              prompts: 1,
+            }),
           ],
           skills: [{ minute: minuteIso(), name: "code-review", kind: "skill", runs: 3 }],
         }),
