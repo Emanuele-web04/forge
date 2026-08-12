@@ -34,6 +34,7 @@ import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesFo
 import { CentralIcon } from "~/lib/central-icons";
 import { DownloadIcon, ExternalLinkIcon, Loader2Icon } from "~/lib/icons";
 import {
+  hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
   serverQueryKeys,
   serverSettingsQueryOptions,
@@ -454,6 +455,7 @@ function isProviderPickerProviderEnabled(
 function SortableProviderVisibilityRow(props: {
   option: { provider: ProviderKind; title: string };
   providerStatus: ServerProviderStatus | undefined;
+  statusReconciled: boolean;
   isHidden: boolean;
   onHiddenChange: (hidden: boolean) => void;
 }) {
@@ -466,6 +468,7 @@ function SortableProviderVisibilityRow(props: {
     transition,
     isDragging,
   } = useSortable({ id: props.option.provider });
+  const isChecking = !props.statusReconciled || props.providerStatus === undefined;
   const isAvailable = props.providerStatus?.available === true;
   const isEnabled = isProviderPickerProviderEnabled(props.providerStatus, props.isHidden);
 
@@ -498,18 +501,20 @@ function SortableProviderVisibilityRow(props: {
         <span className="min-w-0">
           <span className="block truncate text-sm text-foreground">{props.option.title}</span>
           <span className="block text-[11px] text-muted-foreground">
-            {isAvailable ? "Installed" : "CLI not installed"}
+            {isChecking ? "Checking" : isAvailable ? "Installed" : "CLI not installed"}
           </span>
         </span>
       </div>
       <Switch
         checked={isEnabled}
-        disabled={!isAvailable}
+        disabled={isChecking || !isAvailable}
         onCheckedChange={(checked) => props.onHiddenChange(!Boolean(checked))}
         aria-label={
-          isAvailable
-            ? `Show ${props.option.title} in the provider picker`
-            : `${props.option.title} CLI is not installed`
+          isChecking
+            ? `Checking ${props.option.title} CLI availability`
+            : isAvailable
+              ? `Show ${props.option.title} in the provider picker`
+              : `${props.option.title} CLI is not installed`
         }
       />
     </div>
@@ -805,6 +810,7 @@ export function ProvidersSettingsPanel({
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig();
+  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
     () => createProviderInstallDisclosureState(settings),
@@ -845,6 +851,11 @@ export function ProvidersSettingsPanel({
       providerStatusByProvider.get(option.provider)?.available === true &&
       !hiddenProviderSet.has(option.provider),
   ).length;
+  const hasPendingProviderStatuses =
+    !providerStatusesReconciled ||
+    orderedProviderVisibilityOptions.some(
+      (option) => !providerStatusByProvider.has(option.provider),
+    );
   const providerUpdateServerSettings = useMemo(
     () =>
       serverSettingsQuery.data
@@ -942,7 +953,7 @@ export function ProvidersSettingsPanel({
           title="Available CLIs"
           description="Installed providers appear in the picker. Turn off any you don't want to see, and drag them into your preferred order."
           status={
-            serverConfigQuery.isPending
+            serverConfigQuery.isPending || hasPendingProviderStatuses
               ? "Checking installed CLIs"
               : availableProviderCount === 0
                 ? "No CLIs detected"
@@ -982,6 +993,7 @@ export function ProvidersSettingsPanel({
                     key={option.provider}
                     option={option}
                     providerStatus={providerStatusByProvider.get(option.provider)}
+                    statusReconciled={providerStatusesReconciled}
                     isHidden={hiddenProviderSet.has(option.provider)}
                     onHiddenChange={(hidden) =>
                       updateSettings({

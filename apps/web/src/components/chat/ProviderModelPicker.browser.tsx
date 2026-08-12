@@ -196,6 +196,22 @@ describe("ProviderModelPicker", () => {
       provider: "claudeAgent",
       model: "claude-opus-4-6",
       lockedProvider: null,
+      providers: [
+        {
+          provider: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+        {
+          provider: "claudeAgent",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+      ],
     });
 
     try {

@@ -121,7 +121,11 @@ describe("server provider status reconciliation", () => {
     const refresh = refreshServerConfigAfterTransportOpen(queryClient, {
       loadConfig: () => configProjection,
     });
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
+
     await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(true);
+
     resolveConfig(makeServerConfig([unavailableStatus]));
     await refresh;
 
@@ -146,6 +150,7 @@ describe("server provider status reconciliation", () => {
       loadConfig: async () => makeServerConfig([READY_CODEX_STATUS]),
     });
 
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
     expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
       READY_CODEX_STATUS,
     ]);

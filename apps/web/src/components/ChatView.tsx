@@ -2232,16 +2232,25 @@ export default function ChatView({
   const localProviderStatuses = useProviderStatusesForLocalConfig();
   const preferredDraftProvider =
     selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
-  const selectedProvider: ProviderKind =
-    lockedProvider ??
-    resolveAvailableProviderPreference({
-      preferredProvider: preferredDraftProvider,
-      statuses: hasReconciledServerProviderStatuses(queryClient)
-        ? localProviderStatuses
-        : EMPTY_PROVIDER_STATUSES,
-      providerOrder: settings.providerOrder,
-      hiddenProviders: settings.hiddenProviders,
-    });
+  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
+  const selectedProvider = useMemo<ProviderKind>(
+    () =>
+      lockedProvider ??
+      resolveAvailableProviderPreference({
+        preferredProvider: preferredDraftProvider,
+        statuses: providerStatusesReconciled ? localProviderStatuses : EMPTY_PROVIDER_STATUSES,
+        providerOrder: settings.providerOrder,
+        hiddenProviders: settings.hiddenProviders,
+      }),
+    [
+      localProviderStatuses,
+      lockedProvider,
+      preferredDraftProvider,
+      providerStatusesReconciled,
+      settings.hiddenProviders,
+      settings.providerOrder,
+    ],
+  );
   const previousSelectedProviderRef = useRef<{
     threadId: ThreadId;
     provider: ProviderKind;
