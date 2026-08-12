@@ -2105,12 +2105,11 @@ function DesktopProjectBootstrap() {
         if (!needsRepair) {
           if (!ownsAttempt() || !attempt.complete()) return;
           useStore.getState().syncServerShellSnapshot(snapshot);
-          return snapshot;
+          return;
         }
         return api.orchestration.repairState().then((repairedSnapshot) => {
           if (!ownsAttempt() || !attempt.complete()) return;
           syncServerReadModel(repairedSnapshot);
-          return repairedSnapshot;
         });
       })
       .catch(() => {
