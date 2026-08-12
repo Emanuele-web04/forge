@@ -330,7 +330,10 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     await withLockedAccountFile(baseDir, async () => {
       const previous = await readAccountFile(baseDir);
       const sameAccountAndWorkspace =
-        previous?.accountUrl === accountUrl && previous?.organizationId === scoped.organizationId;
+        previous?.accountUrl === accountUrl &&
+        (previous?.organizationId === scoped.organizationId ||
+          (previous?.organizationId === undefined &&
+            (previous?.hostToken !== undefined || previous?.hostId !== undefined)));
       await writeAccountCredentials(baseDir, {
         accountUrl,
         workosClientId: instance.clientId,
