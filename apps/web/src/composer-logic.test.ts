@@ -472,6 +472,10 @@ describe("parseStandaloneComposerSlashCommand", () => {
     expect(parseStandaloneComposerSlashCommand("/default")).toBe("default");
   });
 
+  it("parses standalone /debug command", () => {
+    expect(parseStandaloneComposerSlashCommand("/debug")).toBe("debug");
+  });
+
   it("parses standalone /fast command", () => {
     expect(parseStandaloneComposerSlashCommand("/fast")).toBe("fast");
   });

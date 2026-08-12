@@ -803,6 +803,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       yield* sql`DELETE FROM projection_pending_interactions WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_activities WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_messages WHERE thread_id = ${threadId}`;
+      yield* sql`DELETE FROM message_text_segments WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_proposed_plans WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_sessions WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_turns WHERE thread_id = ${threadId}`;

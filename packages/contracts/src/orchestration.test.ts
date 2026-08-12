@@ -20,6 +20,7 @@ import {
   OrchestrationThreadPullRequest,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ProviderInteractionMode,
   ProviderStartOptions,
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
@@ -36,6 +37,7 @@ const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffI
 const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
 const decodeRuntimeMode = Schema.decodeUnknownEffect(RuntimeMode);
+const decodeProviderInteractionMode = Schema.decodeUnknownEffect(ProviderInteractionMode);
 const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateCommand);
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
@@ -44,6 +46,12 @@ const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartC
 it.effect("decodes the AI-reviewed auto runtime mode", () =>
   Effect.gen(function* () {
     assert.strictEqual(yield* decodeRuntimeMode("auto"), "auto");
+  }),
+);
+
+it.effect("decodes the Synara-controlled debug interaction mode", () =>
+  Effect.gen(function* () {
+    assert.strictEqual(yield* decodeProviderInteractionMode("debug"), "debug");
   }),
 );
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
@@ -481,6 +489,37 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
     assert.strictEqual(parsed.modelSelection?.provider, "codex");
     assert.strictEqual(parsed.runtimeMode, "full-access");
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
+  }),
+);
+
+it.effect("preserves debug mode in thread turns and interaction-mode commands", () =>
+  Effect.gen(function* () {
+    const turn = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-debug-turn",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-debug-turn",
+        role: "user",
+        text: "debug the failing request",
+        attachments: [],
+      },
+      interactionMode: "debug",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    });
+    const modeChange = yield* decodeClientOrchestrationCommand({
+      type: "thread.interaction-mode.set",
+      commandId: "cmd-debug-mode",
+      threadId: "thread-1",
+      interactionMode: "debug",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    });
+
+    assert.strictEqual(turn.interactionMode, "debug");
+    assert.strictEqual(modeChange.type, "thread.interaction-mode.set");
+    if (modeChange.type === "thread.interaction-mode.set") {
+      assert.strictEqual(modeChange.interactionMode, "debug");
+    }
   }),
 );
 

@@ -6,11 +6,11 @@ import { describe } from "vitest";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("092_BackfillMaxIterationsDisabledReason", () => {
+describe("093_BackfillMaxIterationsDisabledReason", () => {
   it.effect("backfills only active disabled definitions at their iteration cap", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 91 });
+      yield* runMigrations({ toMigrationInclusive: 92 });
       yield* sql`
         INSERT INTO automation_definitions (
           automation_id, project_id, name, prompt, schedule_json, enabled,
@@ -59,8 +59,8 @@ describe("092_BackfillMaxIterationsDisabledReason", () => {
           )
       `;
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 92 }), [
-        [92, "BackfillMaxIterationsDisabledReason"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 93 }), [
+        [93, "BackfillMaxIterationsDisabledReason"],
       ]);
 
       const rows = yield* sql<{

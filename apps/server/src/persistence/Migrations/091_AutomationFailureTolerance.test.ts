@@ -6,7 +6,7 @@ import { describe } from "vitest";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("090_AutomationFailureTolerance", () => {
+describe("091_AutomationFailureTolerance", () => {
   it.effect("backfills legacy stop-on-error values into failure thresholds", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -35,7 +35,7 @@ describe("090_AutomationFailureTolerance", () => {
           )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 90 });
+      yield* runMigrations({ toMigrationInclusive: 91 });
 
       const rows = yield* sql<{
         readonly id: string;

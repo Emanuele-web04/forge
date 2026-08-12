@@ -6,11 +6,11 @@ import { describe } from "vitest";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("091_BackfillAutomationRunThreadSource", () => {
+describe("092_BackfillAutomationRunThreadSource", () => {
   it.effect("marks only standalone run threads, in both the event log and the projection", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 90 });
+      yield* runMigrations({ toMigrationInclusive: 91 });
 
       const runThreadId = "automation:automation-run:legacy-run:thread";
       const dedicatedThreadId = "automation:automation-run:dedicated-home:thread";
@@ -93,8 +93,8 @@ describe("091_BackfillAutomationRunThreadSource", () => {
           )
       `;
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 91 }), [
-        [91, "BackfillAutomationRunThreadSource"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 92 }), [
+        [92, "BackfillAutomationRunThreadSource"],
       ]);
 
       const threads = yield* sql<{

@@ -2170,6 +2170,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
+          ...(command.segmentStartedAt ? { segmentStartedAt: command.segmentStartedAt } : {}),
+          ...(command.segmentSequence !== undefined
+            ? { segmentSequence: command.segmentSequence }
+            : {}),
           turnId: resolveStableMessageTurnId({
             existingTurnId: existingMessage?.turnId,
             incomingTurnId: command.turnId,

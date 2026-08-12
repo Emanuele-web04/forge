@@ -131,12 +131,26 @@ beforeAll(() => {
       classList,
       offsetHeight: 0,
     },
+    // flushStorageBeforePageHide registers visibilitychange at module load of
+    // the MessagesTimeline import chain (via composerDraftStore).
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    visibilityState: "visible",
   });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
     return 0;
   });
 });
+
+// Warm the component module once: the first dynamic import pays the whole
+// component-graph transform, which exceeds the 5s per-test timeout on slow CI
+// runners (observed >10s under a full parallel suite). beforeAll keeps that
+// cost off any single test's clock; the explicit timeout keeps it off the
+// default 10s hook clock too.
+beforeAll(async () => {
+  await import("./MessagesTimeline");
+}, 120_000);
 
 describe("MessagesTimeline", () => {
   // The first test pays the full dynamic-import cost of the MessagesTimeline

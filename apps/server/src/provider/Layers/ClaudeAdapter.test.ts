@@ -8878,7 +8878,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("restores base permission mode on sendTurn when interactionMode is default", () => {
+  it.effect("restores base permission mode when switching from Plan to Debug", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -8914,11 +8914,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       yield* Fiber.join(turnCompletedFiber);
 
-      // Second turn back to default
+      // Debug is a normal implementation turn and must leave native Plan mode.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "now do it",
-        interactionMode: "default",
+        interactionMode: "debug",
         attachments: [],
       });
 

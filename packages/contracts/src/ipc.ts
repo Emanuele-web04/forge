@@ -505,7 +505,7 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
-export const DesktopAppIcon = Schema.Literals(["default", "icon"]);
+export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
 export interface SynaraStorageSnapshot {

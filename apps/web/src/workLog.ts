@@ -48,6 +48,8 @@ const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
+  /** Server-owned orchestration event sequence for causal ordering. */
+  sequence?: number;
   turnId?: TurnId | null;
   label: string;
   detail?: string;
@@ -182,6 +184,17 @@ export type TimelineEntry =
       message: ChatMessage;
     }
   | {
+      // One slice of a streamed assistant message that had tool calls inside
+      // its text span; positioned at the slice's own start time so reasoning
+      // interleaves with the tool rows instead of one block above them.
+      id: string;
+      kind: "message-segment";
+      createdAt: string;
+      sequence: number;
+      message: ChatMessage;
+      segmentIndex: number;
+    }
+  | {
       id: string;
       kind: "proposed-plan";
       createdAt: string;
@@ -191,6 +204,7 @@ export type TimelineEntry =
       id: string;
       kind: "work";
       createdAt: string;
+      sequence?: number;
       entry: WorkLogEntry;
     };
 
@@ -451,6 +465,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
+    ...(activity.sequence !== undefined ? { sequence: activity.sequence } : {}),
     ...(activity.turnId !== null ? { turnId: activity.turnId } : {}),
     label: activity.summary,
     tone: activity.tone === "approval" ? "info" : activity.tone,
@@ -2073,6 +2088,15 @@ function compareActivityLifecycleRank(kind: string): number {
 }
 
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  if (
+    "sequence" in left &&
+    "sequence" in right &&
+    left.sequence !== undefined &&
+    right.sequence !== undefined &&
+    left.sequence !== right.sequence
+  ) {
+    return left.sequence - right.sequence;
+  }
   return left.createdAt.localeCompare(right.createdAt);
 }
 
@@ -2133,7 +2157,7 @@ export function deriveTimelineEntries(
   const proposedPlanTurnIds = new Set(
     proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
   );
-  const messageRows: TimelineEntry[] = messages.flatMap((message) => {
+  const messageRows: TimelineEntry[] = messages.flatMap((message): TimelineEntry[] => {
     const displayMessage =
       message.role === "assistant" && message.turnId && proposedPlanTurnIds.has(message.turnId)
         ? { ...message, text: stripProposedPlanBlocksFromText(message.text) }
@@ -2145,6 +2169,27 @@ export function deriveTimelineEntries(
       proposedPlanTurnIds.has(displayMessage.turnId)
     ) {
       return [];
+    }
+    // Completed assistant messages whose streamed text was interleaved with
+    // tool rows render as one row per text segment, each positioned at its own
+    // start time, so the merged timeline shows reasoning next to the tool that
+    // interrupted it instead of one block above every tool. While the message
+    // is still streaming, keep the single live row (the streaming surface).
+    const textSegments = displayMessage.textSegments;
+    if (
+      displayMessage.role === "assistant" &&
+      !displayMessage.streaming &&
+      textSegments !== undefined &&
+      textSegments.length > 1
+    ) {
+      return textSegments.map((segment, segmentIndex) => ({
+        id: `${displayMessage.id}#seg:${segmentIndex}`,
+        kind: "message-segment" as const,
+        createdAt: segment.startedAt,
+        sequence: segment.sequence,
+        message: displayMessage,
+        segmentIndex,
+      }));
     }
     return [
       {
@@ -2165,6 +2210,7 @@ export function deriveTimelineEntries(
     id: entry.id,
     kind: "work",
     createdAt: entry.createdAt,
+    ...(entry.sequence !== undefined ? { sequence: entry.sequence } : {}),
     entry,
   }));
 

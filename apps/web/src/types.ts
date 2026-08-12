@@ -102,10 +102,15 @@ export type ChatAttachment =
   | ChatFileAttachment
   | ChatAssistantSelectionAttachment;
 
+export type OrchestrationMessageTextSegment =
+  import("@synara/contracts").OrchestrationMessageTextSegment;
+
 export interface ChatMessage {
   id: MessageId;
   role: "user" | "assistant" | "system";
   text: string;
+  /** Slices of streamed assistant text between row-making provider events. */
+  textSegments?: OrchestrationMessageTextSegment[];
   attachments?: ChatAttachment[];
   skills?: ProviderSkillReference[];
   mentions?: ProviderMentionReference[];
