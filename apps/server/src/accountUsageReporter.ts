@@ -108,6 +108,11 @@ export interface AccountUsageReporterDeps {
   readonly isSignedIn?: () => Promise<boolean>;
   /** Environment id seam; default resolves/persists `<stateDir>/environment-id`. */
   readonly environmentId?: () => Promise<string>;
+  /**
+   * Signed-in identity seam (`${accountUrl}#${organizationId}`); default
+   * derives it from the credential file. Null when it cannot be determined.
+   */
+  readonly accountIdentity?: () => Promise<string | null>;
   readonly debounceMs?: number;
   readonly failureBackoffMs?: number;
   readonly backfillDays?: number;
@@ -144,6 +149,14 @@ interface MinuteSkillMessageRow {
 interface SyncStateRow {
   readonly watermarkMinute: string | null;
   readonly lastFailureAt: string | null;
+  readonly accountIdentity: string | null;
+}
+
+interface MinuteSkillRow {
+  readonly minute: string | null;
+  readonly name: string | null;
+  readonly kind: string | null;
+  readonly count: number | bigint;
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────
@@ -521,6 +534,112 @@ export function collectUsageBuckets(
       ORDER BY m.created_at ASC, m.message_id ASC
     `;
 
+    // ── Archived (purged-thread) aggregates ────────────────────────────
+    //
+    // Threads deleted BEFORE their history was ever synced live only in the
+    // profile_stats_deleted_* tables (profileStatsArchive.ts) and are
+    // invisible to every projection query above. The local dashboard folds
+    // them in (profileStats.ts merges each query with its deleted_* sibling);
+    // the account totals must match it, so the same aggregates fold into the
+    // pushed buckets here.
+
+    // Archived token deltas carry the original activity timestamp, so they
+    // bucket by minute exactly like the live path. The archive has no
+    // reasoning dimension — those buckets key on null reasoning, matching the
+    // local dashboard's model split, which does not key tokens on reasoning.
+    const archivedTokenRows = yield* sql<MinuteModelRow>`
+      SELECT
+        STRFTIME('%Y-%m-%dT%H:%M:00Z', a.created_at) AS minute,
+        a.provider AS provider,
+        a.model AS model,
+        NULL AS reasoning,
+        SUM(a.tokens) AS count
+      FROM profile_stats_deleted_tokens a
+      WHERE STRFTIME('%Y-%m-%dT%H:%M:00Z', a.created_at) >= ${fromMinute}
+      GROUP BY minute, a.provider, a.model
+    `;
+
+    // Archived prompts carry only their timestamp (no model attribution, as
+    // in the local prompt-activity query); they land on the 'unknown' bucket.
+    const archivedPromptRows = yield* sql<MinuteModelRow>`
+      SELECT
+        STRFTIME('%Y-%m-%dT%H:%M:00Z', d.created_at) AS minute,
+        NULL AS provider,
+        NULL AS model,
+        NULL AS reasoning,
+        COUNT(*) AS count
+      FROM profile_stats_deleted_prompts d
+      WHERE STRFTIME('%Y-%m-%dT%H:%M:00Z', d.created_at) >= ${fromMinute}
+      GROUP BY minute
+    `;
+
+    // Archived turns and skills carry NO timestamp — they are pre-aggregated
+    // per thread. Attribute each thread's counts to one synthetic minute: the
+    // thread's most recent archived token timestamp, falling back to its most
+    // recent archived prompt. A thread with neither has no timestamp evidence
+    // at all, so its (timestampless) turn/skill counts are skipped — there is
+    // no minute they could truthfully land on.
+    const archivedTurnRows = yield* sql<MinuteModelRow>`
+      WITH thread_minute AS (
+        SELECT
+          d.thread_id AS thread_id,
+          STRFTIME('%Y-%m-%dT%H:%M:00Z', COALESCE(
+            (
+              SELECT MAX(t.created_at)
+              FROM profile_stats_deleted_tokens t
+              WHERE t.thread_id = d.thread_id
+            ),
+            (
+              SELECT MAX(p.created_at)
+              FROM profile_stats_deleted_prompts p
+              WHERE p.thread_id = d.thread_id
+            )
+          )) AS minute
+        FROM (SELECT DISTINCT thread_id FROM profile_stats_deleted_turns) d
+      )
+      SELECT
+        tm.minute AS minute,
+        dt.provider AS provider,
+        dt.model AS model,
+        dt.reasoning AS reasoning,
+        SUM(dt.turn_count) AS count
+      FROM profile_stats_deleted_turns dt
+      JOIN thread_minute tm ON tm.thread_id = dt.thread_id
+      WHERE tm.minute IS NOT NULL
+        AND tm.minute >= ${fromMinute}
+      GROUP BY tm.minute, dt.provider, dt.model, dt.reasoning
+    `;
+
+    const archivedSkillRows = yield* sql<MinuteSkillRow>`
+      WITH thread_minute AS (
+        SELECT
+          d.thread_id AS thread_id,
+          STRFTIME('%Y-%m-%dT%H:%M:00Z', COALESCE(
+            (
+              SELECT MAX(t.created_at)
+              FROM profile_stats_deleted_tokens t
+              WHERE t.thread_id = d.thread_id
+            ),
+            (
+              SELECT MAX(p.created_at)
+              FROM profile_stats_deleted_prompts p
+              WHERE p.thread_id = d.thread_id
+            )
+          )) AS minute
+        FROM (SELECT DISTINCT thread_id FROM profile_stats_deleted_skills) d
+      )
+      SELECT
+        tm.minute AS minute,
+        ds.name AS name,
+        ds.kind AS kind,
+        SUM(ds.run_count) AS count
+      FROM profile_stats_deleted_skills ds
+      JOIN thread_minute tm ON tm.thread_id = ds.thread_id
+      WHERE tm.minute IS NOT NULL
+        AND tm.minute >= ${fromMinute}
+      GROUP BY tm.minute, ds.name, ds.kind
+    `;
+
     // Merge tokens, turns, and prompts onto one bucket key.
     const modelBuckets = new Map<
       string,
@@ -553,6 +672,9 @@ export function collectUsageBuckets(
     for (const row of tokenRows) add(row, "tokens");
     for (const row of turnRows) add(row, "turns");
     for (const row of promptRows) add(row, "prompts");
+    for (const row of archivedTokenRows) add(row, "tokens");
+    for (const row of archivedTurnRows) add(row, "turns");
+    for (const row of archivedPromptRows) add(row, "prompts");
 
     const models: UsageModelBucket[] = [...modelBuckets.values()]
       .toSorted((left, right) => left.minute.localeCompare(right.minute))
@@ -574,16 +696,38 @@ export function collectUsageBuckets(
       rows.push(row);
       skillRowsByMinute.set(row.minute, rows);
     }
-    const skills: UsageSkillBucket[] = [...skillRowsByMinute.entries()]
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .flatMap(([minute, rows]) =>
-        aggregateProfileSkillUsageRows(rows).map((usage) => ({
-          minute,
-          name: usage.name.slice(0, USAGE_DIMENSION_MAX_LENGTH),
-          kind: usage.kind,
-          runs: usage.runCount,
-        })),
-      );
+    // Live and archived skill runs merge on the same (minute, name, kind)
+    // key; a purged thread's aggregate lands on its synthetic minute.
+    const skillBuckets = new Map<
+      string,
+      { minute: string; name: string; kind: "skill" | "agent"; runs: number }
+    >();
+    const addSkill = (
+      minute: string,
+      name: string,
+      kind: "skill" | "agent",
+      runs: number,
+    ): void => {
+      if (runs <= 0) return;
+      const boundedName = name.slice(0, USAGE_DIMENSION_MAX_LENGTH);
+      const key = [minute, boundedName, kind].join("\u0000");
+      const bucket = skillBuckets.get(key) ?? { minute, name: boundedName, kind, runs: 0 };
+      bucket.runs += runs;
+      skillBuckets.set(key, bucket);
+    };
+    for (const [minute, rows] of skillRowsByMinute) {
+      for (const usage of aggregateProfileSkillUsageRows(rows)) {
+        addSkill(minute, usage.name, usage.kind, usage.runCount);
+      }
+    }
+    for (const row of archivedSkillRows) {
+      const name = row.name?.trim();
+      if (!row.minute || !name || (row.kind !== "skill" && row.kind !== "agent")) continue;
+      addSkill(row.minute, name, row.kind, toCount(row.count));
+    }
+    const skills: UsageSkillBucket[] = [...skillBuckets.values()].toSorted((left, right) =>
+      left.minute.localeCompare(right.minute),
+    );
 
     return { models, skills };
   });
@@ -609,6 +753,19 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
   const resolveEnvironment =
     deps.environmentId ?? (() => resolveEnvironmentId(baseDir, deps.devUrl));
 
+  // The identity the watermark belongs to. The watermark claims "this account
+  // has everything up to minute X" — a claim about one account and workspace,
+  // so it is keyed by both: sign out of A, sign in to B, and B must NOT
+  // inherit A's watermark (it would skip the full-history backfill it never
+  // received). Same URL resolution as the default push above.
+  const resolveAccountIdentity =
+    deps.accountIdentity ??
+    (async (): Promise<string | null> => {
+      const stored = await readAccountFile(baseDir);
+      if (!stored?.organizationId) return null;
+      return `${stored.accountUrl}#${stored.organizationId}`;
+    });
+
   const push =
     deps.push ??
     (async (request: PushUsageRequest) => {
@@ -626,20 +783,24 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
   const readSyncState = () =>
     Effect.runPromise(
       sql<SyncStateRow>`
-        SELECT watermark_minute AS watermarkMinute, last_failure_at AS lastFailureAt
+        SELECT
+          watermark_minute AS watermarkMinute,
+          last_failure_at AS lastFailureAt,
+          account_identity AS accountIdentity
         FROM account_usage_sync
         WHERE id = 1
       `.pipe(Effect.map((rows) => rows[0])),
     );
 
-  const writeSuccess = (watermarkMinute: string) =>
+  const writeSuccess = (watermarkMinute: string, accountIdentity: string | null) =>
     Effect.runPromise(
       sql`
-        INSERT INTO account_usage_sync (id, watermark_minute, last_failure_at)
-        VALUES (1, ${watermarkMinute}, NULL)
+        INSERT INTO account_usage_sync (id, watermark_minute, last_failure_at, account_identity)
+        VALUES (1, ${watermarkMinute}, NULL, ${accountIdentity})
         ON CONFLICT (id) DO UPDATE SET
           watermark_minute = ${watermarkMinute},
-          last_failure_at = NULL
+          last_failure_at = NULL,
+          account_identity = ${accountIdentity}
       `,
     );
 
@@ -675,7 +836,18 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
       }
 
       const flushStartedAtMs = now();
-      const watermarkMs = state?.watermarkMinute ? Date.parse(state.watermarkMinute) : Number.NaN;
+      // The watermark belongs to ONE identity. A stored watermark whose
+      // identity differs from the current one — or predates the identity
+      // column (NULL) — proves nothing about what THIS account has received,
+      // so it is ignored and the flush takes the full-backfill path. Buckets
+      // are absolute and upserted, so over-covering is merely redundant.
+      const currentIdentity = await resolveAccountIdentity();
+      const watermarkIsForCurrentIdentity =
+        state?.accountIdentity != null && state.accountIdentity === currentIdentity;
+      const watermarkMs =
+        watermarkIsForCurrentIdentity && state?.watermarkMinute
+          ? Date.parse(state.watermarkMinute)
+          : Number.NaN;
       const fromMinute = Number.isFinite(watermarkMs)
         ? minuteStartIso(watermarkMs - WATERMARK_SAFETY_LAP_MS)
         : minuteStartIso(flushStartedAtMs - backfillMs);
@@ -707,7 +879,7 @@ export function createAccountUsageReporter(deps: AccountUsageReporterDeps): Acco
       // Full success: everything through the newest fully elapsed minute (as
       // of flush start) is durably on the account. The still-growing current
       // minute is re-covered by the safety lap on the next flush.
-      await writeSuccess(minuteStartIso(flushStartedAtMs - 60_000));
+      await writeSuccess(minuteStartIso(flushStartedAtMs - 60_000), currentIdentity);
       failureStreak = 0;
     } catch (error) {
       failureStreak += 1;

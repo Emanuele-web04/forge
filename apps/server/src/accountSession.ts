@@ -318,10 +318,19 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     });
 
     // A file left behind by an expired session still holds this machine's
-    // host registration; carrying it forward keeps the link intact. Read and
-    // write under the credential lock so nothing interleaves.
+    // host registration; carrying it forward keeps the link intact. But a
+    // host belongs to the account and workspace that registered it, so the
+    // registration is preserved ONLY when the new session lands on the same
+    // accountUrl AND the same organization — signing in to a different
+    // account (or a different workspace on the same service) must not carry
+    // another identity's host credentials forward. Dropping them is safe:
+    // the machine simply re-registers under the new account via `synara
+    // auth`. Read and write under the credential lock so nothing
+    // interleaves.
     await withLockedAccountFile(baseDir, async () => {
       const previous = await readAccountFile(baseDir);
+      const sameAccountAndWorkspace =
+        previous?.accountUrl === accountUrl && previous?.organizationId === scoped.organizationId;
       await writeAccountCredentials(baseDir, {
         accountUrl,
         workosClientId: instance.clientId,
@@ -329,8 +338,10 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         organizationId: scoped.organizationId,
         accessToken: scoped.accessToken,
         refreshToken: scoped.refreshToken,
-        ...(previous?.hostToken ? { hostToken: previous.hostToken } : {}),
-        ...(previous?.hostId ? { hostId: previous.hostId } : {}),
+        ...(sameAccountAndWorkspace && previous?.hostToken
+          ? { hostToken: previous.hostToken }
+          : {}),
+        ...(sameAccountAndWorkspace && previous?.hostId ? { hostId: previous.hostId } : {}),
       });
     });
 

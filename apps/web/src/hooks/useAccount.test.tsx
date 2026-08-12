@@ -204,6 +204,58 @@ describe("useAccount", () => {
     });
   });
 
+  // The usage-summary cache key carries no user identity, so an identity
+  // change (sign-out, or a fresh sign-in) must REMOVE it — not merely
+  // invalidate — or the next user would render the previous user's usage.
+  it("removes cached account usage after signOut", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), {
+      state: "signed-in",
+      me: makeMe(),
+    });
+    queryClient.setQueryData(accountQueryKeys.usageSummary(120), { lifetimeTokens: 42 });
+    accountApiMock.signOut.mockResolvedValue(undefined);
+
+    const account = renderUseAccount(queryClient);
+    await account.signOut.mutateAsync();
+
+    expect(queryClient.getQueryData(accountQueryKeys.usageSummary(120))).toBeUndefined();
+  });
+
+  it("removes cached account usage before a fresh OTP sign-in renders", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), { state: "signed-out" });
+    // Left behind by a previous identity (sign-out via another client, say).
+    queryClient.setQueryData(accountQueryKeys.usageSummary(120), { lifetimeTokens: 42 });
+    const me = makeMe();
+    accountApiMock.authenticateOtp.mockResolvedValue({ state: "signed-in", me });
+
+    const account = renderUseAccount(queryClient);
+    await account.authenticateOtp.mutateAsync({ email: "ada@example.com", code: "654321" });
+
+    expect(queryClient.getQueryData(accountQueryKeys.usageSummary(120))).toBeUndefined();
+    expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
+      state: "signed-in",
+      me,
+    });
+  });
+
+  it("removes cached account usage before a fresh SSO sign-in renders", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(accountQueryKeys.usageSummary(-330), { lifetimeTokens: 42 });
+    const me = makeMe();
+    accountApiMock.completeSso.mockResolvedValue({ state: "signed-in", me });
+
+    const account = renderUseAccount(queryClient);
+    await account.completeSso.mutateAsync({ ssoId: "sso_1" });
+
+    expect(queryClient.getQueryData(accountQueryKeys.usageSummary(-330))).toBeUndefined();
+    expect(queryClient.getQueryData<AccountStatus>(accountQueryKeys.status())).toEqual({
+      state: "signed-in",
+      me,
+    });
+  });
+
   it("clears the cache to signed-out after signOut", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), {

@@ -44,6 +44,7 @@ function makeReporterHarness(
     baseDir: "/nonexistent-account-usage-test",
     isSignedIn: async () => true,
     environmentId: async () => "env-test",
+    accountIdentity: async () => "https://accounts.example.com#org_1",
     push: async (request) => {
       pushes.push({ request });
     },
@@ -57,8 +58,15 @@ function makeReporterHarness(
 }
 
 const readSyncState = (sql: SqlClient.SqlClient) =>
-  sql<{ readonly watermarkMinute: string | null; readonly lastFailureAt: string | null }>`
-    SELECT watermark_minute AS watermarkMinute, last_failure_at AS lastFailureAt
+  sql<{
+    readonly watermarkMinute: string | null;
+    readonly lastFailureAt: string | null;
+    readonly accountIdentity: string | null;
+  }>`
+    SELECT
+      watermark_minute AS watermarkMinute,
+      last_failure_at AS lastFailureAt,
+      account_identity AS accountIdentity
     FROM account_usage_sync
     WHERE id = 1
   `.pipe(Effect.map((rows) => rows[0]));
@@ -264,6 +272,40 @@ const seedUsageFixture = Effect.fnUntraced(function* (sql: SqlClient.SqlClient) 
   });
 });
 
+// Archived (purged-thread) aggregates: what profileStatsArchive.ts leaves in
+// the profile_stats_deleted_* tables after a hard delete. Two threads: one
+// with full evidence (tokens + prompts + turns + skills), one whose only rows
+// are timestampless turns — no synthetic minute exists for it, so it must be
+// skipped rather than invented.
+const seedArchivedFixture = Effect.fnUntraced(function* (sql: SqlClient.SqlClient) {
+  yield* sql`
+    INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, model, tokens)
+    VALUES
+      ('thread-purged', '2026-08-01T14:03:12.000Z', 'codex', 'gpt-5-codex', 300),
+      ('thread-purged', '2026-08-02T10:30:45.000Z', 'codex', 'gpt-5-codex', 200)
+  `;
+  yield* sql`
+    INSERT INTO profile_stats_deleted_prompts (thread_id, project_id, created_at)
+    VALUES
+      ('thread-purged', 'project-usage', '2026-08-01T14:03:00.000Z'),
+      ('thread-purged', 'project-usage', '2026-08-02T10:30:00.000Z')
+  `;
+  yield* sql`
+    INSERT INTO profile_stats_deleted_turns (thread_id, provider, model, reasoning, turn_count)
+    VALUES ('thread-purged', 'codex', 'gpt-5-codex', NULL, 3)
+  `;
+  yield* sql`
+    INSERT INTO profile_stats_deleted_skills (thread_id, name, kind, run_count)
+    VALUES ('thread-purged', 'check-code', 'skill', 2)
+  `;
+  // No tokens and no prompts for this thread: nothing carries a timestamp,
+  // so its turn count has no minute to land on and is skipped.
+  yield* sql`
+    INSERT INTO profile_stats_deleted_turns (thread_id, provider, model, reasoning, turn_count)
+    VALUES ('thread-orphan-turns', 'grok', 'grok-4', NULL, 5)
+  `;
+});
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 describe("minuteStartIso", () => {
@@ -343,6 +385,60 @@ describe("collectUsageBuckets", () => {
       }),
     );
   });
+
+  // Threads purged before their first sync live only in the
+  // profile_stats_deleted_* archive. The account totals must match what the
+  // local dashboard (profileStats.ts) counts from those same tables: every
+  // archived token, prompt, turn, and skill run.
+  it("folds archived purged-thread aggregates into the buckets, matching the local totals", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedArchivedFixture(sql);
+
+        const { models, skills } = yield* collectUsageBuckets(sql, "2026-07-01T00:00:00Z");
+
+        // Totals match profileStats over the same tables: SUM(tokens) = 500,
+        // 2 prompts, 3 turns for the evidenced thread; the timestampless
+        // orphan-turn thread contributes nothing anywhere.
+        expect(models.reduce((sum, bucket) => sum + bucket.tokens, 0)).toBe(500);
+        expect(models.reduce((sum, bucket) => sum + bucket.prompts, 0)).toBe(2);
+        expect(models.reduce((sum, bucket) => sum + bucket.turns, 0)).toBe(3);
+        expect(models.some((bucket) => bucket.provider === "grok")).toBe(false);
+
+        // Tokens bucket by their archived created_at minute.
+        const firstMinute = models.find(
+          (bucket) => bucket.minute === "2026-08-01T14:03:00Z" && bucket.provider === "codex",
+        );
+        expect(firstMinute).toMatchObject({ model: "gpt-5-codex", reasoning: null, tokens: 300 });
+
+        // Turns land on the thread's synthetic minute — its most recent
+        // archived token timestamp — merged with that minute's token bucket.
+        const syntheticMinute = models.find(
+          (bucket) => bucket.minute === "2026-08-02T10:30:00Z" && bucket.provider === "codex",
+        );
+        expect(syntheticMinute).toMatchObject({ tokens: 200, turns: 3 });
+
+        // Skills use the same synthetic minute.
+        expect(skills).toEqual([
+          { minute: "2026-08-02T10:30:00Z", name: "check-code", kind: "skill", runs: 2 },
+        ]);
+      }),
+    );
+  });
+
+  it("excludes archived aggregates that fall before the window", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedArchivedFixture(sql);
+
+        const { models, skills } = yield* collectUsageBuckets(sql, "2026-08-03T00:00:00Z");
+        expect(models).toEqual([]);
+        expect(skills).toEqual([]);
+      }),
+    );
+  });
 });
 
 describe("createAccountUsageReporter", () => {
@@ -372,9 +468,11 @@ describe("createAccountUsageReporter", () => {
         failPush = false;
         yield* Effect.promise(() => reporter.flushNow());
         const afterSuccess = yield* readSyncState(sql);
-        // Watermark = newest fully elapsed minute at flush start.
+        // Watermark = newest fully elapsed minute at flush start, scoped to
+        // the identity it belongs to.
         expect(afterSuccess?.watermarkMinute).toBe("2026-08-11T09:09:00Z");
         expect(afterSuccess?.lastFailureAt).toBeNull();
+        expect(afterSuccess?.accountIdentity).toBe("https://accounts.example.com#org_1");
         expect(pushes).toHaveLength(1);
         expect(pushes[0]?.environmentId).toBe("env-test");
         expect(pushes[0]?.models).toHaveLength(3);
@@ -418,6 +516,80 @@ describe("createAccountUsageReporter", () => {
         );
         // Absolute recompute: 250 + the 600 regrowth, not an increment.
         expect(secondCodexBucket?.tokens).toBe(850);
+
+        reporter.stop();
+      }),
+    );
+  });
+
+  // The watermark is a claim about ONE account. After an account switch the
+  // stored watermark says nothing about what the NEW account has received,
+  // so the next flush must take the no-watermark full-backfill path.
+  it("ignores the previous identity's watermark and re-backfills after an account switch", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedUsageFixture(sql);
+
+        // Flush "now" far past the fixture: an honored watermark would leave
+        // nothing in the window, a full backfill re-covers everything.
+        const flushedAt = Date.parse("2026-08-12T12:00:00.000Z");
+        let identity = "https://accounts.example.com#org_a";
+        const { reporter, pushes } = makeReporterHarness(sql, {
+          now: () => flushedAt,
+          accountIdentity: async () => identity,
+        });
+
+        // Account A syncs everything and records its watermark + identity.
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(pushes).toHaveLength(1);
+        expect((yield* readSyncState(sql))?.accountIdentity).toBe(
+          "https://accounts.example.com#org_a",
+        );
+
+        // Same identity: the watermark holds, so a quiet window pushes nothing.
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(pushes).toHaveLength(1);
+
+        // Account B signs in: the stored watermark belongs to A and must be
+        // ignored — the flush backfills the full history for B.
+        identity = "https://accounts.example.com#org_b";
+        yield* Effect.promise(() => reporter.flushNow());
+        expect(pushes).toHaveLength(2);
+        expect(pushes[1]?.request.models).toHaveLength(3);
+        expect((yield* readSyncState(sql))?.accountIdentity).toBe(
+          "https://accounts.example.com#org_b",
+        );
+
+        reporter.stop();
+      }),
+    );
+  });
+
+  // A watermark with no recorded identity (a row written before the identity
+  // column existed) proves nothing about the current account either.
+  it("treats a NULL stored identity with a watermark as a mismatch and re-backfills", async () => {
+    await runReporterTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedUsageFixture(sql);
+        yield* sql`
+          INSERT INTO account_usage_sync (id, watermark_minute, last_failure_at, account_identity)
+          VALUES (1, '2026-08-12T11:00:00Z', NULL, NULL)
+          ON CONFLICT (id) DO UPDATE SET
+            watermark_minute = '2026-08-12T11:00:00Z',
+            last_failure_at = NULL,
+            account_identity = NULL
+        `;
+
+        const flushedAt = Date.parse("2026-08-12T12:00:00.000Z");
+        const { reporter, pushes } = makeReporterHarness(sql, { now: () => flushedAt });
+
+        yield* Effect.promise(() => reporter.flushNow());
+        // Honoring the legacy watermark would push nothing (fixture is a day
+        // old); the identity mismatch forces the full backfill instead.
+        expect(pushes).toHaveLength(1);
+        expect(pushes[0]?.request.models).toHaveLength(3);
 
         reporter.stop();
       }),

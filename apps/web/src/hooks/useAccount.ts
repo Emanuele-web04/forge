@@ -18,6 +18,7 @@ import {
   accountStatusQueryOptions,
   cancelAccountStatusFetches,
   invalidateAccountStatus,
+  removeAccountScopedQueries,
 } from "~/lib/accountReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
 
@@ -59,7 +60,13 @@ export function useAccount() {
       const api = ensureNativeApi();
       return api.account.authenticateOtp(input);
     },
-    onSuccess: setStatus,
+    onSuccess: (status: AccountStatus) => {
+      // Drop account-scoped caches from any PREVIOUS identity before this
+      // sign-in renders: the usage-summary key carries no user id, so a
+      // stale entry would show the last user's usage to the new one.
+      removeAccountScopedQueries(queryClient);
+      setStatus(status);
+    },
   });
 
   const beginSso = useMutation({
@@ -82,7 +89,12 @@ export function useAccount() {
         input.signal ? { signal: input.signal } : undefined,
       );
     },
-    onSuccess: setStatus,
+    onSuccess: (status: AccountStatus) => {
+      // Same identity fence as authenticateOtp: no stale account-scoped data
+      // may survive into the session this sign-in establishes.
+      removeAccountScopedQueries(queryClient);
+      setStatus(status);
+    },
   });
 
   const cancelSso = (ssoId: string) => {
@@ -134,6 +146,9 @@ export function useAccount() {
     },
     onSuccess: () => {
       setStatus({ state: "signed-out" });
+      // Removal, not invalidation: the signed-out app must neither render
+      // nor refetch the departed user's account-scoped data.
+      removeAccountScopedQueries(queryClient);
     },
   });
 

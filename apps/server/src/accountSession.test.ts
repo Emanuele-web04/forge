@@ -245,12 +245,15 @@ describe("OTP sign-in", () => {
     });
   });
 
-  it("keeps an existing host registration across an OTP sign-in", async () => {
+  // e.g. the file an expired session left behind: same account, same
+  // workspace, so the registration still describes this machine's link.
+  it("keeps an existing host registration when the sign-in lands on the same account and workspace", async () => {
     const baseDir = makeBaseDir();
     await writeAccountCredentials(baseDir, {
       accountUrl: ACCOUNT_URL,
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
+      organizationId: ORGANIZATION.id,
       hostToken: "host-token",
       hostId: "host_1",
     });
@@ -261,6 +264,47 @@ describe("OTP sign-in", () => {
       hostToken: "host-token",
       hostId: "host_1",
     });
+  });
+
+  // A host registration belongs to the identity that made it. Signing in as
+  // someone else (a different workspace) must not carry the previous
+  // identity's host credentials into the new session's file.
+  it("drops the host registration when the sign-in scopes to a different workspace", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, {
+      accountUrl: ACCOUNT_URL,
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      organizationId: "org_other_user",
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+    const session = sessionFor(baseDir, otpClient());
+
+    await session.authenticateOtp(OTP_INPUT);
+    const stored = await readAccountFile(baseDir);
+    expect(stored?.hostToken).toBeUndefined();
+    expect(stored?.hostId).toBeUndefined();
+    expect(stored).toMatchObject({ organizationId: ORGANIZATION.id });
+  });
+
+  it("drops the host registration when the sign-in targets a different account service", async () => {
+    const baseDir = makeBaseDir();
+    await writeAccountCredentials(baseDir, {
+      accountUrl: "https://other-account.example.com",
+      workosClientId: CLIENT_ID,
+      workosApiUrl: WORKOS_API_URL,
+      organizationId: ORGANIZATION.id,
+      hostToken: "host-token",
+      hostId: "host_1",
+    });
+    const session = sessionFor(baseDir, otpClient());
+
+    await session.authenticateOtp(OTP_INPUT);
+    const stored = await readAccountFile(baseDir);
+    expect(stored?.hostToken).toBeUndefined();
+    expect(stored?.hostId).toBeUndefined();
+    expect(stored).toMatchObject({ accountUrl: ACCOUNT_URL });
   });
 
   // The credential file is the one place the code could plausibly end up,

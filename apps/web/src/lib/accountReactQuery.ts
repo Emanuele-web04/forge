@@ -9,6 +9,8 @@ import { ensureNativeApi } from "~/nativeApi";
 export const accountQueryKeys = {
   all: ["account"] as const,
   status: () => ["account", "status"] as const,
+  /** Prefix of every usageSummary key, whatever the caller's UTC offset. */
+  usageSummaryAll: () => ["account", "usageSummary"] as const,
   usageSummary: (utcOffsetMinutes: number) =>
     ["account", "usageSummary", utcOffsetMinutes] as const,
 };
@@ -62,6 +64,19 @@ export function accountUsageSummaryQueryOptions(input: { enabled?: boolean } = {
  */
 export async function invalidateAccountStatus(queryClient: QueryClient): Promise<void> {
   await queryClient.invalidateQueries({ queryKey: accountQueryKeys.status() });
+}
+
+/**
+ * Removes every cached account-scoped answer (the usage summary today). The
+ * cache key carries no user identity — only the UTC offset — so data cached
+ * for one signed-in user would otherwise render for the NEXT one: a fresh
+ * sign-in (or the signed-out state after sign-out) must never show the
+ * previous user's usage, which includes private skill names. Removal, not
+ * invalidation: invalidation keeps the stale data renderable and merely
+ * refetches, and while signed out there is nothing to refetch at all.
+ */
+export function removeAccountScopedQueries(queryClient: QueryClient): void {
+  queryClient.removeQueries({ queryKey: accountQueryKeys.usageSummaryAll() });
 }
 
 /**
