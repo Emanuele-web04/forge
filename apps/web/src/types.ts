@@ -102,7 +102,8 @@ export type ChatAttachment =
   | ChatFileAttachment
   | ChatAssistantSelectionAttachment;
 
-export type OrchestrationMessageTextSegment = import("@synara/contracts").OrchestrationMessageTextSegment;
+export type OrchestrationMessageTextSegment =
+  import("@synara/contracts").OrchestrationMessageTextSegment;
 
 export interface ChatMessage {
   id: MessageId;
