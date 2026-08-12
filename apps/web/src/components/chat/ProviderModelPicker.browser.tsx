@@ -600,7 +600,7 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("shows unavailable providers as disabled rows", async () => {
+  it("hides unavailable providers and offers provider settings", async () => {
     const mounted = await mountPicker({
       provider: "codex",
       model: "gpt-5-codex",
@@ -629,15 +629,16 @@ describe("ProviderModelPicker", () => {
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
         expect(text).toContain("Codex");
-        expect(text).toContain("Claude");
-        expect(text).toContain("Sign in");
+        expect(text).not.toContain("Claude");
+        expect(text).not.toContain("Sign in");
       });
+      await expect.element(page.getByRole("menuitem", { name: "Add Providers" })).toBeVisible();
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("does not make providers selectable before live status is known", async () => {
+  it("hides providers before live status is known", async () => {
     const mounted = await mountPicker({
       provider: "codex",
       model: "gpt-5-codex",
@@ -658,9 +659,10 @@ describe("ProviderModelPicker", () => {
 
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
-        expect(text).toContain("Claude");
-        expect(text).toContain("Checking");
+        expect(text).not.toContain("Claude");
+        expect(text).not.toContain("Checking");
       });
+      await expect.element(page.getByRole("menuitem", { name: "Add Providers" })).toBeVisible();
     } finally {
       await mounted.cleanup();
     }

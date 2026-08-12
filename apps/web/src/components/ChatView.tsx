@@ -119,6 +119,7 @@ import {
   normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
   resolveProviderSendAvailabilityWithRefresh,
+  resolveAvailableProviderPreference,
 } from "~/lib/providerAvailability";
 import {
   loadConfirmedCustomBinaryPaths,
@@ -2224,15 +2225,23 @@ export default function ChatView({
   const lockedProvider: ProviderKind | null = hasThreadStarted
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const preferredDraftProvider =
+    selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
   const selectedProvider: ProviderKind =
-    lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+    lockedProvider ??
+    resolveAvailableProviderPreference({
+      preferredProvider: preferredDraftProvider,
+      statuses: serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES,
+      providerOrder: settings.providerOrder,
+      hiddenProviders: settings.hiddenProviders,
+    });
   const previousSelectedProviderRef = useRef<{
     threadId: ThreadId;
     provider: ProviderKind;
   } | null>(null);
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
