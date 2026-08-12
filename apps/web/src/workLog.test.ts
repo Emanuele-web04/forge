@@ -168,6 +168,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(entry?.label).toBe("1 out of 3 tasks completed");
     expect(entry?.detail).toBe("Implementing inline editing UI");
+    expect(entry?.toolTitle).toBeUndefined();
   });
 
   it("keeps separate task-list rows for separate turns", () => {
@@ -196,6 +197,32 @@ describe("deriveWorkLogEntries", () => {
       visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1"), TurnId.makeUnsafe("turn-2")]),
     });
     expect(entries.map((entry) => entry.id)).toEqual(["tasks-turn-1", "tasks-turn-2"]);
+  });
+
+  it("keeps turnless task-list snapshots independent across unknown turn boundaries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tasks-turnless-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: null,
+        payload: { tasks: [{ task: "First turn work", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "tasks-turnless-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: null,
+        payload: { tasks: [{ task: "Later turn work", status: "inProgress" }] },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["tasks-turnless-1", "tasks-turnless-2"]);
   });
 
   it("keeps the generic label for a task-list snapshot without readable tasks", () => {

@@ -546,8 +546,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       }
     }
     // Providers snapshot the whole checklist on every change, so one row per
-    // turn (keep-latest) is the entire task history — key the collapse on it.
-    entry.collapseKey = `taskList:${activity.turnId ?? "thread"}`;
+    // turn (keep-latest) is the entire task history. Without a turn id there is
+    // no safe boundary between separate turns, so keep those snapshots
+    // independent instead of collapsing the whole thread into one row.
+    if (activity.turnId !== null) {
+      entry.collapseKey = `taskList:${activity.turnId}`;
+    }
   }
   if (commandPreview.command) {
     entry.command = commandPreview.command;
@@ -614,7 +618,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       payload,
       isRunning: activity.kind !== "tool.completed",
     });
-  if (readableTitle) {
+  // Task-list rows derive their own progress heading above. The generic
+  // activity summary ("Tasks updated") would otherwise become toolTitle and
+  // take precedence over that progress label in TimelineWorkEntryRow.
+  if (readableTitle && activity.kind !== "turn.tasks.updated") {
     entry.toolTitle = readableTitle;
   }
   const liveActivity = deriveWorkLogLiveActivity(activity, payload, entry);
