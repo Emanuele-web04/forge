@@ -216,6 +216,40 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.label).toBe("Tasks updated");
   });
 
+  it("keeps the progressed label when a later snapshot clears the task list", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tasks-progressed",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [
+            { task: "Implement inline editing", status: "completed" },
+            { task: "Run verification", status: "inProgress" },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "tasks-cleared",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [] },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("tasks-progressed");
+    expect(entries[0]?.label).toBe("1 out of 2 tasks completed");
+    expect(entries[0]?.detail).toBe("Run verification");
+  });
+
   it("omits quiet turn lifecycle entries while keeping failed turn state visible", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

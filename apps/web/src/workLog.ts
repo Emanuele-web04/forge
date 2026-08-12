@@ -156,6 +156,7 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   runtimeWarningRepeatCount?: number;
   runtimeWarningMessage?: string;
   suppressStandaloneCommandStart?: boolean;
+  taskListHasTasks?: boolean;
 }
 
 export function isFileChangeWorkLogEntry(
@@ -297,6 +298,7 @@ export function deriveWorkLogEntries(
         runtimeWarningMessage: _runtimeWarningMessage,
         runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
         suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
+        taskListHasTasks: _taskListHasTasks,
         ...entry
       }) => entry,
     );
@@ -533,6 +535,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (activity.kind === "turn.tasks.updated") {
     const tasks = parseTaskListTasks(payload);
     if (tasks && tasks.length > 0) {
+      entry.taskListHasTasks = true;
       const completedCount = tasks.filter((task) => task.status === "completed").length;
       entry.label = `${completedCount} out of ${tasks.length} ${pluralize(tasks.length, "task")} completed`;
       const inProgressTask = tasks.find((task) => task.status === "inProgress");
@@ -1006,10 +1009,16 @@ function mergeRuntimeWarningEntries(
 // resend the full checklist), so keep the newest content while preserving the
 // first row's id and createdAt: the id keeps React rows stable across updates
 // and the createdAt keeps the row anchored where the checklist first appeared.
+// A snapshot without readable tasks (explicit clear, or an unreadable payload)
+// carries no progress copy, so it must not overwrite a progressed row with the
+// generic "Tasks updated" label — keep the previous row's content instead.
 function mergeTaskListEntries(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
 ): DerivedWorkLogEntry {
+  if (previous.taskListHasTasks && !next.taskListHasTasks) {
+    return previous;
+  }
   return { ...next, id: previous.id, createdAt: previous.createdAt };
 }
 
