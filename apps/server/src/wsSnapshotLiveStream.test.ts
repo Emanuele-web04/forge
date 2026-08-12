@@ -352,6 +352,41 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     });
   });
 
+  it("tracks escalation per stream key so concurrent subscribers get independent chains", async () => {
+    // Two clients demanding the same stale stream concurrently are two first
+    // offenses: the caller keys the tracker per subscriber, and the tracker
+    // must not bleed one subscriber's demand into another's restart chain.
+    const tracker = makeResnapshotEscalationTracker();
+    const start = (streamKey: string) =>
+      Effect.runPromise(
+        Effect.scoped(
+          makeCursorSafeSnapshotLiveStream({
+            resnapshotEscalation: { streamKey, tracker },
+            subscribeLive: Effect.succeed(Stream.empty),
+            snapshot: Effect.succeed({ snapshotSequence: 1 }),
+            snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+            getHighWaterSequence: Effect.succeed(ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 2),
+            replay: () => Stream.empty,
+          }).pipe(Stream.runDrain),
+        ),
+      );
+
+    await expect(start("client-1:orchestration.shell")).rejects.toMatchObject({
+      code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
+      retryable: true,
+    });
+    // A different subscriber's first demand stays retryable.
+    await expect(start("client-2:orchestration.shell")).rejects.toMatchObject({
+      code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
+      retryable: true,
+    });
+    // Each chain escalates independently on its own repeat.
+    await expect(start("client-1:orchestration.shell")).rejects.toMatchObject({
+      code: "ORCHESTRATION_SNAPSHOT_STALLED",
+      retryable: false,
+    });
+  });
+
   it("keeps the retryable resnapshot demand while the fence advances between restarts", async () => {
     // An advancing fence means the projector is catching up: each restart is
     // making progress, so the demand must stay retryable.

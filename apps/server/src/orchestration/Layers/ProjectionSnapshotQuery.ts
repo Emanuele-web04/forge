@@ -332,7 +332,7 @@ function decodeProjectionThreadOption(
   );
 }
 
-const REQUIRED_SNAPSHOT_PROJECTORS = [
+export const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.hot,
   ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
 ] as const;

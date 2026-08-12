@@ -25,17 +25,37 @@ export interface ResnapshotReport {
  * repeat demand at a non-advancing fence is escalated to a non-retryable
  * failure so clients stop tearing the transport down and surface the fault.
  *
- * Keyed state is process-wide (the fence is a property of the database, not of
- * one connection), and cleared the moment a stream start succeeds.
+ * Callers must key the tracker per subscriber (client id + stream name), not
+ * per stream name alone: two clients demanding the same stale stream
+ * concurrently are two first offenses, not one restart cycle — a shared key
+ * would hand the second client a non-retryable verdict before either had
+ * actually restarted. The fence itself is shared database state, so each
+ * subscriber's chain still converges on the same evidence; per-subscriber
+ * keying only ensures the "did not advance" comparison spans one
+ * subscription's own retries. State is cleared the moment that subscriber's
+ * stream start succeeds.
  */
 export function makeResnapshotEscalationTracker(): {
   readonly shouldEscalate: (streamKey: string, report: ResnapshotReport) => boolean;
   readonly recordHealthyStart: (streamKey: string) => void;
 } {
   const lastDemandedFenceByStreamKey = new Map<string, number>();
+  // Entries for subscribers that disconnect mid-failure are never cleared by a
+  // healthy start, so bound the map: evict the oldest insertions once the
+  // ceiling is reached. Losing an old entry merely re-grants one retryable
+  // demand to that subscriber — safe, since escalation is a loop guard, not a
+  // correctness fence.
+  const MAX_TRACKED_STREAM_KEYS = 4_096;
   return {
     shouldEscalate: (streamKey, report) => {
       const previousFence = lastDemandedFenceByStreamKey.get(streamKey);
+      lastDemandedFenceByStreamKey.delete(streamKey);
+      if (lastDemandedFenceByStreamKey.size >= MAX_TRACKED_STREAM_KEYS) {
+        const oldestKey = lastDemandedFenceByStreamKey.keys().next().value;
+        if (oldestKey !== undefined) {
+          lastDemandedFenceByStreamKey.delete(oldestKey);
+        }
+      }
       lastDemandedFenceByStreamKey.set(streamKey, report.snapshotSequence);
       return previousFence !== undefined && report.snapshotSequence <= previousFence;
     },

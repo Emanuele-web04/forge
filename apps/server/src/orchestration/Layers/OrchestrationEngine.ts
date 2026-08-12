@@ -69,6 +69,7 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { REQUIRED_SNAPSHOT_PROJECTORS } from "./ProjectionSnapshotQuery.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -369,7 +370,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       ]);
       // Lag is measured directly from the cursor table so a projector that
       // stalled without tripping the deferred dirty flag (or whose cursor row
-      // was deleted by an interrupted repair) is still visible here. A read
+      // was deleted by an interrupted repair) is still visible here. Only the
+      // snapshot-fence cursors are lag-scored: the live path advances each
+      // per-projector cursor only when its predicate matches (checkpoints
+      // rejects every live event), so individual cursors legitimately trail
+      // the journal between bootstraps and scoring them would report a healthy
+      // system as permanently degraded. Missing rows are still checked across
+      // the full repair set — absence is abnormal regardless of phase. A read
       // failure degrades to empty lag data rather than failing the health
       // probe that asks for it.
       const lag = yield* Effect.gen(function* () {
@@ -386,17 +393,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         );
         const lagByProjector: Record<string, number> = {};
         const missingProjectors: string[] = [];
-        for (const projector of REQUIRED_REPAIR_PROJECTORS) {
+        for (const projector of REQUIRED_SNAPSHOT_PROJECTORS) {
           const sequence = sequenceByProjector.get(projector);
           if (sequence === undefined) {
-            if (stateRows.length > 0) {
-              missingProjectors.push(projector);
-            }
             continue;
           }
           const projectorLag = highWaterSequence - sequence;
           if (projectorLag > 0) {
             lagByProjector[projector] = projectorLag;
+          }
+        }
+        if (stateRows.length > 0) {
+          for (const projector of REQUIRED_REPAIR_PROJECTORS) {
+            if (!sequenceByProjector.has(projector)) {
+              missingProjectors.push(projector);
+            }
           }
         }
         return { highWaterSequence, lagByProjector, missingProjectors };

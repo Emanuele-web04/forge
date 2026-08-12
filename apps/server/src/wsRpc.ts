@@ -302,9 +302,9 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
   });
 }
 
-// Process-wide by design: the snapshot fence is a property of the database, so
-// a non-advancing fence must be recognized across reconnects and across
-// clients, not per connection.
+// Process-wide so a subscriber's restart chain survives its own reconnects
+// (the client id is stable across a socket reconnect), but keyed per
+// subscriber inside the tracker — see makeResnapshotEscalationTracker.
 const resnapshotEscalationTracker = makeResnapshotEscalationTracker();
 
 const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
@@ -956,8 +956,10 @@ const makeWsRpcHandlersLayer = () =>
             clientId,
             { key: "orchestration.shell" },
             makeCursorSafeSnapshotLiveStream({
+              // Keyed per subscriber: concurrent clients hitting the same
+              // stale fence are independent first offenses, not one chain.
               resnapshotEscalation: {
-                streamKey: "orchestration.shell",
+                streamKey: `${clientId}:orchestration.shell`,
                 tracker: resnapshotEscalationTracker,
               },
               subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
@@ -1009,8 +1011,10 @@ const makeWsRpcHandlersLayer = () =>
               threadId: input.threadId,
             },
             makeCursorSafeSnapshotLiveStream({
+              // Keyed per subscriber: concurrent clients hitting the same
+              // stale fence are independent first offenses, not one chain.
               resnapshotEscalation: {
-                streamKey: `orchestration.thread:${input.threadId}`,
+                streamKey: `${clientId}:orchestration.thread:${input.threadId}`,
                 tracker: resnapshotEscalationTracker,
               },
               // Cursor resume: a client holding cached detail replays only the
