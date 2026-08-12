@@ -4,6 +4,7 @@ import {
   InstanceInfo,
   OrganizationRequiredBody,
   PublicProfile,
+  UsageSummary,
   USAGE_PUSH_MAX_BUCKETS,
 } from "@synara/contracts";
 import { eq } from "drizzle-orm";
@@ -1482,6 +1483,87 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
         .from(usageModelStats)
         .where(eq(usageModelStats.userId, userId));
       expect(rows).toHaveLength(0);
+    });
+  });
+
+
+  describe("GET /usage/summary", () => {
+    it("rejects unauthenticated reads", async () => {
+      const { app } = buildApp();
+      const res = await app.request("/api/v1/usage/summary", {
+        headers: { "x-forwarded-for": "203.0.121.1" },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("aggregates the owner's usage at full depth, skills included", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      const environmentId = randomUUID();
+      const otherEnvironment = randomUUID();
+      await pushUsage(
+        app,
+        token,
+        usageBody(environmentId, {
+          models: [
+            modelBucket({ tokens: 1000, turns: 2, prompts: 1 }),
+            modelBucket({ model: "claude-opus-4.8", reasoning: "high", tokens: 400, turns: 1, prompts: 1 }),
+          ],
+          skills: [{ minute: minuteIso(), name: "code-review", kind: "skill", runs: 3 }],
+        }),
+        "203.0.121.2",
+      );
+      await pushUsage(
+        app,
+        token,
+        usageBody(otherEnvironment, {
+          models: [modelBucket({ tokens: 600, turns: 1, prompts: 2 })],
+        }),
+        "203.0.121.2",
+      );
+
+      const res = await app.request("/api/v1/usage/summary?utcOffsetMinutes=0", {
+        headers: usageHeaders(token, "203.0.121.3"),
+      });
+      expect(res.status).toBe(200);
+      const body = Schema.decodeUnknownSync(UsageSummary)(await res.json());
+
+      expect(body.lifetimeTokens).toBe(2000);
+      expect(body.lifetimePrompts).toBe(4);
+      expect(body.lifetimeTurns).toBe(4);
+      // Same bucket key from two environments sums into one model row.
+      const fable = body.models.find((row) => row.model === "claude-fable-5");
+      expect(fable).toMatchObject({ reasoning: null, tokens: 1600, turns: 3, prompts: 3 });
+      const opus = body.models.find((row) => row.model === "claude-opus-4.8");
+      expect(opus).toMatchObject({ reasoning: "high", tokens: 400 });
+      // Skills are owner-only data and DO appear here, unlike the public read.
+      expect(body.skills).toEqual([{ name: "code-review", kind: "skill", runs: 3 }]);
+      // Per-environment shares stay separable.
+      const shares = new Map(body.environments.map((row) => [row.environmentId, row.tokens]));
+      expect(shares.get(environmentId)).toBe(1400);
+      expect(shares.get(otherEnvironment)).toBe(600);
+      expect(body.days).toHaveLength(1);
+      expect(body.hours.reduce((total, row) => total + row.prompts, 0)).toBe(4);
+    });
+
+    it("localizes day bucketing to the caller's UTC offset", async () => {
+      const { app } = buildApp();
+      const { token } = await signIn();
+      // A bucket at 23:30 UTC lands on the NEXT local day for UTC+120.
+      const lateUtc = "2026-03-01T23:30:00.000Z";
+      await pushUsage(
+        app,
+        token,
+        usageBody(randomUUID(), { models: [modelBucket({ minute: lateUtc, tokens: 100 })] }),
+        "203.0.121.4",
+      );
+      const res = await app.request("/api/v1/usage/summary?utcOffsetMinutes=120", {
+        headers: usageHeaders(token, "203.0.121.5"),
+      });
+      const body = Schema.decodeUnknownSync(UsageSummary)(await res.json());
+      expect(body.days.map((row) => row.day)).toContain("2026-03-02");
+      // And the hour shifts with it: 23:30 UTC is 01:30 local.
+      expect(body.hours.find((row) => row.prompts > 0)?.hour).toBe(1);
     });
   });
 

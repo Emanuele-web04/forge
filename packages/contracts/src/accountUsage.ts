@@ -133,3 +133,67 @@ export const PublicProfile = Schema.Struct({
   heatmap: Schema.Array(PublicProfileHeatmapDay),
 });
 export type PublicProfile = typeof PublicProfile.Type;
+
+// ── Owner usage summary (authenticated) ──────────────────────────────
+//
+// The account-wide view of the same buckets, for the signed-in owner's
+// usage tab — the "Account" side of the device/account toggle. Unlike the
+// public profile it includes skill runs (owner-only data) and localizes
+// days/hours to the caller's UTC offset, so the account view buckets days
+// exactly the way the local dashboard does.
+
+/** One localized day of owner usage. */
+export const UsageSummaryDay = Schema.Struct({
+  day: Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/)),
+  tokens: NonNegativeInt,
+  prompts: NonNegativeInt,
+  turns: NonNegativeInt,
+});
+export type UsageSummaryDay = typeof UsageSummaryDay.Type;
+
+/** Prompt count per localized hour of day, 0–23; the active-hours chart. */
+export const UsageSummaryHour = Schema.Struct({
+  hour: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(23)),
+  prompts: NonNegativeInt,
+});
+export type UsageSummaryHour = typeof UsageSummaryHour.Type;
+
+/** Lifetime skill/agent runs, owner-only — never part of a public payload. */
+export const UsageSummarySkill = Schema.Struct({
+  name: Schema.String,
+  kind: Schema.Literals(["skill", "agent"]),
+  runs: NonNegativeInt,
+});
+export type UsageSummarySkill = typeof UsageSummarySkill.Type;
+
+/** One linked environment's share, so the owner can see per-device totals. */
+export const UsageSummaryEnvironment = Schema.Struct({
+  environmentId: Schema.String,
+  tokens: NonNegativeInt,
+  prompts: NonNegativeInt,
+});
+export type UsageSummaryEnvironment = typeof UsageSummaryEnvironment.Type;
+
+/**
+ * What `GET /api/v1/usage/summary` answers. Model rows reuse the public
+ * shape — same depth, same aggregation — because the account view IS the
+ * public view plus the owner-only extras (skills, environments, localized
+ * hours).
+ */
+export const UsageSummary = Schema.Struct({
+  lifetimeTokens: NonNegativeInt,
+  lifetimePrompts: NonNegativeInt,
+  lifetimeTurns: NonNegativeInt,
+  models: Schema.Array(PublicProfileModelUsage),
+  days: Schema.Array(UsageSummaryDay),
+  hours: Schema.Array(UsageSummaryHour),
+  skills: Schema.Array(UsageSummarySkill),
+  environments: Schema.Array(UsageSummaryEnvironment),
+});
+export type UsageSummary = typeof UsageSummary.Type;
+
+/** The usage-summary RPC's input: the client's UTC offset, for day bucketing. */
+export const AccountUsageSummaryInput = Schema.Struct({
+  utcOffsetMinutes: Schema.Int,
+});
+export type AccountUsageSummaryInput = typeof AccountUsageSummaryInput.Type;

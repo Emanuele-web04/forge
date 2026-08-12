@@ -21,6 +21,11 @@ import {
   type PublicProfileModelUsage,
   PushUsageRequest,
   type PushUsageResponse,
+  type UsageSummary,
+  type UsageSummaryDay,
+  type UsageSummaryEnvironment,
+  type UsageSummaryHour,
+  type UsageSummarySkill,
   type RegisterHostResponse,
   RegisterHostRequest,
   RefreshTokenRequest,
@@ -775,6 +780,137 @@ export function createV1Routes(deps: {
 
     const body: PushUsageResponse = { written: parsed.models.length + parsed.skills.length };
     return c.json(body, 202);
+  });
+
+
+  /**
+   * The signed-in owner's account-wide usage — the "Account" side of the
+   * usage tab's device/account toggle. Same buckets as the public profile,
+   * plus the owner-only extras a public payload must never carry: skill
+   * runs, per-environment shares, and days/hours localized to the caller's
+   * UTC offset so the account view buckets time exactly the way the local
+   * dashboard does.
+   */
+  v1.get("/usage/summary", async (c) => {
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
+
+    // Clamped to real-world offsets (UTC-12 … UTC+14) rather than refused:
+    // an out-of-range value is a client bug, and answering UTC beats a 400
+    // that hides the whole dashboard.
+    const rawOffset = Number.parseInt(c.req.query("utcOffsetMinutes") ?? "0", 10);
+    const offsetMinutes = Number.isFinite(rawOffset)
+      ? Math.max(-720, Math.min(840, rawOffset))
+      : 0;
+    // Interval arithmetic instead of a timezone name: the client knows its
+    // offset, and Postgres shifting by a fixed interval is DST-agnostic in
+    // exactly the way the local dashboard's own bucketing is. Inlined rather
+    // than parameterized — safe because the value is a clamped integer, and
+    // necessary because a placeholder appears as DIFFERENT params in SELECT
+    // and GROUP BY, which Postgres refuses to unify.
+    const localMinute = sql`(${usageModelStats.minute} + make_interval(mins => ${sql.raw(String(offsetMinutes))}))`;
+
+    const models = await db
+      .select({
+        provider: usageModelStats.provider,
+        model: usageModelStats.model,
+        reasoning: usageModelStats.reasoning,
+        tokens: sql<string>`COALESCE(SUM(${usageModelStats.tokens}), 0)`,
+        turns: sql<string>`COALESCE(SUM(${usageModelStats.turns}), 0)`,
+        prompts: sql<string>`COALESCE(SUM(${usageModelStats.prompts}), 0)`,
+      })
+      .from(usageModelStats)
+      .where(eq(usageModelStats.userId, session.userId))
+      .groupBy(usageModelStats.provider, usageModelStats.model, usageModelStats.reasoning)
+      .orderBy(sql`SUM(${usageModelStats.tokens}) DESC`);
+
+    const days = await db
+      .select({
+        day: sql<string>`to_char(${localMinute} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`,
+        tokens: sql<string>`COALESCE(SUM(${usageModelStats.tokens}), 0)`,
+        prompts: sql<string>`COALESCE(SUM(${usageModelStats.prompts}), 0)`,
+        turns: sql<string>`COALESCE(SUM(${usageModelStats.turns}), 0)`,
+      })
+      .from(usageModelStats)
+      .where(
+        and(
+          eq(usageModelStats.userId, session.userId),
+          sql`${usageModelStats.minute} >= now() - interval '366 days'`,
+        ),
+      )
+      .groupBy(sql`to_char(${localMinute} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`);
+
+    const hours = await db
+      .select({
+        hour: sql<string>`extract(hour from ${localMinute} AT TIME ZONE 'UTC')`,
+        prompts: sql<string>`COALESCE(SUM(${usageModelStats.prompts}), 0)`,
+      })
+      .from(usageModelStats)
+      .where(eq(usageModelStats.userId, session.userId))
+      .groupBy(sql`extract(hour from ${localMinute} AT TIME ZONE 'UTC')`);
+
+    const skills = await db
+      .select({
+        name: usageSkillStats.name,
+        kind: usageSkillStats.kind,
+        runs: sql<string>`COALESCE(SUM(${usageSkillStats.runs}), 0)`,
+      })
+      .from(usageSkillStats)
+      .where(eq(usageSkillStats.userId, session.userId))
+      .groupBy(usageSkillStats.name, usageSkillStats.kind)
+      .orderBy(sql`SUM(${usageSkillStats.runs}) DESC`);
+
+    const environments = await db
+      .select({
+        environmentId: usageModelStats.environmentId,
+        tokens: sql<string>`COALESCE(SUM(${usageModelStats.tokens}), 0)`,
+        prompts: sql<string>`COALESCE(SUM(${usageModelStats.prompts}), 0)`,
+      })
+      .from(usageModelStats)
+      .where(eq(usageModelStats.userId, session.userId))
+      .groupBy(usageModelStats.environmentId)
+      .orderBy(sql`SUM(${usageModelStats.tokens}) DESC`);
+
+    const modelRows = models.map((entry) => ({
+      provider: entry.provider,
+      model: entry.model,
+      reasoning: entry.reasoning === "" ? null : entry.reasoning,
+      tokens: Number(entry.tokens),
+      turns: Number(entry.turns),
+      prompts: Number(entry.prompts),
+    }));
+    const dayRows: UsageSummaryDay[] = days.map((entry) => ({
+      day: entry.day,
+      tokens: Number(entry.tokens),
+      prompts: Number(entry.prompts),
+      turns: Number(entry.turns),
+    }));
+    const hourRows: UsageSummaryHour[] = hours.map((entry) => ({
+      hour: Number(entry.hour),
+      prompts: Number(entry.prompts),
+    }));
+    const skillRows: UsageSummarySkill[] = skills.map((entry) => ({
+      name: entry.name,
+      kind: entry.kind,
+      runs: Number(entry.runs),
+    }));
+    const environmentRows: UsageSummaryEnvironment[] = environments.map((entry) => ({
+      environmentId: entry.environmentId,
+      tokens: Number(entry.tokens),
+      prompts: Number(entry.prompts),
+    }));
+
+    const body: UsageSummary = {
+      lifetimeTokens: modelRows.reduce((total, entry) => total + entry.tokens, 0),
+      lifetimePrompts: modelRows.reduce((total, entry) => total + entry.prompts, 0),
+      lifetimeTurns: modelRows.reduce((total, entry) => total + entry.turns, 0),
+      models: modelRows,
+      days: dayRows,
+      hours: hourRows,
+      skills: skillRows,
+      environments: environmentRows,
+    };
+    return c.json(body);
   });
 
   /**

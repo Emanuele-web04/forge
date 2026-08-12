@@ -27,6 +27,8 @@ import {
   type PushUsageRequest,
   type PushUsageResponse,
   PushUsageResponse as PushUsageResponseSchema,
+  type UsageSummary,
+  UsageSummary as UsageSummarySchema,
   type RegisterHostRequest,
   type RegisterHostResponse,
   RegisterHostResponse as RegisterHostResponseSchema,
@@ -201,6 +203,11 @@ export interface AccountClient {
    * the user access token: usage accrues to the person, not the machine.
    */
   pushUsage(token: string, request: PushUsageRequest): Promise<PushUsageResponse>;
+  /**
+   * The signed-in owner's account-wide usage, days/hours localized to
+   * `utcOffsetMinutes` — the "Account" side of the usage tab's toggle.
+   */
+  getUsageSummary(token: string, utcOffsetMinutes: number): Promise<UsageSummary>;
   /**
    * The public profile behind a handle, or an AccountApiError with status
    * 404 when the handle is unknown OR its owner keeps the profile private —
@@ -481,6 +488,14 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
           body: JSON.stringify(request),
         },
         PushUsageResponseSchema,
+      );
+    },
+
+    async getUsageSummary(token, utcOffsetMinutes) {
+      return requestJson(
+        `/api/v1/usage/summary?utcOffsetMinutes=${encodeURIComponent(utcOffsetMinutes)}`,
+        { method: "GET", headers: authHeaders(token) },
+        UsageSummarySchema,
       );
     },
 

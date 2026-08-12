@@ -12,6 +12,7 @@ import type {
   AccountStatus,
   AccountUpdateProfileInput,
 } from "./account";
+import type { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import type {
   AuthBearerBootstrapResult,
   AuthBootstrapInput,
@@ -874,6 +875,11 @@ export interface NativeApi {
     ) => Promise<AccountStatus>;
     /** Abandons a pending SSO attempt, closing its loopback listener. */
     cancelSso: (input: AccountCompleteSsoInput) => Promise<void>;
+    /**
+     * The account-wide usage summary — the "Account" side of the usage
+     * tab's device/account toggle. Server-brokered like every account call.
+     */
+    usageSummary: (input: AccountUsageSummaryInput) => Promise<UsageSummary>;
     /** Writes the profile, and renames the workspace when `workspaceName` differs. */
     updateProfile: (input: AccountUpdateProfileInput) => Promise<AccountMe>;
     signOut: () => Promise<void>;

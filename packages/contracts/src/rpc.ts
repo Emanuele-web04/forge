@@ -14,6 +14,7 @@ import {
   AccountStatus,
   AccountUpdateProfileInput,
 } from "./account";
+import { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
 import {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
@@ -1192,6 +1193,12 @@ export const WsAccountCancelSsoRpc = Rpc.make(WS_METHODS.accountCancelSso, {
   error: WsRpcError,
 });
 
+export const WsAccountUsageSummaryRpc = Rpc.make(WS_METHODS.accountUsageSummary, {
+  payload: AccountUsageSummaryInput,
+  success: UsageSummary,
+  error: WsRpcError,
+});
+
 export const WsAccountUpdateProfileRpc = Rpc.make(WS_METHODS.accountUpdateProfile, {
   payload: AccountUpdateProfileInput,
   success: AccountMe,
@@ -1393,6 +1400,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAccountBeginSsoRpc,
   WsAccountCompleteSsoRpc,
   WsAccountCancelSsoRpc,
+  WsAccountUsageSummaryRpc,
   WsAccountUpdateProfileRpc,
   WsAccountSignOutRpc,
   WsAccountOpenVerificationUrlRpc,
