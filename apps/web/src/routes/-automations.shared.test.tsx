@@ -985,6 +985,22 @@ describe("rollbackAutomationDefinitionPatch", () => {
     });
   });
 
+  it("does not overwrite a newer edit to the same field when an older patch fails", () => {
+    const current = {
+      definitions: [definitionWith({ name: "Newest name" })],
+      runs: [],
+      memories: [],
+    };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, name: "Older optimistic name" },
+      baseDefinition,
+    );
+
+    expect(rolledBack.definitions[0]?.name).toBe("Newest name");
+  });
+
   it("removes input-only keys the definition never had instead of restoring them", () => {
     const merged = {
       ...definitionWith({}),

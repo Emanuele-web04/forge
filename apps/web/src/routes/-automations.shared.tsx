@@ -657,6 +657,13 @@ export function rollbackAutomationDefinitionPatch(
       const next: Record<string, unknown> = { ...definition };
       for (const key of Object.keys(input)) {
         if (key === "id") continue;
+        // A newer optimistic patch or authoritative stream event may already have
+        // replaced this field while the failed request was in flight. Only undo the
+        // value this mutation itself installed; otherwise an older failure can erase
+        // the newer edit.
+        if (!Object.is(next[key], (input as unknown as Record<string, unknown>)[key])) {
+          continue;
+        }
         if (key in previousDefinition) {
           next[key] = (previousDefinition as unknown as Record<string, unknown>)[key];
         } else {
