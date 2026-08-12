@@ -219,8 +219,22 @@ export function arraysShallowEqual<T>(
  * deltas extend or re-slice a message.
  */
 export function textSegmentArraysEqual(
-  left: ReadonlyArray<{ readonly startedAt: string; readonly endedAt: string; readonly text: string }> | undefined,
-  right: ReadonlyArray<{ readonly startedAt: string; readonly endedAt: string; readonly text: string }> | undefined,
+  left:
+    | ReadonlyArray<{
+        readonly sequence: number;
+        readonly startedAt: string;
+        readonly endedAt: string;
+        readonly text: string;
+      }>
+    | undefined,
+  right:
+    | ReadonlyArray<{
+        readonly sequence: number;
+        readonly startedAt: string;
+        readonly endedAt: string;
+        readonly text: string;
+      }>
+    | undefined,
 ): boolean {
   if (left === right) {
     return true;
@@ -232,6 +246,7 @@ export function textSegmentArraysEqual(
     const leftSegment = left[index]!;
     const rightSegment = right[index]!;
     if (
+      leftSegment.sequence !== rightSegment.sequence ||
       leftSegment.startedAt !== rightSegment.startedAt ||
       leftSegment.endedAt !== rightSegment.endedAt ||
       leftSegment.text !== rightSegment.text

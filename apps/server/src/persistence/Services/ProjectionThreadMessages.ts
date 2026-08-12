@@ -26,12 +26,12 @@ import type { Effect, Option } from "effect";
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export const ProjectionThreadMessageTextSegment = Schema.Struct({
+  sequence: NonNegativeInt,
   startedAt: IsoDateTime,
   endedAt: IsoDateTime,
   text: Schema.String,
 });
-export type ProjectionThreadMessageTextSegment =
-  typeof ProjectionThreadMessageTextSegment.Type;
+export type ProjectionThreadMessageTextSegment = typeof ProjectionThreadMessageTextSegment.Type;
 
 export const ProjectionThreadMessage = Schema.Struct({
   messageId: MessageId,
@@ -57,12 +57,12 @@ export type ProjectionThreadMessage = typeof ProjectionThreadMessage.Type;
 export const ProjectionThreadMessageSegmentDbRow = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  sequence: NonNegativeInt,
   startedAt: IsoDateTime,
   endedAt: IsoDateTime,
   text: Schema.String,
 });
-export type ProjectionThreadMessageSegmentDbRow =
-  typeof ProjectionThreadMessageSegmentDbRow.Type;
+export type ProjectionThreadMessageSegmentDbRow = typeof ProjectionThreadMessageSegmentDbRow.Type;
 
 export const ListProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,

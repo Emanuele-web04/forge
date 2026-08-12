@@ -61,7 +61,8 @@ import { ProjectionThreadProposedPlan } from "../../persistence/Services/Project
 import {
   ProjectionThreadMessageSegmentDbRow,
   type ProjectionThreadMessageTextSegment,
-} from "../../persistence/Services/ProjectionThreadMessages.ts";import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
+} from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
@@ -516,8 +517,9 @@ function attachThreadMessageSegments(
   }
   const segmentsByMessage = new Map<string, ProjectionThreadMessageTextSegment[]>();
   for (const segment of segmentRows) {
-    const key = `${segment.threadId}:${segment.messageId}`;
+    const key = JSON.stringify([segment.threadId, segment.messageId]);
     const entry = {
+      sequence: segment.sequence,
       startedAt: segment.startedAt,
       endedAt: segment.endedAt,
       text: segment.text,
@@ -530,7 +532,7 @@ function attachThreadMessageSegments(
     }
   }
   return rows.map((row) => {
-    const rowSegments = segmentsByMessage.get(`${row.threadId}:${row.messageId}`);
+    const rowSegments = segmentsByMessage.get(JSON.stringify([row.threadId, row.messageId]));
     return rowSegments ? { ...row, textSegments: rowSegments } : row;
   });
 }
@@ -1031,12 +1033,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           message_id AS "messageId",
+          sequence,
           started_at AS "startedAt",
           ended_at AS "endedAt",
           text
         FROM message_text_segments
         WHERE thread_id IN (SELECT thread_id FROM projection_threads WHERE deleted_at IS NULL)
-        ORDER BY started_at ASC, message_id ASC
+        ORDER BY sequence ASC, message_id ASC
       `,
   });
 
@@ -1048,12 +1051,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           message_id AS "messageId",
+          sequence,
           started_at AS "startedAt",
           ended_at AS "endedAt",
           text
         FROM message_text_segments
         WHERE thread_id = ${threadId}
-        ORDER BY started_at ASC, message_id ASC
+        ORDER BY sequence ASC, message_id ASC
       `,
   });
 

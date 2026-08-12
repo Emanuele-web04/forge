@@ -2,7 +2,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema } from "effect";
 
-import { toPersistenceSqlError, toPersistenceSqlOrDecodeError, type ProjectionRepositoryError } from "../Errors.ts";
+import {
+  toPersistenceSqlError,
+  toPersistenceSqlOrDecodeError,
+  type ProjectionRepositoryError,
+} from "../Errors.ts";
 import {
   ProjectionThreadMessageDbRowSchema,
   projectionThreadMessageFromRow,
@@ -206,12 +210,32 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           message_id AS "messageId",
+          sequence,
           started_at AS "startedAt",
           ended_at AS "endedAt",
           text
         FROM message_text_segments
         WHERE thread_id = ${threadId}
-        ORDER BY started_at ASC, message_id ASC
+        ORDER BY sequence ASC, message_id ASC
+      `,
+  });
+
+  const getMessageTextSegmentRowsQuery = SqlSchema.findAll({
+    Request: GetProjectionThreadMessageInput,
+    Result: ProjectionThreadMessageSegmentDbRow,
+    execute: ({ threadId, messageId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          message_id AS "messageId",
+          sequence,
+          started_at AS "startedAt",
+          ended_at AS "endedAt",
+          text
+        FROM message_text_segments
+        WHERE thread_id = ${threadId}
+          AND message_id = ${messageId}
+        ORDER BY sequence ASC
       `,
   });
 
@@ -240,9 +264,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     }
     const segmentsByMessage = new Map<string, ProjectionThreadMessageTextSegment[]>();
     for (const segment of segments) {
-      const key = `${segment.threadId}:${segment.messageId}`;
+      const key = JSON.stringify([segment.threadId, segment.messageId]);
       const existing = segmentsByMessage.get(key);
       const entry = {
+        sequence: segment.sequence,
         startedAt: segment.startedAt,
         endedAt: segment.endedAt,
         text: segment.text,
@@ -254,7 +279,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       }
     }
     return rows.map((row) => {
-      const rowSegments = segmentsByMessage.get(`${row.threadId}:${row.messageId}`);
+      const rowSegments = segmentsByMessage.get(JSON.stringify([row.threadId, row.messageId]));
       return rowSegments ? { ...row, textSegments: rowSegments } : row;
     });
   };
@@ -271,10 +296,18 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           toPersistenceSqlError("ProjectionThreadMessageRepository.getByThreadAndMessageId:query"),
         ),
         Effect.flatMap((row) =>
-          listMessageTextSegmentRows(input).pipe(
+          getMessageTextSegmentRowsQuery(input).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionThreadMessageRepository.getMessageTextSegments:query",
+                "ProjectionThreadMessageRepository.getMessageTextSegments:decodeRows",
+              ),
+            ),
             Effect.map((segments) =>
               Option.map(row, (messageRow) =>
-                projectionThreadMessageFromRow(attachTextSegmentsToRows([messageRow], segments)[0]!),
+                projectionThreadMessageFromRow(
+                  attachTextSegmentsToRows([messageRow], segments)[0]!,
+                ),
               ),
             ),
           ),

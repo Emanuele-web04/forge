@@ -5,8 +5,8 @@
  * provider events (tool calls, warnings, ...). The web timeline interleaves
  * these segments with tool rows so streamed reasoning renders in execution
  * order instead of one block above every tool call. Rows are append-only
- * during streaming; a completed/edited message is collapsed back into a
- * single whole-message segment by the projection.
+ * during streaming. Completed messages retain rows only when a tool boundary
+ * produced multiple segments; edits and rollbacks discard derived boundaries.
  */
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";
@@ -18,14 +18,11 @@ export default Effect.gen(function* () {
     CREATE TABLE IF NOT EXISTS message_text_segments (
       thread_id TEXT NOT NULL,
       message_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
       started_at TEXT NOT NULL,
       ended_at TEXT NOT NULL,
       text TEXT NOT NULL,
-      PRIMARY KEY (thread_id, message_id, started_at)
+      PRIMARY KEY (thread_id, message_id, sequence)
     )
-  `;
-  yield* sql`
-    CREATE INDEX IF NOT EXISTS idx_message_text_segments_thread_message
-    ON message_text_segments(thread_id, message_id, started_at)
   `;
 });

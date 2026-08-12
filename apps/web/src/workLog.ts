@@ -48,6 +48,8 @@ const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
+  /** Server-owned orchestration event sequence for causal ordering. */
+  sequence?: number;
   turnId?: TurnId | null;
   label: string;
   detail?: string;
@@ -188,6 +190,7 @@ export type TimelineEntry =
       id: string;
       kind: "message-segment";
       createdAt: string;
+      sequence: number;
       message: ChatMessage;
       segmentIndex: number;
     }
@@ -201,6 +204,7 @@ export type TimelineEntry =
       id: string;
       kind: "work";
       createdAt: string;
+      sequence?: number;
       entry: WorkLogEntry;
     };
 
@@ -461,6 +465,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
+    ...(activity.sequence !== undefined ? { sequence: activity.sequence } : {}),
     ...(activity.turnId !== null ? { turnId: activity.turnId } : {}),
     label: activity.summary,
     tone: activity.tone === "approval" ? "info" : activity.tone,
@@ -2082,6 +2087,15 @@ function compareActivityLifecycleRank(kind: string): number {
 }
 
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  if (
+    "sequence" in left &&
+    "sequence" in right &&
+    left.sequence !== undefined &&
+    right.sequence !== undefined &&
+    left.sequence !== right.sequence
+  ) {
+    return left.sequence - right.sequence;
+  }
   return left.createdAt.localeCompare(right.createdAt);
 }
 
@@ -2171,6 +2185,7 @@ export function deriveTimelineEntries(
         id: `${displayMessage.id}#seg:${segmentIndex}`,
         kind: "message-segment" as const,
         createdAt: segment.startedAt,
+        sequence: segment.sequence,
         message: displayMessage,
         segmentIndex,
       }));
@@ -2194,6 +2209,7 @@ export function deriveTimelineEntries(
     id: entry.id,
     kind: "work",
     createdAt: entry.createdAt,
+    ...(entry.sequence !== undefined ? { sequence: entry.sequence } : {}),
     entry,
   }));
 

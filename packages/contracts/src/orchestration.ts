@@ -476,6 +476,8 @@ export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "s
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
 export const OrchestrationMessageTextSegment = Schema.Struct({
+  /** Causal orchestration-event order; disambiguates equal timestamps. */
+  sequence: NonNegativeInt,
   startedAt: IsoDateTime,
   endedAt: IsoDateTime,
   text: Schema.String,
@@ -1551,6 +1553,7 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   // provider event (tool call, warning, ...) intervened since the previous
   // assistant delta. Positions the segment in the merged timeline.
   segmentStartedAt: Schema.optional(IsoDateTime),
+  segmentSequence: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });
 
@@ -1911,6 +1914,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   // first delta of a new text segment (after a row-making event). The message
   // projection persists segment boundaries into the message's textSegments.
   segmentStartedAt: Schema.optional(IsoDateTime),
+  segmentSequence: Schema.optional(NonNegativeInt),
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),

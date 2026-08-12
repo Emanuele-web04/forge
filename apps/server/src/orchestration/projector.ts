@@ -308,8 +308,8 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
  * model: streamed assistant deltas accumulate into the current segment, a
  * row-making provider event between deltas starts a new segment at its own
  * time (segmentStartedAt), and completion keeps the boundaries when the
- * collated segment text matches the final text (otherwise it collapses into a
- * single whole-text segment, e.g. edits/rewrites/imports).
+ * collated segment text matches the final text. Single-segment messages and
+ * edits/rewrites/imports need no side table metadata and drop the segments.
  */
 function deriveNextMessageTextSegments(
   previous: ReadonlyArray<OrchestrationMessageTextSegment> | undefined,
@@ -317,6 +317,7 @@ function deriveNextMessageTextSegments(
     readonly text: string;
     readonly streaming: boolean;
     readonly segmentStartedAt: string | undefined;
+    readonly sequence: number;
     readonly createdAt: string;
     readonly updatedAt: string;
   },
@@ -325,7 +326,12 @@ function deriveNextMessageTextSegments(
     if (input.segmentStartedAt) {
       return [
         ...(previous ?? []),
-        { startedAt: input.segmentStartedAt, endedAt: input.updatedAt, text: input.text },
+        {
+          sequence: input.sequence,
+          startedAt: input.segmentStartedAt,
+          endedAt: input.updatedAt,
+          text: input.text,
+        },
       ];
     }
     if (previous && previous.length > 0) {
@@ -335,33 +341,25 @@ function deriveNextMessageTextSegments(
         { ...tail, text: `${tail.text}${input.text}`, endedAt: input.updatedAt },
       ];
     }
-    return [{ startedAt: input.createdAt, endedAt: input.updatedAt, text: input.text }];
-  }
-
-  // Completion / edit / rewrite / import.
-  if (previous && previous.length > 0) {
-    const collatedSegmentText = previous.map((segment) => segment.text).join("");
-    if (collatedSegmentText === input.text || input.text.length === 0) {
-      const tail = previous[previous.length - 1]!;
-      return [...previous.slice(0, -1), { ...tail, endedAt: input.updatedAt }];
-    }
     return [
       {
-        startedAt: input.segmentStartedAt ?? input.createdAt,
+        sequence: input.sequence,
+        startedAt: input.createdAt,
         endedAt: input.updatedAt,
         text: input.text,
       },
     ];
   }
-  return input.text.length > 0
-    ? [
-        {
-          startedAt: input.segmentStartedAt ?? input.createdAt,
-          endedAt: input.updatedAt,
-          text: input.text,
-        },
-      ]
-    : undefined;
+
+  // Completion / edit / rewrite / import.
+  if (previous && previous.length > 1) {
+    const collatedSegmentText = previous.map((segment) => segment.text).join("");
+    if (collatedSegmentText === input.text || input.text.length === 0) {
+      const tail = previous[previous.length - 1]!;
+      return [...previous.slice(0, -1), { ...tail, endedAt: input.updatedAt }];
+    }
+  }
+  return undefined;
 }
 
 export function projectEvent(
@@ -1009,13 +1007,16 @@ export function projectEvent(
                   text: message.streaming ? message.text : resolvedText,
                   streaming: message.streaming,
                   segmentStartedAt: payload.segmentStartedAt,
+                  sequence: payload.segmentSequence ?? event.sequence,
                   createdAt: payload.createdAt,
                   updatedAt: payload.updatedAt,
                 })
               : undefined;
           const nextMessages = thread.messages.slice();
+          const entryWithoutTextSegments = { ...entry };
+          delete entryWithoutTextSegments.textSegments;
           nextMessages[existingIndex] = {
-            ...entry,
+            ...entryWithoutTextSegments,
             text: resolvedText,
             ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
             streaming: message.streaming,
@@ -1037,6 +1038,7 @@ export function projectEvent(
                   text: message.text,
                   streaming: message.streaming,
                   segmentStartedAt: payload.segmentStartedAt,
+                  sequence: payload.segmentSequence ?? event.sequence,
                   createdAt: payload.createdAt,
                   updatedAt: payload.updatedAt,
                 })
@@ -1045,11 +1047,17 @@ export function projectEvent(
             thread.messages.length >= MAX_THREAD_MESSAGES
               ? [
                   ...thread.messages.slice(thread.messages.length - MAX_THREAD_MESSAGES + 1),
-                  { ...message, ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}) },
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
                 ]
               : [
                   ...thread.messages,
-                  { ...message, ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}) },
+                  {
+                    ...message,
+                    ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
+                  },
                 ];
         }
 
@@ -1366,7 +1374,7 @@ export function projectEvent(
 
           const activities = upsertThreadActivity(thread.activities, {
             ...payload.activity,
-            sequence: event.sequence,
+            sequence: payload.activity.sequence ?? event.sequence,
           });
 
           return {
