@@ -809,6 +809,7 @@ export function createWsNativeApi(): NativeApi {
           ...(options?.signal ? { signal: options.signal } : {}),
         }),
       cancelSso: (input) => transport.request(WS_METHODS.accountCancelSso, input),
+      usageSummary: (input) => transport.request(WS_METHODS.accountUsageSummary, input),
       updateProfile: (input) => transport.request(WS_METHODS.accountUpdateProfile, input),
       signOut: () => transport.request(WS_METHODS.accountSignOut),
       openVerificationUrl: (input) =>

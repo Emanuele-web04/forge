@@ -2,13 +2,15 @@
 // Purpose: React Query options and invalidation for the Synara account session.
 // Layer: Web data-fetching (see serverReactQuery.ts for the conventions).
 
-import type { AccountStatus } from "@synara/contracts";
+import type { AccountStatus, UsageSummary } from "@synara/contracts";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 
 export const accountQueryKeys = {
   all: ["account"] as const,
   status: () => ["account", "status"] as const,
+  usageSummary: (utcOffsetMinutes: number) =>
+    ["account", "usageSummary", utcOffsetMinutes] as const,
 };
 
 /**
@@ -28,6 +30,27 @@ export function accountStatusQueryOptions() {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     retry: 1,
+  });
+}
+
+/**
+ * The account-wide usage summary — the "Account" side of the profile panel's
+ * device/account toggle. The client passes its own fixed UTC offset so the
+ * service buckets days/hours to the caller's LOCAL day, exactly like the
+ * local profile-stats RPCs (see serverProfileStatsQueryOptions).
+ */
+export function accountUsageSummaryQueryOptions(input: { enabled?: boolean } = {}) {
+  const utcOffsetMinutes = -new Date().getTimezoneOffset();
+  return queryOptions({
+    queryKey: accountQueryKeys.usageSummary(utcOffsetMinutes),
+    enabled: input.enabled ?? true,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+    queryFn: async (): Promise<UsageSummary> => {
+      const api = ensureNativeApi();
+      return api.account.usageSummary({ utcOffsetMinutes });
+    },
   });
 }
 

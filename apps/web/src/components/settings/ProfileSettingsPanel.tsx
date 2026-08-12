@@ -1,8 +1,10 @@
 // FILE: ProfileSettingsPanel.tsx
 // Purpose: Local-first profile / stats dashboard rendered inside Settings → Profile. Core
 // stats render instantly from a fast SQL RPC; lifetime/peak token figures and the tokens/day
-// heatmap stream in from a second DB-backed RPC. Centered, low-chrome layout
-// with an explicit edit mode for the local name + handle.
+// heatmap stream in from a second DB-backed RPC. Signed-in users get a
+// This device / Account toggle: the Account view renders the account-wide
+// usage summary through the same sections (device-only rows hidden). Centered,
+// low-chrome layout with an explicit edit mode for the local name + handle.
 // Layer: web profile feature (settings panel body).
 
 import { useState } from "react";
@@ -12,6 +14,9 @@ import {
   serverProfileStatsQueryOptions,
   serverProfileTokenStatsQueryOptions,
 } from "~/lib/serverReactQuery";
+import { accountUsageSummaryQueryOptions } from "~/lib/accountReactQuery";
+import { localDayKey, selectAccountUsageView } from "~/lib/accountUsageAdapter";
+import { useAccount } from "~/hooks/useAccount";
 import { CentralIcon } from "~/lib/central-icons";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { Button } from "~/components/ui/button";
@@ -32,10 +37,20 @@ import {
   formatNumber,
   toDisplayName,
 } from "../profile/profileFormatting";
+import { SettingsSegmentedControl } from "./SettingControls";
+
+type StatsScope = "device" | "account";
+
+const SCOPE_OPTIONS = [
+  { value: "device", label: "This device" },
+  { value: "account", label: "Account" },
+] as const satisfies readonly { value: StatsScope; label: string }[];
 
 export function ProfileSettingsPanel() {
   const coreQuery = useQuery(serverProfileStatsQueryOptions());
   const tokenQuery = useQuery(serverProfileTokenStatsQueryOptions());
+  const { me } = useAccount();
+  const [scope, setScope] = useState<StatsScope>("device");
 
   if (coreQuery.isPending) {
     return <ProfileSkeleton />;
@@ -56,6 +71,9 @@ export function ProfileSettingsPanel() {
       stats={coreQuery.data}
       tokenStats={tokenQuery.data ?? null}
       tokensPending={tokenQuery.isPending}
+      // Signed out: no toggle, the device view is the whole panel.
+      scope={me ? scope : "device"}
+      onScopeChange={me ? setScope : null}
     />
   );
 }
@@ -64,10 +82,14 @@ function ProfileContent({
   stats,
   tokenStats,
   tokensPending,
+  scope,
+  onScopeChange,
 }: {
   stats: ProfileStats;
   tokenStats: ProfileTokenStats | null;
   tokensPending: boolean;
+  scope: StatsScope;
+  onScopeChange: ((scope: StatsScope) => void) | null;
 }) {
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -78,25 +100,34 @@ function ProfileContent({
     handle: stats.identity.defaultHandle,
   });
 
-  // Tokens/day when available, prompts/day otherwise — shared with ShareCard.
-  const heatmap = selectProfileHeatmap(stats, tokenStats);
-  const topProvider = selectProfileTopProvider(stats, tokenStats);
-  const modelUsage = selectProfileModelUsage(stats, tokenStats);
-  const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour);
-  const mostWorkedProjectLabel = formatMostWorkedProjectLabel(stats.mostWorkedProject);
-
   return (
     <div className="flex min-w-0 flex-col gap-7">
-      {/* Action row */}
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
-          <CentralIcon name="share-os" />
-          Share
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-          <CentralIcon name="pencil" />
-          Edit
-        </Button>
+      {/* Action row: scope toggle (signed in) on the left, share/edit on the right. */}
+      <div
+        className={
+          onScopeChange
+            ? "flex items-center justify-between gap-2"
+            : "flex items-center justify-end gap-2"
+        }
+      >
+        {onScopeChange ? (
+          <SettingsSegmentedControl
+            value={scope}
+            onValueChange={onScopeChange}
+            options={SCOPE_OPTIONS}
+            ariaLabel="Stats scope"
+          />
+        ) : null}
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
+            <CentralIcon name="share-os" />
+            Share
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+            <CentralIcon name="pencil" />
+            Edit
+          </Button>
+        </div>
       </div>
 
       {/* Centered identity header */}
@@ -120,129 +151,11 @@ function ProfileContent({
         </div>
       </header>
 
-      {/* Stat tiles */}
-      <div className="grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
-        <StatTile
-          label="Lifetime tokens"
-          value={tokensPending ? null : formatCompact(tokenStats?.lifetimeTotalTokens ?? null)}
-        />
-        <StatTile
-          label="Peak day"
-          value={tokensPending ? null : formatCompact(tokenStats?.peakDayTokens ?? null)}
-        />
-        <StatTile label="Total prompts" value={formatNumber(stats.activity.totalPromptsSent)} />
-        <StatTile label="Current streak" value={formatDays(stats.activity.currentStreakDays)} />
-        <StatTile label="Longest streak" value={formatDays(stats.activity.longestStreakDays)} />
-      </div>
-
-      {/* Heatmap */}
-      <section className="flex min-w-0 flex-col gap-3">
-        <h3 className="text-sm font-medium">Activity</h3>
-        {tokensPending ? (
-          <Skeleton className="h-28 w-full rounded-lg" />
-        ) : (
-          <ActivityHeatmap
-            cells={heatmap.cells}
-            fill
-            radius={5}
-            gap={3}
-            tooltip
-            tooltipUnit={heatmap.unit}
-            showMonths
-            monthsPosition="bottom"
-          />
-        )}
-      </section>
-
-      {/* Insights + plugins */}
-      <div className="grid gap-x-12 gap-y-7 md:grid-cols-2">
-        <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium">Activity insights</h3>
-          <dl className="flex flex-col gap-2.5">
-            <InsightRow
-              label="Most used provider"
-              value={
-                topProvider.provider
-                  ? `${formatProviderLabel(topProvider.provider)}${
-                      topProvider.percent !== null ? ` · ${topProvider.percent}%` : ""
-                    }`
-                  : "—"
-              }
-            />
-            <InsightRow
-              label="Most used reasoning"
-              value={
-                stats.insights.topReasoning
-                  ? `${capitalize(stats.insights.topReasoning)}${
-                      stats.insights.topReasoningPercent !== null
-                        ? ` · ${stats.insights.topReasoningPercent}%`
-                        : ""
-                    }`
-                  : "—"
-              }
-            />
-            <InsightRow label="Most active hour" value={peakHourLabel} />
-            <InsightRow label="Most worked project" value={mostWorkedProjectLabel} />
-            <InsightRow
-              label="Skills explored"
-              value={formatNumber(stats.insights.skillsExplored)}
-            />
-            <InsightRow
-              label="Total skills used"
-              value={formatNumber(stats.insights.totalSkillsUsed)}
-            />
-            <InsightRow label="Total threads" value={formatNumber(stats.activity.totalThreads)} />
-          </dl>
-        </section>
-
-        <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium">Most used plugins</h3>
-          {stats.skills.length > 0 ? (
-            <ul className="flex flex-col gap-2.5">
-              {stats.skills.slice(0, 6).map((skill) => (
-                <li
-                  key={`${skill.kind}:${skill.name}`}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <span className="flex min-w-0 items-center gap-2.5">
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
-                      <CentralIcon
-                        name={skill.kind === "agent" ? "agent" : "building-blocks"}
-                        className="size-3"
-                      />
-                    </span>
-                    <span className="truncate text-sm">{skill.displayName}</span>
-                  </span>
-                  <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                    {formatNumber(skill.runCount)} runs
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">No skills or agents used yet.</p>
-          )}
-        </section>
-      </div>
-
-      {/* Model usage */}
-      <section className="flex flex-col gap-3">
-        <h3 className="text-sm font-medium">Model usage</h3>
-        {modelUsage.entries.length > 0 ? (
-          <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
-            {modelUsage.entries.slice(0, 6).map((entry) => (
-              <ModelUsageRow
-                key={`${entry.provider}:${entry.model}`}
-                provider={entry.provider}
-                model={entry.model}
-                percent={entry.percent}
-              />
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm text-muted-foreground">No model activity yet.</p>
-        )}
-      </section>
+      {scope === "account" ? (
+        <AccountStatsBody />
+      ) : (
+        <DeviceStatsBody stats={stats} tokenStats={tokenStats} tokensPending={tokensPending} />
+      )}
 
       <ShareDialog
         stats={stats}
@@ -268,6 +181,302 @@ function ProfileContent({
         onSave={save}
       />
     </div>
+  );
+}
+
+// ── This device ────────────────────────────────────────────────────────
+
+function DeviceStatsBody({
+  stats,
+  tokenStats,
+  tokensPending,
+}: {
+  stats: ProfileStats;
+  tokenStats: ProfileTokenStats | null;
+  tokensPending: boolean;
+}) {
+  // Tokens/day when available, prompts/day otherwise — shared with ShareCard.
+  const heatmap = selectProfileHeatmap(stats, tokenStats);
+  const topProvider = selectProfileTopProvider(stats, tokenStats);
+  const modelUsage = selectProfileModelUsage(stats, tokenStats);
+
+  return (
+    <>
+      <StatTileGrid
+        tiles={[
+          {
+            label: "Lifetime tokens",
+            value: tokensPending ? null : formatCompact(tokenStats?.lifetimeTotalTokens ?? null),
+          },
+          {
+            label: "Peak day",
+            value: tokensPending ? null : formatCompact(tokenStats?.peakDayTokens ?? null),
+          },
+          { label: "Total prompts", value: formatNumber(stats.activity.totalPromptsSent) },
+          { label: "Current streak", value: formatDays(stats.activity.currentStreakDays) },
+          { label: "Longest streak", value: formatDays(stats.activity.longestStreakDays) },
+        ]}
+      />
+
+      <HeatmapSection pending={tokensPending} cells={heatmap.cells} unit={heatmap.unit} />
+
+      <div className="grid gap-x-12 gap-y-7 md:grid-cols-2">
+        <InsightsSection
+          rows={[
+            {
+              label: "Most used provider",
+              value: topProvider.provider
+                ? `${formatProviderLabel(topProvider.provider)}${
+                    topProvider.percent !== null ? ` · ${topProvider.percent}%` : ""
+                  }`
+                : "—",
+            },
+            {
+              label: "Most used reasoning",
+              value: stats.insights.topReasoning
+                ? `${capitalize(stats.insights.topReasoning)}${
+                    stats.insights.topReasoningPercent !== null
+                      ? ` · ${stats.insights.topReasoningPercent}%`
+                      : ""
+                  }`
+                : "—",
+            },
+            { label: "Most active hour", value: formatPeakHourLabel(stats.activeHours.startHour) },
+            {
+              label: "Most worked project",
+              value: formatMostWorkedProjectLabel(stats.mostWorkedProject),
+            },
+            { label: "Skills explored", value: formatNumber(stats.insights.skillsExplored) },
+            { label: "Total skills used", value: formatNumber(stats.insights.totalSkillsUsed) },
+            { label: "Total threads", value: formatNumber(stats.activity.totalThreads) },
+          ]}
+        />
+
+        <SkillsSection
+          skills={stats.skills.map((skill) => ({
+            key: `${skill.kind}:${skill.name}`,
+            displayName: skill.displayName,
+            kind: skill.kind,
+            runCount: skill.runCount,
+          }))}
+        />
+      </div>
+
+      <ModelUsageSection entries={modelUsage.entries} />
+    </>
+  );
+}
+
+// ── Account ────────────────────────────────────────────────────────────
+
+function AccountStatsBody() {
+  const usageQuery = useQuery(accountUsageSummaryQueryOptions());
+
+  if (usageQuery.isPending) {
+    return <AccountStatsSkeleton />;
+  }
+  if (usageQuery.isError || !usageQuery.data) {
+    // Retryable error state; the scope toggle above always lets the user
+    // flip back to This device.
+    return (
+      <div className="flex flex-col items-center gap-3 py-16 text-center">
+        <p className="text-sm text-muted-foreground">Couldn’t load your account stats.</p>
+        <Button variant="outline" size="sm" onClick={() => void usageQuery.refetch()}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  const view = selectAccountUsageView(usageQuery.data, localDayKey());
+
+  return (
+    <>
+      <StatTileGrid
+        tiles={[
+          { label: "Lifetime tokens", value: formatCompact(view.lifetimeTokens) },
+          { label: "Peak day", value: formatCompact(view.peakDayTokens) },
+          { label: "Total prompts", value: formatNumber(view.lifetimePrompts) },
+          { label: "Current streak", value: formatDays(view.currentStreakDays) },
+          { label: "Longest streak", value: formatDays(view.longestStreakDays) },
+        ]}
+      />
+
+      <HeatmapSection pending={false} cells={view.heatmap.cells} unit={view.heatmap.unit} />
+
+      <div className="grid gap-x-12 gap-y-7 md:grid-cols-2">
+        {/* Most-worked project and provider quota are device-only (content/plan
+            data never syncs), so those rows don't exist on the Account view. */}
+        <InsightsSection
+          rows={[
+            {
+              label: "Most used provider",
+              value: view.topProvider.provider
+                ? `${formatProviderLabel(view.topProvider.provider)}${
+                    view.topProvider.percent !== null ? ` · ${view.topProvider.percent}%` : ""
+                  }`
+                : "—",
+            },
+            {
+              label: "Most used reasoning",
+              value: view.topReasoning.reasoning
+                ? `${capitalize(view.topReasoning.reasoning)}${
+                    view.topReasoning.percent !== null ? ` · ${view.topReasoning.percent}%` : ""
+                  }`
+                : "—",
+            },
+            { label: "Most active hour", value: formatPeakHourLabel(view.peakHour) },
+            { label: "Skills explored", value: formatNumber(view.skillsExplored) },
+            { label: "Total skills used", value: formatNumber(view.totalSkillsUsed) },
+            { label: "Total turns", value: formatNumber(view.lifetimeTurns) },
+          ]}
+        />
+
+        <SkillsSection
+          skills={view.skills.map((skill) => ({
+            key: `${skill.kind}:${skill.name}`,
+            displayName: skill.displayName,
+            kind: skill.kind,
+            runCount: skill.runCount,
+          }))}
+        />
+      </div>
+
+      <ModelUsageSection entries={view.models} />
+    </>
+  );
+}
+
+function AccountStatsSkeleton() {
+  return (
+    <>
+      <Skeleton className="h-[72px] w-full rounded-2xl" />
+      <Skeleton className="h-28 w-full rounded-lg" />
+      <div className="grid w-full gap-7 md:grid-cols-2">
+        <Skeleton className="h-40 w-full rounded-lg" />
+        <Skeleton className="h-40 w-full rounded-lg" />
+      </div>
+    </>
+  );
+}
+
+// ── Shared sections (device + account views) ──────────────────────────
+
+function StatTileGrid({ tiles }: { tiles: readonly { label: string; value: string | null }[] }) {
+  return (
+    <div className="grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
+      {tiles.map((tile) => (
+        <StatTile key={tile.label} label={tile.label} value={tile.value} />
+      ))}
+    </div>
+  );
+}
+
+function HeatmapSection({
+  pending,
+  cells,
+  unit,
+}: {
+  pending: boolean;
+  cells: Parameters<typeof ActivityHeatmap>[0]["cells"];
+  unit: "tokens" | "prompts";
+}) {
+  return (
+    <section className="flex min-w-0 flex-col gap-3">
+      <h3 className="text-sm font-medium">Activity</h3>
+      {pending ? (
+        <Skeleton className="h-28 w-full rounded-lg" />
+      ) : (
+        <ActivityHeatmap
+          cells={cells}
+          fill
+          radius={5}
+          gap={3}
+          tooltip
+          tooltipUnit={unit}
+          showMonths
+          monthsPosition="bottom"
+        />
+      )}
+    </section>
+  );
+}
+
+function InsightsSection({ rows }: { rows: readonly { label: string; value: string }[] }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-sm font-medium">Activity insights</h3>
+      <dl className="flex flex-col gap-2.5">
+        {rows.map((row) => (
+          <InsightRow key={row.label} label={row.label} value={row.value} />
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function SkillsSection({
+  skills,
+}: {
+  skills: readonly {
+    key: string;
+    displayName: string;
+    kind: "skill" | "agent";
+    runCount: number;
+  }[];
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-sm font-medium">Most used plugins</h3>
+      {skills.length > 0 ? (
+        <ul className="flex flex-col gap-2.5">
+          {skills.slice(0, 6).map((skill) => (
+            <li key={skill.key} className="flex items-center justify-between gap-3">
+              <span className="flex min-w-0 items-center gap-2.5">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
+                  <CentralIcon
+                    name={skill.kind === "agent" ? "agent" : "building-blocks"}
+                    className="size-3"
+                  />
+                </span>
+                <span className="truncate text-sm">{skill.displayName}</span>
+              </span>
+              <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+                {formatNumber(skill.runCount)} runs
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-muted-foreground">No skills or agents used yet.</p>
+      )}
+    </section>
+  );
+}
+
+function ModelUsageSection({
+  entries,
+}: {
+  entries: readonly { provider: ProviderKind | "unknown"; model: string; percent: number }[];
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-sm font-medium">Model usage</h3>
+      {entries.length > 0 ? (
+        <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
+          {entries.slice(0, 6).map((entry) => (
+            <ModelUsageRow
+              key={`${entry.provider}:${entry.model}`}
+              provider={entry.provider}
+              model={entry.model}
+              percent={entry.percent}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-muted-foreground">No model activity yet.</p>
+      )}
+    </section>
   );
 }
 
