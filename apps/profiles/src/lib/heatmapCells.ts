@@ -7,10 +7,10 @@ import type { PublicProfileHeatmapDay } from "./publicProfile";
 const DAY_MS = 86_400_000;
 // Number of non-empty intensity levels (1–4); level 0 is reserved for empty days.
 const HEATMAP_LEVELS = 4;
-// Trailing window: the SAME full-year span the in-app dashboard uses
+// Trailing window: the SAME ~9-month span the in-app dashboard uses
 // (HEATMAP_WINDOW_DAYS in apps/server/src/profileStats.ts) — the public page
 // must show the identical grid the owner sees in the app.
-const WINDOW_DAYS = 365;
+const WINDOW_DAYS = 274;
 
 /**
  * Rank-based intensity, mirroring `heatmapIntensity` in apps/server/src/profileStats.ts.
@@ -43,7 +43,7 @@ function utcMsOf(day: string): number {
 }
 
 /**
- * The trailing ~365-day cell grid, tokens per UTC day, ending on the owner's most
+ * The trailing ~274-day cell grid, tokens per UTC day, ending on the owner's most
  * recent day. Usage pushes land in the owner's local day buckets, so the window ends
  * at the later of the newest bucket and today's UTC date — the grid is always full
  * and never truncates a bucket the owner already has.
