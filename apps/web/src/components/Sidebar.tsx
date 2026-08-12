@@ -2411,7 +2411,10 @@ export default function Sidebar() {
         return;
       }
 
-      void handleNewChat({ fresh: true });
+      // Reuse the stored home-chat draft when one exists (same as the "New chat"
+      // button) so switching back to the Chats view never destroys an in-progress
+      // draft; only mint a fresh draft when there is nothing to resume.
+      void handleNewChat();
     },
     [
       handleNewChat,
@@ -2453,7 +2456,11 @@ export default function Sidebar() {
   // Opens a fresh home-chat draft directly on the draft thread route so the first send
   // does not need a second route swap from "/" to "/$threadId".
   const handleCreateHomeChat = useCallback(async () => {
-    await handleNewChat({ fresh: true });
+    // Reuse the stored home-chat draft thread when one exists (matching the
+    // project "New thread" button), so a draft typed in a new chat survives
+    // switching to another thread and back. Only mint a fresh draft when there
+    // is no stored draft to resume.
+    await handleNewChat();
   }, [handleNewChat]);
   const handleCreateStudioChat = useCallback(async () => {
     await handleNewStudioChat({ fresh: true });

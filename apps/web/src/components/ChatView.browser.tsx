@@ -6845,6 +6845,163 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("preserves a new-chat draft when switching to another thread and back via New chat", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        addThreadToSnapshot(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-home-draft-switch" as MessageId,
+            targetText: "home draft switch target",
+          }),
+          OTHER_THREAD_ID,
+        ),
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+      },
+    });
+
+    try {
+      // Start a brand-new home chat (draft thread)
+      const newChatButton = page.getByLabelText("Open new chat home");
+      await expect.element(newChatButton).toBeInTheDocument();
+      await newChatButton.click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      // Type a draft in the new chat
+      const prompt = "draft typed in a brand-new home chat";
+      useComposerDraftStore.getState().setPrompt(newThreadId, prompt);
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Switch to another thread to check on it
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Come back via "New chat" — must return to the SAME draft thread with the draft intact
+      const newChatButtonAgain = page.getByLabelText("Open new chat home");
+      await expect.element(newChatButtonAgain).toBeInTheDocument();
+      await newChatButtonAgain.click();
+      const returnedPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a draft thread UUID.",
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(returnedPath).toBe(newThreadPath);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const composerEditorAfter = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditorAfter.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // The original draft thread must still be registered with its content
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(prompt);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("preserves a new-chat draft when returning via the project New thread button", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-project-draft-switch" as MessageId,
+          targetText: "project draft switch target",
+        }),
+        OTHER_THREAD_ID,
+      ),
+    });
+
+    try {
+      const newThreadButton = page.getByLabelText("Create new thread in Project");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const prompt = "draft typed in a brand-new project thread";
+      useComposerDraftStore.getState().setPrompt(newThreadId, prompt);
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForLayout();
+
+      const newThreadButtonAgain = page.getByLabelText("Create new thread in Project");
+      await expect.element(newThreadButtonAgain).toBeInTheDocument();
+      await newThreadButtonAgain.click();
+      const returnedPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a draft thread UUID.",
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(returnedPath).toBe(newThreadPath);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const composerEditorAfter = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditorAfter.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a new thread from the global chat.new shortcut", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -6886,6 +7043,126 @@ describe("ChatView timeline estimator parity (full app)", () => {
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
         "Route should have changed to a new draft thread UUID from the shortcut.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("preserves a home-chat draft when the chat.newChat shortcut is reused after a thread switch", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        addThreadToSnapshot(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-home-draft-shortcut-switch" as MessageId,
+            targetText: "home draft shortcut switch target",
+          }),
+          OTHER_THREAD_ID,
+        ),
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "chat.newChat",
+              shortcut: {
+                key: "n",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: true,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      await waitForLayout();
+      const dispatchNewChatShortcut = () => {
+        const useMetaForMod = isMacPlatform(navigator.platform);
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "n",
+            metaKey: useMetaForMod,
+            ctrlKey: !useMetaForMod,
+            altKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      };
+      const newThreadPath = await triggerThreadShortcutUntilPath(
+        mounted.router,
+        dispatchNewChatShortcut,
+        (path) => UUID_ROUTE_RE.test(path),
+        "chat.newChat should route to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      // Type a draft in the new home chat
+      const prompt = "draft typed via chat.newChat";
+      useComposerDraftStore.getState().setPrompt(newThreadId, prompt);
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(
+            prompt,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Switch to another thread and come back via the same shortcut
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForLayout();
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const returnedPath = await triggerThreadShortcutUntilPath(
+        mounted.router,
+        dispatchNewChatShortcut,
+        (path) => UUID_ROUTE_RE.test(path),
+        "chat.newChat should route back to a draft thread UUID.",
+      );
+      await vi.waitFor(
+        () => {
+          expect(returnedPath).toBe(newThreadPath);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // The draft must survive the round trip on the same thread
+      expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(prompt);
+      const composerEditorAfter = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditorAfter.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
