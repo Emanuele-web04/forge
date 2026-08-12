@@ -16,6 +16,8 @@ export function SiteNav() {
         <ThemeToggle />
         <a
           href="https://trysynara.com/install"
+          target="_blank"
+          rel="noopener"
           className="text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           Get Synara
