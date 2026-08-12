@@ -263,6 +263,11 @@ export const PullRequestDetail = Schema.Struct({
   stack: Schema.optional(Schema.NullOr(PullRequestStack)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  // Stack lookup is optional for rendering detail, but merge UX must distinguish an unavailable
+  // lookup from a confirmed standalone pull request.
+  stackMetadataIncomplete: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 

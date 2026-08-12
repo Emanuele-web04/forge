@@ -114,6 +114,10 @@ describe("PullRequestDetail", () => {
 
     expect(decoded.mergeability).toBe("unknown");
     expect(decoded.stack).toBeNull();
+    expect(decoded.stackMetadataIncomplete).toBe(false);
+    expect(
+      decodeDetail({ ...decoded, stackMetadataIncomplete: true }).stackMetadataIncomplete,
+    ).toBe(true);
   });
 
   it("decodes a complete stack while preserving bottom-to-top positions", () => {

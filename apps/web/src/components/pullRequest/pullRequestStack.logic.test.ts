@@ -1,7 +1,11 @@
 import type { PullRequestStack, PullRequestStackEntry } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { assessPullRequestStack, pullRequestStackTargetEntries } from "./pullRequestStack.logic";
+import {
+  assessPullRequestStack,
+  pullRequestMergeBlocker,
+  pullRequestStackTargetEntries,
+} from "./pullRequestStack.logic";
 
 function entry(
   position: number,
@@ -68,5 +72,13 @@ describe("assessPullRequestStack", () => {
       label: "Merge status pending",
       canAttemptMerge: true,
     });
+  });
+});
+
+describe("pullRequestMergeBlocker", () => {
+  it("blocks merge when stack metadata could not be verified", () => {
+    expect(
+      pullRequestMergeBlocker({ stackMetadataIncomplete: true, mergeability: "mergeable" }, null),
+    ).toBe("Stack details are temporarily unavailable. Refresh before merging.");
   });
 });

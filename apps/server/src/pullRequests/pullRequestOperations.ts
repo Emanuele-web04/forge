@@ -38,7 +38,7 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const repository = yield* dependencies.validateProjectRepository(project, repositoryInput);
       const [owner = "", repo = ""] = repository.split("/");
-      const [detail, mergeCapabilities, reviewCommentsResult, stack] = yield* Effect.all(
+      const [detail, mergeCapabilities, reviewCommentsResult, stackResult] = yield* Effect.all(
         [
           dependencies.withGitHubRead(
             dependencies.github.getPullRequestDetail({
@@ -72,7 +72,10 @@ export function makePullRequestOperations(dependencies: {
                 number,
               }),
             )
-            .pipe(Effect.catch(() => Effect.succeed(null))),
+            .pipe(
+              Effect.map((stack) => ({ stack, incomplete: false as const })),
+              Effect.catch(() => Effect.succeed({ stack: null, incomplete: true as const })),
+            ),
         ],
         { concurrency: 4 },
       );
@@ -107,7 +110,8 @@ export function makePullRequestOperations(dependencies: {
         commentsTruncated: reviewCommentsResult.truncated,
         commentsIncomplete: reviewCommentsResult.incomplete,
         mergeCapabilities,
-        stack,
+        stack: stackResult.stack,
+        stackMetadataIncomplete: stackResult.incomplete,
       } satisfies PullRequestDetail;
     });
 
@@ -144,6 +148,13 @@ export function makePullRequestOperations(dependencies: {
             new Error(`The repository does not allow the ${mergeMethod} merge method.`),
           );
         }
+        yield* dependencies.withGitHubRead(
+          dependencies.github.getPullRequestStack({
+            cwd: project.workspaceRoot,
+            repository,
+            number: input.number,
+          }),
+        );
       }
       const result = yield* dependencies.github
         .runPullRequestAction({

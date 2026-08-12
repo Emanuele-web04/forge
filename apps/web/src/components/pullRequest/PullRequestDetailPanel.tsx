@@ -79,7 +79,7 @@ import { PullRequestStackPopover } from "./PullRequestStackPopover";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
-import { assessPullRequestStack } from "./pullRequestStack.logic";
+import { assessPullRequestStack, pullRequestMergeBlocker } from "./pullRequestStack.logic";
 
 type DetailTab = "summary" | "timeline" | "code";
 
@@ -328,12 +328,7 @@ export function PullRequestDetailPanel({
     : null;
   const stackAssessment = detail?.stack ? assessPullRequestStack(detail.stack) : null;
   const stackMergeTargetCount = stackAssessment?.mergeTargetCount ?? 0;
-  const mergeBlocker =
-    stackAssessment?.canAttemptMerge === false
-      ? (stackAssessment.blocker ?? "This stack is not ready to merge.")
-      : detail?.mergeability === "conflicting"
-        ? "Resolve merge conflicts before merging"
-        : null;
+  const mergeBlocker = detail ? pullRequestMergeBlocker(detail, stackAssessment) : null;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
@@ -591,6 +586,11 @@ export function PullRequestDetailPanel({
           </Empty>
         ) : (
           <div className="flex h-full min-h-0 flex-col">
+            {detail.stackMetadataIncomplete === true ? (
+              <PullRequestWarningNote shape="banner" className="shrink-0" role="status">
+                Stack details could not be loaded. Refresh before merging.
+              </PullRequestWarningNote>
+            ) : null}
             {detailErrorState.backgroundError ? (
               <PullRequestWarningNote shape="banner" className="shrink-0" role="status">
                 Could not refresh pull request details. Showing saved data.

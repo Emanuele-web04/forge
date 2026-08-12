@@ -1,4 +1,4 @@
-import type { PullRequestStack, PullRequestStackEntry } from "@synara/contracts";
+import type { PullRequestDetail, PullRequestStack, PullRequestStackEntry } from "@synara/contracts";
 
 export type PullRequestStackAssessment = {
   readonly label:
@@ -104,4 +104,17 @@ export function assessPullRequestStack(stack: PullRequestStack): PullRequestStac
     canAttemptMerge: true,
     blocker: null,
   };
+}
+
+export function pullRequestMergeBlocker(
+  detail: Pick<PullRequestDetail, "mergeability" | "stackMetadataIncomplete">,
+  stackAssessment: PullRequestStackAssessment | null,
+): string | null {
+  if (detail.stackMetadataIncomplete === true) {
+    return "Stack details are temporarily unavailable. Refresh before merging.";
+  }
+  if (stackAssessment?.canAttemptMerge === false) {
+    return stackAssessment.blocker ?? "This stack is not ready to merge.";
+  }
+  return detail.mergeability === "conflicting" ? "Resolve merge conflicts before merging" : null;
 }
