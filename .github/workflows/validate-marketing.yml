@@ -110,15 +110,7 @@ jobs:
       - name: Visual regression checks
         id: visual
         continue-on-error: true
-        run: bun run test:visual -- --update-snapshots
-
-      - name: TEMP upload regenerated baselines
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: regenerated-visual-baselines
-          path: apps/marketing/tests/visual/visual.spec.ts-snapshots
-          if-no-files-found: error
+        run: bun run test:visual
 
       - name: Upload visual failure artifacts
         if: ${{ always() && steps.visual.outcome == 'failure' }}
