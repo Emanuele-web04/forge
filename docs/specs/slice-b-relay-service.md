@@ -1,43 +1,89 @@
-# Slice B — Relay service: control protocol, grant verification, splice
+# Slice B — Relay service: control protocol, grant verification, splice (v2)
 
-**Draft — finalized after Slice A lands (depends on `packages/contracts/src/hostAuth.ts` shapes and `/internal/revocations`).** Implements workstream B per ADRs 0006, 0008, 0010, 0013. New deployable: `apps/relay`.
+Implements workstream B of `2026-08-13-hosts-as-account-entities.md` (ADRs 0006, 0008, 0010, 0013). New deployable: `apps/relay`. v2 is written against the contracts Slice A actually shipped.
 
-## Shape
+> **Identity rule (non-negotiable).** The relay keys hosts by **`hostId` only**.
+> `environmentId` is self-asserted by the host in its link proof and is unique
+> only per org, so two users in different orgs can legitimately hold the same
+> `environmentId`. Any routing, pairing, or audience decision made on
+> `environmentId` is a cross-org takeover. It may be logged; it may never
+> select a socket.
 
-Bun + Hono service in `apps/relay`, mirroring `apps/api`'s structure (config.ts, index.ts, Dockerfile, Railway deploy). **No database.** State is in-memory per instance: connected host control sockets, pending splices, grant jti cache. Horizontal scaling is out of scope for v1 (one instance; the design keeps it stateless enough to add a shared jti cache later — noted, not built).
+## 1. Shape
 
-## Endpoints (all WebSocket except health)
+Bun + Hono service in `apps/relay`, structured like `apps/api` (`config.ts`, `app.ts`, `index.ts`, Dockerfile, Railway deploy). **No database.** All state is in-memory per instance:
 
-- `GET /healthz` — liveness.
-- `GET /host/control` — host control socket. Auth at upgrade: `synara-relay-ticket+jwt` (Slice A §9 — obtained by the host from `POST /hosts/:id/relay-ticket` with its HostProof), verified statelessly against the API's `/keys/jwks`. The relay never sees host keys. Ticket refresh: reconnects fetch a fresh ticket; a live control socket is not re-checked (revocation of a host lands as `host_unlinked` via the revocation feed, which the relay applies by dropping that host's control socket and pairs).
-- `GET /client/session?grant=<jwt>` — client data socket. Relay verifies grant (signature via JWKS, exp, aud, `scope: host:connect`), enforces jti single-use in the in-memory cache (60s TTL), signals the target host's control socket, holds the client socket pending.
-- `GET /host/data?splice=<spliceId>` — host dials back per splice signal; relay pairs it with the pending client socket and from then on forwards opaque frames 1:1 both ways, with per-pair backpressure (pause reads when the peer's bufferedAmount exceeds the high-water mark). Close semantics: either side closing closes the pair with matching code where possible.
+- `hosts: Map<hostId, HostConnection>` — one live control socket per host (a second dial replaces the first, closing it `4409`).
+- `pending: Map<spliceId, PendingSplice>` — client socket awaiting its host data socket, with a 10s timer.
+- `usedGrantJtis: Map<jti, expiryMs>` — single-use enforcement, swept opportunistically; entries live only as long as the grant (≤60s + tolerance).
 
-## Control protocol (host control socket, JSON messages)
+Single instance in v1 (ADR 0005 defers regional relays). Horizontal scaling is explicitly out of scope: the jti cache and host map are per-process, so two instances would let one grant splice twice. `RELAY_MAX_PAIRS` (default 1024) caps concurrent splices; over it, new clients get `1013`.
 
-Small and versioned (`{v: 1, type, ...}`):
+## 2. Verification (shared, from `@synara/contracts`)
 
-- relay→host `splice_request {spliceId, grantJti, userId, deviceJkt, expiresAt}` — host must dial `/host/data?splice=` within 10s or the pending client is dropped with close code `4404`.
-- relay→host `revocation {events: [{kind, subject, hostId}]}` — fan-out from the API poller (below).
-- host→relay `ping` / relay→host `pong` — keepalive (30s interval, 2 missed = dead).
-- Mint requests do NOT traverse the control socket: the mint handshake runs inside the spliced data socket (client speaks it to the host directly once spliced — ADR 0013's "relay forwarding is just the carrier"). The relay never parses spliced frames.
+The relay never sees host keys. Everything it verifies is API-signed and checked against `GET {API_BASE_URL}/api/v1/keys/jwks`:
 
-## Revocation fan-out
+- JWKS fetched at boot, refreshed hourly and on unknown `kid` (rate-limited to one refetch per 60s so an attacker cannot drive fetch storms). Last-known-good is retained on fetch failure — a JWKS outage must not drop live sessions or block splices for already-cached keys.
+- Verification pins, for every token: `alg: EdDSA`, `typ`, `aud = SYNARA_RELAY_AUDIENCE`, `iss = API_ISSUER` (configured, exact), `clockTolerance: 60`, bounded lifetime (`exp > iat`, `exp - iat ≤ cap`, `iat ≤ now + 60`, and **`exp ≥ now`** — expiry is absolute, matching the API's `verifyBoundedJwt`).
+- Claim decode uses the Effect schemas `RelayTicketClaims` / `GrantClaims`, so scope tuples and shapes are checked, not just signatures.
 
-Background loop polls `GET /internal/revocations?after=<cursor>` on the API (auth: `RELAY_SERVICE_TOKEN`) every 5s. The response is `{events, watermark}` (Slice A §4.6): the relay advances its cursor to `watermark` only (the lag-safe max id), delivers all events, and treats duplicate delivery as normal — signals are idempotent re-verify prompts. `host_unlinked` additionally makes the relay drop that host's control socket and all its pairs. Cursor in memory only — on restart, resume from latest watermark (hosts re-verify sessions on control-socket reconnect, which covers the gap).
+A shared package (`packages/relay-protocol`, new) carries the control-message schemas and close codes so `apps/relay`, `apps/server` (Slice C), and the harness cannot drift. Where a shape already exists in `@synara/contracts` (grant/ticket claims, revocation events) it is imported, not redefined.
 
-## Close codes
+## 3. Endpoints
 
-`4401` bad/expired grant or ticket · `4403` jti replay · `4404` host not connected / splice timeout · `4409` splice already claimed · `1013` overloaded. Shared constants in `packages/contracts/src/relayProtocol.ts` (new; also carries the control-message Effect Schemas).
+- `GET /healthz` — liveness; reports connected host count and pair count.
+- `GET /host/control?ticket=<jwt>` — host control socket. Verifies `synara-relay-ticket+jwt` (typ, `aud`, `iss`, scope `["relay:control"]`, ≤5min). `sub` is the **hostId** and is the only routing key. Replaces any existing socket for that host.
+- `GET /client/session?grant=<jwt>` — client data socket. Verifies `synara-grant+jwt` (scope `["host:connect"]`, ≤60s), enforces single-use on `jti`, requires a live control socket for `claims.hostId`, then registers a pending splice and signals the host. Holds the socket until the host dials back or the 10s timer fires.
+- `GET /host/data?splice=<id>` — host data socket. Matches a pending splice, pairs 1:1, and from then on forwards frames verbatim in both directions. The splice id is a 32-byte random value, single-use, and only meaningful to the host that was signaled (it arrives over that host's authenticated control socket, so it needs no separate auth — but the relay still checks the dialing socket belongs to the same host).
 
-## Config
+Query-param tokens are used because browsers cannot set headers on WebSocket upgrades. Tokens are ≤60s/≤5min and single-use where it matters; the relay must not log full query strings.
 
-`RELAY_PORT`, `API_BASE_URL` (JWKS + revocations), `RELAY_SERVICE_TOKEN`, `RELAY_MAX_PAIRS` (default 1024), high-water mark bytes. JWKS fetched at boot + refreshed hourly and on unknown-kid.
+## 4. Control protocol (`packages/relay-protocol`)
 
-## Tests
+JSON, versioned `{v: 1, type, ...}`, validated with Effect Schema on receipt:
 
-Vitest, no DB. Unit: grant verify (signature/exp/aud/jti-replay via injected JWKS), control protocol framing, splice pairing state machine (timeout, double-claim, close propagation), backpressure (slow reader pauses fast writer). Integration: in-process relay + fake API (serves JWKS + revocations) + two raw WS clients exercising the full splice + revocation fan-out. Load smoke: 100 concurrent pairs echo traffic without frame reordering (reliability-first priority).
+- relay→host `splice_request {spliceId, hostId, userId, deviceJkt, expiresAtMs}` — dial `/host/data?splice=` within 10s.
+- relay→host `revocation {events: RevocationEvent[]}` — fan-out from the API poller.
+- relay→host `ping` / host→relay `pong` — 30s interval, 2 missed ⇒ socket closed `4408` and its pairs torn down.
+- host→relay `ready {v:1}` — sent once after connect; lets the relay distinguish a live agent from a socket that merely opened.
 
-## Out of scope
+Mint requests do **not** traverse the control socket: the mint handshake runs inside the spliced data socket (ADR 0013 — the relay is the carrier, never the parser).
 
-Multi-instance coordination; metrics/observability beyond structured logs; HTTP proxying (ADR 0014); mint parsing (host-side, Slice C); regional relays (ADR 0005 deferral).
+## 5. Revocation fan-out
+
+Poll loop every 5s: `GET {API_BASE_URL}/internal/revocations?after=<cursor>` with `Authorization: Bearer ${RELAY_SERVICE_TOKEN}`. The response is `{events, watermark}`; the relay **advances its cursor to `watermark` only** and delivers every returned event (duplicates are expected and safe — Slice A's watermark is xmin-bounded, so an event is never skipped, but it may repeat).
+
+Delivery: each event goes to the control socket of `event.hostId` if connected. `host_unlinked` additionally closes that host's control socket (`4401`) and tears down its pairs — an unlinked host's ticket is void and its sessions must not survive. Events for unconnected hosts are dropped (the host re-verifies on reconnect, per ADR 0013).
+
+Cursor lives in memory; on restart the relay resumes from the newest watermark (`?after=` omitted ⇒ API returns the current tail). Poll failures are logged and retried with backoff; the loop never dies.
+
+## 6. Splice semantics
+
+- **Backpressure**: forwarding pauses reads on one side when the peer's `bufferedAmount` exceeds `RELAY_HIGH_WATER_BYTES` (default 1 MiB) and resumes under half that. A peer that stays over the mark for 30s is closed `1013` — one slow client must not consume unbounded relay memory.
+- **Close propagation**: either side closing closes the peer, forwarding the code where it is a valid client code, else `1001`.
+- **Binary and text frames** both forward verbatim; the relay never parses payloads.
+- **No multiplexing** (ADR: socket per session).
+
+## 7. Close codes (shared constants)
+
+`4401` bad/expired/void token · `4403` grant jti replay · `4404` host not connected or splice timeout · `4408` keepalive lost · `4409` superseded by a newer control socket · `4413` splice already claimed · `1013` overloaded/too slow.
+
+## 8. Config
+
+`RELAY_PORT`, `API_BASE_URL`, `API_ISSUER`, `RELAY_SERVICE_TOKEN` (required — fail closed at boot, like the API's `API_SIGNING_KEY`), `RELAY_MAX_PAIRS`, `RELAY_HIGH_WATER_BYTES`. Fail-closed config validation mirrors `apps/api/src/config.ts`.
+
+## 9. Tests (vitest, no DB)
+
+1. **Ticket auth**: valid ticket connects; wrong `typ`/`aud`/`iss`/scope, expired, forward-stamped, unknown `kid`, and API-issuer-mismatch all rejected `4401`.
+2. **Grant auth**: valid grant splices; replayed `jti` rejected `4403`; expired rejected; grant for a host with no control socket rejected `4404`; grant whose `hostId` differs from the connected host never reaches that host.
+3. **Splice lifecycle**: host dials back and frames flow both ways verbatim (text + binary); host never dials ⇒ client closed `4404` after the timer; second dial for the same splice rejected `4413`; close propagation both directions.
+4. **Backpressure**: a stalled reader pauses the writer rather than growing memory unboundedly; sustained stall closes `1013`.
+5. **Control protocol**: unknown/malformed messages are ignored (not fatal); keepalive loss closes `4408`; a second control dial supersedes the first with `4409`.
+6. **Revocation**: poller advances only to `watermark`; duplicate events are delivered idempotently; `host_unlinked` closes the socket and tears down pairs; poll failure retries without killing the loop; restart resumes from the tail.
+7. **Identity rule**: two hosts sharing an `environmentId` (different `hostId`) route independently — a grant for one never signals the other.
+8. **Integration**: in-process relay + fake API (serves JWKS + revocations) + raw WS client and host exercising link→ticket→control→grant→splice→traffic→revoke→teardown.
+9. **Load smoke**: 100 concurrent pairs echo without reordering or cross-talk (reliability-first).
+
+## 10. Out of scope
+
+Multi-instance coordination (documented single-instance constraint); metrics beyond structured logs; HTTP proxying or UI serving (ADR 0014); mint parsing (Slice C); regional relays (ADR 0005).
