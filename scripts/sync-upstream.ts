@@ -74,17 +74,21 @@ function runGit(
 }
 
 function branchExists(branch: string): boolean {
-  return runGit("rev-parse", ["--verify", `refs/heads/${branch}`], {
-    capture: true,
-    allowFailure: true,
-  }).status === 0;
+  return (
+    runGit("rev-parse", ["--verify", `refs/heads/${branch}`], {
+      capture: true,
+      allowFailure: true,
+    }).status === 0
+  );
 }
 
 function remoteBranchExists(remote: string, branch: string): boolean {
-  return runGit("rev-parse", ["--verify", `refs/remotes/${remote}/${branch}`], {
-    capture: true,
-    allowFailure: true,
-  }).status === 0;
+  return (
+    runGit("rev-parse", ["--verify", `refs/remotes/${remote}/${branch}`], {
+      capture: true,
+      allowFailure: true,
+    }).status === 0
+  );
 }
 
 function checkoutBase(base: string): void {
@@ -119,11 +123,10 @@ function currentBranchName(): string {
 
 function tryMergeWithUpstream(remote: string, upstream: string): void {
   const ref = `${remote}/${upstream}`;
-  const result = spawnCommand(
-    "git",
-    ["merge", "--no-ff", "--no-edit", ref],
-    { capture: true, allowFailure: true },
-  );
+  const result = spawnCommand("git", ["merge", "--no-ff", "--no-edit", ref], {
+    capture: true,
+    allowFailure: true,
+  });
 
   if (result.status !== 0) {
     console.error(result.stdout);
@@ -151,11 +154,11 @@ function applyForkFixes(skipFixes: boolean): void {
   );
   chatNext = chatNext.replace(
     'expect(document.body.textContent).not.toContain("Cancelling...");',
-    'expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);',
+    "expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);",
   );
   chatNext = chatNext.replace(
     'expect(document.body.textContent).not.toContain("Canceling...");',
-    'expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);',
+    "expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);",
   );
 
   if (chatNext !== chatTest) {
@@ -181,8 +184,8 @@ function main(): void {
     "git",
     ["rev-list", "--left-right", "--count", `${options.base}...${upstreamRef}`],
     { capture: true },
-  ).stdout
-    .trim()
+  )
+    .stdout.trim()
     .split(/\s+/)
     .map(Number);
 
