@@ -20,7 +20,17 @@
     ],
     "paths": {
       "@/*": ["./src/*"],
-      "collections/*": ["./.source/*"]
+      "collections/*": ["./.source/*"],
+      // fumadocs-mdx declares a wider fumadocs-core peer range than this app
+      // pins, so bun's isolated linker gives it a second fumadocs-core copy.
+      // The generated .source augments PageData (lastModified, toc, body) on
+      // ITS copy, while loader() here reads ours — so those fields vanish at
+      // type level and the build fails. Pinning both to node_modules/
+      // fumadocs-core keeps one set of types. Local to this app on purpose: a
+      // root zod override would dedupe it too, but drags apps/web onto zod
+      // 4.4, whose z.function().returns() removal breaks its vite config.
+      "fumadocs-core": ["./node_modules/fumadocs-core"],
+      "fumadocs-core/*": ["./node_modules/fumadocs-core/dist/*"]
     }
   },
   "include": [

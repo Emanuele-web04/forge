@@ -104,7 +104,10 @@ try {
       `homepage still renders retired copy: ${retired}`,
     );
   }
-  assert.match(homepage, /<title>Synara — Run every coding agent in one workspace<\/title>/);
+  assert.match(
+    homepage,
+    /<title>Synara — AI Coding Workspace for Claude Code, Codex &amp; Cursor<\/title>/,
+  );
   assert.match(
     homepage,
     /<link rel="canonical" href="https:\/\/www\.trysynara\.com"\/>/,
