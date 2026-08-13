@@ -1,0 +1,54 @@
+name: Deploy Profiles
+
+# Deploys apps/profiles to Cloudflare Workers (synara-profiles). Shipping is
+# deliberate, mirroring the desktop release convention (v*.*.* tags): push a
+# `profiles-v*` tag (e.g. profiles-v1) or run the workflow manually — plain
+# branch pushes never deploy. Secrets: CLOUDFLARE_API_TOKEN (Workers
+# Scripts:Edit + Workers R2 Storage:Edit) and CLOUDFLARE_ACCOUNT_ID must be
+# set in the repo's Actions secrets.
+on:
+  push:
+    tags:
+      - "profiles-v*"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-profiles
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and deploy to Cloudflare Workers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Cache Bun
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build and deploy
+        working-directory: apps/profiles
+        run: bunx opennextjs-cloudflare build && bunx opennextjs-cloudflare deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
