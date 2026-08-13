@@ -5,7 +5,7 @@ import {
   SYNARA_DEVICE_ISSUER,
   type AccountDevice,
 } from "@synara/contracts";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Schema } from "effect";
 import { decodeJwt } from "jose";
@@ -17,6 +17,14 @@ import { publicJwkThumbprint, verifyJwtWithEmbeddedJwk } from "./signing";
 import { writeRevocationEvents } from "./revocationLog";
 
 type DeviceRow = typeof devices.$inferSelect;
+
+/**
+ * Ceiling on device_revoked events written per revocation. Only hosts the
+ * device could actually have connected to (linked, and owned-or-discoverable)
+ * are notified, newest first; past this the credential TTL and reconnect
+ * re-verification are the backstop.
+ */
+const DEVICE_REVOKE_FANOUT_LIMIT = 200;
 
 function toAccountDevice(row: DeviceRow): AccountDevice {
   return {
@@ -117,13 +125,28 @@ export function createDeviceRegistry(
           )
           .returning();
         if (!revoked) return undefined;
+        // Over-notify, but bounded: the API keeps no session bookkeeping, so
+        // it cannot know which hosts the device actually touched. Fanning out
+        // to every host in every org the user belongs to lets one member of a
+        // large org flood the shared feed (org size x revokes, durable for
+        // 24h). Cap the fan-out; hosts beyond it still enforce at credential
+        // expiry, and a host that missed the signal re-verifies on its next
+        // control-socket reconnect.
         const uniqueOrgIds = [...new Set(affectedOrgIds)];
         const affectedHosts =
           uniqueOrgIds.length > 0
             ? await tx
                 .select({ id: hosts.id })
                 .from(hosts)
-                .where(inArray(hosts.ownerOrgId, uniqueOrgIds))
+                .where(
+                  and(
+                    inArray(hosts.ownerOrgId, uniqueOrgIds),
+                    isNotNull(hosts.publicKeyJwk),
+                    or(eq(hosts.ownerUserId, userId), eq(hosts.discoverable, true)),
+                  ),
+                )
+                .orderBy(desc(hosts.lastSeenAt))
+                .limit(DEVICE_REVOKE_FANOUT_LIMIT)
             : [];
         if (affectedHosts.length > 0) {
           await writeRevocationEvents(

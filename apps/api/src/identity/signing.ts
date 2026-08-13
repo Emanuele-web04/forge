@@ -52,6 +52,14 @@ function assertBoundedLifetime(
   if (issuedAt > nowSeconds + JWT_CLOCK_TOLERANCE_SECONDS) {
     throw new Error("JWT iat is too far in the future");
   }
+  // jose honors a token until exp + clockTolerance, which on a 60s proof adds
+  // another minute of replay window on top of the forward-stamping the iat
+  // tolerance already allows (~3x the intended window in the worst case).
+  // Skew tolerance belongs on the not-yet-valid side; an expired short-lived
+  // proof is simply expired.
+  if (expiresAt < nowSeconds) {
+    throw new Error("JWT has expired");
+  }
 }
 
 /** Verifies signature/registered claims, then applies the spec's lifetime cap. */

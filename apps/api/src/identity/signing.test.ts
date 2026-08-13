@@ -131,4 +131,39 @@ describe("API signing", () => {
       }),
     ).rejects.toThrow();
   });
+
+  it("stops honoring a proof the moment it expires, despite clock tolerance", async () => {
+    // jose accepts until exp + clockTolerance (60s here). On a 60s host proof
+    // that doubles the replay window, and combined with forward-stamped iat
+    // it reaches ~3x. Expiry must be absolute for these short-lived proofs.
+    const keys = await generateKeyPair("EdDSA", { extractable: true });
+    const jwk = await exportJWK(keys.publicKey);
+    const publicKeyJwk = { kty: "OKP", crv: "Ed25519", x: jwk.x as string } as const;
+    const now = Math.floor(Date.now() / 1000);
+    const sign = (iat: number, exp: number) =>
+      new SignJWT({ keyGeneration: 1 })
+        .setProtectedHeader({ alg: "EdDSA", typ: HOST_PROOF_JWT_TYP })
+        .setIssuer("synara-host:env-1")
+        .setSubject("host-1")
+        .setAudience("https://api.example")
+        .setIssuedAt(iat)
+        .setExpirationTime(exp)
+        .sign(keys.privateKey);
+    const options = {
+      typ: HOST_PROOF_JWT_TYP,
+      audience: "https://api.example",
+      issuer: "synara-host:env-1",
+      algorithms: ["EdDSA"],
+      maxAgeSeconds: 60,
+      publicKeyJwk,
+    } as const;
+
+    await expect(
+      verifyJwtWithEmbeddedJwk(await sign(now, now + 60), options),
+    ).resolves.toBeDefined();
+    // Expired 30s ago: inside jose's tolerance, outside ours.
+    await expect(
+      verifyJwtWithEmbeddedJwk(await sign(now - 90, now - 30), options),
+    ).rejects.toThrow();
+  });
 });

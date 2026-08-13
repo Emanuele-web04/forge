@@ -154,6 +154,7 @@ export const PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE = 60;
 export const LINK_DEVICE_RATE_LIMIT_PER_MINUTE = 10;
 export const LINK_APPROVE_RATE_LIMIT_PER_MINUTE = 10;
 export const GRANT_RATE_LIMIT_PER_MINUTE = 60;
+export const DEVICE_MUTATION_RATE_LIMIT_PER_MINUTE = 10;
 
 /**
  * Byte cap on an uploaded avatar. Avatars render at most ~128px in every
@@ -424,6 +425,14 @@ export function createV1Routes(deps: {
   });
   const grantRateLimiter = createRateLimiter({
     limit: GRANT_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+  // Device churn is the write amplifier on the shared revocation feed: each
+  // revoke fans out to many hosts. Real devices register once and are revoked
+  // rarely, so a tight per-user budget costs nothing and stops one org member
+  // from saturating the feed every other member depends on.
+  const deviceMutationRateLimiter = createRateLimiter({
+    limit: DEVICE_MUTATION_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
@@ -1137,6 +1146,9 @@ export function createV1Routes(deps: {
   v1.post("/devices", async (c) => {
     const session = await requireUserSession(c);
     if (session instanceof Response) return session;
+    if (!deviceMutationRateLimiter.tryConsume(`user:${session.userId}`)) {
+      return errorResponse(c, 429, "rate_limited", "Too many device changes — slow down");
+    }
     const json = await c.req.json().catch(() => null);
     if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
     let parsed: typeof RegisterDeviceRequest.Type;
@@ -1170,6 +1182,9 @@ export function createV1Routes(deps: {
   v1.delete("/devices/:id", async (c) => {
     const session = await requireUserSession(c);
     if (session instanceof Response) return session;
+    if (!deviceMutationRateLimiter.tryConsume(`user:${session.userId}`)) {
+      return errorResponse(c, 429, "rate_limited", "Too many device changes — slow down");
+    }
     // Killing a stolen device key must never depend on the identity provider
     // being reachable: the org list only addresses the over-notification
     // fan-out (hosts re-verify anyway), so a provider outage degrades the
