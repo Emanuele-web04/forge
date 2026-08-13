@@ -2205,27 +2205,42 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      return command.messages.map((message) => ({
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.message-sent" as const,
-        payload: {
-          threadId: command.threadId,
-          messageId: message.messageId,
-          role: message.role,
-          text: message.text,
-          ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-          turnId: null,
-          streaming: false,
-          source: "native" as const,
-          createdAt: message.createdAt,
-          updatedAt: message.updatedAt,
-        },
-      }));
+      return [
+        ...command.messages.map((message) => ({
+          ...withEventBase({
+            aggregateKind: "thread" as const,
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.message-sent" as const,
+          payload: {
+            threadId: command.threadId,
+            messageId: message.messageId,
+            role: message.role,
+            text: message.text,
+            ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+            turnId: null,
+            streaming: false,
+            source: "native" as const,
+            createdAt: message.createdAt,
+            updatedAt: message.updatedAt,
+          },
+        })),
+        ...(command.activities ?? []).map((activity) => ({
+          ...withEventBase({
+            aggregateKind: "thread" as const,
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.activity-appended" as const,
+          payload: {
+            threadId: command.threadId,
+            activity,
+          },
+        })),
+      ];
     }
 
     case "thread.message.assistant.delta": {

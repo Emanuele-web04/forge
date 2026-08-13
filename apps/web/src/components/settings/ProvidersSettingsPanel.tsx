@@ -8,7 +8,7 @@ import {
   type ServerProviderStatus,
   type ServerSettings,
 } from "@synara/contracts";
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { PROVIDER_DESCRIPTOR_BY_KIND, PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { pluralize } from "@synara/shared/text";
 import {
   closestCenter,
@@ -132,7 +132,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
     provider: "codex",
     docs: [
-      { label: "Install", href: "https://help.openai.com/en/articles/11096431" },
+      { label: "Install", href: PROVIDER_DESCRIPTOR_BY_KIND.codex.installDocsHref },
       { label: "Update", href: "https://help.openai.com/en/articles/11096431" },
       { label: "Config", href: "https://github.com/openai/codex/blob/main/docs/config.md" },
     ],
@@ -160,7 +160,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
     provider: "claudeAgent",
     docs: [
-      { label: "Install", href: "https://code.claude.com/docs/en/installation" },
+      { label: "Install", href: PROVIDER_DESCRIPTOR_BY_KIND.claudeAgent.installDocsHref },
       { label: "Update", href: "https://code.claude.com/docs/en/installation#update-claude-code" },
       { label: "Config", href: "https://code.claude.com/docs/en/settings" },
     ],
@@ -181,7 +181,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
     provider: "cursor",
     docs: [
-      { label: "Install", href: "https://docs.cursor.com/en/cli/installation" },
+      { label: "Install", href: PROVIDER_DESCRIPTOR_BY_KIND.cursor.installDocsHref },
       { label: "Update", href: "https://docs.cursor.com/en/cli/installation#updates" },
       { label: "Config", href: "https://docs.cursor.com/en/cli/overview" },
     ],
@@ -210,7 +210,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
     provider: "antigravity",
     docs: [
-      { label: "Install", href: "https://antigravity.google/docs/cli-using" },
+      { label: "Install", href: PROVIDER_DESCRIPTOR_BY_KIND.antigravity.installDocsHref },
       { label: "Reference", href: "https://antigravity.google/docs/cli-reference" },
       { label: "Hooks", href: "https://antigravity.google/docs/hooks" },
     ],
@@ -231,7 +231,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
     provider: "grok",
     docs: [
-      { label: "Install", href: "https://docs.x.ai/build/overview" },
+      { label: "Install", href: PROVIDER_DESCRIPTOR_BY_KIND.grok.installDocsHref },
       { label: "Headless", href: "https://docs.x.ai/build/cli/headless-scripting" },
       { label: "Config", href: "https://docs.x.ai/build/overview" },
     ],
@@ -254,7 +254,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
     docs: [
       {
         label: "Quickstart",
-        href: "https://docs.factory.ai/cli/getting-started/quickstart.md",
+        href: PROVIDER_DESCRIPTOR_BY_KIND.droid.installDocsHref,
       },
     ],
     fields: [
@@ -274,7 +274,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
     provider: "kilo",
     docs: [
-      { label: "Install", href: "https://kilo.ai/docs/cli" },
+      { label: "Install", href: PROVIDER_DESCRIPTOR_BY_KIND.kilo.installDocsHref },
       { label: "Update", href: "https://kilo.ai/docs/cli" },
       { label: "Config", href: "https://kilo.ai/docs/cli#configuration" },
     ],
@@ -310,7 +310,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
     provider: "opencode",
     docs: [
-      { label: "Install", href: "https://opencode.ai/docs/" },
+      { label: "Install", href: PROVIDER_DESCRIPTOR_BY_KIND.opencode.installDocsHref },
       { label: "Update", href: "https://opencode.ai/docs/cli/" },
       { label: "Config", href: "https://opencode.ai/docs/config/" },
     ],
@@ -353,7 +353,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
     provider: "pi",
     docs: [
-      { label: "Install", href: "https://pi.dev/docs/latest" },
+      { label: "Install", href: PROVIDER_DESCRIPTOR_BY_KIND.pi.installDocsHref },
       { label: "Update", href: "https://pi.dev/docs/latest/settings" },
       { label: "Config", href: "https://pi.dev/docs/latest/settings" },
     ],

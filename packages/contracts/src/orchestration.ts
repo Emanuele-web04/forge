@@ -1586,6 +1586,7 @@ const ThreadMessagesImportCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   messages: Schema.Array(ThreadHandoffImportedMessage),
+  activities: Schema.optional(Schema.Array(OrchestrationThreadActivity)),
   createdAt: IsoDateTime,
 });
 

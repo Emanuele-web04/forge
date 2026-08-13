@@ -27,6 +27,8 @@ import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
+import { OnboardingDialog } from "../onboarding/OnboardingDialog";
+import { useOnboarding } from "../onboarding/useOnboarding";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
@@ -268,6 +270,7 @@ function RootRouteView() {
           <TaskCompletionNotifications />
           <AppSnapWelcomeDialog />
           <AppSnapCoordinator />
+          <GlobalOnboardingDialog />
           <DesktopProjectBootstrap />
           <Outlet />
         </AnchoredToastProvider>
@@ -732,6 +735,17 @@ function GlobalFeedbackDialog() {
   };
 
   return <FeedbackDialog open={isOpen} context={context} onOpenChange={setOpen} />;
+}
+
+function GlobalOnboardingDialog() {
+  const onboarding = useOnboarding();
+  return (
+    <OnboardingDialog
+      open={onboarding.isOpen}
+      onOpenChange={onboarding.onOpenChange}
+      onComplete={onboarding.complete}
+    />
+  );
 }
 
 function GlobalWhatsNewSurface() {

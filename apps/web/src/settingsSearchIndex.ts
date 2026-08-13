@@ -47,6 +47,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Pick the default workspace mode for newly created draft threads. local worktree environment",
   },
   {
+    id: "general:welcome-tour",
+    section: "general",
+    title: "Welcome tour",
+    keywords:
+      "Replay the first-run setup: connect providers, import projects, and import threads. onboarding welcome wizard getting started setup",
+  },
+  {
     id: "general:project-order",
     section: "general",
     title: "Project order",

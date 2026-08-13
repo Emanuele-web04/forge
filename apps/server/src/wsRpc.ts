@@ -101,6 +101,7 @@ import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegist
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
+import { listExternalProjectCandidates, listExternalSessions } from "./externalSessions";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
@@ -1673,6 +1674,23 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
           rpcEffect(listProviderUsage(input), "Failed to load provider usage"),
+        [WS_METHODS.serverListExternalSessions]: (input) =>
+          rpcEffect(listExternalSessions(input), "Failed to list external sessions"),
+        [WS_METHODS.serverListExternalProjectCandidates]: (input) =>
+          rpcEffect(
+            projectionReadModelQuery.getShellSnapshot().pipe(
+              Effect.flatMap((shell) =>
+                listExternalProjectCandidates({
+                  ...(input.forceRefresh !== undefined ? { forceRefresh: input.forceRefresh } : {}),
+                  projects: shell.projects.map((project) => ({
+                    id: project.id,
+                    workspaceRoot: project.workspaceRoot,
+                  })),
+                }),
+              ),
+            ),
+            "Failed to list external project candidates",
+          ),
         [WS_METHODS.serverGetDiagnostics]: () =>
           rpcEffect(
             Effect.gen(function* () {

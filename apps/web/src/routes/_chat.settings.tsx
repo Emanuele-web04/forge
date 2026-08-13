@@ -78,6 +78,7 @@ import {
   AutocompletePopup,
 } from "../components/ui/autocomplete";
 import { Button } from "../components/ui/button";
+import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 import { Input } from "../components/ui/input";
 import { SelectItem } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
@@ -439,6 +440,19 @@ function SettingsRouteView() {
                 New worktree
               </SelectItem>
             </SettingsSelectControl>
+          }
+        />
+
+        <SettingsRow
+          title="Welcome tour"
+          description="Replay the first-run setup: connect providers, import projects, and import threads."
+          control={
+            <Button
+              variant="outline"
+              onClick={() => useOnboardingDialogStore.getState().openDialog()}
+            >
+              Open welcome tour
+            </Button>
           }
         />
       </SettingsSection>

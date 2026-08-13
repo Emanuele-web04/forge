@@ -15,6 +15,7 @@ export interface ProviderDescriptor {
    * can route steers without a runtime round-trip; keep the two in sync.
    */
   readonly supportsNativeTurnSteering: boolean;
+  readonly installDocsHref: string;
   readonly usage: {
     readonly signInCommand: string;
     readonly learnMoreHref: string;
@@ -26,6 +27,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "codex",
     displayName: PROVIDER_DISPLAY_NAMES.codex,
     available: true,
+    installDocsHref: "https://help.openai.com/en/articles/11096431",
     supportsNativeTurnSteering: true,
     usage: {
       signInCommand: "codex login",
@@ -36,6 +38,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "claudeAgent",
     displayName: PROVIDER_DISPLAY_NAMES.claudeAgent,
     available: true,
+    installDocsHref: "https://code.claude.com/docs/en/installation",
     supportsNativeTurnSteering: true,
     usage: {
       signInCommand: "claude",
@@ -46,6 +49,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "cursor",
     displayName: PROVIDER_DISPLAY_NAMES.cursor,
     available: true,
+    installDocsHref: "https://docs.cursor.com/en/cli/installation",
     supportsNativeTurnSteering: false,
     usage: {
       signInCommand: "cursor-agent login",
@@ -56,6 +60,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "antigravity",
     displayName: PROVIDER_DISPLAY_NAMES.antigravity,
     available: true,
+    installDocsHref: "https://antigravity.google/docs/cli-using",
     supportsNativeTurnSteering: false,
     usage: null,
   },
@@ -63,6 +68,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "grok",
     displayName: PROVIDER_DISPLAY_NAMES.grok,
     available: true,
+    installDocsHref: "https://docs.x.ai/build/overview",
     supportsNativeTurnSteering: false,
     usage: null,
   },
@@ -70,6 +76,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "droid",
     displayName: PROVIDER_DISPLAY_NAMES.droid,
     available: true,
+    installDocsHref: "https://docs.factory.ai/cli/getting-started/quickstart.md",
     supportsNativeTurnSteering: false,
     usage: null,
   },
@@ -77,6 +84,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "kilo",
     displayName: PROVIDER_DISPLAY_NAMES.kilo,
     available: true,
+    installDocsHref: "https://kilo.ai/docs/cli",
     supportsNativeTurnSteering: false,
     usage: null,
   },
@@ -84,6 +92,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "opencode",
     displayName: PROVIDER_DISPLAY_NAMES.opencode,
     available: true,
+    installDocsHref: "https://opencode.ai/docs/",
     supportsNativeTurnSteering: false,
     usage: null,
   },
@@ -91,6 +100,7 @@ export const PROVIDER_DESCRIPTORS = [
     kind: "pi",
     displayName: PROVIDER_DISPLAY_NAMES.pi,
     available: true,
+    installDocsHref: "https://pi.dev/docs/latest",
     supportsNativeTurnSteering: true,
     usage: null,
   },

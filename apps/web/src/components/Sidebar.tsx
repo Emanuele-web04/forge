@@ -102,6 +102,8 @@ import {
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
+import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import { importExternalThread } from "../lib/threadImport";
 import { isOrdinarySpaceProject } from "../lib/spaces";
 import { expandProjectHomePath, joinProjectPath } from "../lib/projectPaths";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
@@ -2704,21 +2706,31 @@ export default function Sidebar() {
   ]);
 
   const handleImportThread = useCallback(
-    async (provider: ImportProviderKind, externalId: string) => {
+    async (
+      provider: ImportProviderKind,
+      externalId: string,
+      options?: { cwd?: string | undefined; title?: string | undefined },
+    ) => {
       const api = readNativeApi();
       if (!api) {
         throw new Error("The app server is unavailable.");
       }
 
-      if (!currentProjectShortcutTargetId) {
-        throw new Error("Add a project before importing a thread.");
-      }
-
-      const activeProject = projects.find(
-        (project) => project.id === currentProjectShortcutTargetId,
-      );
+      const sessionCwd = options?.cwd?.trim();
+      const cwdMatchedProject = sessionCwd
+        ? projects.find((project) => workspaceRootsEqual(project.cwd, sessionCwd))
+        : undefined;
+      const activeProject =
+        cwdMatchedProject ??
+        (currentProjectShortcutTargetId
+          ? projects.find((project) => project.id === currentProjectShortcutTargetId)
+          : undefined);
       if (!activeProject) {
-        throw new Error("The target project could not be resolved.");
+        throw new Error(
+          currentProjectShortcutTargetId
+            ? "The target project could not be resolved."
+            : "Add a project before importing a thread.",
+        );
       }
 
       const providerDefaultModel = getDefaultModel(provider);
@@ -2734,62 +2746,23 @@ export default function Sidebar() {
       if (!modelSelection) {
         throw new Error("Select a Pi model before importing a Pi thread.");
       }
-      const threadId = newThreadId();
-      const createdAt = new Date().toISOString();
-      const trimmedExternalId = externalId.trim();
-      const suffix = trimmedExternalId.slice(-8);
-      const title =
-        provider === "claudeAgent"
-          ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
-          : provider === "cursor"
-            ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
-            : provider === "kilo"
-              ? `Imported Kilo session${suffix ? ` ${suffix}` : ""}`
-              : provider === "opencode"
-                ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
-      let createdThread = false;
 
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.create",
-          commandId: newCommandId(),
-          threadId,
-          projectId: activeProject.id,
-          title,
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          envMode: resolveSidebarNewThreadEnvMode({
-            defaultEnvMode: appSettings.defaultThreadEnvMode,
-          }),
-          branch: null,
-          worktreePath: null,
-          createdAt,
-        });
-        createdThread = true;
+      const threadId = await importExternalThread({
+        api,
+        projectId: activeProject.id,
+        provider,
+        externalId,
+        modelSelection,
+        envMode: resolveSidebarNewThreadEnvMode({
+          defaultEnvMode: appSettings.defaultThreadEnvMode,
+        }),
+        title: options?.title,
+      });
 
-        await api.orchestration.importThread({
-          threadId,
-          externalId: trimmedExternalId,
-        });
-
-        await navigate({
-          to: "/$threadId",
-          params: { threadId },
-        });
-      } catch (error) {
-        if (createdThread) {
-          await api.orchestration
-            .dispatchCommand({
-              type: "thread.delete",
-              commandId: newCommandId(),
-              threadId,
-            })
-            .catch(() => undefined);
-        }
-        throw error;
-      }
+      await navigate({
+        to: "/$threadId",
+        params: { threadId },
+      });
     },
     [appSettings.defaultThreadEnvMode, currentProjectShortcutTargetId, navigate, projects],
   );

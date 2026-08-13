@@ -25,8 +25,9 @@ import type { ProviderAdapterRegistryShape } from "../provider/Services/Provider
 import type { ProviderServiceShape } from "../provider/Services/ProviderService";
 import { parseManagedWorktreeWorkspaceRoot } from "../workspace/managedWorktree";
 import {
-  mapClaudeSessionMessages,
-  mapCodexSnapshotMessages,
+  type ImportedThreadTranscript,
+  mapClaudeSessionTranscript,
+  mapCodexSnapshotTranscript,
   mapFactorySnapshotMessages,
   mapOpenCodeSnapshotMessages,
 } from "./importedThreadMessages";
@@ -83,21 +84,56 @@ export interface ImportThreadHandlerOptions {
   readonly providerService: ProviderServiceShape;
 }
 
+const IMPORT_DISPATCH_CHUNK_SIZE = 200;
+
+function chunkImportedItems<T>(items: ReadonlyArray<T>): ReadonlyArray<ReadonlyArray<T>> {
+  const chunks: Array<ReadonlyArray<T>> = [];
+  for (let index = 0; index < items.length; index += IMPORT_DISPATCH_CHUNK_SIZE) {
+    chunks.push(items.slice(index, index + IMPORT_DISPATCH_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
 export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   const dispatchImportedMessages = (input: {
     readonly createdAt: string;
     readonly messages: ReadonlyArray<ThreadHandoffImportedMessage>;
     readonly threadId: ThreadId;
   }) =>
-    input.messages.length === 0
-      ? Effect.void
-      : options.orchestrationEngine.dispatch({
+    dispatchImportedTranscript({
+      threadId: input.threadId,
+      transcript: { messages: input.messages, activities: [] },
+      createdAt: input.createdAt,
+    });
+
+  const dispatchImportedTranscript = (input: {
+    readonly createdAt: string;
+    readonly transcript: ImportedThreadTranscript;
+    readonly threadId: ThreadId;
+  }) => {
+    const messageChunks = chunkImportedItems(input.transcript.messages);
+    const activityChunks = chunkImportedItems(input.transcript.activities);
+    const chunkCount = Math.max(messageChunks.length, activityChunks.length);
+    if (chunkCount === 0) {
+      return Effect.void;
+    }
+    return Effect.forEach(
+      Array.from({ length: chunkCount }, (_, index) => index),
+      (index) => {
+        const messages = messageChunks[index] ?? [];
+        const activities = activityChunks[index] ?? [];
+        return options.orchestrationEngine.dispatch({
           type: "thread.messages.import",
           commandId: CommandId.makeUnsafe(crypto.randomUUID()),
           threadId: input.threadId,
-          messages: input.messages,
+          messages,
+          ...(activities.length > 0 ? { activities } : {}),
           createdAt: input.createdAt,
         });
+      },
+      { discard: true },
+    );
+  };
 
   const ensureClaudeThreadImportable = Effect.fn(function* (input: {
     readonly cwd: string | undefined;
@@ -238,9 +274,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ),
       );
 
-    yield* dispatchImportedMessages({
+    yield* dispatchImportedTranscript({
       threadId: input.threadId,
-      messages: mapCodexSnapshotMessages({
+      transcript: mapCodexSnapshotTranscript({
         threadId: input.threadId,
         turns: snapshot.turns,
         importedAt: input.importedAt,
@@ -268,9 +304,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ),
     });
 
-    yield* dispatchImportedMessages({
+    yield* dispatchImportedTranscript({
       threadId: input.threadId,
-      messages: mapClaudeSessionMessages({
+      transcript: mapClaudeSessionTranscript({
         threadId: input.threadId,
         messages: sessionMessages,
         importedAt: input.importedAt,

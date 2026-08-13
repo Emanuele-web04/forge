@@ -130,6 +130,12 @@ import type {
 } from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import type {
+  ServerListExternalProjectCandidatesInput,
+  ServerListExternalProjectCandidatesResult,
+  ServerListExternalSessionsInput,
+  ServerListExternalSessionsResult,
+} from "./externalSessions";
+import type {
   DeviceAttachInput,
   DeviceBootInput,
   DeviceBootResult,
@@ -753,6 +759,12 @@ export interface NativeApi {
     listProviderUsage: (
       input: ServerListProviderUsageInput,
     ) => Promise<ServerListProviderUsageResult>;
+    listExternalSessions: (
+      input: ServerListExternalSessionsInput,
+    ) => Promise<ServerListExternalSessionsResult>;
+    listExternalProjectCandidates: (
+      input: ServerListExternalProjectCandidatesInput,
+    ) => Promise<ServerListExternalProjectCandidatesResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,

@@ -14,7 +14,19 @@ import {
   SettingsIcon,
   SunIcon,
 } from "~/lib/icons";
-import { type FilesystemBrowseResult, type ProviderKind } from "@synara/contracts";
+import {
+  type FilesystemBrowseResult,
+  type ProviderKind,
+  type ServerExternalSessionSummary,
+} from "@synara/contracts";
+import type { ImportProviderKind } from "~/lib/threadImport";
+import {
+  externalSessionsQueryOptions,
+  isExternalSessionDiscoveryProvider,
+} from "~/onboarding/discoveryQueries";
+import { ExternalSessionPicker } from "./ExternalSessionPicker";
+import { DisclosureRegion } from "./ui/DisclosureRegion";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
@@ -90,13 +102,14 @@ interface SidebarSearchPaletteProps {
   onOpenProject: (projectId: string) => void;
   onOpenThread: (threadId: string) => void;
   importProviders: readonly ImportProviderKind[];
-  onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
+  onImportThread: (
+    provider: ImportProviderKind,
+    externalId: string,
+    options?: { cwd?: string | undefined; title?: string | undefined },
+  ) => Promise<void>;
 }
 
-export type ImportProviderKind = Extract<
-  ProviderKind,
-  "codex" | "claudeAgent" | "cursor" | "kilo" | "opencode"
->;
+export type { ImportProviderKind };
 
 function actionHandler(
   actionId: string,
@@ -358,6 +371,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const [importId, setImportId] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [importingSessionId, setImportingSessionId] = useState<string | null>(null);
+  const [manualImportOpen, setManualImportOpen] = useState(false);
   // Derived fallback (no syncing effect): an unavailable provider renders as
   // the first available one, and the user's pick resurfaces if it comes back.
   const importProvider = props.importProviders.includes(importProviderState)
@@ -390,6 +405,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
       setImportId("");
       setImportError(null);
       setIsImporting(false);
+      setImportingSessionId(null);
+      setManualImportOpen(false);
       setAddProjectError(null);
       setIsAddingProject(false);
     }, 0);
@@ -592,6 +609,37 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
       });
   };
 
+  const importDiscoveryProvider = isExternalSessionDiscoveryProvider(importProvider)
+    ? importProvider
+    : null;
+  const externalSessionsQuery = useQuery({
+    ...externalSessionsQueryOptions(importDiscoveryProvider ?? "claudeAgent"),
+    enabled: props.open && props.mode === "import" && importDiscoveryProvider !== null,
+  });
+
+  const pickExternalSession = (session: ServerExternalSessionSummary) => {
+    if (importingSessionId !== null || isImporting) {
+      return;
+    }
+    setImportError(null);
+    setImportingSessionId(session.sessionId);
+    void Promise.resolve(
+      props.onImportThread(importProvider, session.sessionId, {
+        cwd: session.cwd,
+        title: session.title,
+      }),
+    )
+      .then(() => {
+        props.onOpenChange(false);
+      })
+      .catch((error: unknown) => {
+        setImportError(error instanceof Error ? error.message : "Failed to import thread.");
+      })
+      .finally(() => {
+        setImportingSessionId(null);
+      });
+  };
+
   return (
     <CommandDialog open={props.open} onOpenChange={props.onOpenChange}>
       <CommandDialogPopup className="max-w-2xl">
@@ -652,34 +700,64 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   </p>
                 ) : null}
               </div>
-              <div className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground">{importFieldLabel}</p>
-                <Input
-                  autoFocus
-                  nativeInput
-                  placeholder={importPlaceholder}
-                  value={importId}
-                  disabled={props.importProviders.length === 0}
-                  onChange={(event) => setImportId(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void submitImport();
+              {importDiscoveryProvider !== null ? (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Recent sessions</p>
+                  <ExternalSessionPicker
+                    key={importProvider}
+                    sessions={externalSessionsQuery.data?.sessions ?? []}
+                    isLoading={externalSessionsQuery.isPending}
+                    error={
+                      externalSessionsQuery.isError
+                        ? "Could not load sessions from this machine."
+                        : null
                     }
-                  }}
-                />
-                <p className="text-xs text-muted-foreground">
-                  {importProvider === "claudeAgent"
-                    ? "Claude resumes a persisted session by session id."
-                    : importProvider === "cursor"
-                      ? "Cursor resumes a persisted session by session id."
-                      : importProvider === "kilo"
-                        ? "Kilo resumes a persisted session by session id."
-                        : importProvider === "opencode"
-                          ? "OpenCode resumes a persisted session by session id."
-                          : "Codex resumes a persisted thread by thread id."}
-                </p>
-              </div>
+                    onRetry={() => void externalSessionsQuery.refetch()}
+                    selectionMode="single"
+                    onPick={pickExternalSession}
+                    busySessionId={importingSessionId}
+                    homeDir={props.homeDir}
+                  />
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => setManualImportOpen((open) => !open)}
+                  >
+                    <DisclosureChevron open={manualImportOpen} />
+                    Paste an id instead
+                  </button>
+                </div>
+              ) : null}
+              <DisclosureRegion open={importDiscoveryProvider === null || manualImportOpen}>
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">{importFieldLabel}</p>
+                  <Input
+                    autoFocus={importDiscoveryProvider === null}
+                    nativeInput
+                    placeholder={importPlaceholder}
+                    value={importId}
+                    disabled={props.importProviders.length === 0}
+                    onChange={(event) => setImportId(event.currentTarget.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void submitImport();
+                      }
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {importProvider === "claudeAgent"
+                      ? "Claude resumes a persisted session by session id."
+                      : importProvider === "cursor"
+                        ? "Cursor resumes a persisted session by session id."
+                        : importProvider === "kilo"
+                          ? "Kilo resumes a persisted session by session id."
+                          : importProvider === "opencode"
+                            ? "OpenCode resumes a persisted session by session id."
+                            : "Codex resumes a persisted thread by thread id."}
+                  </p>
+                </div>
+              </DisclosureRegion>
               {importError ? (
                 <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                   {importError}

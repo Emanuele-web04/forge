@@ -94,7 +94,7 @@ function jsonSafeValue(value: unknown, ancestors: Set<object>): unknown {
   }
 }
 
-function toActivityPayload(payload: unknown): ActivityPayload {
+export function toActivityPayload(payload: unknown): ActivityPayload {
   return (jsonSafeValue(payload, new Set<object>()) ?? null) as ActivityPayload;
 }
 
@@ -105,7 +105,7 @@ function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return trimmed === undefined ? undefined : TurnId.makeUnsafe(trimmed);
 }
 
-function truncateDetail(value: string, limit = 180): string {
+export function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
@@ -249,7 +249,7 @@ function truncateJsonValue(
   return result;
 }
 
-function boundActivityData(value: unknown): unknown {
+export function boundActivityData(value: unknown): unknown {
   const serialized = stringifyJsonLike(value);
   if (serialized.length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
     return JSON.parse(serialized);

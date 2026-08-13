@@ -100,7 +100,7 @@ function formatRecentSessionsSubtitle(sessionCount: number): string | undefined 
   return `${new Intl.NumberFormat(undefined).format(sessionCount)} recent ${sessionCount === 1 ? "session" : "sessions"}`;
 }
 
-async function safeReadDir(path: string): Promise<ReadonlyArray<Dirent>> {
+export async function safeReadDir(path: string): Promise<ReadonlyArray<Dirent>> {
   try {
     return await fs.readdir(path, { withFileTypes: true });
   } catch {
@@ -108,7 +108,7 @@ async function safeReadDir(path: string): Promise<ReadonlyArray<Dirent>> {
   }
 }
 
-async function safeStat(path: string): Promise<Stats | null> {
+export async function safeStat(path: string): Promise<Stats | null> {
   try {
     return await fs.stat(path);
   } catch {
@@ -118,7 +118,7 @@ async function safeStat(path: string): Promise<Stats | null> {
 
 // Bounds archive reads so a cold stats load does useful parallel work without
 // flooding the filesystem with thousands of simultaneous readFile calls.
-async function mapWithConcurrency<T, R>(
+export async function mapWithConcurrency<T, R>(
   items: ReadonlyArray<T>,
   concurrency: number,
   mapper: (item: T) => Promise<R>,
@@ -147,7 +147,7 @@ async function mapWithConcurrency<T, R>(
   return results.toSorted((left, right) => left.index - right.index).map((entry) => entry.value);
 }
 
-async function listRecentFiles(
+export async function listRecentFiles(
   paths: ReadonlyArray<string>,
   maxFiles: number = MAX_RECENT_USAGE_FILES,
 ): Promise<ReadonlyArray<string>> {
@@ -257,7 +257,9 @@ function readCodexTotalTokens(payload: Record<string, unknown>): number {
   );
 }
 
-async function listRecentCodexSessionFiles(sessionsRoot: string): Promise<ReadonlyArray<string>> {
+export async function listRecentCodexSessionFiles(
+  sessionsRoot: string,
+): Promise<ReadonlyArray<string>> {
   const now = new Date();
   const candidates: string[] = [];
 
@@ -416,7 +418,7 @@ function readClaudeToolResultSample(input: {
 // Claude Code stores transcripts under `<CLAUDE_CONFIG_DIR>/projects`, defaulting to
 // `~/.claude/projects`. Honor the override so the Profile reads the SAME transcripts
 // the active Claude provider does (the adapter inherits `process.env`).
-function resolveClaudeProjectsRoot(homeDir: string): string {
+export function resolveClaudeProjectsRoot(homeDir: string): string {
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
   return nodePath.join(configDir || nodePath.join(homeDir, ".claude"), "projects");
 }

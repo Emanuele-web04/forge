@@ -27,7 +27,7 @@ export const PROJECT_CREATE_EXISTING_SYNC_ERROR =
 export const PROJECT_CREATE_SYNC_ERROR =
   "The project was created, but it has not synced into Synara yet. Try again in a moment.";
 
-function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
+export function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
   return workspaceRoot.split(/[/\\]/).findLast((segment) => segment.length > 0) ?? workspaceRoot;
 }
 
