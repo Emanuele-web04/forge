@@ -6,15 +6,16 @@ name: Validate marketing site
 # paths that can affect the site so unrelated PRs skip it.
 on:
   pull_request:
-    paths:
+    paths: &marketing_paths
       - "apps/marketing/**"
       - ".github/workflows/validate-marketing.yml"
+      # The site installs from the root lockfile, so a dependency bump can
+      # break it without touching apps/marketing.
+      - "bun.lock"
   push:
     branches:
       - main
-    paths:
-      - "apps/marketing/**"
-      - ".github/workflows/validate-marketing.yml"
+    paths: *marketing_paths
   workflow_dispatch:
 
 permissions:
