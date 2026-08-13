@@ -29,7 +29,27 @@ Implements ADR 0007 exactly: build the candidate list, probe concurrently, pick 
 
 ## 4. UI (Synara design system; Paper references)
 
-Per the repo's UI conventions: **all open/close motion via `apps/web/src/lib/disclosureMotion.ts`** — no bespoke transitions. Follow the Paper "Synara Remote Access" artboard and existing Sidebar/Settings patterns.
+Per the repo's UI conventions: **all open/close motion via `apps/web/src/lib/disclosureMotion.ts`** — no bespoke transitions. Follow existing Sidebar/Settings patterns.
+
+**Paper state (checked 2026-08-13, file `Synara`):** the `Architecture` page holds the Remote Access diagram (the architecture reference used throughout this epic); `Profile` holds the shipped profile/share dialogs; the **`Connections` page is empty**. So there is no host-UI artboard to match — this slice designs it fresh against the token system below, and the user's follow-up pass is where visual polish lands.
+
+Design tokens (from Paper; mirror whatever the web app already defines rather than hardcoding):
+
+| token | value | | token | value |
+|---|---|---|---|---|
+| `--color-background` | `#FCFCFC` | | `--text-ui-sm` | 11px |
+| `--color-card` | `#FFFFFF` | | `--text-ui` | 12px |
+| `--color-foreground` | `#262626` | | `--text-ui-lg` | 13px |
+| `--color-muted-foreground` | `#676767` | | `--text-body` | 14px |
+| `--color-faint-foreground` | `#8F8F8F` | | `--text-title` | 20px |
+| `--color-primary` | `#171717` | | `--weight-regular` / `--weight-medium` | 400 / 500 |
+| `--color-primary-foreground` | `#FFFFFF` | | `--radius-sm` / `md` / `lg` | 6 / 8 / 10px |
+| `--color-border` | `rgb(0 0 0 / 5%)` | | `--radius-dialog` | 22px |
+| `--color-border-input` | `rgb(0 0 0 / 6%)` | | `--font-ui` | System Sans-Serif |
+| `--color-secondary` | `rgb(0 0 0 / 4%)` | | `--font-display` | Cal Sans |
+| `--color-destructive` | `#EF4444` | | `--font-mono` | JetBrains Mono |
+
+Conventions that follow from the palette: it is a warm-neutral, low-chroma system — **no color-coded status dots** (there is no success/warning token, and ADR 0010 means we have no live presence to show anyway). Reachability reads as text/opacity, not a green light. `--color-destructive` is reserved for genuinely destructive affordances: device revoke, host delete, unlink. The device-code is `--font-mono`.
 
 - **Host list** (Sidebar section + Settings pane): name, platform, `mine` vs org badge, last-probe reachability, and the transport actually in use once connected. Discoverability toggle for owned hosts.
 - **Link a host**: Desktop auto-registers its bundled host at sign-in; in a **multi-member org** show the consent prompt before making it discoverable (ADR 0002/0015). Sign-out unlinks.
