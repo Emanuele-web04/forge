@@ -220,6 +220,7 @@ describe("minimaxUsageFetcher", () => {
     const snapshot = await minimaxUsageFetcher.fetch(makeCtx(dir));
     expect(snapshot.status).toBe("ok");
     expect(snapshot.planName).toBe("Token Plan");
+    expect(snapshot.detail).toBe("Usage is tracked through OpenCode (minimax-coding-plan).");
     expect(snapshot.limits).toHaveLength(1);
     expect(calledUrls).toHaveLength(1);
   });
