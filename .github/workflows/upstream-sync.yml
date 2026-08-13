@@ -1,0 +1,91 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    # Every Monday at 03:00 UTC
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      branch_prefix:
+        description: "Prefix for the sync branch"
+        required: false
+        default: "sync/upstream-main-auto"
+      base_branch:
+        description: "Local base branch to sync from"
+        required: false
+        default: "built-from-scratch"
+      upstream_branch:
+        description: "Upstream branch name"
+        required: false
+        default: "main"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Sync upstream/main into built-from-scratch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Set identity
+        run: |
+          git config --global user.name "${{ github.workflow }} Bot"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Run upstream sync
+        id: sync
+        env:
+          GH_EVENT_BRANCH_PREFIX: ${{ github.event.inputs.branch_prefix || 'sync/upstream-main-auto' }}
+          GH_EVENT_BASE_BRANCH: ${{ github.event.inputs.base_branch || 'built-from-scratch' }}
+          GH_EVENT_UPSTREAM_BRANCH: ${{ github.event.inputs.upstream_branch || 'main' }}
+          TIMESTAMP: ${{ github.run_id }}
+        run: |
+          SYNC_BRANCH="${GH_EVENT_BRANCH_PREFIX}-${TIMESTAMP}"
+          bun run sync:upstream \
+            --base "${GH_EVENT_BASE_BRANCH}" \
+            --upstream "${GH_EVENT_UPSTREAM_BRANCH}" \
+            --branch "${SYNC_BRANCH}"
+          echo "branch=${SYNC_BRANCH}" >> "$GITHUB_OUTPUT"
+      - name: Push and open PR if changes
+        if: ${{ always() && steps.sync.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.event.inputs.base_branch || 'built-from-scratch' }}
+          UPSTREAM_BRANCH: ${{ github.event.inputs.upstream_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.sync.outputs.branch }}"
+          if [ -z "$BRANCH" ]; then
+            echo "No sync branch was created."
+            exit 0
+          fi
+
+          if ! git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+            echo "Sync branch not available on filesystem: $BRANCH"
+            exit 0
+          fi
+
+          if [ -z "$(git status --porcelain=v1)" ]; then
+            echo "No file edits were produced on $BRANCH; proceeding with branch sync commit only."
+          else
+            git add -A
+            git commit -m "chore: sync fork with upstream ${UPSTREAM_BRANCH}"
+          fi
+
+          git push --set-upstream origin "$BRANCH"
+
+          gh pr create \
+            --repo "${{ github.repository }}" \
+            --title "chore: sync upstream/${UPSTREAM_BRANCH} ($(date -u +%Y-%m-%d))" \
+            --body "Automated upstream synchronization from \`${{ github.repository_owner }}/${{ github.repository }}\` via workflow run #${{ github.run_id }}." \
+            --base "${BASE_BRANCH}" \
+            --head "$BRANCH"

@@ -50,6 +50,9 @@ If the change depends on motion, timing, transitions, or interaction details, in
 
 If we have to guess what changed, we are much less likely to review it.
 
+For required upstream refresh PRs, follow [Upstream sync playbook](./docs/upstream-sync-playbook.md)
+and target `built-from-scratch`.
+
 ## Issues First
 
 If you are thinking about a non-trivial change, open an issue first.
