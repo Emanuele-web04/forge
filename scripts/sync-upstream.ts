@@ -145,17 +145,7 @@ function applyForkFixes(skipFixes: boolean): void {
   const approvedAttribution =
     "Synara began as a clone of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.";
   const readmeNext = readme
-    .replace(
-      "Synara began as a clone of T3Code.",
-      approvedAttribution,
-    )
-    .replace(
-      /Synara began as a clone of.*$/m,
-      (line) =>
-        line.includes("T3Code") || line.includes("https://github.com/pingdotgg/t3code")
-          ? line
-          : approvedAttribution,
-    );
+    .replace(/Synara began as a clone of.*$/m, approvedAttribution);
 
   if (readmeNext !== readme) {
     writeFileSync(README_PATH, readmeNext.endsWith("\n") ? readmeNext : `${readmeNext}\n`);
