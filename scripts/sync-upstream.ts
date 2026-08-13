@@ -74,8 +74,10 @@ function runGit(
 }
 
 function branchExists(branch: string): boolean {
-  return runGit("rev-parse", ["--verify", `refs/heads/${branch}`], { capture: true, allowFailure: true })
-    .status === 0;
+  return runGit("rev-parse", ["--verify", `refs/heads/${branch}`], {
+    capture: true,
+    allowFailure: true,
+  }).status === 0;
 }
 
 function remoteBranchExists(remote: string, branch: string): boolean {
