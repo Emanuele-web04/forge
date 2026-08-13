@@ -48,7 +48,7 @@ The goal was to strengthen Synara's technical SEO, Search Console readiness, and
 
 ### Problem
 
-The site already had basic metadata, a single sitemap, robots.txt, and a static `llms.txt`, but several signals were shallow or inconsistent. Release pages all used build-time `new Date()` in the sitemap, AI/search crawlers were not called out explicitly, and repository links were split between the older `dpcode` identity and the current `synara` identity.
+The site already had basic metadata, a single sitemap, robots.txt, and a static `llms.txt`, but several signals were shallow or inconsistent. Release pages all used build-time `new Date()` in the sitemap, AI/search crawlers were not called out explicitly, and repository links were split between the older project identity and the current `synara` identity.
 
 ### Approach
 

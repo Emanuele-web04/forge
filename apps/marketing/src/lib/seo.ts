@@ -86,8 +86,8 @@ export const OG_IMAGE = {
 export const SITE_IMAGES = {
   icon: "/synara-icon.png",
   og: "/og.png",
-  lightScreenshot: "/dpcode-ui-light.png",
-  darkScreenshot: "/dpcode-ui-dark.png",
+  lightScreenshot: "/synara-ui-light.png",
+  darkScreenshot: "/synara-ui-dark.png",
 };
 
 /** Builds an absolute production URL for metadata, sitemaps, and structured data. */

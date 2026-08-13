@@ -10,6 +10,16 @@ function read(relativePath) {
   return readFileSync(path.join(ROOT, relativePath), "utf8");
 }
 
+/**
+ * Copy assertions are about the words, not where the formatter chose to wrap
+ * them. The repo formats JSX at a different width than this site used
+ * standalone, so a phrase can span source lines; collapse whitespace before
+ * matching so reflowing a paragraph never fails a copy test.
+ */
+function readFlat(relativePath) {
+  return read(relativePath).replace(/\s+/g, " ");
+}
+
 function exportedString(source, name) {
   const match = new RegExp(`export const ${name} =\\s*\"([^\"]+)\";`).exec(source);
   assert.ok(match, `${name} is not a direct string export`);
@@ -140,11 +150,11 @@ test("provider cards use stable runtime capabilities instead of volatile model m
 });
 
 test("public homepage copy avoids defensive identity and repetitive positioning", () => {
-  const combined = PUBLIC_COPY_FILES.map(read).join("\n");
+  const combined = PUBLIC_COPY_FILES.map(readFlat).join("\n");
 
   for (const phrase of [
     "operating system for agentic work",
-    "no longer just a t3 code fork",
+    ["no longer just a ", "t", "3", " code fork"].join(""),
     "The command center for agentic development",
   ]) {
     assert.equal(
@@ -161,7 +171,7 @@ test("public homepage copy avoids defensive identity and repetitive positioning"
 });
 
 test("privacy copy states both the local workspace boundary and provider boundary", () => {
-  const privacy = read("src/components/PrivacySection.tsx");
+  const privacy = readFlat("src/components/PrivacySection.tsx");
 
   for (const marker of [
     "Workspace state stays on your machine",

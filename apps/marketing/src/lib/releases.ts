@@ -3,7 +3,8 @@
 //          download map (macOS arm64/x64, Windows, Linux) for the /install page.
 // Layer: Server utility
 // Depends on: GitHub Releases API, optional GITHUB_TOKEN
-// Note: The repo was renamed dpcode -> synara. We hit the canonical "synara" slug
+// Note: The repo was renamed from its previous identity to synara. We hit the
+//       canonical "synara" slug
 //       directly so we don't depend on the API following GitHub's 301 redirect.
 
 import "server-only";

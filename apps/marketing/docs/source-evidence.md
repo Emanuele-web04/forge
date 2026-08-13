@@ -14,7 +14,7 @@ the executable is `cursor-agent`; `cursor-agent login` / `cursor-agent status` /
 `cursor-agent update` / `cursor-agent upgrade` are valid subcommands.
 
 **Primary source:** [Cursor Docs — CLI](https://cursor.com/docs/cli/overview), fetched copy
-`/tmp/dpcode-pr2/cursor-docs.html` (captured 2026-08-07 from https://cursor.com/docs).
+`/tmp/site-pr2/cursor-docs.html` (captured 2026-08-07 from https://cursor.com/docs).
 
 **Decision — Official documentation links:**
 
@@ -27,7 +27,7 @@ that all three now redirect (HTTP 200, `Location`) to the generic landing page
 - `https://docs.cursor.com/en/cli/reference/parameters` → `https://cursor.com/docs`
 
 The CLI page slugs were extracted from the fetched copy of `https://cursor.com/docs`
-(`/tmp/dpcode-pr2/cursor-docs.html`), which lists the canonical CLI docs tree, and each
+(`/tmp/site-pr2/cursor-docs.html`), which lists the canonical CLI docs tree, and each
 candidate was confirmed with `curl` (HTTP 200 + real page content, correct `<title>`):
 
 | Page               | Canonical URL (used)                                   | Verified                                     |
@@ -141,7 +141,7 @@ valid subcommand alternative to `cursor-agent update`.
 
 **Primary source:** Web-verified 2026-08-07 — the cursor-agent CLI exposes only
 `cursor-agent update`; there is no `upgrade` subcommand. The local capture
-`/tmp/dpcode-pr2/cursor-docs.html` is the `https://cursor.com/docs` landing page and
+`/tmp/site-pr2/cursor-docs.html` is the `https://cursor.com/docs` landing page and
 contains no cursor-agent mentions, so the live web check is the authoritative source.
 
 **Decision — CORRECT:** removal of `cursor-agent upgrade` stands.

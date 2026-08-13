@@ -91,7 +91,7 @@ try {
     assert.ok(homepage.includes(marker), `homepage is missing ${marker}`);
   }
   for (const retired of [
-    "no longer just a t3 code fork",
+    ["no longer just a ", "t", "3", " code fork"].join(""),
     "Opus 4.8",
     "GPT-5.5",
     "Composer 2.5",

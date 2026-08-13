@@ -3,8 +3,8 @@
 import { useSyncExternalStore } from "react";
 import { FiMoon, FiSun } from "react-icons/fi";
 
-const THEME_KEY = "dpcode-theme";
-const THEME_CHANGE_EVENT = "dpcode-theme-change";
+const THEME_KEY = "synara-theme";
+const THEME_CHANGE_EVENT = "synara-theme-change";
 
 function subscribeToThemeChanges(onChange: () => void) {
   window.addEventListener(THEME_CHANGE_EVENT, onChange);

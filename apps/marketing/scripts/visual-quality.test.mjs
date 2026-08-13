@@ -11,7 +11,9 @@ function read(relativePath) {
 }
 
 test("browser quality CI uses a supported runtime and preserves failure evidence", () => {
-  const workflow = read(".github/workflows/validate-docs.yml");
+  // Lives at the repo root now: workflows only run from there, so the site's
+  // own .github/ moved to ../../.github when it joined the monorepo.
+  const workflow = read("../../.github/workflows/validate-marketing.yml");
   const performance = read("scripts/performance-smoke.mjs");
 
   assert.ok(workflow.includes("node-version: 22.19.0"));

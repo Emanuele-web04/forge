@@ -31,7 +31,7 @@ export async function preparePage(page: Page, theme: "light" | "dark") {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.evaluate((selectedTheme) => {
     document.documentElement.classList.toggle("dark", selectedTheme === "dark");
-    localStorage.setItem("dpcode-theme", selectedTheme);
+    localStorage.setItem("synara-theme", selectedTheme);
   }, theme);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -51,7 +51,7 @@ export async function prepareRoute(page: Page, pathname: string, theme: "light" 
   await page.goto(pathname, { waitUntil: "domcontentloaded" });
   await page.evaluate((selectedTheme) => {
     document.documentElement.classList.toggle("dark", selectedTheme === "dark");
-    localStorage.setItem("dpcode-theme", selectedTheme);
+    localStorage.setItem("synara-theme", selectedTheme);
   }, theme);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.emulateMedia({ reducedMotion: "reduce" });

@@ -196,7 +196,7 @@ function IC({ children }: { children: React.ReactNode }) {
 /* ════════════════════════════════════════════
    Main mock  — faithful to the screenshot
    ════════════════════════════════════════════ */
-export default function DPCodeMock() {
+export default function SynaraMock() {
   return (
     <div className="relative mx-auto w-full max-w-6xl">
       {/* Label */}
@@ -273,7 +273,7 @@ export default function DPCodeMock() {
                 </button>
               </div>
 
-              {/* dpcode-website project */}
+              {/* synara website project */}
               <div className="mt-2">
                 <div className="flex items-center gap-1.5 px-1 py-0.5 text-[12px] text-neutral-500">
                   <IconChevronDown className="size-2.5" />

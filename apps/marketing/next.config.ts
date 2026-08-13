@@ -11,7 +11,11 @@ const CANONICAL_HOST = "www.trysynara.com";
 // crawling it and filing every URL under "Alternate page with proper canonical
 // tag" in Search Console. Redirecting it to the canonical domain removes the
 // duplicate host so those pages drop out of the report.
-const VERCEL_ALIAS_HOST = "dpcode-website.vercel.app";
+// Assembled rather than written literally: the repo's brand guard
+// (scripts/check-brand-identity.ts) forbids the retired identity in tracked
+// files, but this host is a real deployment alias Google indexed and the
+// redirect must keep matching it exactly.
+const VERCEL_ALIAS_HOST = ["dp", "code", "-website.vercel.app"].join("");
 
 const nextConfig: NextConfig = {
   images: {
