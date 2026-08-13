@@ -13,7 +13,7 @@
 Implements ADR 0007 exactly: build the candidate list, probe concurrently, pick by fixed preference **loopback > LAN > Tailscale > SSH (desktop only) > relay**.
 
 - Candidates: directory endpoints (`AccountHost.endpoints`), mDNS discoveries (Desktop only), and always the relay.
-- Probe = cheap liveness check with a short timeout (~1.5s) and an overall race deadline (~3s); first *preferred* winner wins, not merely the first to answer — a slower loopback still beats a fast relay.
+- Probe = cheap liveness check with a short timeout (~1.5s) and an overall race deadline (~3s); first _preferred_ winner wins, not merely the first to answer — a slower loopback still beats a fast relay.
 - Reachability is **attempt-based** (ADR 0010): no presence store, no push channel. The host list renders status as of the last probe.
 - Credential reuse across transports (ADR 0013): one minted session credential authenticates on any winning transport, so a mid-session transport switch does not re-auth.
 
@@ -35,19 +35,19 @@ Per the repo's UI conventions: **all open/close motion via `apps/web/src/lib/dis
 
 Design tokens (from Paper; mirror whatever the web app already defines rather than hardcoding):
 
-| token | value | | token | value |
-|---|---|---|---|---|
-| `--color-background` | `#FCFCFC` | | `--text-ui-sm` | 11px |
-| `--color-card` | `#FFFFFF` | | `--text-ui` | 12px |
-| `--color-foreground` | `#262626` | | `--text-ui-lg` | 13px |
-| `--color-muted-foreground` | `#676767` | | `--text-body` | 14px |
-| `--color-faint-foreground` | `#8F8F8F` | | `--text-title` | 20px |
-| `--color-primary` | `#171717` | | `--weight-regular` / `--weight-medium` | 400 / 500 |
-| `--color-primary-foreground` | `#FFFFFF` | | `--radius-sm` / `md` / `lg` | 6 / 8 / 10px |
-| `--color-border` | `rgb(0 0 0 / 5%)` | | `--radius-dialog` | 22px |
-| `--color-border-input` | `rgb(0 0 0 / 6%)` | | `--font-ui` | System Sans-Serif |
-| `--color-secondary` | `rgb(0 0 0 / 4%)` | | `--font-display` | Cal Sans |
-| `--color-destructive` | `#EF4444` | | `--font-mono` | JetBrains Mono |
+| token                        | value             |     | token                                  | value             |
+| ---------------------------- | ----------------- | --- | -------------------------------------- | ----------------- |
+| `--color-background`         | `#FCFCFC`         |     | `--text-ui-sm`                         | 11px              |
+| `--color-card`               | `#FFFFFF`         |     | `--text-ui`                            | 12px              |
+| `--color-foreground`         | `#262626`         |     | `--text-ui-lg`                         | 13px              |
+| `--color-muted-foreground`   | `#676767`         |     | `--text-body`                          | 14px              |
+| `--color-faint-foreground`   | `#8F8F8F`         |     | `--text-title`                         | 20px              |
+| `--color-primary`            | `#171717`         |     | `--weight-regular` / `--weight-medium` | 400 / 500         |
+| `--color-primary-foreground` | `#FFFFFF`         |     | `--radius-sm` / `md` / `lg`            | 6 / 8 / 10px      |
+| `--color-border`             | `rgb(0 0 0 / 5%)` |     | `--radius-dialog`                      | 22px              |
+| `--color-border-input`       | `rgb(0 0 0 / 6%)` |     | `--font-ui`                            | System Sans-Serif |
+| `--color-secondary`          | `rgb(0 0 0 / 4%)` |     | `--font-display`                       | Cal Sans          |
+| `--color-destructive`        | `#EF4444`         |     | `--font-mono`                          | JetBrains Mono    |
 
 Conventions that follow from the palette: it is a warm-neutral, low-chroma system — **no color-coded status dots** (there is no success/warning token, and ADR 0010 means we have no live presence to show anyway). Reachability reads as text/opacity, not a green light. `--color-destructive` is reserved for genuinely destructive affordances: device revoke, host delete, unlink. The device-code is `--font-mono`.
 

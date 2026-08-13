@@ -47,6 +47,7 @@ import {
 import {
   readAccountCredentials,
   readAccountFile,
+  runAuthLogout,
   scopeTokenToWorkspace,
   selectOrganization,
   SessionExpiredError,
@@ -182,34 +183,6 @@ function isSignedOut(error: unknown): boolean {
   return error instanceof SessionExpiredError || error instanceof WorkspaceAccessChangedError;
 }
 
-/**
- * Drops the session half of the stored file, keeping the host registration.
- * Sign-out is a local act: the host this machine registered is still real and
- * still reachable by its own token, and deleting the whole file would strand
- * it on the account with nothing able to remove or update it.
- *
- * The organization goes with the session — it was chosen for that sign-in, and
- * carrying it into the next one would silently re-pick a workspace the user
- * may no longer have. Runs read→write under the credential lock so a
- * concurrent rotation or host registration cannot interleave; sign-out is
- * user intent, so unlike a race-loser's clear it applies to whatever session
- * is on disk at that moment.
- */
-async function clearStoredSession(baseDir: string): Promise<void> {
-  await withLockedAccountFile(baseDir, async () => {
-    const stored = await readAccountFile(baseDir);
-    if (!stored) return;
-    const {
-      accessToken: _accessToken,
-      refreshToken: _refreshToken,
-      organizationId: _organizationId,
-      userId: _userId,
-      ...rest
-    } = stored;
-    await writeAccountCredentials(baseDir, rest);
-  });
-}
-
 export function createAccountSession(options: AccountSessionOptions): AccountSession {
   const { baseDir } = options;
   const configuredUrl = options.accountUrl ?? resolveAccountUrl();
@@ -333,8 +306,7 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
       const sameAccountAndWorkspace =
         previous?.accountUrl === accountUrl &&
         (previous?.organizationId === scoped.organizationId ||
-          (previous?.organizationId === undefined &&
-            (previous?.hostToken !== undefined || previous?.hostId !== undefined)));
+          (previous?.organizationId === undefined && previous?.hostId !== undefined));
       await writeAccountCredentials(baseDir, {
         accountUrl,
         workosClientId: instance.clientId,
@@ -343,10 +315,13 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         userId: scoped.userId,
         accessToken: scoped.accessToken,
         refreshToken: scoped.refreshToken,
-        ...(sameAccountAndWorkspace && previous?.hostToken
-          ? { hostToken: previous.hostToken }
-          : {}),
         ...(sameAccountAndWorkspace && previous?.hostId ? { hostId: previous.hostId } : {}),
+        ...(sameAccountAndWorkspace && previous?.hostOwnerUserId
+          ? { hostOwnerUserId: previous.hostOwnerUserId }
+          : {}),
+        ...(sameAccountAndWorkspace && previous?.hostKeyGeneration !== undefined
+          ? { hostKeyGeneration: previous.hostKeyGeneration }
+          : {}),
       });
     });
 
@@ -598,14 +573,8 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
       return withSession((token, client) => client.getUsageSummary(token, input.utcOffsetMinutes));
     },
 
-    /**
-     * Forgets this machine's session. Deliberately local-only in V1: WorkOS
-     * owns the browser session and the access token is short-lived, so
-     * dropping the stored credentials is what sign-out means here. The host
-     * registration survives, exactly as it does across an ordinary expiry.
-     */
     async signOut() {
-      await clearStoredSession(baseDir);
+      await runAuthLogout({ baseDir, client: clientFor(configuredUrl), stdout: () => {} });
     },
 
     isVerificationUrlAllowed(url) {

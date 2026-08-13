@@ -60,8 +60,6 @@ export async function createApp(
     createV1Routes({
       verifier: identity.verifier,
       grants: identity.grants,
-      deviceCredentials: identity.deviceCredentials,
-      environments: identity.environments,
       signing: identity.signing,
       hostKeys: identity.hostKeys,
       devices: identity.devices,

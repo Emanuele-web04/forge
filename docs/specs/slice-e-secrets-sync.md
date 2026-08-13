@@ -4,7 +4,7 @@
 
 ## 1. What syncs
 
-Per-host configuration the *owner's* devices share: SSH destination, launcher config, host-key verification policy. Never private keys in plaintext, never anything an org-mate should see — **Host Secrets never cross user boundaries**, which is why SSH is an owner-only transport (ADR 0004/0013).
+Per-host configuration the _owner's_ devices share: SSH destination, launcher config, host-key verification policy. Never private keys in plaintext, never anything an org-mate should see — **Host Secrets never cross user boundaries**, which is why SSH is an owner-only transport (ADR 0004/0013).
 
 ## 2. Crypto
 

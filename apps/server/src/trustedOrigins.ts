@@ -117,7 +117,18 @@ export function shouldRejectAuthMutationOrigin(input: {
 
 /** Remote-reachable sockets always require a real authenticated session. */
 export function requiresWebSocketAuthentication(
-  config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">,
+  config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl" | "sshForwardPort">,
 ): boolean {
-  return Boolean(config.authToken) || Boolean(config.publicUrl) || !isLoopbackHost(config.host);
+  return (
+    Boolean(config.authToken) ||
+    Boolean(config.publicUrl) ||
+    !isLoopbackHost(config.host) ||
+    // Local trust assumes "same machine implies the console user". An SSH
+    // forward breaks that: sshd's forwarded socket is indistinguishable from
+    // a same-machine process, so anyone who can SSH in can `ssh -L` straight
+    // to the main port and bypass the credential the dedicated forward port
+    // demands (ADR 0013). Enabling a forward therefore withdraws local trust
+    // for the whole server, not just for the forward's own port.
+    config.sshForwardPort !== undefined
+  );
 }

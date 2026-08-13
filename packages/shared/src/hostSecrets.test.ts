@@ -1,0 +1,747 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  decodeBase64Url,
+  encodeBase64Url,
+  generatePairingKeyPair,
+  generateSyncKey,
+  HOST_SECRET_INITIAL_VERSION,
+  HOST_SECRET_IV_BYTES,
+  HostSecretsError,
+  openHostSecret,
+  PAIRING_VERIFICATION_CODE_LENGTH,
+  pairingVerificationCode,
+  rotateHostSecrets,
+  sealHostSecret,
+  unwrapSyncKey,
+  wrapSyncKey,
+  type HostSecretEntry,
+  type HostSecretEnvelope,
+} from "./hostSecrets";
+
+const OWNER = "11111111-1111-4111-8111-111111111111";
+const HOST_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const HOST_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+/** The shape Slice E actually syncs: SSH destination, launcher, key policy. */
+const SSH_HOST_SECRET = {
+  ssh: {
+    destination: "deploy@build-01.internal:2222",
+    identityFile: "~/.ssh/id_ed25519_synara",
+    proxyJump: "bastion.internal",
+  },
+  launcher: {
+    command: "/opt/synara/bin/synara-server",
+    args: ["--port", "0"],
+    env: { SYNARA_HOME: "/var/lib/synara" },
+  },
+  keyVerification: {
+    policy: "pinned" as const,
+    pinnedHostKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyMaterial0000000000"],
+  },
+};
+
+/** Flips one bit in a base64url field so the AEAD tag must reject it. */
+function tamper(value: string, index: number): string {
+  const bytes = decodeBase64Url(value);
+  const target = bytes[index];
+  if (target === undefined) throw new Error(`tamper index ${index} out of range`);
+  bytes[index] = target ^ 0b0000_0001;
+  return encodeBase64Url(bytes);
+}
+
+async function sealForHostA(syncKey: CryptoKey, secret: unknown = SSH_HOST_SECRET) {
+  return sealHostSecret({
+    syncKey,
+    hostId: HOST_A,
+    ownerUserId: OWNER,
+    version: HOST_SECRET_INITIAL_VERSION,
+    secret,
+  });
+}
+
+/** Every rejection must be our own uniform error, never a raw DOMException. */
+async function expectOpenRejection(promise: Promise<unknown>): Promise<void> {
+  await expect(promise).rejects.toBeInstanceOf(HostSecretsError);
+  await expect(promise).rejects.toMatchObject({ reason: "open-failed" });
+}
+
+describe("base64url codec", () => {
+  it("round-trips arbitrary bytes without padding", () => {
+    for (let length = 0; length <= 40; length += 1) {
+      const bytes = crypto.getRandomValues(new Uint8Array(length));
+      const encoded = encodeBase64Url(bytes);
+      expect(encoded).not.toContain("=");
+      expect(Array.from(decodeBase64Url(encoded))).toEqual(Array.from(bytes));
+    }
+  });
+
+  it("refuses inputs that are not base64url rather than guessing at the bytes", () => {
+    // Two devices that disagree about the bytes behind one string would produce
+    // ciphertext neither can open, so the decoder must never improvise.
+    expect(() => decodeBase64Url("abc+")).toThrow(HostSecretsError);
+    expect(() => decodeBase64Url("ab/d")).toThrow(HostSecretsError);
+    expect(() => decodeBase64Url("abcd=")).toThrow(HostSecretsError);
+    expect(() => decodeBase64Url("abcde")).toThrow(HostSecretsError);
+  });
+});
+
+describe("sealHostSecret / openHostSecret", () => {
+  it("round-trips a realistic host secret", async () => {
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    expect(envelope.version).toBe(HOST_SECRET_INITIAL_VERSION);
+    expect(decodeBase64Url(envelope.iv)).toHaveLength(HOST_SECRET_IV_BYTES);
+
+    const opened = await openHostSecret({
+      syncKey,
+      hostId: HOST_A,
+      ownerUserId: OWNER,
+      version: HOST_SECRET_INITIAL_VERSION,
+      envelope,
+    });
+    expect(opened).toEqual(SSH_HOST_SECRET);
+  });
+
+  it("produces an envelope that survives JSON storage unchanged", async () => {
+    // The account service stores this as opaque columns and hands it back; a
+    // field that did not survive the trip would break sync silently.
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+    const stored: HostSecretEnvelope = JSON.parse(JSON.stringify(envelope));
+
+    await expect(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope: stored,
+      }),
+    ).resolves.toEqual(SSH_HOST_SECRET);
+  });
+
+  it("never reuses an IV across repeated seals of identical plaintext", async () => {
+    // AES-GCM loses confidentiality outright on IV reuse, and host config is
+    // rewritten with byte-identical contents often.
+    const syncKey = await generateSyncKey();
+    const seals = await Promise.all(Array.from({ length: 64 }, () => sealForHostA(syncKey)));
+
+    expect(new Set(seals.map((seal) => seal.iv)).size).toBe(seals.length);
+    expect(new Set(seals.map((seal) => seal.ciphertext)).size).toBe(seals.length);
+  });
+
+  it("rejects identifiers and versions it cannot bind", async () => {
+    const syncKey = await generateSyncKey();
+    await expect(
+      sealHostSecret({ syncKey, hostId: "", ownerUserId: OWNER, version: 1, secret: {} }),
+    ).rejects.toMatchObject({ reason: "invalid-input" });
+    await expect(
+      sealHostSecret({ syncKey, hostId: HOST_A, ownerUserId: "", version: 1, secret: {} }),
+    ).rejects.toMatchObject({ reason: "invalid-input" });
+    await expect(
+      sealHostSecret({ syncKey, hostId: HOST_A, ownerUserId: OWNER, version: -1, secret: {} }),
+    ).rejects.toMatchObject({ reason: "invalid-input" });
+    await expect(
+      sealHostSecret({ syncKey, hostId: HOST_A, ownerUserId: OWNER, version: 1.5, secret: {} }),
+    ).rejects.toMatchObject({ reason: "invalid-input" });
+  });
+});
+
+describe("AAD binding", () => {
+  it("refuses a ciphertext lifted onto another host's row", async () => {
+    // The security property: the account service cannot inspect rows, so
+    // nothing but the AAD stops attacker-chosen SSH config from being replayed
+    // into a different host.
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_B,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope,
+      }),
+    );
+  });
+
+  it("refuses a ciphertext replayed under a different owner", async () => {
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: "22222222-2222-4222-8222-222222222222",
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope,
+      }),
+    );
+  });
+
+  it("refuses a ciphertext replayed at a different version", async () => {
+    // Without this, a rolled-back row would silently revive superseded config.
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION + 1,
+        envelope: { ...envelope, version: HOST_SECRET_INITIAL_VERSION + 1 },
+      }),
+    );
+  });
+
+  it("refuses an envelope whose version field was edited under a correct AAD", async () => {
+    // Storage-level tampering with the version column alone must not open.
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope: { ...envelope, version: HOST_SECRET_INITIAL_VERSION + 7 },
+      }),
+    );
+  });
+
+  it("does not let a crafted hostId forge another pair's binding", async () => {
+    // A delimiter-joined AAD would let ("a", "b|c") collide with ("a|b", "c").
+    const syncKey = await generateSyncKey();
+    const envelope = await sealHostSecret({
+      syncKey,
+      hostId: "host",
+      ownerUserId: `owner","extra`,
+      version: 1,
+      secret: SSH_HOST_SECRET,
+    });
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: `host","owner`,
+        ownerUserId: "extra",
+        version: 1,
+        envelope,
+      }),
+    );
+  });
+
+  it("refuses the right envelope under the wrong sync key", async () => {
+    const envelope = await sealForHostA(await generateSyncKey());
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey: await generateSyncKey(),
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope,
+      }),
+    );
+  });
+});
+
+describe("tampering", () => {
+  it("fails authentication when a ciphertext byte is flipped", async () => {
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    for (const index of [0, 5, decodeBase64Url(envelope.ciphertext).length - 1]) {
+      await expectOpenRejection(
+        openHostSecret({
+          syncKey,
+          hostId: HOST_A,
+          ownerUserId: OWNER,
+          version: HOST_SECRET_INITIAL_VERSION,
+          envelope: { ...envelope, ciphertext: tamper(envelope.ciphertext, index) },
+        }),
+      );
+    }
+  });
+
+  it("fails authentication when an IV byte is flipped", async () => {
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope: { ...envelope, iv: tamper(envelope.iv, 0) },
+      }),
+    );
+  });
+
+  it("rejects an IV of the wrong length rather than letting the platform decide", async () => {
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope: { ...envelope, iv: encodeBase64Url(new Uint8Array(16)) },
+      }),
+    );
+  });
+
+  it("rejects a truncated ciphertext", async () => {
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+    const bytes = decodeBase64Url(envelope.ciphertext);
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope: { ...envelope, ciphertext: encodeBase64Url(bytes.slice(0, bytes.length - 1)) },
+      }),
+    );
+  });
+});
+
+describe("pairing key wrap", () => {
+  it("hands the sync key to a new device and keeps it usable end to end", async () => {
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    const newDevice = await generatePairingKeyPair();
+    const wrapped = await wrapSyncKey({ syncKey, recipientPublicJwk: newDevice.publicJwk });
+    const received = await unwrapSyncKey({
+      wrapped,
+      recipientPrivateKey: newDevice.privateKey,
+    });
+
+    // The real acceptance test: the second device reads config it never saw.
+    await expect(
+      openHostSecret({
+        syncKey: received,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope,
+      }),
+    ).resolves.toEqual(SSH_HOST_SECRET);
+  });
+
+  it("produces a key the receiving device can wrap onward to a third device", async () => {
+    // Pairing chains: device 2 must be able to enroll device 3.
+    const syncKey = await generateSyncKey();
+    const second = await generatePairingKeyPair();
+    const third = await generatePairingKeyPair();
+
+    const toSecond = await unwrapSyncKey({
+      wrapped: await wrapSyncKey({ syncKey, recipientPublicJwk: second.publicJwk }),
+      recipientPrivateKey: second.privateKey,
+    });
+    const toThird = await unwrapSyncKey({
+      wrapped: await wrapSyncKey({ syncKey: toSecond, recipientPublicJwk: third.publicJwk }),
+      recipientPrivateKey: third.privateKey,
+    });
+
+    const envelope = await sealForHostA(syncKey);
+    await expect(
+      openHostSecret({
+        syncKey: toThird,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope,
+      }),
+    ).resolves.toEqual(SSH_HOST_SECRET);
+  });
+
+  it("refuses to unwrap with the wrong private key", async () => {
+    const syncKey = await generateSyncKey();
+    const intended = await generatePairingKeyPair();
+    const eavesdropper = await generatePairingKeyPair();
+
+    const wrapped = await wrapSyncKey({ syncKey, recipientPublicJwk: intended.publicJwk });
+
+    await expect(
+      unwrapSyncKey({ wrapped, recipientPrivateKey: eavesdropper.privateKey }),
+    ).rejects.toMatchObject({ reason: "unwrap-failed" });
+  });
+
+  it("refuses a wrap re-pointed at a different recipient", async () => {
+    // The KDF transcript binds both public keys, so a relayed blob cannot be
+    // re-labelled for another device even by the service carrying it.
+    const syncKey = await generateSyncKey();
+    const intended = await generatePairingKeyPair();
+    const other = await generatePairingKeyPair();
+
+    const wrapped = await wrapSyncKey({ syncKey, recipientPublicJwk: intended.publicJwk });
+
+    await expect(
+      unwrapSyncKey({
+        wrapped: { ...wrapped, recipientPublicJwk: other.publicJwk },
+        recipientPrivateKey: intended.privateKey,
+      }),
+    ).rejects.toMatchObject({ reason: "unwrap-failed" });
+  });
+
+  it("refuses a wrap whose ephemeral key was swapped", async () => {
+    const syncKey = await generateSyncKey();
+    const recipient = await generatePairingKeyPair();
+    const attacker = await generatePairingKeyPair();
+
+    const wrapped = await wrapSyncKey({ syncKey, recipientPublicJwk: recipient.publicJwk });
+
+    await expect(
+      unwrapSyncKey({
+        wrapped: { ...wrapped, ephemeralPublicJwk: attacker.publicJwk },
+        recipientPrivateKey: recipient.privateKey,
+      }),
+    ).rejects.toMatchObject({ reason: "unwrap-failed" });
+  });
+
+  it("refuses a wrap whose bytes were tampered with", async () => {
+    const syncKey = await generateSyncKey();
+    const recipient = await generatePairingKeyPair();
+    const wrapped = await wrapSyncKey({ syncKey, recipientPublicJwk: recipient.publicJwk });
+
+    await expect(
+      unwrapSyncKey({
+        wrapped: { ...wrapped, wrapped: tamper(wrapped.wrapped, 3) },
+        recipientPrivateKey: recipient.privateKey,
+      }),
+    ).rejects.toMatchObject({ reason: "unwrap-failed" });
+  });
+
+  it("uses a fresh ephemeral key per wrap", async () => {
+    const syncKey = await generateSyncKey();
+    const recipient = await generatePairingKeyPair();
+
+    const first = await wrapSyncKey({ syncKey, recipientPublicJwk: recipient.publicJwk });
+    const second = await wrapSyncKey({ syncKey, recipientPublicJwk: recipient.publicJwk });
+
+    expect(first.ephemeralPublicJwk.x).not.toBe(second.ephemeralPublicJwk.x);
+    expect(first.wrapped).not.toBe(second.wrapped);
+  });
+
+  it("rejects a public JWK that is not an EC P-256 point", async () => {
+    const syncKey = await generateSyncKey();
+    const recipient = await generatePairingKeyPair();
+
+    await expect(
+      wrapSyncKey({
+        syncKey,
+        recipientPublicJwk: { ...recipient.publicJwk, crv: "P-384" } as never,
+      }),
+    ).rejects.toMatchObject({ reason: "invalid-input" });
+    await expect(
+      wrapSyncKey({
+        syncKey,
+        recipientPublicJwk: { ...recipient.publicJwk, x: encodeBase64Url(new Uint8Array(31)) },
+      }),
+    ).rejects.toMatchObject({ reason: "invalid-input" });
+  });
+});
+
+describe("pairingVerificationCode", () => {
+  it("gives both peers the same code regardless of who calls itself the sender", async () => {
+    // Documented contract: order does not matter. A check that reported a
+    // mismatch on role confusion is a check users learn to click through.
+    const alice = await generatePairingKeyPair();
+    const bob = await generatePairingKeyPair();
+
+    const fromAlice = await pairingVerificationCode({
+      senderPublicJwk: alice.publicJwk,
+      recipientPublicJwk: bob.publicJwk,
+    });
+    const fromBob = await pairingVerificationCode({
+      senderPublicJwk: bob.publicJwk,
+      recipientPublicJwk: alice.publicJwk,
+    });
+
+    expect(fromAlice).toBe(fromBob);
+  });
+
+  it("is deterministic and shaped for a human to read aloud", async () => {
+    const alice = await generatePairingKeyPair();
+    const bob = await generatePairingKeyPair();
+    const args = { senderPublicJwk: alice.publicJwk, recipientPublicJwk: bob.publicJwk };
+
+    const code = await pairingVerificationCode(args);
+    expect(code).toHaveLength(PAIRING_VERIFICATION_CODE_LENGTH);
+    // No 0/1/I/O: a code read over the phone must not be ambiguous.
+    expect(code).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
+    await expect(pairingVerificationCode(args)).resolves.toBe(code);
+  });
+
+  it("changes when either peer is substituted — this is what makes a MITM visible", async () => {
+    const alice = await generatePairingKeyPair();
+    const bob = await generatePairingKeyPair();
+    const attacker = await generatePairingKeyPair();
+
+    const honest = await pairingVerificationCode({
+      senderPublicJwk: alice.publicJwk,
+      recipientPublicJwk: bob.publicJwk,
+    });
+    // What Alice would see if the attacker's key reached her instead of Bob's.
+    const aliceSideOfMitm = await pairingVerificationCode({
+      senderPublicJwk: alice.publicJwk,
+      recipientPublicJwk: attacker.publicJwk,
+    });
+    // What Bob would see on his side of the same attack.
+    const bobSideOfMitm = await pairingVerificationCode({
+      senderPublicJwk: attacker.publicJwk,
+      recipientPublicJwk: bob.publicJwk,
+    });
+
+    expect(aliceSideOfMitm).not.toBe(honest);
+    expect(bobSideOfMitm).not.toBe(honest);
+    // The two halves of the attack disagree with each other, which is exactly
+    // what the user is asked to notice.
+    expect(aliceSideOfMitm).not.toBe(bobSideOfMitm);
+  });
+
+  it("spreads codes across the alphabet rather than collapsing onto a few", async () => {
+    // A derivation that discarded entropy would still pass the tests above.
+    const pairs = await Promise.all(
+      Array.from({ length: 24 }, async () => {
+        const [sender, recipient] = await Promise.all([
+          generatePairingKeyPair(),
+          generatePairingKeyPair(),
+        ]);
+        return pairingVerificationCode({
+          senderPublicJwk: sender.publicJwk,
+          recipientPublicJwk: recipient.publicJwk,
+        });
+      }),
+    );
+
+    expect(new Set(pairs).size).toBe(pairs.length);
+    expect(new Set(pairs.map((code) => code[0])).size).toBeGreaterThan(1);
+    expect(new Set(pairs.map((code) => code.at(-1))).size).toBeGreaterThan(1);
+  });
+
+  it("ignores base64url padding differences in an otherwise identical key", async () => {
+    // Same point, differently spelled, must not read as a different peer.
+    const alice = await generatePairingKeyPair();
+    const bob = await generatePairingKeyPair();
+    const paddedBob = { ...bob.publicJwk, x: `${bob.publicJwk.x}=`.slice(0, -1) };
+
+    await expect(
+      pairingVerificationCode({
+        senderPublicJwk: alice.publicJwk,
+        recipientPublicJwk: paddedBob,
+      }),
+    ).resolves.toBe(
+      await pairingVerificationCode({
+        senderPublicJwk: alice.publicJwk,
+        recipientPublicJwk: bob.publicJwk,
+      }),
+    );
+  });
+});
+
+describe("rotateHostSecrets", () => {
+  const HOST_IDS = [HOST_A, HOST_B, "cccccccc-cccc-4ccc-8ccc-cccccccccccc"];
+
+  async function seedEntries(syncKey: CryptoKey): Promise<readonly HostSecretEntry[]> {
+    return Promise.all(
+      HOST_IDS.map(async (hostId, index): Promise<HostSecretEntry> => {
+        const version = HOST_SECRET_INITIAL_VERSION + index;
+        return {
+          hostId,
+          ownerUserId: OWNER,
+          envelope: await sealHostSecret({
+            syncKey,
+            hostId,
+            ownerUserId: OWNER,
+            version,
+            secret: { ...SSH_HOST_SECRET, label: `host-${index}` },
+          }),
+        };
+      }),
+    );
+  }
+
+  it("re-encrypts every entry, bumps each version, and locks the old key out", async () => {
+    const oldSyncKey = await generateSyncKey();
+    const newSyncKey = await generateSyncKey();
+    const entries = await seedEntries(oldSyncKey);
+
+    const rotated = await rotateHostSecrets({ oldSyncKey, newSyncKey, entries });
+
+    expect(rotated).toHaveLength(entries.length);
+    expect(rotated.map((entry) => entry.hostId)).toEqual(HOST_IDS);
+
+    for (const [index, entry] of rotated.entries()) {
+      const before = entries[index];
+      if (before === undefined) throw new Error("missing seeded entry");
+
+      expect(entry.envelope.version).toBe(before.envelope.version + 1);
+      expect(entry.envelope.ciphertext).not.toBe(before.envelope.ciphertext);
+      expect(entry.envelope.iv).not.toBe(before.envelope.iv);
+
+      // The new key opens everything...
+      await expect(
+        openHostSecret({
+          syncKey: newSyncKey,
+          hostId: entry.hostId,
+          ownerUserId: entry.ownerUserId,
+          version: entry.envelope.version,
+          envelope: entry.envelope,
+        }),
+      ).resolves.toEqual({ ...SSH_HOST_SECRET, label: `host-${index}` });
+
+      // ...and the removed device's key opens none of it. This is the whole
+      // point of rotation on device removal (ADR 0015).
+      await expectOpenRejection(
+        openHostSecret({
+          syncKey: oldSyncKey,
+          hostId: entry.hostId,
+          ownerUserId: entry.ownerUserId,
+          version: entry.envelope.version,
+          envelope: entry.envelope,
+        }),
+      );
+    }
+  });
+
+  it("accepts an empty set", async () => {
+    const oldSyncKey = await generateSyncKey();
+    const newSyncKey = await generateSyncKey();
+    await expect(rotateHostSecrets({ oldSyncKey, newSyncKey, entries: [] })).resolves.toEqual([]);
+  });
+
+  it("throws rather than returning a partially rotated set", async () => {
+    // Silently skipping the bad entry would leave some hosts readable by the
+    // removed device, with nothing recording which.
+    const oldSyncKey = await generateSyncKey();
+    const newSyncKey = await generateSyncKey();
+    const entries = await seedEntries(oldSyncKey);
+    const middle = entries[1];
+    if (middle === undefined) throw new Error("missing seeded entry");
+    const poisoned: readonly HostSecretEntry[] = entries.with(1, {
+      ...middle,
+      envelope: { ...middle.envelope, ciphertext: tamper(middle.envelope.ciphertext, 0) },
+    });
+
+    await expect(
+      rotateHostSecrets({ oldSyncKey, newSyncKey, entries: poisoned }),
+    ).rejects.toBeInstanceOf(HostSecretsError);
+  });
+
+  it("refuses a set with duplicate hosts", async () => {
+    const oldSyncKey = await generateSyncKey();
+    const newSyncKey = await generateSyncKey();
+    const entries = await seedEntries(oldSyncKey);
+    const first = entries[0];
+    if (first === undefined) throw new Error("missing seeded entry");
+
+    await expect(
+      rotateHostSecrets({ oldSyncKey, newSyncKey, entries: [...entries, first] }),
+    ).rejects.toMatchObject({ reason: "invalid-input" });
+  });
+
+  it("refuses a rotation that does not actually change the key", async () => {
+    // A no-op that reports success is the one failure that defeats the feature.
+    const syncKey = await generateSyncKey();
+    const entries = await seedEntries(syncKey);
+
+    await expect(
+      rotateHostSecrets({ oldSyncKey: syncKey, newSyncKey: syncKey, entries }),
+    ).rejects.toMatchObject({ reason: "invalid-input" });
+  });
+
+  it("refuses when an entry is bound to a different owner than its ciphertext", async () => {
+    const oldSyncKey = await generateSyncKey();
+    const newSyncKey = await generateSyncKey();
+    const entries = await seedEntries(oldSyncKey);
+    const first = entries[0];
+    if (first === undefined) throw new Error("missing seeded entry");
+
+    await expect(
+      rotateHostSecrets({
+        oldSyncKey,
+        newSyncKey,
+        entries: [{ ...first, ownerUserId: "33333333-3333-4333-8333-333333333333" }],
+      }),
+    ).rejects.toMatchObject({ reason: "open-failed" });
+  });
+});
+
+describe("device removal, end to end", () => {
+  it("pairs two devices, shares a secret, rotates, and shuts the removed device out", async () => {
+    // The integration path from the spec, in one place: what a user actually
+    // does when a laptop is stolen.
+    const firstDevice = await generateSyncKey();
+    const envelope = await sealForHostA(firstDevice);
+
+    const removedDevice = await generatePairingKeyPair();
+    const survivingDevice = await generatePairingKeyPair();
+    const removedKey = await unwrapSyncKey({
+      wrapped: await wrapSyncKey({
+        syncKey: firstDevice,
+        recipientPublicJwk: removedDevice.publicJwk,
+      }),
+      recipientPrivateKey: removedDevice.privateKey,
+    });
+    const survivingKey = await unwrapSyncKey({
+      wrapped: await wrapSyncKey({
+        syncKey: firstDevice,
+        recipientPublicJwk: survivingDevice.publicJwk,
+      }),
+      recipientPrivateKey: survivingDevice.privateKey,
+    });
+
+    // Before removal, both devices read the same host config.
+    await expect(
+      openHostSecret({
+        syncKey: removedKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope,
+      }),
+    ).resolves.toEqual(SSH_HOST_SECRET);
+
+    const rotatedKey = await generateSyncKey();
+    const rotated = await rotateHostSecrets({
+      oldSyncKey: survivingKey,
+      newSyncKey: rotatedKey,
+      entries: [{ hostId: HOST_A, ownerUserId: OWNER, envelope }],
+    });
+    const rotatedEntry = rotated[0];
+    if (rotatedEntry === undefined) throw new Error("rotation dropped the only entry");
+
+    // After: the surviving device reads the new write, the removed one cannot.
+    await expect(
+      openHostSecret({
+        syncKey: rotatedKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: rotatedEntry.envelope.version,
+        envelope: rotatedEntry.envelope,
+      }),
+    ).resolves.toEqual(SSH_HOST_SECRET);
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey: removedKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: rotatedEntry.envelope.version,
+        envelope: rotatedEntry.envelope,
+      }),
+    );
+  });
+});

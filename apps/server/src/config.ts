@@ -84,6 +84,7 @@ export interface ServerDerivedPaths {
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
   readonly environmentIdPath: string;
+  readonly hostIdentityPath: string;
 }
 
 /**
@@ -101,6 +102,8 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
   readonly publicUrl: URL | undefined;
+  readonly relayUrl?: URL | undefined;
+  readonly sshForwardPort?: number | undefined;
   readonly allowInsecureRemote: boolean;
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
@@ -162,6 +165,7 @@ export const deriveServerPaths = Effect.fn(function* (
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
     environmentIdPath: join(stateDir, "environment-id"),
+    hostIdentityPath: join(secretsDir, "host-identity.json"),
   };
 });
 

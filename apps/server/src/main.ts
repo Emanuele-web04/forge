@@ -43,6 +43,7 @@ import {
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
+import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { makeServerApplicationLayers } from "./serverLayers";
@@ -55,6 +56,7 @@ import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
+import { startHostConnectivity } from "./hostConnectivity";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
 import {
@@ -65,10 +67,10 @@ import {
 import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
 import {
   ACCOUNT_URL_ENV_NAME,
-  refreshHostRegistration,
   resolveAccountUrl,
   resolveAuthLoginAccountUrl,
   runAuthLogin,
+  runDeviceCodeHostLink,
   runAuthLogout,
   runStatus,
 } from "./accountAuth";
@@ -109,6 +111,8 @@ interface CliInput {
   readonly synaraHome: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
   readonly publicUrl: Option.Option<URL>;
+  readonly relayUrl: Option.Option<URL>;
+  readonly sshForwardPort: Option.Option<number>;
   readonly allowInsecureRemote: BooleanFlagInput;
   readonly noBrowser: BooleanFlagInput;
   readonly authToken: Option.Option<string>;
@@ -175,6 +179,11 @@ const CliEnvConfig = Config.all({
   synaraHome: Config.string("SYNARA_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   publicUrl: Config.url("SYNARA_PUBLIC_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  relayUrl: Config.url("SYNARA_RELAY_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  sshForwardPort: Config.port("SYNARA_SSH_FORWARD_PORT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   allowInsecureRemote: optionalBooleanEnvironmentConfig("SYNARA_ALLOW_INSECURE_REMOTE"),
   noBrowser: optionalBooleanEnvironmentConfig("SYNARA_NO_BROWSER"),
   authToken: Config.string("SYNARA_AUTH_TOKEN").pipe(
@@ -250,6 +259,8 @@ const ServerConfigLive = (input: CliInput) =>
       });
       const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+      const relayUrl = Option.getOrUndefined(input.relayUrl) ?? env.relayUrl;
+      const sshForwardPort = Option.getOrUndefined(input.sshForwardPort) ?? env.sshForwardPort;
       const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
       const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,
@@ -361,6 +372,7 @@ const makeServerProgram = (input: CliInput) =>
     const { start, stopSignal } = yield* Server;
     const openDeps = yield* Open;
     const serverAuth = yield* ServerAuth;
+    const localSessions = yield* SessionCredentialService;
     const serverSettings = yield* ServerSettingsService;
     yield* cliConfig.fixPath;
 
@@ -377,6 +389,16 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
+    const stopHostConnectivity = yield* Effect.tryPromise(() =>
+      startHostConnectivity({ config, listeningPort: config.port, localSessions }),
+    ).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Host connectivity did not start.", { cause: String(cause) }).pipe(
+          Effect.as(() => {}),
+        ),
+      ),
+    );
+    yield* Effect.addFinalizer(() => Effect.sync(stopHostConnectivity));
 
     const localUrl = `http://localhost:${config.port}`;
     const bindUrl =
@@ -402,18 +424,6 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
-    // Re-advertise this host's endpoints now that server-runtime.json reflects
-    // the live bind. A machine that ran `synara auth` before its first start
-    // registered with none, and this is the only thing that fixes that. One
-    // shot, no retry: it must never delay or fail a boot.
-    yield* Effect.forkChild(
-      Effect.tryPromise(() =>
-        refreshHostRegistration({
-          baseDir: config.baseDir,
-          ...(config.devUrl ? { devUrl: config.devUrl } : {}),
-        }),
-      ).pipe(Effect.ignore),
-    );
     // Event-driven account usage sync: every committed usage-relevant domain
     // event nudges the reporter, which debounces, recomputes recent per-minute
     // buckets from the local projections, and pushes absolute values to the
@@ -530,6 +540,18 @@ const publicUrlFlag = Flag.string("public-url").pipe(
   ),
   Flag.optional,
 );
+const relayUrlFlag = Flag.string("relay-url").pipe(
+  Flag.withSchema(Schema.URLFromString),
+  Flag.withDescription("Relay service root URL (equivalent to SYNARA_RELAY_URL)."),
+  Flag.optional,
+);
+const sshForwardPortFlag = Flag.integer("ssh-forward-port").pipe(
+  Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+  Flag.withDescription(
+    "Loopback-only credential-gated WebSocket port for SSH forwarding (equivalent to SYNARA_SSH_FORWARD_PORT).",
+  ),
+  Flag.optional,
+);
 const allowInsecureRemoteFlag = optionalBooleanFlag("allow-insecure-remote", {
   description:
     "Explicitly allow unencrypted authenticated remote access on a trusted LAN (equivalent to SYNARA_ALLOW_INSECURE_REMOTE).",
@@ -576,6 +598,8 @@ const baseServerCommand = Command.make("synara", {
   synaraHome: synaraHomeFlag,
   devUrl: devUrlFlag,
   publicUrl: publicUrlFlag,
+  relayUrl: relayUrlFlag,
+  sshForwardPort: sshForwardPortFlag,
   allowInsecureRemote: allowInsecureRemoteFlag,
   noBrowser: noBrowserFlag,
   authToken: authTokenFlag,
@@ -661,9 +685,12 @@ const requireAccountUrl = (flag: Option.Option<string>) =>
 // `--account-url` lives only on the base `auth` command: the Effect CLI rejects
 // a flag declared on both a parent and its subcommand, so `logout` reads the
 // parsed value out of the parent's context (same shape as `--home-dir` above).
-const baseAuthCommand = Command.make("auth", { accountUrl: accountUrlFlag }).pipe(
-  Command.withDescription("Register this machine as a host on the account signed in via the app."),
-);
+const baseAuthCommand = Command.make("auth", {
+  accountUrl: accountUrlFlag,
+  deviceCode: Flag.boolean("device-code").pipe(
+    Flag.withDescription("Link a headless host using a browser approval code."),
+  ),
+}).pipe(Command.withDescription("Link this machine as an account host."));
 
 const authLogoutCommand = Command.make("logout", {}, () =>
   Effect.gen(function* () {
@@ -683,10 +710,23 @@ const authLogoutCommand = Command.make("logout", {}, () =>
 );
 
 const authCommand = baseAuthCommand.pipe(
-  Command.withHandler(({ accountUrl }) =>
+  Command.withHandler(({ accountUrl, deviceCode }) =>
     Effect.gen(function* () {
       const root = yield* baseServerCommand;
       const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(root.synaraHome));
+      if (deviceCode) {
+        const resolved = yield* requireAccountUrl(accountUrl);
+        yield* Effect.tryPromise({
+          try: () =>
+            runDeviceCodeHostLink({
+              accountUrl: resolved,
+              baseDir,
+              ...(Option.isSome(root.devUrl) ? { devUrl: root.devUrl.value } : {}),
+            }),
+          catch: (cause) => new StartupError({ message: "Device-code host link failed.", cause }),
+        });
+        return;
+      }
       // Once a session exists, the URL stored at sign-in wins (as refresh,
       // status, and logout already do): the stored tokens belong to THAT
       // service, and a conflicting explicit URL is refused rather than

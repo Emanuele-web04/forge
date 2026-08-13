@@ -54,7 +54,16 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     deleteAvatar: unimplemented("deleteAvatar"),
     updateOrganization: unimplemented("updateOrganization"),
     listHosts: unimplemented("listHosts"),
-    registerHost: unimplemented("registerHost"),
+    startHostLink: unimplemented("startHostLink"),
+    completeHostLink: unimplemented("completeHostLink"),
+    startDeviceHostLink: unimplemented("startDeviceHostLink"),
+    approveDeviceHostLink: unimplemented("approveDeviceHostLink"),
+    exchangeDeviceHostLink: unimplemented("exchangeDeviceHostLink"),
+    getApiJwks: unimplemented("getApiJwks"),
+    replaceHostEndpoints: unimplemented("replaceHostEndpoints"),
+    requestRelayTicket: unimplemented("requestRelayTicket"),
+    getHostAuthorization: unimplemented("getHostAuthorization"),
+    unlinkHost: unimplemented("unlinkHost"),
     updateHost: unimplemented("updateHost"),
     deleteHost: unimplemented("deleteHost"),
     requestAuthorizeUrl: unimplemented("requestAuthorizeUrl"),
@@ -87,6 +96,12 @@ function credentials(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+const linkedHostFields = {
+  hostId: "host_1",
+  hostOwnerUserId: "user_1",
+  hostKeyGeneration: 1,
+} as const;
 
 function sessionFor(baseDir: string, client: AccountClient) {
   return createAccountSession({ baseDir, accountUrl: ACCOUNT_URL, client });
@@ -140,7 +155,7 @@ describe("status", () => {
   // raising a failed RPC over.
   it("reports signed out when the refresh token can no longer be redeemed", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+    await writeAccountCredentials(baseDir, credentials(linkedHostFields));
     const session = sessionFor(
       baseDir,
       makeClient({
@@ -157,7 +172,7 @@ describe("status", () => {
 
     expect(await session.status()).toEqual({ state: "signed-out" });
     // The host registration is not part of the session and must survive it.
-    expect(await readAccountFile(baseDir)).toMatchObject({ hostToken: "host-token" });
+    expect(await readAccountFile(baseDir)).toMatchObject(linkedHostFields);
   });
 
   // An unreachable account is not a signed-out one: reporting it that way
@@ -257,15 +272,13 @@ describe("OTP sign-in", () => {
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
       organizationId: ORGANIZATION.id,
-      hostToken: "host-token",
-      hostId: "host_1",
+      ...linkedHostFields,
     });
     const session = sessionFor(baseDir, otpClient());
 
     await session.authenticateOtp(OTP_INPUT);
     expect(await readAccountFile(baseDir)).toMatchObject({
-      hostToken: "host-token",
-      hostId: "host_1",
+      ...linkedHostFields,
     });
   });
 
@@ -279,14 +292,13 @@ describe("OTP sign-in", () => {
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
       organizationId: "org_other_user",
-      hostToken: "host-token",
-      hostId: "host_1",
+      ...linkedHostFields,
     });
     const session = sessionFor(baseDir, otpClient());
 
     await session.authenticateOtp(OTP_INPUT);
     const stored = await readAccountFile(baseDir);
-    expect(stored?.hostToken).toBeUndefined();
+    expect(stored?.hostId).toBeUndefined();
     expect(stored?.hostId).toBeUndefined();
     expect(stored).toMatchObject({ organizationId: ORGANIZATION.id });
   });
@@ -298,14 +310,13 @@ describe("OTP sign-in", () => {
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
       organizationId: ORGANIZATION.id,
-      hostToken: "host-token",
-      hostId: "host_1",
+      ...linkedHostFields,
     });
     const session = sessionFor(baseDir, otpClient());
 
     await session.authenticateOtp(OTP_INPUT);
     const stored = await readAccountFile(baseDir);
-    expect(stored?.hostToken).toBeUndefined();
+    expect(stored?.hostId).toBeUndefined();
     expect(stored?.hostId).toBeUndefined();
     expect(stored).toMatchObject({ accountUrl: ACCOUNT_URL });
   });
@@ -766,21 +777,14 @@ describe("avatar", () => {
 });
 
 describe("signOut", () => {
-  it("drops the session and keeps the host registration", async () => {
+  it("unlinks local account state, including the host link", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await writeAccountCredentials(baseDir, credentials(linkedHostFields));
     const session = sessionFor(baseDir, makeClient({}));
 
     await session.signOut();
 
-    const stored = await readAccountFile(baseDir);
-    expect(stored).toMatchObject({ hostToken: "host-token", hostId: "host_1" });
-    expect(stored?.accessToken).toBeUndefined();
-    expect(stored?.refreshToken).toBeUndefined();
-    expect(stored?.organizationId).toBeUndefined();
+    expect(await readAccountFile(baseDir)).toBeUndefined();
     expect(await session.status()).toEqual({ state: "signed-out" });
   });
 

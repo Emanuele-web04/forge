@@ -17,9 +17,7 @@ import type { WorkosApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
 import { hosts, linkChallenges, revocationEvents } from "../db/schema";
-import { createDeviceCredentialStore } from "../identity/deviceCredentialStore";
 import { createDeviceRegistry } from "../identity/deviceRegistry";
-import { createEnvironmentRegistry } from "../identity/environmentRegistry";
 import { createHostGrantIssuer } from "../identity/grantIssuer";
 import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
 import { clearOrgCache } from "../identity/orgProvisioning";
@@ -83,8 +81,6 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       createV1Routes({
         verifier,
         grants,
-        deviceCredentials: createDeviceCredentialStore(db),
-        environments: createEnvironmentRegistry(db),
         signing,
         hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
         devices: createDeviceRegistry(db, config.apiPublicUrl),
@@ -1182,8 +1178,6 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         createV1Routes({
           verifier,
           grants,
-          deviceCredentials: createDeviceCredentialStore(db),
-          environments: createEnvironmentRegistry(db),
           signing: rotated,
           hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
           devices: createDeviceRegistry(db, config.apiPublicUrl),
@@ -1201,8 +1195,8 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
     });
   });
 
-  describe("9. coexistence", () => {
-    it("keeps legacy registration and host-token PATCH working", async () => {
+  describe("9. cutover", () => {
+    it("removes legacy registration and rejects synhost bearer credentials", async () => {
       const { app } = buildApp();
       const owner = await signIn();
       const registered = await app.request("/api/v1/hosts", {
@@ -1216,26 +1210,25 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           endpoints: [],
         }),
       });
-      expect(registered.status).toBe(201);
-      const body = (await registered.json()) as { host: { id: string }; hostToken: string };
+      expect(registered.status).toBe(404);
       expect(
         (
-          await app.request(`/api/v1/hosts/${body.host.id}`, {
+          await app.request(`/api/v1/hosts/${randomUUID()}`, {
             method: "PATCH",
-            headers: authHeaders(body.hostToken),
-            body: JSON.stringify({ name: "Still legacy" }),
+            headers: authHeaders("synhost_removed"),
+            body: JSON.stringify({ name: "Must not apply" }),
           })
         ).status,
-      ).toBe(200);
+      ).toBe(401);
     });
 
-    it("does not let an org-mate mint a legacy token for the owner's host", async () => {
+    it("does not let an org-mate relink the owner's environment", async () => {
       const { app } = buildApp();
       const owner = await signIn();
       const member = await teammate(owner);
       const environmentId = randomUUID();
       const host = await linkHost(app, owner, { environmentId });
-      const takeover = await app.request("/api/v1/hosts", {
+      const takeover = await app.request("/api/v1/hosts/link/start", {
         method: "POST",
         headers: authHeaders(member.token),
         body: JSON.stringify({
@@ -1243,7 +1236,6 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           name: "Legacy takeover",
           platform: "darwin",
           kind: "local",
-          endpoints: [],
         }),
       });
       expect(takeover.status).toBe(409);

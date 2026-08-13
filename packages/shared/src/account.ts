@@ -3,6 +3,7 @@ import {
   type AccountErrorCode,
   AccountErrorBody,
   AccountHost,
+  type AccountHostEndpoint,
   type AccountMe,
   AccountMe as AccountMeSchema,
   type InstanceInfo,
@@ -29,9 +30,24 @@ import {
   PushUsageResponse as PushUsageResponseSchema,
   type UsageSummary,
   UsageSummary as UsageSummarySchema,
-  type RegisterHostRequest,
-  type RegisterHostResponse,
-  RegisterHostResponse as RegisterHostResponseSchema,
+  type ApiJwks,
+  ApiJwks as ApiJwksSchema,
+  type HostAuthorizationSnapshot,
+  HostAuthorizationSnapshot as HostAuthorizationSnapshotSchema,
+  type LinkCompleteRequest,
+  type LinkCompleteResponse,
+  LinkCompleteResponse as LinkCompleteResponseSchema,
+  type LinkDeviceApproveRequest,
+  type LinkDeviceStartResponse,
+  LinkDeviceStartResponse as LinkDeviceStartResponseSchema,
+  type LinkDeviceTokenRequest,
+  type LinkDeviceTokenResponse,
+  LinkDeviceTokenResponse as LinkDeviceTokenResponseSchema,
+  type LinkStartRequest,
+  type LinkStartResponse,
+  LinkStartResponse as LinkStartResponseSchema,
+  type RelayTicketResponse,
+  RelayTicketResponse as RelayTicketResponseSchema,
   type UpdateHostRequest,
   type UpdateOrganizationRequest,
   type UpdateProfileRequest,
@@ -157,6 +173,10 @@ function authHeaders(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
 }
 
+function hostProofHeaders(proof: string): Record<string, string> {
+  return { authorization: `HostProof ${proof}` };
+}
+
 export interface CreateAccountClientOptions {
   baseUrl: string;
   fetch?: FetchLike;
@@ -202,8 +222,21 @@ export interface AccountClient {
   /** Renames the workspace — the WorkOS organization the token is scoped to. */
   updateOrganization(token: string, request: UpdateOrganizationRequest): Promise<AccountMe>;
   listHosts(token: string): Promise<ListHostsResponse>;
-  registerHost(token: string, request: RegisterHostRequest): Promise<RegisterHostResponse>;
-  updateHost(hostToken: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
+  startHostLink(token: string, request: LinkStartRequest): Promise<LinkStartResponse>;
+  completeHostLink(request: LinkCompleteRequest): Promise<LinkCompleteResponse>;
+  startDeviceHostLink(): Promise<LinkDeviceStartResponse>;
+  approveDeviceHostLink(token: string, request: LinkDeviceApproveRequest): Promise<void>;
+  exchangeDeviceHostLink(request: LinkDeviceTokenRequest): Promise<LinkDeviceTokenResponse>;
+  getApiJwks(): Promise<ApiJwks>;
+  replaceHostEndpoints(
+    hostProof: string,
+    hostId: string,
+    endpoints: readonly AccountHostEndpoint[],
+  ): Promise<AccountHost>;
+  requestRelayTicket(hostProof: string, hostId: string): Promise<RelayTicketResponse>;
+  getHostAuthorization(hostProof: string, hostId: string): Promise<HostAuthorizationSnapshot>;
+  unlinkHost(hostProof: string, hostId: string): Promise<AccountHost>;
+  updateHost(token: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
   deleteHost(token: string, hostId: string): Promise<void>;
   /**
    * Pushes a batch of per-minute usage buckets. Buckets carry ABSOLUTE
@@ -480,24 +513,106 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       );
     },
 
-    async registerHost(token, request) {
+    async startHostLink(token, request) {
       return requestJson(
-        "/api/v1/hosts",
+        "/api/v1/hosts/link/start",
         {
           method: "POST",
           headers: { ...authHeaders(token), "content-type": "application/json" },
           body: JSON.stringify(request),
         },
-        RegisterHostResponseSchema,
+        LinkStartResponseSchema,
       );
     },
 
-    async updateHost(hostToken, hostId, request) {
+    async completeHostLink(request) {
+      return requestJson(
+        "/api/v1/hosts/link/complete",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        LinkCompleteResponseSchema,
+      );
+    },
+
+    async startDeviceHostLink() {
+      return requestJson(
+        "/api/v1/hosts/link/device",
+        { method: "POST" },
+        LinkDeviceStartResponseSchema,
+      );
+    },
+
+    async approveDeviceHostLink(token, request) {
+      await requestEmpty("/api/v1/hosts/link/approve", {
+        method: "POST",
+        headers: { ...authHeaders(token), "content-type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    },
+
+    async exchangeDeviceHostLink(request) {
+      return requestJson(
+        "/api/v1/hosts/link/device/token",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        LinkDeviceTokenResponseSchema,
+      );
+    },
+
+    async getApiJwks() {
+      return requestJson("/api/v1/keys/jwks", { method: "GET" }, ApiJwksSchema);
+    },
+
+    async replaceHostEndpoints(hostProof, hostId, endpoints) {
+      const decoded = await requestJson(
+        `/api/v1/hosts/${encodeURIComponent(hostId)}/endpoints`,
+        {
+          method: "PUT",
+          headers: { ...hostProofHeaders(hostProof), "content-type": "application/json" },
+          body: JSON.stringify({ endpoints }),
+        },
+        UpdateHostResponse,
+      );
+      return decoded.host;
+    },
+
+    async requestRelayTicket(hostProof, hostId) {
+      return requestJson(
+        `/api/v1/hosts/${encodeURIComponent(hostId)}/relay-ticket`,
+        { method: "POST", headers: hostProofHeaders(hostProof) },
+        RelayTicketResponseSchema,
+      );
+    },
+
+    async getHostAuthorization(hostProof, hostId) {
+      return requestJson(
+        `/api/v1/hosts/${encodeURIComponent(hostId)}/authorization`,
+        { method: "GET", headers: hostProofHeaders(hostProof) },
+        HostAuthorizationSnapshotSchema,
+      );
+    },
+
+    async unlinkHost(hostProof, hostId) {
+      const decoded = await requestJson(
+        `/api/v1/hosts/${encodeURIComponent(hostId)}/unlink`,
+        { method: "POST", headers: hostProofHeaders(hostProof) },
+        UpdateHostResponse,
+      );
+      return decoded.host;
+    },
+
+    async updateHost(token, hostId, request) {
       const decoded = await requestJson(
         `/api/v1/hosts/${encodeURIComponent(hostId)}`,
         {
           method: "PATCH",
-          headers: { ...authHeaders(hostToken), "content-type": "application/json" },
+          headers: { ...authHeaders(token), "content-type": "application/json" },
           body: JSON.stringify(request),
         },
         UpdateHostResponse,

@@ -779,8 +779,8 @@ it.layer(testLayer)("server CLI command", (it) => {
 
   // With a stored session and NO explicit URL anywhere, `synara auth` resolves
   // the persisted accountUrl instead of failing "not configured". The session
-  // here is already registered, so the command answers locally — succeeding
-  // at all proves the URL requirement was satisfied from the file.
+  // proves the URL requirement is satisfied from the file even when the host
+  // link still needs to be completed.
   it.effect("lets `synara auth` use the persisted accountUrl with no env or flag", () =>
     Effect.gen(function* () {
       const homeDir = makeTempHome("synara-main-auth-persisted-");
@@ -793,8 +793,9 @@ it.layer(testLayer)("server CLI command", (it) => {
           organizationId: "org_1",
           accessToken: "access-1",
           refreshToken: "refresh-1",
-          hostToken: "host-token",
           hostId: "host_1",
+          hostOwnerUserId: "user_1",
+          hostKeyGeneration: 1,
         }),
       );
 

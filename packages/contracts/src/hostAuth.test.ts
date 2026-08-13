@@ -69,7 +69,6 @@ describe("host auth contracts", () => {
       platform: "darwin",
       kind: "local",
       endpoints: [],
-      registeredByUserId: "user_1",
       createdAt: "2026-08-13T00:00:00.000Z",
       lastSeenAt: "2026-08-13T00:00:00.000Z",
     };

@@ -3,12 +3,17 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { type AccountHost, EnvironmentId } from "@synara/contracts";
 
 import type { AccountClient } from "@synara/shared/account";
 import { AccountApiError, OrganizationRequiredError } from "@synara/shared/account";
+import { generateAndPersistHostIdentity } from "./hostIdentity";
+
+vi.mock("./tailscaleEndpoint", () => ({
+  resolveTailscaleEndpoint: vi.fn(async () => undefined),
+}));
 
 import {
   accountCredentialsPath,
@@ -62,7 +67,10 @@ const host: AccountHost = {
   kind: "local",
   endpoints: [{ url: "http://192.168.1.10:3773", transport: "lan" }],
   appVersion: "0.6.4",
-  registeredByUserId: "user_1",
+  ownerUserId: "user_1",
+  discoverable: true,
+  linked: true,
+  keyGeneration: 1,
   createdAt: "2026-08-01T00:00:00.000Z",
   lastSeenAt: "2026-08-03T12:00:00.000Z",
 };
@@ -95,6 +103,7 @@ const WORKOS_API_URL = "https://api.workos.example";
 
 /** A credentials file with a live session, as `synara auth` leaves it. */
 function credentials(overrides: Record<string, unknown> = {}) {
+  const { linkedHost: linkedHostValue, ...currentOverrides } = overrides;
   return {
     accountUrl: "https://accounts.example.com",
     workosClientId: CLIENT_ID,
@@ -103,11 +112,32 @@ function credentials(overrides: Record<string, unknown> = {}) {
     userId: "user_1",
     accessToken: "access-1",
     refreshToken: "refresh-1",
-    ...overrides,
+    ...currentOverrides,
+    ...(linkedHostValue === true
+      ? {
+          hostId: typeof currentOverrides.hostId === "string" ? currentOverrides.hostId : "host_1",
+          hostOwnerUserId: "user_1",
+          hostKeyGeneration: 1,
+        }
+      : {}),
   };
 }
 
-function makeClient(overrides: Partial<AccountClient>): AccountClient {
+type AccountClientOverrides = Partial<AccountClient> & {
+  readonly linkHost?: (token: string, request: any) => Promise<{ host: AccountHost }>;
+  readonly unlinkHostFlow?: (proof: string, hostId: string) => Promise<void>;
+  readonly reportEndpoints?: (
+    proof: string,
+    hostId: string,
+    request: { readonly endpoints: readonly unknown[] },
+  ) => Promise<AccountHost>;
+};
+
+function makeClient(overrides: AccountClientOverrides): AccountClient {
+  let pendingLink: Promise<{ host: AccountHost }> | undefined;
+  const linkHost = overrides.linkHost;
+  const unlinkHostFlow = overrides.unlinkHostFlow;
+  const reportEndpoints = overrides.reportEndpoints;
   return {
     instance: unimplemented("instance"),
     sendOtp: unimplemented("sendOtp"),
@@ -116,14 +146,65 @@ function makeClient(overrides: Partial<AccountClient>): AccountClient {
     updateProfile: unimplemented("updateProfile"),
     updateOrganization: unimplemented("updateOrganization"),
     listHosts: unimplemented("listHosts"),
-    registerHost: unimplemented("registerHost"),
+    startHostLink: linkHost
+      ? async (token, request) => {
+          pendingLink = Promise.resolve(await linkHost(token, request));
+          return Promise.resolve({
+            challengeId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+            nonce: "bm9uY2U",
+            expiresAt: new Date(Date.now() + 300_000).toISOString(),
+          });
+        }
+      : unimplemented("startHostLink"),
+    completeHostLink: linkHost
+      ? async () => ({ host: (await pendingLink!).host as any })
+      : unimplemented("completeHostLink"),
+    startDeviceHostLink: unimplemented("startDeviceHostLink"),
+    approveDeviceHostLink: unimplemented("approveDeviceHostLink"),
+    exchangeDeviceHostLink: unimplemented("exchangeDeviceHostLink"),
+    getApiJwks: unimplemented("getApiJwks"),
+    replaceHostEndpoints: unimplemented("replaceHostEndpoints"),
+    requestRelayTicket: unimplemented("requestRelayTicket"),
+    getHostAuthorization: unimplemented("getHostAuthorization"),
+    unlinkHost: unimplemented("unlinkHost"),
     updateHost: unimplemented("updateHost"),
     deleteHost: unimplemented("deleteHost"),
     requestAuthorizeUrl: unimplemented("requestAuthorizeUrl"),
     exchangeAuthorizeCode: unimplemented("exchangeAuthorizeCode"),
     refreshAccessToken: unimplemented("refreshAccessToken"),
     ...overrides,
+    ...(linkHost
+      ? {
+          startHostLink: async (token: string, request: any) => {
+            pendingLink = Promise.resolve(await linkHost(token, request));
+            return Promise.resolve({
+              challengeId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+              nonce: "bm9uY2U",
+              expiresAt: new Date(Date.now() + 300_000).toISOString(),
+            });
+          },
+          completeHostLink: async () => ({ host: (await pendingLink!).host as any }),
+        }
+      : {}),
+    ...(unlinkHostFlow
+      ? {
+          unlinkHost: (proof: string, hostId: string) =>
+            unlinkHostFlow(proof, hostId).then(() => host),
+        }
+      : {}),
+    ...(reportEndpoints
+      ? {
+          replaceHostEndpoints: (proof: string, hostId: string, endpoints: readonly unknown[]) =>
+            reportEndpoints(proof, hostId, { endpoints } as any),
+        }
+      : {}),
   } as AccountClient;
+}
+
+async function persistTestHostIdentity(baseDir: string): Promise<void> {
+  const secretsDir = path.join(baseDir, "userdata", "secrets");
+  fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
+  await generateAndPersistHostIdentity(path.join(secretsDir, "host-identity.json"));
 }
 
 function unauthorized(): AccountApiError {
@@ -135,7 +216,7 @@ describe("account credential store", () => {
     const baseDir = makeBaseDir();
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
 
-    const stored = credentials({ hostToken: "host-token", hostId: "host_1" });
+    const stored = credentials({ linkedHost: true, hostId: "host_1" });
     await writeAccountCredentials(baseDir, stored);
 
     expect(await readAccountCredentials(baseDir)).toEqual(stored);
@@ -159,8 +240,9 @@ describe("account credential store", () => {
       JSON.stringify({
         accountUrl: "https://accounts.example.com",
         deviceToken: "legacy-device-token",
-        hostToken: "host-token",
         hostId: "host_1",
+        hostOwnerUserId: "user_1",
+        hostKeyGeneration: 1,
       }),
       "utf8",
     );
@@ -185,19 +267,14 @@ describe("account credential store", () => {
         workosApiUrl: WORKOS_API_URL,
         accessToken: "access-1",
         refreshToken: "refresh-1",
-        hostToken: "host-token",
         hostId: "host_1",
       }),
       "utf8",
     );
 
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
-    // The host half is still readable, so `synara auth` can re-link rather
-    // than stranding the machine's registration.
-    expect(await readAccountFile(baseDir)).toMatchObject({
-      hostToken: "host-token",
-      hostId: "host_1",
-    });
+    // An incomplete public-key link is ignored.
+    expect(await readAccountFile(baseDir)).not.toHaveProperty("hostId");
   });
 
   it("reads a file whose session was cleared but keeps its host fields", async () => {
@@ -206,13 +283,15 @@ describe("account credential store", () => {
       accountUrl: "https://accounts.example.com",
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
-      hostToken: "host-token",
       hostId: "host_1",
+      hostOwnerUserId: "user_1",
+      hostKeyGeneration: 1,
     });
 
     expect(await readAccountFile(baseDir)).toMatchObject({
-      hostToken: "host-token",
       hostId: "host_1",
+      hostOwnerUserId: "user_1",
+      hostKeyGeneration: 1,
     });
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
   });
@@ -238,7 +317,7 @@ describe("withFreshAccessToken", () => {
 
   it("persists the rotated pair before retrying, so a crash mid-retry cannot lose it", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
 
     // Read back inside the retry, not after it: a helper that wrote the new
     // pair only once `fn` resolved would still pass an after-the-fact
@@ -276,7 +355,7 @@ describe("withFreshAccessToken", () => {
     expect(result).toBe("ok");
     expect(attempts).toEqual(["access-1", "access-2"]);
     expect(onDiskDuringRetry).toEqual(
-      credentials({ accessToken: "access-2", refreshToken: "refresh-2", hostToken: "host-token" }),
+      credentials({ accessToken: "access-2", refreshToken: "refresh-2", linkedHost: true }),
     );
   });
 
@@ -447,10 +526,7 @@ describe("withFreshAccessToken", () => {
 
   it("signs the session out but keeps the host fields when the refresh token is spent", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
 
     await expect(
       withFreshAccessToken(
@@ -476,8 +552,9 @@ describe("withFreshAccessToken", () => {
       accountUrl: "https://accounts.example.com",
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
-      hostToken: "host-token",
       hostId: "host_1",
+      hostOwnerUserId: "user_1",
+      hostKeyGeneration: 1,
     });
   });
 
@@ -488,7 +565,7 @@ describe("withFreshAccessToken", () => {
   // the loser re-reads and rides the winner's stored pair instead.
   it("lets concurrent expired-token operations share one rotation instead of double-spending", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
 
     // Single-use semantics, as WorkOS enforces them: only the stored token
     // redeems, exactly once.
@@ -530,7 +607,7 @@ describe("withFreshAccessToken", () => {
     // never presented the spent token.
     expect(refreshCalls).toBe(1);
     expect(await readAccountCredentials(baseDir)).toEqual(
-      credentials({ accessToken: "access-2", refreshToken: "refresh-2", hostToken: "host-token" }),
+      credentials({ accessToken: "access-2", refreshToken: "refresh-2", linkedHost: true }),
     );
   });
 
@@ -539,7 +616,7 @@ describe("withFreshAccessToken", () => {
   // compare-and-swapped on the refresh token it consumed.
   it("does not let a stale workspace-changed clear overwrite a newly rotated session", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
 
     let releaseFn: ((error: unknown) => void) | undefined;
     const gate = new Promise<never>((_, reject) => {
@@ -552,13 +629,13 @@ describe("withFreshAccessToken", () => {
       (error: unknown) => error,
     );
 
-    // Meanwhile the session rotates and a host token is stored.
+    // Meanwhile the session rotates and a host link is stored.
     await writeAccountCredentials(
       baseDir,
       credentials({
         accessToken: "access-2",
         refreshToken: "refresh-2",
-        hostToken: "host-token-2",
+        linkedHost: true,
         hostId: "host_2",
       }),
     );
@@ -573,7 +650,7 @@ describe("withFreshAccessToken", () => {
       credentials({
         accessToken: "access-2",
         refreshToken: "refresh-2",
-        hostToken: "host-token-2",
+        linkedHost: true,
         hostId: "host_2",
       }),
     );
@@ -614,10 +691,7 @@ describe("withFreshAccessToken and workspace access", () => {
    */
   it("clears the session without refreshing when the workspace is no longer the caller's", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
 
     let attempts = 0;
     await expect(
@@ -643,8 +717,9 @@ describe("withFreshAccessToken and workspace access", () => {
       accountUrl: "https://accounts.example.com",
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
-      hostToken: "host-token",
       hostId: "host_1",
+      hostOwnerUserId: "user_1",
+      hostKeyGeneration: 1,
     });
   });
 
@@ -780,8 +855,9 @@ describe("resolveAuthLoginAccountUrl", () => {
       accountUrl: "https://accounts.example.com",
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
-      hostToken: "host-token",
       hostId: "host_1",
+      hostOwnerUserId: "user_1",
+      hostKeyGeneration: 1,
     });
 
     await expect(
@@ -817,8 +893,9 @@ describe("runAuthLogin", () => {
       accountUrl: "https://accounts.example.com",
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
-      hostToken: "old-host-token",
       hostId: "host_1",
+      hostOwnerUserId: "user_1",
+      hostKeyGeneration: 1,
     };
     await writeAccountCredentials(baseDir, stored);
     const stdout = makeStdout();
@@ -836,10 +913,8 @@ describe("runAuthLogin", () => {
 
   it("refuses to re-link when a fully registered session already exists", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await persistTestHostIdentity(baseDir);
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
     const stdout = makeStdout();
 
     await runAuthLogin({
@@ -850,7 +925,7 @@ describe("runAuthLogin", () => {
     });
 
     expect(stdout.text()).toContain("Already signed in");
-    expect(stdout.text()).toContain("this host is registered");
+    expect(stdout.text()).toContain("this host is linked");
     expect(stdout.text()).toContain("synara auth logout");
   });
 
@@ -864,9 +939,9 @@ describe("runAuthLogin", () => {
 
     const registered: Array<{ token: string; request: unknown }> = [];
     const client = makeClient({
-      registerHost: (token, request) => {
+      linkHost: (token, request) => {
         registered.push({ token, request });
-        return Promise.resolve({ host, hostToken: "host-token" });
+        return Promise.resolve({ host, linkedHost: true });
       },
     });
 
@@ -880,7 +955,7 @@ describe("runAuthLogin", () => {
       appVersion: "0.6.4",
     });
 
-    expect(stdout.text()).toContain("completing host registration");
+    expect(stdout.text()).toContain("completing host link");
     expect(registered).toHaveLength(1);
     expect(registered[0]?.token).toBe("access-1");
     expect(registered[0]?.request).toMatchObject({
@@ -888,11 +963,10 @@ describe("runAuthLogin", () => {
       name: "workstation",
       platform: "darwin",
       kind: "local",
-      appVersion: "0.6.4",
     });
 
     expect(await readAccountCredentials(baseDir)).toEqual(
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
+      credentials({ linkedHost: true, hostId: "host_1" }),
     );
   });
 
@@ -909,11 +983,11 @@ describe("runAuthLogin", () => {
       platform: "win32",
       hostname: "pc",
       client: makeClient({
-        registerHost: (_token, request) => {
+        linkHost: (_token, request) => {
           requests.push({ platform: request.platform });
           return Promise.resolve({
             host: { ...host, platform: "windows" },
-            hostToken: "host-token",
+            linkedHost: true,
           });
         },
       }),
@@ -955,10 +1029,10 @@ describe("runAuthLogin", () => {
           refreshToken: "refresh-2",
           user: { id: "user_1", email: "ada@example.com", name: "Ada Lovelace" },
         }),
-      registerHost: (token) => {
+      linkHost: (token) => {
         tokens.push(token);
         if (token === "access-1") return Promise.reject(unauthorized());
-        return Promise.resolve({ host, hostToken: "host-token" });
+        return Promise.resolve({ host, linkedHost: true });
       },
     });
 
@@ -978,7 +1052,7 @@ describe("runAuthLogin", () => {
       credentials({
         accessToken: "access-2",
         refreshToken: "refresh-2",
-        hostToken: "host-token",
+        linkedHost: true,
         hostId: "host_1",
       }),
     );
@@ -988,10 +1062,8 @@ describe("runAuthLogin", () => {
 describe("runAuthLogout", () => {
   it("removes the host, then removes the credentials file", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await persistTestHostIdentity(baseDir);
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
     const stdout = makeStdout();
     const deleted: Array<[string, string]> = [];
 
@@ -999,14 +1071,15 @@ describe("runAuthLogout", () => {
       baseDir,
       stdout: stdout.write,
       client: makeClient({
-        deleteHost: (token, hostId) => {
+        unlinkHostFlow: (token, hostId) => {
           deleted.push([token, hostId]);
           return Promise.resolve();
         },
       }),
     });
 
-    expect(deleted).toEqual([["host-token", "host_1"]]);
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]?.[1]).toBe("host_1");
     expect(await readAccountCredentials(baseDir)).toBeUndefined();
     expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
     expect(stdout.text()).toContain("expires on its own");
@@ -1014,12 +1087,14 @@ describe("runAuthLogout", () => {
 
   it("signs out a file whose session already expired", async () => {
     const baseDir = makeBaseDir();
+    await persistTestHostIdentity(baseDir);
     await writeAccountCredentials(baseDir, {
       accountUrl: "https://accounts.example.com",
       workosClientId: CLIENT_ID,
       workosApiUrl: WORKOS_API_URL,
-      hostToken: "host-token",
       hostId: "host_1",
+      hostOwnerUserId: "user_1",
+      hostKeyGeneration: 1,
     });
     const stdout = makeStdout();
     const deleted: Array<[string, string]> = [];
@@ -1028,32 +1103,29 @@ describe("runAuthLogout", () => {
       baseDir,
       stdout: stdout.write,
       client: makeClient({
-        deleteHost: (token, hostId) => {
+        unlinkHostFlow: (token, hostId) => {
           deleted.push([token, hostId]);
           return Promise.resolve();
         },
       }),
     });
 
-    // The host token is independent of the user session, so an expired
-    // session must not leave a phantom host on the account.
-    expect(deleted).toEqual([["host-token", "host_1"]]);
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]?.[1]).toBe("host_1");
     expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
   });
 
   it("still removes local credentials when the network calls fail", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await persistTestHostIdentity(baseDir);
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
     const stdout = makeStdout();
 
     await runAuthLogout({
       baseDir,
       stdout: stdout.write,
       client: makeClient({
-        deleteHost: () => Promise.reject(new Error("network down")),
+        unlinkHostFlow: () => Promise.reject(new Error("network down")),
       }),
     });
 
@@ -1087,7 +1159,7 @@ describe("runAuthLogout", () => {
       JSON.stringify({
         accountUrl: "https://accounts.example.com",
         deviceToken: "legacy-device-token",
-        hostToken: "host-token",
+        linkedHost: true,
         hostId: "host_1",
       }),
       "utf8",
@@ -1096,7 +1168,7 @@ describe("runAuthLogout", () => {
 
     await runAuthLogout({ baseDir, stdout: stdout.write, client: makeClient({}) });
 
-    // The legacy host token cannot authenticate against the new API, so the
+    // The legacy host link cannot authenticate against the new API, so the
     // host record is the user's to clean up — but the file must still go.
     expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
     expect(stdout.text()).toContain("stale credentials");
@@ -1115,10 +1187,8 @@ describe("runAuthLogout", () => {
 
   it("waits for a concurrent credential-lock holder and tears down what it stored", async () => {
     const baseDir = makeBaseDir();
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token-old", hostId: "host_1" }),
-    );
+    await persistTestHostIdentity(baseDir);
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
 
     // A slow refresh/host-registration holding the lock mid-flight. If logout
     // deleted the file without the lock, this holder's write would land after
@@ -1140,7 +1210,7 @@ describe("runAuthLogout", () => {
         credentials({
           accessToken: "access-2",
           refreshToken: "refresh-2",
-          hostToken: "host-token-new",
+          linkedHost: true,
           hostId: "host_2",
         }),
       );
@@ -1153,7 +1223,7 @@ describe("runAuthLogout", () => {
       baseDir,
       stdout: stdout.write,
       client: makeClient({
-        deleteHost: (token, hostId) => {
+        unlinkHostFlow: (token, hostId) => {
           deleted.push([token, hostId]);
           return Promise.resolve();
         },
@@ -1171,7 +1241,8 @@ describe("runAuthLogout", () => {
 
     // Logout re-read inside the lock, so the host it tore down is the one the
     // holder committed — not the stale pre-rotation snapshot.
-    expect(deleted).toEqual([["host-token-new", "host_2"]]);
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]?.[1]).toBe("host_2");
     expect(fs.existsSync(accountCredentialsPath(baseDir))).toBe(false);
     expect(stdout.text()).toContain("Signed out");
   });
@@ -1202,10 +1273,7 @@ describe("runStatus", () => {
     const stateDir = path.join(baseDir, "userdata");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(stateDir, "environment-id"), "env-uuid\n", "utf8");
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
     const stdout = makeStdout();
 
     await runStatus({
@@ -1364,9 +1432,9 @@ describe("refreshHostRegistration", () => {
       instance: record("instance"),
       me: record("me"),
       listHosts: record("listHosts"),
-      registerHost: record("registerHost"),
-      updateHost: record("updateHost"),
-      deleteHost: record("deleteHost"),
+      linkHost: record("linkHost"),
+      reportEndpoints: record("reportEndpoints"),
+      unlinkHostFlow: record("unlinkHostFlow"),
     } as unknown as AccountClient;
     return { client, reached };
   }
@@ -1391,53 +1459,47 @@ describe("refreshHostRegistration", () => {
 
   it("sends the freshly derived endpoints for the registered host exactly once", async () => {
     const baseDir = makeBaseDir();
+    await persistTestHostIdentity(baseDir);
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
 
-    const calls: Array<{ hostToken: string; hostId: string; request: unknown }> = [];
+    const calls: Array<{ linkedHost: string; hostId: string; request: unknown }> = [];
     await refreshHostRegistration({
       baseDir,
       appVersion: "0.6.4",
       client: makeClient({
-        updateHost: (hostToken, hostId, request) => {
-          calls.push({ hostToken, hostId, request });
+        reportEndpoints: (linkedHost, hostId, request) => {
+          calls.push({ linkedHost, hostId, request });
           return Promise.resolve(host);
         },
       }),
     });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.hostToken).toBe("host-token");
     expect(calls[0]?.hostId).toBe("host_1");
     expect(calls[0]?.request).toEqual({
       endpoints: [{ url: "http://192.168.1.42:3773", transport: "lan" }],
-      appVersion: "0.6.4",
     });
   });
 
   it("resolves without throwing when the account rejects the refresh", async () => {
     const baseDir = makeBaseDir();
+    await persistTestHostIdentity(baseDir);
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
 
     let attempted = false;
     await expect(
       refreshHostRegistration({
         baseDir,
         client: makeClient({
-          updateHost: () => {
+          reportEndpoints: () => {
             attempted = true;
             return Promise.reject(
               new AccountApiError({
                 code: "token_revoked",
                 status: 403,
-                message: "Host token invalid",
+                message: "Host proof invalid",
               }),
             );
           },
@@ -1460,7 +1522,7 @@ describe("refreshHostRegistration", () => {
     expect(reached).toEqual([]);
   });
 
-  it("does not call the account when credentials exist without a host token", async () => {
+  it("does not call the account when credentials exist without a host link", async () => {
     const baseDir = makeBaseDir();
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
     await writeAccountCredentials(baseDir, credentials());
@@ -1471,10 +1533,10 @@ describe("refreshHostRegistration", () => {
     expect(reached).toEqual([]);
   });
 
-  it("does not call the account when credentials carry a host token but no host id", async () => {
+  it("does not call the account when credentials carry a host link but no host id", async () => {
     const baseDir = makeBaseDir();
     writeRuntimeState(baseDir, "http://192.168.1.42:3773", "192.168.1.42");
-    await writeAccountCredentials(baseDir, credentials({ hostToken: "host-token" }));
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true }));
 
     const { client, reached } = makeRecordingClient();
     await refreshHostRegistration({ baseDir, client });
@@ -1484,24 +1546,22 @@ describe("refreshHostRegistration", () => {
 
   it("clears stale endpoints when the server is only reachable on loopback", async () => {
     const baseDir = makeBaseDir();
+    await persistTestHostIdentity(baseDir);
     writeRuntimeState(baseDir, "http://127.0.0.1:3773", "127.0.0.1");
-    await writeAccountCredentials(
-      baseDir,
-      credentials({ hostToken: "host-token", hostId: "host_1" }),
-    );
+    await writeAccountCredentials(baseDir, credentials({ linkedHost: true, hostId: "host_1" }));
 
     const requests: unknown[] = [];
     await refreshHostRegistration({
       baseDir,
       appVersion: "0.6.4",
       client: makeClient({
-        updateHost: (_hostToken, _hostId, request) => {
+        reportEndpoints: (_linkedHost, _hostId, request) => {
           requests.push(request);
           return Promise.resolve(host);
         },
       }),
     });
 
-    expect(requests).toEqual([{ endpoints: [], appVersion: "0.6.4" }]);
+    expect(requests).toEqual([{ endpoints: [] }]);
   });
 });

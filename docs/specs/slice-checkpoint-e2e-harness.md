@@ -4,7 +4,7 @@ Gates the A→B→C thin slice (parent spec, "Workstreams & build order" step 4)
 
 ## Why this exists
 
-Each slice's own suite uses fakes for its neighbours: the relay tests fake the API, the host tests fake the relay. Those prove each side honors the contract *as that side understands it*. Only this harness proves the three understandings agree — and it is the thing that would have caught, in one run, both bugs the per-slice suites missed (the closing-handshake hang and the silently dropped frames).
+Each slice's own suite uses fakes for its neighbours: the relay tests fake the API, the host tests fake the relay. Those prove each side honors the contract _as that side understands it_. Only this harness proves the three understandings agree — and it is the thing that would have caught, in one run, both bugs the per-slice suites missed (the closing-handshake hang and the silently dropped frames).
 
 It is not throwaway: it becomes the permanent integration suite and the debugging tool for Slices D and E.
 
@@ -23,11 +23,11 @@ Each gets an ephemeral port; no fixed ports, so the suite is parallel-safe and C
 
 1. **Enrollment**: host links via challenge → `hosts` row has the public key and `key_generation` 1; a second link rotates the key and the old HostProof is refused.
 2. **Device-code enrollment**: headless path — mint code, approve as the owner, exchange, complete.
-3. **Relay session**: client fetches a grant, connects through the relay, completes the mint handshake, exchanges real protocol traffic both directions, and the payloads arrive byte-identical (text *and* binary).
+3. **Relay session**: client fetches a grant, connects through the relay, completes the mint handshake, exchanges real protocol traffic both directions, and the payloads arrive byte-identical (text _and_ binary).
 4. **Direct session**: same client, same credential, over the host's LAN URL — proving the credential is transport-independent (ADR 0013) and no re-auth occurs on switch.
 5. **Grant single-use**: replaying a spent grant is refused with the documented close code.
 6. **Revocation kills live sessions**: with a session open, the owner turns discoverability off (or revokes the device) → the API writes the event → the relay polls it → the host drops that session, and the client observes the specific close code. This is the one path that spans all three services and cannot be tested anywhere else.
-7. **Offline degradation**: stop the relay mid-session → the direct transport still works; stop the API → an already-minted credential still authenticates until expiry, and a *new* device→host pairing fails cleanly (the accepted trade in ADR 0013).
+7. **Offline degradation**: stop the relay mid-session → the direct transport still works; stop the API → an already-minted credential still authenticates until expiry, and a _new_ device→host pairing fails cleanly (the accepted trade in ADR 0013).
 8. **Backpressure integrity**: push a large burst through a deliberately slow reader and assert every frame arrives, in order, unmodified — the regression test for the dropped-frame blocker.
 
 ## Running

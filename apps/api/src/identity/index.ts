@@ -10,9 +10,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { ApiConfig } from "../config";
 import type * as schema from "../db/schema";
 import { createDevIdentityProvider } from "./devProvider";
-import { createDeviceCredentialStore } from "./deviceCredentialStore";
 import { createDeviceRegistry } from "./deviceRegistry";
-import { createEnvironmentRegistry } from "./environmentRegistry";
 import { createHostGrantIssuer } from "./grantIssuer";
 import { createHostKeyRegistry } from "./hostKeyRegistry";
 import type { IdentityAdapters } from "./interfaces";
@@ -24,11 +22,6 @@ export async function createIdentityAdapters(
   config: ApiConfig,
   db: NodePgDatabase<typeof schema>,
 ): Promise<IdentityAdapters> {
-  // The credential store and environment registry are database-owned and
-  // identical under every provider: host tokens and host rows are Synara's,
-  // not the identity provider's.
-  const deviceCredentials = createDeviceCredentialStore(db);
-  const environments = createEnvironmentRegistry(db);
   const signing = await createApiSigningService({
     issuer: config.apiPublicUrl,
     seed: config.apiSigningKey,
@@ -44,8 +37,6 @@ export async function createIdentityAdapters(
     return {
       verifier,
       grants,
-      deviceCredentials,
-      environments,
       signing,
       hostKeys,
       devices,
@@ -59,8 +50,6 @@ export async function createIdentityAdapters(
   return {
     verifier,
     grants,
-    deviceCredentials,
-    environments,
     signing,
     hostKeys,
     devices,

@@ -117,8 +117,10 @@
         "@effect/sql-sqlite-bun": "catalog:",
         "@opencode-ai/sdk": "^1.15.13",
         "@pierre/diffs": "^1.2.12",
+        "@synara/relay-protocol": "workspace:*",
         "@xterm/headless": "^6.0.0",
         "effect": "catalog:",
+        "jose": "^6.1.0",
         "node-pty": "^1.1.0",
         "open": "^10.1.0",
         "tree-kill": "^1.2.2",
@@ -259,6 +261,7 @@
       "dependencies": {
         "@synara/contracts": "workspace:*",
         "effect": "catalog:",
+        "jose": "^6.1.0",
       },
       "devDependencies": {
         "@effect/language-service": "catalog:",

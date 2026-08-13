@@ -26,11 +26,7 @@ export const hosts = pgTable(
     // reference; orphaned rows are tolerated until WorkOS webhook cleanup is
     // built (future work).
     ownerOrgId: text("owner_org_id").notNull(),
-    // WorkOS user id of whoever ran legacy registration. Audit only — the
-    // independent ownerUserId below is the authorization key.
-    registeredByUserId: text("registered_by_user_id").notNull(),
-    // The user who owns and authorizes access to this host. Kept distinct
-    // from the legacy registration audit stamp until Slice C removes it.
+    // The user who owns and authorizes access to this host.
     ownerUserId: text("owner_user_id").notNull(),
     environmentId: text("environment_id").notNull(),
     name: text("name").notNull(),
@@ -239,28 +235,5 @@ export const usageSkillStats = pgTable(
       table.kind,
     ),
     index("usage_skill_stats_user_minute").on(table.userId, table.minute),
-  ],
-);
-
-export const hostTokens = pgTable(
-  "host_tokens",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    hostId: uuid("host_id")
-      .notNull()
-      .references(() => hosts.id, { onDelete: "cascade" }),
-    tokenHash: text("token_hash").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-    revokedAt: timestamp("revoked_at", { withTimezone: true }),
-  },
-  (table) => [
-    // One live credential per host, enforced by the database rather than by
-    // rotation happening to run alone: rotation is revoke-then-insert, and
-    // without this a race (or a bug) could leave a host with two valid
-    // tokens. Partial over `revoked_at IS NULL` so history rows are exempt.
-    uniqueIndex("host_tokens_one_active_per_host")
-      .on(table.hostId)
-      .where(sql`${table.revokedAt} IS NULL`),
   ],
 );

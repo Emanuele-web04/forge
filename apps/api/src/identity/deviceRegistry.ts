@@ -11,7 +11,7 @@ import { Schema } from "effect";
 import { decodeJwt } from "jose";
 import type * as schema from "../db/schema";
 import { devices, hosts } from "../db/schema";
-import { isUniqueViolation } from "./environmentRegistry";
+import { isUniqueViolation } from "./hostRecords";
 import { HostAuthDomainError, type DeviceRegistry } from "./interfaces";
 import { publicJwkThumbprint, verifyJwtWithEmbeddedJwk } from "./signing";
 import { writeRevocationEvents } from "./revocationLog";

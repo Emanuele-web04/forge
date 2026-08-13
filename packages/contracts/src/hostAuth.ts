@@ -165,14 +165,30 @@ export const SessionCredentialClaims = Schema.Struct({
 });
 export type SessionCredentialClaims = typeof SessionCredentialClaims.Type;
 
+/**
+ * RFC 9449 DPoP proof. `ath` (the access-token hash) binds the proof to a
+ * specific credential and is REQUIRED on every request that presents one —
+ * verifiers must check it. It is absent in exactly one case: the mint
+ * handshake, which is the request that *obtains* the credential and so has
+ * nothing to hash yet. Verifiers of a credential-bearing request must
+ * therefore decode with `DpopProofWithCredentialClaims`, which makes the
+ * omission impossible rather than merely discouraged.
+ */
 export const DpopProofClaims = Schema.Struct({
   htu: TrimmedNonEmptyString,
   htm: TrimmedNonEmptyString,
   jti: Jti,
   iat: JwtTime,
-  ath: Base64Url,
+  ath: Schema.optional(Base64Url),
 });
 export type DpopProofClaims = typeof DpopProofClaims.Type;
+
+/** A DPoP proof accompanying a session credential: `ath` is mandatory. */
+export const DpopProofWithCredentialClaims = Schema.Struct({
+  ...DpopProofClaims.fields,
+  ath: Base64Url,
+});
+export type DpopProofWithCredentialClaims = typeof DpopProofWithCredentialClaims.Type;
 
 export const LinkStartRequest = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId),
@@ -193,11 +209,7 @@ export type LinkStartResponse = typeof LinkStartResponse.Type;
 export const LinkCompleteRequest = Schema.Struct({ challengeId: Uuid, proof: JwtString });
 export type LinkCompleteRequest = typeof LinkCompleteRequest.Type;
 
-/**
- * AccountHost keeps its new fields optional at the legacy shared boundary so
- * pre-Slice-A consumers remain source-compatible. New link responses are
- * strict: linked hosts always carry the complete authorization/key state.
- */
+/** Linked hosts always carry the complete authorization/key state. */
 export const LinkedAccountHost = Schema.Struct({
   ...AccountHost.fields,
   ownerUserId: TrimmedNonEmptyString,

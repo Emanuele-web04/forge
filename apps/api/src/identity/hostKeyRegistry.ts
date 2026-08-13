@@ -16,7 +16,7 @@ import { decodeJwt } from "jose";
 import { createHash, randomBytes } from "node:crypto";
 import type * as schema from "../db/schema";
 import { hosts, linkChallenges } from "../db/schema";
-import { isUniqueViolation, toAccountHost } from "./environmentRegistry";
+import { isUniqueViolation, toAccountHost } from "./hostRecords";
 import { hostEnvironmentLockKey } from "./environmentLock";
 import { HostAuthDomainError, type HostKeyRegistry, type HostRecord } from "./interfaces";
 import { verifyJwtWithEmbeddedJwk } from "./signing";
@@ -233,7 +233,6 @@ export function createHostKeyRegistry(
               .values({
                 ownerUserId: owner.userId,
                 ownerOrgId: owner.orgId,
-                registeredByUserId: owner.userId,
                 environmentId: request.environmentId,
                 name: request.name,
                 platform: request.platform,
@@ -371,7 +370,6 @@ export function createHostKeyRegistry(
             .values({
               ownerUserId: challenge.ownerUserId,
               ownerOrgId: challenge.ownerOrgId,
-              registeredByUserId: challenge.ownerUserId,
               environmentId,
               name: claims.name,
               platform: claims.platform,

@@ -199,6 +199,29 @@ describe("trustedOrigins", () => {
     ).toBe(true);
   });
 
+  it("withdraws local trust while an SSH forward is enabled", () => {
+    // sshd's forwarded socket is indistinguishable from a same-machine
+    // process, so anyone who can SSH in could `ssh -L` to the MAIN port and
+    // skip the credential the dedicated forward port requires. Enabling a
+    // forward must therefore require auth server-wide, not just on that port.
+    expect(
+      requiresWebSocketAuthentication({
+        host: "127.0.0.1",
+        authToken: undefined,
+        publicUrl: undefined,
+        sshForwardPort: 7071,
+      }),
+    ).toBe(true);
+    expect(
+      requiresWebSocketAuthentication({
+        host: "127.0.0.1",
+        authToken: undefined,
+        publicUrl: undefined,
+        sshForwardPort: undefined,
+      }),
+    ).toBe(false);
+  });
+
   it("requires browser mutations to have a trusted origin or explicit bearer provenance", () => {
     expect(
       shouldRejectAuthMutationOrigin({

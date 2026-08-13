@@ -64,6 +64,13 @@
       "when": 1786617850245,
       "tag": "0008_modern_norrin_radd",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786646298283,
+      "tag": "0009_narrow_energizer",
+      "breakpoints": true
     }
   ]
 }

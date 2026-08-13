@@ -69,18 +69,16 @@ export const AccountHost = Schema.Struct({
   kind: AccountHostKind,
   endpoints: Schema.Array(AccountHostEndpoint),
   appVersion: Schema.optional(TrimmedNonEmptyString),
-  /** Authorization owner. Optional on decode for pre-Slice-A wire compatibility. */
-  ownerUserId: Schema.optional(TrimmedNonEmptyString),
+  /** Authorization owner. */
+  ownerUserId: TrimmedNonEmptyString,
   /** Whether non-owner members of the owning organization may see and use it. */
-  discoverable: Schema.optional(Schema.Boolean),
+  discoverable: Schema.Boolean,
   /** Whether a host public key is currently linked. */
-  linked: Schema.optional(Schema.Boolean),
+  linked: Schema.Boolean,
   /** Monotonic key epoch; host proofs bind to this value. */
-  keyGeneration: Schema.optional(NonNegativeInt),
+  keyGeneration: NonNegativeInt,
   /** Set by list reads to distinguish an owner row from an org-visible row. */
   mine: Schema.optional(Schema.Boolean),
-  /** WorkOS user id of whoever ran the legacy registration. Audit only. */
-  registeredByUserId: TrimmedNonEmptyString,
   createdAt: TrimmedNonEmptyString,
   lastSeenAt: TrimmedNonEmptyString,
 });
@@ -204,24 +202,6 @@ export const UpdateOrganizationRequest = Schema.Struct({
   name: AccountNameString,
 });
 export type UpdateOrganizationRequest = typeof UpdateOrganizationRequest.Type;
-
-export const RegisterHostRequest = Schema.Struct({
-  environmentId: EnvironmentId,
-  name: AccountNameString,
-  platform: AccountHostPlatform,
-  kind: AccountHostKind,
-  endpoints: Schema.Array(AccountHostEndpoint).check(
-    Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX),
-  ),
-  appVersion: Schema.optional(AccountAppVersionString),
-});
-export type RegisterHostRequest = typeof RegisterHostRequest.Type;
-
-export const RegisterHostResponse = Schema.Struct({
-  host: AccountHost,
-  hostToken: TrimmedNonEmptyString,
-});
-export type RegisterHostResponse = typeof RegisterHostResponse.Type;
 
 export const UpdateHostRequest = Schema.Struct({
   name: Schema.optional(AccountNameString),

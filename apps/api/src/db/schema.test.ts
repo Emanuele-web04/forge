@@ -14,7 +14,6 @@ function hostRow(overrides: Partial<typeof hosts.$inferInsert> = {}) {
     // WorkOS ids are opaque strings with no local row behind them.
     ownerOrgId: `org_${crypto.randomUUID()}`,
     ownerUserId: `user_${crypto.randomUUID()}`,
-    registeredByUserId: `user_${crypto.randomUUID()}`,
     environmentId: "env-1",
     name: "MacBook",
     platform: "darwin" as const,
@@ -47,11 +46,8 @@ describe.skipIf(!url)("schema", () => {
     const { db, pool } = createDb(url!);
     try {
       const environmentId = `env_${crypto.randomUUID()}`;
-      const registeredByUserId = `user_${crypto.randomUUID()}`;
-      await db.insert(hosts).values(hostRow({ environmentId, registeredByUserId }));
-      await expect(
-        db.insert(hosts).values(hostRow({ environmentId, registeredByUserId })),
-      ).resolves.toBeDefined();
+      await db.insert(hosts).values(hostRow({ environmentId }));
+      await expect(db.insert(hosts).values(hostRow({ environmentId }))).resolves.toBeDefined();
     } finally {
       await pool.end();
     }
@@ -111,7 +107,7 @@ describe.skipIf(!url)("schema", () => {
     }
   });
 
-  it("migrates a seeded pre-v2 host by backfilling owner and stripping public endpoints", async () => {
+  it("migrates a seeded legacy host and removes the host-token surface", async () => {
     const databaseName = `synara_slice_a_${crypto.randomUUID().replaceAll("-", "")}`;
     const admin = new pg.Pool({ connectionString: url! });
     const targetUrl = new URL(url!);
@@ -158,6 +154,12 @@ describe.skipIf(!url)("schema", () => {
           "",
         ),
       );
+      await target.query(
+        (await readFile(`${migrations}0009_narrow_energizer.sql`, "utf8")).replaceAll(
+          "--> statement-breakpoint",
+          "",
+        ),
+      );
       const migrated = await target.query<{
         owner_user_id: string;
         endpoints: Array<{ transport: string }>;
@@ -166,6 +168,24 @@ describe.skipIf(!url)("schema", () => {
         owner_user_id: "user_seed",
         endpoints: [{ url: "http://192.168.1.2", transport: "lan" }],
       });
+      expect(
+        (
+          await target.query<{ exists: boolean }>(
+            "SELECT to_regclass('public.host_tokens') IS NOT NULL AS exists",
+          )
+        ).rows[0]?.exists,
+      ).toBe(false);
+      expect(
+        (
+          await target.query<{ exists: boolean }>(
+            `SELECT EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'hosts'
+                AND column_name = 'registered_by_user_id'
+            ) AS exists`,
+          )
+        ).rows[0]?.exists,
+      ).toBe(false);
     } finally {
       await target?.end();
       await admin.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`);

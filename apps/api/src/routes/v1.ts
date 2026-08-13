@@ -29,8 +29,6 @@ import {
   type UsageSummaryEnvironment,
   type UsageSummaryHour,
   type UsageSummarySkill,
-  type RegisterHostResponse,
-  RegisterHostRequest,
   RegisterDeviceRequest,
   type RegisterDeviceResponse,
   GrantRequest,
@@ -70,18 +68,15 @@ import {
   usageModelStats,
   usageSkillStats,
 } from "../db/schema";
-import { isUniqueViolation, toAccountHost } from "../identity/environmentRegistry";
+import { isUniqueViolation, toAccountHost } from "../identity/hostRecords";
 import {
-  EnvironmentAlreadyLinkedError,
   IdentityAuthError,
   IdentityProviderError,
   RefreshRejectedError,
   type AccountIdentityVerifier,
   type AuthFailureReason,
   type AuthTokens,
-  type DeviceCredentialStore,
   type EnvironmentGrantIssuer,
-  type EnvironmentRegistry,
   HostAuthDomainError,
   type DeviceRegistry,
   type HostGrantIssuer,
@@ -274,8 +269,6 @@ function authTokensBody(auth_: AuthTokens): AuthTokensResponse {
 export function createV1Routes(deps: {
   verifier: AccountIdentityVerifier;
   grants: EnvironmentGrantIssuer;
-  deviceCredentials: DeviceCredentialStore;
-  environments: EnvironmentRegistry;
   signing: ApiSigningService;
   hostKeys: HostKeyRegistry;
   devices: DeviceRegistry;
@@ -314,8 +307,6 @@ export function createV1Routes(deps: {
   const {
     verifier,
     grants,
-    deviceCredentials,
-    environments,
     signing,
     hostKeys,
     devices,
@@ -1236,51 +1227,8 @@ export function createV1Routes(deps: {
     return c.json(body);
   });
 
-  v1.post("/hosts", async (c) => {
-    // Mutating: registering mints a host credential, so membership is
-    // resolved live — a just-revoked member must not link machines.
-    const session = await requireOrgSession(c, { freshMembership: true });
-    if (session instanceof Response) return session;
-
-    const json = await c.req.json().catch(() => null);
-    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
-
-    let parsed: RegisterHostRequest;
-    try {
-      parsed = Schema.decodeUnknownSync(RegisterHostRequest)(json);
-    } catch (error) {
-      return errorResponse(
-        c,
-        400,
-        "validation_failed",
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-
-    try {
-      const { host, created } = await environments.register(session.orgId, session.userId, parsed);
-      // Registering is also the (re-)link that rotates the host's credential:
-      // any previously issued token is revoked and the fresh one returned —
-      // shown exactly once. Concurrent re-links of the same environment are
-      // last-wins BY DESIGN: one-active-token-per-host means someone must
-      // lose, and the loser's next `synara auth` recovers exactly like a
-      // lost-token re-link — the scenario rotation exists to serve.
-      const hostToken = await deviceCredentials.rotate(host.id);
-
-      const body: RegisterHostResponse = { host, hostToken };
-      return c.json(body, created ? 201 : 200);
-    } catch (error) {
-      if (error instanceof EnvironmentAlreadyLinkedError) {
-        return errorResponse(c, 409, "environment_already_linked", error.message);
-      }
-      throw error;
-    }
-  });
-
   v1.patch("/hosts/:id", async (c) => {
     const id = c.req.param("id");
-    const authHeader = c.req.header("authorization");
-
     const json = await c.req.json().catch(() => null);
     if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
 
@@ -1294,25 +1242,6 @@ export function createV1Routes(deps: {
         "validation_failed",
         error instanceof Error ? error.message : String(error),
       );
-    }
-
-    if (deviceCredentials.isDeviceCredential(authHeader)) {
-      const result = await deviceCredentials.authenticate(authHeader);
-      if (!result.ok) return errorResponse(c, result.status, result.error, "Host token invalid");
-      if (result.hostId !== id) {
-        return errorResponse(c, 401, "unauthorized", "Host token does not match this host");
-      }
-      if (parsed.discoverable !== undefined) {
-        return errorResponse(
-          c,
-          403,
-          "not_host_owner",
-          "A legacy host token cannot change discoverability",
-        );
-      }
-      const updated = await environments.update(id, parsed);
-      if (!updated) return errorResponse(c, 404, "host_not_found", "Host not found");
-      return c.json({ host: updated });
     }
 
     const owned = await requireHostOwner(c, id);
@@ -1587,32 +1516,6 @@ export function createV1Routes(deps: {
 
   v1.delete("/hosts/:id", async (c) => {
     const id = c.req.param("id");
-    const authHeader = c.req.header("authorization");
-
-    if (deviceCredentials.isDeviceCredential(authHeader)) {
-      const result = await deviceCredentials.authenticate(authHeader);
-      if (!result.ok) return errorResponse(c, result.status, result.error, "Host token invalid");
-      if (result.hostId !== id) {
-        return errorResponse(c, 401, "unauthorized", "Host token does not match this host");
-      }
-      // A legacy-registered host may have been linked since. The relay only
-      // learns about the deletion from the event, so this branch must emit it
-      // exactly like the owner path — deletion without the event would leave
-      // outstanding grants honored until natural expiry.
-      await db.transaction(async (tx) => {
-        const [locked] = await tx
-          .select({ id: hostRows.id })
-          .from(hostRows)
-          .where(eq(hostRows.id, id))
-          .limit(1)
-          .for("update");
-        if (!locked) return;
-        await writeRevocationEvents(tx, [{ hostId: id, kind: "host_unlinked" }]);
-        await tx.delete(hostRows).where(eq(hostRows.id, id));
-      });
-      return c.body(null, 204);
-    }
-
     const owned = await requireHostOwner(c, id);
     if (owned instanceof Response) return owned;
     await db.transaction(async (tx) => {

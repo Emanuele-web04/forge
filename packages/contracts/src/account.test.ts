@@ -3,26 +3,20 @@ import { Schema } from "effect";
 
 import {
   ACCOUNT_ENDPOINT_URL_MAX_LENGTH,
-  ACCOUNT_HOST_ENDPOINTS_MAX,
   ACCOUNT_NAME_MAX_LENGTH,
+  AccountHostEndpoint,
   AccountErrorBody,
   AccountHost,
   AccountMe,
   InstanceInfo,
   OrganizationRequiredBody,
-  RegisterHostRequest,
   UpdateProfileRequest,
 } from "./account";
 
-const decodeRegisterHostRequest = Schema.decodeUnknownSync(RegisterHostRequest);
 const decodeInstanceInfo = Schema.decodeUnknownSync(InstanceInfo);
 const decodeAccountHost = Schema.decodeUnknownSync(AccountHost);
 const decodeAccountMe = Schema.decodeUnknownSync(AccountMe);
 const decodeOrganizationRequired = Schema.decodeUnknownSync(OrganizationRequiredBody);
-
-function endpointAt(index: number) {
-  return { url: `https://host-${index}.example.com`, transport: "lan" };
-}
 
 function hostPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -36,112 +30,30 @@ function hostPayload(overrides: Record<string, unknown> = {}) {
     discoverable: true,
     linked: true,
     keyGeneration: 2,
-    registeredByUserId: "user_1",
     createdAt: "2026-08-01T00:00:00.000Z",
     lastSeenAt: "2026-08-01T00:00:00.000Z",
     ...overrides,
   };
 }
 
-describe("RegisterHostRequest", () => {
-  it("decodes a valid registration request", () => {
-    const parsed = decodeRegisterHostRequest({
-      environmentId: "env-1",
-      name: "My Laptop",
-      platform: "darwin",
-      kind: "local",
-      endpoints: [{ url: "https://example.com", transport: "lan" }],
-    });
-
-    expect(parsed.name).toBe("My Laptop");
-    expect(parsed.platform).toBe("darwin");
-    expect(parsed.endpoints[0]?.transport).toBe("lan");
-    expect(parsed.appVersion).toBeUndefined();
-  });
-
+describe("AccountHostEndpoint", () => {
   it("rejects an invalid transport literal", () => {
     expect(() =>
-      decodeRegisterHostRequest({
-        environmentId: "env-1",
-        name: "My Laptop",
-        platform: "darwin",
-        kind: "local",
-        endpoints: [{ url: "https://example.com", transport: "vpn" }],
-      }),
-    ).toThrow();
-  });
-
-  it("rejects an empty name", () => {
-    expect(() =>
-      decodeRegisterHostRequest({
-        environmentId: "env-1",
-        name: "",
-        platform: "darwin",
-        kind: "local",
-        endpoints: [{ url: "https://example.com", transport: "lan" }],
-      }),
-    ).toThrow();
-  });
-
-  // Request fields are explicitly bounded; the boundary passes, one-over fails.
-  it("accepts a name at the maximum length and rejects one character over", () => {
-    const base = {
-      environmentId: "env-1",
-      platform: "darwin",
-      kind: "local",
-      endpoints: [],
-    };
-    expect(
-      decodeRegisterHostRequest({ ...base, name: "a".repeat(ACCOUNT_NAME_MAX_LENGTH) }).name,
-    ).toHaveLength(ACCOUNT_NAME_MAX_LENGTH);
-    expect(() =>
-      decodeRegisterHostRequest({ ...base, name: "a".repeat(ACCOUNT_NAME_MAX_LENGTH + 1) }),
-    ).toThrow();
-  });
-
-  it("caps the endpoints array at the maximum and rejects one entry over", () => {
-    const base = {
-      environmentId: "env-1",
-      name: "My Laptop",
-      platform: "darwin",
-      kind: "local",
-    };
-    expect(
-      decodeRegisterHostRequest({
-        ...base,
-        endpoints: Array.from({ length: ACCOUNT_HOST_ENDPOINTS_MAX }, (_, index) =>
-          endpointAt(index),
-        ),
-      }).endpoints,
-    ).toHaveLength(ACCOUNT_HOST_ENDPOINTS_MAX);
-    expect(() =>
-      decodeRegisterHostRequest({
-        ...base,
-        endpoints: Array.from({ length: ACCOUNT_HOST_ENDPOINTS_MAX + 1 }, (_, index) =>
-          endpointAt(index),
-        ),
+      Schema.decodeUnknownSync(AccountHostEndpoint)({
+        url: "https://example.com",
+        transport: "vpn",
       }),
     ).toThrow();
   });
 
   it("bounds each endpoint URL", () => {
-    const base = {
-      environmentId: "env-1",
-      name: "My Laptop",
-      platform: "darwin",
-      kind: "local",
-    };
     const prefix = "https://";
     const atLimit = `${prefix}${"a".repeat(ACCOUNT_ENDPOINT_URL_MAX_LENGTH - prefix.length)}`;
     expect(
-      decodeRegisterHostRequest({ ...base, endpoints: [{ url: atLimit, transport: "lan" }] })
-        .endpoints,
-    ).toHaveLength(1);
+      Schema.decodeUnknownSync(AccountHostEndpoint)({ url: atLimit, transport: "lan" }).url,
+    ).toHaveLength(ACCOUNT_ENDPOINT_URL_MAX_LENGTH);
     expect(() =>
-      decodeRegisterHostRequest({
-        ...base,
-        endpoints: [{ url: `${atLimit}a`, transport: "lan" }],
-      }),
+      Schema.decodeUnknownSync(AccountHostEndpoint)({ url: `${atLimit}a`, transport: "lan" }),
     ).toThrow();
   });
 });
@@ -160,24 +72,15 @@ describe("UpdateProfileRequest", () => {
 });
 
 describe("AccountHost", () => {
-  it("decodes a host carrying its registering user", () => {
-    expect(decodeAccountHost(hostPayload()).registeredByUserId).toBe("user_1");
-  });
-
-  // The field is the audit trail for who linked a machine to an organization.
-  // Optional, it would quietly go missing the moment a writer forgot it.
-  it("rejects a host with no registeredByUserId", () => {
-    const { registeredByUserId: _omitted, ...withoutUser } = hostPayload();
-    expect(() => decodeAccountHost(withoutUser)).toThrow();
-  });
-
-  it("decodes Slice A ownership and link state", () => {
+  it("requires ownership and link state after the keypair cutover", () => {
     expect(decodeAccountHost(hostPayload())).toMatchObject({
       ownerUserId: "user_1",
       discoverable: true,
       linked: true,
       keyGeneration: 2,
     });
+    const { ownerUserId: _omitted, ...withoutOwner } = hostPayload();
+    expect(() => decodeAccountHost(withoutOwner)).toThrow();
   });
 
   it("rejects the retired public endpoint transport", () => {

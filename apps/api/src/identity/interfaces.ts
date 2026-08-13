@@ -22,10 +22,8 @@ import type {
   LinkDeviceTokenResponse,
   LinkStartRequest,
   LinkStartResponse,
-  RegisterHostRequest,
   RevocationEvent,
   RevocationKind,
-  UpdateHostRequest,
 } from "@synara/contracts";
 import type { ApiSigningService } from "./signing";
 
@@ -385,78 +383,14 @@ export type RevocationLog = {
   read(after: number): Promise<{ events: RevocationEvent[]; watermark: number }>;
 };
 
-export type DeviceCredentialAuthResult =
-  | { ok: true; hostId: string }
-  | { ok: false; status: 401; error: "unauthorized" }
-  | { ok: false; status: 403; error: "token_revoked" };
-
 /**
- * Mints, verifies, and revokes the long-lived credentials machines hold —
- * today the `synhost_` host tokens, hashed at rest, one active per host.
- * The future device-bound PoP credentials (maintainer step 10) slot in here.
- */
-export type DeviceCredentialStore = {
-  /**
-   * Revokes every active credential for `hostId` and mints a fresh one,
-   * returning the only copy of the plaintext token that will ever exist.
-   * On a freshly registered host there is nothing to revoke and this is
-   * simply the first mint.
-   */
-  rotate(hostId: string): Promise<string>;
-  /** Resolves an Authorization header to its owning host, or a typed failure. */
-  authenticate(authorizationHeader: string | undefined | null): Promise<DeviceCredentialAuthResult>;
-  /** Whether the header carries a device credential (vs. a user access token). */
-  isDeviceCredential(authorizationHeader: string | undefined | null): boolean;
-};
-
-/**
- * A registration refused because the environment is already linked to another
- * host record in the same organization.
- */
-export class EnvironmentAlreadyLinkedError extends Error {
-  constructor() {
-    super("This environment is already linked to another host record");
-    this.name = "EnvironmentAlreadyLinkedError";
-  }
-}
-
-/**
- * The directory of environments (hosts) an organization owns — the registry
- * half of the control plane. Speaks contract types on the way out so callers
- * never touch storage rows.
- */
-export type EnvironmentRegistry = {
-  list(orgId: string): Promise<AccountHost[]>;
-  /**
-   * Registers an environment, or refreshes its record when the organization
-   * already linked this `environmentId`. `registeredByUserId` is audit only
-   * and must never be consulted for access. Rejects with
-   * {@link EnvironmentAlreadyLinkedError} when the environment is linked to a
-   * different host record.
-   */
-  register(
-    orgId: string,
-    registeredByUserId: string,
-    request: RegisterHostRequest,
-  ): Promise<{ host: AccountHost; created: boolean }>;
-  /** Applies a host's self-reported update, bumping lastSeenAt. Undefined when unknown. */
-  update(hostId: string, request: UpdateHostRequest): Promise<AccountHost | undefined>;
-  /** Owner removal: scoped to the organization. False when nothing matched. */
-  deleteForOrg(hostId: string, orgId: string): Promise<boolean>;
-  /** Self-removal by the host itself, already authenticated by its credential. */
-  deleteById(hostId: string): Promise<void>;
-};
-
-/**
- * The four adapters, built together by the factory so wiring stays in one
+ * The adapters, built together by the factory so wiring stays in one
  * place. `close` releases whatever the provider holds open (the dev provider
  * runs an in-process endpoint); for the hosted provider it is a no-op.
  */
 export type IdentityAdapters = {
   verifier: AccountIdentityVerifier;
   grants: EnvironmentGrantIssuer;
-  deviceCredentials: DeviceCredentialStore;
-  environments: EnvironmentRegistry;
   signing: ApiSigningService;
   hostKeys: HostKeyRegistry;
   devices: DeviceRegistry;
