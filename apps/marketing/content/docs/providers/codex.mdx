@@ -1,0 +1,160 @@
+---
+title: Codex
+description: Install, authenticate, verify, and run OpenAI Codex through Synara.
+---
+
+Synara connects to the local Codex CLI. OpenAI owns authentication, account limits, models, and provider behavior; Synara wraps the session in a durable task with terminals, browser tools, diffs, worktrees, approvals, and Git delivery.
+
+## Install
+
+OpenAI provides native installers for macOS, Linux, and Windows. Package-manager options include:
+
+```bash
+npm install -g @openai/codex
+```
+
+```bash
+brew install --cask codex
+```
+
+Synara looks for the `codex` executable. Verify it after installation:
+
+```bash
+codex --version
+```
+
+## Authenticate
+
+Run Codex and choose the authentication path for your account:
+
+```bash
+codex
+```
+
+For ChatGPT-backed access, select **Sign in with ChatGPT**. Codex can also use an API key or a custom model provider configured in its own `config.toml`.
+
+You can start the explicit login flow with:
+
+```bash
+codex login
+```
+
+Check the current state with:
+
+```bash
+codex login status
+```
+
+When Codex is configured to use a non-OpenAI model provider, authentication may be supplied through that provider’s environment variables instead of `codex login`.
+
+## Verify
+
+From a fresh terminal:
+
+```bash
+codex --version
+codex login status
+```
+
+Then start Codex in a disposable repository and ask it to inspect the project without making changes. Resolve CLI or account errors there before debugging Synara.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Codex
+
+Open Synara provider settings and confirm that Codex is detected.
+
+</Step>
+<Step>
+
+### Confirm the binary
+
+Synara uses `codex` by default. Set a custom binary path only when you intentionally maintain another installation.
+
+</Step>
+<Step>
+
+### Inspect models and reasoning
+
+Refresh the provider and confirm that the model picker reflects the current Codex catalog and reasoning options.
+
+</Step>
+<Step>
+
+### Run a small task
+
+Start with a clean repository and a bounded objective. Review permissions and the working environment before sending the first turn.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Codex sessions can expose:
+
+- Model and reasoning-effort selection
+- Plan and execution behavior
+- Command, tool, and file-change events
+- Approval requests and user input
+- Session resume and reconnect behavior
+- Context and usage information where available
+- Native steering of a running turn
+- Codex-specific account and version health checks
+
+Native steering lets Synara deliver a follow-up to a supported active Codex turn without cancelling it first. It does not bypass Codex permissions or guarantee immediate action.
+
+Synara discovers Codex behavior from the installed CLI. A newer CLI may expose capabilities that an older build does not.
+
+## Configuration
+
+Codex keeps its own configuration, normally under `~/.codex/config.toml` or `$CODEX_HOME/config.toml`.
+
+Changing the Codex model provider, authentication environment, sandbox rules, or approval settings can change what Synara sees. Keep provider configuration in Codex rather than duplicating secrets in Synara.
+
+## Updating
+
+Update through the installation method you used:
+
+```bash
+npm install -g @openai/codex@latest
+```
+
+or:
+
+```bash
+brew upgrade --cask codex
+```
+
+Restart Synara after updating.
+
+## Troubleshooting
+
+### Codex is not detected
+
+1. Run `codex --version` in a fresh terminal.
+2. Check whether multiple `codex` binaries exist on `PATH`.
+3. Remove or correct an obsolete custom binary path in Synara.
+4. Restart Synara after installation or shell-profile changes.
+
+### Synara reports that Codex is not authenticated
+
+Run `codex login status`, then `codex login` if needed. For a custom model provider, verify its required environment variables and Codex configuration instead.
+
+### Models or reasoning options differ
+
+Check the selected Codex installation, account, CLI version, and `config.toml`. Synara does not invent model access beyond what the runtime reports.
+
+### A new Codex feature is missing
+
+Update the CLI and start a new session. Existing sessions may retain capabilities negotiated when they were created.
+
+## Official documentation
+
+- [Codex documentation](https://developers.openai.com/codex)
+- [Codex CLI repository and installation](https://github.com/openai/codex)
+- [Codex authentication](https://developers.openai.com/codex/auth)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

@@ -1,0 +1,140 @@
+---
+title: Antigravity
+description: Install, authenticate, verify, and run Antigravity CLI through Synara.
+---
+
+Synara connects to Google’s Antigravity CLI through the `agy` executable. Antigravity owns its account session, models, permissions, tools, and conversation runtime; Synara supplies the task boundary, working environment, transcript, browser, terminal, diff, and Git workflow around it.
+
+## Install
+
+On macOS and Linux, use the official installer:
+
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://antigravity.google/cli/install.ps1 | iex
+```
+
+The Unix installer normally places `agy` under `~/.local/bin`. Verify the executable from a fresh terminal:
+
+```bash
+agy --version
+```
+
+## Authenticate
+
+Start Antigravity in a normal terminal:
+
+```bash
+agy
+```
+
+Antigravity first checks the operating system’s secure keyring. If no valid session exists, it opens Google Sign-In in a browser. In an SSH or remote session, it can print an authorization URL and accept the resulting code in the terminal.
+
+To remove stored credentials from an interactive Antigravity session, use:
+
+```text
+/logout
+```
+
+Synara does not copy or replace the credential profile stored by Antigravity.
+
+## Verify
+
+From a clean test directory:
+
+```bash
+mkdir -p /tmp/agy-synara-check
+cd /tmp/agy-synara-check
+agy
+```
+
+Confirm that Antigravity starts without a keyring or sign-in error and can answer a harmless read-only request. Exit before making changes. This isolates installation and authentication problems from Synara.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Antigravity
+
+Open provider settings and confirm that Synara detects `agy`.
+
+</Step>
+<Step>
+
+### Check the executable path
+
+Use automatic discovery unless you intentionally installed Antigravity elsewhere. A custom binary path must point to the executable itself.
+
+</Step>
+<Step>
+
+### Refresh models
+
+Confirm that Synara can discover the models exposed by the installed Antigravity runtime.
+
+</Step>
+<Step>
+
+### Start a bounded task
+
+Use a clean repository and a small objective. Review the selected model, mode, and working environment before sending the first turn.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Antigravity sessions can expose:
+
+- Model selection discovered from the installed runtime
+- Assistant output, command execution, file changes, and web-search activity
+- Permission requests surfaced through Synara
+- Plan-oriented and normal task workflows supported by the runtime
+- Attachments projected into the provider prompt
+- Conversation continuity where the runtime supplies a conversation identifier
+- Synara’s terminal, browser, diff, checkpoint, and Git delivery surfaces
+
+Synara does not currently classify Antigravity as supporting native live-turn steering. Use interruption and follow-up controls according to the state shown in the active task.
+
+Antigravity keeps its own settings and conversation data. Changes to its permission mode, sandbox, model, hooks, or workspace trust can alter behavior even when the same task is opened through Synara.
+
+## Updating
+
+Antigravity includes a native update path and its installer can install or upgrade the CLI. Keep the installation directory writable by your user and restart Synara after the executable changes.
+
+If an update is stuck, check Antigravity’s own updater status and lock files before reinstalling. Do not delete unrelated files from its configuration directory.
+
+## Troubleshooting
+
+### Antigravity is not detected
+
+1. Run `agy --version` from a fresh terminal.
+2. Confirm `~/.local/bin` or the Windows installation directory is on `PATH`.
+3. Remove or correct an obsolete custom binary path in Synara.
+4. Restart Synara after installation or shell-profile changes.
+
+### Authentication repeatedly opens or fails
+
+Launch `agy` directly. Check whether the operating-system keyring is unlocked and available to your user session. In SSH environments, complete the printed authorization flow rather than expecting a local browser to open remotely.
+
+### Models are missing
+
+Update Antigravity, confirm the account can see the expected models in the CLI, then refresh provider status in Synara. Availability can depend on the account and runtime release.
+
+### Antigravity reports an updater lock
+
+Follow Antigravity’s updater troubleshooting guidance. A stale updater lock, read-only install directory, or competing update process can prevent the runtime from refreshing.
+
+## Official documentation
+
+- [Antigravity installation and authentication](https://antigravity.google/docs/cli/install)
+- [Antigravity CLI usage](https://antigravity.google/docs/cli-using)
+- [Antigravity troubleshooting](https://antigravity.google/docs/cli-troubleshooting)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

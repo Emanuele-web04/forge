@@ -1,0 +1,317 @@
+---
+title: Report a problem
+description: Create a minimal, reproducible Synara bug report with useful evidence and no exposed secrets.
+---
+
+A useful report lets another person reproduce the problem, identify the failing layer, and compare expected behavior with the exact observed result. Preserve the work first, then reduce the failure before collecting more data.
+
+## Before opening an issue
+
+1. Search existing [Synara issues](https://github.com/Emanuele-web04/synara/issues).
+2. Check the relevant troubleshooting and workflow guide.
+3. Confirm whether the problem occurs in a packaged release, current `main`, or a local modification.
+4. Reproduce it once with the smallest safe setup.
+5. Preserve the failing state and exact evidence.
+6. Remove secrets and private data from every attachment.
+
+Do not open several issues for the same root failure. Add new evidence to the existing report when it is clearly the same problem.
+
+## Define the failure boundary
+
+State which layer fails:
+
+- Desktop launch or update
+- Provider detection or authentication
+- Model discovery
+- Task lifecycle or provider runtime
+- Git or managed worktree
+- Browser runtime
+- Pull-request workflow
+- Automation
+- Agent Gateway
+- External MCP
+- Website or documentation
+
+When unsure, describe the boundary rather than guessing a cause.
+
+## Build a minimal reproduction
+
+A strong reproduction includes:
+
+1. Clean starting state
+2. Exact action
+3. Exact result
+4. Expected result
+5. Whether the failure is consistent
+6. Smallest environment that still fails
+
+Example:
+
+```text
+Starting state:
+- Synara packaged release 0.x.y on macOS
+- Codex CLI x.y.z, authenticated
+- Clean test repository on a local branch
+- One task using approval-required mode
+
+Steps:
+1. Create a task in a managed worktree.
+2. Select the documented model and default options.
+3. Send: “Read README.md and summarize it. Do not modify files.”
+4. Wait for the first provider response.
+
+Actual:
+- Task changes to error after 8 seconds.
+- Exact message: <redacted error>
+- No files changed.
+
+Expected:
+- A read-only summary and an idle task.
+
+Frequency:
+- 3/3 attempts in this repository.
+- 0/2 attempts in an empty repository.
+```
+
+Avoid reproductions that begin with “after hours of work” unless the duration itself is essential.
+
+## Environment information
+
+Include:
+
+- Operating system and version
+- CPU architecture
+- Synara version
+- Packaged release, source build, branch, and commit as applicable
+- Provider name
+- Provider executable path and version
+- Authentication method without the credential
+- Model and provider-specific options
+- Local checkout or worktree
+- Runtime permission mode
+- Repository type and size when relevant
+- Whether the failure occurs in a disposable repository
+
+Use placeholders for private paths and names.
+
+## Exact task evidence
+
+For task failures, include:
+
+- Task status
+- Task or thread ID only when maintainers need it
+- Turn state
+- Exact error text
+- Time range with timezone
+- Last successful activity
+- Whether approval or user input was pending
+- Whether interruption occurred
+- Whether the provider process continued
+- Whether files or remote state may have changed
+
+Do not paste a complete private transcript.
+
+## Git evidence
+
+For Git or worktree problems, include redacted output from:
+
+```bash
+git status --short --branch
+git rev-parse HEAD
+git worktree list --porcelain
+git diff --check
+git diff --stat
+```
+
+Do not post a proprietary diff merely because `git diff --stat` was insufficient. Describe the affected paths or create a public minimal repository.
+
+## Provider evidence
+
+Include:
+
+```bash
+command -v <provider-command>
+<provider-command> --version
+```
+
+On Windows PowerShell, use:
+
+```powershell
+Get-Command <provider-command>
+<provider-command> --version
+```
+
+State whether authentication and the same minimal request work directly in the provider CLI.
+
+Never include API keys, tokens, cookies, credential files, or complete provider configuration.
+
+## Browser evidence
+
+Include:
+
+- Browser tool name
+- Task and tab scope
+- URL generalized when private
+- Snapshot ID only when necessary
+- Target form used
+- Exact error code
+- Whether the action may have committed
+- Fresh snapshot result after the failure
+- Relevant redacted console or network metadata
+- Screenshot only when pixels matter
+
+Do not include credentials, private page content, or authenticated screenshots without explicit permission.
+
+## Automation and integration evidence
+
+For automations:
+
+- Schedule
+- Current or paused state
+- Last run time and outcome
+- Stop condition
+- Project/provider/model/environment
+- Whether another run overlapped
+- Whether any external effect duplicated
+
+For Agent Gateway:
+
+- Caller context and capability result
+- Tool name
+- Stable `requestId` generalized when needed
+- Target project/environment/runtime mode
+- Exact rejection or result
+
+For External MCP:
+
+- Pairing, paired, or connected state
+- Integration scopes and project allowlist without credentials
+- Client type
+- Whether `synara_overview` succeeds
+- Exact lifecycle, rate, or active-task error
+- Whether the integration is expired or revoked
+
+Never share the raw integration credential or private credential file.
+
+## Diagnostic evidence
+
+Start with a redacted `synara_diagnose_thread` result when available. Add one narrower source only when it answers a specific question.
+
+For every diagnostic extract, state:
+
+- Tool and filters
+- Coverage fields
+- Cursor/page boundary
+- Whether details were enabled
+- Manual redactions performed
+- Inference drawn from the evidence
+
+Read [Diagnostics](/docs/troubleshooting/diagnostics) before claiming an event was absent.
+
+## Secret and privacy review
+
+Remove:
+
+- API keys, tokens, cookies, passwords, and authorization headers
+- Private prompts and model output
+- Proprietary source code
+- Customer or personal data
+- Private repository names and URLs
+- Local usernames, hostnames, and home paths
+- Internal services, issue links, and annotation URLs
+- Account, organization, integration, project, and task IDs when unnecessary
+- Screenshots containing private browser or terminal content
+
+<Callout type="warn" title="Deleting a secret from the issue is not enough">
+  If a real credential was posted, rotate or revoke it immediately. Editing the issue does not
+  guarantee that every copy, notification, cache, or log disappeared.
+</Callout>
+
+## Bug report template
+
+```markdown
+## Summary
+
+A one-sentence description of the observable failure.
+
+## Environment
+
+- OS:
+- Architecture:
+- Synara version/build:
+- Provider executable and version:
+- Model/options:
+- Environment: local checkout | worktree
+- Runtime mode:
+
+## Starting state
+
+What was true before the reproduction?
+
+## Steps to reproduce
+
+1.
+2.
+3.
+
+## Expected behavior
+
+What should have happened?
+
+## Actual behavior
+
+What happened instead? Include the exact redacted error.
+
+## Frequency
+
+Always, intermittent, or one occurrence? Include attempt counts.
+
+## Impact
+
+What work is blocked, lost, duplicated, or unsafe?
+
+## Evidence
+
+- Time range and timezone:
+- Git status/stat:
+- Provider direct test:
+- Redacted diagnostics and coverage:
+- Screenshot or video when relevant:
+
+## Recovery attempts
+
+List each change separately and its result.
+
+## Privacy review
+
+- [ ] Secrets removed
+- [ ] Private source removed
+- [ ] Paths and identifiers generalized
+- [ ] Any exposed credential rotated or revoked
+```
+
+## What not to do
+
+- Do not post “it does not work” without a reproduction
+- Do not upload the complete Synara data directory
+- Do not paste an entire private task transcript
+- Do not run destructive cleanup merely to make the report simpler
+- Do not claim a failure is provider-wide without testing the provider directly
+- Do not claim an event was absent from an incomplete diagnostic source
+- Do not combine unrelated failures into one issue
+- Do not repeatedly mention maintainers to accelerate a report
+
+## Reporting checklist
+
+- [ ] Existing issues were searched
+- [ ] The failing layer was identified or bounded honestly
+- [ ] The smallest safe reproduction was written
+- [ ] Exact environment and versions were included
+- [ ] Expected and actual behavior were separated
+- [ ] Frequency and impact were stated
+- [ ] Evidence includes exact times and coverage
+- [ ] Every attachment was manually redacted
+- [ ] Exposed credentials were rotated or revoked
+- [ ] The issue is focused enough to verify a fix
+
+Open a new report in [Synara issues](https://github.com/Emanuele-web04/synara/issues/new) only after this checklist is complete.

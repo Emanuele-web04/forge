@@ -1,0 +1,131 @@
+---
+title: Quickstart
+description: Go from installation to your first reviewed change in about five minutes.
+---
+
+This guide takes you through Synara's basic loop: open a repository, give one coding agent a concrete task, supervise the work, and review the resulting diff.
+
+<Callout type="info" title="Before you begin">
+  Install Synara and authenticate at least one supported provider. In shortcuts, `mod` means Command
+  on macOS and Ctrl on Windows or Linux.
+</Callout>
+
+<Steps>
+<Step>
+
+## Add a Git project
+
+Open Synara and add a local repository.
+
+Start with a repository whose current changes are already committed or intentionally preserved. A clean starting state makes the agent's work much easier to review.
+
+</Step>
+<Step>
+
+## Create one task
+
+Press `mod+n` or use the new-task control.
+
+For this first task, use the local checkout and run only one agent against the repository. Use a [Git worktree](/docs/workflows/worktrees) when you begin running multiple tasks or want stronger isolation.
+
+</Step>
+<Step>
+
+## Choose a provider and model
+
+Select an available provider, model, and effort or reasoning option.
+
+Synara uses the provider runtime and account configured on your machine. It does not add a separate Synara model plan.
+
+</Step>
+<Step>
+
+## Give the agent a verifiable objective
+
+Describe:
+
+- The outcome you want
+- The files or area involved
+- Important constraints
+- The checks that should pass
+
+For example:
+
+```text
+Add an empty state to the pull-request list.
+
+Reuse the existing shared panel components.
+Do not redesign the surrounding page.
+Run the focused browser test and report the result.
+```
+
+A bounded objective is easier to execute, review, and undo than "improve the pull-request page."
+
+</Step>
+<Step>
+
+## Supervise the turn
+
+Follow the transcript and tool activity while the provider works.
+
+Useful controls:
+
+- `mod+j` opens the terminal drawer.
+- `mod+d` opens the diff view.
+- `mod+shift+b` opens the browser.
+- Approval and user-input requests appear in the task.
+- Send a follow-up when the agent needs a correction or additional constraint.
+- Interrupt the turn when it is clearly heading in the wrong direction.
+
+Do not wait passively for a final message if the intermediate work is already incorrect.
+
+</Step>
+<Step>
+
+## Verify the result yourself
+
+When the turn finishes:
+
+1. Read the agent's summary.
+2. Inspect the complete diff.
+3. Run the relevant tests or checks yourself.
+4. Look for unrelated files, debug output, generated artifacts, or accidental deletions.
+5. Keep only the changes you understand and intend to ship.
+
+The agent's final message is a report, not proof that the work is correct.
+
+</Step>
+<Step>
+
+## Commit or continue to a pull request
+
+Commit the reviewed changes when they are ready.
+
+For GitHub repositories, continue with the [pull-request workflow](/docs/workflows/pull-requests) to push the branch, inspect the final change set, and open a PR.
+
+</Step>
+</Steps>
+
+That is Synara's core workflow:
+
+> Give one task a concrete objective, supervise the work, verify the result, and commit only what you intend to keep.
+
+## Continue learning
+
+<Cards>
+  <Card
+    title="Core concepts"
+    description="Understand projects, tasks, environments, provider sessions, and Git ownership."
+    href="/docs/getting-started/core-concepts"
+  />
+  <Card
+    title="Your first task"
+    description="Walk through the same workflow in more detail, including recovery and review."
+    href="/docs/getting-started/first-task"
+  />
+  <Card
+    title="Best practices"
+    description="Use the patterns Synara maintainers rely on for real development work."
+    href="/docs/workflows/best-practices"
+  />
+</Cards>

@@ -1,0 +1,146 @@
+---
+title: Troubleshooting
+description: Diagnose Synara problems safely, preserve useful evidence, and recover without losing work.
+---
+
+Start by protecting the current state. A provider error, browser timeout, or failed Git operation is easier to investigate than a second failure caused by deleting a worktree, repeating a mutation, or reinstalling without preserving evidence.
+
+## Use the safest-first sequence
+
+<Steps>
+<Step>
+
+### Preserve the work
+
+Inspect the task diff and untracked files. Commit, stash, copy, or push anything you cannot afford to lose before restarting a provider, cleaning a worktree, or reinstalling Synara.
+
+</Step>
+<Step>
+
+### Identify the failing layer
+
+Separate the problem into one primary layer:
+
+- Desktop application
+- Provider installation or authentication
+- Task or provider runtime
+- Git or worktree
+- Browser runtime
+- Automation
+- Agent Gateway or External MCP
+- Documentation or website
+
+Do not change several layers at once.
+
+</Step>
+<Step>
+
+### Reproduce the smallest failure
+
+Reduce the problem to one provider, one repository, one task, one command, or one browser action. Record the exact result and time.
+
+</Step>
+<Step>
+
+### Capture evidence before retrying
+
+Keep the exact error text, task status, provider version, repository state, and relevant diagnostic output. A timeout does not prove that a mutation failed to commit.
+
+</Step>
+<Step>
+
+### Change one variable
+
+Examples: authenticate the provider, remove a stale custom binary path, resolve the Git lock, start a fresh task, or re-snapshot the browser page.
+
+</Step>
+<Step>
+
+### Verify the recovery
+
+Repeat the smallest reproduction and then run the broader workflow that originally failed. Do not treat the disappearance of an error banner as proof that the underlying work is correct.
+
+</Step>
+</Steps>
+
+## Find the right guide
+
+<Cards>
+  <Card
+    title="Desktop and updates"
+    description="App launch, blank windows, packaged updates, architecture, and reinstall safety."
+    href="/docs/troubleshooting/desktop-and-updates"
+  />
+  <Card
+    title="Providers"
+    description="Detection, authentication, model discovery, custom binaries, and provider updates."
+    href="/docs/troubleshooting/providers"
+  />
+  <Card
+    title="Tasks and runtime"
+    description="Waiting states, stuck turns, interrupted sessions, runtime errors, and safe recovery."
+    href="/docs/troubleshooting/tasks-and-runtime"
+  />
+  <Card
+    title="Git and worktrees"
+    description="Repository locks, detached worktrees, conflicts, missing paths, and cleanup."
+    href="/docs/troubleshooting/git-and-worktrees"
+  />
+  <Card
+    title="Browser"
+    description="Unavailable runtimes, stale snapshots, timeouts, OAuth popups, and ambiguous actions."
+    href="/docs/troubleshooting/browser"
+  />
+  <Card
+    title="Automations and integrations"
+    description="Schedules, duplicate effects, Agent Gateway authority, and External MCP pairing."
+    href="/docs/troubleshooting/automations-and-integrations"
+  />
+  <Card
+    title="Diagnostics"
+    description="Read projected activity, durable events, provider-runtime evidence, and coverage limits."
+    href="/docs/troubleshooting/diagnostics"
+  />
+  <Card
+    title="FAQ"
+    description="Answers to common setup, privacy, workflow, and product questions."
+    href="/docs/troubleshooting/faq"
+  />
+  <Card
+    title="Report a problem"
+    description="Build a minimal reproduction and share useful evidence without leaking secrets."
+    href="/docs/troubleshooting/report-a-problem"
+  />
+</Cards>
+
+## Common symptoms
+
+| Symptom                                 | Start here                                                                         |
+| --------------------------------------- | ---------------------------------------------------------------------------------- |
+| Synara will not open or update          | [Desktop and updates](/docs/troubleshooting/desktop-and-updates)                   |
+| Provider is missing or unauthenticated  | [Providers](/docs/troubleshooting/providers)                                       |
+| Task says working but makes no progress | [Tasks and runtime](/docs/troubleshooting/tasks-and-runtime)                       |
+| Task is waiting for approval or input   | [Tasks and runtime](/docs/troubleshooting/tasks-and-runtime)                       |
+| Worktree path is missing or locked      | [Git and worktrees](/docs/troubleshooting/git-and-worktrees)                       |
+| Browser action timed out                | [Browser](/docs/troubleshooting/browser)                                           |
+| Automation did not run or ran twice     | [Automations and integrations](/docs/troubleshooting/automations-and-integrations) |
+| External MCP is waiting for pairing     | [Automations and integrations](/docs/troubleshooting/automations-and-integrations) |
+| You need evidence for a stuck thread    | [Diagnostics](/docs/troubleshooting/diagnostics)                                   |
+
+## Stop before making it worse
+
+Stop and preserve state when:
+
+- A mutation timed out and you do not know whether it committed
+- Two tasks may be editing the same checkout
+- Git reports a lock or unresolved operation
+- A worktree path disappeared while its task still matters
+- A provider repeatedly resumes into an error
+- An integration appears to target the wrong project or Synara installation
+- Diagnostics may contain private source, prompts, URLs, account identifiers, or tokens
+
+<Callout type="warn" title="Never post raw diagnostics blindly">
+  Synara redacts common secret fields in its bounded diagnostic tools, but redaction is not a
+  substitute for human review. Remove credentials, private prompts, proprietary code, local
+  usernames, repository paths, and sensitive URLs before sharing anything publicly.
+</Callout>

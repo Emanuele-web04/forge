@@ -1,0 +1,16 @@
+{
+  "title": "Troubleshooting",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "desktop-and-updates",
+    "providers",
+    "tasks-and-runtime",
+    "git-and-worktrees",
+    "browser",
+    "automations-and-integrations",
+    "diagnostics",
+    "faq",
+    "report-a-problem"
+  ]
+}

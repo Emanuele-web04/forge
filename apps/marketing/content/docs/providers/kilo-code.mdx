@@ -1,0 +1,145 @@
+---
+title: Kilo Code
+description: Install, configure, verify, and run Kilo Code CLI through Synara.
+---
+
+Synara connects to the Kilo Code CLI through the `kilo` executable. Kilo owns its account, configured model providers, credentials, modes, agents, and model catalog; Synara supplies the durable task, repository environment, transcript, approvals, review surfaces, and Git workflow around the session.
+
+## Install
+
+Install the current Kilo CLI through npm:
+
+```bash
+npm install -g @kilocode/cli
+```
+
+Verify the installed runtime:
+
+```bash
+kilo --version
+```
+
+The dedicated Synara integration targets the current Kilo CLI. Upgrade older pre-1.0 installations before diagnosing integration behavior.
+
+## Authenticate
+
+Start Kilo in a normal terminal:
+
+```bash
+kilo
+```
+
+Use Kilo’s interactive connection flow:
+
+```text
+/connect
+```
+
+You can sign in with a Kilo account or configure credentials for supported model providers. Authentication and API keys remain in Kilo’s supported configuration; Synara does not create a second credential store for them.
+
+## Verify
+
+From a fresh terminal in a test repository:
+
+```bash
+kilo --version
+kilo
+```
+
+Confirm that `/connect` shows the intended provider state, the model selector contains a usable model, and a harmless read-only request succeeds.
+
+When migrating from OpenCode, verify Kilo’s own configuration paths rather than assuming it still reads every `.opencode` directory.
+
+## Connect to Synara
+
+<Steps>
+<Step>
+
+### Enable Kilo Code
+
+Open provider settings and confirm that Synara detects `kilo`.
+
+</Step>
+<Step>
+
+### Confirm the binary path
+
+Use automatic discovery unless multiple Kilo installations exist. A custom path must point to the Kilo executable.
+
+</Step>
+<Step>
+
+### Refresh models and options
+
+Synara reads Kilo’s provider catalog, models, variants, and supported options. Confirm the expected entries before starting a task.
+
+</Step>
+<Step>
+
+### Run a bounded task
+
+Start with one model, one clean repository, and one concrete objective before relying on custom modes, remote services, or a large provider catalog.
+
+</Step>
+</Steps>
+
+## Capabilities in Synara
+
+Kilo sessions use Synara’s OpenCode-compatible runtime layer and can expose:
+
+- Models and provider-specific options configured through Kilo
+- Kilo’s normal code agent and plan-oriented agent flow
+- Tool calls, command output, file changes, questions, and approvals
+- Session continuation supported by the installed runtime
+- Kilo commands and agents where discovery exposes them
+- Context, cost, and usage information where the runtime supplies it
+- Synara’s terminal, browser, diff, worktree, checkpoint, and Git delivery surfaces
+
+Kilo and OpenCode share architectural foundations, but Synara treats them as separate providers with separate executables, configuration, model discovery, and session identity.
+
+Synara does not currently classify Kilo as supporting native live-turn steering.
+
+## Updating
+
+Use Kilo’s native upgrade command:
+
+```bash
+kilo upgrade
+```
+
+Or update the global npm package:
+
+```bash
+npm update -g @kilocode/cli
+```
+
+Restart Synara and create a new session after an update that changes models, agents, permissions, or protocol behavior.
+
+## Troubleshooting
+
+### Kilo is not detected
+
+1. Run `kilo --version` from a fresh terminal.
+2. Confirm the global package-manager binary directory is on `PATH`.
+3. Check Synara’s custom binary path.
+4. Restart Synara after installation or shell-profile changes.
+
+### Kilo starts but has no usable model
+
+Run Kilo directly, use `/connect`, and configure either a Kilo account or a supported model provider. Confirm the model works in Kilo before refreshing Synara.
+
+### Synara shows an unexpected model catalog
+
+Compare the Kilo executable, global and project configuration, provider credentials, and working directory. Project-level Kilo configuration can override global settings.
+
+### Old OpenCode configuration is ignored
+
+Move or recreate configuration in Kilo’s supported paths. Current Kilo releases do not promise to load every legacy `.opencode` directory automatically.
+
+## Official documentation
+
+- [Kilo Code CLI](https://kilo.ai/docs/code-with-ai/platforms/cli)
+- [Kilo CLI product and installation](https://kilo.ai/cli)
+- [Kilo source repository](https://github.com/Kilo-Org/kilocode)
+
+Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

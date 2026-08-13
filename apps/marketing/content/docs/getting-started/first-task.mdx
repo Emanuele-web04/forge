@@ -1,0 +1,179 @@
+---
+title: Your first task
+description: Complete and verify a coding task in Synara from a known repository state to a reviewed change.
+---
+
+Your first task should be small enough to understand completely. The goal is not to demonstrate maximum autonomy—it is to learn the full loop from objective to verified diff.
+
+## 1. Begin from a known repository state
+
+Open the repository in your normal Git tools before starting.
+
+Confirm:
+
+- The correct branch is checked out
+- Existing changes are committed, stashed, or intentionally preserved
+- The repository can run its normal checks
+- You know which files should remain untouched
+
+A known starting point makes it possible to attribute every new change to the task.
+
+## 2. Add the project
+
+Add the local repository to Synara.
+
+A Git repository gives the task access to the complete delivery workflow: branches, worktrees, diffs, commits, pushes, and pull requests.
+
+## 3. Choose the environment
+
+Choose where the task should work.
+
+| Choice         | Use it when                                                                                   |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| Local checkout | This is the only active task and you intentionally want it to modify the current working tree |
+| Git worktree   | Another task may run in parallel, you want a dedicated branch, or the work is experimental    |
+
+For a first small task, the local checkout is simpler. Before starting parallel work, read [Git worktrees](/docs/workflows/worktrees).
+
+## 4. Select the provider
+
+Choose an available provider, model, and effort or reasoning option.
+
+For the first task:
+
+- Use a provider you have already verified outside Synara
+- Avoid testing a new provider and a new repository workflow at the same time
+- Prefer a familiar model over the largest available option
+- Confirm that the task is using the intended environment before sending
+
+## 5. Write the objective
+
+A useful objective states the outcome, scope, constraints, and verification.
+
+Use this structure:
+
+```text
+Outcome:
+What should be true when the task is finished?
+
+Scope:
+Which component, file, route, or behavior is involved?
+
+Constraints:
+What must be reused, preserved, or avoided?
+
+Verification:
+Which tests, builds, or manual checks should pass?
+```
+
+Example:
+
+```text
+Outcome:
+Add an empty state to the pull-request list when no results match.
+
+Scope:
+Only the existing pull-request list and its focused tests.
+
+Constraints:
+Reuse the shared panel components.
+Do not redesign the surrounding page.
+Do not change server behavior.
+
+Verification:
+Run the focused unit and browser tests.
+Report the exact commands and results.
+```
+
+This is easier to review than a broad instruction such as "make the pull-request page better."
+
+## 6. Follow the work
+
+While the provider runs:
+
+- Read plans before approving large actions
+- Watch tool activity for work outside the requested scope
+- Answer user-input requests precisely
+- Use the terminal to run your own checks
+- Open the browser when visual behavior matters
+- Inspect the diff before the task finishes if the change is growing
+- Send a correction when assumptions are wrong
+- Interrupt work that is clearly unsafe or unrelated
+
+Steering early is cheaper than repairing an oversized diff later.
+
+## 7. Verify independently
+
+When the provider reports completion, perform your own verification.
+
+At minimum:
+
+1. Read the complete final response.
+2. Inspect every changed and untracked file.
+3. Read the actual diff.
+4. Run the relevant focused checks.
+5. Run a broader check when the change can affect shared behavior.
+6. Exercise visible behavior manually when applicable.
+7. Confirm that the original objective—not merely the tests—was satisfied.
+
+Record failures honestly. A pre-existing failure should only be called pre-existing after reproducing it from the same environment on the base branch.
+
+## 8. Review the change set
+
+Look specifically for:
+
+- Unrelated refactors
+- Formatting churn
+- Generated files
+- Debug logs
+- Temporary scripts
+- Secret or machine-specific values
+- Missing error handling
+- Unverified claims in comments or documentation
+- Tests that assert the implementation without testing user-visible behavior
+- Files the task was told not to modify
+
+Remove or separate unrelated work before committing.
+
+## 9. Commit and deliver
+
+Commit only the reviewed change.
+
+Before pushing:
+
+```bash
+git status
+git diff --check
+git diff --stat
+```
+
+Then inspect the final commit range and push the intended branch.
+
+For GitHub repositories, continue with the [pull-request workflow](/docs/workflows/pull-requests). Confirm that the PR contains only the expected commits and files.
+
+## When the task goes wrong
+
+- **The provider misunderstood the objective:** send a narrower correction.
+- **The change grew too large:** stop, preserve useful work, and split the objective.
+- **The provider edited unrelated files:** revert or separate them before continuing.
+- **The task is stuck:** inspect approvals, user-input requests, provider status, and terminal output.
+- **The repository is no longer trustworthy:** stop the task and restore from Git or a known checkpoint.
+- **Another task needs the same files:** move one owner to a separate worktree or serialize the work.
+
+Do not continue stacking new instructions onto a task whose ownership or working state is unclear.
+
+## First-task completion checklist
+
+- [ ] The original objective is satisfied
+- [ ] Every changed file was reviewed
+- [ ] Relevant tests were run
+- [ ] Visible behavior was checked when applicable
+- [ ] No unrelated artifacts remain
+- [ ] The branch and environment are understood
+- [ ] Only intentional changes were committed
+- [ ] The next reviewer can understand what changed and why
+
+<Callout type="info" title="Next">
+  Read [Best practices](/docs/workflows/best-practices), then learn how to run [parallel
+  agents](/docs/workflows/parallel-agents) safely.
+</Callout>

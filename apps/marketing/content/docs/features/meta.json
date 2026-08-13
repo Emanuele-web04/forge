@@ -1,0 +1,5 @@
+{
+  "title": "Features",
+  "defaultOpen": true,
+  "pages": ["overview", "composer", "organize", "automations", "customization"]
+}

@@ -1,0 +1,45 @@
+---
+title: Slash commands
+description: Every composer command — thread control, modes, delegation, export, and automation.
+---
+
+Type `/` in the composer to open the command menu. Provider-native commands (like Claude's own `/review`) are merged into the same menu; the commands below are Synara's.
+
+## Thread control
+
+| Command                     | What it does                                                            |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `/clear` (`/reset`, `/new`) | Start a fresh thread and clear context                                  |
+| `/compact`                  | Compact the current thread's context to free space                      |
+| `/status`                   | Show context usage and rate-limit status                                |
+| `/model`                    | Switch the response model for this thread                               |
+| `/fast`                     | Toggle fast mode for this thread                                        |
+| `/export`                   | Download the thread as a ZIP (`thread.json` + readable `transcript.md`) |
+
+## Modes
+
+| Command    | What it does                                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `/plan`    | Switch the thread into plan mode — the agent proposes before executing, and can pause to ask you multi-select questions |
+| `/default` | Return to normal chat mode                                                                                              |
+| `/review`  | Start a code review of the current changes                                                                              |
+
+## Branch and delegate
+
+| Command             | What it does                                                               |
+| ------------------- | -------------------------------------------------------------------------- |
+| `/fork` (`/branch`) | Fork the thread into the local checkout or a new worktree                  |
+| `/side`             | Open a guarded side-thread from this conversation                          |
+| `/subagents`        | Ask the assistant to delegate independent work to parallel subagents       |
+| `/automation`       | Turn this prompt into a scheduled [automation](/docs/features/automations) |
+
+## App
+
+| Command              | What it does                     |
+| -------------------- | -------------------------------- |
+| `/feedback` (`/bug`) | Send feedback to the Synara team |
+
+<Callout type="info" title="The ones worth memorizing">
+  `/plan` before big changes, `/fork` when a thread should split into its own worktree, `/subagents`
+  for parallel research, `/export` to share a session. These four cover most days.
+</Callout>

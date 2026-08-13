@@ -1,0 +1,173 @@
+---
+title: Provider handoffs
+description: Continue the same Synara task and working environment with another provider.
+---
+
+A provider handoff changes which provider continues one Synara task. Use it when the objective and environment should remain the same but another runtime is better suited to the next phase or useful as an independent second opinion.
+
+## Handoff or new task
+
+| Choose           | When                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| Handoff          | One provider should continue the same objective, branch, files, and task history                     |
+| New task         | Both providers should work independently, produce separate diffs, or use different environments      |
+| Review-only task | A second provider should inspect a completed diff without inheriting ownership of the implementation |
+
+A handoff is continuation, not parallelism. Do not leave two providers actively editing the same environment.
+
+## Good reasons to hand off
+
+- A different provider has a capability better suited to the next phase
+- The first provider completed implementation and another should review it critically
+- The current provider is unavailable or rate-limited
+- The task needs a fresh approach without losing its working state
+- You want to move from planning to implementation with a different runtime
+- You want one provider to diagnose a failure produced by another
+
+Do not hand off merely because the first attempt was confusing. First make the environment and objective understandable to the receiver.
+
+## Before handing off
+
+<Steps>
+<Step>
+
+### Stop at a stable boundary
+
+Let the active turn finish, interrupt it, or otherwise confirm that it is no longer mutating the environment.
+
+</Step>
+<Step>
+
+### Review the current state
+
+Inspect pending approvals, unanswered questions, changed files, untracked files, test results, and running terminal processes.
+
+</Step>
+<Step>
+
+### Create a checkpoint
+
+For risky or substantial work, commit a checkpoint before changing providers:
+
+```bash
+git status --short
+git diff --check
+git add <reviewed-files>
+git commit -m "checkpoint: preserve work before provider handoff"
+```
+
+Do not commit secrets, temporary files, or changes you have not reviewed merely to make the tree clean.
+
+</Step>
+<Step>
+
+### State the next role explicitly
+
+Tell the receiving provider whether it should investigate, review, continue implementation, repair failures, or verify the result.
+
+</Step>
+</Steps>
+
+## What Synara preserves
+
+The task remains associated with:
+
+- Its project
+- Local checkout or managed worktree
+- Branch and file changes
+- Synara transcript and task metadata
+- Prior tool activity and user decisions available in task context
+- Git and terminal surfaces belonging to the task
+
+Synara supplies a bounded recap for continuation. The receiving provider should still inspect the actual repository state rather than trusting a summary alone.
+
+## What does not transfer
+
+Provider-native state does not become portable merely because the Synara task continues.
+
+The receiving provider does not inherit another provider’s:
+
+- Native session identifier
+- Hidden context or reasoning
+- Provider-specific tools
+- Permission implementation
+- Model-specific capabilities
+- Native subagents or background tasks
+- Exact compaction or resume behavior
+
+The new runtime starts or resumes according to its own adapter and account capabilities.
+
+## Write the handoff instruction
+
+A good implementation handoff:
+
+```text
+Continue the same objective from the current worktree.
+
+First inspect git status, the complete diff, and the latest test output.
+Do not assume the previous provider’s summary is correct.
+Preserve the existing public API and do not widen scope.
+Fix only confirmed issues, run the listed verification, and report the exact results.
+```
+
+A good review handoff:
+
+```text
+Review the current branch without editing first.
+
+Check correctness, lifecycle behavior, security, error handling, and test coverage.
+Verify claims against the source and diff.
+List findings with file references before proposing changes.
+Do not rewrite code unless I explicitly continue after the review.
+```
+
+## Verification after handoff
+
+When the receiving provider finishes:
+
+1. Compare the current diff with the checkpoint or handoff boundary.
+2. Identify which provider introduced each additional change.
+3. Re-run the relevant checks from the task environment.
+4. Confirm the objective is still unchanged.
+5. Review any new permissions, configuration, or generated artifacts.
+6. Commit only the combined result you understand.
+
+A second provider does not automatically make a result independent. Both may repeat the same assumption unless the review objective asks for evidence.
+
+## Failure cases
+
+### The receiver cannot understand the current state
+
+Stop implementation. Ask it to summarize the repository, diff, failing checks, and unresolved questions first. Narrow the task before continuing.
+
+### The receiver wants to replace the approach entirely
+
+Require a written comparison and preserve the checkpoint. A rewrite should be a deliberate new decision, not an accidental consequence of switching models.
+
+### The original provider still has an active turn
+
+Interrupt or wait. Do not permit concurrent edits in one environment.
+
+### Provider capabilities differ
+
+Adjust the workflow. A model option, tool, live-steering feature, or plan mode available to one provider may not exist for the receiver.
+
+### The handoff introduces unrelated changes
+
+Separate or revert them. The handoff does not expand the original ownership boundary.
+
+## Handoff checklist
+
+- [ ] The active turn is stopped or complete
+- [ ] The environment and diff were reviewed
+- [ ] Valuable work is checkpointed
+- [ ] The next provider has one explicit role
+- [ ] The objective and constraints remain unchanged
+- [ ] Provider-native state is not assumed to transfer
+- [ ] Verification runs after the receiving provider finishes
+- [ ] Only reviewed combined changes are committed
+
+<Callout type="warn" title="A handoff changes the worker, not the owner">
+  The Synara task still owns one body of work. Create a separate task and worktree when both
+  providers should proceed independently.
+</Callout>

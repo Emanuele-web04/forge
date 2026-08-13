@@ -1,0 +1,17 @@
+{
+  "title": "Workflows",
+  "defaultOpen": true,
+  "pages": [
+    "index",
+    "best-practices",
+    "parallel-agents",
+    "worktrees",
+    "handoffs",
+    "browser-verification",
+    "pull-requests",
+    "automations",
+    "studio",
+    "agent-gateway",
+    "external-mcp"
+  ]
+}

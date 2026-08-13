@@ -1,0 +1,17 @@
+{
+  "title": "Synara Documentation",
+  "pages": [
+    "index",
+    "---Getting started---",
+    "getting-started",
+    "---Providers---",
+    "providers",
+    "---Workflows---",
+    "workflows",
+    "---Features---",
+    "features",
+    "---Reference---",
+    "reference",
+    "troubleshooting"
+  ]
+}

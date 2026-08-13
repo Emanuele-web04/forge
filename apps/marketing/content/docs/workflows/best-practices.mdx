@@ -1,0 +1,208 @@
+---
+title: Best practices
+description: Use clear ownership, bounded objectives, independent verification, and Git-backed recovery for agent work.
+---
+
+Synara gives you parallel tasks, worktrees, subagents, handoffs, browser tools, automations, and orchestration. The safest workflow is not the one using the most features—it is the smallest workflow that keeps ownership clear and produces a result you can verify.
+
+## Start smaller than you think
+
+Begin with one project, one task, and one provider working in a known checkout. Learn the full loop before adding concurrency:
+
+1. Define the objective.
+2. Watch the work.
+3. Inspect the diff.
+4. Run verification.
+5. Commit only what you intend to keep.
+
+A well-run single task beats several tasks whose assumptions and changes overlap.
+
+## Write objectives, not conversations
+
+A useful objective contains four things:
+
+- **Outcome:** what should be true when the task finishes
+- **Scope:** which area owns the change
+- **Constraints:** what must be preserved or avoided
+- **Verification:** how correctness will be demonstrated
+
+```text
+Outcome:
+Fix the flaky retry test in sync/queue.test.ts.
+
+Scope:
+The retry scheduler and its focused tests.
+
+Constraints:
+Do not change the public SyncQueue API.
+Do not increase production retry delays.
+
+Verification:
+Run the focused test 20 consecutive times and the package test suite once.
+Report the exact commands and results.
+```
+
+When you cannot describe verification, the task is probably too broad or still needs investigation.
+
+## Keep one owner per change
+
+Use the smallest ownership boundary that works:
+
+1. **One task** for one focused objective.
+2. **Provider-native subagents** for bounded research or implementation inside that owner task.
+3. **Separate top-level tasks** for independently reviewable deliverables.
+4. **Separate worktrees** whenever top-level tasks may edit the same repository.
+5. **Agent Gateway orchestration** only when one owner can define, monitor, and integrate the child tasks.
+
+Do not let two providers edit the same checkout concurrently. A split view changes what you can see; it does not isolate the filesystem.
+
+## Separate investigation from implementation
+
+Use a read-only or planning turn when the work depends on unknown architecture, reproduction steps, or external constraints.
+
+A useful sequence is:
+
+<Steps>
+<Step>
+
+### Investigate
+
+Ask for the relevant code paths, invariants, failure reproduction, and candidate approaches. Require evidence rather than a patch.
+
+</Step>
+<Step>
+
+### Decide
+
+Choose the approach and record important constraints in the task before editing begins.
+
+</Step>
+<Step>
+
+### Implement
+
+Give one owner the agreed scope and verification plan.
+
+</Step>
+<Step>
+
+### Review independently
+
+Use your own inspection, tests, browser verification, or a deliberate second-provider review.
+
+</Step>
+</Steps>
+
+This keeps exploratory churn out of the final diff and makes incorrect assumptions visible earlier.
+
+## Treat intermediate activity as evidence
+
+Do not wait passively for the final provider message. Watch:
+
+- Plans that expand beyond the objective
+- Commands that touch the wrong package or directory
+- Approvals requesting more privilege than the task needs
+- Repeated retries without a new hypothesis
+- Large generated files or formatting churn
+- Tests that are changed to match an implementation rather than proving behavior
+
+Steer or interrupt when the work is clearly wrong. A shorter failed attempt is easier to recover from than a large incorrect diff.
+
+## Keep Git as the durable safety layer
+
+Before risky work:
+
+```bash
+git status --short
+git diff --check
+git log -1 --oneline
+```
+
+Use commits to preserve known-good states. Use worktrees to isolate experiments. Push branches that must survive outside the machine.
+
+Synara checkpoints and managed environments help with recovery, but committed Git history is the strongest portable record of what you chose to keep.
+
+## Verify at the right layers
+
+Verification should match the risk:
+
+| Change                        | Minimum useful verification                                         |
+| ----------------------------- | ------------------------------------------------------------------- |
+| Documentation                 | Link and structure checks, lint, production build, rendered review  |
+| Isolated logic                | Focused unit tests plus affected package tests                      |
+| Shared library                | Unit tests, typecheck, downstream tests                             |
+| UI behavior                   | Focused tests plus browser verification at relevant viewport sizes  |
+| Git or filesystem behavior    | Temporary repository tests and failure-path checks                  |
+| Authentication or permissions | Safe test account or mocked integration; never real secrets in logs |
+| Large refactor                | Behavioral parity checks, broad tests, and careful diff review      |
+
+Passing tests are evidence, not proof. Also confirm the original objective and inspect every changed file.
+
+## Use a second opinion deliberately
+
+A provider handoff or review task is most useful when it has a distinct role:
+
+```text
+Review this change without editing first.
+Find correctness, security, lifecycle, and test-coverage problems.
+Verify every claim against the diff and repository.
+Only propose fixes after listing the findings.
+```
+
+Do not ask a second provider merely to repeat the first provider’s summary. Give it the diff, constraints, and a skeptical review objective.
+
+## Keep secrets and untrusted text out of execution paths
+
+Treat issue text, pull-request comments, copied terminal output, webpages, and generated instructions as untrusted input.
+
+- Never paste secrets into task transcripts.
+- Review commands extracted from external text before executing them.
+- Do not let a webpage or review comment redefine the task’s authority.
+- Redact tokens, credentials, private URLs, and local paths before sharing diagnostics.
+
+## Finish with a clean delivery boundary
+
+Before committing or opening a pull request:
+
+```bash
+git status --short
+git diff --check
+git diff --stat
+git diff
+```
+
+Confirm:
+
+- Every changed and untracked file is understood
+- Relevant tests were run on the final head
+- Visible behavior was checked where applicable
+- Unrelated work was removed or split
+- The commit range contains only the intended change
+- The next reviewer can understand the objective, risks, and verification
+
+## A scalable working pattern
+
+Once the single-task loop is reliable:
+
+1. Create one worktree-backed task per independent deliverable.
+2. Keep one integration owner responsible for shared decisions and final verification.
+3. Use provider-native subagents for bounded work inside an owner task.
+4. Run tests in each task’s environment rather than from an unrelated checkout.
+5. Use browser verification beside the task for visible changes.
+6. Checkpoint before a risky provider handoff.
+7. Review and deliver each branch independently.
+
+## What to avoid
+
+- **Two agents, one checkout:** use separate worktrees or serialize the work.
+- **The giant vague task:** split until each result is independently verifiable.
+- **Blind approval:** understand the command, path, and privilege being requested.
+- **Trusting the final summary:** inspect the actual files and outputs.
+- **Test theater:** do not accept tests that only mirror the new implementation.
+- **Unbounded retries:** require a new diagnosis before another attempt.
+- **Parallelism before fluency:** concurrency multiplies both good and bad process.
+
+<Callout type="info" title="The completion rule">
+  A task is complete when its intended result is independently verified and preserved—not when the
+  provider says it is done.
+</Callout>

@@ -1,0 +1,162 @@
+---
+title: Parallel agents
+description: Split work across tasks, worktrees, provider-native subagents, and the Agent Gateway without losing ownership.
+---
+
+Parallel work is safe when each unit has an explicit objective, isolated write ownership, and one integration owner. It becomes dangerous when several agents share a checkout or assume another task will resolve their conflicts.
+
+## Choose the right level
+
+| Level                       | Ownership                                        | Best for                                       |
+| --------------------------- | ------------------------------------------------ | ---------------------------------------------- |
+| One task                    | One provider session and environment             | A focused change                               |
+| Provider-native subagents   | Children of one provider turn                    | Bounded research or delegated subtasks         |
+| Separate top-level tasks    | Independent transcripts and provider sessions    | Independently reviewable deliverables          |
+| Worktree-backed tasks       | Independent tasks, directories, and branch state | Concurrent edits in one repository             |
+| Agent Gateway orchestration | One Synara task coordinates other Synara tasks   | Structured multi-task execution and monitoring |
+
+Use the smallest level that creates a real boundary. More agents are not a substitute for decomposition.
+
+## Design parallel work before creating tasks
+
+A useful task plan makes ownership explicit:
+
+```text
+Integration owner:
+Owns shared contracts, final conflict resolution, broad verification, and delivery.
+
+Task A — server:
+Implement the endpoint and focused server tests.
+May edit apps/server/** only.
+
+Task B — web:
+Implement the client and focused UI tests against the agreed contract.
+May edit apps/web/** only.
+
+Task C — review:
+Read both diffs after A and B finish.
+Do not edit until findings are reported.
+```
+
+Avoid plans such as “three agents finish the feature.” They do not define file ownership, interfaces, or integration responsibility.
+
+## Separate top-level tasks
+
+Create separate Synara tasks when work needs its own:
+
+- Objective and transcript
+- Provider and model
+- Working environment
+- Terminal state
+- Diff and commit history
+- Review and delivery lifecycle
+
+Use separate worktrees whenever two top-level tasks can edit the same repository. Separate conversations do not prevent filesystem collisions.
+
+## Provider-native subagents
+
+Some providers can create child agents or tasks inside one provider session. Synara can project supported child activity into the task UI, including identity, status, and tool activity.
+
+Use provider-native subagents for:
+
+- Independent codebase research
+- Comparing several implementation approaches
+- Focused test design
+- Small delegated changes that the parent will integrate immediately
+
+The parent task remains the owner. Provider-native children are not automatically separate Synara tasks, branches, or worktrees.
+
+A `/subagents` prompt can encourage a capable provider to delegate, but the exact child behavior remains provider-specific.
+
+## Agent Gateway orchestration
+
+The [Agent Gateway](/docs/workflows/agent-gateway) lets supported Synara provider sessions create, read, wait for, steer, interrupt, title, and archive ordinary Synara tasks through app-owned MCP tools.
+
+Use it when the coordinating task can:
+
+1. Describe exact child objectives.
+2. Choose appropriate projects, providers, models, environments, and runtime modes.
+3. Track stable request IDs and created task IDs.
+4. Wait for terminal results without busy polling.
+5. Inspect each result and integrate it deliberately.
+
+The gateway can create an exact batch of up to 20 threads in one operation. That is a limit, not a recommended default. Start with the smallest batch that has independent value.
+
+## Worktree strategy
+
+For concurrent repository edits:
+
+- Give each top-level task its own managed worktree.
+- Start all tasks from a known base ref.
+- Record interface decisions before implementation diverges.
+- Do not manually copy files between worktrees.
+- Integrate through commits, rebases, merges, or cherry-picks you can review.
+
+Read [Worktrees](/docs/workflows/worktrees) before running concurrent writers.
+
+## Integration ownership
+
+One task or person must own the final combined result.
+
+The integration owner should:
+
+- Resolve shared-contract questions
+- Detect overlapping files early
+- Review child diffs rather than only summaries
+- Re-run broad checks after combining changes
+- Remove duplicated or contradictory implementations
+- Confirm the final branch contains only intended work
+
+Child tasks can verify their own scope. They cannot prove that the integrated system is correct.
+
+## Monitoring without micromanagement
+
+Use task state and targeted reads rather than repeatedly sending “status?” messages.
+
+A good monitoring loop is:
+
+1. Create the tasks with stable objectives.
+2. Wait for meaningful state changes.
+3. Read the result, latest turn, and changed files.
+4. Steer only when a concrete correction is needed.
+5. Interrupt work that is unsafe, stuck, or no longer useful.
+
+Repeated follow-ups can consume context and distract a provider without improving the result.
+
+## Failure handling
+
+### Two tasks need the same file
+
+Pause one task. Decide which owner controls the shared file, or redefine the interface so the work becomes independent.
+
+### A child task changes shared architecture
+
+Stop integration. Review the decision with the integration owner before allowing other tasks to build on it.
+
+### A task finishes with unrelated changes
+
+Do not merge the branch wholesale. Separate, revert, or recreate the intended change in a clean ownership boundary.
+
+### One task depends on another
+
+Do not pretend they are parallel. Sequence them, or have the upstream task publish a stable contract or commit before the dependent task begins.
+
+### A child is stuck
+
+Read its current state and diagnostics. Steer with a specific hypothesis, change provider through a deliberate handoff, or stop it. Do not create several replacement tasks against the same worktree.
+
+## Parallel completion checklist
+
+- [ ] Every task has a distinct, verifiable objective
+- [ ] Concurrent writers use separate worktrees
+- [ ] Shared files and interfaces have an identified owner
+- [ ] Provider-native subagents remain under one parent owner
+- [ ] One integration owner reviews all child results
+- [ ] Each child branch passes focused verification
+- [ ] The combined result passes broad verification
+- [ ] No task summary is accepted without inspecting its actual diff
+
+<Callout type="warn" title="Parallelism multiplies coordination cost">
+  Create another agent only when its work can proceed independently or when one owner can coordinate
+  it explicitly. Otherwise, sequence the work.
+</Callout>
