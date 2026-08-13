@@ -1,15 +1,16 @@
 name: Deploy Profiles
 
-# Deploys apps/profiles to Cloudflare Workers (synara-profiles). Shipping is
-# deliberate, mirroring the desktop release convention (v*.*.* tags): push a
-# `profiles-v*` tag (e.g. profiles-v1) or run the workflow manually — plain
-# branch pushes never deploy. Secrets: CLOUDFLARE_API_TOKEN (Workers
-# Scripts:Edit + Workers R2 Storage:Edit) and CLOUDFLARE_ACCOUNT_ID must be
-# set in the repo's Actions secrets.
+# Deploys apps/profiles to Cloudflare Workers (synara-profiles). Rides the
+# normal release train: the same v*.*.* tag that releases the desktop app
+# also ships profiles, so there is one deliberate "ship it" act for
+# everything. workflow_dispatch covers out-of-band fixes; plain branch
+# pushes never deploy. Secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit +
+# Workers R2 Storage:Edit) and CLOUDFLARE_ACCOUNT_ID must be set in the
+# repo's Actions secrets.
 on:
   push:
     tags:
-      - "profiles-v*"
+      - "v*.*.*"
   workflow_dispatch:
 
 concurrency:
@@ -21,6 +22,7 @@ jobs:
     name: Build and deploy to Cloudflare Workers
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    if: github.event_name == 'workflow_dispatch' || (github.ref_type == 'tag' && !contains(github.ref_name, '-'))
     steps:
       - name: Checkout
         uses: actions/checkout@v6
