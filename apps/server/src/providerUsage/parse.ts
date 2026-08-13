@@ -104,6 +104,7 @@ export interface SnapshotInput {
   usageLines?: ReadonlyArray<ServerProviderUsageLine>;
   planName?: string;
   detail?: string;
+  note?: string;
 }
 
 export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot {
@@ -116,6 +117,7 @@ export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot
     status: input.status,
     ...(input.planName ? { planName: input.planName } : {}),
     ...(input.detail ? { detail: input.detail } : {}),
+    ...(input.note ? { note: input.note } : {}),
   };
 }
 

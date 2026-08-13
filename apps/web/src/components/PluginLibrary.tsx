@@ -429,6 +429,10 @@ export function PluginLibrary() {
       plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
     },
+    minimax: {
+      plugins: false,
+      skills: false,
+    },
     pi: {
       plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(piCapabilitiesQuery.data),

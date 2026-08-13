@@ -26,6 +26,7 @@ describe("ComposerModelEffortPicker", () => {
           droid: [],
           kilo: [],
           opencode: [],
+          minimax: [],
           pi: [],
         }}
         hideStatusLabel

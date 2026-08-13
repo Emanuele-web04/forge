@@ -110,6 +110,9 @@ export function providerModelsPrefetchQueryOptions(input: {
         binaryPath: settings.openCodeBinaryPath || null,
         cwd,
       });
+    case "minimax":
+      // MiniMax has no CLI to discover models from; its catalog is owned by opencode.
+      return null;
     case "pi":
       return providerModelsQueryOptions({
         provider: "pi",
@@ -159,13 +162,14 @@ export function prefetchProviderModelsForNewThread(
   },
 ): void {
   const cwd = input.cwd ?? null;
-  void queryClient.prefetchQuery(
-    providerModelsPrefetchQueryOptions({
-      provider: input.provider,
-      settings: input.settings,
-      cwd,
-    }),
-  );
+  const modelsOptions = providerModelsPrefetchQueryOptions({
+    provider: input.provider,
+    settings: input.settings,
+    cwd,
+  });
+  if (modelsOptions) {
+    void queryClient.prefetchQuery(modelsOptions);
+  }
 
   // Agent/mode lists ride along for providers that surface them next to models.
   const agentsOptions = providerAgentsPrefetchQueryOptions({

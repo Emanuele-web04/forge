@@ -124,6 +124,7 @@ type CustomModelSettingsKey =
   | "customDroidModels"
   | "customKiloModels"
   | "customOpenCodeModels"
+  | "customMinimaxModels"
   | "customPiModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
@@ -144,6 +145,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+  minimax: new Set(getModelOptions("minimax").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
 };
 
@@ -170,6 +172,7 @@ const PersistedProviderKind = Schema.Literals([
   "droid",
   "kilo",
   "opencode",
+  "minimax",
   "pi",
 ]).pipe(
   Schema.decodeTo(
@@ -276,6 +279,7 @@ export const AppSettingsSchema = Schema.Struct({
   customDroidModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customMinimaxModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
@@ -413,6 +417,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Pi model slugs for the picker and provider runtime.",
     placeholder: "provider/model",
     example: "anthropic/claude-sonnet-4-5",
+  },
+  minimax: {
+    provider: "minimax",
+    settingsKey: "customMinimaxModels",
+    defaultSettingsKey: "customMinimaxModels",
+    title: "MiniMax",
+    description: "Save additional MiniMax model slugs (MiniMax models run through OpenCode).",
+    placeholder: "minimax-m3",
+    example: "minimax-m3",
   },
 };
 
@@ -878,6 +891,7 @@ export function getCustomModelsByProvider(
     droid: getCustomModelsForProvider(settings, "droid"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
+    minimax: getCustomModelsForProvider(settings, "minimax"),
     pi: getCustomModelsForProvider(settings, "pi"),
   };
 }
@@ -1026,6 +1040,7 @@ export function getCustomModelOptionsByProvider(
     droid: getAppModelOptions("droid", customModelsByProvider.droid),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
+    minimax: getAppModelOptions("minimax", customModelsByProvider.minimax),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
   };
 }
@@ -1206,6 +1221,9 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.kiloBinaryPath);
     case "opencode":
       return normalizeProviderBinaryPathOverride(provider, settings.openCodeBinaryPath);
+    case "minimax":
+      // MiniMax has no standalone CLI; its usage is tracked via the opencode credential.
+      return "";
     case "pi":
       return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
   }

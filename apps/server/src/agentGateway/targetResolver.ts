@@ -236,6 +236,16 @@ const PROVIDER_TARGET_OPTION_RULES = {
       }),
     },
   }),
+  minimax: defineProviderOptionConfig<"minimax">({
+    primaryOptionKey: "variant",
+    options: {
+      variant: providerOptionRule("string", [], "model-discovery"),
+      agent: providerOptionRule("string", [], "model-discovery", {
+        validation: { kind: "non-empty-string" },
+        allowsCustomValue: true,
+      }),
+    },
+  }),
 } as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
 
 function providerDefaultModel(provider: ProviderKind): string | null {

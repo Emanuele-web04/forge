@@ -466,6 +466,7 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   droid: ["factory", "agents", "claude", "codex"],
   kilo: ["kilo", "agents", "claude"],
   opencode: ["opencode", "claude", "agents"],
+  minimax: ["opencode", "claude", "agents"],
   pi: ["pi", "agents"],
 } as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;
 

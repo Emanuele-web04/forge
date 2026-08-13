@@ -88,6 +88,16 @@ export const PROVIDER_DESCRIPTORS = [
     usage: null,
   },
   {
+    kind: "minimax",
+    displayName: PROVIDER_DISPLAY_NAMES.minimax,
+    available: false,
+    supportsNativeTurnSteering: false,
+    usage: {
+      signInCommand: "opencode",
+      learnMoreHref: "https://platform.minimax.io/subscribe/token-plan",
+    },
+  },
+  {
     kind: "pi",
     displayName: PROVIDER_DISPLAY_NAMES.pi,
     available: true,

@@ -276,6 +276,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           kilo: [],
           opencode: [],
+          minimax: [],
           pi: [],
         },
         "galapagos-alpha",
@@ -296,6 +297,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           kilo: [],
           opencode: [],
+          minimax: [],
           pi: [],
         },
         "",
@@ -316,6 +318,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           kilo: [],
           opencode: [],
+          minimax: [],
           pi: [],
         },
         "GPT-5.3 Codex",
@@ -336,6 +339,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           kilo: [],
           opencode: [],
+          minimax: [],
           pi: [],
         },
         "sonnet",
@@ -356,6 +360,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           kilo: [],
           opencode: [],
+          minimax: [],
           pi: [],
         },
         "custom/selected-model",
@@ -595,6 +600,7 @@ describe("provider-indexed custom model settings", () => {
     customDroidModels: ["claude-opus-4-8-custom"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
+    customMinimaxModels: ["minimax-m3"],
     customPiModels: ["anthropic/custom-pi"],
   } as const;
 
@@ -639,6 +645,7 @@ describe("provider-indexed custom model settings", () => {
       customDroidModels: ["droid/default-model"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
+      customMinimaxModels: [],
       customPiModels: ["anthropic/default-pi"],
     } as const;
 
@@ -774,6 +781,7 @@ describe("provider-indexed custom model settings", () => {
         "openrouter/gpt-oss-120b",
         "openrouter/gpt-oss-120b",
       ],
+      customMinimaxModels: [" minimax-m3 ", "minimax/custom-m3"],
       customPiModels: [
         " anthropic/claude-sonnet-4-5 ",
         "anthropic/custom-pi",

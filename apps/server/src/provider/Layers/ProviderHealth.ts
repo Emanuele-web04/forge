@@ -2128,7 +2128,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       const refreshScope = yield* Scope.make("sequential");
       yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
 
-      const cachePathByProvider = new Map(
+      const cachePathByProvider = new Map<ProviderKind, string>(
         PROVIDERS.map(
           (provider) =>
             [
@@ -2244,7 +2244,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             });
           }
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: getProviderBinaryPath(provider, settings),
+            binaryPath: getProviderBinaryPath(provider, settings) ?? null,
             env: providerCommandEnv(provider),
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
