@@ -201,6 +201,14 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
           : {}),
       };
+    case "minimax":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "minimax" }>["options"] }
+          : {}),
+      };
     case "pi":
       return {
         provider,

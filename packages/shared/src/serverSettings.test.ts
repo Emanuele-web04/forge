@@ -51,6 +51,9 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "",
           agentDir: "",
         },
+        minimax: {
+          ...DEFAULT_SERVER_SETTINGS.providers.minimax,
+        },
       },
     };
 

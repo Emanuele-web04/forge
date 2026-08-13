@@ -294,6 +294,11 @@ export function useProviderModelCatalog(input: {
         customModelsByProvider.opencode,
         modelHintByProvider?.opencode,
       ),
+      minimax: getAppModelOptions(
+        "minimax",
+        customModelsByProvider.minimax,
+        modelHintByProvider?.minimax,
+      ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
     };
     const result: Record<
@@ -312,6 +317,7 @@ export function useProviderModelCatalog(input: {
       droid: droidDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
+      minimax: undefined,
       pi: piDynamicModelsQuery.data,
     };
     for (const provider of [
@@ -381,6 +387,7 @@ export function useProviderModelCatalog(input: {
       droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
+      minimax: [],
       pi: piDynamicModelsQuery.data?.models ?? [],
     }),
     [

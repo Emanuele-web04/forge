@@ -345,6 +345,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "Kilo";
     case "opencode":
       return "OpenCode";
+    case "minimax":
+      return "MiniMax";
     case "pi":
       return "Pi";
   }

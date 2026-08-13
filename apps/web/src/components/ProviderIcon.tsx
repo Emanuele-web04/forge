@@ -17,6 +17,7 @@ import {
   GrokIcon,
   type Icon,
   KiloIcon,
+  MiniMaxIcon,
   OpenAI,
   OpenCodeIcon,
   PiIcon,
@@ -72,6 +73,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   droid: DroidIcon,
   kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
+  minimax: MiniMaxIcon,
   pi: PiIcon,
 };
 

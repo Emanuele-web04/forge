@@ -364,6 +364,7 @@ describe("composerDraftStore modelSelection", () => {
         droid: [],
         kilo: [],
         opencode: [],
+        minimax: [],
         pi: [],
       },
       availableModelOptionsByProvider: {
@@ -392,6 +393,7 @@ describe("composerDraftStore modelSelection", () => {
         droid: [],
         kilo: [],
         opencode: [],
+        minimax: [],
         pi: [],
       },
       availableModelOptionsByProvider: {
@@ -425,6 +427,7 @@ describe("composerDraftStore modelSelection", () => {
         droid: [],
         kilo: [],
         opencode: [],
+        minimax: [],
         pi: [],
       },
       availableModelOptionsByProvider: {
@@ -458,6 +461,7 @@ describe("composerDraftStore modelSelection", () => {
         droid: [],
         kilo: [],
         opencode: [],
+        minimax: [],
         pi: [],
       },
       availableModelOptionsByProvider: {

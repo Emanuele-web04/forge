@@ -16,6 +16,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "droid",
   "kilo",
   "opencode",
+  "minimax",
   "pi",
 ]);
 

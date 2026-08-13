@@ -48,6 +48,7 @@ function ClaudeTraitsPickerHarness(props: {
       droid: [],
       kilo: [],
       opencode: [],
+      minimax: [],
       pi: [],
     },
   });
@@ -650,6 +651,7 @@ function OpenCodeTraitsPickerHarness(props: {
       droid: [],
       kilo: [],
       opencode: [],
+      minimax: [],
       pi: [],
     },
   });

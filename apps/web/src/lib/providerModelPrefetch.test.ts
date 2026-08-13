@@ -116,7 +116,7 @@ describe("providerModelsPrefetchQueryOptions", () => {
     const cursorOptions = providerModelsPrefetchQueryOptions({
       provider: "cursor",
       settings,
-    });
+    })!;
     expect(cursorOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models("cursor", "/bin/agent", "https://api.example", null, null),
     );
@@ -125,7 +125,7 @@ describe("providerModelsPrefetchQueryOptions", () => {
       provider: "opencode",
       settings,
       cwd: "/tmp/project",
-    });
+    })!;
     expect(openCodeOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models("opencode", "/bin/opencode", null, null, "/tmp/project"),
     );
@@ -134,7 +134,7 @@ describe("providerModelsPrefetchQueryOptions", () => {
       provider: "pi",
       settings,
       cwd: "/tmp/project",
-    });
+    })!;
     expect(piOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models("pi", "/bin/pi", null, "/tmp/pi-agent", "/tmp/project"),
     );
@@ -143,7 +143,7 @@ describe("providerModelsPrefetchQueryOptions", () => {
       provider: "antigravity",
       settings,
       cwd: "/tmp/project",
-    });
+    })!;
     expect(antigravityOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models(
         "antigravity",
@@ -157,7 +157,7 @@ describe("providerModelsPrefetchQueryOptions", () => {
     const codexOptions = providerModelsPrefetchQueryOptions({
       provider: "codex",
       settings,
-    });
+    })!;
     expect(codexOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models("codex", null, null, null, null),
     );

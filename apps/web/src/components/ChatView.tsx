@@ -941,6 +941,9 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
     case "cursor":
       return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
+    case "minimax":
+      // MiniMax has no standalone CLI binary.
+      return null;
     case "pi":
       return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
   }
@@ -2278,6 +2281,7 @@ export default function ChatView({
       droid: resolveHint("droid"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
+      minimax: resolveHint("minimax"),
       pi: resolveHint("pi"),
     };
   }, [

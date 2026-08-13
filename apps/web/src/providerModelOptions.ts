@@ -462,6 +462,14 @@ export function buildModelSelection(
             options: options as OpenCodeModelOptions,
           }
         : { provider, model };
+    case "minimax":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as OpenCodeModelOptions,
+          }
+        : { provider, model };
     case "pi":
       return options
         ? {

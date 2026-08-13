@@ -79,6 +79,14 @@ export const PiServerProviderSettings = Schema.Struct({
 });
 export type PiServerProviderSettings = typeof PiServerProviderSettings.Type;
 
+export const MinimaxServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  // MiniMax has no standalone CLI: usage is tracked through the opencode provider's
+  // `minimax-coding-plan` credential, and model catalog is owned by opencode.
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+});
+export type MinimaxServerProviderSettings = typeof MinimaxServerProviderSettings.Type;
+
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
@@ -110,6 +118,7 @@ export const ServerSettings = Schema.Struct({
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    minimax: MinimaxServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -183,6 +192,7 @@ export const ServerSettingsPatch = Schema.Struct({
           experimentalWebSockets: Schema.optionalKey(Schema.Boolean),
         }),
       ),
+      minimax: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       pi: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,

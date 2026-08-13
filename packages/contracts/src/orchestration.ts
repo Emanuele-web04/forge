@@ -62,6 +62,7 @@ export const ProviderKind = Schema.Literals([
   "droid",
   "kilo",
   "opencode",
+  "minimax",
   "pi",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
@@ -144,6 +145,13 @@ export const PiModelSelection = Schema.Struct({
 });
 export type PiModelSelection = typeof PiModelSelection.Type;
 
+export const MinimaxModelSelection = Schema.Struct({
+  provider: Schema.Literal("minimax"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(OpenCodeModelOptions),
+});
+export type MinimaxModelSelection = typeof MinimaxModelSelection.Type;
+
 export const ModelSelection = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
@@ -153,6 +161,7 @@ export const ModelSelection = Schema.Union([
   DroidModelSelection,
   KiloModelSelection,
   OpenCodeModelSelection,
+  MinimaxModelSelection,
   PiModelSelection,
 ]);
 export type ModelSelection = typeof ModelSelection.Type;

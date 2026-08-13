@@ -154,6 +154,7 @@ export const ProviderModelOptions = Schema.Struct({
   droid: Schema.optional(DroidModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
+  minimax: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
@@ -827,6 +828,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
+  // MiniMax is tracked for usage only; model catalog is owned by the opencode provider.
+  minimax: [],
   cursor: [
     {
       // Cursor exposes auto as the `default` model id over ACP; the adapter maps it.
@@ -1029,6 +1032,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
+  minimax: "minimax-m3",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -1163,6 +1167,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   kilo: {},
   opencode: {},
+  minimax: {},
   pi: {},
 };
 
@@ -1199,5 +1204,6 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   droid: "Droid",
   kilo: "Kilo",
   opencode: "OpenCode",
+  minimax: "MiniMax",
   pi: "Pi",
 };

@@ -277,6 +277,17 @@ export const PiIcon: Icon = (props) => (
   </svg>
 );
 
+export const MiniMaxIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 800 800" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fill="currentColor"
+      fillRule="evenodd"
+      d="M165.29 165.29H282.65V400H400V282.65H517.36V517.36H400V634.72H282.65V517.36H165.29V165.29Z"
+      clipRule="evenodd"
+    />
+  </svg>
+);
+
 export const OpenCodeIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 32 40" fill="none" xmlns="http://www.w3.org/2000/svg">
     <g clipPath="url(#opencode__clip0_1311_94969)">

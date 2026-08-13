@@ -11,6 +11,7 @@ export type ProviderChildKind =
   | "droid"
   | "grok"
   | "kilo"
+  | "minimax"
   | "opencode"
   | "pi";
 
@@ -48,6 +49,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   acp: "all",
   codex: "all",
   kilo: "all",
+  minimax: "all",
   opencode: "all",
   pi: "all",
 };
