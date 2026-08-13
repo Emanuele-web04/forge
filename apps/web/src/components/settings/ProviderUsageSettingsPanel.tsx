@@ -118,6 +118,9 @@ function ProviderUsageCard({
                 surface="settings"
               />
             ) : null}
+            {snapshot.note ? (
+              <p className="text-xs leading-relaxed text-muted-foreground">{snapshot.note}</p>
+            ) : null}
           </>
         ) : (
           <p className="text-xs leading-relaxed text-muted-foreground">

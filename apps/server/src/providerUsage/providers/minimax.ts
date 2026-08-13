@@ -286,7 +286,7 @@ export const minimaxUsageFetcher: ProviderUsageFetcher = {
       source: SOURCE,
       ...(planName ? { planName } : {}),
       limits,
-      detail: "Usage is tracked through OpenCode (minimax-coding-plan).",
+      note: "Usage is tracked through OpenCode (minimax-coding-plan).",
     });
   },
 };
