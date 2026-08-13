@@ -3,14 +3,14 @@
 // Layer: App Router route handler (Node.js runtime)
 // Depends on: Server-only Resend, recipient, and verified sender configuration.
 
+import { consumeFeedbackRateLimit } from "@/lib/feedbackRateLimit";
+
 export const runtime = "nodejs";
 
 const RESEND_API_URL = "https://api.resend.com/emails";
 const DEFAULT_FROM_EMAIL = "Synara Feedback <feedback@trysynara.com>";
 const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_DETAILS_LENGTH = 5_000;
-const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1_000;
-const RATE_LIMIT_MAX_REQUESTS = 5;
 const SEND_TIMEOUT_MS = 15_000;
 
 const CATEGORY_LABELS = {
@@ -30,13 +30,6 @@ interface ParsedFeedback {
   details: string;
   diagnostics: Record<string, DiagnosticValue>;
 }
-
-interface RateLimitRecord {
-  count: number;
-  resetAt: number;
-}
-
-const rateLimits = new Map<string, RateLimitRecord>();
 
 const DIAGNOSTIC_FIELDS = [
   "appVersion",
@@ -104,25 +97,6 @@ function jsonResponse(body: unknown, status: number, origin: string | null): Res
 function requestIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   return forwarded || request.headers.get("x-real-ip")?.trim() || "unknown";
-}
-
-function consumeRateLimit(key: string, now = Date.now()): { allowed: boolean; retryAfter: number } {
-  if (rateLimits.size > 2_000) {
-    for (const [candidate, record] of rateLimits) {
-      if (record.resetAt <= now) rateLimits.delete(candidate);
-    }
-  }
-
-  const current = rateLimits.get(key);
-  if (!current || current.resetAt <= now) {
-    rateLimits.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return { allowed: true, retryAfter: 0 };
-  }
-  if (current.count >= RATE_LIMIT_MAX_REQUESTS) {
-    return { allowed: false, retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1_000)) };
-  }
-  current.count += 1;
-  return { allowed: true, retryAfter: 0 };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -276,7 +250,7 @@ export async function POST(request: Request): Promise<Response> {
     return jsonResponse({ error: "Feedback is too large." }, 413, allowedOrigin);
   }
 
-  const rateLimit = consumeRateLimit(requestIp(request));
+  const rateLimit = await consumeFeedbackRateLimit(requestIp(request));
   if (!rateLimit.allowed) {
     const response = jsonResponse(
       { error: "Too many feedback reports. Please try again later." },

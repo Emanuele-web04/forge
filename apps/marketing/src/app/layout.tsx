@@ -6,7 +6,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeScript } from "@/components/ThemeScript";
-import { Analytics } from "@vercel/analytics/next";
+import { WebAnalytics } from "@/components/WebAnalytics";
 import { RootProvider } from "fumadocs-ui/provider/next";
 import {
   SITE_URL,
@@ -91,13 +91,6 @@ export const metadata: Metadata = {
   },
 };
 
-// Vercel Web Analytics only reports from a Vercel deployment, so the gate is
-// still `VERCEL` rather than "any production": on Workers the script would
-// load and silently collect nothing. Swapping to Cloudflare Web Analytics is a
-// separate decision (it changes what /privacy documents), so this stays as-is
-// and simply stays off on the Workers preview.
-const analyticsEnabled = Boolean(process.env.VERCEL) && process.env.VISUAL_TEST !== "1";
-
 export const viewport: Viewport = {
   themeColor: "#111111",
 };
@@ -120,7 +113,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: jsonLdScript(SITE_JSONLD) }}
         />
         <RootProvider theme={{ enabled: false }}>{children}</RootProvider>
-        {analyticsEnabled ? <Analytics /> : null}
+        <WebAnalytics />
       </body>
     </html>
   );

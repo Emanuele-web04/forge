@@ -170,12 +170,12 @@ export default function PrivacyPage() {
           <p>
             This marketing site (the page you&apos;re reading) uses privacy- friendly{" "}
             <a
-              href="https://vercel.com/docs/analytics/privacy-policy"
+              href="https://developers.cloudflare.com/web-analytics/"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[var(--accent-link)] transition-colors hover:text-[var(--accent-link-hover)]"
             >
-              Vercel Web Analytics
+              Cloudflare Web Analytics
             </a>{" "}
             for anonymous, aggregate visit counts. No cookies, no cross-site tracking, no selling of
             data.

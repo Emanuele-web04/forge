@@ -23,7 +23,6 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@vercel/analytics": "^2.0.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "fumadocs-core": "16.11.5",
