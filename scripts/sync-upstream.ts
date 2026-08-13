@@ -140,18 +140,6 @@ function applyForkFixes(skipFixes: boolean): void {
     return;
   }
 
-  const README_PATH = "README.md";
-  const readme = readFileSync(README_PATH, "utf8");
-  const approvedAttribution =
-    "Synara began as a clone of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.";
-  const readmeNext = readme
-    .replace(/Synara began as a clone of.*$/m, approvedAttribution);
-
-  if (readmeNext !== readme) {
-    writeFileSync(README_PATH, readmeNext.endsWith("\n") ? readmeNext : `${readmeNext}\n`);
-    console.log("Applied branded-attribution normalization in README.md.");
-  }
-
   const CHAT_TEST_PATH = "apps/web/src/components/ChatView.browser.tsx";
   const chatTest = readFileSync(CHAT_TEST_PATH, "utf8");
   let chatNext = chatTest;
