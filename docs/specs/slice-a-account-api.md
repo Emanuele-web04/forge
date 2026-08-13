@@ -2,7 +2,7 @@
 
 Implements workstream A of `2026-08-13-hosts-as-account-entities.md` (ADRs 0002, 0006, 0011, 0012, 0013, 0015). v2 after adversarial review (25 confirmed findings resolved; see git history for v1).
 
-**Landability**: Slice A is **additive**. The legacy surface (`POST /hosts`, `host_tokens`, `deviceCredentialStore`, `RegisterHostRequest/Response`, `registered_by_user_id`) stays intact and functional so `packages/shared` and `apps/server` keep compiling and working untouched. The cutover (ADR 0012) happens when **Slice C** switches the host to keypair auth — that PR removes the legacy surface, drops `host_tokens`, and force-re-links deployed hosts. Slice A only *adds*: new tables, new columns, new routes, new contracts.
+**Landability**: Slice A is **additive**. The legacy surface (`POST /hosts`, `host_tokens`, `deviceCredentialStore`, `RegisterHostRequest/Response`, `registered_by_user_id`) stays intact and functional so `packages/shared` and `apps/server` keep compiling and working untouched. The cutover (ADR 0012) happens when **Slice C** switches the host to keypair auth — that PR removes the legacy surface, drops `host_tokens`, and force-re-links deployed hosts. Slice A only _adds_: new tables, new columns, new routes, new contracts.
 
 ## 1. Schema changes (`apps/api/src/db/schema.ts`)
 
@@ -64,6 +64,7 @@ Existing idiom throughout: inline gates, `Schema.decodeUnknownSync`, `errorRespo
 There is no API-signed challenge JWT. The `link_challenges` row is the single source of truth; the proof binds `challengeId` + `nonce` directly.
 
 **`POST /hosts/link/start`** — session-authed (`requireOrgSession`). Body `{environmentId?, name?, platform?, kind?}`.
+
 - If `environmentId` given and a row exists for `(orgId, environmentId)`: caller MUST be its owner, else `409 environment_already_linked` (F3/F8 — no org-member takeover). The existing row is NOT modified — no key clearing, no owner rewrite; `start` is side-effect-free on existing hosts beyond creating the challenge row.
 - If `environmentId` given and no row exists: insert host row `{ownerUserId: caller, ownerOrgId, environmentId, name, platform, kind, discoverable: true, publicKeyJwk: null, keyGeneration: 0}`.
 - If `environmentId` absent (host will self-report it in the proof): no host row yet.
@@ -75,6 +76,7 @@ Effects (one transaction): set `public_key_jwk`, `key_generation += 1`; **unlink
 Response `{host}` including `keyGeneration` (F20).
 
 **Device-code flow (headless, RFC 8628-shaped — F5/F13/F18 resolved):**
+
 - `POST /hosts/link/device` — unauthenticated, per-IP rate-limited. Mints `deviceCode` (32B base64url — the CLI's real credential, stored hashed) + `userCode` (8 chars from a 32-symbol alphabet, ~40 bits, display only) on a challenge row with no owner bound. Response `{deviceCode, userCode, verificationUri, expiresAt, interval: 5}`.
 - `POST /hosts/link/approve` — session-authed. Body `{userCode}`. Binds `ownerUserId`/`ownerOrgId` to the challenge, sets `approved_at`. Per-IP rate limit (10/min) bounds userCode guessing; unexpired userCodes are unique.
 - `POST /hosts/link/device/token` — unauthenticated. Body `{deviceCode}` (hash lookup). Returns `428 approval_pending` until approved, then `{challengeId, nonce}` (single delivery), after which `link/complete` proceeds identically.
@@ -116,7 +118,7 @@ All additive: `deviceCredentialStore.ts` and existing interfaces stay until Slic
 
 ## 6. Threat-model precision (F16)
 
-ADR 0011's "a compromised API cannot fabricate access" is amended (see ADR): the API is the *authorization* authority, so API-key compromise can authorize sessions to linked, discoverable-or-owned hosts. What the design guarantees: **relay** compromise fabricates nothing (it signs nothing); API compromise cannot impersonate a host, cannot decrypt Host Secrets, and cannot reach a host silently — every session requires the host online and minting, and Slice C hosts enforce their own last-known policy at mint time (owner userId recorded at link; local `discoverable` mirror refuses non-owner grants when off). Sessions are surfaced in the host UI.
+ADR 0011's "a compromised API cannot fabricate access" is amended (see ADR): the API is the _authorization_ authority, so API-key compromise can authorize sessions to linked, discoverable-or-owned hosts. What the design guarantees: **relay** compromise fabricates nothing (it signs nothing); API compromise cannot impersonate a host, cannot decrypt Host Secrets, and cannot reach a host silently — every session requires the host online and minting, and Slice C hosts enforce their own last-known policy at mint time (owner userId recorded at link; local `discoverable` mirror refuses non-owner grants when off). Sessions are surfaced in the host UI.
 
 ## 7. Config
 
@@ -140,15 +142,15 @@ Existing patterns (real Postgres via `TEST_DATABASE_URL`, fakeWorkos). Matrix:
 
 Conventions (t3code-derived): jose; header pins `typ`; issuers/audiences exact-matched; `clockTolerance: 60`; bounded lifetime = `exp > iat ∧ exp − iat ≤ cap ∧ iat ≤ now + 60s`; UUIDv4 `jti`. **Host and API keys: Ed25519 (EdDSA). Device keys: ES256 (P-256, Secure Enclave) or EdDSA** (F23). API issuer string = `API_PUBLIC_URL`.
 
-| typ | signer | aud | cap | purpose |
-|---|---|---|---|---|
-| `synara-host-link+jwt` | host key (TOFU) | API issuer | 5m | link proof: `iss "synara-host:<envId>"`, `sub` envId, `challengeId`, `nonce`, `publicKeyJwk`, `name`, `platform`, `appVersion?` |
-| `synara-host-proof+jwt` | host key | API issuer | 60s | API auth: `iss "synara-host:<envId>"`, `sub` hostId, `keyGeneration` (F20: iss/sub fixed) |
-| `synara-device-register+jwt` | device key (TOFU) | API issuer | 60s | PoP registration: `iss "synara-device"`, `sub` userId, `publicKeyJwk`, `displayName`, `platform` |
-| `synara-grant+jwt` | API key | `"synara-relay"` (hosts accept too) | 60s | `sub` userId, `hostId`, `environmentId`, `cnf:{jkt}`, `scope:["host:connect"]` |
-| `synara-relay-ticket+jwt` | API key | `"synara-relay"` | 5m | `sub` hostId, `environmentId`, `keyGeneration`, `scope:["relay:control"]` |
-| `synara-mint-request+jwt` | device key | `"synara-host:<envId>"` | 2m | Slice C, fully defined now (F23): `iss "synara-device"`, `sub` userId, `publicKeyJwk`, `grant` (full grant JWT echoed). Host verifies: grant sig vs API JWKS + exp + `hostId` = self + jti unseen (60s cache); request sig vs embedded JWK; thumbprint(JWK) === grant `cnf.jkt`; bounded lifetimes. |
-| `synara-session-credential+jwt` | host key | `"synara-session"` | 1h | Slice C: `iss "synara-host:<envId>"`, `sub` userId, `cnf:{jkt}`, `keyGeneration`, `scope:["host:connect"]`. Presented with an RFC 9449 DPoP proof (`typ "dpop+jwt"`, signed by device key, `htu`/`htm`/`jti`/`iat`, `ath` = SHA-256 of the credential). |
+| typ                             | signer            | aud                                 | cap | purpose                                                                                                                                                                                                                                                                                             |
+| ------------------------------- | ----------------- | ----------------------------------- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `synara-host-link+jwt`          | host key (TOFU)   | API issuer                          | 5m  | link proof: `iss "synara-host:<envId>"`, `sub` envId, `challengeId`, `nonce`, `publicKeyJwk`, `name`, `platform`, `appVersion?`                                                                                                                                                                     |
+| `synara-host-proof+jwt`         | host key          | API issuer                          | 60s | API auth: `iss "synara-host:<envId>"`, `sub` hostId, `keyGeneration` (F20: iss/sub fixed)                                                                                                                                                                                                           |
+| `synara-device-register+jwt`    | device key (TOFU) | API issuer                          | 60s | PoP registration: `iss "synara-device"`, `sub` userId, `publicKeyJwk`, `displayName`, `platform`                                                                                                                                                                                                    |
+| `synara-grant+jwt`              | API key           | `"synara-relay"` (hosts accept too) | 60s | `sub` userId, `hostId`, `environmentId`, `cnf:{jkt}`, `scope:["host:connect"]`                                                                                                                                                                                                                      |
+| `synara-relay-ticket+jwt`       | API key           | `"synara-relay"`                    | 5m  | `sub` hostId, `environmentId`, `keyGeneration`, `scope:["relay:control"]`                                                                                                                                                                                                                           |
+| `synara-mint-request+jwt`       | device key        | `"synara-host:<envId>"`             | 2m  | Slice C, fully defined now (F23): `iss "synara-device"`, `sub` userId, `publicKeyJwk`, `grant` (full grant JWT echoed). Host verifies: grant sig vs API JWKS + exp + `hostId` = self + jti unseen (60s cache); request sig vs embedded JWK; thumbprint(JWK) === grant `cnf.jkt`; bounded lifetimes. |
+| `synara-session-credential+jwt` | host key          | `"synara-session"`                  | 1h  | Slice C: `iss "synara-host:<envId>"`, `sub` userId, `cnf:{jkt}`, `keyGeneration`, `scope:["host:connect"]`. Presented with an RFC 9449 DPoP proof (`typ "dpop+jwt"`, signed by device key, `htu`/`htm`/`jti`/`iat`, `ath` = SHA-256 of the credential).                                             |
 
 No challenge JWT exists (F12): the challenge is a DB row; the proof binds `challengeId` + `nonce`.
 

@@ -57,6 +57,13 @@
       "when": 1786541443592,
       "tag": "0007_profile_avatars",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786617850245,
+      "tag": "0008_modern_norrin_radd",
+      "breakpoints": true
     }
   ]
 }

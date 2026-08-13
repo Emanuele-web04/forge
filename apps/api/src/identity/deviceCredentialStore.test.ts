@@ -28,6 +28,7 @@ describe.skipIf(!TEST_DATABASE_URL)("deviceCredentialStore rotation", () => {
       .values({
         ownerOrgId: `org_${randomUUID()}`,
         registeredByUserId: `user_${randomUUID()}`,
+        ownerUserId: `user_${randomUUID()}`,
         environmentId: randomUUID(),
         name: "Rotation Test Host",
         platform: "darwin",

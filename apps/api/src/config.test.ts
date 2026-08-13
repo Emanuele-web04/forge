@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiConfigError, loadApiConfig, type WorkosApiConfig } from "./config";
 
 /** The default (WorkOS) shape, narrowed so field assertions typecheck. */
@@ -13,13 +13,16 @@ const base = {
   WORKOS_API_KEY: "sk_test_123",
   WORKOS_CLIENT_ID: "client_123",
   ACCOUNT_BASE_URL: "https://accounts.example.com",
+  API_PUBLIC_URL: "https://accounts.example.com/api/v1",
+  API_SIGNING_KEY: Buffer.alloc(32, 1).toString("base64url"),
+  RELAY_SERVICE_TOKEN: "relay-secret",
 };
 
 describe("loadApiConfig", () => {
   it("throws listing every missing required var", () => {
     expect(() => loadApiConfig({})).toThrow(ApiConfigError);
     expect(() => loadApiConfig({})).toThrow(
-      /DATABASE_URL.*WORKOS_API_KEY.*WORKOS_CLIENT_ID.*ACCOUNT_BASE_URL/s,
+      /DATABASE_URL.*WORKOS_API_KEY.*WORKOS_CLIENT_ID.*ACCOUNT_BASE_URL.*API_PUBLIC_URL/s,
     );
   });
 
@@ -29,7 +32,42 @@ describe("loadApiConfig", () => {
       workosApiKey: base.WORKOS_API_KEY,
       workosClientId: base.WORKOS_CLIENT_ID,
       baseUrl: base.ACCOUNT_BASE_URL,
+      apiPublicUrl: base.API_PUBLIC_URL,
+      apiSigningKey: base.API_SIGNING_KEY,
+      relayServiceToken: base.RELAY_SERVICE_TOKEN,
     });
+  });
+
+  it("fails closed for WorkOS without the API signing or relay service key", () => {
+    const { API_SIGNING_KEY: _signing, ...withoutSigning } = base;
+    expect(() => loadApiConfig(withoutSigning)).toThrow(/API_SIGNING_KEY/);
+    const { RELAY_SERVICE_TOKEN: _relay, ...withoutRelay } = base;
+    expect(() => loadApiConfig(withoutRelay)).toThrow(/RELAY_SERVICE_TOKEN/);
+  });
+
+  it("reads the previous signing key for rotation", () => {
+    expect(
+      loadApiConfig({
+        ...base,
+        API_SIGNING_KEY_PREVIOUS: Buffer.alloc(32, 2).toString("base64url"),
+      }).apiSigningKeyPrevious,
+    ).toBe(Buffer.alloc(32, 2).toString("base64url"));
+  });
+
+  it("generates an ephemeral signing key with a warning only for the dev provider", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const config = loadApiConfig({
+        IDENTITY_PROVIDER: "dev",
+        DATABASE_URL: base.DATABASE_URL,
+        ACCOUNT_BASE_URL: "http://localhost:8788",
+        API_PUBLIC_URL: "http://localhost:8788/api/v1",
+      });
+      expect(Buffer.from(config.apiSigningKey, "base64url")).toHaveLength(32);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("ephemeral signing key"));
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it("defaults port to 8788 and parses PORT", () => {

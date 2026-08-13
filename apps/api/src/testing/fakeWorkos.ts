@@ -521,24 +521,31 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   app.get("/user_management/organization_memberships", (c) => {
     const userId = c.req.query("user_id");
     const orgId = c.req.query("organization_id");
+    const after = c.req.query("after");
     const limitParam = Number.parseInt(c.req.query("limit") ?? "", 10);
     const limit = Number.isInteger(limitParam) && limitParam > 0 ? limitParam : 100;
-    const data = memberships
-      .filter(
-        (entry) =>
-          (userId === undefined || entry.userId === userId) &&
-          (orgId === undefined || entry.orgId === orgId),
-      )
-      .slice(0, limit)
-      .map((entry) => ({
-        object: "organization_membership",
-        id: `om_fake_${entry.orgId}_${entry.userId}`,
-        user_id: entry.userId,
-        organization_id: entry.orgId,
-        organization_name: organizations.get(entry.orgId)?.name ?? null,
-        status: "active",
-      }));
-    return c.json({ object: "list", data, list_metadata: { before: null, after: null } });
+    const matching = memberships.filter(
+      (entry) =>
+        (userId === undefined || entry.userId === userId) &&
+        (orgId === undefined || entry.orgId === orgId),
+    );
+    const start = after
+      ? Math.max(
+          0,
+          matching.findIndex((entry) => `om_fake_${entry.orgId}_${entry.userId}` === after) + 1,
+        )
+      : 0;
+    const page = matching.slice(start, start + limit);
+    const data = page.map((entry) => ({
+      object: "organization_membership",
+      id: `om_fake_${entry.orgId}_${entry.userId}`,
+      user_id: entry.userId,
+      organization_id: entry.orgId,
+      organization_name: organizations.get(entry.orgId)?.name ?? null,
+      status: "active",
+    }));
+    const next = start + page.length < matching.length ? (data.at(-1)?.id ?? null) : null;
+    return c.json({ object: "list", data, list_metadata: { before: null, after: next } });
   });
 
   // The Organizations API, deliberately not under /user_management: a caller
@@ -636,6 +643,9 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
         identityProvider: "workos",
         databaseUrl: "postgres://unused",
         baseUrl: "http://localhost:8788",
+        apiPublicUrl: "http://localhost:8788/api/v1",
+        apiSigningKey: Buffer.alloc(32, 1).toString("base64url"),
+        relayServiceToken: "relay-test-secret",
         port: 8788,
         trustedProxyHops: 1,
         workosApiKey: apiKey,

@@ -8,7 +8,7 @@ import type { ApiConfig } from "./config";
 import { createDb } from "./db";
 import { createIdentityAdapters } from "./identity";
 import type { IdentityAdapters } from "./identity/interfaces";
-import { AVATAR_MAX_BYTES, createV1Routes } from "./routes/v1";
+import { AVATAR_MAX_BYTES, createInternalRoutes, createV1Routes } from "./routes/v1";
 
 /**
  * The largest request body any JSON /api/v1 route accepts. Every JSON payload
@@ -62,21 +62,34 @@ export async function createApp(
       grants: identity.grants,
       deviceCredentials: identity.deviceCredentials,
       environments: identity.environments,
+      signing: identity.signing,
+      hostKeys: identity.hostKeys,
+      devices: identity.devices,
+      hostGrants: identity.hostGrants,
+      accountBaseUrl: config.baseUrl,
+      ...(config.relayServiceToken ? { relayServiceToken: config.relayServiceToken } : {}),
       db,
       ...(config.avatarStorage ? { avatarStorage: createAvatarStorage(config.avatarStorage) } : {}),
       trustedProxyHops: config.trustedProxyHops,
       ...(config.profileProxySecret ? { profileProxySecret: config.profileProxySecret } : {}),
     }),
   );
+  app.route(
+    "/internal",
+    createInternalRoutes({
+      revocations: identity.revocations,
+      ...(config.relayServiceToken ? { relayServiceToken: config.relayServiceToken } : {}),
+    }),
+  );
 
   /**
-   * Safety net: any unhandled throw under /api/ still answers with an
+   * Safety net: any unhandled throw under an API route still answers with an
    * AccountErrorBody. Without this Hono emits plain-text "Internal Server
    * Error", so a client parsing the documented JSON shape fails on exactly the
    * responses it most needs to read. Non-API paths keep the default handler.
    */
   app.onError((error, c) => {
-    if (!c.req.path.startsWith("/api/")) throw error;
+    if (!c.req.path.startsWith("/api/") && !c.req.path.startsWith("/internal/")) throw error;
     console.error(`[api] unhandled error on ${c.req.method} ${c.req.path}`, error);
     const body: AccountErrorBody = {
       error: "internal_error",
@@ -93,7 +106,7 @@ export async function createApp(
    * than a 404 that reads like an outage.
    */
   app.notFound((c) => {
-    if (c.req.path.startsWith("/api/")) {
+    if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/internal/")) {
       const body: AccountErrorBody = { error: "validation_failed", message: "Unknown API route" };
       return c.json(body, 404);
     }

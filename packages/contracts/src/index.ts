@@ -1,4 +1,5 @@
 export * from "./account";
+export * from "./hostAuth";
 export * from "./accountUsage";
 export * from "./auth";
 export * from "./automation";

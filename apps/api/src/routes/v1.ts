@@ -1,6 +1,8 @@
 import {
   type AccountErrorBody,
   type AccountErrorCode,
+  ACCOUNT_HOST_ENDPOINTS_MAX,
+  AccountHostEndpoint,
   AuthorizeTokenRequest,
   AuthorizeUrlRequest,
   type AuthorizeUrlResponse,
@@ -11,6 +13,7 @@ import {
   type AuthTokensResponse,
   type InstanceInfo,
   type ListHostsResponse,
+  type ListDevicesResponse,
   type OrganizationRequiredBody,
   type OrganizationSummary,
   type OtpSendResponse,
@@ -28,13 +31,24 @@ import {
   type UsageSummarySkill,
   type RegisterHostResponse,
   RegisterHostRequest,
+  RegisterDeviceRequest,
+  type RegisterDeviceResponse,
+  GrantRequest,
+  type GrantResponse,
+  LinkCompleteRequest,
+  LinkDeviceApproveRequest,
+  LinkDeviceTokenRequest,
+  LinkStartRequest,
+  type HostAuthorizationSnapshot,
+  type RelayTicketResponse,
+  type RevocationEventsResponse,
   RefreshTokenRequest,
   type RefreshTokenResponse,
   UpdateHostRequest,
   UpdateOrganizationRequest,
   UpdateProfileRequest,
 } from "@synara/contracts";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Schema } from "effect";
 import { Hono } from "hono";
@@ -49,8 +63,14 @@ import {
   sanitizeForwardableUserAgent,
 } from "../clientIp";
 import type * as schema from "../db/schema";
-import { profiles, usageModelStats, usageSkillStats } from "../db/schema";
-import { isUniqueViolation } from "../identity/environmentRegistry";
+import {
+  devices as deviceRows,
+  hosts as hostRows,
+  profiles,
+  usageModelStats,
+  usageSkillStats,
+} from "../db/schema";
+import { isUniqueViolation, toAccountHost } from "../identity/environmentRegistry";
 import {
   EnvironmentAlreadyLinkedError,
   IdentityAuthError,
@@ -62,9 +82,18 @@ import {
   type DeviceCredentialStore,
   type EnvironmentGrantIssuer,
   type EnvironmentRegistry,
+  HostAuthDomainError,
+  type DeviceRegistry,
+  type HostGrantIssuer,
+  type HostKeyRegistry,
+  type HostRecord,
   type IdentityUser,
   type OrganizationRef,
+  type RevocationLog,
 } from "../identity/interfaces";
+import type { ApiSigningService } from "../identity/signing";
+import { hostRecordFromRow, isHostProofAuthorization } from "../identity/hostKeyRegistry";
+import { writeRevocationEvents } from "../identity/revocationLog";
 import { createRateLimiter } from "../rateLimit";
 import packageJson from "../../package.json" with { type: "json" };
 
@@ -122,6 +151,9 @@ export const USAGE_PUSH_RATE_LIMIT_PER_MINUTE = 30;
  * budget; generous enough for a page render plus retries.
  */
 export const PUBLIC_PROFILE_RATE_LIMIT_PER_MINUTE = 60;
+export const LINK_DEVICE_RATE_LIMIT_PER_MINUTE = 10;
+export const LINK_APPROVE_RATE_LIMIT_PER_MINUTE = 10;
+export const GRANT_RATE_LIMIT_PER_MINUTE = 60;
 
 /**
  * Byte cap on an uploaded avatar. Avatars render at most ~128px in every
@@ -161,6 +193,12 @@ function secretHeaderMatches(expected: string, presented: string | undefined): b
     expectedBytes.length === presentedBytes.length && timingSafeEqual(expectedBytes, presentedBytes)
   );
 }
+
+const ReplaceHostEndpointsRequest = Schema.Struct({
+  endpoints: Schema.Array(AccountHostEndpoint).check(
+    Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX),
+  ),
+});
 
 type ProfileRow = typeof profiles.$inferSelect;
 
@@ -237,6 +275,13 @@ export function createV1Routes(deps: {
   grants: EnvironmentGrantIssuer;
   deviceCredentials: DeviceCredentialStore;
   environments: EnvironmentRegistry;
+  signing: ApiSigningService;
+  hostKeys: HostKeyRegistry;
+  devices: DeviceRegistry;
+  hostGrants: HostGrantIssuer;
+  /** Browser/app approval surface, distinct from the API JWT issuer. */
+  accountBaseUrl: string;
+  relayServiceToken?: string;
   db: NodePgDatabase<typeof schema>;
   /**
    * Object storage for uploaded avatars, injected like the identity adapters
@@ -265,7 +310,19 @@ export function createV1Routes(deps: {
    */
   scheduleDeferred?: (task: () => void, delayMs: number) => void;
 }): Hono {
-  const { verifier, grants, deviceCredentials, environments, db, avatarStorage } = deps;
+  const {
+    verifier,
+    grants,
+    deviceCredentials,
+    environments,
+    signing,
+    hostKeys,
+    devices,
+    hostGrants,
+    accountBaseUrl,
+    db,
+    avatarStorage,
+  } = deps;
   const trustedProxyHops = deps.trustedProxyHops ?? DEFAULT_TRUSTED_PROXY_HOPS;
   const profileProxySecret = deps.profileProxySecret;
   const scheduleDeferred =
@@ -357,6 +414,19 @@ export function createV1Routes(deps: {
     windowMs: 60_000,
   });
 
+  const linkDeviceRateLimiter = createRateLimiter({
+    limit: LINK_DEVICE_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+  const linkApproveRateLimiter = createRateLimiter({
+    limit: LINK_APPROVE_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+  const grantRateLimiter = createRateLimiter({
+    limit: GRANT_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+
   // The per-recipient budget behind the email-sending route, keyed by
   // normalized address. Bounds the *target*: even a caller who defeats IP
   // keying cannot flood one mailbox past this. BOTH the per-IP budget and
@@ -387,9 +457,8 @@ export function createV1Routes(deps: {
   }
 
   /**
-   * An authenticated caller acting inside an organization. `orgId` is the only
-   * key the host routes authorize on; `userId` is carried for audit stamping
-   * and must never be used to decide access.
+   * An authenticated caller acting inside an organization. Host routes use
+   * both values: `userId` for ownership and `orgId` for discoverable sharing.
    */
   type OrgSession = {
     userId: string;
@@ -468,6 +537,38 @@ export function createV1Routes(deps: {
       orgId: scope.organization.orgId,
       organization: toOrganizationSummary(scope.organization),
     };
+  }
+
+  /** Per-user session gate for account entities that are not org-scoped. */
+  async function requireUserSession(c: Context): Promise<{ userId: string } | Response> {
+    const session = await getDeviceSession(c);
+    if (!session) return errorResponse(c, 401, "unauthorized", "Not authenticated");
+    return { userId: session.userId };
+  }
+
+  function hostDomainError(c: Context, error: unknown): Response {
+    if (error instanceof HostAuthDomainError) {
+      return errorResponse(c, error.status, error.code, error.message);
+    }
+    throw error;
+  }
+
+  async function requireHostOwner(
+    c: Context,
+    hostId: string,
+  ): Promise<{ session: OrgSession; host: typeof hostRows.$inferSelect } | Response> {
+    const session = await requireOrgSession(c, { freshMembership: true });
+    if (session instanceof Response) return session;
+    const [host] = await db.select().from(hostRows).where(eq(hostRows.id, hostId)).limit(1);
+    if (!host) return errorResponse(c, 404, "host_not_found", "Host not found");
+    if (host.ownerUserId !== session.userId) {
+      // A host the caller cannot see must be indistinguishable from a missing
+      // one; only visible-but-not-owned hosts get the honest 403.
+      const visible = host.ownerOrgId === session.orgId && host.discoverable;
+      if (!visible) return errorResponse(c, 404, "host_not_found", "Host not found");
+      return errorResponse(c, 403, "not_host_owner", "Only the host owner may do that");
+    }
+    return { session, host };
   }
 
   /** The caller's profile row, or null when they have not onboarded. */
@@ -932,11 +1033,191 @@ export function createV1Routes(deps: {
     return c.json(await accountMe(user, toOrganizationSummary(renamed)));
   });
 
+  v1.get("/keys/jwks", (c) => c.json(signing.jwks));
+
+  v1.post("/hosts/link/start", async (c) => {
+    const session = await requireOrgSession(c, { freshMembership: true });
+    if (session instanceof Response) return session;
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: typeof LinkStartRequest.Type;
+    try {
+      parsed = Schema.decodeUnknownSync(LinkStartRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    try {
+      return c.json(await hostKeys.startLink(session, parsed), 201);
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.post("/hosts/link/complete", async (c) => {
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: typeof LinkCompleteRequest.Type;
+    try {
+      parsed = Schema.decodeUnknownSync(LinkCompleteRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    try {
+      return c.json(await hostKeys.completeLink(parsed));
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.post("/hosts/link/device", async (c) => {
+    if (!linkDeviceRateLimiter.tryConsume(callerIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many link attempts — wait a minute");
+    }
+    return c.json(await hostKeys.startDeviceLink(new URL("/link", accountBaseUrl).toString()), 201);
+  });
+
+  v1.post("/hosts/link/approve", async (c) => {
+    if (!linkApproveRateLimiter.tryConsume(callerIp(c))) {
+      return errorResponse(c, 429, "rate_limited", "Too many approval attempts — wait a minute");
+    }
+    const session = await requireOrgSession(c, { freshMembership: true });
+    if (session instanceof Response) return session;
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: typeof LinkDeviceApproveRequest.Type;
+    try {
+      parsed = Schema.decodeUnknownSync(LinkDeviceApproveRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    try {
+      await hostKeys.approveDeviceLink(session, parsed.userCode);
+      return c.body(null, 204);
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.post("/hosts/link/device/token", async (c) => {
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: typeof LinkDeviceTokenRequest.Type;
+    try {
+      parsed = Schema.decodeUnknownSync(LinkDeviceTokenRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    try {
+      return c.json(await hostKeys.exchangeDeviceCode(parsed.deviceCode));
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.post("/devices", async (c) => {
+    const session = await requireUserSession(c);
+    if (session instanceof Response) return session;
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: typeof RegisterDeviceRequest.Type;
+    try {
+      parsed = Schema.decodeUnknownSync(RegisterDeviceRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    try {
+      const body: RegisterDeviceResponse = {
+        device: await devices.register(session.userId, parsed.proof),
+      };
+      return c.json(body, 201);
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.get("/devices", async (c) => {
+    const session = await requireUserSession(c);
+    if (session instanceof Response) return session;
+    const body: ListDevicesResponse = { devices: await devices.list(session.userId) };
+    return c.json(body);
+  });
+
+  v1.delete("/devices/:id", async (c) => {
+    const session = await requireUserSession(c);
+    if (session instanceof Response) return session;
+    // Killing a stolen device key must never depend on the identity provider
+    // being reachable: the org list only addresses the over-notification
+    // fan-out (hosts re-verify anyway), so a provider outage degrades the
+    // notification, not the revocation.
+    let organizations: OrganizationRef[] = [];
+    try {
+      organizations = await grants.listUserOrganizations(session.userId, {
+        freshMembership: true,
+      });
+    } catch (error) {
+      console.error("[api] device revocation membership lookup failed:", error);
+    }
+    const device = await devices.revoke(
+      session.userId,
+      c.req.param("id"),
+      organizations.map((organization) => organization.orgId),
+    );
+    if (!device) {
+      return errorResponse(c, 404, "device_not_registered", "Device not found or already revoked");
+    }
+    return c.body(null, 204);
+  });
+
   v1.get("/hosts", async (c) => {
     const session = await requireOrgSession(c);
     if (session instanceof Response) return session;
 
-    const body: ListHostsResponse = { hosts: await environments.list(session.orgId) };
+    // The owner clause is deliberately org-independent: a user's fleet
+    // follows them across workspace switches (ADR 0002 — org is tenancy,
+    // not ownership). Org members only ever see discoverable rows of the
+    // active org. environmentId disclosure here is safe: link/complete's
+    // sweep and start's 409 are owner-scoped, so knowing an environmentId
+    // grants nothing.
+    const rows = await db
+      .select()
+      .from(hostRows)
+      .where(
+        or(
+          eq(hostRows.ownerUserId, session.userId),
+          and(eq(hostRows.ownerOrgId, session.orgId), eq(hostRows.discoverable, true)),
+        ),
+      );
+    const body: ListHostsResponse = {
+      hosts: rows.map((row) => ({
+        ...toAccountHost(row),
+        mine: row.ownerUserId === session.userId,
+      })),
+    };
     return c.json(body);
   });
 
@@ -985,12 +1266,6 @@ export function createV1Routes(deps: {
     const id = c.req.param("id");
     const authHeader = c.req.header("authorization");
 
-    const result = await deviceCredentials.authenticate(authHeader);
-    if (!result.ok) return errorResponse(c, result.status, result.error, "Host token invalid");
-    if (result.hostId !== id) {
-      return errorResponse(c, 401, "unauthorized", "Host token does not match this host");
-    }
-
     const json = await c.req.json().catch(() => null);
     if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
 
@@ -1006,10 +1281,293 @@ export function createV1Routes(deps: {
       );
     }
 
-    const updated = await environments.update(id, parsed);
+    if (deviceCredentials.isDeviceCredential(authHeader)) {
+      const result = await deviceCredentials.authenticate(authHeader);
+      if (!result.ok) return errorResponse(c, result.status, result.error, "Host token invalid");
+      if (result.hostId !== id) {
+        return errorResponse(c, 401, "unauthorized", "Host token does not match this host");
+      }
+      if (parsed.discoverable !== undefined) {
+        return errorResponse(
+          c,
+          403,
+          "not_host_owner",
+          "A legacy host token cannot change discoverability",
+        );
+      }
+      const updated = await environments.update(id, parsed);
+      if (!updated) return errorResponse(c, 404, "host_not_found", "Host not found");
+      return c.json({ host: updated });
+    }
+
+    const owned = await requireHostOwner(c, id);
+    if (owned instanceof Response) return owned;
+    const updated = await db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(hostRows)
+        .where(eq(hostRows.id, id))
+        .limit(1)
+        .for("update");
+      if (!locked) return undefined;
+      const [row] = await tx
+        .update(hostRows)
+        .set({
+          ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+          ...(parsed.discoverable !== undefined ? { discoverable: parsed.discoverable } : {}),
+          ...(parsed.endpoints !== undefined ? { endpoints: [...parsed.endpoints] } : {}),
+          ...(parsed.appVersion !== undefined ? { appVersion: parsed.appVersion } : {}),
+        })
+        .where(eq(hostRows.id, id))
+        .returning();
+      if (row && parsed.discoverable === false && locked.discoverable) {
+        await writeRevocationEvents(tx, [
+          {
+            hostId: id,
+            kind: "discoverability_off",
+            subject: owned.session.userId,
+          },
+        ]);
+      }
+      return row;
+    });
     if (!updated) return errorResponse(c, 404, "host_not_found", "Host not found");
 
-    return c.json({ host: updated });
+    return c.json({ host: toAccountHost(updated) });
+  });
+
+  v1.put("/hosts/:id/endpoints", async (c) => {
+    const id = c.req.param("id");
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: typeof ReplaceHostEndpointsRequest.Type;
+    try {
+      parsed = Schema.decodeUnknownSync(ReplaceHostEndpointsRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    try {
+      return c.json({
+        host: await hostKeys.replaceEndpoints(c.req.header("authorization"), id, parsed.endpoints),
+      });
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.post("/hosts/:id/relay-ticket", async (c) => {
+    try {
+      const body: RelayTicketResponse = {
+        ticket: await hostKeys.withAuthenticatedHost(
+          c.req.header("authorization"),
+          c.req.param("id"),
+          (host) => hostGrants.issueRelayTicket(host),
+        ),
+      };
+      return c.json(body);
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.get("/hosts/:id/authorization", async (c) => {
+    try {
+      // The host row lock is released before the provider call: a WorkOS
+      // round trip can take up to its 15s timeout, and holding an exclusive
+      // lock across it would stall every grant/patch/unlink for that host —
+      // and, with a small pool, the whole API. The snapshot is advisory
+      // (the host re-verifies on signal), so a lock-free read is correct.
+      const host = await hostKeys.withAuthenticatedHost(
+        c.req.header("authorization"),
+        c.req.param("id"),
+        async (authenticated) => authenticated,
+      );
+      let organizations: OrganizationRef[];
+      try {
+        organizations = await grants.listUserOrganizations(host.ownerUserId);
+      } catch (error) {
+        console.error("[api] host authorization membership lookup failed:", error);
+        return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+      }
+      const body: HostAuthorizationSnapshot = {
+        discoverable: host.discoverable,
+        ownerUserId: host.ownerUserId,
+        orgId: host.ownerOrgId,
+        ownerInOrg: organizations.some((organization) => organization.orgId === host.ownerOrgId),
+      };
+      return c.json(body);
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.post("/hosts/:id/grant", async (c) => {
+    // Rate limit BEFORE the session gate: requireOrgSession with
+    // freshMembership makes two live WorkOS calls, so limiting afterwards
+    // would let one caller burn provider quota without bound and take the
+    // whole deployment's authorization down with 502s. Keyed on IP here and
+    // on the user below, so neither a single address nor a single account
+    // can outrun the limit.
+    if (!grantRateLimiter.tryConsume(`ip:${callerIp(c)}`)) {
+      return errorResponse(c, 429, "rate_limited", "Too many grant requests — slow down");
+    }
+    const session = await requireOrgSession(c, { freshMembership: true });
+    if (session instanceof Response) return session;
+    if (!grantRateLimiter.tryConsume(`user:${session.userId}`)) {
+      return errorResponse(c, 429, "rate_limited", "Too many grant requests — slow down");
+    }
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: typeof GrantRequest.Type;
+    try {
+      parsed = Schema.decodeUnknownSync(GrantRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    // The owner-membership decision needs a WorkOS round trip, which must not
+    // run while holding row locks — so the host is read once here, the
+    // provider consulted, and everything is re-verified under FOR UPDATE
+    // below before signing.
+    const [candidateHost] = await db
+      .select()
+      .from(hostRows)
+      .where(eq(hostRows.id, c.req.param("id")))
+      .limit(1);
+    // A host the caller cannot see is indistinguishable from one that does
+    // not exist — same rule as requireHostOwner, applied BEFORE the linked
+    // check so 409 never doubles as an existence oracle.
+    const visible =
+      candidateHost &&
+      (candidateHost.ownerUserId === session.userId ||
+        (candidateHost.ownerOrgId === session.orgId && candidateHost.discoverable));
+    if (!candidateHost || !visible) {
+      return errorResponse(c, 404, "host_not_found", "Host not found");
+    }
+    if (!candidateHost.publicKeyJwk) {
+      return errorResponse(c, 409, "host_not_linked", "Host is not linked");
+    }
+    let ownerInOrg = true;
+    if (candidateHost.ownerUserId !== session.userId) {
+      let ownerOrganizations: OrganizationRef[];
+      try {
+        ownerOrganizations = await grants.listUserOrganizations(candidateHost.ownerUserId);
+      } catch (error) {
+        console.error("[api] host owner membership lookup failed:", error);
+        return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+      }
+      ownerInOrg = ownerOrganizations.some((org) => org.orgId === candidateHost.ownerOrgId);
+      if (!ownerInOrg) {
+        // A departed owner's host leaves the org's directory (ADR 0002), so
+        // the refusal is also the moment the listing stops advertising it.
+        // The event is emitted only alongside a real state change: repeated
+        // probes must not append duplicate rows to the relay's feed.
+        await db.transaction(async (tx) => {
+          const flipped = await tx
+            .update(hostRows)
+            .set({ discoverable: false })
+            .where(and(eq(hostRows.id, candidateHost.id), eq(hostRows.discoverable, true)))
+            .returning({ id: hostRows.id });
+          if (flipped.length > 0) {
+            await writeRevocationEvents(tx, [
+              {
+                hostId: candidateHost.id,
+                kind: "org_departure",
+                subject: candidateHost.ownerUserId,
+              },
+            ]);
+          }
+        });
+        return errorResponse(c, 403, "not_host_owner", "The host owner left this workspace");
+      }
+    }
+    try {
+      const grant = await db.transaction(async (tx) => {
+        // Device first, then host, is the global lock order shared with
+        // device revocation. Holding both through signing makes issuance
+        // linearizable with revoke, unlink/relink, and discoverability
+        // changes.
+        const [device] = await tx
+          .select()
+          .from(deviceRows)
+          .where(
+            and(
+              eq(deviceRows.userId, session.userId),
+              eq(deviceRows.jkt, parsed.deviceJkt),
+              isNull(deviceRows.revokedAt),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (!device) {
+          throw new HostAuthDomainError(
+            403,
+            "device_not_registered",
+            "The device is not registered or was revoked",
+          );
+        }
+        const [row] = await tx
+          .select()
+          .from(hostRows)
+          .where(eq(hostRows.id, candidateHost.id))
+          .limit(1)
+          .for("update");
+        if (!row?.publicKeyJwk) {
+          throw new HostAuthDomainError(409, "host_not_linked", "Host is not linked");
+        }
+        if (
+          row.ownerUserId !== session.userId &&
+          (!row.discoverable || row.ownerOrgId !== session.orgId || !ownerInOrg)
+        ) {
+          throw new HostAuthDomainError(
+            403,
+            "not_host_owner",
+            "Host is not available to this user",
+          );
+        }
+        await tx
+          .update(deviceRows)
+          .set({ lastUsedAt: new Date() })
+          .where(eq(deviceRows.id, device.id));
+        return hostGrants.issueGrant({
+          userId: session.userId,
+          host: hostRecordFromRow(row),
+          deviceJkt: device.jkt,
+        });
+      });
+      const body: GrantResponse = { grant };
+      return c.json(body);
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+
+  v1.post("/hosts/:id/unlink", async (c) => {
+    const id = c.req.param("id");
+    const authorization = c.req.header("authorization");
+    if (isHostProofAuthorization(authorization)) {
+      try {
+        return c.json({ host: await hostKeys.unlinkWithProof(authorization, id) });
+      } catch (error) {
+        return hostDomainError(c, error);
+      }
+    }
+    const owned = await requireHostOwner(c, id);
+    if (owned instanceof Response) return owned;
+    try {
+      return c.json({ host: await hostKeys.unlink(id) });
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
   });
 
   v1.delete("/hosts/:id", async (c) => {
@@ -1022,16 +1580,46 @@ export function createV1Routes(deps: {
       if (result.hostId !== id) {
         return errorResponse(c, 401, "unauthorized", "Host token does not match this host");
       }
-      await environments.deleteById(id);
+      // A legacy-registered host may have been linked since. The relay only
+      // learns about the deletion from the event, so this branch must emit it
+      // exactly like the owner path — deletion without the event would leave
+      // outstanding grants honored until natural expiry.
+      await db.transaction(async (tx) => {
+        const [locked] = await tx
+          .select({ id: hostRows.id })
+          .from(hostRows)
+          .where(eq(hostRows.id, id))
+          .limit(1)
+          .for("update");
+        if (!locked) return;
+        await writeRevocationEvents(tx, [{ hostId: id, kind: "host_unlinked" }]);
+        await tx.delete(hostRows).where(eq(hostRows.id, id));
+      });
       return c.body(null, 204);
     }
 
-    // Mutating: owner deletion is resolved against live membership.
-    const session = await requireOrgSession(c, { freshMembership: true });
-    if (session instanceof Response) return session;
-
-    const deleted = await environments.deleteForOrg(id, session.orgId);
-    if (!deleted) return errorResponse(c, 404, "host_not_found", "Host not found");
+    const owned = await requireHostOwner(c, id);
+    if (owned instanceof Response) return owned;
+    await db.transaction(async (tx) => {
+      // Keep the global mutation lock order host -> revocation event. The
+      // event insert still precedes the DELETE statement as required, while
+      // concurrent unlink/PATCH cannot deadlock in the opposite order.
+      const [locked] = await tx
+        .select({ id: hostRows.id })
+        .from(hostRows)
+        .where(eq(hostRows.id, id))
+        .limit(1)
+        .for("update");
+      if (!locked) return;
+      await writeRevocationEvents(tx, [
+        {
+          hostId: id,
+          kind: "host_unlinked",
+          subject: owned.session.userId,
+        },
+      ]);
+      await tx.delete(hostRows).where(eq(hostRows.id, id));
+    });
 
     return c.body(null, 204);
   });
@@ -1746,4 +2334,31 @@ export function createV1Routes(deps: {
   });
 
   return v1;
+}
+
+/** Relay-only API kept outside the public `/api/v1` route namespace. */
+export function createInternalRoutes(deps: {
+  revocations: RevocationLog;
+  relayServiceToken?: string;
+}): Hono {
+  const internal = new Hono();
+  internal.get("/revocations", async (c) => {
+    const expected = deps.relayServiceToken;
+    const authorization = c.req.header("authorization");
+    const match = authorization ? /^Bearer\s+(.+)$/i.exec(authorization) : null;
+    if (!expected || !secretHeaderMatches(expected, match?.[1])) {
+      return errorResponse(c, 401, "unauthorized", "Relay service token invalid");
+    }
+    const rawAfter = c.req.query("after") ?? "0";
+    if (!/^\d+$/.test(rawAfter)) {
+      return errorResponse(c, 400, "validation_failed", "after must be a non-negative integer");
+    }
+    const after = Number(rawAfter);
+    if (!Number.isSafeInteger(after)) {
+      return errorResponse(c, 400, "validation_failed", "after is outside the supported range");
+    }
+    const body: RevocationEventsResponse = await deps.revocations.read(after);
+    return c.json(body);
+  });
+  return internal;
 }

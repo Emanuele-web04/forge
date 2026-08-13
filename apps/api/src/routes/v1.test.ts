@@ -16,8 +16,13 @@ import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
 import { profiles, usageModelStats, usageSkillStats } from "../db/schema";
 import { createDeviceCredentialStore } from "../identity/deviceCredentialStore";
+import { createDeviceRegistry } from "../identity/deviceRegistry";
 import { createEnvironmentRegistry } from "../identity/environmentRegistry";
+import { createHostGrantIssuer } from "../identity/grantIssuer";
+import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
 import { clearOrgCache } from "../identity/orgProvisioning";
+import { createRevocationLog } from "../identity/revocationLog";
+import { createApiSigningService, type ApiSigningService } from "../identity/signing";
 import { createWorkosIdentityProvider } from "../identity/workos";
 import type { AvatarStorage } from "../avatarStorage";
 import { startFakeWorkos, type FakeWorkos } from "../testing/fakeWorkos";
@@ -62,6 +67,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   let pool: Awaited<ReturnType<typeof createDb>>["pool"];
   let workos: FakeWorkos;
   let config: WorkosApiConfig;
+  let testSigning: ApiSigningService;
 
   /**
    * A signed-in user acting inside their own organization — the state the CLI
@@ -141,6 +147,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       grants,
       deviceCredentials: createDeviceCredentialStore(db),
       environments: createEnvironmentRegistry(db),
+      signing: testSigning,
+      hostKeys: createHostKeyRegistry(db, forConfig.apiPublicUrl),
+      devices: createDeviceRegistry(db, forConfig.apiPublicUrl),
+      hostGrants: createHostGrantIssuer(testSigning),
+      accountBaseUrl: forConfig.baseUrl,
+      relayServiceToken: forConfig.relayServiceToken,
       db,
       trustedProxyHops: options.trustedProxyHops ?? 1,
       ...(options.avatarStorage !== undefined ? { avatarStorage: options.avatarStorage } : {}),
@@ -164,6 +176,10 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     await runMigrations(databaseUrl);
     workos = await startFakeWorkos();
     config = workos.config({ databaseUrl });
+    testSigning = await createApiSigningService({
+      issuer: config.apiPublicUrl,
+      seed: config.apiSigningKey,
+    });
     pool = createDb(databaseUrl).pool;
   });
 
@@ -528,7 +544,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     expect(secondBody.host.id).not.toBe(firstBody.host.id);
   });
 
-  it("stamps the registering user on the host without granting them access", async () => {
+  it("stamps the registering user as the additive Slice A owner", async () => {
     const { app } = buildApp();
     const owner = await signIn();
 
@@ -537,11 +553,13 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       headers: authHeaders(owner.token),
       body: JSON.stringify(registerHostBody(randomUUID())),
     });
-    const body = (await registerRes.json()) as { host: { registeredByUserId: string } };
+    const body = (await registerRes.json()) as {
+      host: { id: string; registeredByUserId: string };
+    };
     expect(body.host.registeredByUserId).toBe(owner.userId);
 
-    // Same user, a different organization: the audit stamp is not a key, so
-    // the host they registered is out of reach from anywhere else.
+    // Same user, a different active organization: Slice A ownership is keyed
+    // by user, so the owner's host remains visible independent of org scope.
     const elsewhere = workos.addOrganization({ name: "Elsewhere" });
     workos.addMembership(elsewhere.id, owner.userId);
     clearOrgCache();
@@ -552,7 +570,9 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
     });
 
     const list = await app.request("/api/v1/hosts", { headers: authHeaders(elsewhereToken) });
-    expect(((await list.json()) as { hosts: unknown[] }).hosts).toHaveLength(0);
+    expect(((await list.json()) as { hosts: Array<{ id: string }> }).hosts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: body.host.id })]),
+    );
   });
 
   it("deletes a host and its token with the device token", async () => {
@@ -2734,6 +2754,12 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
           grants: { ...grants, countOrganizationMembers: async () => 0, renameOrganization },
           deviceCredentials: createDeviceCredentialStore(db),
           environments: createEnvironmentRegistry(db),
+          signing: testSigning,
+          hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
+          devices: createDeviceRegistry(db, config.apiPublicUrl),
+          hostGrants: createHostGrantIssuer(testSigning),
+          accountBaseUrl: config.baseUrl,
+          relayServiceToken: config.relayServiceToken,
           db,
         }),
       );

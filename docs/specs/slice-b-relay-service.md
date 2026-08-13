@@ -9,7 +9,7 @@ Bun + Hono service in `apps/relay`, mirroring `apps/api`'s structure (config.ts,
 ## Endpoints (all WebSocket except health)
 
 - `GET /healthz` — liveness.
-- `GET /host/control` — host control socket. Auth at upgrade: `synara-host-proof+jwt` as query param or header; verified against the API's `/keys/jwks` — **no**: HostProof is verified against the *host's* key, which the relay doesn't have. Instead the host authenticates with a `synara-grant`-style **host session**: v1 keeps it simple — the host presents its HostProof to the **API** (`POST /hosts/:id/relay-ticket`) and receives a short-lived relay ticket signed by the API key; the relay verifies that statelessly against JWKS. (Ticket: `synara-relay-ticket+jwt`, aud `synara-relay`, sub hostId, TTL 5 min, added to Slice A's grant issuer — small addition, keeps the relay DB-free and host-key-ignorant.)
+- `GET /host/control` — host control socket. Auth at upgrade: `synara-relay-ticket+jwt` (Slice A §9 — obtained by the host from `POST /hosts/:id/relay-ticket` with its HostProof), verified statelessly against the API's `/keys/jwks`. The relay never sees host keys. Ticket refresh: reconnects fetch a fresh ticket; a live control socket is not re-checked (revocation of a host lands as `host_unlinked` via the revocation feed, which the relay applies by dropping that host's control socket and pairs).
 - `GET /client/session?grant=<jwt>` — client data socket. Relay verifies grant (signature via JWKS, exp, aud, `scope: host:connect`), enforces jti single-use in the in-memory cache (60s TTL), signals the target host's control socket, holds the client socket pending.
 - `GET /host/data?splice=<spliceId>` — host dials back per splice signal; relay pairs it with the pending client socket and from then on forwards opaque frames 1:1 both ways, with per-pair backpressure (pause reads when the peer's bufferedAmount exceeds the high-water mark). Close semantics: either side closing closes the pair with matching code where possible.
 
@@ -24,7 +24,7 @@ Small and versioned (`{v: 1, type, ...}`):
 
 ## Revocation fan-out
 
-Background loop polls `GET /internal/revocations?after=<cursor>` on the API (auth: `RELAY_SERVICE_TOKEN`) every 5s; delivers matching events to connected hosts' control sockets. Cursor persisted in memory only — on restart, re-poll from latest (hosts re-verify sessions on control-socket reconnect anyway, which covers the gap).
+Background loop polls `GET /internal/revocations?after=<cursor>` on the API (auth: `RELAY_SERVICE_TOKEN`) every 5s. The response is `{events, watermark}` (Slice A §4.6): the relay advances its cursor to `watermark` only (the lag-safe max id), delivers all events, and treats duplicate delivery as normal — signals are idempotent re-verify prompts. `host_unlinked` additionally makes the relay drop that host's control socket and all its pairs. Cursor in memory only — on restart, resume from latest watermark (hosts re-verify sessions on control-socket reconnect, which covers the gap).
 
 ## Close codes
 

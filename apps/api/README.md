@@ -31,18 +31,18 @@ nothing in this app runs unless you deploy an instance and point a server at it.
 
 ## Identity: WorkOS AuthKit behind an adapter seam
 
-This service does not store users, passwords, sessions, or signing keys.
-WorkOS owns all of that; the database here holds the host registry (`hosts`,
-`host_tokens`) and Synara-owned profiles (`profiles`), and every WorkOS id in
-those tables is opaque with no foreign key behind it.
+This service does not store users, passwords, or WorkOS sessions. WorkOS owns
+those. Synara does own an Ed25519 API signing key supplied at boot for host
+grants and relay tickets; only its public keys are served from
+`GET /api/v1/keys/jwks`. The database holds the additive host/account registry
+(`hosts`, legacy `host_tokens`, `devices`, link challenges and revocations)
+plus Synara-owned profiles.
 
-The domain never talks to WorkOS directly: routes depend on four internal
-adapters defined in `src/identity/interfaces.ts` — `AccountIdentityVerifier`,
-`EnvironmentGrantIssuer`, `DeviceCredentialStore`, `EnvironmentRegistry` —
-and WorkOS is one implementation of the first two (`src/identity/workos.ts`),
-selected by `src/identity/index.ts`. The dev provider below is a second, and
-a generic OIDC or BetterAuth implementation for self-hosters slots in the
-same way.
+The domain never talks to WorkOS directly: routes depend on the identity and
+registry interfaces in `src/identity/interfaces.ts`. WorkOS implements user
+verification and membership grants; the database-backed host/device/key and
+revocation modules are provider-independent and wired alongside the retained
+legacy host-token adapters in `src/identity/index.ts`.
 
 ### Two ways in
 
@@ -72,22 +72,23 @@ backs both:
 Both converge on the same token pair, so everything downstream — workspace
 scoping, credential storage, refresh — is one code path.
 
-## Hosts belong to organizations
+## Hosts are account entities shared through organizations
 
-Ownership is keyed on the **WorkOS organization**, never the user. Every user
+Ownership is keyed on **`hosts.owner_user_id`**. Every user
 gets a personal organization the first time they use the service — provisioned
 lazily, named `Personal — <email>` — so there is no "personal account" concept
 separate from a workspace. Teams later are the same organization with more
 members: an invite, not a migration.
 
-- `hosts.owner_org_id` is the authorization key. A caller reaches a host
-  exactly when their access token's `org_id` claim names that organization and
-  they are still a member of it.
+- Owners can manage and reach their hosts across their active workspace
+  context. A non-owner can see/use a host only when it is discoverable and
+  both users are members of `hosts.owner_org_id`.
 - `hosts.registered_by_user_id` records who ran the registration. It is an
   audit trail only and is never consulted for access — otherwise someone who
   left an organization would keep reaching the hosts they happened to register.
-- The unique index is `(owner_org_id, environment_id)`, so one machine can be
-  linked from two different workspaces.
+- The unique index remains `(owner_org_id, environment_id)` for additive
+  compatibility, while keypair link completion unlinks every other row for
+  the same environment id so one machine has only one live account link.
 
 WorkOS mints sign-in tokens **without** an `org_id` claim, so the first call
 after a sign-in is always refused with `403 organization_required`. That
@@ -115,9 +116,10 @@ own.
   emailed code instead. There is no in-app challenge flow.
 - **Email delivery is WorkOS's.** OTP mail is sent by WorkOS, so there is no
   SMTP or Resend configuration.
-- **The JWKS is WorkOS's, served by WorkOS.** This service only reads it.
-  Nothing is generated or stored locally, so there is no key material to rotate
-  or lose.
+- **There are two JWKS roles.** WorkOS's JWKS verifies user access tokens. The
+  service also derives a stable Ed25519 key from `API_SIGNING_KEY`, serves its
+  public JWK (plus `API_SIGNING_KEY_PREVIOUS` during rotation), and signs host
+  grants/relay tickets. WorkOS mode fails closed when this key is absent.
 - **The issuer and JWKS URL are discovered, not guessed.** On its first token
   verification the service fetches WorkOS's OIDC metadata document at
   `{WORKOS_API_URL}/user_management/{WORKOS_CLIENT_ID}/.well-known/openid-configuration`
@@ -175,7 +177,8 @@ an offline implementation — no WorkOS tenancy, no network, no extra process:
 
 ```sh
 IDENTITY_PROVIDER=dev DATABASE_URL=postgres://synara:synara@localhost:5432/synara_accounts \
-  ACCOUNT_BASE_URL=http://localhost:8788 bun run --cwd apps/api dev
+  ACCOUNT_BASE_URL=http://localhost:8788 API_PUBLIC_URL=http://localhost:8788/api/v1 \
+  bun run --cwd apps/api dev
 ```
 
 - Any email signs in. The 6-digit OTP code is **printed to the API's stdout**
@@ -288,20 +291,24 @@ trusting an instance against real WorkOS, confirm by hand:
 
 ## Environment variables
 
-| Variable               | Required | Default                  | Purpose                                                                                                                                              |
-| ---------------------- | -------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`         | yes      | —                        | Postgres connection string for the host registry.                                                                                                    |
-| `WORKOS_API_KEY`       | yes      | —                        | WorkOS secret key (`sk_…`). Server-side only.                                                                                                        |
-| `WORKOS_CLIENT_ID`     | yes      | —                        | WorkOS AuthKit client id (`client_…`).                                                                                                               |
-| `ACCOUNT_BASE_URL`     | yes      | —                        | Public origin of this instance.                                                                                                                      |
-| `PORT`                 | no       | `8788`                   | HTTP listen port.                                                                                                                                    |
-| `WORKOS_API_URL`       | no       | `https://api.workos.com` | WorkOS API origin. Override only to point at a stand-in.                                                                                             |
-| `WORKOS_JWKS_URL`      | no       | discovered (`jwks_uri`)  | Full JWKS URL. Override only to point at a stand-in.                                                                                                 |
-| `WORKOS_ISSUER`        | no       | discovered (`issuer`)    | Expected `iss` claim. Set only for a custom auth domain.                                                                                             |
-| `IDENTITY_PROVIDER`    | no       | `workos`                 | `dev` selects the offline dev identity provider. Refused with `NODE_ENV=production` or a set `WORKOS_API_KEY`.                                       |
-| `TRUSTED_PROXY_HOPS`   | no       | `0`                      | Proxies trusted to append to `x-forwarded-for`. `0` (no proxy) keys rate limits on the socket; Railway and similar TLS-terminating proxies need `1`. |
-| `PROFILE_PROXY_SECRET` | no       | unset                    | Shared secret from the profiles SSR deployment; when matched, public-profile rate limits key on the forwarded viewer IP. Keying only, not auth.      |
-| `TEST_DATABASE_URL`    | tests    | —                        | Database the Vitest suites use. Without it they skip.                                                                                                |
+| Variable                   | Required | Default                  | Purpose                                                                                                                                              |
+| -------------------------- | -------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`             | yes      | —                        | Postgres connection string for the host registry.                                                                                                    |
+| `WORKOS_API_KEY`           | yes      | —                        | WorkOS secret key (`sk_…`). Server-side only.                                                                                                        |
+| `WORKOS_CLIENT_ID`         | yes      | —                        | WorkOS AuthKit client id (`client_…`).                                                                                                               |
+| `ACCOUNT_BASE_URL`         | yes      | —                        | Public origin of this instance.                                                                                                                      |
+| `API_PUBLIC_URL`           | yes      | —                        | Exact public API issuer used by host/device JWTs, e.g. `https://accounts.example.com/api/v1`.                                                        |
+| `API_SIGNING_KEY`          | WorkOS   | dev: ephemeral           | Base64url-encoded 32-byte Ed25519 seed for grants and relay tickets.                                                                                 |
+| `API_SIGNING_KEY_PREVIOUS` | no       | —                        | Previous signing seed kept in public JWKS during rotation.                                                                                           |
+| `RELAY_SERVICE_TOKEN`      | WorkOS   | —                        | Shared secret authenticating relay reads from `/internal/revocations`.                                                                               |
+| `PORT`                     | no       | `8788`                   | HTTP listen port.                                                                                                                                    |
+| `WORKOS_API_URL`           | no       | `https://api.workos.com` | WorkOS API origin. Override only to point at a stand-in.                                                                                             |
+| `WORKOS_JWKS_URL`          | no       | discovered (`jwks_uri`)  | Full JWKS URL. Override only to point at a stand-in.                                                                                                 |
+| `WORKOS_ISSUER`            | no       | discovered (`issuer`)    | Expected `iss` claim. Set only for a custom auth domain.                                                                                             |
+| `IDENTITY_PROVIDER`        | no       | `workos`                 | `dev` selects the offline dev identity provider. Refused with `NODE_ENV=production` or a set `WORKOS_API_KEY`.                                       |
+| `TRUSTED_PROXY_HOPS`       | no       | `0`                      | Proxies trusted to append to `x-forwarded-for`. `0` (no proxy) keys rate limits on the socket; Railway and similar TLS-terminating proxies need `1`. |
+| `PROFILE_PROXY_SECRET`     | no       | unset                    | Shared secret from the profiles SSR deployment; when matched, public-profile rate limits key on the forwarded viewer IP. Keying only, not auth.      |
+| `TEST_DATABASE_URL`        | tests    | —                        | Database the Vitest suites use. Without it they skip.                                                                                                |
 
 A missing required variable fails the boot with an explicit
 `Missing required environment variables: …` rather than starting half-configured.
@@ -314,8 +321,9 @@ The service runs TypeScript directly under Bun, with no build step at all.
 - **Start command:** `bun run start`
 - **Root directory:** `apps/api` (or run the commands with `--cwd apps/api` from
   the monorepo root, since this is a workspace package).
-- **Variables:** set `DATABASE_URL`, `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, and
-  `ACCOUNT_BASE_URL` (to the Railway public domain) at minimum. Leave `PORT` to
+- **Variables:** set `DATABASE_URL`, `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`,
+  `ACCOUNT_BASE_URL`, `API_PUBLIC_URL`, `API_SIGNING_KEY`, and
+  `RELAY_SERVICE_TOKEN` at minimum. Leave `PORT` to
   Railway — it injects one, and `loadApiConfig` honours it. Set
   `TRUSTED_PROXY_HOPS=1`: Railway terminates TLS in front of the service and
   appends exactly one `x-forwarded-for` hop; without it every caller shares the

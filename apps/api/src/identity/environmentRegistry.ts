@@ -1,21 +1,22 @@
 // FILE: identity/environmentRegistry.ts
 // Purpose: The Postgres-backed EnvironmentRegistry — the directory of
-// environments (hosts) an organization owns. Provider-independent: rows are
+// environments (hosts) accounts register. Provider-independent: rows are
 // keyed by opaque organization and user ids, and nothing here knows which
 // identity provider issued them.
 // Layer: API identity (implementation)
 // Depends on: db/schema (hosts).
 
 import type { AccountHost, EnvironmentId } from "@synara/contracts";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../db/schema";
 import { hosts } from "../db/schema";
 import { EnvironmentAlreadyLinkedError, type EnvironmentRegistry } from "./interfaces";
+import { hostEnvironmentLockKey } from "./environmentLock";
 
 type HostRow = typeof hosts.$inferSelect;
 
-function toAccountHost(row: HostRow): AccountHost {
+export function toAccountHost(row: HostRow): AccountHost {
   return {
     id: row.id,
     environmentId: row.environmentId as EnvironmentId,
@@ -25,6 +26,10 @@ function toAccountHost(row: HostRow): AccountHost {
     endpoints: row.endpoints,
     ...(row.appVersion ? { appVersion: row.appVersion } : {}),
     registeredByUserId: row.registeredByUserId,
+    ownerUserId: row.ownerUserId,
+    discoverable: row.discoverable,
+    linked: row.publicKeyJwk !== null,
+    keyGeneration: row.keyGeneration,
     createdAt: row.createdAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
   };
@@ -58,46 +63,55 @@ export function createEnvironmentRegistry(db: NodePgDatabase<typeof schema>): En
 
     async register(orgId, registeredByUserId, request) {
       try {
-        const [existing] = await db
-          .select()
-          .from(hosts)
-          .where(and(eq(hosts.ownerOrgId, orgId), eq(hosts.environmentId, request.environmentId)))
-          .limit(1);
+        return await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(hashtextextended(${hostEnvironmentLockKey(request.environmentId)}, 0))`,
+          );
+          const [existing] = await tx
+            .select()
+            .from(hosts)
+            .where(and(eq(hosts.ownerOrgId, orgId), eq(hosts.environmentId, request.environmentId)))
+            .limit(1);
 
-        if (existing) {
-          const [updated] = await db
-            .update(hosts)
-            .set({
+          if (existing) {
+            if (existing.ownerUserId !== registeredByUserId) {
+              throw new EnvironmentAlreadyLinkedError();
+            }
+            const [updated] = await tx
+              .update(hosts)
+              .set({
+                name: request.name,
+                platform: request.platform,
+                kind: request.kind,
+                endpoints: [...request.endpoints],
+                appVersion: request.appVersion ?? null,
+                lastSeenAt: new Date(),
+              })
+              .where(eq(hosts.id, existing.id))
+              .returning();
+            if (!updated) throw new Error("failed to update host row");
+            return { host: toAccountHost(updated), created: false };
+          }
+
+          const [inserted] = await tx
+            .insert(hosts)
+            .values({
+              ownerOrgId: orgId,
+              // Legacy audit stamp only. ownerUserId below is the authorization
+              // owner for the additive account-host surface.
+              registeredByUserId,
+              ownerUserId: registeredByUserId,
+              environmentId: request.environmentId,
               name: request.name,
               platform: request.platform,
               kind: request.kind,
               endpoints: [...request.endpoints],
               appVersion: request.appVersion ?? null,
-              lastSeenAt: new Date(),
             })
-            .where(eq(hosts.id, existing.id))
             .returning();
-          if (!updated) throw new Error("failed to update host row");
-          return { host: toAccountHost(updated), created: false };
-        }
-
-        const [inserted] = await db
-          .insert(hosts)
-          .values({
-            ownerOrgId: orgId,
-            // Audit only. Ownership is the organization's, so this is never
-            // consulted when deciding who may reach the host.
-            registeredByUserId,
-            environmentId: request.environmentId,
-            name: request.name,
-            platform: request.platform,
-            kind: request.kind,
-            endpoints: [...request.endpoints],
-            appVersion: request.appVersion ?? null,
-          })
-          .returning();
-        if (!inserted) throw new Error("failed to insert host row");
-        return { host: toAccountHost(inserted), created: true };
+          if (!inserted) throw new Error("failed to insert host row");
+          return { host: toAccountHost(inserted), created: true };
+        });
       } catch (error) {
         // The unique index over (owner_org_id, environment_id) is the
         // reservation; a violation means a concurrent registration won.

@@ -1,4 +1,5 @@
 import { resolveTrustedProxyHops } from "./clientIp";
+import { randomBytes } from "node:crypto";
 
 /**
  * Where uploaded profile avatars live: any S3-compatible object store
@@ -27,6 +28,14 @@ export type AvatarStorageConfig = {
 export type ApiConfigBase = {
   databaseUrl: string;
   baseUrl: string;
+  /** Exact JWT issuer and public origin for API-facing host auth. */
+  apiPublicUrl: string;
+  /** Base64url 32-byte Ed25519 seed used for API-signed grants and tickets. */
+  apiSigningKey: string;
+  /** Previous seed served through JWKS during rotation, verification-only. */
+  apiSigningKeyPrevious?: string;
+  /** Shared credential for relay-only internal routes. */
+  relayServiceToken?: string;
   port: number;
   /**
    * S3-compatible avatar storage, or undefined when the deployment has none
@@ -61,6 +70,7 @@ export type ApiConfigBase = {
  */
 export type WorkosApiConfig = ApiConfigBase & {
   identityProvider: "workos";
+  relayServiceToken: string;
   workosApiKey: string;
   workosClientId: string;
   /** WorkOS API origin, no trailing slash. Overridable so tests can point at a local server. */
@@ -116,10 +126,13 @@ const REQUIRED_VARS = [
   "WORKOS_API_KEY",
   "WORKOS_CLIENT_ID",
   "ACCOUNT_BASE_URL",
+  "API_PUBLIC_URL",
+  "API_SIGNING_KEY",
+  "RELAY_SERVICE_TOKEN",
 ] as const;
 
 /** The dev provider stores rows and serves clients, so these it still needs. */
-const REQUIRED_DEV_VARS = ["DATABASE_URL", "ACCOUNT_BASE_URL"] as const;
+const REQUIRED_DEV_VARS = ["DATABASE_URL", "ACCOUNT_BASE_URL", "API_PUBLIC_URL"] as const;
 
 const DEFAULT_WORKOS_API_URL = "https://api.workos.com";
 
@@ -159,6 +172,18 @@ function requireVars(env: Env, names: readonly string[]): void {
   if (missing.length > 0) {
     throw new ApiConfigError(`Missing required environment variables: ${missing.join(", ")}`);
   }
+}
+
+function signingSeed(
+  env: Env,
+  name: "API_SIGNING_KEY" | "API_SIGNING_KEY_PREVIOUS",
+): string | undefined {
+  const value = env[name]?.trim();
+  if (!value) return undefined;
+  if (!/^[A-Za-z0-9_-]+$/.test(value) || Buffer.from(value, "base64url").length !== 32) {
+    throw new ApiConfigError(`${name} must be a base64url-encoded 32-byte Ed25519 seed`);
+  }
+  return value;
 }
 
 /** The five S3_* variables, valid only as a complete set. */
@@ -214,10 +239,22 @@ export function loadApiConfig(env: Env): ApiConfig {
   if (identityProvider === "dev") {
     assertDevIdentityAllowed(env);
     requireVars(env, REQUIRED_DEV_VARS);
+    const configuredSigningKey = signingSeed(env, "API_SIGNING_KEY");
+    const apiSigningKeyPrevious = signingSeed(env, "API_SIGNING_KEY_PREVIOUS");
+    const apiSigningKey = configuredSigningKey ?? randomBytes(32).toString("base64url");
+    if (!configuredSigningKey) {
+      console.warn("[api] API_SIGNING_KEY is unset in dev mode; using an ephemeral signing key");
+    }
     return {
       identityProvider,
       databaseUrl: env.DATABASE_URL as string,
       baseUrl: env.ACCOUNT_BASE_URL as string,
+      apiPublicUrl: (env.API_PUBLIC_URL as string).replace(/\/+$/, ""),
+      apiSigningKey,
+      ...(apiSigningKeyPrevious ? { apiSigningKeyPrevious } : {}),
+      ...(env.RELAY_SERVICE_TOKEN?.trim()
+        ? { relayServiceToken: env.RELAY_SERVICE_TOKEN.trim() }
+        : {}),
       port,
       trustedProxyHops,
       ...(profileProxySecret ? { profileProxySecret } : {}),
@@ -227,11 +264,24 @@ export function loadApiConfig(env: Env): ApiConfig {
 
   requireVars(env, REQUIRED_VARS);
   const workosClientId = env.WORKOS_CLIENT_ID as string;
+  const apiSigningKey = signingSeed(env, "API_SIGNING_KEY");
+  if (!apiSigningKey) {
+    throw new ApiConfigError("API_SIGNING_KEY must be a base64url-encoded 32-byte Ed25519 seed");
+  }
+  const apiSigningKeyPrevious = signingSeed(env, "API_SIGNING_KEY_PREVIOUS");
+  const relayServiceToken = env.RELAY_SERVICE_TOKEN?.trim();
+  if (!relayServiceToken) {
+    throw new ApiConfigError("RELAY_SERVICE_TOKEN must not be empty");
+  }
   const workosApiUrl = (env.WORKOS_API_URL ?? DEFAULT_WORKOS_API_URL).replace(/\/+$/, "");
   return {
     identityProvider,
     databaseUrl: env.DATABASE_URL as string,
     baseUrl: env.ACCOUNT_BASE_URL as string,
+    apiPublicUrl: (env.API_PUBLIC_URL as string).replace(/\/+$/, ""),
+    apiSigningKey,
+    ...(apiSigningKeyPrevious ? { apiSigningKeyPrevious } : {}),
+    relayServiceToken,
     port,
     trustedProxyHops,
     ...(profileProxySecret ? { profileProxySecret } : {}),

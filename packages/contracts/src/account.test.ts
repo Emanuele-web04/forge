@@ -32,6 +32,10 @@ function hostPayload(overrides: Record<string, unknown> = {}) {
     platform: "darwin",
     kind: "local",
     endpoints: [],
+    ownerUserId: "user_1",
+    discoverable: true,
+    linked: true,
+    keyGeneration: 2,
     registeredByUserId: "user_1",
     createdAt: "2026-08-01T00:00:00.000Z",
     lastSeenAt: "2026-08-01T00:00:00.000Z",
@@ -165,6 +169,23 @@ describe("AccountHost", () => {
   it("rejects a host with no registeredByUserId", () => {
     const { registeredByUserId: _omitted, ...withoutUser } = hostPayload();
     expect(() => decodeAccountHost(withoutUser)).toThrow();
+  });
+
+  it("decodes Slice A ownership and link state", () => {
+    expect(decodeAccountHost(hostPayload())).toMatchObject({
+      ownerUserId: "user_1",
+      discoverable: true,
+      linked: true,
+      keyGeneration: 2,
+    });
+  });
+
+  it("rejects the retired public endpoint transport", () => {
+    expect(() =>
+      decodeAccountHost(
+        hostPayload({ endpoints: [{ url: "https://relay.example.com", transport: "public" }] }),
+      ),
+    ).toThrow();
   });
 });
 

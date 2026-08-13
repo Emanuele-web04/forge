@@ -45,7 +45,7 @@ A URL a host self-reports to the directory for a direct transport (LAN, Tailscal
 A host's supervisor-kept persistent connection to the relay, used for splice signaling. Hosts hold one; clients hold none — a client only contacts the relay to open a session. Distinct from a spliced data socket, which stays opaque end-to-end.
 
 **Host Keypair**:
-The Ed25519 keypair a host generates at registration; its public key lives in the directory. It is the host's *only* credential: it proves link challenges, authenticates the host to the API, and mints session credentials — the cloud can authorize a splice but can never fabricate access to a host. Revocation = deleting the public key.
+The Ed25519 keypair a host generates at registration; its public key lives in the directory. It is the host's _only_ credential: it proves link challenges, authenticates the host to the API, and mints session credentials — the cloud can authorize a splice but can never fabricate access to a host. Revocation = deleting the public key.
 
 **Directory**:
 The cloud's role with respect to hosts: identity, endpoints, presence, display metadata. Cloud is a directory + pipe; hosts own all state.

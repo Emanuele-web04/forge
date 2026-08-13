@@ -8,12 +8,26 @@
 // Depends on: @synara/contracts (shared wire types) only.
 
 import type {
+  AccountDevice,
+  AccountErrorCode,
   AccountHost,
+  AccountHostEndpoint,
   AccountSsoProvider,
+  DevicePublicKeyJwk,
+  HostPublicKeyJwk,
   InstanceInfo,
+  LinkCompleteRequest,
+  LinkCompleteResponse,
+  LinkDeviceStartResponse,
+  LinkDeviceTokenResponse,
+  LinkStartRequest,
+  LinkStartResponse,
   RegisterHostRequest,
+  RevocationEvent,
+  RevocationKind,
   UpdateHostRequest,
 } from "@synara/contracts";
+import type { ApiSigningService } from "./signing";
 
 /** The subset of a user this service surfaces (see /me). */
 export type IdentityUser = {
@@ -300,6 +314,75 @@ export type EnvironmentGrantIssuer = {
    * they cannot answer rather than degrade to a guess.
    */
   countOrganizationMembers(orgId: string, atLeast: number): Promise<number>;
+  /** Membership list for authorization decisions about an arbitrary user. */
+  listUserOrganizations(
+    userId: string,
+    options?: { freshMembership?: boolean },
+  ): Promise<OrganizationRef[]>;
+};
+
+export class HostAuthDomainError extends Error {
+  constructor(
+    readonly status: 400 | 401 | 403 | 404 | 409 | 428 | 502,
+    readonly code: AccountErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HostAuthDomainError";
+  }
+}
+
+export type HostRecord = {
+  id: string;
+  ownerUserId: string;
+  ownerOrgId: string;
+  environmentId: string;
+  publicKeyJwk: HostPublicKeyJwk | null;
+  keyGeneration: number;
+  discoverable: boolean;
+};
+
+export type HostKeyRegistry = {
+  startLink(
+    owner: { userId: string; orgId: string },
+    request: LinkStartRequest,
+  ): Promise<LinkStartResponse>;
+  completeLink(request: LinkCompleteRequest): Promise<LinkCompleteResponse>;
+  startDeviceLink(verificationUri: string): Promise<LinkDeviceStartResponse>;
+  approveDeviceLink(owner: { userId: string; orgId: string }, userCode: string): Promise<void>;
+  exchangeDeviceCode(deviceCode: string): Promise<LinkDeviceTokenResponse>;
+  withAuthenticatedHost<T>(
+    authorization: string | undefined | null,
+    expectedHostId: string,
+    action: (host: HostRecord) => Promise<T>,
+  ): Promise<T>;
+  replaceEndpoints(
+    authorization: string | undefined | null,
+    hostId: string,
+    endpoints: readonly AccountHostEndpoint[],
+  ): Promise<AccountHost>;
+  unlink(hostId: string): Promise<AccountHost>;
+  unlinkWithProof(authorization: string | undefined | null, hostId: string): Promise<AccountHost>;
+};
+
+export type DeviceRegistry = {
+  register(userId: string, proof: string): Promise<AccountDevice>;
+  list(userId: string): Promise<AccountDevice[]>;
+  revoke(
+    userId: string,
+    deviceId: string,
+    affectedOrgIds: readonly string[],
+  ): Promise<AccountDevice | undefined>;
+};
+
+export type HostGrantIssuer = {
+  issueGrant(input: { userId: string; host: HostRecord; deviceJkt: string }): Promise<string>;
+  issueRelayTicket(host: HostRecord): Promise<string>;
+};
+
+export type RevocationLog = {
+  record(hostId: string, kind: RevocationKind, subject?: string): Promise<void>;
+  read(after: number): Promise<{ events: RevocationEvent[]; watermark: number }>;
 };
 
 export type DeviceCredentialAuthResult =
@@ -374,5 +457,10 @@ export type IdentityAdapters = {
   grants: EnvironmentGrantIssuer;
   deviceCredentials: DeviceCredentialStore;
   environments: EnvironmentRegistry;
+  signing: ApiSigningService;
+  hostKeys: HostKeyRegistry;
+  devices: DeviceRegistry;
+  hostGrants: HostGrantIssuer;
+  revocations: RevocationLog;
   close(): Promise<void>;
 };

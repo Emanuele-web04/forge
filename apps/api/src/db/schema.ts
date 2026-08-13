@@ -1,6 +1,8 @@
+import type { DevicePublicKeyJwk, HostPublicKeyJwk } from "@synara/contracts";
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  bigserial,
   boolean,
   index,
   integer,
@@ -12,34 +14,111 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-export type HostEndpoint = { url: string; transport: "lan" | "tailscale" | "public" };
+export type HostEndpoint = { url: string; transport: "lan" | "tailscale" };
 
 export const hosts = pgTable(
   "hosts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    // WorkOS organization id, and the only key authorization is decided on: a
-    // caller reaches a host exactly when their token is scoped to this org.
+    // WorkOS organization id. Owner-or-discoverable authorization combines
+    // this membership scope with ownerUserId below.
     // Identity and membership live in WorkOS, so there is no local table to
     // reference; orphaned rows are tolerated until WorkOS webhook cleanup is
     // built (future work).
     ownerOrgId: text("owner_org_id").notNull(),
-    // WorkOS user id of whoever ran the registration. Audit only — it must
-    // never be read as an access check, or a user who left the organization
-    // would keep reaching the hosts they happened to register.
+    // WorkOS user id of whoever ran legacy registration. Audit only — the
+    // independent ownerUserId below is the authorization key.
     registeredByUserId: text("registered_by_user_id").notNull(),
+    // The user who owns and authorizes access to this host. Kept distinct
+    // from the legacy registration audit stamp until Slice C removes it.
+    ownerUserId: text("owner_user_id").notNull(),
     environmentId: text("environment_id").notNull(),
     name: text("name").notNull(),
     platform: text("platform", { enum: ["darwin", "linux", "windows"] }).notNull(),
     kind: text("kind", { enum: ["local", "ssh-managed"] }).notNull(),
     endpoints: jsonb("endpoints").$type<HostEndpoint[]>().notNull().default([]),
     appVersion: text("app_version"),
+    discoverable: boolean("discoverable").notNull().default(true),
+    publicKeyJwk: jsonb("public_key_jwk").$type<HostPublicKeyJwk>(),
+    keyGeneration: integer("key_generation").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("hosts_owner_org_environment_unique").on(table.ownerOrgId, table.environmentId),
+    index("hosts_owner_user_idx").on(table.ownerUserId),
+    // completeLink sweeps same-environment rows by (environment_id,
+    // owner_user_id); without this the sweep seq-scans hosts inside the
+    // linking critical section.
+    index("hosts_environment_idx").on(table.environmentId),
   ],
+);
+
+export const devices = pgTable(
+  "devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    publicKeyJwk: jsonb("public_key_jwk").$type<DevicePublicKeyJwk>().notNull(),
+    jkt: text("jkt").notNull(),
+    displayName: text("display_name").notNull(),
+    platform: text("platform", {
+      enum: ["darwin", "ios", "linux", "windows", "web"],
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("devices_user_jkt_active_unique")
+      .on(table.userId, table.jkt)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ],
+);
+
+export const linkChallenges = pgTable(
+  "link_challenges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nonce: text("nonce").notNull(),
+    ownerUserId: text("owner_user_id"),
+    ownerOrgId: text("owner_org_id"),
+    // Deliberately no FK. Complete consumes challenge -> host, while host
+    // deletion otherwise locks host -> challenge for ON DELETE SET NULL and
+    // the inverse order can deadlock. A missing host is resolved explicitly.
+    hostId: uuid("host_id"),
+    environmentId: text("environment_id"),
+    deviceCodeHash: text("device_code_hash"),
+    userCode: text("user_code"),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("link_challenges_device_code_hash_unique").on(table.deviceCodeHash),
+    // Expired challenges are deleted before issuance. This unique index then
+    // reserves every code still present, which is at least as strict as
+    // uniqueness among unexpired rows without relying on volatile now() in
+    // a Postgres partial-index predicate.
+    uniqueIndex("link_challenges_user_code_unique").on(table.userCode),
+    index("link_challenges_expires_at_idx").on(table.expiresAt),
+  ],
+);
+
+export const revocationEvents = pgTable(
+  "revocation_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    // Deliberately no foreign key: unlink/delete events must outlive the host.
+    hostId: uuid("host_id").notNull(),
+    kind: text("kind", {
+      enum: ["discoverability_off", "org_departure", "device_revoked", "host_unlinked"],
+    }).notNull(),
+    subject: text("subject"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("revocation_events_created_at_idx").on(table.createdAt)],
 );
 
 /**

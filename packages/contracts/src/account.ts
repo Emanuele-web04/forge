@@ -1,6 +1,11 @@
 import { Schema } from "effect";
 
-import { boundedTrimmedNonEmptyString, EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  boundedTrimmedNonEmptyString,
+  EnvironmentId,
+  NonNegativeInt,
+  TrimmedNonEmptyString,
+} from "./baseSchemas";
 
 // ── Request field bounds ─────────────────────────────────────────────
 //
@@ -30,7 +35,7 @@ const AccountEmailString = boundedTrimmedNonEmptyString(ACCOUNT_EMAIL_MAX_LENGTH
 const AccountAuthTokenString = boundedTrimmedNonEmptyString(ACCOUNT_AUTH_TOKEN_MAX_LENGTH);
 const AccountAppVersionString = boundedTrimmedNonEmptyString(ACCOUNT_APP_VERSION_MAX_LENGTH);
 
-export const AccountHostTransport = Schema.Literals(["lan", "tailscale", "public"]);
+export const AccountHostTransport = Schema.Literals(["lan", "tailscale"]);
 export type AccountHostTransport = typeof AccountHostTransport.Type;
 
 export const AccountHostEndpoint = Schema.Struct({
@@ -64,8 +69,17 @@ export const AccountHost = Schema.Struct({
   kind: AccountHostKind,
   endpoints: Schema.Array(AccountHostEndpoint),
   appVersion: Schema.optional(TrimmedNonEmptyString),
-  /** WorkOS user id of whoever ran the registration. Audit only — the
-   * organization owns the host, so this grants no access of its own. */
+  /** Authorization owner. Optional on decode for pre-Slice-A wire compatibility. */
+  ownerUserId: Schema.optional(TrimmedNonEmptyString),
+  /** Whether non-owner members of the owning organization may see and use it. */
+  discoverable: Schema.optional(Schema.Boolean),
+  /** Whether a host public key is currently linked. */
+  linked: Schema.optional(Schema.Boolean),
+  /** Monotonic key epoch; host proofs bind to this value. */
+  keyGeneration: Schema.optional(NonNegativeInt),
+  /** Set by list reads to distinguish an owner row from an org-visible row. */
+  mine: Schema.optional(Schema.Boolean),
+  /** WorkOS user id of whoever ran the legacy registration. Audit only. */
   registeredByUserId: TrimmedNonEmptyString,
   createdAt: TrimmedNonEmptyString,
   lastSeenAt: TrimmedNonEmptyString,
@@ -211,6 +225,7 @@ export type RegisterHostResponse = typeof RegisterHostResponse.Type;
 
 export const UpdateHostRequest = Schema.Struct({
   name: Schema.optional(AccountNameString),
+  discoverable: Schema.optional(Schema.Boolean),
   endpoints: Schema.optional(
     Schema.Array(AccountHostEndpoint).check(Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX)),
   ),
@@ -251,6 +266,14 @@ export const AccountErrorCode = Schema.Literals([
   "token_revoked",
   "organization_required",
   "environment_already_linked",
+  "not_host_owner",
+  "host_not_linked",
+  "device_revoked",
+  "device_not_registered",
+  "challenge_expired",
+  "challenge_consumed",
+  "approval_pending",
+  "bad_proof",
   "handle_taken",
   /**
    * The identity provider will not authenticate this account until its email

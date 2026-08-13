@@ -70,6 +70,40 @@ describe("ensurePersonalOrg", () => {
     expect(deps.calls.filter((call) => call.startsWith("create:"))).toEqual([]);
   });
 
+  it("does not let a fresh authorization lookup reuse a stale in-flight read", async () => {
+    const beforeRemoval: OrganizationRef[] = [{ orgId: "org_a", orgName: "Acme" }];
+    let memberships = [...beforeRemoval];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let reads = 0;
+    const deps = makeDeps({
+      async listUserOrganizationMemberships() {
+        reads += 1;
+        const snapshot = [...memberships];
+        if (reads === 1) await firstGate;
+        return snapshot;
+      },
+      async createOrganization(name) {
+        const organization = { orgId: "org_personal", orgName: name };
+        memberships.push(organization);
+        return organization;
+      },
+    });
+    const ordinary = ensurePersonalOrg(deps, "user_1", "ada@example.com");
+    await Promise.resolve();
+    memberships = [];
+    const firstFresh = ensurePersonalOrg(deps, "user_1", "ada@example.com", { fresh: true });
+    const secondFresh = ensurePersonalOrg(deps, "user_1", "ada@example.com", { fresh: true });
+    releaseFirst();
+    await expect(ordinary).resolves.toEqual(beforeRemoval);
+    const [a, b] = await Promise.all([firstFresh, secondFresh]);
+    expect(a).toEqual(b);
+    expect(deps.calls.filter((call) => call.startsWith("create:"))).toHaveLength(1);
+    expect(reads).toBe(3);
+  });
+
   it("provisions a personal organization for a user who has none", async () => {
     const deps = makeDeps();
 
