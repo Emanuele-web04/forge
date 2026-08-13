@@ -12,7 +12,7 @@ interface ParsedOptions {
   base: string;
   upstream: string;
   remote: string;
-  branch?: string;
+  branch: string | undefined;
   skipFixes: boolean;
 }
 
@@ -180,27 +180,32 @@ function main(): void {
 
   assertUpstreamBranchExists(options.remote, options.upstream);
   checkoutBase(options.base);
-  const divergence = spawnCommand(
+  const [leftText, rightText] = spawnCommand(
     "git",
     ["rev-list", "--left-right", "--count", `${options.base}...${upstreamRef}`],
     { capture: true },
   )
     .stdout.trim()
-    .split(/\s+/)
-    .map(Number);
+    .split(/\s+/);
+  const left = Number(leftText);
+  const right = Number(rightText);
 
-  if (divergence.length !== 2 || Number.isNaN(divergence[0] + divergence[1])) {
+  if (
+    leftText === undefined ||
+    rightText === undefined ||
+    Number.isNaN(left) ||
+    Number.isNaN(right)
+  ) {
     throw new Error("Unable to compute upstream divergence.");
   }
 
-  const [left, right] = divergence;
   const hasUpstreamDelta = right > 0;
   const branchAlreadyExists = branchExists(syncBranch);
   const currentBranch = currentBranchName();
 
   if (branchAlreadyExists) {
     if (currentBranch !== syncBranch) {
-      runGit("switch", syncBranch);
+      runGit("switch", [syncBranch]);
     }
     console.log(`Reusing existing sync branch ${syncBranch}.`);
   } else {
@@ -208,7 +213,7 @@ function main(): void {
       console.log(`${options.base} is already synced with ${upstreamRef}.`);
       return;
     }
-    runGit("switch", "-c", syncBranch, options.base);
+    runGit("switch", ["-c", syncBranch, options.base]);
     console.log(`Created sync branch ${syncBranch} from ${options.base}.`);
   }
 
