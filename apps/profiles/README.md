@@ -58,8 +58,27 @@ Point `ACCOUNT_API_URL` at a local API for offline work.
 
 ## Deploy
 
-Its own Vercel project, root directory `apps/profiles`, default Next.js
-build. Set `ACCOUNT_API_URL` if the account service ever moves.
+Cloudflare Workers via OpenNext (`@opennextjs/cloudflare`). The Next data
+cache reuses the existing avatar bucket (`synara`, EU jurisdiction — the
+API's `S3_BUCKET`) under the `profiles-next-cache/` prefix, so there is no
+bucket to create. One-time setup:
+
+```sh
+bunx wrangler secret put PROFILE_PROXY_SECRET          # if used in this environment
+```
+
+then
+
+```sh
+bun run --cwd apps/profiles deploy     # opennextjs-cloudflare build && deploy
+bun run --cwd apps/profiles preview    # same build, served locally by wrangler
+```
+
+Bindings live in `wrangler.jsonc`: the R2 bucket plus a Durable Object queue
+back the `revalidate: 15` data cache (without them each isolate re-fetches
+the API on every page load); `ACCOUNT_API_URL` is a plain var there. The
+marketing project's rewrites (above) point at the worker's URL instead of a
+Vercel deployment — rewrites can target any origin, so nothing else changes.
 
 Production must also set:
 
