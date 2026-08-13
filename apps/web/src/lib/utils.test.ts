@@ -1,6 +1,11 @@
-import { assert, describe, it } from "vitest";
+import { afterEach, assert, describe, it, vi } from "vitest";
 
-import { isMacPlatform, isWindowsPlatform } from "./utils";
+import {
+  getNavigatorPlatform,
+  isMacNavigatorPlatform,
+  isMacPlatform,
+  isWindowsPlatform,
+} from "./utils";
 
 describe("isMacPlatform", () => {
   it("matches browser and Node.js macOS platform identifiers", () => {
@@ -23,5 +28,35 @@ describe("isWindowsPlatform", () => {
 
   it("does not match darwin", () => {
     assert.isFalse(isWindowsPlatform("darwin"));
+  });
+});
+
+describe("navigator platform helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the host platform, falling back to an empty string without a navigator", () => {
+    vi.stubGlobal("navigator", undefined);
+    assert.equal(getNavigatorPlatform(), "");
+
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    assert.equal(getNavigatorPlatform(), "MacIntel");
+  });
+
+  it("detects macOS hosts, including the Node.js-style identifier", () => {
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    assert.isTrue(isMacNavigatorPlatform());
+
+    vi.stubGlobal("navigator", { platform: "darwin" });
+    assert.isTrue(isMacNavigatorPlatform());
+  });
+
+  it("is false on other hosts and without a navigator", () => {
+    vi.stubGlobal("navigator", { platform: "Win32" });
+    assert.isFalse(isMacNavigatorPlatform());
+
+    vi.stubGlobal("navigator", undefined);
+    assert.isFalse(isMacNavigatorPlatform());
   });
 });

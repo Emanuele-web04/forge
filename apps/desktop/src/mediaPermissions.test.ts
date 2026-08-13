@@ -58,7 +58,7 @@ describe("isTrustedMediaPermissionRequest", () => {
     );
   });
 
-  it("rejects subframes and origins other than the live Forkara renderer", () => {
+  it("rejects subframes and origins other than the live Synara renderer", () => {
     const trusted = {
       isDestroyed: () => false,
       getURL: () => "synara://app/index.html",

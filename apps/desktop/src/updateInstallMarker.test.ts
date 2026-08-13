@@ -36,7 +36,7 @@ import {
 
 const temporaryDirectories: string[] = [];
 const artifact = {
-  path: Path.resolve("/tmp/Forkara-update.zip"),
+  path: Path.resolve("/tmp/Synara-update.zip"),
   size: 123,
   sha512: "a".repeat(128),
 } as const;

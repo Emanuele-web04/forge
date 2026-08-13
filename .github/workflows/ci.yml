@@ -8,7 +8,7 @@ on:
 
 jobs:
   quality:
-    name: Format, Lint, Typecheck, Test, Build
+    name: Format, Lint, Typecheck, Test, Browser Test, Build
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -25,18 +25,55 @@ jobs:
         with:
           node-version-file: package.json
 
+      - name: Cache Bun and Turbo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.bun/install/cache
+            .turbo
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-${{ hashFiles('turbo.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Cache Electron runtime
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
+
+      - name: Install Electron test runtime
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if node apps/desktop/node_modules/electron/install.js; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
       - name: Verify Linux terminal PTY native dependency
         if: runner.os == 'Linux'
         run: node scripts/node-pty-smoke.mjs
 
-      - name: Verify Forkara upstream attribution
-        # During active branding/rebrand churn, this check is intentionally advisory
-        # in PR validation so documentation and naming updates do not block
-        # functional validation paths.
-        continue-on-error: true
+      - name: Verify Synara identity
         run: bun run brand:check
 
       - name: Format
@@ -51,6 +88,29 @@ jobs:
       - name: Test
         run: bun run test
 
+      # Run the workspace-local playwright binary directly: bunx stalled after
+      # the chromium download on hosted runners. The step timeout stops any
+      # remaining apt/download stalls from eating the whole job budget.
+      - name: Install browser test runtime
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          cd apps/web
+          ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Browser test (stable)
+        timeout-minutes: 20
+        run: bun run --cwd apps/web test:browser:stable
+
+      # Pixel/font/layout comparisons are tracked explicitly in
+      # apps/web/BROWSER_TEST_QUARANTINE.md while their Linux rendering is fixed.
+      # All untagged browser tests run in the blocking stable step above.
+      - name: Browser test (Linux geometry quarantine)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: bun run --cwd apps/web test:browser:geometry
+
       - name: Build desktop pipeline
         run: bun run build:desktop
 
@@ -58,3 +118,102 @@ jobs:
         run: |
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
+
+  windows_process:
+    name: Windows Process Regression
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: bun install --frozen-lockfile
+
+      - name: Verify Windows terminal PTY native dependency under Bun
+        run: bun scripts/node-pty-smoke.mjs
+
+      - name: Test Windows process planning
+        run: bun run --cwd packages/shared test src/windowsProcess.test.ts
+
+      - name: Test Effect Windows process spawn
+        run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts
+
+      - name: Test Windows desktop backend shutdown
+        run: bun run --cwd apps/desktop test src/backendShutdown.windows.integration.test.ts
+
+      # The 0.6.0 wedge hit Windows hardest, and the repair path is built out of
+      # exactly what Windows treats differently: unlinking a marker, reclaiming
+      # stranded partials, and renaming a database file that may still be held
+      # open. Linux-only coverage cannot speak for any of that.
+      - name: Test migration recovery marker
+        run: bun run --cwd packages/shared test src/migrationRecovery.test.ts
+
+      - name: Test desktop migration recovery
+        run: bun run --cwd apps/desktop test src/desktopMigrationRecovery.test.ts
+
+      - name: Test migration backup and restore
+        run: bun run --cwd apps/server test src/persistence/MigrationBackup.test.ts
+
+      - name: Test migration replay
+        run: bun run --cwd apps/server test src/persistence/Migrations/MigrationReplay.test.ts
+
+  # Released (id, name) migration pairs are recorded in every user's
+  # effect_sql_migrations table, so renumbering or renaming one corrupts existing
+  # installs. This job needs the release tags, hence the unshallow checkout; the
+  # guard itself is dependency-free and skips with a warning if tags are missing.
+  migration_lineage:
+    name: Migration Lineage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Verify released migration lineage
+        run: node scripts/check-migration-lineage.ts
+
+  release_smoke:
+    name: Release Smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Verify Synara identity
+        run: bun run brand:check
+
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts

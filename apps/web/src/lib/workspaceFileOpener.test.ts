@@ -26,7 +26,7 @@ describe("resolveWorkspaceFileOpenTarget", () => {
     );
   });
 
-  it("maps Forkara public asset URLs to their workspace files", () => {
+  it("maps Synara public asset URLs to their workspace files", () => {
     expect(
       resolveWorkspaceFileOpenTarget("/central-icons-reversed/magnifying-glass.svg", "/repo/app"),
     ).toBe("apps/web/public/central-icons-reversed/magnifying-glass.svg");

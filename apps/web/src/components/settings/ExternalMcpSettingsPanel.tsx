@@ -13,7 +13,7 @@ import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { cn } from "~/lib/utils";
+import { cn, getNavigatorPlatform } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import {
   buildExternalMcpClientConfiguration,
@@ -226,7 +226,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
           : pairingExpired
             ? "Pairing code expired"
             : "Waiting for pairing";
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const platform = getNavigatorPlatform();
   const setupPrompt = setup
     ? buildExternalMcpSetupPrompt({
         setupCommand: paired ? null : setup.setupCommand,
@@ -251,7 +251,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
         <SettingsSection title="Connect a coding agent">
           <SettingsRow
             title="Name"
-            description="How this connection appears in Forkara. Works with Codex, Claude, and any other MCP-capable agent."
+            description="How this connection appears in Synara. Works with Codex, Claude, and any other MCP-capable agent."
             control={
               <Input
                 className="w-full sm:w-64"
@@ -263,7 +263,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             }
           />
           <SettingsRow
-            title="Access all of Forkara"
+            title="Access all of Synara"
             description="The agent can discover and work in every project, including ones you add later. Turn off to pick specific projects."
             control={<Switch checked={allProjects} onCheckedChange={setAllProjects} />}
           >
@@ -384,13 +384,13 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             }
             description={
               revoked
-                ? "This connection has been revoked and can no longer access Forkara."
+                ? "This connection has been revoked and can no longer access Synara."
                 : integrationExpired
-                  ? "This connection has expired and can no longer access Forkara."
+                  ? "This connection has expired and can no longer access Synara."
                   : connected
-                    ? "Forkara received a request from this agent. Setup is complete."
+                    ? "Synara received a request from this agent. Setup is complete."
                     : paired
-                      ? "The private credential is stored locally. If the agent has not registered Forkara yet, give it the setup prompt below."
+                      ? "The private credential is stored locally. If the agent has not registered Synara yet, give it the setup prompt below."
                       : pairingExpired
                         ? "The one-time pairing code was not used in time. Resume pairing to issue a fresh code without replacing this connection."
                         : "Paste the setup prompt into your agent. This page updates automatically when pairing succeeds."
@@ -433,7 +433,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
           />
           <SettingsRow
             title="1. Give your agent this prompt"
-            description="Copy the prompt and paste it into the agent you want to connect (Codex, Claude Code, or any MCP-capable app). The agent pairs this computer, registers Forkara in its own configuration, and verifies the connection by itself."
+            description="Copy the prompt and paste it into the agent you want to connect (Codex, Claude Code, or any MCP-capable app). The agent pairs this computer, registers Synara in its own configuration, and verifies the connection by itself."
             status={
               paired
                 ? "Paired. The prompt now covers only registration and verification."
@@ -514,8 +514,8 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             description="Open a new chat in the agent you just connected and send this editable example. You never need to copy project IDs, model IDs, or request IDs yourself."
             status={
               connected
-                ? "Connection verified by Forkara."
-                : "Forkara will show Connected after the agent makes its first request."
+                ? "Connection verified by Synara."
+                : "Synara will show Connected after the agent makes its first request."
             }
             control={
               <Button
@@ -603,7 +603,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
         ) : (
           <SettingsListRow
             title="No connected agents"
-            description="Connect Codex, Claude, or another local MCP agent to create and follow Forkara tasks."
+            description="Connect Codex, Claude, or another local MCP agent to create and follow Synara tasks."
           />
         )}
       </SettingsSection>

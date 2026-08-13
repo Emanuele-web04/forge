@@ -38,6 +38,7 @@ import {
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
 import { Button } from "./ui/button";
+import { DiffStat } from "./ui/diff-stat";
 import {
   Dialog,
   DialogDescription,
@@ -83,6 +84,7 @@ interface BranchToolbarBranchSelectorProps {
   effectiveEnvMode: EnvMode;
   envLocked: boolean;
   hasServerThread: boolean;
+  isThreadSettled: boolean;
   onSetThreadWorkspace: (patch: ThreadWorkspacePatch) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -272,7 +274,7 @@ function handleCheckoutError(
                   type: "warning",
                   title: "Changes saved, but not reapplied.",
                   description:
-                    "Forkara switched branches and kept your changes in a stash because they could not be restored onto this branch cleanly.",
+                    "Synara switched branches and kept your changes in a stash because they could not be restored onto this branch cleanly.",
                   data: { copyText: toBranchActionErrorMessage(stashError) },
                   actionProps: {
                     children: "Discard stash",
@@ -377,6 +379,7 @@ export function BranchToolbarBranchSelector({
   effectiveEnvMode,
   envLocked,
   hasServerThread,
+  isThreadSettled,
   onSetThreadWorkspace,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
@@ -456,6 +459,7 @@ export function BranchToolbarBranchSelector({
         activeThreadBranch,
         currentGitBranch,
         hasServerThread,
+        isThreadSettled,
         isBranchActionPending,
       })
     ) {
@@ -469,6 +473,7 @@ export function BranchToolbarBranchSelector({
     currentGitBranch,
     effectiveEnvMode,
     hasServerThread,
+    isThreadSettled,
     isBranchActionPending,
     onSetThreadWorkspace,
   ]);
@@ -827,12 +832,11 @@ export function BranchToolbarBranchSelector({
                   Uncommitted: {currentBranchChangeSummary.fileCount.toLocaleString()}{" "}
                   {pluralize(currentBranchChangeSummary.fileCount, "file")}
                 </span>
-                <span className="font-mono tabular-nums text-success">
-                  +{currentBranchChangeSummary.insertions.toLocaleString()}
-                </span>
-                <span className="font-mono tabular-nums text-destructive">
-                  -{currentBranchChangeSummary.deletions.toLocaleString()}
-                </span>
+                <DiffStat
+                  className="font-mono"
+                  insertions={currentBranchChangeSummary.insertions}
+                  deletions={currentBranchChangeSummary.deletions}
+                />
               </div>
             ) : null}
           </div>

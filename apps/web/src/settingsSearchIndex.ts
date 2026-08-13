@@ -73,6 +73,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show the Studio tab in the sidebar switcher. sidebar section content outbox",
   },
   {
+    id: "general:automation-run-threads",
+    section: "general",
+    title: "Automation runs",
+    keywords:
+      "Show the thread each standalone automation run creates in the sidebar. hide automation run threads clutter scheduled",
+  },
+  {
     id: "general:environment-default-open",
     section: "general",
     title: "Open by default",
@@ -90,12 +97,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "general",
     title: "Repository",
     keywords: "Show the GitHub repository link in the chat Environment panel. git changes worktree",
-  },
-  {
-    id: "general:environment-hide-upstream",
-    section: "general",
-    title: "Hide upstream information",
-    keywords: "Hide upstream repository identity in the Environment panel. Forkara parody",
   },
   {
     id: "general:environment-pull-request",
@@ -147,20 +148,20 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "appearance:theme",
     section: "appearance",
     title: "Theme",
-    keywords: "Choose how Forkara looks across the app. dark light system color",
+    keywords: "Choose how Synara looks across the app. dark light system color",
   },
   {
     id: "appearance:app-icon",
     section: "appearance",
     title: "App icon",
-    keywords: "Choose the icon Forkara uses in the dock or taskbar desktop application logo.",
+    keywords: "Choose the icon Synara uses in the dock or taskbar desktop application logo.",
     target: null,
   },
   {
     id: "appearance:system-ui-font",
     section: "appearance",
     title: "Use system UI font",
-    keywords: "Use the operating system interface font throughout Forkara.",
+    keywords: "Use the operating system interface font throughout Synara.",
   },
   {
     id: "appearance:ui-density",
@@ -168,6 +169,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "UI density",
     keywords:
       "Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size. compact comfortable",
+  },
+  {
+    id: "appearance:chat-width",
+    section: "appearance",
+    title: "Chat width",
+    keywords:
+      "Control how wide the chat column grows so tables and wide content get more room. standard wide full",
   },
   {
     id: "appearance:base-font-size",
@@ -302,7 +310,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "shortcuts",
     title: "Keybindings",
     keywords:
-      "Every keyboard shortcut available in Forkara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
+      "Every keyboard shortcut available in Synara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
     target: null,
   },
 
@@ -311,7 +319,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "worktrees:managed-worktrees",
     section: "worktrees",
     title: "Managed worktrees",
-    keywords: "Review and clean up the worktrees created by Forkara. git branch remove",
+    keywords: "Review and clean up the worktrees created by Synara. git branch remove",
     target: null,
   },
 
@@ -357,7 +365,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "providers:provider-updates",
     section: "providers",
     title: "Provider updates",
-    keywords: "Update installed provider tools that Forkara can safely update. upgrade cli",
+    keywords: "Update installed provider tools that Synara can safely update. upgrade cli",
   },
   {
     id: "providers:installed-clis",

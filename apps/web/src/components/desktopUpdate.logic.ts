@@ -167,12 +167,12 @@ export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState):
 
   const action = resolveDesktopUpdateButtonAction(state);
   if (action === "download") {
-    return "This Mac has Apple Silicon, but Forkara is still running the Intel build under Rosetta. Forkara is preparing the native Apple Silicon update.";
+    return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. Synara is preparing the native Apple Silicon update.";
   }
   if (action === "install") {
-    return "This Mac has Apple Silicon, but Forkara is still running the Intel build under Rosetta. Click Update to restart into the native Apple Silicon build.";
+    return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. Click Update to restart into the native Apple Silicon build.";
   }
-  return "This Mac has Apple Silicon, but Forkara is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
+  return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
 }
 
 export function getDesktopUpdateButtonTooltip(
@@ -192,7 +192,7 @@ export function getDesktopUpdateButtonTooltip(
     return `You're up to date on ${state.currentVersion}. Click to check again.`;
   }
   if (state.errorContext === "install" && !state.downloadedVersion && state.availableVersion) {
-    return `Forkara restarted, but update ${state.availableVersion} was not installed. Click to try again.`;
+    return `Synara restarted, but update ${state.availableVersion} was not installed. Click to try again.`;
   }
   if (state.errorContext === "download" && state.availableVersion) {
     return `Could not prepare update ${state.availableVersion}. Click to retry.`;

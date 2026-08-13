@@ -330,7 +330,7 @@ export interface DeviceShortcutEventLike {
  * Simulator.app's hardware chords, matched before keyboard passthrough so the
  * muscle memory carries over. Everything else with Cmd held is left to the
  * browser/app rather than injected, since Cmd+W/Cmd+R on a focused canvas must
- * still reach Forkara.
+ * still reach Synara.
  *
  * One of Simulator.app's chords is deliberately absent, for one reason:
  * claiming a chord swallows the keystroke, so a chord the backend refuses is
@@ -547,7 +547,7 @@ export function resolveDeviceAvailabilityView(
       return {
         kind: "blocked",
         title: "iOS Simulator needs macOS",
-        description: `This Forkara server runs on ${availability.platform}. Simulators are only available when the server runs on a Mac with Xcode installed.`,
+        description: `This Synara server runs on ${availability.platform}. Simulators are only available when the server runs on a Mac with Xcode installed.`,
         steps: [],
         retryable: false,
       };
@@ -742,7 +742,7 @@ export interface DeviceSetupAction {
 
 /**
  * The one thing the user can act on right now. Only Xcode installation has a
- * destination Forkara can send them to — every other step either completes on
+ * destination Synara can send them to — every other step either completes on
  * its own or is driven from Xcode itself — so the screen shows a single button
  * or none, rather than a row of links that mostly go nowhere.
  */

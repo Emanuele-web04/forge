@@ -50,10 +50,10 @@ function writeMacManifestFixtures(targetRoot: string): { arm64Path: string; x64P
     arm64Path,
     `version: 9.9.9-smoke.0
 files:
-  - url: Forkara-9.9.9-smoke.0-arm64.zip
+  - url: Synara-9.9.9-smoke.0-arm64.zip
     sha512: arm64zip
     size: 125621344
-path: Forkara-9.9.9-smoke.0-arm64.zip
+path: Synara-9.9.9-smoke.0-arm64.zip
 sha512: arm64zip
 releaseDate: '2026-03-08T10:32:14.587Z'
 `,
@@ -63,10 +63,10 @@ releaseDate: '2026-03-08T10:32:14.587Z'
     x64Path,
     `version: 9.9.9-smoke.0
 files:
-  - url: Forkara-9.9.9-smoke.0-x64.zip
+  - url: Synara-9.9.9-smoke.0-x64.zip
     sha512: x64zip
     size: 132000112
-path: Forkara-9.9.9-smoke.0-x64.zip
+path: Synara-9.9.9-smoke.0-x64.zip
 sha512: x64zip
 releaseDate: '2026-03-08T10:36:07.540Z'
 `,
@@ -100,7 +100,7 @@ function verifyCanonicalIdentity(): void {
   };
   if (JSON.stringify(serverPackage.bin ?? {}) !== JSON.stringify(expectedBinaries)) {
     throw new Error(
-      "Expected the CLI to expose only the Forkara entry point and migration recovery binary.",
+      "Expected the CLI to expose only the Synara entry point and migration recovery binary.",
     );
   }
   if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
@@ -117,12 +117,50 @@ function verifyCanonicalIdentity(): void {
     !resolvedPolicy.makeLatest ||
     resolvedPolicy.mirrorToStableChannel
   ) {
-    throw new Error("Expected stable clean Forkara releases to publish on GitHub Latest.");
+    throw new Error("Expected stable clean Synara releases to publish on GitHub Latest.");
   }
 }
 
 function verifyReleaseWorkflowSafety(): void {
-  const workflow = readFileSync(resolve(repoRoot, ".github/workflows/release.yml"), "utf8");
+  const workflow = readFileSync(
+    resolve(repoRoot, ".github/workflows/release.yml"),
+    "utf8",
+  ).replaceAll("\r\n", "\n");
+  assertContains(
+    workflow,
+    "\npermissions: {}\n",
+    "Expected the release workflow to deny GITHUB_TOKEN permissions by default.",
+  );
+  assertNotContains(
+    workflow,
+    "permissions:\n  contents: write\n  id-token: write",
+    "Release-wide publication permissions must not be inherited by every job.",
+  );
+  assertContains(
+    workflow,
+    "  preflight:\n    name: Preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
+    "Expected preflight to receive read-only repository access.",
+  );
+  assertContains(
+    workflow,
+    "  build:\n    name: Build ${{ matrix.label }}\n    needs: preflight\n    runs-on: ${{ matrix.runner }}\n    timeout-minutes: 30\n    permissions:\n      contents: read",
+    "Expected artifact builds to receive read-only repository access.",
+  );
+  assertContains(
+    workflow,
+    "    permissions:\n      contents: read\n      id-token: write\n    steps:",
+    "Expected only CLI publication to combine repository reads with npm OIDC.",
+  );
+  assertContains(
+    workflow,
+    "  release:\n    name: Publish GitHub Release\n    if: ${{ needs.preflight.outputs.publish_release == 'true' }}\n    needs: [preflight, build]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: write",
+    "Expected only GitHub release publication to receive contents write access.",
+  );
+  assertContains(
+    workflow,
+    "repositories: ${{ github.event.repository.name }}\n          permission-contents: write",
+    "Expected release finalization to mint a repository-scoped contents token.",
+  );
   assertContains(
     workflow,
     "publish_release:\n        description:",
@@ -432,12 +470,12 @@ try {
   const mergedManifest = readFileSync(arm64Path, "utf8");
   assertContains(
     mergedManifest,
-    "Forkara-9.9.9-smoke.0-arm64.zip",
+    "Synara-9.9.9-smoke.0-arm64.zip",
     "Merged manifest is missing the arm64 asset.",
   );
   assertContains(
     mergedManifest,
-    "Forkara-9.9.9-smoke.0-x64.zip",
+    "Synara-9.9.9-smoke.0-x64.zip",
     "Merged manifest is missing the x64 asset.",
   );
   assertNotContains(

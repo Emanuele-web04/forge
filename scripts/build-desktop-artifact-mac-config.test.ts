@@ -77,7 +77,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     const win = createDesktopPlatformBuildConfig({
       platform: "win",
       target: "nsis",
-      windowsAzureSignOptions: { publisherName: "Forkara" },
+      windowsAzureSignOptions: { publisherName: "Synara" },
     });
 
     assert.equal(linux.mac, undefined);
@@ -105,8 +105,8 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(win.win, {
       target: ["nsis"],
       icon: "icon.ico",
-      publisherName: "Forkara",
-      azureSignOptions: { publisherName: "Forkara" },
+      publisherName: "Synara",
+      azureSignOptions: { publisherName: "Synara" },
     });
   });
 

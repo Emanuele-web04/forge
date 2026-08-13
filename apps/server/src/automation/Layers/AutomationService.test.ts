@@ -90,6 +90,8 @@ let failDispatchType: OrchestrationCommand["type"] | null = null;
 let dispatchHook:
   | ((command: OrchestrationCommand) => Effect.Effect<void, OrchestrationCommandInternalError>)
   | null = null;
+let projectLookupHook: (() => Effect.Effect<void>) | null = null;
+let threadShellLookupHook: (() => Effect.Effect<void>) | null = null;
 
 function resetHarness() {
   dispatchedCommands.length = 0;
@@ -110,6 +112,8 @@ function resetHarness() {
   completionEvaluationGate = null;
   failDispatchType = null;
   dispatchHook = null;
+  projectLookupHook = null;
+  threadShellLookupHook = null;
 }
 
 // Build a partial thread shell; only the fields reconcileThread reads are populated.
@@ -206,6 +210,29 @@ function aiCompletionPolicy(stopWhen: string) {
     stopWhen,
     confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   };
+}
+
+function reconcileAutomationRun(input: {
+  readonly service: AutomationServiceShape;
+  readonly run: AutomationRun;
+  readonly state: "completed" | "error";
+  readonly error?: string;
+}) {
+  const threadId = input.run.threadId;
+  if (threadId === null) {
+    return Effect.die("Expected the automation run to have a thread id.");
+  }
+  threadShell = Option.some(
+    makeThreadShell({
+      id: threadId,
+      latestTurn: makeLatestTurn(
+        input.state,
+        TurnId.makeUnsafe(`turn-${input.state}-${input.run.id}`),
+      ),
+      ...(input.error !== undefined ? { lastError: input.error } : {}),
+    }),
+  );
+  return input.service.reconcileThread({ threadId });
 }
 
 // Completes an automation turn and exposes the transcript used by AI stop-condition checks.
@@ -335,6 +362,7 @@ const createInput = (
     model: "gpt-5-codex",
   },
   worktreeMode,
+  stopAfterConsecutiveFailures: 1,
   acknowledgedRisks: worktreeMode === "local" ? ["local-checkout"] : [],
 });
 
@@ -347,6 +375,9 @@ const orchestrationEngine = {
     inFlight: false,
     retryAttempts: 0,
     lastFailure: null,
+    highWaterSequence: 0,
+    lagByProjector: {},
+    missingProjectors: [],
   }),
   readEvents: () => Stream.empty,
   readEventsThrough: () => Stream.empty,
@@ -416,21 +447,28 @@ const projectionSnapshotQuery = {
     }),
   getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 0 }),
   getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-  getShellSnapshot: () =>
-    Effect.succeed({
+  getShellSnapshot: () => {
+    const snapshot = {
       snapshotSequence: 0,
       spaces: [],
       projects: [project],
       threads: [],
       updatedAt: now,
-    }),
+    };
+    return projectLookupHook
+      ? projectLookupHook().pipe(Effect.as(snapshot))
+      : Effect.succeed(snapshot);
+  },
   getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.some(project as never)),
   getProjectShellById: () => Effect.succeed(Option.some(project)),
   getSpaceShellById: () => Effect.succeed(Option.none()),
   getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
   getThreadCheckpointContext: () => Effect.succeed(Option.none()),
   getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-  getThreadShellById: () => Effect.succeed(threadShell),
+  getThreadShellById: () =>
+    threadShellLookupHook
+      ? threadShellLookupHook().pipe(Effect.as(threadShell))
+      : Effect.succeed(threadShell),
   findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
   getThreadDetailById: () => Effect.succeed(threadDetail as never),
   getThreadDetailForExportById: () => Effect.succeed(threadDetail as never),
@@ -678,6 +716,61 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("retries an update after a concurrent scheduler write", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const created = yield* service.create(createInput());
+      projectLookupHook = () => {
+        projectLookupHook = null;
+        return Effect.gen(function* () {
+          yield* repository.incrementDefinitionIterationCount({
+            id: created.id,
+            now: "2026-06-16T10:01:00.000Z",
+          });
+          const moved = Option.getOrThrow(yield* repository.getDefinitionById({ id: created.id }));
+          assert.strictEqual(moved.iterationCount, 1);
+          assert.notStrictEqual(moved.updatedAt, created.updatedAt);
+        }).pipe(Effect.orDie);
+      };
+
+      const updated = yield* service.update({ id: created.id, name: "Updated after conflict" });
+
+      assert.strictEqual(updated.name, "Updated after conflict");
+      assert.strictEqual(updated.iterationCount, 1);
+    }),
+  );
+
+  it.effect("fails an update after three concurrent write conflicts", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const created = yield* service.create(createInput());
+      let schedulerWrites = 0;
+      projectLookupHook = () => {
+        schedulerWrites += 1;
+        return repository
+          .incrementDefinitionIterationCount({
+            id: created.id,
+            now: `2026-06-16T10:00:0${schedulerWrites}.000Z`,
+          })
+          .pipe(Effect.orDie);
+      };
+
+      const error = yield* service
+        .update({ id: created.id, name: "Never persisted" })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(schedulerWrites, 3);
+      assert.match(error.message, /changed while saving.*Try again/);
+      const reloaded = Option.getOrThrow(yield* repository.getDefinitionById({ id: created.id }));
+      assert.strictEqual(reloaded.name, created.name);
+      assert.strictEqual(reloaded.iterationCount, 3);
+    }),
+  );
+
   it.effect("stores memory from an automation owner and injects it into dispatch", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -851,6 +944,8 @@ layer("AutomationService", (it) => {
       }
       assert.strictEqual(threadCreate.envMode, "local");
       assert.strictEqual(threadCreate.runtimeMode, "approval-required");
+      // A standalone run thread is a throwaway artifact; the marker lets the sidebar hide it.
+      assert.strictEqual(threadCreate.creationSource, "automation_run");
       assert.include(turnStart.message.text, "Automation: Nightly maintenance");
       assert.include(turnStart.message.text, "Memory (persistent across runs");
       assert.isTrue(turnStart.message.text.endsWith("---\n\nCheck stale dependencies."));
@@ -881,6 +976,8 @@ layer("AutomationService", (it) => {
       }
       // The thread outlives this run, so it is titled for the automation, not the occurrence.
       assert.strictEqual(threadCreate.title, "Nightly maintenance");
+      // A dedicated thread is a persistent conversation, not a run artifact: no marker.
+      assert.strictEqual(threadCreate.creationSource, undefined);
       const dedicatedThreadId = threadCreate.threadId;
       assert.strictEqual(first.run.threadId, dedicatedThreadId);
 
@@ -1007,7 +1104,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("worktree"),
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: true,
+          stopAfterConsecutiveFailures: 1,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -1084,7 +1181,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("worktree"),
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: true,
+          stopAfterConsecutiveFailures: 1,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -1410,7 +1507,11 @@ layer("AutomationService", (it) => {
       assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:15:00.000Z");
       assert.strictEqual(runs.length, 1);
       assert.strictEqual(runs[0]?.status, "skipped");
-      yield* repository.disableDefinition({ id: automationId, now: "2026-06-16T10:11:00.000Z" });
+      yield* repository.disableDefinition({
+        id: automationId,
+        now: "2026-06-16T10:11:00.000Z",
+        reason: "user",
+      });
     }),
   );
 
@@ -1442,7 +1543,11 @@ layer("AutomationService", (it) => {
       const listed = yield* service.list({ projectId });
       const definition = listed.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:16:00.000Z");
-      yield* repository.disableDefinition({ id: automationId, now: "2026-06-16T10:11:00.000Z" });
+      yield* repository.disableDefinition({
+        id: automationId,
+        now: "2026-06-16T10:11:00.000Z",
+        reason: "user",
+      });
     }),
   );
 
@@ -1886,7 +1991,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           maxRuntimeSeconds: 1,
-          stopOnError: false,
+          stopAfterConsecutiveFailures: null,
         },
         now: "2000-01-01T00:00:00.000Z",
       });
@@ -1951,7 +2056,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           maxRuntimeSeconds: 1,
-          stopOnError: false,
+          stopAfterConsecutiveFailures: null,
         },
         now: "2000-01-01T00:00:00.000Z",
       });
@@ -1997,6 +2102,7 @@ layer("AutomationService", (it) => {
                   archivedAt: null,
                 },
                 finishedAt: "2026-06-16T10:00:00.000Z",
+                accountedAt: "2026-06-16T10:00:00.000Z",
               })
               .pipe(Effect.asVoid, Effect.orDie)
           : Effect.void;
@@ -2707,6 +2813,7 @@ layer("AutomationService", (it) => {
           archivedAt: null,
         },
         finishedAt: definitionUpdatedAt!,
+        accountedAt: definitionUpdatedAt!,
       });
 
       yield* service.reconcileActiveRuns();
@@ -3540,7 +3647,10 @@ layer("AutomationService", (it) => {
         maxIterations: 3,
         acknowledgedRisks: ["fast-interval", "local-checkout"],
       });
-      yield* repository.saveDefinition({ ...created, maxIterations: null });
+      yield* repository.saveDefinition({
+        definition: { ...created, maxIterations: null },
+        expectedUpdatedAt: created.updatedAt,
+      });
 
       const paused = yield* service.update({ id: created.id, enabled: false });
 
@@ -3773,6 +3883,7 @@ layer("AutomationService", (it) => {
           repository.disableDefinition({
             id: definition.id,
             now: scheduledAt,
+            reason: "user",
           }),
         { discard: true },
       );
@@ -3835,6 +3946,7 @@ layer("AutomationService", (it) => {
           repository.disableDefinition({
             id: AutomationId.makeUnsafe(`automation-isolated-${index}`),
             now: scheduledAt,
+            reason: "user",
           }),
         { discard: true },
       );
@@ -3875,6 +3987,7 @@ layer("AutomationService", (it) => {
       yield* repository.disableDefinition({
         id: automationId,
         now: "2026-06-16T10:01:00.000Z",
+        reason: "max-iterations",
       });
       threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
 
@@ -3901,11 +4014,12 @@ layer("AutomationService", (it) => {
       yield* repository.disableDefinition({
         id: automationId,
         now: new Date().toISOString(),
+        reason: "user",
       });
     }),
   );
 
-  it.effect("keeps legacy fast loops over the hard cap disabled after a manual rerun", () =>
+  it.effect("preserves the disable reason when an exhausted loop cannot restart", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -3918,7 +4032,10 @@ layer("AutomationService", (it) => {
         acknowledgedRisks: ["fast-interval", "local-checkout"],
       });
       const automationId = created.id;
-      yield* repository.saveDefinition({ ...created, maxIterations: 25 });
+      yield* repository.saveDefinition({
+        definition: { ...created, maxIterations: 25 },
+        expectedUpdatedAt: created.updatedAt,
+      });
       yield* Effect.forEach(
         Array.from({ length: 25 }),
         () =>
@@ -3931,6 +4048,7 @@ layer("AutomationService", (it) => {
       yield* repository.disableDefinition({
         id: automationId,
         now: "2026-06-16T10:01:00.000Z",
+        reason: "max-iterations",
       });
 
       const result = yield* service.runNow({ automationId });
@@ -3943,10 +4061,12 @@ layer("AutomationService", (it) => {
       assert.strictEqual(definition?.nextRunAt, null);
       assert.strictEqual(definition?.iterationCount, 1);
       assert.strictEqual(definition?.maxIterations, 25);
+      assert.strictEqual(definition?.disabledReason, "max-iterations");
+      assert.strictEqual(definition?.disabledAt, "2026-06-16T10:01:00.000Z");
     }),
   );
 
-  it.effect("disables a stopOnError automation when its run reconciles to failed", () =>
+  it.effect("disables at the configured failure threshold when a run reconciles to failed", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -3958,7 +4078,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: true,
+          stopAfterConsecutiveFailures: 1,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -3984,6 +4104,274 @@ layer("AutomationService", (it) => {
       const definition = reloaded.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.enabled, false);
       assert.strictEqual(reloaded.runs.find((entry) => entry.id === run!.id)?.status, "failed");
+    }),
+  );
+
+  it.effect("keeps running below a three-failure threshold and disables on the third failure", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        stopAfterConsecutiveFailures: 3,
+      });
+
+      for (let failureNumber = 1; failureNumber <= 3; failureNumber += 1) {
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* reconcileAutomationRun({
+          service,
+          run,
+          state: "error",
+          error: `failure ${failureNumber}`,
+        });
+
+        const definition = (yield* service.list({ projectId })).definitions.find(
+          (entry) => entry.id === created.id,
+        );
+        assert.strictEqual(definition?.consecutiveFailureCount, failureNumber);
+        assert.strictEqual(definition?.enabled, failureNumber < 3);
+      }
+
+      const stopped = (yield* service.list({ projectId })).definitions.find(
+        (entry) => entry.id === created.id,
+      );
+      assert.strictEqual(stopped?.disabledReason, "failures");
+      assert.isNotNull(stopped?.disabledAt ?? null);
+    }),
+  );
+
+  it.effect("resets consecutive failures after a successful run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        stopAfterConsecutiveFailures: 3,
+      });
+      const failedRun = (yield* service.runNow({ automationId: created.id })).run;
+      yield* reconcileAutomationRun({
+        service,
+        run: failedRun,
+        state: "error",
+        error: "first failure",
+      });
+      const successfulRun = (yield* service.runNow({ automationId: created.id })).run;
+
+      yield* reconcileAutomationRun({ service, run: successfulRun, state: "completed" });
+
+      const definition = (yield* service.list({ projectId })).definitions.find(
+        (entry) => entry.id === created.id,
+      );
+      assert.strictEqual(definition?.consecutiveFailureCount, 0);
+      assert.isTrue(definition?.enabled ?? false);
+    }),
+  );
+
+  it.effect("accounts for an already-failed run only once", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        stopAfterConsecutiveFailures: 3,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      const threadId = run.threadId;
+      assert.isNotNull(threadId);
+      if (threadId === null) {
+        assert.fail("Expected the automation run to have a thread id.");
+      }
+      threadShell = Option.some(
+        makeThreadShell({
+          id: threadId,
+          latestTurn: makeLatestTurn("error", TurnId.makeUnsafe("turn-double-failure")),
+          lastError: "racing failure",
+        }),
+      );
+      let lookupCount = 0;
+      let releaseLookups: () => void = () => {};
+      const bothLookupsArrived = new Promise<void>((resolve) => {
+        releaseLookups = () => resolve();
+      });
+      threadShellLookupHook = () =>
+        Effect.promise(() => {
+          lookupCount += 1;
+          if (lookupCount === 2) {
+            releaseLookups();
+          }
+          return bothLookupsArrived;
+        });
+
+      yield* Effect.all(
+        [service.reconcileThread({ threadId }), service.reconcileThread({ threadId })],
+        { concurrency: "unbounded" },
+      );
+
+      const definition = (yield* service.list({ projectId })).definitions.find(
+        (entry) => entry.id === created.id,
+      );
+      assert.strictEqual(definition?.consecutiveFailureCount, 1);
+    }),
+  );
+
+  it.effect("disables a bounded automation when its final iteration fails", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        maxIterations: 1,
+        stopAfterConsecutiveFailures: 3,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+
+      yield* reconcileAutomationRun({
+        service,
+        run,
+        state: "error",
+        error: "final iteration failed",
+      });
+
+      const definition = (yield* service.list({ projectId })).definitions.find(
+        (entry) => entry.id === created.id,
+      );
+      assert.isFalse(definition?.enabled ?? true);
+      assert.strictEqual(definition?.disabledReason, "max-iterations");
+      assert.strictEqual(definition?.consecutiveFailureCount, 1);
+    }),
+  );
+
+  it.effect("restarts an exhausted failure-disabled loop when the user re-enables it", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-reenable-failure-at-cap");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          maxIterations: 1,
+          stopAfterConsecutiveFailures: 1,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const initialRuns = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const initialRun = initialRuns.find((entry) => entry.run.automationId === automationId)?.run;
+      if (!initialRun) {
+        assert.fail("Expected the first scheduled automation run.");
+      }
+      yield* reconcileAutomationRun({
+        service,
+        run: initialRun,
+        state: "error",
+        error: "failure at iteration cap",
+      });
+
+      const reenabled = yield* service.update({ id: automationId, enabled: true });
+      assert.isTrue(reenabled.enabled);
+      assert.strictEqual(reenabled.iterationCount, 0);
+      assert.strictEqual(reenabled.consecutiveFailureCount, 0);
+      assert.isNull(reenabled.disabledReason);
+      const nextRunAt = reenabled.nextRunAt;
+      if (nextRunAt === null) {
+        assert.fail("Expected the re-enabled automation to have a next run time.");
+      }
+
+      const resumedRuns = yield* service.runDueOnce({
+        now: nextRunAt,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const resumedRun = resumedRuns.find((entry) => entry.run.automationId === automationId)?.run;
+      assert.strictEqual(resumedRun?.status, "running");
+    }),
+  );
+
+  it.effect("does not restart an exhausted automation disabled by failures", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        maxIterations: 1,
+        stopAfterConsecutiveFailures: 1,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* reconcileAutomationRun({
+        service,
+        run,
+        state: "error",
+        error: "failure-disabled",
+      });
+
+      const rerunError = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+      const definition = (yield* service.list({ projectId })).definitions.find(
+        (entry) => entry.id === created.id,
+      );
+
+      assert.match(rerunError.message, /re-enable/i);
+      assert.isFalse(definition?.enabled ?? true);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(definition?.consecutiveFailureCount, 1);
+      assert.strictEqual(definition?.disabledReason, "failures");
+    }),
+  );
+
+  it.effect("requires re-enabling an unbounded automation disabled by failures", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        stopAfterConsecutiveFailures: 1,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* reconcileAutomationRun({
+        service,
+        run,
+        state: "error",
+        error: "failure-disabled",
+      });
+
+      const rerunError = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(rerunError.message, /re-enable/i);
+      assert.strictEqual(dispatchedCommands.length, 2);
+    }),
+  );
+
+  it.effect("keeps the failure auto-disable notice after a long error summary", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        stopAfterConsecutiveFailures: 1,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+
+      yield* reconcileAutomationRun({
+        service,
+        run,
+        state: "error",
+        error: "x".repeat(3_000),
+      });
+
+      const failedRun = (yield* service.list({ projectId })).runs.find(
+        (entry) => entry.id === run.id,
+      );
+      assert.isAtMost(failedRun?.result?.summary?.length ?? 0, 2_000);
+      assert.match(
+        failedRun?.result?.summary ?? "",
+        /Automation was stopped after 1 consecutive failed runs\.$/,
+      );
     }),
   );
 
@@ -4084,6 +4472,7 @@ layer("AutomationService", (it) => {
       yield* repository.disableDefinition({
         id: automationId,
         now: "2026-06-16T10:05:00.000Z",
+        reason: "user",
       });
     }),
   );
@@ -4662,8 +5051,8 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
-          // No stopOnError so the failure does not also disable the automation here.
-          stopOnError: false,
+          // No failure threshold so the failure does not also disable the automation here.
+          stopAfterConsecutiveFailures: null,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -4701,7 +5090,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: false,
+          stopAfterConsecutiveFailures: null,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -4739,7 +5128,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: false,
+          stopAfterConsecutiveFailures: null,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -4792,7 +5181,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: false,
+          stopAfterConsecutiveFailures: null,
         },
         now,
       });
@@ -4847,7 +5236,7 @@ layer("AutomationService", (it) => {
           mode: "heartbeat",
           targetThreadId,
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: false,
+          stopAfterConsecutiveFailures: null,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -4885,7 +5274,7 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("disables a stopOnError automation when dispatch fails", () =>
+  it.effect("disables at the configured failure threshold when dispatch fails", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -4897,7 +5286,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: true,
+          stopAfterConsecutiveFailures: 1,
         },
         now: "2026-06-16T10:00:00.000Z",
       });
@@ -4919,7 +5308,7 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("does not disable stopOnError when cancellation wins a dispatch failure race", () =>
+  it.effect("does not count a failure when cancellation wins a dispatch failure race", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -4931,7 +5320,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
-          stopOnError: true,
+          stopAfterConsecutiveFailures: 1,
         },
         now: "2026-06-16T10:00:00.000Z",
       });

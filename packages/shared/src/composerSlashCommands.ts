@@ -9,8 +9,8 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "compact",
   "model",
   "plan",
+  "debug",
   "default",
-  "blame-someone-else",
   "review",
   "fork",
   "side",
@@ -18,6 +18,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "subagents",
   "fast",
   "export",
+  "goal",
   "feedback",
   "automation",
 ] as const;

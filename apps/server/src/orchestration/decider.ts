@@ -4,6 +4,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationThread,
   ProjectKind,
+  ThreadGoalAchievement,
   ThreadMarker,
 } from "@synara/contracts";
 import {
@@ -12,6 +13,7 @@ import {
   PINNED_MESSAGES_MAX_COUNT,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
+  THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
   THREAD_MARKERS_MAX_COUNT,
   TurnId,
 } from "@synara/contracts";
@@ -31,6 +33,7 @@ import {
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
@@ -319,6 +322,81 @@ function resolveCreatedThreadWorkspaceMetadata(
         : {}),
     }),
   };
+}
+
+/**
+ * Stamps authoritative goal timestamps for `thread.meta.update`. `goalAchieved`
+ * takes precedence over everything: it records a ThreadGoalAchievement (with
+ * pause-adjusted elapsed time, anchored to the thread's latest turn) and clears
+ * the goal in the same event. A goal change takes precedence over `goalPaused`
+ * in the same command: a newly set goal starts the pursuit clock, an edit of an
+ * existing goal keeps the running clock and pause state, and clearing resets
+ * everything. Pause freezes the clock at `goalPausedAt`; resume rebases
+ * `goalStartedAt` so the paused span is excluded from the elapsed time.
+ */
+function resolveThreadGoalPatch(
+  command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
+  currentThread: OrchestrationThread,
+  occurredAt: string,
+): {
+  goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
+  goalAchievements?: readonly ThreadGoalAchievement[];
+} {
+  const activeGoal = (currentThread.goal ?? "").trim();
+  if (command.goalAchieved === true) {
+    if (activeGoal.length === 0) {
+      return {};
+    }
+    const startedMs = Date.parse(currentThread.goalStartedAt ?? "");
+    const pausedMs = Date.parse(currentThread.goalPausedAt ?? "");
+    const occurredMs = Date.parse(occurredAt);
+    const endMs = Number.isFinite(pausedMs) ? pausedMs : occurredMs;
+    const elapsedMs =
+      Number.isFinite(startedMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startedMs) : null;
+    const achievement: ThreadGoalAchievement = {
+      goal: activeGoal,
+      achievedAt: occurredAt,
+      elapsedMs,
+      turnId: currentThread.latestTurn?.turnId ?? null,
+    };
+    return {
+      goal: "",
+      goalStartedAt: null,
+      goalPausedAt: null,
+      goalAchievements: [...(currentThread.goalAchievements ?? []), achievement].slice(
+        -THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
+      ),
+    };
+  }
+  if (command.goal !== undefined) {
+    if (command.goal.trim().length === 0) {
+      return { goal: command.goal, goalStartedAt: null, goalPausedAt: null };
+    }
+    if (activeGoal.length > 0) {
+      return { goal: command.goal };
+    }
+    return { goal: command.goal, goalStartedAt: occurredAt, goalPausedAt: null };
+  }
+  if (command.goalPaused === undefined || activeGoal.length === 0) {
+    return {};
+  }
+  const pausedAt = currentThread.goalPausedAt ?? null;
+  if (command.goalPaused) {
+    return pausedAt === null ? { goalPausedAt: occurredAt } : {};
+  }
+  if (pausedAt === null) {
+    return {};
+  }
+  const startedMs = Date.parse(currentThread.goalStartedAt ?? "");
+  const pausedMs = Date.parse(pausedAt);
+  const occurredMs = Date.parse(occurredAt);
+  const rebasedStartedAt =
+    Number.isFinite(startedMs) && Number.isFinite(pausedMs) && Number.isFinite(occurredMs)
+      ? new Date(occurredMs - Math.max(0, pausedMs - startedMs)).toISOString()
+      : occurredAt;
+  return { goalStartedAt: rebasedStartedAt, goalPausedAt: null };
 }
 
 function resolveThreadWorkspaceMetadataPatch(
@@ -1074,7 +1152,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
-          title: command.title,
+          title: command.sidechatSourceThreadId
+            ? command.title
+            : buildForkThreadTitle(
+                sourceThread,
+                listThreadsByProjectId(readModel, command.projectId),
+              ),
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
@@ -1262,6 +1345,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { pinnedMessages: command.pinnedMessages }
             : {}),
           ...(command.notes !== undefined ? { notes: command.notes } : {}),
+          ...resolveThreadGoalPatch(command, thread, occurredAt),
           updatedAt: occurredAt,
         },
       };
@@ -2164,6 +2248,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
+          ...(command.segmentStartedAt ? { segmentStartedAt: command.segmentStartedAt } : {}),
+          ...(command.segmentSequence !== undefined
+            ? { segmentSequence: command.segmentSequence }
+            : {}),
           turnId: resolveStableMessageTurnId({
             existingTurnId: existingMessage?.turnId,
             incomingTurnId: command.turnId,

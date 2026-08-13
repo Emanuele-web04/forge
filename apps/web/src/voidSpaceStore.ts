@@ -1,7 +1,7 @@
 // FILE: voidSpaceStore.ts
 // Purpose: Persists what the user calls the group of projects that are in no Space.
 // Layer: Web UI state
-// Why: "Void" is Forkara's word for "not filed yet", and it is the one Space label a user
+// Why: "Void" is Synara's word for "not filed yet", and it is the one Space label a user
 //      cannot rename through the orchestration commands — there is no row behind it. Most
 //      installs leave every project there, so the sidebar's loudest label is also its least
 //      meaningful one (and untranslatable). This keeps a per-install name and icon for it.

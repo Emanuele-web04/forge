@@ -13,25 +13,16 @@ import { type ComposerSlashCommand } from "../../composerSlashCommands";
 import {
   BotIcon,
   BrainIcon,
-  BugIcon,
   ChangesIcon,
-  ClockIcon,
   DeviceLaptopIcon,
-  EraserIcon,
-  FastModeIcon,
   GitBranchIcon,
-  GitForkIcon,
-  InfoIcon,
-  ListTodoIcon,
   type LucideIcon,
-  MessageCircleIcon,
-  Minimize2,
   PluginIcon,
   SkillCubeIcon,
-  TemporaryThreadIcon,
   TerminalIcon,
   WorktreeIcon,
 } from "~/lib/icons";
+import { slashCommandIcon } from "~/lib/slashCommandIcons";
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
 import {
@@ -72,6 +63,8 @@ function commandMenuTitle(
       return "Fast Mode";
     case "plan":
       return "Plan Mode";
+    case "debug":
+      return "Debug Mode";
     case "default":
       return "Default Mode";
     case "review":
@@ -85,7 +78,7 @@ function commandMenuTitle(
     case "subagents":
       return "Subagents";
     case "feedback":
-      return "Feedback Forkara";
+      return "Feedback Synara";
     default:
       return humanizeProviderCommandName(item.command);
   }
@@ -444,27 +437,8 @@ const COMPOSER_COMMAND_ITEM_FILE_ICON_CLASSNAME =
 
 const COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME = "size-3.5";
 
-// Reuse the app's existing icon components for each concept so the command menu
-// stays coherent with how plan/fork/review/model/etc. appear everywhere else.
-// Don't introduce bespoke glyphs here — map to the shared `~/lib/icons` exports.
-const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
-  clear: EraserIcon,
-  compact: Minimize2,
-  model: BrainIcon,
-  fast: FastModeIcon,
-  plan: ListTodoIcon,
-  default: MessageCircleIcon,
-  review: BugIcon,
-  fork: GitForkIcon,
-  side: TemporaryThreadIcon,
-  status: InfoIcon,
-  subagents: BotIcon,
-  feedback: BugIcon,
-  automation: ClockIcon,
-};
-
 function commandMenuSlashGlyph(command: string, fallback: LucideIcon): ReactNode {
-  const Icon = SLASH_COMMAND_ICONS[command] ?? fallback;
+  const Icon = slashCommandIcon(command, fallback);
   return <Icon className={COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME} />;
 }
 

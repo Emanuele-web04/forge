@@ -62,7 +62,7 @@ describe("normalizeCompactToolLabel", () => {
 });
 
 describe("deriveSynaraMcpToolTitle", () => {
-  it("uses stable action-first names for Forkara browser tools", () => {
+  it("uses stable action-first names for Synara browser tools", () => {
     for (const status of ["running", "completed", "failed"] as const) {
       expect(
         deriveSynaraMcpToolTitle({
@@ -74,78 +74,70 @@ describe("deriveSynaraMcpToolTitle", () => {
 
     expect(
       deriveSynaraMcpToolTitle({
-        title: "Forkara: Browser Snapshot",
+        title: "Synara: Browser Snapshot",
         status: "completed",
       }),
     ).toBe("Snapshot browser page");
   });
 
-  it("has intentional running and completed copy for every Forkara gateway action", () => {
+  it("has intentional running and completed copy for every Synara gateway action", () => {
     const cases = [
-      ["synara_context", "Forkara is checking its context", "Forkara checked its context"],
+      ["synara_context", "Synara is checking its context", "Synara checked its context"],
       [
         "synara_capabilities",
-        "Forkara is checking available agents",
-        "Forkara checked available agents",
+        "Synara is checking available agents",
+        "Synara checked available agents",
       ],
-      ["synara_list_projects", "Forkara is listing projects", "Forkara listed projects"],
-      ["synara_list_threads", "Forkara is listing threads", "Forkara listed threads"],
-      ["synara_read_thread", "Forkara is reading a thread", "Forkara read a thread"],
+      ["synara_list_projects", "Synara is listing projects", "Synara listed projects"],
+      ["synara_list_threads", "Synara is listing threads", "Synara listed threads"],
+      ["synara_read_thread", "Synara is reading a thread", "Synara read a thread"],
       [
         "synara_read_thread_activity",
-        "Forkara is reading thread activity",
-        "Forkara read thread activity",
+        "Synara is reading thread activity",
+        "Synara read thread activity",
       ],
-      [
-        "synara_read_thread_events",
-        "Forkara is reading thread events",
-        "Forkara read thread events",
-      ],
+      ["synara_read_thread_events", "Synara is reading thread events", "Synara read thread events"],
       [
         "synara_read_thread_runtime_events",
-        "Forkara is reading thread runtime events",
-        "Forkara read thread runtime events",
+        "Synara is reading thread runtime events",
+        "Synara read thread runtime events",
       ],
-      ["synara_diagnose_thread", "Forkara is diagnosing a thread", "Forkara diagnosed a thread"],
-      ["synara_create_thread", "Forkara is creating a thread", "Forkara created a thread"],
-      ["synara_create_threads", "Forkara is creating threads", "Forkara created threads"],
+      ["synara_diagnose_thread", "Synara is diagnosing a thread", "Synara diagnosed a thread"],
+      ["synara_create_thread", "Synara is creating a thread", "Synara created a thread"],
+      ["synara_create_threads", "Synara is creating threads", "Synara created threads"],
       [
         "synara_wait_for_threads",
-        "Forkara is waiting for threads",
-        "Forkara finished waiting for threads",
+        "Synara is waiting for threads",
+        "Synara finished waiting for threads",
       ],
-      ["synara_send_message", "Forkara is sending a message", "Forkara sent a message"],
-      [
-        "synara_interrupt_thread",
-        "Forkara is interrupting a thread",
-        "Forkara interrupted a thread",
-      ],
-      ["synara_set_thread_title", "Forkara is renaming a thread", "Forkara renamed a thread"],
-      ["synara_set_thread_archived", "Forkara is updating a thread", "Forkara updated a thread"],
+      ["synara_send_message", "Synara is sending a message", "Synara sent a message"],
+      ["synara_interrupt_thread", "Synara is interrupting a thread", "Synara interrupted a thread"],
+      ["synara_set_thread_title", "Synara is renaming a thread", "Synara renamed a thread"],
+      ["synara_set_thread_archived", "Synara is updating a thread", "Synara updated a thread"],
       [
         "synara_create_automation",
-        "Forkara is creating an automation",
-        "Forkara created an automation",
+        "Synara is creating an automation",
+        "Synara created an automation",
       ],
-      ["synara_list_automations", "Forkara is listing automations", "Forkara listed automations"],
+      ["synara_list_automations", "Synara is listing automations", "Synara listed automations"],
       [
         "synara_cancel_automation",
-        "Forkara is stopping an automation",
-        "Forkara stopped an automation",
+        "Synara is stopping an automation",
+        "Synara stopped an automation",
       ],
-      ["synara_overview", "Forkara is gathering an overview", "Forkara gathered an overview"],
+      ["synara_overview", "Synara is gathering an overview", "Synara gathered an overview"],
       [
         "synara_list_allowed_projects",
-        "Forkara is listing allowed projects",
-        "Forkara listed allowed projects",
+        "Synara is listing allowed projects",
+        "Synara listed allowed projects",
       ],
-      ["synara_create_task", "Forkara is creating a task", "Forkara created a task"],
+      ["synara_create_task", "Synara is creating a task", "Synara created a task"],
       [
         "synara_wait_for_task",
-        "Forkara is waiting for a task",
-        "Forkara finished waiting for a task",
+        "Synara is waiting for a task",
+        "Synara finished waiting for a task",
       ],
-      ["synara_read_task", "Forkara is reading a task", "Forkara read a task"],
+      ["synara_read_task", "Synara is reading a task", "Synara read a task"],
     ] as const;
 
     for (const [toolName, running, completed] of cases) {
@@ -158,13 +150,13 @@ describe("deriveSynaraMcpToolTitle", () => {
         toolName: "synara_create_threads",
         status: "failed",
       }),
-    ).toBe("Forkara couldn't create threads");
+    ).toBe("Synara couldn't create threads");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "synara_create_thread",
         status: "cancelled",
       }),
-    ).toBe("Forkara stopped creating a thread");
+    ).toBe("Synara stopped creating a thread");
   });
 
   it("turns provider-specific create-thread identifiers into activity sentences", () => {
@@ -173,22 +165,22 @@ describe("deriveSynaraMcpToolTitle", () => {
         toolName: "Synara__synara_create_thread",
         status: "running",
       }),
-    ).toBe("Forkara is creating a thread");
+    ).toBe("Synara is creating a thread");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "mcp__synara__synara_create_thread",
         status: "completed",
       }),
-    ).toBe("Forkara created a thread");
+    ).toBe("Synara created a thread");
   });
 
-  it("recognizes bare and already-humanized Forkara tool names", () => {
+  it("recognizes bare and already-humanized Synara tool names", () => {
     expect(deriveSynaraMcpToolTitle({ toolName: "synara_send_message", status: "running" })).toBe(
-      "Forkara is sending a message",
+      "Synara is sending a message",
     );
     expect(
-      deriveSynaraMcpToolTitle({ title: "Forkara: Forkara List Threads", status: "completed" }),
-    ).toBe("Forkara listed threads");
+      deriveSynaraMcpToolTitle({ title: "Synara: Synara List Threads", status: "completed" }),
+    ).toBe("Synara listed threads");
   });
 
   it("ignores tools from other MCP servers", () => {
@@ -200,75 +192,75 @@ describe("deriveSynaraMcpToolTitle", () => {
     ).toBeNull();
   });
 
-  it("keeps future Forkara actions branded without exposing raw identifiers", () => {
+  it("keeps future Synara actions branded without exposing raw identifiers", () => {
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "mcp__synara__synara_delete_project",
         status: "running",
       }),
-    ).toBe("Forkara is handling delete project");
+    ).toBe("Synara is handling delete project");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "Synara__synara_delete_project",
         status: "completed",
       }),
-    ).toBe("Forkara handled delete project");
+    ).toBe("Synara handled delete project");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "synara_is_handling_delete_project",
         status: "completed",
       }),
-    ).toBe("Forkara handled delete project");
+    ).toBe("Synara handled delete project");
   });
 
   it("does not reinterpret free text beginning with fallback status copy", () => {
     expect(
       deriveSynaraMcpToolTitle({
-        title: "Forkara is handling delete project after recovery",
+        title: "Synara is handling delete project after recovery",
         status: "completed",
       }),
     ).toBeNull();
     expect(
       deriveSynaraMcpToolTitle({
-        title: "Forkara handled delete project after recovery",
+        title: "Synara handled delete project after recovery",
         status: "running",
       }),
     ).toBeNull();
     expect(
       deriveSynaraMcpToolTitle({
-        title: "Forkara couldn't handle delete project after recovery",
+        title: "Synara couldn't handle delete project after recovery",
         status: "failed",
       }),
     ).toBeNull();
   });
 
-  it("leaves free-text activity summaries starting with Forkara untouched", () => {
+  it("leaves free-text activity summaries starting with Synara untouched", () => {
     expect(
       deriveSynaraMcpToolTitle({
-        title: "Forkara recovered a stale running state",
+        title: "Synara recovered a stale running state",
         status: "completed",
       }),
     ).toBeNull();
     expect(
       deriveSynaraMcpToolTitle({
-        fallbackLabel: "Forkara restarted the provider session",
+        fallbackLabel: "Synara restarted the provider session",
         status: "running",
       }),
     ).toBeNull();
   });
 
-  it("removes transport identifiers without hiding meaningful Forkara details", () => {
+  it("removes transport identifiers without hiding meaningful Synara details", () => {
     expect(
       sanitizeSynaraMcpToolPreview({
         preview: "Synara__synara_create_threads",
-        heading: "Forkara created threads",
+        heading: "Synara created threads",
         status: "completed",
       }),
     ).toBeNull();
     expect(
       sanitizeSynaraMcpToolPreview({
         preview: 'Unexpected key "reasoningEffort" for Claude Agent',
-        heading: "Forkara couldn't create threads",
+        heading: "Synara couldn't create threads",
         status: "failed",
       }),
     ).toBe('Unexpected key "reasoningEffort" for Claude Agent');
@@ -279,7 +271,7 @@ describe("isSynaraBrowserToolCall", () => {
   it("recognizes canonical presentation titles without a tool identifier", () => {
     expect(isSynaraBrowserToolCall({ title: "Open browser tab" })).toBe(true);
     expect(isSynaraBrowserToolCall({ fallbackLabel: "Snapshot browser page" })).toBe(true);
-    expect(isSynaraBrowserToolCall({ title: "Forkara listed threads" })).toBe(false);
+    expect(isSynaraBrowserToolCall({ title: "Synara listed threads" })).toBe(false);
   });
 });
 

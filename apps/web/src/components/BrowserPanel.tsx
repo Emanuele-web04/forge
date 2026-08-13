@@ -48,7 +48,7 @@ import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
 import { NATIVE_SURFACE_OCCLUSION_SYNC_EVENT } from "~/lib/nativeSurfaceOcclusion";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
-import { cn, isMacPlatform } from "~/lib/utils";
+import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 
 import {
   useBrowserStateStore,
@@ -96,7 +96,7 @@ const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 30;
 const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
 const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
-const SYNARA_BROWSER_LABEL = "Forkara browser";
+const SYNARA_BROWSER_LABEL = "Synara browser";
 const browserPanelHideScheduler = createBrowserPanelHideScheduler();
 // The address field and tab pills share one chrome-control surface so the whole row reads
 // as a single cohesive control: matching height, radius, border width, and type scale.
@@ -1468,7 +1468,7 @@ export function BrowserPanel({
           alt: event.altKey,
           key: event.key,
         },
-        isMacPlatform(navigator.platform),
+        isMacNavigatorPlatform(),
       );
       if (!matches) {
         return;

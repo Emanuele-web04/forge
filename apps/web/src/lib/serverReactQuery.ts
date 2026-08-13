@@ -49,12 +49,17 @@ export function serverConfigQueryOptions() {
 interface ProviderStatusSnapshot {
   readonly revision: number;
   readonly providers: readonly ServerProviderStatus[];
+  readonly reconciled: boolean;
 }
 
 const latestProviderStatusSnapshotByQueryClient = new WeakMap<
   QueryClient,
   ProviderStatusSnapshot
 >();
+
+export function hasReconciledServerProviderStatuses(queryClient: QueryClient): boolean {
+  return latestProviderStatusSnapshotByQueryClient.get(queryClient)?.reconciled === true;
+}
 
 function recordProviderStatusSnapshot(
   queryClient: QueryClient,
@@ -63,6 +68,7 @@ function recordProviderStatusSnapshot(
   const snapshot = {
     revision: (latestProviderStatusSnapshotByQueryClient.get(queryClient)?.revision ?? 0) + 1,
     providers,
+    reconciled: true,
   };
   latestProviderStatusSnapshotByQueryClient.set(queryClient, snapshot);
   return snapshot;
@@ -116,8 +122,13 @@ export async function refreshServerConfigAfterTransportOpen(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
-  const providerRevisionAtStart =
-    latestProviderStatusSnapshotByQueryClient.get(queryClient)?.revision ?? 0;
+  const providerSnapshotAtStart = latestProviderStatusSnapshotByQueryClient.get(queryClient);
+  const providerRevisionAtStart = providerSnapshotAtStart?.revision ?? 0;
+  latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+    revision: providerRevisionAtStart,
+    providers: providerSnapshotAtStart?.providers ?? [],
+    reconciled: false,
+  });
   const loadConfig =
     options?.loadConfig ??
     (() =>
@@ -130,7 +141,8 @@ export async function refreshServerConfigAfterTransportOpen(
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), {
     ...config,
     providers:
-      latestProviderSnapshot && latestProviderSnapshot.revision > providerRevisionAtStart
+      latestProviderSnapshot?.reconciled === true &&
+      latestProviderSnapshot.revision > providerRevisionAtStart
         ? latestProviderSnapshot.providers
         : config.providers,
   });
@@ -215,7 +227,7 @@ export function serverLocalServersQueryOptions(
 }
 
 // Sidebar project badges need a snapshot, but idle Home should not keep shelling out
-// through lsof/ps; active Forkara-owned runs still poll for responsive status.
+// through lsof/ps; active Synara-owned runs still poll for responsive status.
 export function sidebarLocalServersQueryOptions(input: {
   hasActiveProjectRun: boolean;
   hasProjects: boolean;
@@ -296,7 +308,7 @@ export async function fetchAllProviderUsage(input: ServerListProviderUsageInput 
 }
 
 // Local profile + shareable-card core statistics. The client passes its own fixed
-// UTC offset; all metrics are computed from Forkara's local DB projections.
+// UTC offset; all metrics are computed from Synara's local DB projections.
 export function serverProfileStatsQueryOptions(input: { enabled?: boolean } = {}) {
   const utcOffsetMinutes = -new Date().getTimezoneOffset();
   return queryOptions({

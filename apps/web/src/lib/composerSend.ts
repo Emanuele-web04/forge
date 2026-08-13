@@ -129,7 +129,7 @@ export async function prepareComposerImageAttachmentsFromFiles(input: {
       error =
         cause instanceof ComposerImagePreparationError
           ? cause.message
-          : `Forkara could not prepare '${file.name || "image"}'.`;
+          : `Synara could not prepare '${file.name || "image"}'.`;
     }
   }
 

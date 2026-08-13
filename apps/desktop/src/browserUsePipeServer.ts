@@ -426,7 +426,7 @@ export class BrowserHostPipeServer {
     }
     client.sessionId = sessionId;
     return {
-      name: "Forkara Browser Host",
+      name: "Synara Browser Host",
       version: "1.0.0",
       type: "synara-browser-host",
       metadata: {

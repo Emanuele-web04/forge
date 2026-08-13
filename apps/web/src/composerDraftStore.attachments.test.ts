@@ -551,7 +551,7 @@ describe("composerDraftStore prompt history saved draft", () => {
       captureId,
       capturedAt: "2026-07-14T08:00:00.000Z",
       appName: "Safari",
-      windowTitle: "Forkara",
+      windowTitle: "Synara",
     };
     const staleLiveImage = {
       ...makeImage({ id: "appsnap-stale-live", previewUrl: "blob:appsnap-stale-live" }),
@@ -720,7 +720,7 @@ describe("composerDraftStore copyTransferableComposerState", () => {
         captureId: "capture-shared",
         capturedAt: "2026-07-12T20:00:00.000Z",
         appName: "Safari",
-        windowTitle: "Forkara",
+        windowTitle: "Synara",
       },
     };
     const store = useComposerDraftStore.getState();
@@ -1139,7 +1139,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
       appName: "Safari",
       bundleIdentifier: null,
       appIconDataUrl: null,
-      windowTitle: "Forkara",
+      windowTitle: "Synara",
     };
     const mergedState = persistApi.getOptions().merge(
       {
@@ -1194,7 +1194,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
                 appName: "Safari",
                 bundleIdentifier: "com.apple.Safari",
                 appIconDataUrl: "data:image/png;base64,aWNvbg==",
-                windowTitle: "Forkara",
+                windowTitle: "Synara",
               },
             },
           ],

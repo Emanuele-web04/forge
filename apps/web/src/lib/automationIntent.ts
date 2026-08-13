@@ -1,5 +1,5 @@
 // FILE: automationIntent.ts
-// Purpose: Detects when a normal chat prompt is actually asking Forkara to create an automation.
+// Purpose: Detects when a normal chat prompt is actually asking Synara to create an automation.
 // Layer: Web composer helper
 // Exports: automation intent parsers, resolver, and cadence/name formatters.
 // Depends on: AutomationSchedule contract shared with the automation API.

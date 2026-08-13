@@ -191,7 +191,7 @@ async function resolveDesktopVoiceAuth(
         params: {
           clientInfo: {
             name: "synara-desktop",
-            title: "Forkara Desktop",
+            title: "Synara Desktop",
             version: app.getVersion(),
           },
           capabilities: { experimentalApi: true },

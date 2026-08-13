@@ -1,5 +1,5 @@
 // FILE: CrossTaskOriginLabel.tsx
-// Purpose: Identify the source thread for conversations created by another Forkara agent.
+// Purpose: Identify the source thread for conversations created by another Synara agent.
 // Layer: Chat transcript UI
 
 import { type ProviderKind, type ThreadId } from "@synara/contracts";
@@ -14,15 +14,15 @@ export interface CrossTaskOrigin {
 }
 
 // A single, app-level attribution: the message reached this thread from another
-// Forkara thread, so it always reads as "Sent by Forkara" with the Forkara mark
+// Synara thread, so it always reads as "Sent by Synara" with the Synara mark
 // (the origin provider is not surfaced here to keep one consistent label).
 function OriginContent(): ReactNode {
   return (
     <>
       <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground/70">
-        <SynaraLogo className="h-4 w-auto" aria-label="Forkara" />
+        <SynaraLogo className="h-4 w-auto" aria-label="Synara" />
       </span>
-      <span className="truncate">Sent by Forkara from another thread</span>
+      <span className="truncate">Sent by Synara from another thread</span>
     </>
   );
 }

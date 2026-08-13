@@ -3,6 +3,7 @@
 // Exports: Selector factories used by routes and sidebar-heavy components.
 
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
+import { isAutomationRunThread } from "@synara/shared/automationMode";
 
 import type { AppState } from "./storeState";
 import { resolveThreadDisplayProvider } from "./lib/threadDisplayProvider";
@@ -290,9 +291,28 @@ export function createComposerThreadMentionSourcesSelector(): (
   };
 }
 
-export function createSidebarDisplayThreadsSelector(): (
-  state: AppState,
-) => readonly SidebarThreadSummary[] {
+export interface SidebarThreadVisibilityOptions {
+  /** Drop the per-run threads standalone automations create (pinned ones stay). */
+  readonly hideAutomationRunThreads?: boolean;
+}
+
+/**
+ * Whether a thread row belongs in user-facing thread lists (sidebar tree, Kanban,
+ * project picker). Housekeeping consumers that must see every thread (retention,
+ * spaces controller, search) read the unfiltered summaries selector instead.
+ */
+export function isSidebarThreadVisible(
+  thread: SidebarThreadSummary,
+  options?: SidebarThreadVisibilityOptions,
+): boolean {
+  if (!options?.hideAutomationRunThreads) return true;
+  if (thread.isPinned) return true;
+  return !isAutomationRunThread(thread);
+}
+
+export function createSidebarDisplayThreadsSelector(
+  options?: SidebarThreadVisibilityOptions,
+): (state: AppState) => readonly SidebarThreadSummary[] {
   const selectSidebarSummaries = createSidebarThreadSummariesSelector();
   let previousSummaries: readonly SidebarThreadSummary[] | undefined;
   let previousDisplaySummaries: readonly SidebarThreadSummary[] = [];
@@ -305,7 +325,10 @@ export function createSidebarDisplayThreadsSelector(): (
 
     previousSummaries = sidebarSummaries;
     previousDisplaySummaries = sidebarSummaries.filter(
-      (thread) => !thread.parentThreadId && thread.archivedAt == null,
+      (thread) =>
+        !thread.parentThreadId &&
+        thread.archivedAt == null &&
+        isSidebarThreadVisible(thread, options),
     );
     return previousDisplaySummaries;
   };
@@ -315,9 +338,9 @@ export function createSidebarDisplayThreadsSelector(): (
 // child (subagent) threads so buildProjectThreadTree can nest them under
 // their parent row behind the "N subagents" expand toggle. Flat consumers
 // (pinned rows, search palette) should keep using the display selector.
-export function createSidebarTreeThreadsSelector(): (
-  state: AppState,
-) => readonly SidebarThreadSummary[] {
+export function createSidebarTreeThreadsSelector(
+  options?: SidebarThreadVisibilityOptions,
+): (state: AppState) => readonly SidebarThreadSummary[] {
   const selectSidebarSummaries = createSidebarThreadSummariesSelector();
   let previousSummaries: readonly SidebarThreadSummary[] | undefined;
   let previousTreeSummaries: readonly SidebarThreadSummary[] = [];
@@ -329,7 +352,9 @@ export function createSidebarTreeThreadsSelector(): (
     }
 
     previousSummaries = sidebarSummaries;
-    previousTreeSummaries = sidebarSummaries.filter((thread) => thread.archivedAt == null);
+    previousTreeSummaries = sidebarSummaries.filter(
+      (thread) => thread.archivedAt == null && isSidebarThreadVisible(thread, options),
+    );
     return previousTreeSummaries;
   };
 }

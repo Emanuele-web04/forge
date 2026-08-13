@@ -36,6 +36,7 @@ import {
   type CanonicalRequestType,
   EventId,
   type ProviderApprovalDecision,
+  type ProviderInteractionMode,
   ProviderItemId,
   type ProviderRuntimeEvent,
   type ProviderRuntimeTurnStatus,
@@ -192,7 +193,7 @@ interface ClaudeResumeState {
 interface ClaudeTurnState {
   readonly turnId: TurnId;
   readonly startedAt: string;
-  readonly interactionMode: "default" | "plan";
+  readonly interactionMode: ProviderInteractionMode;
   // True for auto-started turns that wrap assistant output arriving without an
   // active turn (background agent/subagent responses between user prompts).
   // Synthetic turns are never steered: a sendTurn auto-closes them, and a
@@ -328,7 +329,7 @@ interface ClaudeSessionContext {
   // longer prove the CLI's mode, so every turn re-sends `setPermissionMode`
   // unconditionally.
   firstTurnSpawnModeAuthoritative: boolean;
-  lastInteractionMode: "default" | "plan" | undefined;
+  lastInteractionMode: ProviderInteractionMode | undefined;
   currentApiModelId: string | undefined;
   resumeSessionId: string | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
@@ -559,6 +560,10 @@ export interface ClaudeAdapterLiveOptions {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }) => ClaudeQueryRuntime | Promise<ClaudeQueryRuntime>;
+  readonly forkNativeSession?: (
+    sessionId: string,
+    options?: { readonly dir?: string; readonly upToMessageId?: string },
+  ) => Promise<{ sessionId: string }>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   // Interval for polling a live workflow's transcript directory. Tests shrink it.
@@ -1754,6 +1759,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       }
       const { query } = await loadClaudeAgentSdk();
       return query({ prompt: input.prompt, options: input.options }) as ClaudeQueryRuntime;
+    };
+    const forkNativeSession = async (
+      sessionId: string,
+      forkOptions?: { readonly dir?: string; readonly upToMessageId?: string },
+    ): Promise<{ sessionId: string }> => {
+      const override = options?.forkNativeSession;
+      if (override) {
+        return override(sessionId, forkOptions);
+      }
+      const { forkSession } = await loadClaudeAgentSdk();
+      return forkSession(sessionId, forkOptions);
     };
     const spawnClaudeProcess = options?.spawnClaudeCodeProcess ?? spawnOwnedClaudeCodeProcess;
     const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
@@ -5474,7 +5490,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       context: ClaudeSessionContext,
       threadId: ThreadId,
       interactionMode: ProviderSendTurnInput["interactionMode"],
-    ): Effect.Effect<"default" | "plan", ProviderAdapterError> =>
+    ): Effect.Effect<ProviderInteractionMode, ProviderAdapterError> =>
       Effect.gen(function* () {
         const effectiveInteractionMode = interactionMode ?? "default";
         const desiredPermissionMode: PermissionMode | undefined =
@@ -5918,6 +5934,59 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }),
       );
 
+    const forkThread: NonNullable<ClaudeAdapterShape["forkThread"]> = (input) =>
+      Effect.gen(function* () {
+        // Prefer the live session's cursor: the persisted binding may lag the
+        // runtime by a turn.
+        const liveSource = sessions.get(input.sourceThreadId);
+        // Mid-turn `lastAssistantUuid` can point at a tool_use without its
+        // result yet, so a fork now would cut the transcript in an incomplete
+        // state. Let the retained-transcript fallback handle busy sources.
+        if (liveSource?.turnState !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue:
+              "The source Claude session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
+          });
+        }
+        const sourceState = readClaudeResumeState(input.sourceResumeCursor);
+        const sourceSessionId = liveSource?.resumeSessionId ?? sourceState?.resume;
+        if (!sourceSessionId) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue: "The source Claude session has no resumable native cursor.",
+          });
+        }
+        const upToMessageId = liveSource?.lastAssistantUuid ?? sourceState?.resumeSessionAt;
+        const sourceCwd = liveSource?.session.cwd ?? input.sourceCwd;
+        const forked = yield* Effect.tryPromise({
+          try: () =>
+            forkNativeSession(sourceSessionId, {
+              ...(sourceCwd ? { dir: sourceCwd } : {}),
+              ...(upToMessageId ? { upToMessageId } : {}),
+            }),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/fork",
+              detail: toMessage(cause, "Failed to fork the Claude session transcript."),
+              cause,
+            }),
+        });
+        // The SDK fork remaps every message uuid, so the source's resume pin
+        // (`resumeSessionAt`) and tracked tasks must not carry into the fork.
+        // A live context restarts `turns` at [] on resume, so its length can
+        // undercount the cumulative persisted total — keep the larger of the two.
+        const resumeCursor = {
+          threadId: input.threadId,
+          resume: forked.sessionId,
+          turnCount: Math.max(liveSource?.turns.length ?? 0, sourceState?.turnCount ?? 0),
+        };
+        return { threadId: input.threadId, resumeCursor };
+      });
+
     const respondToRequest: ClaudeAdapterShape["respondToRequest"] = (
       threadId,
       requestId,
@@ -6314,6 +6383,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       steerSubagent,
       readThread,
       rollbackThread,
+      forkThread,
       respondToRequest,
       respondToUserInput,
       stopSession,

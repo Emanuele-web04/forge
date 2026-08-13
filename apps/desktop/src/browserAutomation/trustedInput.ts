@@ -19,7 +19,7 @@ export interface TrustedClickOptions {
 
 interface IsolatedKeyboardInputEvent extends KeyboardInputEvent {
   /** Chromium's NativeWebKeyboardEvent escape hatch: never bubble an
-   * unhandled guest key into Forkara's renderer or application menu. */
+   * unhandled guest key into Synara's renderer or application menu. */
   readonly skipIfUnhandled: true;
 }
 
@@ -401,7 +401,7 @@ export const dispatchTrustedText = async (
   throwIfAborted(signal);
   if (text.length === 0) return;
   // Electron's CDP Input.insertText can follow the embedder's native focus and
-  // type into Forkara's composer when a <webview> guest is visible but the user
+  // type into Synara's composer when a <webview> guest is visible but the user
   // last focused the shell. WebContents.insertText is explicitly bound to this
   // adopted guest, preserving trusted editing semantics without crossing the
   // browser boundary.

@@ -284,11 +284,11 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
   return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
 }
 
-// Forkara's own agent-gateway tools (synara_list_threads, synara_create_thread,
-// ...) get the Forkara mark instead of the generic MCP glyph. Providers report
+// Synara's own agent-gateway tools (synara_list_threads, synara_create_thread,
+// ...) get the Synara mark instead of the generic MCP glyph. Providers report
 // the call differently: Claude prefixes the MCP server (mcp__synara__*), ACP
 // agents surface the bare tool name (synara_*), and Codex reports server/tool
-// pairs that the label humanizer renders as "Forkara: ...".
+// pairs that the label humanizer renders as "Synara: ...".
 function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus {
   if (workEntry.toolStatus) return workEntry.toolStatus;
   return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
@@ -350,6 +350,12 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  // Task progress is semantic copy, not a tool lifecycle status. Preserve the
+  // trailing "completed" instead of passing it through the compact tool-label
+  // normalizer, which intentionally strips lifecycle suffixes.
+  if (workEntry.activityKind === "turn.tasks.updated") {
+    return capitalizePhrase(workEntry.label);
+  }
   const synaraTitle = deriveSynaraMcpToolTitle({
     toolName: workEntry.toolName,
     title: workEntry.toolTitle,

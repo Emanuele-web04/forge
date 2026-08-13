@@ -36,7 +36,7 @@ import { SettingResetButton } from "./SettingControls";
 import { SettingsCard, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 function appSnapStatusText(state: DesktopAppSnapState | null): string {
-  if (!state) return "Available in the Forkara desktop app";
+  if (!state) return "Available in the Synara desktop app";
   if (!state.supported) return state.message ?? "Available on macOS only";
   if (state.status === "ready") {
     const shortcut = state.shortcut;
@@ -266,7 +266,7 @@ export function AppSnapSettingsPanel({
       toastManager.add({
         type: "warning",
         title: "AppSnap unavailable",
-        description: "AppSnap requires the Forkara desktop app on macOS.",
+        description: "AppSnap requires the Synara desktop app on macOS.",
       });
       return;
     }
@@ -336,7 +336,7 @@ export function AppSnapSettingsPanel({
             Take an AppSnap to show your agent another app's window
           </p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            Press your two-key shortcut while any app is frontmost. Forkara captures that window as
+            Press your two-key shortcut while any app is frontmost. Synara captures that window as
             an image, brings itself forward, and attaches the snap to a task composer — the capture
             stays on this device until you send the message.
           </p>
@@ -344,7 +344,7 @@ export function AppSnapSettingsPanel({
             <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "pt-0.5")}>
               {appSnapState
                 ? (appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
-                : "AppSnap requires the Forkara desktop app on macOS."}
+                : "AppSnap requires the Synara desktop app on macOS."}
             </p>
           ) : null}
         </div>
@@ -353,7 +353,7 @@ export function AppSnapSettingsPanel({
       <SettingsSection title="Capture">
         <SettingsRow
           title="Enable AppSnap"
-          description="Run the capture listener in the background while Forkara is open."
+          description="Run the capture listener in the background while Synara is open."
           status={appSnapStatusText(appSnapState)}
           resetAction={
             settings.enableAppSnap !== defaults.enableAppSnap ? (
@@ -375,7 +375,7 @@ export function AppSnapSettingsPanel({
 
         <SettingsRow
           title="Shortcut"
-          description="Choose exactly two keys: one modifier and one other key. Forkara checks its own bindings and asks macOS whether another app already owns the shortcut before saving it."
+          description="Choose exactly two keys: one modifier and one other key. Synara checks its own bindings and asks macOS whether another app already owns the shortcut before saving it."
           control={
             <AppSnapShortcutControl
               key={
@@ -397,7 +397,7 @@ export function AppSnapSettingsPanel({
 
         <SettingsRow
           title="Destination"
-          description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Forkara opens a fresh task with the capture attached."
+          description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
           control={<span className="text-xs font-medium text-muted-foreground">Automatic</span>}
         />
 
@@ -433,17 +433,17 @@ export function AppSnapSettingsPanel({
         <SettingsSection title="macOS permissions">
           <SettingsRow
             title="Input Monitoring"
-            description="Lets Forkara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
+            description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
             control={<AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />}
           />
           <SettingsRow
             title="Screen Recording"
-            description="Lets Forkara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
+            description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
             control={<AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />}
           />
           <SettingsRow
             title="Permission status"
-            description="Grant both permissions to Forkara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
+            description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
             control={
               <Button
                 type="button"

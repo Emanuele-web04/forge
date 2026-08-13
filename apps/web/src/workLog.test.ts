@@ -25,6 +25,49 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
+  it("does not expose unmapped diagnostic data as a transcript preview", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unmapped-provider-event",
+          kind: "provider.event.unmapped",
+          summary: "item/future/completed",
+          payload: {
+            nativeEventType: "item/future/completed",
+            detail: "Safe provider summary",
+            data: { arbitrary: "must-not-render" },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBe("Safe provider summary");
+    expect(entry?.preview).toBeUndefined();
+  });
+
+  it("does not derive unmapped details from generic raw tool output", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "unmapped-provider-output",
+          kind: "provider.event.unmapped",
+          summary: "item/future/completed",
+          payload: {
+            nativeEventType: "item/future/completed",
+            data: {
+              rawOutput: { stdout: "must-not-render", error: "must-not-render-error" },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry?.detail).toBeUndefined();
+    expect(entry?.preview).toBeUndefined();
+  });
+
   it("omits task start and completion lifecycle entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -52,6 +95,184 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress"]);
+  });
+
+  it("collapses task-list snapshots into one progressing row per turn", () => {
+    const taskListActivity = (
+      id: string,
+      createdAt: string,
+      tasks: Array<{ task: string; status: string }>,
+    ) =>
+      makeActivity({
+        id,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks },
+      });
+    const activities: OrchestrationThreadActivity[] = [
+      taskListActivity("tasks-1", "2026-02-23T00:00:01.000Z", [
+        { task: "Implement inline editing", status: "inProgress" },
+        { task: "Run verification", status: "pending" },
+      ]),
+      makeActivity({
+        id: "tool-between",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        turnId: "turn-1",
+      }),
+      taskListActivity("tasks-2", "2026-02-23T00:00:03.000Z", [
+        { task: "Implement inline editing", status: "completed" },
+        { task: "Run verification", status: "inProgress" },
+      ]),
+      taskListActivity("tasks-3", "2026-02-23T00:00:04.000Z", [
+        { task: "Implement inline editing", status: "completed" },
+        { task: "Run verification", status: "completed" },
+      ]),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
+    const taskListEntries = entries.filter((entry) => entry.activityKind === "turn.tasks.updated");
+    expect(taskListEntries).toHaveLength(1);
+    // Anchored at the first snapshot (stable id/createdAt), showing the latest state.
+    expect(taskListEntries[0]?.id).toBe("tasks-1");
+    expect(taskListEntries[0]?.createdAt).toBe("2026-02-23T00:00:01.000Z");
+    expect(taskListEntries[0]?.label).toBe("2 out of 2 tasks completed");
+    expect(taskListEntries[0]?.detail).toBeUndefined();
+    expect(entries.map((entry) => entry.id)).toEqual(["tasks-1", "tool-between"]);
+  });
+
+  it("labels task-list rows with progress and the in-progress task", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-live",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: "turn-1",
+          payload: {
+            tasks: [
+              { task: "Workstream A server: failure tolerance", status: "completed" },
+              { task: "Implementing inline editing UI", status: "inProgress" },
+              { task: "Final verification pass", status: "pending" },
+            ],
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entry?.label).toBe("1 out of 3 tasks completed");
+    expect(entry?.detail).toBe("Implementing inline editing UI");
+    expect(entry?.toolTitle).toBeUndefined();
+  });
+
+  it("keeps separate task-list rows for separate turns", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tasks-turn-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "First turn work", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "tasks-turn-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-2",
+        payload: { tasks: [{ task: "Second turn work", status: "inProgress" }] },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1"), TurnId.makeUnsafe("turn-2")]),
+    });
+    expect(entries.map((entry) => entry.id)).toEqual(["tasks-turn-1", "tasks-turn-2"]);
+  });
+
+  it("keeps turnless task-list snapshots independent across unknown turn boundaries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tasks-turnless-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        payload: { tasks: [{ task: "First turn work", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "tasks-turnless-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        payload: { tasks: [{ task: "Later turn work", status: "inProgress" }] },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["tasks-turnless-1", "tasks-turnless-2"]);
+  });
+
+  it("keeps the generic label for a task-list snapshot without readable tasks", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-empty",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: "turn-1",
+          payload: { tasks: [] },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entry?.label).toBe("Tasks updated");
+  });
+
+  it("keeps the progressed label when a later snapshot clears the task list", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tasks-progressed",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [
+            { task: "Implement inline editing", status: "completed" },
+            { task: "Run verification", status: "inProgress" },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "tasks-cleared",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [] },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("tasks-progressed");
+    expect(entries[0]?.label).toBe("1 out of 2 tasks completed");
+    expect(entries[0]?.detail).toBe("Run verification");
   });
 
   it("omits quiet turn lifecycle entries while keeping failed turn state visible", () => {
@@ -169,12 +390,12 @@ describe("deriveWorkLogEntries", () => {
         id: "automation-created",
         createdAt: "2026-02-23T00:00:05.000Z",
         kind: "automation.created",
-        summary: "Created automation: Watch Forkara PR 231 - Every 5m",
+        summary: "Created automation: Watch Synara PR 231 - Every 5m",
         tone: "info",
         payload: {
           source: "chat-composer",
           automationId: "automation-7",
-          automationName: "Watch Forkara PR 231",
+          automationName: "Watch Synara PR 231",
           cadenceLabel: "Every 5m",
         },
       }),
@@ -188,7 +409,7 @@ describe("deriveWorkLogEntries", () => {
     expect(automationEntry).toBeDefined();
     expect(automationEntry?.automation).toEqual({
       id: "automation-7",
-      name: "Watch Forkara PR 231",
+      name: "Watch Synara PR 231",
       cadenceLabel: "Every 5m",
     });
   });
@@ -219,14 +440,14 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
-  it("exposes a provider-independent Forkara thread creation recap", () => {
+  it("exposes a provider-independent Synara thread creation recap", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "synara-created-threads",
         createdAt: "2026-02-23T00:00:05.000Z",
         turnId: "turn-1",
         kind: "synara.threads.created",
-        summary: "Created 2 Forkara threads",
+        summary: "Created 2 Synara threads",
         tone: "info",
         payload: {
           operationId: "gateway:create:two-workers",
@@ -413,7 +634,7 @@ describe("deriveWorkLogEntries", () => {
         id: "recovery-first",
         createdAt: "2026-02-23T00:00:01.000Z",
         kind: "provider.runtime.reconciled",
-        summary: "Forkara recovered a stale running state",
+        summary: "Synara recovered a stale running state",
         turnId: "turn-stale",
         payload: recoveryPayload,
       }),
@@ -427,7 +648,7 @@ describe("deriveWorkLogEntries", () => {
         id: "recovery-repeat",
         createdAt: "2026-02-23T00:00:03.000Z",
         kind: "provider.runtime.reconciled",
-        summary: "Forkara recovered a stale running state",
+        summary: "Synara recovered a stale running state",
         turnId: "turn-stale",
         payload: recoveryPayload,
       }),
@@ -2213,11 +2434,11 @@ describe("deriveWorkLogEntries", () => {
           id: "cancelled-synara-start",
           createdAt: "2026-02-23T00:00:01.000Z",
           kind: "tool.started",
-          summary: "Forkara create thread",
+          summary: "Synara create thread",
           turnId,
           payload: {
             itemType: "mcp_tool_call",
-            title: "Forkara create thread",
+            title: "Synara create thread",
             data: {
               toolCallId: "cancelled-synara-call",
               toolName: "mcp__synara__synara_create_thread",
@@ -2248,10 +2469,10 @@ describe("deriveWorkLogEntries", () => {
           id: "interrupted-tool",
           createdAt: "2026-02-23T00:00:01.000Z",
           kind: "tool.completed",
-          summary: "Forkara create thread",
+          summary: "Synara create thread",
           payload: {
             itemType: "mcp_tool_call",
-            title: "Forkara create thread",
+            title: "Synara create thread",
             status: "interrupted",
             data: {
               toolCallId: "interrupted-synara-call",
@@ -2515,7 +2736,7 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
-  it("presents Forkara MCP activity consistently across provider item shapes", () => {
+  it("presents Synara MCP activity consistently across provider item shapes", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "synara-mcp-create-thread-progress",
@@ -2559,15 +2780,15 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => [entry.itemType, entry.toolTitle])).toEqual(
       expect.arrayContaining([
-        ["mcp_tool_call", "Forkara is creating a thread"],
-        ["dynamic_tool_call", "Forkara is sending a message"],
-        ["file_change", "Forkara is listing threads"],
+        ["mcp_tool_call", "Synara is creating a thread"],
+        ["dynamic_tool_call", "Synara is sending a message"],
+        ["file_change", "Synara is listing threads"],
       ]),
     );
     expect(entries).toHaveLength(3);
   });
 
-  it("preserves a failed Forkara MCP result as a failed activity sentence", () => {
+  it("preserves a failed Synara MCP result as a failed activity sentence", () => {
     const [entry] = deriveWorkLogEntries(
       [
         makeActivity({
@@ -2593,7 +2814,7 @@ describe("deriveWorkLogEntries", () => {
 
     expect(entry).toMatchObject({
       toolStatus: "failed",
-      toolTitle: "Forkara couldn't create threads",
+      toolTitle: "Synara couldn't create threads",
       detail: "Invalid target options",
     });
   });
@@ -3338,6 +3559,105 @@ describe("deriveTimelineEntries", () => {
     );
 
     expect(entries.map((entry) => entry.kind)).toEqual(["proposed-plan"]);
+  });
+
+  it("splits completed assistant messages with interleaved text segments into per-segment rows", () => {
+    const messageId = MessageId.makeUnsafe("assistant-segmented");
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: messageId,
+          role: "assistant",
+          text: "Plan: scan files.Found the largest test file: ClaudeAdapter.test.ts (~357KB).",
+          textSegments: [
+            {
+              sequence: 10,
+              startedAt: "2026-02-23T00:00:01.000Z",
+              endedAt: "2026-02-23T00:00:03.000Z",
+              text: "Plan: scan files.",
+            },
+            {
+              startedAt: "2026-02-23T00:00:01.000Z",
+              endedAt: "2026-02-23T00:00:25.000Z",
+              sequence: 30,
+              text: "Found the largest test file: ClaudeAdapter.test.ts (~357KB).",
+            },
+          ],
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "work-fd",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          sequence: 20,
+          label: "fd",
+          tone: "tool",
+        },
+        {
+          id: "work-wc",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          sequence: 40,
+          label: "wc",
+          tone: "tool",
+        },
+      ],
+    );
+
+    // The whole-message row is replaced by one row per segment, each anchored
+    // at its own start time, and the tool rows interleave between them exactly
+    // like the CLI execution order.
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "message-segment",
+      "work",
+      "message-segment",
+      "work",
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: "message-segment",
+      segmentIndex: 0,
+      createdAt: "2026-02-23T00:00:01.000Z",
+      message: { id: messageId },
+    });
+    expect(entries[2]).toMatchObject({
+      kind: "message-segment",
+      segmentIndex: 1,
+      createdAt: "2026-02-23T00:00:01.000Z",
+      message: { id: messageId },
+    });
+  });
+
+  it("keeps a single live message row while segments are still streaming", () => {
+    const messageId = MessageId.makeUnsafe("assistant-streaming-segmented");
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: messageId,
+          role: "assistant",
+          text: "partial",
+          textSegments: [
+            {
+              sequence: 10,
+              startedAt: "2026-02-23T00:00:01.000Z",
+              endedAt: "2026-02-23T00:00:03.000Z",
+              text: "partial",
+            },
+          ],
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: true,
+        },
+      ],
+      [],
+      [],
+    );
+
+    expect(entries.map((entry) => entry.kind)).toEqual(["message"]);
+    expect(entries[0]).toMatchObject({
+      kind: "message",
+      message: { id: messageId, streaming: true },
+    });
   });
 });
 

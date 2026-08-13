@@ -10,6 +10,7 @@ import * as ProcessRunner from "./processRunner";
 import {
   discoverProjectScripts,
   listWorkspaceDirectories,
+  searchWorkspaceContent,
   searchWorkspaceEntries,
 } from "./workspaceEntries";
 
@@ -452,5 +453,97 @@ describe("discoverProjectScripts", () => {
     expect(commandsByPath.get("apps/pnpm")).toBe("pnpm run dev");
     expect(commandsByPath.get("apps/yarn")).toBe("yarn dev");
     expect(commandsByPath.get("apps/npm")).toBe("npm run dev");
+  });
+});
+
+describe("searchWorkspaceContent", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds matching lines with path, line number, and text", async () => {
+    const cwd = makeTempDir("synara-content-search-basic-");
+    writeFile(
+      cwd,
+      "src/index.ts",
+      "export const a = 1;\nexport function findMe() {\n  return true;\n}\n",
+    );
+    writeFile(cwd, "src/other.ts", "const FINDME = 'x';\n");
+    writeFile(cwd, "README.md", "not a match\n");
+
+    const result = await searchWorkspaceContent({ cwd, query: "findme" });
+
+    expect(result.truncated).toBe(false);
+    expect(result.matches).toEqual([
+      { path: "src/index.ts", lineNumber: 2, lineText: "export function findMe() {" },
+      { path: "src/other.ts", lineNumber: 1, lineText: "const FINDME = 'x';" },
+    ]);
+  });
+
+  it("returns no matches for queries shorter than two characters", async () => {
+    const cwd = makeTempDir("synara-content-search-short-query-");
+    writeFile(cwd, "a.ts", "x\n");
+
+    const result = await searchWorkspaceContent({ cwd, query: "x" });
+
+    expect(result.matches).toEqual([]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("skips binary files", async () => {
+    const cwd = makeTempDir("synara-content-search-binary-");
+    writeFile(cwd, "text.ts", "needle in text\n");
+    writeFile(cwd, "blob.bin", "");
+    fs.writeFileSync(path.join(cwd, "blob.bin"), Buffer.from([0x00, 0x01, 0x02, 0x03]));
+
+    const result = await searchWorkspaceContent({ cwd, query: "needle" });
+
+    expect(result.matches).toEqual([
+      { path: "text.ts", lineNumber: 1, lineText: "needle in text" },
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not follow tracked symlinks outside the workspace",
+    async () => {
+      const cwd = makeTempDir("synara-content-search-symlink-");
+      const outside = makeTempDir("synara-content-search-outside-");
+      writeFile(outside, "secret.txt", "outside needle\n");
+      runGit(cwd, ["init"]);
+      fs.symlinkSync(path.join(outside, "secret.txt"), path.join(cwd, "linked-secret.txt"));
+      runGit(cwd, ["add", "linked-secret.txt"]);
+
+      const result = await searchWorkspaceContent({ cwd, query: "needle" });
+
+      expect(result.matches).toEqual([]);
+    },
+  );
+
+  it("caps per-file matches so one hot file cannot crowd out others", async () => {
+    const cwd = makeTempDir("synara-content-search-per-file-cap-");
+    const hotLines = Array.from({ length: 10 }, () => "hot needle line\n").join("");
+    writeFile(cwd, "hot.ts", hotLines);
+    writeFile(cwd, "cold.ts", "needle in cold file\n");
+
+    const result = await searchWorkspaceContent({ cwd, query: "needle" });
+
+    const hotMatches = result.matches.filter((match) => match.path === "hot.ts");
+    expect(hotMatches.length).toBeLessThanOrEqual(5);
+    expect(result.matches.some((match) => match.path === "cold.ts")).toBe(true);
+  });
+
+  it("truncates when matches exceed the requested limit", async () => {
+    const cwd = makeTempDir("synara-content-search-limit-");
+    for (let index = 0; index < 20; index += 1) {
+      writeFile(cwd, `src/file${index}.ts`, `needle ${index}\n`);
+    }
+
+    const result = await searchWorkspaceContent({ cwd, query: "needle", limit: 5 });
+
+    expect(result.matches.length).toBeLessThanOrEqual(5);
+    expect(result.truncated).toBe(true);
   });
 });

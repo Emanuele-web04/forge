@@ -124,6 +124,7 @@ export function buildPullRequestListEntry(input: {
       },
     ],
     mergeability: pullRequest.mergeability,
+    stack: pullRequest.stack,
     labels: pullRequest.labels,
   };
 }

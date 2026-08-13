@@ -16,7 +16,7 @@ import type { Space } from "~/types";
 
 /**
  * Void is not a stored Space, so its name and icon are defaults here rather than a row.
- * "Void" is Forkara's word, not the user's — the presentation is overridable per install
+ * "Void" is Synara's word, not the user's — the presentation is overridable per install
  * (see `voidSpaceStore`), and every list renders whatever the user settled on instead of
  * these constants.
  */

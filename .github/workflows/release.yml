@@ -16,9 +16,7 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: synara-desktop-release
@@ -29,6 +27,8 @@ jobs:
     name: Preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.release_meta.outputs.version }}
       tag: ${{ steps.release_meta.outputs.tag }}
@@ -139,9 +139,9 @@ jobs:
           bun-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile --ignore-scripts
+        run: bun install --frozen-lockfile
 
-      - name: Verify Forkara upstream attribution
+      - name: Verify Synara identity
         run: bun run brand:check
 
       - name: Lint
@@ -158,6 +158,8 @@ jobs:
     needs: preflight
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -390,6 +392,9 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -424,6 +429,8 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -533,7 +540,7 @@ jobs:
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ needs.preflight.outputs.ref }}
-          name: Forkara v${{ needs.preflight.outputs.version }}
+          name: Synara v${{ needs.preflight.outputs.version }}
           generate_release_notes: true
           prerelease: ${{ needs.preflight.outputs.is_prerelease }}
           make_latest: ${{ needs.preflight.outputs.make_latest }}
@@ -547,7 +554,7 @@ jobs:
             release-assets/*.provenance.json
           fail_on_unmatched_files: true
 
-      - name: Mirror Forkara artifacts onto the pinned updater feed
+      - name: Mirror Synara artifacts onto the pinned updater feed
         if: ${{ needs.preflight.outputs.mirror_to_stable_channel == 'true' }}
         shell: bash
         env:
@@ -613,6 +620,8 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
 
       - name: Checkout
         uses: actions/checkout@v6

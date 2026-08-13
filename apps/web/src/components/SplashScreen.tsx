@@ -16,7 +16,7 @@ export function SplashScreen({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-5 select-none">
-        <SynaraLogo aria-label="Forkara" className="size-24" />
+        <SynaraLogo aria-label="Synara" className="size-24" />
 
         {errorMessage ? (
           <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">

@@ -1,13 +1,8 @@
-import {
-  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  type OrchestrationMessage,
-  type OrchestrationThread,
-} from "@synara/contracts";
+import type { OrchestrationMessage, OrchestrationThread } from "@synara/contracts";
 
 const RECENT_MESSAGE_COUNT = 6;
 const EARLIER_MESSAGE_CHAR_LIMIT = 320;
 const RECENT_MESSAGE_CHAR_LIMIT = 2_400;
-const HANDOFF_BOOTSTRAP_CHAR_BUDGET = Math.floor(PROVIDER_SEND_TURN_MAX_INPUT_CHARS * 0.75);
 // Hard ceiling for any bootstrap transcript: it replays as one uncached user
 // message, so long threads must drop their oldest summaries rather than grow.
 const BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET = 32_000;
@@ -180,7 +175,7 @@ function buildImportedMessagesBootstrapText(input: {
 
 export function buildHandoffBootstrapText(
   thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "handoff" | "messages">,
-  maxChars = HANDOFF_BOOTSTRAP_CHAR_BUDGET,
+  maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
   const importedMessages = listImportedHandoffMessages(thread);
   if (importedMessages.length === 0 || thread.handoff === null) {
@@ -198,7 +193,7 @@ export function buildHandoffBootstrapText(
 export function buildPriorTranscriptBootstrapText(
   thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "messages">,
   currentMessageId: string,
-  maxChars = HANDOFF_BOOTSTRAP_CHAR_BUDGET,
+  maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
   const priorMessages = listPriorTranscriptMessages(thread, currentMessageId);
   if (priorMessages.length === 0) {
@@ -216,7 +211,7 @@ export function buildPriorTranscriptBootstrapText(
 
 export function buildForkBootstrapText(
   thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "messages">,
-  maxChars = HANDOFF_BOOTSTRAP_CHAR_BUDGET,
+  maxChars = BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET,
 ): string | null {
   const importedMessages = listImportedForkMessages(thread);
   if (importedMessages.length === 0) {

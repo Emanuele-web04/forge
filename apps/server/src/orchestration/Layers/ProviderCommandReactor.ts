@@ -12,6 +12,7 @@ import {
   type OrchestrationEvent,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
+  type ProviderInteractionMode,
   type ProviderRuntimeEvent,
   ProviderKind,
   type ProviderReviewTarget,
@@ -73,6 +74,15 @@ import {
   ProviderServiceError,
 } from "../../provider/Errors.ts";
 import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
+import {
+  PROVIDER_DEBUG_MODE_PROMPT_PREFIX,
+  withProviderDebugModePrompt,
+} from "../../provider/debugMode.ts";
+import {
+  activeThreadGoal,
+  providerGoalPromptOverheadChars,
+  withProviderGoalPrompt,
+} from "../../provider/goalMode.ts";
 import {
   appendThreadMentionContextBlocks,
   resolveThreadMentionPromptProjection,
@@ -308,6 +318,12 @@ const SIDECHAT_BOUNDARY_INSTRUCTION =
 
 type ProviderContextTag = "handoff_context" | "sidechat_context" | "thread_context";
 
+interface BootstrapContextSelection {
+  readonly tag: ProviderContextTag;
+  readonly contextText: string;
+  readonly wrapLatestUserMessage: boolean;
+}
+
 function wrapProviderContext(input: {
   readonly tag: ProviderContextTag;
   readonly contextText: string;
@@ -324,21 +340,51 @@ function availableProviderContextChars(input: {
   readonly tag: ProviderContextTag;
   readonly messageText: string;
   readonly wrapLatestUserMessage: boolean;
+  readonly reservedChars?: number;
 }): number {
   return Math.max(
     0,
-    PROVIDER_SEND_TURN_MAX_INPUT_CHARS - wrapProviderContext({ ...input, contextText: "" }).length,
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+      wrapProviderContext({ ...input, contextText: "" }).length -
+      (input.reservedChars ?? 0),
   );
 }
 
-function availableThreadMentionContextChars(messageText: string): number {
+function availableThreadMentionContextChars(messageText: string, reservedChars = 0): number {
   return Math.max(
     0,
     PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
       messageText.length -
       PROVIDER_INPUT_SAFETY_MARGIN_CHARS -
-      THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS,
+      THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS -
+      reservedChars,
   );
+}
+
+function debugModePromptOverheadChars(
+  interactionMode: ProviderInteractionMode | undefined,
+): number {
+  return interactionMode === "debug" ? PROVIDER_DEBUG_MODE_PROMPT_PREFIX.length + 2 : 0;
+}
+
+function withProviderThreadStatePrompts(input: {
+  readonly text: string;
+  readonly interactionMode?: ProviderInteractionMode | undefined;
+  readonly goal?: string | undefined;
+}): string {
+  return withProviderGoalPrompt({
+    goal: input.goal,
+    text: withProviderDebugModePrompt({
+      interactionMode: input.interactionMode,
+      text: input.text,
+    }),
+  });
+}
+
+function providerPromptOverflowIssue(goalPromptOverheadChars: number): string {
+  return goalPromptOverheadChars > 0
+    ? "The latest message is too long to include the persistent thread goal. Shorten the message and retry."
+    : "The latest message is too long to include Synara Debug mode instructions. Shorten the message and retry.";
 }
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
@@ -1352,7 +1398,7 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
     readonly runtimeMode?: RuntimeMode;
-    readonly interactionMode?: "default" | "plan";
+    readonly interactionMode?: ProviderInteractionMode;
     readonly dispatchMode?: "queue" | "steer";
     readonly createdAt: string;
   }) {
@@ -1360,10 +1406,16 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
+    const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
+    const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
     const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
       mentions: input.mentions,
       snapshotQuery: projectionSnapshotQuery,
-      maxTotalContextChars: availableThreadMentionContextChars(input.messageText),
+      maxTotalContextChars: availableThreadMentionContextChars(
+        input.messageText,
+        providerPromptOverheadChars,
+      ),
     });
     const messageText = appendThreadMentionContextBlocks({
       text: input.messageText,
@@ -1397,7 +1449,8 @@ const make = Effect.gen(function* () {
                   0,
                   PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
                     messageText.length -
-                    PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
+                    PROVIDER_INPUT_SAFETY_MARGIN_CHARS -
+                    providerPromptOverheadChars,
                 ),
               }),
             ).pipe(
@@ -1412,13 +1465,26 @@ const make = Effect.gen(function* () {
       const steerMessageWithSkills = steerSkillInlineText
         ? `${messageText}\n\n${steerSkillInlineText}`
         : messageText;
-      const normalizedSteerInput = toNonEmptyProviderInput(
-        normalizeSkillMentionTextForProvider({
+      const composedSteerInput = withProviderThreadStatePrompts({
+        interactionMode: input.interactionMode,
+        goal: activeThreadGoal(thread),
+        text: normalizeSkillMentionTextForProvider({
           provider: steerProvider,
           messageText: steerMessageWithSkills,
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
         }),
-      );
+      });
+      if (
+        providerPromptOverheadChars > 0 &&
+        composedSteerInput.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+      ) {
+        return yield* new ProviderAdapterValidationError({
+          provider: steerProvider,
+          operation: "thread.turn.start",
+          issue: providerPromptOverflowIssue(goalPromptOverheadChars),
+        });
+      }
+      const normalizedSteerInput = toNonEmptyProviderInput(composedSteerInput);
       const normalizedSteerAttachments = yield* resolveProviderDispatchAttachments({
         attachments: input.attachments,
         attachmentsDir: serverConfig.attachmentsDir,
@@ -1471,6 +1537,7 @@ const make = Effect.gen(function* () {
       tag: "handoff_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: true,
+      reservedChars: providerPromptOverheadChars,
     });
     const handoffBootstrapText =
       shouldBootstrapHandoff && handoffBootstrapAvailableChars > 0
@@ -1481,6 +1548,20 @@ const make = Effect.gen(function* () {
       threadSessionModelSelections.get(input.threadId)?.provider ??
       thread.session?.providerName ??
       thread.modelSelection.provider;
+    if (
+      providerPromptOverheadChars > 0 &&
+      withProviderThreadStatePrompts({
+        interactionMode: input.interactionMode,
+        goal: activeThreadGoal(thread),
+        text: bootstrapBudgetMessageText,
+      }).length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+    ) {
+      return yield* new ProviderAdapterValidationError({
+        provider: selectedProvider as ProviderKind,
+        operation: "thread.turn.start",
+        issue: providerPromptOverflowIssue(goalPromptOverheadChars),
+      });
+    }
     const hasPendingPriorTranscriptBootstrap =
       freshSessionContextBootstrapThreadIds.has(input.threadId) ||
       rollbackContextBootstrapThreadIds.has(input.threadId);
@@ -1494,6 +1575,7 @@ const make = Effect.gen(function* () {
       tag: "sidechat_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: false,
+      reservedChars: providerPromptOverheadChars,
     });
     const sidechatBootstrapText =
       shouldBootstrapSidechatContext && sidechatBootstrapAvailableChars > 0
@@ -1526,6 +1608,7 @@ const make = Effect.gen(function* () {
       tag: "thread_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: true,
+      reservedChars: providerPromptOverheadChars,
     });
     if (
       input.reviewTarget === undefined &&
@@ -1549,29 +1632,33 @@ const make = Effect.gen(function* () {
             priorTranscriptBootstrapAvailableChars,
           )
         : null;
-    const providerInput = handoffBootstrapText
-      ? wrapProviderContext({
-          tag: "handoff_context",
-          contextText: handoffBootstrapText,
-          messageText: boundaryMessageText,
-          wrapLatestUserMessage: true,
-        })
-      : sidechatBootstrapText
-        ? wrapProviderContext({
-            tag: "sidechat_context",
-            contextText: sidechatBootstrapText,
-            messageText: boundaryMessageText,
-            wrapLatestUserMessage: false,
-          })
-        : priorTranscriptBootstrapText
-          ? wrapProviderContext({
-              tag: "thread_context",
-              contextText: priorTranscriptBootstrapText,
-              messageText: boundaryMessageText,
-              wrapLatestUserMessage: true,
-            })
-          : boundaryMessageText;
-    const providerInputWithMentionContext = `${providerInput}${mentionContextSuffix}`;
+    // The guards above make the three bootstrap flavors mutually exclusive, so
+    // a turn carries at most one context block.
+    const selectedBootstrapContext: BootstrapContextSelection | null =
+      handoffBootstrapText !== null
+        ? { tag: "handoff_context", contextText: handoffBootstrapText, wrapLatestUserMessage: true }
+        : sidechatBootstrapText !== null
+          ? {
+              tag: "sidechat_context",
+              contextText: sidechatBootstrapText,
+              wrapLatestUserMessage: false,
+            }
+          : priorTranscriptBootstrapText !== null
+            ? {
+                tag: "thread_context",
+                contextText: priorTranscriptBootstrapText,
+                wrapLatestUserMessage: true,
+              }
+            : null;
+    const composeProviderInput = (bootstrap: BootstrapContextSelection | null): string =>
+      bootstrap
+        ? wrapProviderContext({ ...bootstrap, messageText: boundaryMessageText })
+        : boundaryMessageText;
+    const providerInputWithMentionContext = withProviderThreadStatePrompts({
+      interactionMode: input.interactionMode,
+      goal: activeThreadGoal(thread),
+      text: `${composeProviderInput(selectedBootstrapContext)}${mentionContextSuffix}`,
+    });
     // Portable skills fallback: providers that cannot load the referenced skill
     // file natively get the skill instructions inlined into the prompt.
     const skillInlineText =
@@ -1596,16 +1683,24 @@ const make = Effect.gen(function* () {
             ),
           )
         : "";
-    const providerInputWithSkills = skillInlineText
-      ? `${providerInputWithMentionContext}\n\n${skillInlineText}`
-      : providerInputWithMentionContext;
-    const normalizedInput = toNonEmptyProviderInput(
-      normalizeSkillMentionTextForProvider({
-        provider: selectedProvider as ProviderKind,
-        messageText: providerInputWithSkills,
-        ...(input.skills !== undefined ? { skills: input.skills } : {}),
-      }),
-    );
+    const finalizeProviderInput = (bootstrap: BootstrapContextSelection | null) => {
+      const withMentionContext = `${composeProviderInput(bootstrap)}${mentionContextSuffix}`;
+      const withSkills = skillInlineText
+        ? `${withMentionContext}\n\n${skillInlineText}`
+        : withMentionContext;
+      return toNonEmptyProviderInput(
+        withProviderThreadStatePrompts({
+          interactionMode: input.interactionMode,
+          goal: activeThreadGoal(thread),
+          text: normalizeSkillMentionTextForProvider({
+            provider: selectedProvider as ProviderKind,
+            messageText: withSkills,
+            ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          }),
+        }),
+      );
+    };
+    const normalizedInput = finalizeProviderInput(selectedBootstrapContext);
     const normalizedAttachments = yield* resolveProviderDispatchAttachments({
       attachments: input.attachments,
       attachmentsDir: serverConfig.attachmentsDir,
@@ -1746,24 +1841,14 @@ const make = Effect.gen(function* () {
                   priorTranscriptBootstrapAvailableChars,
                 )
               : null;
-          const retryProviderInput = retryBootstrapText
-            ? wrapProviderContext({
-                tag: "thread_context",
-                contextText: retryBootstrapText,
-                messageText: boundaryMessageText,
-                wrapLatestUserMessage: true,
-              })
-            : boundaryMessageText;
-          const retryProviderInputWithMentionContext = `${retryProviderInput}${mentionContextSuffix}`;
-          const retryProviderInputWithSkills = skillInlineText
-            ? `${retryProviderInputWithMentionContext}\n\n${skillInlineText}`
-            : retryProviderInputWithMentionContext;
-          const retryNormalizedInput = toNonEmptyProviderInput(
-            normalizeSkillMentionTextForProvider({
-              provider: selectedProvider as ProviderKind,
-              messageText: retryProviderInputWithSkills,
-              ...(input.skills !== undefined ? { skills: input.skills } : {}),
-            }),
+          const retryNormalizedInput = finalizeProviderInput(
+            retryBootstrapText !== null
+              ? {
+                  tag: "thread_context",
+                  contextText: retryBootstrapText,
+                  wrapLatestUserMessage: true,
+                }
+              : null,
           );
 
           yield* Effect.logWarning(

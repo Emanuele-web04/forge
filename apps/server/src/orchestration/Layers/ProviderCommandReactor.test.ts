@@ -92,6 +92,7 @@ import {
 } from "../Services/StudioOutputReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
+import { PROVIDER_DEBUG_MODE_PROMPT_PREFIX } from "../../provider/debugMode.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import {
@@ -2332,6 +2333,42 @@ describe("ProviderCommandReactor", () => {
     expect(input?.mentions).toBeUndefined();
   });
 
+  it("rejects a provider-max input that cannot also fit the persistent thread goal", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-max-input-goal-set"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Preserve the full objective",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-max-input-with-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("max-input-with-goal"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect((await readHarnessThread(harness))?.session?.lastError).toContain(
+      "too long to include the persistent thread goal",
+    );
+  });
+
   it("preserves pending sidechat context when the first turn is an overlong provider review", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -3651,6 +3688,15 @@ describe("ProviderCommandReactor", () => {
 
     await Effect.runPromise(
       harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-goal-before-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Deliver <all> providers safely",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.makeUnsafe("cmd-turn-start-1"),
         threadId: ThreadId.makeUnsafe("thread-1"),
@@ -3677,6 +3723,10 @@ describe("ProviderCommandReactor", () => {
       },
       runtimeMode: "approval-required",
     });
+    const providerInput = harness.sendTurn.mock.calls[0]?.[0].input;
+    expect(providerInput).toContain("<synara_goal>");
+    expect(providerInput).toContain("Deliver &lt;all&gt; providers safely");
+    expect(providerInput).toContain("</synara_goal>\n\nhello reactor");
 
     const thread = await readHarnessThread(harness);
     expect(thread?.session?.threadId).toBe("thread-1");
@@ -3733,6 +3783,59 @@ describe("ProviderCommandReactor", () => {
     // The subagent thread must never boot a provider session of its own.
     expect(harness.startSession).not.toHaveBeenCalled();
     expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("injects the subagent thread goal into its parent-session steer", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const subagentThreadId = ThreadId.makeUnsafe("subagent:thread-1:tool-goal-steer");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-subagent-goal-thread-create"),
+        threadId: subagentThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Goal subagent",
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-subagent-goal-set"),
+        threadId: subagentThreadId,
+        goal: "Finish <all> tests",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-subagent-goal-steer"),
+        threadId: subagentThreadId,
+        message: {
+          messageId: asMessageId("subagent-goal-steer-message"),
+          role: "user",
+          text: "continue",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.steerSubagent.mock.calls.length === 1);
+    const steerInput = harness.steerSubagent.mock.calls[0]?.[0].input;
+    expect(steerInput).toContain("<synara_goal>");
+    expect(steerInput).toContain("Finish &lt;all&gt; tests");
+    expect(steerInput).toContain("</synara_goal>\n\ncontinue");
   });
 
   it("dispatches thread.task.background to the provider service", async () => {
@@ -4153,7 +4256,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("clears stale Claude resume state and retries the turn with transcript context", async () => {
+  it("retries Debug turns with transcript context without duplicating the prompt prefix", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
     });
@@ -4210,7 +4313,7 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        interactionMode: "debug",
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -4226,6 +4329,7 @@ describe("ProviderCommandReactor", () => {
       readonly input?: string;
     };
     expect(nativeRetrySendInput.input).not.toContain("<thread_context>");
+    expect(nativeRetrySendInput.input?.split(PROVIDER_DEBUG_MODE_PROMPT_PREFIX)).toHaveLength(2);
     // Second stale failure clears the cursor and bootstraps the transcript.
     expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
@@ -4239,6 +4343,7 @@ describe("ProviderCommandReactor", () => {
     expect(retrySendInput.input).toContain("Move the changelog navigation to the left.");
     expect(retrySendInput.input).toContain("<latest_user_message>");
     expect(retrySendInput.input).toContain("nice but bring it on the left.");
+    expect(retrySendInput.input?.split(PROVIDER_DEBUG_MODE_PROMPT_PREFIX)).toHaveLength(2);
   });
 
   it("retries a stale Claude resume natively before paying the transcript bootstrap", async () => {
@@ -6120,7 +6225,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("steers immediately for codex sessions when Cmd/Ctrl+Enter is used", async () => {
+  it("steers Debug turns immediately with one prompt prefix", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -6164,7 +6269,7 @@ describe("ProviderCommandReactor", () => {
         },
         dispatchMode: "steer",
         runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        interactionMode: "debug",
         createdAt: now,
       }),
     );
@@ -6174,9 +6279,11 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn).not.toHaveBeenCalled();
     expect(harness.steerTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
-      input: "pivot now",
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      interactionMode: "debug",
     });
+    const steerInput = harness.steerTurn.mock.calls[0]?.[0] as { readonly input?: string };
+    expect(steerInput.input).toContain("pivot now");
+    expect(steerInput.input?.split(PROVIDER_DEBUG_MODE_PROMPT_PREFIX)).toHaveLength(2);
   });
 
   it("dispatches a codex steer as a queued turn when the live provider turn already settled", async () => {
@@ -6943,6 +7050,45 @@ describe("ProviderCommandReactor", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
       interactionMode: "plan",
     });
+  });
+
+  it("applies the Debug prompt once while preserving interaction and runtime modes", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-debug"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-debug"),
+          role: "user",
+          text: "reproduce the crash",
+          attachments: [],
+        },
+        interactionMode: "debug",
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      runtimeMode: "approval-required",
+    });
+    const turnInput = harness.sendTurn.mock.calls[0]?.[0] as {
+      readonly input?: string;
+      readonly interactionMode?: string;
+    };
+    expect(turnInput.interactionMode).toBe("debug");
+    expect(turnInput.input).toContain("reproduce the crash");
+    expect(turnInput.input?.split(PROVIDER_DEBUG_MODE_PROMPT_PREFIX)).toHaveLength(2);
   });
 
   it("adopts the requested provider on a first turn before binding a session", async () => {

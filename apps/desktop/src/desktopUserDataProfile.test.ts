@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 describe("desktopUserDataProfile", () => {
-  it("resolves the canonical Forkara profile names", () => {
+  it("resolves the canonical Synara profile names", () => {
     const appDataBase = "/Users/tester/Library/Application Support";
     expect(resolveDesktopUserDataPath({ appDataBase, userDataDirectoryName: "synara-dev" })).toBe(
       "/Users/tester/Library/Application Support/synara-dev",
@@ -84,7 +84,7 @@ describe("desktopUserDataProfile", () => {
     );
   });
 
-  it("rejects bridge manifests that point outside the Forkara profile parent", () => {
+  it("rejects bridge manifests that point outside the Synara profile parent", () => {
     const appDataBase = makeTempDir();
     const unrelatedBase = makeTempDir();
     const targetPath = Path.join(appDataBase, "synara");
@@ -101,7 +101,7 @@ describe("desktopUserDataProfile", () => {
     });
   });
 
-  it("never adds a foreign SQLite sidecar beside an existing Forkara database", () => {
+  it("never adds a foreign SQLite sidecar beside an existing Synara database", () => {
     const appDataBase = makeTempDir();
     const targetPath = Path.join(appDataBase, "synara");
     const sourcePath = Path.join(appDataBase, "previous-profile");

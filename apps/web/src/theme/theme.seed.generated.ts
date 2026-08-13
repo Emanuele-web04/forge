@@ -1,5 +1,5 @@
 // FILE: theme.seed.generated.ts
-// Purpose: Stores normalized theme seeds with Forkara's zero-contrast default.
+// Purpose: Stores normalized theme seeds with Synara's zero-contrast default.
 // Layer: Web appearance generated catalog
 // Exports: THEME_SEED_CATALOG for code-theme seed lookup.
 

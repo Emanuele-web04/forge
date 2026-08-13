@@ -12,6 +12,42 @@ import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
 import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
+const FORK_SOURCE = {
+  sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+  sourceTitle: "ciao (2)",
+};
+
+function makeForkImportedEntry() {
+  return {
+    id: "imported-entry",
+    kind: "message" as const,
+    createdAt: "2026-03-17T19:12:28.000Z",
+    message: {
+      id: MessageId.makeUnsafe("imported-message"),
+      role: "assistant" as const,
+      text: "Imported history",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      streaming: false,
+      source: "fork-import" as const,
+    },
+  };
+}
+
+function makeForkOwnedEntry() {
+  return {
+    id: "fork-entry",
+    kind: "message" as const,
+    createdAt: "2026-03-17T19:12:29.000Z",
+    message: {
+      id: MessageId.makeUnsafe("fork-message"),
+      role: "user" as const,
+      text: "Fork-only turn",
+      createdAt: "2026-03-17T19:12:29.000Z",
+      streaming: false,
+      source: "native" as const,
+    },
+  };
+}
 
 vi.mock("@legendapp/list/react", async () => {
   const React = await import("react");
@@ -21,6 +57,7 @@ vi.mock("@legendapp/list/react", async () => {
       data: Array<{ id: string }>;
       keyExtractor: (item: { id: string }) => string;
       renderItem: (args: { item: { id: string } }) => React.ReactNode;
+      ListFooterComponent?: React.ReactNode;
     },
     _ref: React.ForwardedRef<unknown>,
   ) {
@@ -29,6 +66,7 @@ vi.mock("@legendapp/list/react", async () => {
         {props.data.map((item) => (
           <div key={props.keyExtractor(item)}>{props.renderItem({ item })}</div>
         ))}
+        {props.ListFooterComponent}
       </div>
     );
   });
@@ -93,6 +131,11 @@ beforeAll(() => {
       classList,
       offsetHeight: 0,
     },
+    // flushStorageBeforePageHide registers visibilitychange at module load of
+    // the MessagesTimeline import chain (via composerDraftStore).
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    visibilityState: "visible",
   });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
@@ -100,7 +143,59 @@ beforeAll(() => {
   });
 });
 
+// Warm the component module once: the first dynamic import pays the whole
+// component-graph transform, which exceeds the 5s per-test timeout on slow CI
+// runners (observed >10s under a full parallel suite). beforeAll keeps that
+// cost off any single test's clock; the explicit timeout keeps it off the
+// default 10s hook clock too.
+beforeAll(async () => {
+  await import("./MessagesTimeline");
+}, 120_000);
+
 describe("MessagesTimeline", () => {
+  // The first test pays the full dynamic-import cost of the MessagesTimeline
+  // module graph, which can exceed 10s under CI thread contention.
+  it("renders an accent deep link to the immediate fork source", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        hasMessages
+        timelineEntries={[makeForkImportedEntry(), makeForkOwnedEntry()]}
+        forkSource={FORK_SOURCE}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('data-fork-source-divider="true"');
+    expect(markup).toContain('href="/source-thread"');
+    expect(markup).toContain("Continued from chat");
+    expect(markup).toContain("text-[var(--color-text-accent)]");
+    expect(markup.indexOf("Imported history")).toBeLessThan(
+      markup.indexOf('data-fork-source-divider="true"'),
+    );
+    expect(markup.indexOf('data-fork-source-divider="true"')).toBeLessThan(
+      markup.indexOf("Fork-only turn"),
+    );
+  }, 30_000);
+
+  it("keeps the divider after imported history while waiting for the first fork turn", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        hasMessages
+        timelineEntries={[makeForkImportedEntry()]}
+        forkSource={FORK_SOURCE}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup.indexOf("Imported history")).toBeLessThan(
+      markup.indexOf('data-fork-source-divider="true"'),
+    );
+  });
+
   it("keeps small transcripts on the simple non-virtualized path", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -142,11 +237,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-index="0"');
     expect(markup).not.toContain('class="relative" style="height:');
     expect(markup).toContain('data-timeline-row-kind="message"');
-    // First test in the file pays the full dynamic-import cost of the
-    // MessagesTimeline module graph, which exceeds 10s under CI thread
-    // contention (observed flaking on 4-thread runners while passing in
-    // ~2s locally).
-  }, 30_000);
+  });
 
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -294,9 +385,9 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup.match(/data-cross-task-origin="true"/g)).toHaveLength(1);
-    expect(markup).toContain("Sent by Forkara from another thread");
+    expect(markup).toContain("Sent by Synara from another thread");
     expect(markup).toContain('aria-label="Open source thread"');
-    expect(markup.indexOf("Sent by Forkara from another thread")).toBeLessThan(
+    expect(markup.indexOf("Sent by Synara from another thread")).toBeLessThan(
       markup.indexOf("Inspect the repository"),
     );
   });
@@ -345,7 +436,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Sent by Forkara from another thread");
+    expect(markup).toContain("Sent by Synara from another thread");
     expect(markup).not.toContain("Sent by agent");
   });
 
@@ -481,7 +572,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Copy message"');
     expect(markup).toContain('aria-label="Edit message"');
     expect(markup).toContain('aria-label="Revert to this message"');
-    expect(markup).toContain("size-[1.125em]");
+    expect(markup).toContain("size-[1.375em]");
   });
 
   it("keeps edit available and hides undo before a revert checkpoint exists", async () => {
@@ -1482,6 +1573,50 @@ describe("MessagesTimeline", () => {
       '<span data-work-entry-display-text="true">Searched 2 files found</span>',
     );
     expect(markup).not.toContain("data-work-entry-action-word");
+  });
+
+  it("renders the complete task-list progress heading", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-task-progress");
+    const timelineEntries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-live",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: activeTurnId,
+          payload: {
+            tasks: [
+              { task: "Implement inline editing", status: "completed" },
+              { task: "Run verification", status: "inProgress" },
+              { task: "Ship", status: "pending" },
+            ],
+          },
+        }),
+      ],
+      activeTurnId,
+    ).map((entry) => ({
+      id: entry.id,
+      kind: "work" as const,
+      createdAt: entry.createdAt,
+      entry,
+    }));
+
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-05-09T16:31:20.000Z"
+        timelineEntries={timelineEntries}
+      />,
+    );
+
+    expect(markup).toContain(
+      '<span data-work-entry-display-text="true">1 out of 3 tasks completed Run verification</span>',
+    );
   });
 
   it("renders Claude agent task output through the shared markdown renderer", async () => {
@@ -2648,7 +2783,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-tool-icon="mcp"');
   });
 
-  it("shows the Forkara mark for every provider-specific tool row shape", async () => {
+  it("shows the Synara mark for every provider-specific tool row shape", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const baseProps = makeTimelineBaseProps();
 
@@ -2678,7 +2813,7 @@ describe("MessagesTimeline", () => {
     );
     expect(claudeMarkup).toContain('data-tool-icon="synara"');
     expect(claudeMarkup).not.toContain('data-tool-icon="mcp"');
-    expect(claudeMarkup).toContain("Forkara is creating a thread");
+    expect(claudeMarkup).toContain("Synara is creating a thread");
     expect(claudeMarkup).not.toContain("Synara__synara_create_thread");
 
     // A provider may misclassify an MCP action containing "create" or "list"
@@ -2705,7 +2840,7 @@ describe("MessagesTimeline", () => {
       />,
     );
     expect(codexMarkup).toContain('data-tool-icon="synara"');
-    expect(codexMarkup).toContain("Forkara listed threads");
+    expect(codexMarkup).toContain("Synara listed threads");
     expect(codexMarkup).not.toContain("mcp__Synara__synara_list_threads");
 
     const failedMarkup = renderToStaticMarkup(
@@ -2731,13 +2866,13 @@ describe("MessagesTimeline", () => {
         ]}
       />,
     );
-    expect(failedMarkup).toContain("Forkara couldn&#x27;t create threads");
+    expect(failedMarkup).toContain("Synara couldn&#x27;t create threads");
     expect(failedMarkup).toContain("Claude rejected reasoningEffort");
   });
 
-  // Browser calls get the globe rather than the generic Forkara mark: a browsing
+  // Browser calls get the globe rather than the generic Synara mark: a browsing
   // row is about a page, and the surface it acted on is the first thing to read.
-  it("uses the browser icon and action name for Forkara browser calls", async () => {
+  it("uses the browser icon and action name for Synara browser calls", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -2757,7 +2892,7 @@ describe("MessagesTimeline", () => {
               toolStatus: "completed",
               liveActivity: {
                 state: "completed",
-                label: "Forkara: Browser Open",
+                label: "Synara: Browser Open",
                 startedAt: "2026-03-17T19:12:27.000Z",
                 lastActivityAt: "2026-03-17T19:12:28.000Z",
                 elapsedSeconds: 1,
@@ -2773,7 +2908,7 @@ describe("MessagesTimeline", () => {
     // A settled call reads as its action alone — no lifecycle or timing tail.
     expect(markup).not.toContain("elapsed");
     expect(markup).not.toContain("Completed tool");
-    expect(markup).not.toContain("Forkara: Browser Open");
+    expect(markup).not.toContain("Synara: Browser Open");
 
     const presentationOnlyMarkup = renderToStaticMarkup(
       <MessagesTimeline
@@ -2829,7 +2964,7 @@ describe("MessagesTimeline", () => {
       detail: 'mcp__synara__synara_read_thread: {"threadId":"c357d8c5-b4c1-47d0"}',
       activityKind: "tool.completed",
     });
-    expect(readThreadMarkup).toContain("Forkara read a thread");
+    expect(readThreadMarkup).toContain("Synara read a thread");
     expect(readThreadMarkup).not.toContain("mcp__synara__synara_read_thread:");
     expect(readThreadMarkup).not.toContain("threadId");
 
@@ -2843,7 +2978,7 @@ describe("MessagesTimeline", () => {
       detail: 'mcp__synara__synara_diagnose_thread: {"threadId":"09a1615d-084f-40b9"}',
       activityKind: "tool.completed",
     });
-    expect(diagnoseMarkup).toContain("Forkara diagnosed a thread");
+    expect(diagnoseMarkup).toContain("Synara diagnosed a thread");
     expect(diagnoseMarkup).not.toContain("mcp__synara__synara_diagnose_thread:");
     expect(diagnoseMarkup).not.toContain("threadId");
 
@@ -2874,11 +3009,11 @@ describe("MessagesTimeline", () => {
       detail: 'McpError: {"code":-32602,"message":"Invalid params"}',
       activityKind: "tool.completed",
     });
-    expect(failedArgsMarkup).toContain("Forkara couldn&#x27;t create threads");
+    expect(failedArgsMarkup).toContain("Synara couldn&#x27;t create threads");
     expect(failedArgsMarkup).toContain("Invalid params");
   });
 
-  it("keeps Forkara tool calls and adds a thread creation recap at the end of the turn", async () => {
+  it("keeps Synara tool calls and adds a thread creation recap at the end of the turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-synara-recap");
     const workEntries = [
@@ -2893,7 +3028,7 @@ describe("MessagesTimeline", () => {
           tone: "tool",
           itemType: "mcp_tool_call",
           toolName: "mcp__synara__synara_create_threads",
-          toolTitle: "Forkara created threads",
+          toolTitle: "Synara created threads",
           activityKind: "tool.completed",
         },
       },
@@ -2904,7 +3039,7 @@ describe("MessagesTimeline", () => {
         entry: {
           id: "work-synara-create-recap",
           createdAt: "2026-03-17T19:12:29.000Z",
-          label: "Created 2 Forkara threads",
+          label: "Created 2 Synara threads",
           tone: "info",
           activityKind: "synara.threads.created",
           synaraThreadCreation: {
@@ -2946,7 +3081,7 @@ describe("MessagesTimeline", () => {
         timelineEntries={[...workEntries]}
       />,
     );
-    expect(liveMarkup).toContain("Forkara created threads");
+    expect(liveMarkup).toContain("Synara created threads");
     expect(liveMarkup).not.toContain('data-synara-thread-creation-card="true"');
 
     const markup = renderToStaticMarkup(
@@ -3229,5 +3364,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
+    expect(markup.indexOf('aria-label="Copy message"')).toBeGreaterThan(
+      markup.indexOf("Edited 1 file"),
+    );
   });
 });

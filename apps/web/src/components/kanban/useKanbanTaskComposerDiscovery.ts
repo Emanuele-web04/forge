@@ -35,7 +35,7 @@ import {
   supportsSkillDiscovery,
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
-import { isMacPlatform } from "~/lib/utils";
+import { isMacNavigatorPlatform } from "~/lib/utils";
 import { AVAILABLE_PROVIDER_OPTIONS } from "../chat/ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
 
@@ -91,10 +91,9 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     piAgentDir,
   } = input;
 
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
     serverHomeDir,
-    isMacPlatform(platform),
+    isMacNavigatorPlatform(),
   );
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";

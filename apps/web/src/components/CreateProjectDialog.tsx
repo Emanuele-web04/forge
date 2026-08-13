@@ -82,7 +82,6 @@ interface CreateGitHubProjectSubmitValue {
   readonly source: "github";
   readonly operationId: string;
   readonly repository: string;
-  readonly forkDestinationOwner: string | undefined;
   readonly destinationParent: string;
   readonly directoryName: string;
   readonly spaceId: SpaceId | null;
@@ -130,14 +129,12 @@ export function CreateProjectDialog(props: {
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [forkDestinationOwner, setForkDestinationOwner] = useState("");
   const openedRef = useRef(false);
   const submitAbortRef = useRef<AbortController | null>(null);
   const activeOperationIdRef = useRef<string | null>(null);
   const fieldId = useId();
   const pathInputId = `${fieldId}-path`;
   const repositoryInputId = `${fieldId}-repository`;
-  const forkDestinationOwnerInputId = `${fieldId}-fork-destination-owner`;
   const destinationParentInputId = `${fieldId}-destination-parent`;
   const directoryNameInputId = `${fieldId}-directory-name`;
   const submitButtonId = `${fieldId}-submit`;
@@ -155,7 +152,6 @@ export function CreateProjectDialog(props: {
     setRepositoryInput("");
     setDestinationParent(props.defaultCloneParent);
     setDirectoryName("");
-    setForkDestinationOwner("");
     setDirectoryNameEdited(false);
     setProvisionProgress(null);
     submitAbortRef.current = null;
@@ -307,7 +303,7 @@ export function CreateProjectDialog(props: {
       return;
     }
     if (source === "github" && !props.githubProvisioningAvailable) {
-      setFormError("Update the Forkara server before adding a project from GitHub.");
+      setFormError("Update the Synara server before adding a project from GitHub.");
       return;
     }
     if (source === "github" && trimmedDestinationParent.length === 0) {
@@ -335,7 +331,6 @@ export function CreateProjectDialog(props: {
             source: "github",
             operationId,
             repository: parsedRepository ?? repositoryInput.trim(),
-            forkDestinationOwner: forkDestinationOwner.trim() || undefined,
             destinationParent: trimmedDestinationParent,
             directoryName: normalizedDirectoryName ?? trimmedDirectoryName,
             spaceId,
@@ -502,12 +497,10 @@ export function CreateProjectDialog(props: {
           ) : (
             <CreateGitHubProjectFields
               repositoryInputId={repositoryInputId}
-              forkDestinationOwnerInputId={forkDestinationOwnerInputId}
               destinationParentInputId={destinationParentInputId}
               directoryNameInputId={directoryNameInputId}
               errorId={errorId}
               repositoryInput={repositoryInput}
-              forkDestinationOwner={forkDestinationOwner}
               destinationParent={destinationParent}
               directoryName={directoryName}
               finalClonePath={finalClonePath}
@@ -526,10 +519,6 @@ export function CreateProjectDialog(props: {
               }}
               onDestinationParentChange={(nextParent) => {
                 setDestinationParent(nextParent);
-                setFormError(null);
-              }}
-              onForkDestinationOwnerChange={(nextOwner) => {
-                setForkDestinationOwner(nextOwner);
                 setFormError(null);
               }}
               onDirectoryNameChange={(nextName) => {

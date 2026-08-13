@@ -592,6 +592,30 @@ export function resolveGitRepoUiState(input: {
   return input.queriedIsRepo ?? !input.isStudioContainer;
 }
 
+export interface SettledThreadBranchMismatch {
+  readonly threadBranch: string;
+  readonly currentBranch: string;
+}
+
+export function resolveSettledThreadBranchMismatch(input: {
+  isSettled: boolean;
+  isLocalWorkspace: boolean;
+  threadBranch: string | null | undefined;
+  currentBranch: string | null | undefined;
+}): SettledThreadBranchMismatch | null {
+  if (!input.isSettled || !input.isLocalWorkspace) {
+    return null;
+  }
+
+  const threadBranch = input.threadBranch?.trim() ?? "";
+  const currentBranch = input.currentBranch?.trim() ?? "";
+  if (!threadBranch || !currentBranch || threadBranch === currentBranch) {
+    return null;
+  }
+
+  return { threadBranch, currentBranch };
+}
+
 // The composer live strip prefers the turn's computed diff (the
 // `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
 // Before that lands, it falls back to mid-turn file-edit work-log activity so
@@ -717,6 +741,7 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    ...(draftThread.goal ? { goal: draftThread.goal } : {}),
   };
 }
 
@@ -824,7 +849,7 @@ export function describeVoiceRecordingStartError(error: unknown): string {
   const errorName = typeof error.name === "string" ? error.name : "";
 
   if (errorName === "NotAllowedError" || errorName === "PermissionDeniedError") {
-    return "Microphone access was denied. Enable it in macOS Privacy & Security > Microphone for Forkara, then try again.";
+    return "Microphone access was denied. Enable it in macOS Privacy & Security > Microphone for Synara, then try again.";
   }
   if (errorName === "NotFoundError" || errorName === "DevicesNotFoundError") {
     return "No microphone was found. Connect one and try again.";

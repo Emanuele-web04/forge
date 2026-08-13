@@ -7,6 +7,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import {
+  hasReconciledServerProviderStatuses,
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
@@ -29,8 +30,8 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
   return {
     cwd: "G:\\synara",
     homeDir: "C:\\Users\\tester",
-    chatWorkspaceRoot: "C:\\Users\\tester\\Documents\\Forkara",
-    studioWorkspaceRoot: "C:\\Users\\tester\\Documents\\Forkara\\Studio",
+    chatWorkspaceRoot: "C:\\Users\\tester\\Documents\\Synara",
+    studioWorkspaceRoot: "C:\\Users\\tester\\Documents\\Synara\\Studio",
     worktreesDir: "C:\\SynaraDev\\worktrees",
     keybindingsConfigPath: "C:\\SynaraDev\\keybindings.json",
     keybindings: [],
@@ -41,6 +42,17 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
 }
 
 describe("server provider status reconciliation", () => {
+  it("distinguishes hydrated config from a live provider snapshot", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([READY_CODEX_STATUS]));
+
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
+
+    await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(true);
+  });
+
   it("applies a missed live snapshot after the config projection hydrates", async () => {
     const queryClient = new QueryClient();
     let resolveConfig!: (config: ServerConfig) => void;
@@ -109,7 +121,11 @@ describe("server provider status reconciliation", () => {
     const refresh = refreshServerConfigAfterTransportOpen(queryClient, {
       loadConfig: () => configProjection,
     });
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
+
     await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(true);
+
     resolveConfig(makeServerConfig([unavailableStatus]));
     await refresh;
 
@@ -134,6 +150,7 @@ describe("server provider status reconciliation", () => {
       loadConfig: async () => makeServerConfig([READY_CODEX_STATUS]),
     });
 
+    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
     expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
       READY_CODEX_STATUS,
     ]);
@@ -166,7 +183,7 @@ describe("serverLocalServersQueryOptions", () => {
     expect(options.refetchOnWindowFocus).toBe(true);
   });
 
-  it("uses visible polling while a Forkara-owned project run is active", () => {
+  it("uses visible polling while a Synara-owned project run is active", () => {
     const options = sidebarLocalServersQueryOptions({
       hasActiveProjectRun: true,
       hasProjects: true,

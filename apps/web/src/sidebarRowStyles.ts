@@ -34,7 +34,7 @@ export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
  */
 export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
 
-/** Section label ("Threads"/"Pinned" and settings "App"/"Forkara"). */
+/** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
 export const SIDEBAR_SECTION_LABEL_CLASS_NAME =
   "text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58";
 

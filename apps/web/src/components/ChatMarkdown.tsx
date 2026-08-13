@@ -5,6 +5,7 @@
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
+import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import React, {
   Children,
@@ -34,6 +35,7 @@ import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
+import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
@@ -52,6 +54,7 @@ import { InlineAgentChip } from "./chat/InlineAgentChip";
 import { InlineLinkChip } from "./InlineLinkChip";
 import { InlineMentionChip } from "./chat/InlineMentionChip";
 import { InlineSkillChip } from "./chat/InlineSkillChip";
+import { InlineSlashCommandChip } from "./chat/InlineSlashCommandChip";
 import {
   COMPOSER_CHIP_SEGMENT_ATTRIBUTE,
   COMPOSER_CHIP_TAG_NAME,
@@ -770,6 +773,7 @@ function OpenableFileChip(props: {
 }) {
   const opener = useWorkspaceFileOpener();
   const chipPath = props.targetPath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+  const revealPath = isLocalAbsolutePath(chipPath) ? chipPath : undefined;
   return (
     <InlineMentionChip
       path={chipPath}
@@ -780,6 +784,16 @@ function OpenableFileChip(props: {
         event.stopPropagation();
         const forceExternalEditor = event.metaKey || event.ctrlKey;
         openWorkspaceFileReference(forceExternalEditor ? null : opener, props.targetPath);
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void showFileReferenceContextMenu({
+          path: chipPath,
+          ...(revealPath ? { revealPath } : {}),
+          position: { x: event.clientX, y: event.clientY },
+          onReferenceInChat: undefined,
+        });
       }}
       {...(opener?.prefetchFile
         ? { onHoverPrefetch: () => opener.prefetchFile?.(props.targetPath) }
@@ -815,6 +829,9 @@ function ComposerChipElement(props: {
   }
   if (segment.type === "agent-mention") {
     return <InlineAgentChip alias={segment.alias} color={segment.color} />;
+  }
+  if (segment.type === "slash-command") {
+    return <InlineSlashCommandChip command={segment.command} />;
   }
   return <InlineLinkChip url={segment.url} interactive />;
 }

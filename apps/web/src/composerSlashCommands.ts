@@ -1,4 +1,9 @@
-import type { GitBranch, ProviderKind } from "@synara/contracts";
+import {
+  THREAD_GOAL_MAX_CHARS,
+  type GitBranch,
+  type ProviderInteractionMode,
+  type ProviderKind,
+} from "@synara/contracts";
 import {
   BUILT_IN_COMPOSER_SLASH_COMMANDS,
   isBuiltInComposerSlashCommandName,
@@ -25,6 +30,11 @@ export interface ComposerSlashInvocation {
 
 export type FastSlashCommandAction = "toggle" | "on" | "off" | "status" | "invalid";
 export type ForkSlashCommandTarget = "local" | "worktree";
+export type GoalSlashCommandAction =
+  | { readonly action: "show" }
+  | { readonly action: "clear" }
+  | { readonly action: "set"; readonly goal: string }
+  | { readonly action: "too-long" };
 
 const CLAUDE_NATIVE_COMMAND_ALIASES: Record<string, readonly string[]> = {
   clear: ["reset", "new"],
@@ -82,9 +92,12 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   command: ComposerSlashCommand,
 ): boolean {
   return (
+    command === "debug" ||
+    command === "default" ||
     command === "automation" ||
     command === "export" ||
     command === "feedback" ||
+    command === "goal" ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && command === "review")
   );
 }
@@ -98,8 +111,11 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
   const appCommandIsAvailable = options.availableAppCommands?.has(normalizedCommand) ?? true;
   return (
     normalizedCommand === "automation" ||
+    normalizedCommand === "debug" ||
+    normalizedCommand === "default" ||
     (normalizedCommand === "export" && appCommandIsAvailable) ||
     (normalizedCommand === "feedback" && appCommandIsAvailable) ||
+    (normalizedCommand === "goal" && appCommandIsAvailable) ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && normalizedCommand === "review")
   );
 }
@@ -157,6 +173,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Switch this thread into plan mode",
     source: "app",
   },
+  debug: {
+    command: "debug",
+    label: "/debug",
+    description: "Switch this thread into evidence-first debug mode",
+    source: "app",
+  },
   default: {
     command: "default",
     label: "/default",
@@ -205,16 +227,16 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Download this thread as a ZIP archive (thread.json + transcript.md)",
     source: "app",
   },
+  goal: {
+    command: "goal",
+    label: "/goal",
+    description: "View, set, replace, or clear this thread's persistent goal",
+    source: "app",
+  },
   feedback: {
     command: "feedback",
     label: "/feedback",
-    description: "Send feedback to the Forkara team",
-    source: "app",
-  },
-  "blame-someone-else": {
-    command: "blame-someone-else",
-    label: "/blame-someone-else",
-    description: "Transfer blame to someone else (but keep git history honest)",
+    description: "Send feedback to the Synara team",
     source: "app",
   },
   automation: {
@@ -237,7 +259,7 @@ export function parseComposerSlashInvocationForCommands(
   text: string,
   commands: ReadonlyArray<ComposerSlashCommand>,
 ): ComposerSlashInvocation | null {
-  const match = /^\/([a-z-]+)(?:\s+(.*))?$/i.exec(text.trim());
+  const match = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!match) {
     return null;
   }
@@ -277,7 +299,7 @@ export function canOfferForkSlashCommand(input: {
   terminalContextCount: number;
   selectedSkillCount: number;
   selectedMentionCount: number;
-  interactionMode: "default" | "plan";
+  interactionMode: ProviderInteractionMode;
 }): boolean {
   return (
     !hasMeaningfulComposerText(input.prompt) &&
@@ -295,7 +317,7 @@ export function canOfferSideSlashCommand(input: {
   terminalContextCount: number;
   selectedSkillCount: number;
   selectedMentionCount: number;
-  interactionMode: "default" | "plan";
+  interactionMode: ProviderInteractionMode;
   isSidechat: boolean;
 }): boolean {
   return (
@@ -362,6 +384,20 @@ export function parseFastSlashCommandAction(text: string): FastSlashCommandActio
   return "invalid";
 }
 
+export function parseGoalSlashCommandArgs(args: string): GoalSlashCommandAction {
+  const goal = args.trim();
+  if (!goal) {
+    return { action: "show" };
+  }
+  if (goal.toLowerCase() === "clear") {
+    return { action: "clear" };
+  }
+  if (goal.length > THREAD_GOAL_MAX_CHARS) {
+    return { action: "too-long" };
+  }
+  return { action: "set", goal };
+}
+
 export function resolveComposerSlashRootBranch(input: {
   branches: ReadonlyArray<GitBranch> | null | undefined;
   activeProjectCwd: string | null | undefined;
@@ -410,6 +446,7 @@ export function getAvailableComposerSlashCommands(input: {
           "model",
           ...(input.supportsFastSlashCommand ? (["fast"] as const) : []),
           "plan",
+          "debug",
           "default",
           ...(input.canOfferReviewCommand ? (["review"] as const) : []),
           ...(input.canOfferForkCommand ? (["fork"] as const) : []),
@@ -417,19 +454,21 @@ export function getAvailableComposerSlashCommands(input: {
           "status",
           "subagents",
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
+          "goal",
           "feedback",
-          "blame-someone-else",
           "automation",
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
-          // creates a Forkara split/context clone before the provider sees the first turn.
-          // /export is app-level too — Forkara owns the thread transcript, so the download
+          // creates a Synara split/context clone before the provider sees the first turn.
+          // /export is app-level too — Synara owns the thread transcript, so the download
           // happens in the app rather than being forwarded to Claude's native /export.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
+          "goal",
+          "debug",
+          "default",
           "feedback",
-          "blame-someone-else",
           "automation",
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));

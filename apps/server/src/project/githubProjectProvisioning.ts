@@ -21,30 +21,6 @@ const CLONE_OUTPUT_LIMIT_BYTES = 2 * 1_024 * 1_024;
 const MAX_CLONE_PROGRESS_MESSAGE_LENGTH = 240;
 const CLONE_PROGRESS_LINE =
   /^(?:remote:\s*)?(?:Enumerating objects|Counting objects|Compressing objects|Receiving objects|Resolving deltas|Updating files|Checking out files|Filtering content):/i;
-const GITHUB_OWNER_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
-const FORK_ALREADY_EXISTS_PATTERN =
-  /fork already exists|already exists|already created|repository already exists/i;
-const GITHUB_AUTH_REQUIRED_KEYWORDS =
-  /(not authenticated|not logged in|authentication failed|no oauth token|bad credentials|could not read username|http 401|returned error: 401|401 unauthorized|gh auth login)/i;
-
-const RawForkParentSchema = Schema.Struct({
-  nameWithOwner: Schema.String,
-});
-const RawForkInfoSchema = Schema.Struct({
-  isFork: Schema.Boolean,
-  parent: Schema.optional(Schema.NullOr(RawForkParentSchema)),
-});
-
-interface GitHubForkSourceInfo {
-  readonly isFork: boolean;
-  readonly parentNameWithOwner: string | null;
-}
-
-interface GitHubForkPlan {
-  readonly cloneRepository: string;
-  readonly upstreamRepository: string | null;
-  readonly upstreamMessage: string | null;
-}
 
 export const GitHubProjectProvisioningErrorCode = Schema.Literals([
   "INVALID_REPOSITORY",
@@ -277,304 +253,6 @@ function classifyPromotionFailure(cause: unknown): GitHubProjectProvisioningErro
   );
 }
 
-function isValidGitHubOwner(input: string): boolean {
-  return GITHUB_OWNER_NAME_PATTERN.test(input.trim());
-}
-
-function isForkAlreadyExistsError(detail: string): boolean {
-  return FORK_ALREADY_EXISTS_PATTERN.test(detail);
-}
-
-function isAuthRequired(detail: string): boolean {
-  return GITHUB_AUTH_REQUIRED_KEYWORDS.test(detail.toLowerCase());
-}
-
-function decodeForkInfoJson(
-  raw: string,
-  operation: string,
-): Effect.Effect<GitHubForkSourceInfo, GitHubCliError> {
-  return Effect.gen(function* () {
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(raw) as unknown,
-      catch: (error) =>
-        new GitHubCliError({
-          operation,
-          detail: error instanceof Error ? error.message : "Unable to parse repository JSON.",
-          reason: "other",
-        }),
-    });
-    const decoded = yield* Schema.decodeUnknownSync(RawForkInfoSchema)(parsed).pipe(
-      Effect.mapError((error) =>
-        new GitHubCliError({
-          operation,
-          detail: error instanceof Error
-            ? `Invalid repository JSON response: ${error.message}`
-            : "Invalid repository JSON response.",
-          reason: "other",
-        }),
-      ),
-    );
-    return {
-      isFork: decoded.isFork,
-      parentNameWithOwner: decoded.parent?.nameWithOwner ?? null,
-    };
-  });
-}
-
-function classifyGitHubFailure(
-  cause: unknown,
-  operationLabel: string,
-  repository: string,
-): GitHubProjectProvisioningError {
-  if (cause instanceof GitHubProjectProvisioningError) return cause;
-
-  const detail =
-    cause instanceof GitHubCliError || cause instanceof GitCommandError
-      ? cause.detail
-      : cause instanceof Error
-        ? cause.message
-        : String(cause);
-  const lower = detail.toLowerCase();
-
-  if (isAuthRequired(lower)) {
-    return provisioningError(
-      "AUTH_REQUIRED",
-      `${operationLabel}: GitHub authentication is required for ${repository}.`,
-      false,
-      cause,
-    );
-  }
-
-  if (
-    lower.includes("repository not found") ||
-    lower.includes("could not resolve to a repository") ||
-    lower.includes("http 404")
-  ) {
-    return provisioningError(
-      "REPOSITORY_NOT_FOUND",
-      `${operationLabel}: Repository ${repository} was not found.`,
-      false,
-      cause,
-    );
-  }
-
-  if (lower.includes("permission denied") || lower.includes("not permitted") || lower.includes("not authorized")) {
-    return provisioningError(
-      "PERMISSION_DENIED",
-      `${operationLabel}: The GitHub account does not have permission for ${repository}.`,
-      false,
-      cause,
-    );
-  }
-
-  return provisioningError(
-    "CLONE_FAILED",
-    `${operationLabel}: The GitHub operation failed for ${repository}. Check permissions and retry.`,
-    true,
-    cause,
-  );
-}
-
-function repositoryNameFrom(ownerAndName: string): string {
-  const separator = ownerAndName.lastIndexOf("/");
-  return separator === -1 ? ownerAndName : ownerAndName.slice(separator + 1);
-}
-
-function resolveForkSourceInfo(
-  repository: string,
-  parent: string,
-  reporter: GitHubProjectProvisioningProgressReporter,
-  operationId: string,
-  github: GitHubCliShape,
-): Effect.Effect<GitHubForkSourceInfo, GitHubProjectProvisioningError> {
-  return Effect.gen(function* () {
-    const raw = yield* github
-      .execute({
-        cwd: parent,
-        args: ["repo", "view", repository, "--json", "isFork,parent"],
-      })
-      .pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.mapError((cause) =>
-          classifyGitHubFailure(cause, "Inspect source repository", repository),
-        ),
-      );
-
-    const sourceInfo = yield* decodeForkInfoJson(raw, "inspect source repository").pipe(
-      Effect.mapError((cause) =>
-        provisioningError(
-          "REPOSITORY_NOT_FOUND",
-          `Unable to inspect fork metadata for ${repository}.`,
-          false,
-          cause,
-        ),
-      ),
-    );
-    
-    if (sourceInfo.isFork && sourceInfo.parentNameWithOwner) {
-      yield* publishPhase(
-        reporter,
-        operationId,
-        "resolving-access",
-        `Source repository is already a fork of ${sourceInfo.parentNameWithOwner}.`,
-      );
-    }
-
-    return sourceInfo;
-  });
-}
-
-function ensureFork(
-  sourceRepository: string,
-  forkSource: GitHubForkSourceInfo,
-  input: GitHubProjectProvisionInput,
-  viewerLogin: string,
-  parent: string,
-  reporter: GitHubProjectProvisioningProgressReporter,
-  github: GitHubCliShape,
-): Effect.Effect<GitHubForkPlan, GitHubProjectProvisioningError> {
-  if (forkSource.isFork) {
-    return Effect.succeed({
-      cloneRepository: sourceRepository,
-      upstreamRepository: forkSource.parentNameWithOwner,
-      upstreamMessage:
-        forkSource.parentNameWithOwner === null
-          ? null
-          : `Using fork upstream ${forkSource.parentNameWithOwner}.`,
-    });
-  }
-
-  const forkDestinationOwner = input.forkDestinationOwner?.trim() || viewerLogin.trim();
-  if (!isValidGitHubOwner(forkDestinationOwner)) {
-    return Effect.fail(
-      provisioningError("INVALID_DESTINATION", "Choose a valid destination account or organization.", false),
-    );
-  }
-
-  const forkRepository = `${forkDestinationOwner}/${repositoryNameFrom(sourceRepository)}`;
-  const commandArgs = [
-    "repo",
-    "fork",
-    sourceRepository,
-    "--clone=false",
-    ...(forkDestinationOwner === viewerLogin ? [] : ["--org", forkDestinationOwner]),
-  ];
-
-  return Effect.gen(function* () {
-    const forked = yield* github.execute({ cwd: parent, args: commandArgs }).pipe(
-      Effect.as(true),
-      Effect.catchAll((cause) => {
-        const detail =
-          cause instanceof GitHubCliError || cause instanceof GitCommandError
-            ? cause.detail
-            : cause instanceof Error
-              ? cause.message
-              : String(cause);
-        if (isForkAlreadyExistsError(detail)) {
-          return Effect.succeed(false);
-        }
-        return Effect.fail(classifyGitHubFailure(cause, "Create fork", sourceRepository));
-      }),
-    );
-
-    if (!forked) {
-      yield* publishPhase(
-        reporter,
-        input.operationId,
-        "resolving-access",
-        `Fork already exists for ${forkRepository}. Using existing fork.`,
-      );
-    }
-
-    return {
-      cloneRepository: forkRepository,
-      upstreamRepository: sourceRepository,
-      upstreamMessage:
-        forked
-          ? `Forked ${sourceRepository} into ${forkRepository}.`
-          : `Reusing existing fork ${forkRepository}.`,
-    };
-  });
-}
-
-function setUpstreamRemote(
-  workspaceRoot: string,
-  upstreamRepository: string,
-  parent: string,
-  reporter: GitHubProjectProvisioningProgressReporter,
-  operationId: string,
-  git: GitCoreShape,
-  github: GitHubCliShape,
-): Effect.Effect<void, GitHubProjectProvisioningError> {
-  return Effect.gen(function* () {
-    const upstreamUrl = yield* github
-      .getRepositoryCloneUrls({ cwd: parent, repository: upstreamRepository })
-      .pipe(
-        Effect.map((value) => value.url),
-        Effect.mapError((cause) =>
-          classifyGitHubFailure(cause, "Resolve upstream", upstreamRepository),
-        ),
-      );
-
-    const existingUpstream = yield* git
-      .execute({
-        operation: "inspect upstream",
-        cwd: workspaceRoot,
-        args: ["remote", "get-url", "upstream"],
-        allowNonZeroExit: true,
-        timeoutMs: 15_000,
-        maxOutputBytes: 64 * 1_024,
-      })
-      .pipe(Effect.map((result) => result.stdout.trim()));
-
-    if (existingUpstream.length > 0 && existingUpstream === upstreamUrl) {
-      return;
-    }
-
-    if (existingUpstream.length > 0) {
-      yield* git
-        .execute({
-          operation: "set upstream remote",
-          cwd: workspaceRoot,
-          args: ["remote", "set-url", "upstream", upstreamUrl],
-          timeoutMs: 15_000,
-          maxOutputBytes: 64 * 1_024,
-        })
-        .pipe(Effect.mapError((cause) => classifyCloneFailure(cause)));
-      return;
-    }
-
-    yield* git
-      .execute({
-        operation: "add upstream remote",
-        cwd: workspaceRoot,
-        args: ["remote", "add", "upstream", upstreamUrl],
-        timeoutMs: 15_000,
-        maxOutputBytes: 64 * 1_024,
-      })
-      .pipe(
-        Effect.catchAll(() =>
-          git
-            .execute({
-              operation: "set upstream remote",
-              cwd: workspaceRoot,
-              args: ["remote", "set-url", "upstream", upstreamUrl],
-              timeoutMs: 15_000,
-              maxOutputBytes: 64 * 1_024,
-            })
-            .pipe(Effect.mapError((cause) => classifyCloneFailure(cause))),
-        ),
-      );
-
-    yield* publishPhase(
-      reporter,
-      operationId,
-      "resolving-access",
-      `Configured ${upstreamRepository} as upstream.`,
-    );
-  });
-}
-
 function publishPhase(
   reporter: GitHubProjectProvisioningProgressReporter,
   operationId: string,
@@ -687,21 +365,49 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
     reporter: GitHubProjectProvisioningProgressReporter,
   ) {
     const publishChunk = createCloneProgressChunkHandler(input.operationId, reporter);
+    const githubCliReady = yield* github.getViewerLogin({ cwd: parent }).pipe(
+      Effect.as(true),
+      Effect.catch(() => Effect.succeed(false)),
+    );
 
-    yield* github.execute({
+    if (githubCliReady) {
+      yield* github.execute({
+        cwd: parent,
+        args: ["repo", "clone", "--no-upstream", repository, stagingPath, "--", "--progress"],
+        timeoutMs: CLONE_TIMEOUT_MS,
+        maxBufferBytes: CLONE_OUTPUT_LIMIT_BYTES,
+        outputMode: "truncate",
+        env: {
+          GCM_INTERACTIVE: "never",
+          GIT_TERMINAL_PROMPT: "0",
+          SSH_ASKPASS: "",
+          SSH_ASKPASS_REQUIRE: "never",
+        },
+        onStdoutChunk: publishChunk,
+        onStderrChunk: publishChunk,
+      });
+      return;
+    }
+
+    // GitCore.execute owns the spawned process in an Effect Scope. Cancelling the
+    // WebSocket request interrupts this Effect, closes that Scope, and terminates
+    // the fallback `git clone` process just like runProcess does for the gh path.
+    yield* git.execute({
+      operation: "clone public GitHub project",
       cwd: parent,
-      args: ["repo", "clone", "--no-upstream", repository, stagingPath, "--", "--progress"],
-      timeoutMs: CLONE_TIMEOUT_MS,
-      maxBufferBytes: CLONE_OUTPUT_LIMIT_BYTES,
-      outputMode: "truncate",
+      args: ["clone", "--progress", "--", `https://github.com/${repository}.git`, stagingPath],
       env: {
         GCM_INTERACTIVE: "never",
+        GIT_ASKPASS: "",
         GIT_TERMINAL_PROMPT: "0",
-        SSH_ASKPASS: "",
-        SSH_ASKPASS_REQUIRE: "never",
       },
-      onStdoutChunk: publishChunk,
-      onStderrChunk: publishChunk,
+      timeoutMs: CLONE_TIMEOUT_MS,
+      maxOutputBytes: CLONE_OUTPUT_LIMIT_BYTES,
+      outputMode: "truncate",
+      progress: {
+        onStdoutLine: (line) => Effect.sync(() => publishChunk(`${line}\n`)),
+        onStderrLine: (line) => Effect.sync(() => publishChunk(`${line}\n`)),
+      },
     });
   });
 
@@ -769,40 +475,17 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
       return yield* withDestinationLock(
         workspaceRoot,
         Effect.gen(function* () {
-          const viewerLogin = yield* github
-            .getViewerLogin({ cwd: parent })
-            .pipe(Effect.mapError((cause) =>
-              classifyGitHubFailure(cause, "Authenticate with GitHub", repository),
-            ));
-
-          const forkSource = yield* resolveForkSourceInfo(
-            repository,
-            parent,
-            reporter,
-            input.operationId,
-            github,
-          );
-
-          const forkPlan = yield* ensureFork(
-            repository,
-            forkSource,
-            input,
-            viewerLogin,
-            parent,
-            reporter,
-            github,
-          );
-
-          if (forkPlan.upstreamMessage) {
-            yield* publishPhase(reporter, input.operationId, "resolving-access", forkPlan.upstreamMessage);
-          }
-
-          const existing = yield* inspectExistingDestination(workspaceRoot, forkPlan.cloneRepository);
+          const existing = yield* inspectExistingDestination(workspaceRoot, repository);
           if (existing) {
             return { ...existing, operationId: input.operationId };
           }
 
-          yield* publishPhase(reporter, input.operationId, "resolving-access", "Resolving GitHub access");
+          yield* publishPhase(
+            reporter,
+            input.operationId,
+            "resolving-access",
+            "Resolving GitHub access",
+          );
           const stagingPath = path.join(
             parent,
             `.synara-clone-${process.pid}-${randomUUID().replace(/-/g, "")}`,
@@ -810,41 +493,24 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
           let promoted = false;
 
           const runClone = Effect.gen(function* () {
-            yield* publishPhase(
-              reporter,
-              input.operationId,
-              "cloning",
-              `Cloning ${forkPlan.cloneRepository}`,
-            );
+            yield* publishPhase(reporter, input.operationId, "cloning", `Cloning ${repository}`);
             yield* cloneSlots.withPermits(1)(
-              cloneToStaging(input, forkPlan.cloneRepository, parent, stagingPath, reporter),
+              cloneToStaging(input, repository, parent, stagingPath, reporter),
             );
 
             yield* publishPhase(reporter, input.operationId, "verifying", "Verifying checkout");
-            const valid = yield* verifyCheckout(stagingPath, forkPlan.cloneRepository);
+            const valid = yield* verifyCheckout(stagingPath, repository);
             if (!valid) {
               return yield* provisioningError(
                 "CLONE_FAILED",
-                "The cloned repository's origin does not match the requested GitHub fork.",
+                "The cloned repository's origin does not match the requested GitHub repository.",
                 false,
-              );
-            }
-
-            if (forkPlan.upstreamRepository) {
-              yield* setUpstreamRemote(
-                stagingPath,
-                forkPlan.upstreamRepository,
-                parent,
-                reporter,
-                input.operationId,
-                git,
-                github,
               );
             }
 
             const appearedDuringClone = yield* inspectExistingDestination(
               workspaceRoot,
-              forkPlan.cloneRepository,
+              repository,
             );
             if (appearedDuringClone) {
               return { ...appearedDuringClone, operationId: input.operationId };
@@ -856,7 +522,7 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
             promoted = true;
             return {
               operationId: input.operationId,
-              repository: forkPlan.cloneRepository,
+              repository,
               workspaceRoot,
               checkout: "created" as const,
               recoveryPath: stagingPath,

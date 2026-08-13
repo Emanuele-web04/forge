@@ -29,7 +29,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "startup-reconnect-recovery",
         title: "Large histories start and reconnect without a fixed deadline",
         description:
-          "Forkara now keeps waiting for a healthy backend and recovers late connections instead of giving up while a large history is still loading.",
+          "Synara now keeps waiting for a healthy backend and recovers late connections instead of giving up while a large history is still loading.",
         details:
           "Desktop readiness is cancellable but no longer capped by a fixed timeout, WebSocket reconnects use bounded backoff, and orchestration replay filters irrelevant events before decoding them. Startup, resume, and late-event handling now converge without turning a slow database into a false failure.",
       },
@@ -53,7 +53,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "editable-explorer",
         title: "Edit and save files directly from Explorer",
         description:
-          "Workspace previews are now useful for small code and text edits without leaving Forkara.",
+          "Workspace previews are now useful for small code and text edits without leaving Synara.",
         details:
           "Explorer file previews support editing, dirty-state tracking, guarded saves, clearer breadcrumbs, and safer path validation. Image overlays and preview layering were also corrected so file inspection remains usable beside the native browser and docked tools.",
       },
@@ -134,7 +134,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "We did not add it, and we have no access to the PostHog project receiving the events.",
         details:
-          "The configuration has been removed. Forkara no longer sends remote product analytics. The events did not include prompts, source code, filenames, or file contents. We're sorry this wasn't caught earlier",
+          "The configuration has been removed. Synara no longer sends remote product analytics. The events did not include prompts, source code, filenames, or file contents. We're sorry this wasn't caught earlier",
       },
     ],
   },
@@ -146,7 +146,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "github-project-import",
         title: "Start directly from a GitHub repository",
         description:
-          "Create a project from a GitHub URL or repository name and let Forkara prepare the local checkout for you.",
+          "Create a project from a GitHub URL or repository name and let Synara prepare the local checkout for you.",
         details:
           "The new GitHub source in the project dialog validates repository and folder names, uses your GitHub CLI access, reports clone progress, reuses compatible checkouts, and recovers safely from cancellation or a failed registration without leaving an ambiguous project behind.",
       },
@@ -186,7 +186,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "attention-aware-notifications",
         title: "Notifications respect where your attention is",
         description:
-          "Completion alerts stay quiet while Forkara is in front of you, and provider update notices refresh more reliably when you return.",
+          "Completion alerts stay quiet while Synara is in front of you, and provider update notices refresh more reliably when you return.",
         details:
           "Foreground detection now includes the native browser pane, toast visibility follows side-chat dock and split routes, and provider update checks retry on focus with fresher scheduling so stale availability does not linger in the sidebar.",
       },
@@ -218,13 +218,13 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Permission prompts and other requests for your input are less likely to linger, reappear, or acknowledge the wrong task.",
         details:
-          "Human interactions are now fenced to the owning provider request and turn across Claude and OpenCode. Resolved guards remain resolved, stale cross-turn requests are ignored, retryable interactions stay visible, and OpenCode permission replies wait for a real acknowledgement before Forkara clears them.",
+          "Human interactions are now fenced to the owning provider request and turn across Claude and OpenCode. Resolved guards remain resolved, stale cross-turn requests are ignored, retryable interactions stay visible, and OpenCode permission replies wait for a real acknowledgement before Synara clears them.",
       },
       {
         id: "provider-skills-and-models",
         title: "Installed skills and favourite models stay discoverable",
         description:
-          "Forkara now finds installed Claude plugin skills and keeps similarly named favourite models tied to the correct provider.",
+          "Synara now finds installed Claude plugin skills and keeps similarly named favourite models tied to the correct provider.",
         details:
           "Claude plugin discovery respects install precedence and Windows path boundaries. Model metadata from Pi extensions is normalized without losing resolvable identities, favourite entries distinguish providers, and model-cost context remains accessible in the picker.",
       },
@@ -240,7 +240,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "accurate-completion-signals",
         title: "Completion alerts mean the task really completed",
         description:
-          "Forkara no longer treats interrupted or errored work as a successful completion or repeats an alert as timestamps change.",
+          "Synara no longer treats interrupted or errored work as a successful completion or repeats an alert as timestamps change.",
         details:
           "Completion identity is now tied to the turn rather than mutable session fields, stale snapshots cannot settle the active turn, and notification deduplication remains stable as status projections converge.",
       },
@@ -302,7 +302,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Let supported agents navigate and operate the same browser surface you can see, with tabs, snapshots, screenshots, input, dialogs, and workspace-safe file transfer.",
         details:
-          "The browser bridge is provider-agnostic and session-scoped: it reuses Forkara's visible Electron WebView, cookies, and authenticated state instead of creating a hidden browser. Agents get bounded semantic snapshots, trusted clicks, typing, key presses, scrolling, selection, dragging, waits, and page diagnostics, while navigation, target refs, timeouts, popup sign-in, uploads, and download approval boundaries stay explicit.",
+          "The browser bridge is provider-agnostic and session-scoped: it reuses Synara's visible Electron WebView, cookies, and authenticated state instead of creating a hidden browser. Agents get bounded semantic snapshots, trusted clicks, typing, key presses, scrolling, selection, dragging, waits, and page diagnostics, while navigation, target refs, timeouts, popup sign-in, uploads, and download approval boundaries stay explicit.",
       },
       {
         id: "browser-dom-annotations",
@@ -340,7 +340,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "lighter-reconnects",
         title: "Reconnects use less bandwidth and recover more state",
         description:
-          "Forkara negotiates one authenticated connection, compresses large traffic, and resumes thread detail from a cursor when possible.",
+          "Synara negotiates one authenticated connection, compresses large traffic, and resumes thread detail from a cursor when possible.",
         details:
           "A single handshake negotiates compatibility and permessage-deflate; delta-capable subscriptions replay from safe cursors with conservative snapshot fallback; precompressed web assets and cache headers speed first loads. Hydration also reads durable projections directly, retries missing snapshots after timed-out starts, and keeps provider notification drains alive until sessions settle.",
       },
@@ -358,7 +358,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Model discovery and runtime menus stay useful across cold starts, Claude capabilities, and mixed provider sessions.",
         details:
-          "Claude models can be discovered on a cold start, model and effort options use capability-aware ordering and labels, and thread hover cards expose the active provider and model context. Unknown provider update statuses no longer break self-update flows, and Antigravity returns a decision for inactive hook requests instead of launching Forkara.",
+          "Claude models can be discovered on a cold start, model and effort options use capability-aware ordering and labels, and thread hover cards expose the active provider and model context. Unknown provider update statuses no longer break self-update flows, and Antigravity returns a decision for inactive hook requests instead of launching Synara.",
       },
       {
         id: "repository-aware-git-workflows",
@@ -378,7 +378,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "responsive-stop-controls",
         title: "Stop stays responsive under load",
         description:
-          "Interrupt and stop actions now take priority over new work, even when a busy Forkara server has filled its ordinary command queue.",
+          "Interrupt and stop actions now take priority over new work, even when a busy Synara server has filled its ordinary command queue.",
         details:
           "Control, user, and background commands now use separate admission priorities while preserving reserved capacity for recovery. Provider calls and lifecycle locks are bounded too, so one wedged session cannot hold every other task hostage, and failed stop requests now surface an actionable error instead of silently leaving the UI spinning.",
       },
@@ -396,7 +396,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Turns are less likely to remain stuck as running after terminal provider events, restarts, stale resumes, or delayed lifecycle updates.",
         details:
-          "Forkara retains enough turn identity to settle late Claude results, fences stale lifecycle generations, reconciles durable provider commands and runtime events, and aligns Codex, Claude, Cursor, and ACP session ownership through start, stop, reconnect, and restart boundaries.",
+          "Synara retains enough turn identity to settle late Claude results, fences stale lifecycle generations, reconciles durable provider commands and runtime events, and aligns Codex, Claude, Cursor, and ACP session ownership through start, stop, reconnect, and restart boundaries.",
       },
       {
         id: "safe-follow-up-queues",
@@ -426,7 +426,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Follow tools as they start, update, and finish across supported providers, with consistent labels and details directly in the transcript.",
         details:
-          "Forkara now normalizes live and settled tool activity into one presentation model, preserves expandable tool details and interactions, and reconciles terminal states without leaving duplicate or permanently running work rows behind.",
+          "Synara now normalizes live and settled tool activity into one presentation model, preserves expandable tool details and interactions, and reconciles terminal states without leaving duplicate or permanently running work rows behind.",
       },
       {
         id: "reliable-live-recovery",
@@ -450,7 +450,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "When an uncertain provider delivery quarantines a thread, the error banner now offers a safe Unblock thread action.",
         details:
-          "Forkara abandons ambiguous blockers oldest-first, then replays only the skipped turn starts. This restores the conversation without risking a duplicate resend of the command whose delivery could not be proven.",
+          "Synara abandons ambiguous blockers oldest-first, then replays only the skipped turn starts. This restores the conversation without risking a duplicate resend of the command whose delivery could not be proven.",
       },
       {
         id: "automation-and-desktop-resilience",
@@ -464,7 +464,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "faster-startup-and-diffs",
         title: "Startup and large diffs do less work",
         description:
-          "Forkara loads expensive provider and diff machinery only when needed and computes working-tree statistics without transferring full patches.",
+          "Synara loads expensive provider and diff machinery only when needed and computes working-tree statistics without transferring full patches.",
         details:
           "Shell environment probes and orchestration startup state are reused, route chunks are preloaded selectively, supervised process scans are throttled, and React Compiler coverage protects chat, picker, hook, and UI hot paths.",
       },
@@ -474,7 +474,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Exclusive SQLite locking and stricter migration-artifact cleanup reduce the chance of competing writers or abandoned update files.",
         details:
-          "Database access now proves exclusive ownership, migration backups and resumable artifacts receive broader retention and reclamation coverage, and orphan cleanup stays bounded to verified Forkara-owned paths.",
+          "Database access now proves exclusive ownership, migration backups and resumable artifacts receive broader retention and reclamation coverage, and orphan cleanup stays bounded to verified Synara-owned paths.",
       },
       {
         id: "custom-void-space",
@@ -502,7 +502,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "database-recovery",
         title: "Updates recover safely from interrupted migrations",
         description:
-          "Forkara now detects and repairs the database state that could leave some 0.6.0 installations stuck during startup.",
+          "Synara now detects and repairs the database state that could leave some 0.6.0 installations stuck during startup.",
         details:
           "Migration lineage is validated before launch, recovery uses verified backups and resumable markers, and the desktop supervisor distinguishes recoverable migration failures from ordinary backend exits. The recovery path is covered on macOS, Linux, and Windows, including Windows-specific process and filesystem behavior.",
       },
@@ -546,19 +546,19 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "external-synara-mcp",
-        title: "Bring Forkara to any MCP-capable agent",
+        title: "Bring Synara to any MCP-capable agent",
         description:
-          "Connect Codex, Claude Code, Claude Desktop, or another local MCP app, then let it discover your Forkara workspace, launch isolated tasks, wait for results, and bring the answer back.",
+          "Connect Codex, Claude Code, Claude Desktop, or another local MCP app, then let it discover your Synara workspace, launch isolated tasks, wait for results, and bring the answer back.",
         details:
           "Settings → Integrations now provides a copy-ready guided prompt for agentic clients, manual JSON configuration for Claude Desktop and other non-agentic clients, resumable pairing, all-or-selected project access, provider and model discovery, connection status, and immediate revocation. Connections expire, are rate-limited and capability-scoped, and default new work to managed worktrees with approval-required execution; local-checkout, full-access, and project-wide task reading stay behind explicit advanced permissions.",
       },
       {
         id: "built-in-synara-mcp",
-        title: "Forkara's agents can now operate Forkara",
+        title: "Synara's agents can now operate Synara",
         description:
-          "Every supported agent running inside Forkara receives built-in tools to understand the app, delegate work, coordinate parallel tasks, inspect failures, and manage automations.",
+          "Every supported agent running inside Synara receives built-in tools to understand the app, delegate work, coordinate parallel tasks, inspect failures, and manage automations.",
         details:
-          "The new Forkara Agent Gateway can list and read projects and tasks, create one task or an exact multi-agent batch across providers and models, wait for every result, continue or interrupt work, rename or archive tasks, inspect runtime diagnostics, and manage automation lifecycles. Thread-bound authority, privilege caps, idempotent creation, isolated worktrees, and restart recovery keep delegated work visible and contained.",
+          "The new Synara Agent Gateway can list and read projects and tasks, create one task or an exact multi-agent batch across providers and models, wait for every result, continue or interrupt work, rename or archive tasks, inspect runtime diagnostics, and manage automation lifecycles. Thread-bound authority, privilege caps, idempotent creation, isolated worktrees, and restart recovery keep delegated work visible and contained.",
       },
       {
         id: "project-spaces",
@@ -580,7 +580,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "claude-subagents-workflows",
         title: "Claude subagents and workflows are first-class",
         description:
-          "Follow Claude's native subagents and dynamic workflows as real Forkara work, with live status, phases, tools, usage, steering, and background controls.",
+          "Follow Claude's native subagents and dynamic workflows as real Synara work, with live status, phases, tools, usage, steering, and background controls.",
         details:
           "Child tasks are navigable and independently visible, workflow cards show every phase and agent by default, model and effort stay live, and pause, resume, stop, foreground, and background actions remain synchronized through late events and provider restarts.",
       },
@@ -588,7 +588,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "cross-task-context",
         title: "Bring another task into the conversation",
         description:
-          "Mention an existing Forkara task from the composer to give the current agent the right recent context without copying a transcript by hand.",
+          "Mention an existing Synara task from the composer to give the current agent the right recent context without copying a transcript by hand.",
         details:
           "Cross-task mentions include bounded recent conversation context together with the source project and provider identity, and disambiguate tasks that share the same title.",
       },
@@ -598,7 +598,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "New chats paint sooner, model choices arrive earlier, and active turns spend less time on repeated setup, storage, and rendering work.",
         details:
-          "Forkara prefetches provider models before the composer opens, avoids a redundant first-turn Claude permission wait, prepares Codex overlays without blocking, parallelizes independent turn-start I/O, reduces streaming SQL work, and expands React Compiler coverage across the web app.",
+          "Synara prefetches provider models before the composer opens, avoids a redundant first-turn Claude permission wait, prepares Codex overlays without blocking, parallelizes independent turn-start I/O, reduces streaming SQL work, and expands React Compiler coverage across the web app.",
       },
       {
         id: "provider-reliability",
@@ -606,7 +606,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Claude, Codex, Cursor, Droid, Grok, OpenCode, Kilo, Pi, and Antigravity receive a broad round of model, permission, resume, child-event, and completion fixes.",
         details:
-          "Highlights include Fable 5 and Opus 4.8 in Pi, namespaced Cursor and Grok model support, accurate Claude context windows, official ACP SDK handling, app-owned OpenCode review commands, isolated Codex child events, safer provider updates, preserved blank PATH defaults, and an Antigravity hook that no longer launches Forkara unexpectedly.",
+          "Highlights include Fable 5 and Opus 4.8 in Pi, namespaced Cursor and Grok model support, accurate Claude context windows, official ACP SDK handling, app-owned OpenCode review commands, isolated Codex child events, safer provider updates, preserved blank PATH defaults, and an Antigravity hook that no longer launches Synara unexpectedly.",
       },
       {
         id: "desktop-runtime-hardening",
@@ -632,11 +632,11 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "antigravity-provider",
-        title: "Antigravity joins Forkara",
+        title: "Antigravity joins Synara",
         description:
           "Connect the Antigravity CLI as a first-class coding agent, with discovered models, reasoning controls, streaming activity, approvals, and resumable conversations.",
         details:
-          "The new provider adapter covers installation and authentication guidance, model and effort discovery, session creation and resume, tool and plan events, permission requests, usage reporting, cancellation, and restart recovery. Forkara also includes dedicated Antigravity branding throughout provider setup and selection.",
+          "The new provider adapter covers installation and authentication guidance, model and effort discovery, session creation and resume, tool and plan events, permission requests, usage reporting, cancellation, and restart recovery. Synara also includes dedicated Antigravity branding throughout provider setup and selection.",
       },
       {
         id: "steadier-live-turns",
@@ -668,7 +668,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "A failed Cursor model refresh no longer takes down the model picker or discards usable choices from other discovery sources.",
         details:
-          "Model-catalog queries retain successful and cached data when one Cursor discovery path fails, while pull-request data is coalesced through shared list logic and picker popups use a unified interaction model. Diff headers now use Forkara's own visual chrome for a more consistent workspace.",
+          "Model-catalog queries retain successful and cached data when one Cursor discovery path fails, while pull-request data is coalesced through shared list logic and picker popups use a unified interaction model. Diff headers now use Synara's own visual chrome for a more consistent workspace.",
       },
     ],
   },
@@ -678,7 +678,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "pull-request-workspace",
-        title: "Review pull requests without leaving Forkara",
+        title: "Review pull requests without leaving Synara",
         description:
           "Browse, search, and filter pull requests across your projects, then open a complete review workspace beside the conversation.",
         details:
@@ -712,7 +712,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "desktop-window-restore",
         title: "Desktop windows reopen where you left them",
         description:
-          "Forkara restores the previous desktop window size, position, and maximized state while keeping reopened windows on a visible display.",
+          "Synara restores the previous desktop window size, position, and maximized state while keeping reopened windows on a visible display.",
         details:
           "Window state is persisted across launches and validated against the current monitor layout, avoiding off-screen restoration when displays have changed.",
       },
@@ -734,7 +734,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "appsnap-capture",
         title: "Capture any Mac app straight into your task",
         description:
-          "Press both Option keys to capture the window you are using and attach it to the current Forkara task.",
+          "Press both Option keys to capture the window you are using and attach it to the current Synara task.",
         details:
           "AppSnap is an opt-in macOS workflow with a dedicated setup panel, permission guidance, capture feedback, app icons, and a first-run introduction. Captures stay tied to the active task without stealing focus, and the desktop helper is included in packaged Mac builds.",
       },
@@ -772,15 +772,15 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "droid-provider",
         title: "Factory Droid is now a first-class provider",
         description:
-          "Droid is now available alongside Forkara's other agents, with runtime model discovery, session import, token multipliers, and resilient resume and recovery.",
+          "Droid is now available alongside Synara's other agents, with runtime model discovery, session import, token multipliers, and resilient resume and recovery.",
         details:
-          "Forkara now connects to Factory Droid through ACP, discovers models and their switching capabilities at runtime, imports existing Droid sessions, carries context across forks and restarts, and keeps bootstrap, configuration, and turn teardown state coherent. The release also adds the Factory logo and richer Droid token reporting.",
+          "Synara now connects to Factory Droid through ACP, discovers models and their switching capabilities at runtime, imports existing Droid sessions, carries context across forks and restarts, and keeps bootstrap, configuration, and turn teardown state coherent. The release also adds the Factory logo and richer Droid token reporting.",
       },
       {
         id: "large-history-startup",
         title: "Large conversation histories start reliably",
         description:
-          "Forkara now upgrades large local histories without leaving the project list stuck on its loading screen.",
+          "Synara now upgrades large local histories without leaving the project list stuck on its loading screen.",
         details:
           "The activity-sequence backfill now builds one indexed lookup instead of repeatedly scanning the entire event history. A database with more than 180,000 activities completes the recovery in seconds while preserving every project, thread, message, and activity.",
       },
@@ -830,11 +830,11 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "synara-identity",
-        title: "Forkara, all the way through",
+        title: "Synara, all the way through",
         description:
           "The app now uses one identity everywhere, from its desktop installation and command line to packages, settings, diagnostics, and release artifacts.",
         details:
-          "The desktop bundle is now com.emanueledipietro.synara, the CLI is @synara/cli with the synara command, and every first-party runtime identifier uses the Forkara namespace. The 0.4.2 bridge preserves renderer state during the origin change.",
+          "The desktop bundle is now com.emanueledipietro.synara, the CLI is @synara/cli with the synara command, and every first-party runtime identifier uses the Synara namespace. The 0.4.2 bridge preserves renderer state during the origin change.",
       },
       {
         id: "claude-context-and-resume",
@@ -884,11 +884,11 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "synara-identity-bridge",
-        title: "Forkara is preparing a seamless identity upgrade",
+        title: "Synara is preparing a seamless identity upgrade",
         description:
-          "Launch this version at least once before installing the next Forkara release so your drafts, pins, theme, browser state, and other local interface preferences move with you.",
+          "Launch this version at least once before installing the next Synara release so your drafts, pins, theme, browser state, and other local interface preferences move with you.",
         details:
-          "This bridge writes a validated Forkara-only snapshot of renderer state, keeps existing project and thread data intact, and prepares database and checkpoint metadata for the final identity cutover. Earlier command and environment aliases are accepted by this bridge release only and will be removed next.",
+          "This bridge writes a validated Synara-only snapshot of renderer state, keeps existing project and thread data intact, and prepares database and checkpoint metadata for the final identity cutover. Earlier command and environment aliases are accepted by this bridge release only and will be removed next.",
       },
       {
         id: "claude-usage-reliability",
@@ -902,7 +902,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "desktop-update-verification",
         title: "Desktop updates now verify their own installs",
         description:
-          "Forkara checks that an update actually installed after restart, detects failed installs, and recovers instead of silently staying on the old version.",
+          "Synara checks that an update actually installed after restart, detects failed installs, and recovers instead of silently staying on the old version.",
         details:
           "A durable install marker survives restarts and tracks handoff state, an install watchdog recovers from hung installs, and on macOS dedicated diagnostics capture updater state to make failures actionable.",
       },
@@ -948,7 +948,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "restore-and-routing-reliability",
         title: "Returning to a chat or Studio is more reliable",
         description:
-          "Forkara is more careful about restoring the right destination after reloads, segment switches, reconnects, and partially completed project creation.",
+          "Synara is more careful about restoring the right destination after reloads, segment switches, reconnects, and partially completed project creation.",
         details:
           "Routing now prefers canonical containers, waits for snapshot hydration where needed, fails closed on ambiguous thread kinds, and guards against overlapping fresh-chat creation so drafts and active work land in the intended surface.",
       },
@@ -994,7 +994,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "claude-rate-limits",
         title: "Claude rate limits fail more gracefully",
         description:
-          "When Claude reports usage or rate-limit trouble, Forkara now presents the condition more calmly instead of turning it into a generic provider failure.",
+          "When Claude reports usage or rate-limit trouble, Synara now presents the condition more calmly instead of turning it into a generic provider failure.",
         details:
           "Provider usage handling now narrows usage summary types more safely and treats Claude usage limit responses as a recoverable, user-facing state with focused parser and resilience coverage.",
       },
@@ -1048,7 +1048,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "terminal-shutdown-escalation",
         title: "Terminal shutdown is more reliable",
         description:
-          "Forkara is better at shutting down stubborn terminal process trees without returning early while child processes are still alive.",
+          "Synara is better at shutting down stubborn terminal process trees without returning early while child processes are still alive.",
         details:
           "TerminalManager now routes shutdown through a dedicated process-tree killer with SIGTERM-to-SIGKILL escalation, cancellation when processes exit cleanly, nested process activity coverage, and tests for disposal timing.",
       },
@@ -1086,7 +1086,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "worktree-setup-status",
         title: "Worktree setup failures recover cleanly",
         description:
-          "When a worktree setup step fails, Forkara now shows the failed setup state, keeps the timeline from looking stuck, and resets the local dispatch when you send again.",
+          "When a worktree setup step fails, Synara now shows the failed setup state, keeps the timeline from looking stuck, and resets the local dispatch when you send again.",
         details:
           "ChatView and timeline setup snapshots now carry explicit setup step status, targeted cleanup for failed local dispatches, and focused browser/unit coverage for new-turn reset and setup rows.",
       },
@@ -1110,7 +1110,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "startup-keepalive-gating",
         title: "Startup does less surprise work",
         description:
-          "Forkara avoids unnecessary provider refresh work during startup and gates Claude keepalive behavior more carefully, so opening the app is calmer and less likely to fight credential checks.",
+          "Synara avoids unnecessary provider refresh work during startup and gates Claude keepalive behavior more carefully, so opening the app is calmer and less likely to fight credential checks.",
         details:
           "Server startup no longer runs provider refresh eagerly, Claude keepalive respects auth-state timing, provider usage hooks handle inactive summaries more predictably, and related settings/server query invalidation paths have tests.",
       },
@@ -1132,7 +1132,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "update-download-progress",
         title: "Update downloads show their progress",
         description:
-          "When Forkara is downloading a desktop update, the sidebar update button now shows a live percent badge so you can tell whether it is moving or nearly ready.",
+          "When Synara is downloading a desktop update, the sidebar update button now shows a live percent badge so you can tell whether it is moving or nearly ready.",
         details:
           "The desktop update helper now clamps reported download percentages, hides them outside active downloads, and covers edge cases for null, negative, oversized, and fractional progress values.",
       },
@@ -1148,7 +1148,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "checkpoint-baseline-resilience",
         title: "Turn checkpoints are harder to confuse",
         description:
-          "Forkara preserves the first pre-turn snapshot more carefully, so transcript diffs and restore points better match what was on disk when you pressed send.",
+          "Synara preserves the first pre-turn snapshot more carefully, so transcript diffs and restore points better match what was on disk when you pressed send.",
         details:
           "Checkpoint capture now has single-flight behavior per repo/ref, a bounded capture timeout, first-writer-wins `skipIfExists` baselines, and extra recovery when a startup or backup path missed the original message baseline.",
       },
@@ -1186,13 +1186,13 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "cursor-launch-fallbacks",
         title: "Cursor launch fallback is much sturdier",
         description:
-          "Forkara now finds Cursor agent commands across more install layouts, including bundled sibling shims and legacy shim locations, while rejecting unsafe fallbacks.",
+          "Synara now finds Cursor agent commands across more install layouts, including bundled sibling shims and legacy shim locations, while rejecting unsafe fallbacks.",
         details:
           "Cursor ACP command discovery now resolves safer CLI paths, honors bundled sibling launchers, preserves legacy shim coverage, and avoids falling back to paths that do not match the expected Cursor agent shape.",
       },
       {
         id: "muxy-open-in",
-        title: "Muxy can open from Forkara",
+        title: "Muxy can open from Synara",
         description:
           "Open-in support now recognizes Muxy, so editor/open buttons can hand files to the right desktop target when Muxy is part of your workflow.",
         details:
@@ -1218,7 +1218,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "claude-credential-keepalive",
         title: "Claude credentials stay fresh longer",
         description:
-          "Forkara refreshes Claude credential freshness on macOS so long sessions are less likely to hit the familiar stale-token sign-in failure.",
+          "Synara refreshes Claude credential freshness on macOS so long sessions are less likely to hit the familiar stale-token sign-in failure.",
         details:
           "A Claude credential keepalive helper, adapter integration, and focused tests now keep the OAuth token file active enough to avoid the roughly eight-hour stale credential path.",
       },
@@ -1320,7 +1320,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Agent mentions, task rows, tool labels, file-change rows, chat seams, and switches received a small polish pass that makes dense chats easier to scan.",
         details:
-          "Forkara now reuses the central robot glyph for agent chips, improves file-change and tool-call labels, refines chat card contrast, and tightens shared switch sizing, thumb travel, and animation.",
+          "Synara now reuses the central robot glyph for agent chips, improves file-change and tool-call labels, refines chat card contrast, and tightens shared switch sizing, thumb travel, and animation.",
       },
       {
         id: "release-gate-type-fixes",
@@ -1340,7 +1340,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "windows-vscode-store-launch",
         title: "VS Code from the Microsoft Store opens correctly on Windows",
         description:
-          "Forkara can now launch VS Code Store installs through the right Windows app identity and URI fallback, so editor buttons work even when the normal `code` command is unavailable.",
+          "Synara can now launch VS Code Store installs through the right Windows app identity and URI fallback, so editor buttons work even when the normal `code` command is unavailable.",
         details:
           "Editor launch discovery now understands Windows packaged app metadata, adds VS Code and VS Code Insiders Store coverage, falls back from command launch to URI activation, and keeps file-manager launches isolated from editor-specific behavior.",
       },
@@ -1348,17 +1348,17 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "provider-update-checks",
         title: "Provider update checks are now optional",
         description:
-          "A new settings toggle lets you disable provider update checks when you want Forkara to stay quieter about external CLI versions.",
+          "A new settings toggle lets you disable provider update checks when you want Synara to stay quieter about external CLI versions.",
         details:
           "Provider health, server settings, app settings migration, settings search, root notifications, and provider update filtering now share the same `enableProviderUpdateChecks` flag so background update notices respect the user's preference.",
       },
       {
         id: "icons-and-logo-refresh",
-        title: "The app icon and Forkara mark look cleaner",
+        title: "The app icon and Synara mark look cleaner",
         description:
-          "The desktop, web, marketing, and release assets were refreshed so the Forkara icon renders more consistently across macOS, Windows, browser favicons, and update artifacts.",
+          "The desktop, web, marketing, and release assets were refreshed so the Synara icon renders more consistently across macOS, Windows, browser favicons, and update artifacts.",
         details:
-          "This release refreshes the inline Forkara logo path, replaces generated icon assets from the full source image, corrects macOS bundle icon handling after the rounded-icon Ventura pass, and removes a literal Dock-icon workaround that was not the final direction.",
+          "This release refreshes the inline Synara logo path, replaces generated icon assets from the full source image, corrects macOS bundle icon handling after the rounded-icon Ventura pass, and removes a literal Dock-icon workaround that was not the final direction.",
       },
       {
         id: "workspace-explorer-polish",
@@ -1372,7 +1372,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "lighter-idle-polling",
         title: "Idle server polling is lighter",
         description:
-          "Forkara polls local server state less aggressively while idle, reducing background work without changing the active-session refresh path.",
+          "Synara polls local server state less aggressively while idle, reducing background work without changing the active-session refresh path.",
         details:
           "The server React Query helper now separates active and idle refresh intervals, the sidebar uses the calmer idle cadence, and focused tests cover the interval behavior.",
       },
@@ -1394,7 +1394,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "branch-toolbar-projects",
         title: "Project switching moved closer to your branch work",
         description:
-          "The branch toolbar can now show and change the active project, so project, branch, and worktree context are easier to keep aligned while you move around Forkara.",
+          "The branch toolbar can now show and change the active project, so project, branch, and worktree context are easier to keep aligned while you move around Synara.",
         details:
           "This release teaches the branch toolbar about project selection, shared home-chat containers, draft-thread mapping, project creation recovery, and project picker state so navigation does not depend only on the sidebar.",
       },
@@ -1412,7 +1412,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "The diff panel now has a review file tree, giving larger review batches a clearer outline before you dive into individual patches.",
         details:
-          "Forkara now builds file diff trees, renders a collapsible review panel with shared disclosure motion, and reuses file-row styling so review navigation feels closer to the rest of the workspace.",
+          "Synara now builds file diff trees, renders a collapsible review panel with shared disclosure motion, and reuses file-row styling so review navigation feels closer to the rest of the workspace.",
       },
       {
         id: "workspace-explorer",
@@ -1458,7 +1458,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Transcript tool calls now expose clearer detail dialogs for shell commands, patches, file changes, and tool output, so review-heavy chats are easier to audit.",
         details:
-          "Forkara now formats tool command transcripts, normalizes patch/change output, labels more tool kinds consistently, preserves structured work metadata through the timeline, and adds focused coverage for tool-call labels and formatting.",
+          "Synara now formats tool command transcripts, normalizes patch/change output, labels more tool kinds consistently, preserves structured work metadata through the timeline, and adds focused coverage for tool-call labels and formatting.",
       },
       {
         id: "transcript-flow",
@@ -1514,7 +1514,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Provider icons, central icon assets, model pickers, composer controls, automation banners, Kanban cards, preview cards, and tooltips were cleaned up in small but visible ways.",
         details:
-          "Forkara now ships a curated central-icons set, improves provider/model picker presentation, refines composer picker and automation banners, adds better project/thread hover details, and keeps repeated UI surfaces closer to the same visual language.",
+          "Synara now ships a curated central-icons set, improves provider/model picker presentation, refines composer picker and automation banners, adds better project/thread hover details, and keeps repeated UI surfaces closer to the same visual language.",
       },
     ],
   },
@@ -1526,7 +1526,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "automations-workspace",
         title: "Automations are a real workspace surface",
         description:
-          "Forkara now has first-class Automations for scheduled agent work, with sidebar navigation, list/detail pages, run history, triage actions, and inline editing.",
+          "Synara now has first-class Automations for scheduled agent work, with sidebar navigation, list/detail pages, run history, triage actions, and inline editing.",
         details:
           "This release wires automation contracts, persistence, scheduler leases, run tracking, RPC methods, sidebar badges, Current/Paused views, detail routes, editable fields, previous-run history, and result triage so scheduled work lives inside the same thread/provider/worktree pipeline as normal chat work.",
       },
@@ -1560,7 +1560,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Chat now supports generic file attachments alongside images, with better chips/cards, safer upload normalization, worktree-aware previews, and in-app local image downloads.",
         details:
-          "File attachments now flow through contracts, upload storage, composer paste/drop, provider prompts, Kanban dispatch, recap/bootstrap surfaces, optimistic timeline rendering, caps/rollback, attachment-bearing plan follow-ups, explicit unsupported-file rejection, worktree-backed file preview roots, and blob-based download handling that keeps failed local image downloads inside Forkara.",
+          "File attachments now flow through contracts, upload storage, composer paste/drop, provider prompts, Kanban dispatch, recap/bootstrap surfaces, optimistic timeline rendering, caps/rollback, attachment-bearing plan follow-ups, explicit unsupported-file rejection, worktree-backed file preview roots, and blob-based download handling that keeps failed local image downloads inside Synara.",
       },
       {
         id: "provider-model-scoping",
@@ -1618,7 +1618,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "restart-chat-restore",
         title: "Restarts bring you back to the right chat",
         description:
-          "Forkara now waits for one fresh server snapshot before giving up on a remembered chat route, so app restarts are less likely to dump you onto an empty fallback screen.",
+          "Synara now waits for one fresh server snapshot before giving up on a remembered chat route, so app restarts are less likely to dump you onto an empty fallback screen.",
         details:
           "Chat route restore now validates remembered thread/split routes against refreshed orchestration state, holds fallback while startup data is still empty, and has focused coverage for missing-thread and empty-startup recovery paths.",
       },
@@ -1648,9 +1648,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "smarter-profile-stats",
         title: "Your profile understands more of your work",
         description:
-          "Forkara now tracks richer local profile stats, including your most worked project, skill and agent usage, active hours, provider/model mix, and prompt activity.",
+          "Synara now tracks richer local profile stats, including your most worked project, skill and agent usage, active hours, provider/model mix, and prompt activity.",
         details:
-          "Profile stats now derive more signal from Forkara's local projection database: most-worked project, prompt/thread activity, skill and agent usage, provider/model usage, reasoning patterns, active-hour windows, and token heatmap data are all represented in the profile contract and settings panel.",
+          "Profile stats now derive more signal from Synara's local projection database: most-worked project, prompt/thread activity, skill and agent usage, provider/model usage, reasoning patterns, active-hour windows, and token heatmap data are all represented in the profile contract and settings panel.",
       },
       {
         id: "pasted-text-cards",
@@ -1676,9 +1676,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "profile-and-personalization",
-        title: "Your Forkara profile has more personality",
+        title: "Your Synara profile has more personality",
         description:
-          "Profile settings now include richer identity details, activity stats, and a cleaner editing flow so Forkara feels more like your own workspace.",
+          "Profile settings now include richer identity details, activity stats, and a cleaner editing flow so Synara feels more like your own workspace.",
         details:
           "This release adds profile stats aggregation, profile settings UI polish, activity heatmap refinements, avatar/profile editing updates, and focused coverage for the new profile data paths.",
       },
@@ -1688,7 +1688,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Thread deletion now keeps soft-deleted data around long enough to avoid accidental loss while still letting cleanup happen predictably.",
         details:
-          "Forkara now tracks thread retention state explicitly, covers soft-delete cleanup behavior with server tests, and keeps deletion/recovery semantics more predictable for early WIP data.",
+          "Synara now tracks thread retention state explicitly, covers soft-delete cleanup behavior with server tests, and keeps deletion/recovery semantics more predictable for early WIP data.",
       },
       {
         id: "live-composer-edits",
@@ -1740,7 +1740,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "restart-and-idle-recovery",
         title: "Restarted sessions are less likely to leave turns hanging",
         description:
-          "After provider restarts, reconnects, or quiet ACP sessions, Forkara does a better job of reconciling active turns and finishing idle work instead of getting stuck.",
+          "After provider restarts, reconnects, or quiet ACP sessions, Synara does a better job of reconciling active turns and finishing idle work instead of getting stuck.",
         details:
           "Startup turn reconciliation, ACP idle watchdog handling, provider runtime ingestion, Cursor/Grok/OpenCode adapter event paths, command reactor cleanup, and shared thread summaries now work together to recover unfinished turns and surface stale runtime state more predictably.",
       },
@@ -1752,7 +1752,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "secure-pdf-preview",
-        title: "PDFs open safely inside Forkara",
+        title: "PDFs open safely inside Synara",
         description:
           "Local PDFs can now be previewed directly in the workspace pane with page navigation, zoom controls, selection-safe rendering, and hardened link handling.",
         details:
@@ -1764,13 +1764,13 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "The right dock and editor workspace now use the same richer file preview surface, so browsing files, images, markdown, and PDFs feels more consistent.",
         details:
-          "Forkara now routes file preview through `WorkspaceFilePreview`, `PdfFilePreview`, shared preview headers, markdown/source selection references, workspace file openers, dock pane activation metadata, local preview URL helpers, and tighter file reference context-menu behavior.",
+          "Synara now routes file preview through `WorkspaceFilePreview`, `PdfFilePreview`, shared preview headers, markdown/source selection references, workspace file openers, dock pane activation metadata, local preview URL helpers, and tighter file reference context-menu behavior.",
       },
       {
         id: "pi-plugin-routing",
         title: "Pi plugin sessions start in the right place",
         description:
-          "Pi-backed plugin flows now route through Forkara more reliably, discover model support better, and keep startup prompts attached to the correct provider session.",
+          "Pi-backed plugin flows now route through Synara more reliably, discover model support better, and keep startup prompts attached to the correct provider session.",
         details:
           "The Pi adapter gained richer ACP handling, extension model discovery, cwd/session wiring, startup prompt routing, provider command reactor coverage, provider service safeguards, and an ACP mock agent so plugin startup, prompt forwarding, and provider state transitions are covered more directly.",
       },
@@ -1796,7 +1796,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Cursor message ids are handled more carefully, changed files moved to a flatter UI path, and stale plan/sidebar indicators were cleaned up.",
         details:
-          "Forkara now preserves Cursor message identity more reliably, removes the older turn diff tree path, refines changed-file file-list rendering, fixes duplicate plan-mode icons and stale plan sidebar state, and hides inline project actions from the chat header where they created noise.",
+          "Synara now preserves Cursor message identity more reliably, removes the older turn diff tree path, refines changed-file file-list rendering, fixes duplicate plan-mode icons and stale plan sidebar state, and hides inline project actions from the chat header where they created noise.",
       },
       {
         id: "preview-security-and-local-files",
@@ -1872,7 +1872,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Ghostty, Terminal, JetBrains, Xcode, Zed, Cursor, VS Code, and other editor launchers now have better discovery, icons, and platform-specific launch behavior.",
         details:
-          "Forkara now discovers native editor apps and icons, caches icon assets server-side, exposes authenticated icon routes, and tightens macOS/Linux/Windows launcher handling, including Ghostty working-directory behavior and Linux desktop-entry matching.",
+          "Synara now discovers native editor apps and icons, caches icon assets server-side, exposes authenticated icon routes, and tightens macOS/Linux/Windows launcher handling, including Ghostty working-directory behavior and Linux desktop-entry matching.",
       },
       {
         id: "portable-skills",
@@ -1904,7 +1904,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Legacy migration trackers, pinned/sidechat reconciliation, terminal environment handling, and workspace path checks were tightened for early-WIP installs.",
         details:
-          "Forkara now reconciles legacy migration bookkeeping before running migrations, expands migration coverage, validates workspace real-path containment, and carries terminal environment updates through shared server and web contracts.",
+          "Synara now reconciles legacy migration bookkeeping before running migrations, expands migration coverage, validates workspace real-path containment, and carries terminal environment updates through shared server and web contracts.",
       },
     ],
   },
@@ -1934,7 +1934,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Usage limits and pace now show up in the chat environment, settings, and compact controls for Codex, Claude, Cursor, and Gemini.",
         details:
-          "Forkara now reads provider credentials and usage data through shared server parsers, normalizes snapshots, stores cached values in SQLite, and renders reusable usage rows, progress tracks, line lists, and settings panels in the web app.",
+          "Synara now reads provider credentials and usage data through shared server parsers, normalizes snapshots, stores cached values in SQLite, and renders reusable usage rows, progress tracks, line lists, and settings panels in the web app.",
       },
       {
         id: "composer-picker-polish",
@@ -1988,7 +1988,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "AI response links, source lists, composer chips, and sent user bubbles now share the same link parsing path with website favicons instead of generic globe icons.",
         details:
-          "Forkara now caches site favicons server-side, serves authenticated favicon image URLs, recognizes bare domains in composer text, and keeps markdown link text aligned with the same medium-weight chip styling used while composing.",
+          "Synara now caches site favicons server-side, serves authenticated favicon image URLs, recognizes bare domains in composer text, and keeps markdown link text aligned with the same medium-weight chip styling used while composing.",
       },
       {
         id: "local-server-environment",
@@ -2026,7 +2026,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "The macOS release path now has stronger artifact smoke checks, zip finalization helpers, and updater download coverage so new builds are easier to trust before they ship.",
         details:
-          "Release tooling now validates Mac update artifacts, parses boolean environment flags consistently, and tests the resumable update downloader without the older update-feed cache layer. The README and release docs were refreshed around the current Forkara desktop flow too.",
+          "Release tooling now validates Mac update artifacts, parses boolean environment flags consistently, and tests the resumable update downloader without the older update-feed cache layer. The README and release docs were refreshed around the current Synara desktop flow too.",
       },
       {
         id: "diff-panel-refactor",
@@ -2120,7 +2120,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "External Claude shutdowns, terminal cleanup, websocket RPC errors, and provider session recovery picked up extra guards for reconnects and interrupted work.",
         details:
-          "Claude SIGTERM from outside Forkara is treated as a benign suspend path, terminal process cleanup has stronger tests, and websocket RPC failure handling is less likely to leave the UI believing a request is still in flight.",
+          "Claude SIGTERM from outside Synara is treated as a benign suspend path, terminal process cleanup has stronger tests, and websocket RPC failure handling is less likely to leave the UI believing a request is still in flight.",
       },
       {
         id: "migration-and-release-hardening",
@@ -2146,7 +2146,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "thread-recap-panel",
         title: "Long chats can be recapped in place",
         description:
-          "Forkara can now generate and cache thread recaps, show current-state context in the chat environment, and reuse provider-backed recap generation without making the transcript harder to follow.",
+          "Synara can now generate and cache thread recaps, show current-state context in the chat environment, and reuse provider-backed recap generation without making the transcript harder to follow.",
       },
       {
         id: "diff-totals-performance",
@@ -2212,13 +2212,13 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "stale-claude-resume-recovery",
         title: "Claude resumes recover from stale native sessions",
         description:
-          "When Claude reports a missing conversation id, Forkara clears the stale resume cursor, recreates the provider session, and retries with transcript context instead of leaving the turn failed.",
+          "When Claude reports a missing conversation id, Synara clears the stale resume cursor, recreates the provider session, and retries with transcript context instead of leaving the turn failed.",
       },
       {
         id: "desktop-update-manual-fallback",
         title: "Desktop updates now have a manual escape hatch",
         description:
-          "If an in-app install silently fails, Forkara restarts the backend, resumes update polling, deduplicates error toasts, and points you at the exact GitHub release page for a manual download.",
+          "If an in-app install silently fails, Synara restarts the backend, resumes update polling, deduplicates error toasts, and points you at the exact GitHub release page for a manual download.",
       },
       {
         id: "mac-desktop-chrome-alignment",
@@ -2236,7 +2236,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "agent-task-activity-rendering",
         title: "Agent task activity is easier to follow",
         description:
-          "OpenCode task child sessions and newer shell-step events now flow into Forkara's activity timeline, while generic agent task rows keep their useful prompt and result text instead of disappearing or showing wrapper noise.",
+          "OpenCode task child sessions and newer shell-step events now flow into Synara's activity timeline, while generic agent task rows keep their useful prompt and result text instead of disappearing or showing wrapper noise.",
       },
       {
         id: "transport-reconnect-events",
@@ -2254,7 +2254,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "opencode-provider-depth",
         title: "OpenCode support is much deeper",
         description:
-          "OpenCode startup, model discovery, command discovery, server connection options, and experimental WebSocket mode now flow through the same settings and runtime paths as the rest of Forkara.",
+          "OpenCode startup, model discovery, command discovery, server connection options, and experimental WebSocket mode now flow through the same settings and runtime paths as the rest of Synara.",
       },
       {
         id: "opencode-command-discovery-settings",
@@ -2302,7 +2302,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "legacy-database-repairs",
         title: "Imported legacy databases recover missing columns",
         description:
-          "Fresh repair migrations reconcile older imported migration trackers that skipped Forkara's sidechat-source or pinned-thread columns, preventing startup crashes in those upgraded histories.",
+          "Fresh repair migrations reconcile older imported migration trackers that skipped Synara's sidechat-source or pinned-thread columns, preventing startup crashes in those upgraded histories.",
       },
       {
         id: "opencode-visual-polish",
@@ -2324,9 +2324,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "synara-home-migration",
-        title: "Forkara is now the default home",
+        title: "Synara is now the default home",
         description:
-          "The app now starts from `~/.synara`, carries the Forkara environment variables through the desktop and server runtime, and safely imports data from previous installations on first launch.",
+          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports data from previous installations on first launch.",
       },
       {
         id: "desktop-platform-polish",
@@ -2367,7 +2367,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       {
         id: "claude-opus-4-8",
         title: "Claude Opus 4.8 is available",
-        description: "Forkara now includes Claude Opus 4.8 in the Claude model picker.",
+        description: "Synara now includes Claude Opus 4.8 in the Claude model picker.",
       },
     ],
   },
@@ -2385,7 +2385,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "provider-picker-readiness",
         title: "Provider choices wait for real readiness",
         description:
-          "The provider picker no longer treats unknown provider status as usable. Providers stay in a checking state until Forkara has confirmed that the local runtime is available and authenticated.",
+          "The provider picker no longer treats unknown provider status as usable. Providers stay in a checking state until Synara has confirmed that the local runtime is available and authenticated.",
       },
       {
         id: "desktop-shutdown-recovery",
@@ -2413,7 +2413,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "grok-provider-headline",
-        title: "Grok joins Forkara",
+        title: "Grok joins Synara",
         description:
           "Pick Grok as a first-class coding provider with ACP-backed sessions, model selection, approval handling, resume support, provider health checks, settings, icons, and handoff wired through the same app surfaces as the rest of your agents.",
       },
@@ -2493,7 +2493,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "kilo-code-provider",
         title: "Kilo Code joins the provider lineup",
         description:
-          "Forkara can now launch and monitor Kilo Code sessions alongside Codex, Claude, Cursor, OpenCode, and Gemini, with health checks, settings, mentions, handoff, and model compatibility wired through the app.",
+          "Synara can now launch and monitor Kilo Code sessions alongside Codex, Claude, Cursor, OpenCode, and Gemini, with health checks, settings, mentions, handoff, and model compatibility wired through the app.",
       },
       {
         id: "provider-ordering",
@@ -2523,7 +2523,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "opencode-latest-events",
         title: "OpenCode sessions understand the latest event stream",
         description:
-          "Forkara now tracks the newer OpenCode SDK session events, keeps titles fresher, and has much deeper coverage around OpenCode startup, output, and recovery flows.",
+          "Synara now tracks the newer OpenCode SDK session events, keeps titles fresher, and has much deeper coverage around OpenCode startup, output, and recovery flows.",
       },
       {
         id: "turn-recovery-stability",
@@ -2565,7 +2565,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "secure-local-image-route",
         title: "Generated images use a safer local route",
         description:
-          "Forkara now serves generated files through a dedicated local-image endpoint with MIME checks, workspace-aware path resolution, and Codex generated_images allowlists for both the normal home and desktop overlay home.",
+          "Synara now serves generated files through a dedicated local-image endpoint with MIME checks, workspace-aware path resolution, and Codex generated_images allowlists for both the normal home and desktop overlay home.",
       },
       {
         id: "provider-favorites",
@@ -2593,9 +2593,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "cursor-provider",
-        title: "Cursor is now a first-class Forkara provider",
+        title: "Cursor is now a first-class Synara provider",
         description:
-          "Run Cursor CLI sessions directly from Forkara with ACP-backed startup, model discovery, existing-chat resume, handoff, and provider health checks alongside Codex and OpenCode.",
+          "Run Cursor CLI sessions directly from Synara with ACP-backed startup, model discovery, existing-chat resume, handoff, and provider health checks alongside Codex and OpenCode.",
       },
       {
         id: "effect-acp-runtime",
@@ -2643,7 +2643,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "git-commit-push-action",
         title: "Git gained commit and push",
         description:
-          "The Git actions menu can now commit current work and push it from Forkara, keeping the common release and handoff flow closer to the chat.",
+          "The Git actions menu can now commit current work and push it from Synara, keeping the common release and handoff flow closer to the chat.",
       },
       {
         id: "task-and-approval-polish",
@@ -2685,7 +2685,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "git-branch-pr-flow",
         title: "Git flows are smoother",
         description:
-          "The Git menu now includes branch creation with Forkara-style names, and PR creation can recover from GitHub duplicate-PR responses by reusing the existing open pull request.",
+          "The Git menu now includes branch creation with Synara-style names, and PR creation can recover from GitHub duplicate-PR responses by reusing the existing open pull request.",
       },
       {
         id: "legacy-import-recovery",
@@ -2733,7 +2733,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "opencode-task-events",
         title: "OpenCode tasks show live progress",
         description:
-          "OpenCode todo events now flow into Forkara as active task updates, with a compact banner option for keeping current work visible without taking over the chat.",
+          "OpenCode todo events now flow into Synara as active task updates, with a compact banner option for keeping current work visible without taking over the chat.",
       },
       {
         id: "opencode-model-favourites",
@@ -2745,7 +2745,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "opencode-context-usage",
         title: "OpenCode context usage is tracked",
         description:
-          "OpenCode sessions now report context usage more consistently, giving Forkara better runtime visibility as conversations grow.",
+          "OpenCode sessions now report context usage more consistently, giving Synara better runtime visibility as conversations grow.",
       },
       {
         id: "production-debug-flags",
@@ -2763,7 +2763,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "cursor-provider",
         title: "Cursor CLI support landed",
         description:
-          "Cursor is now available as a provider, with ACP sessions, model discovery, existing chats, handoff, shortcuts, and git text generation wired into Forkara.",
+          "Cursor is now available as a provider, with ACP sessions, model discovery, existing chats, handoff, shortcuts, and git text generation wired into Synara.",
       },
       {
         id: "chatgpt-voice-transcription",
@@ -2793,7 +2793,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "toast-feature-flags",
         title: "Toast behavior can be feature-flagged",
         description:
-          "Toast notifications picked up feature-flag wiring, giving Forkara a safer way to roll notification changes forward or back.",
+          "Toast notifications picked up feature-flag wiring, giving Synara a safer way to roll notification changes forward or back.",
       },
       {
         id: "desktop-bridge-reconnects",
@@ -2811,7 +2811,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "branch-switch-recovery",
         title: "Branch switching is much safer",
         description:
-          "Forkara now handles messy branch switches with clearer recovery actions, recreated stashes, unpublished branch publishing, and stronger checks around conflicts and local work.",
+          "Synara now handles messy branch switches with clearer recovery actions, recreated stashes, unpublished branch publishing, and stronger checks around conflicts and local work.",
       },
       {
         id: "plan-mode-proposals",
@@ -2823,7 +2823,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "desktop-navigation-controls",
         title: "Desktop navigation controls landed",
         description:
-          "The desktop app now has app-level back and forward navigation controls, making it easier to move around Forkara without losing your place.",
+          "The desktop app now has app-level back and forward navigation controls, making it easier to move around Synara without losing your place.",
       },
       {
         id: "sidebar-sort-stability",
@@ -2847,7 +2847,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "gpt-5-5-available",
         title: "GPT-5.5 is available",
         description:
-          "GPT-5.5 is now in the model picker with the right default reasoning behavior, so you can move new Codex sessions onto the latest model directly from Forkara.",
+          "GPT-5.5 is now in the model picker with the right default reasoning behavior, so you can move new Codex sessions onto the latest model directly from Synara.",
       },
       {
         id: "opencode-provider",
@@ -2901,7 +2901,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "desktop-boot-splash-screen",
         title: "🚀 Desktop startup feels clearer",
         description:
-          "Forkara now shows a proper splash screen while the desktop backend spins up, so launch feels intentional instead of looking briefly stalled.",
+          "Synara now shows a proper splash screen while the desktop backend spins up, so launch feels intentional instead of looking briefly stalled.",
       },
       {
         id: "provider-capability-and-theme-polish",
@@ -2925,7 +2925,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "theme-pack-editor",
         title: "🎨 Theme packs are editable",
         description:
-          "The new theme pack editor lets you tune UI colors directly in Forkara, with shared theme tokens keeping the sidebar, composer, transcript, and controls in sync.",
+          "The new theme pack editor lets you tune UI colors directly in Synara, with shared theme tokens keeping the sidebar, composer, transcript, and controls in sync.",
       },
       {
         id: "sidebar-notifications",
@@ -3003,7 +3003,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "update-check-timeout-recovery",
         title: "🛟 No more stuck checking state",
         description:
-          "If the updater never answers, Forkara now times out and recovers instead of hanging on a permanent Checking status.",
+          "If the updater never answers, Synara now times out and recovers instead of hanging on a permanent Checking status.",
       },
     ],
   },
@@ -3021,7 +3021,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "custom-provider-binaries",
         title: "🛠️ Custom binary paths for every provider",
         description:
-          "Point Forkara at your own Codex, Claude, or Gemini binary when your setup lives outside the default install path.",
+          "Point Synara at your own Codex, Claude, or Gemini binary when your setup lives outside the default install path.",
       },
       {
         id: "assistant-selections-as-context",

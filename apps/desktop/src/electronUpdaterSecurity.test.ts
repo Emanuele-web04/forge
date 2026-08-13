@@ -31,9 +31,9 @@ describe("electronUpdaterSecurity", () => {
   });
 
   it("parses distinguished names the same way as builder-util-runtime", () => {
-    const parsed = parseDistinguishedName('CN=Forkara, O="Acme, Inc.", OU=Tools\\2C Desktop');
+    const parsed = parseDistinguishedName('CN=Synara, O="Acme, Inc.", OU=Tools\\2C Desktop');
 
-    expect(parsed.get("CN")).toBe("Forkara");
+    expect(parsed.get("CN")).toBe("Synara");
     expect(parsed.get("O")).toBe("Acme, Inc.");
     expect(parsed.get("OU")).toBe("Tools, Desktop");
   });
@@ -42,9 +42,9 @@ describe("electronUpdaterSecurity", () => {
     expect(
       resolveWindowsUpdatePublisherNames(
         ["CN=Feed Controlled, O=Unexpected"],
-        [" CN=Forkara, O=Acme Tools ", "CN=Only", ""],
+        [" CN=Synara, O=Acme Tools ", "CN=Only", ""],
       ),
-    ).toEqual(["CN=Forkara, O=Acme Tools"]);
+    ).toEqual(["CN=Synara, O=Acme Tools"]);
     expect(resolveWindowsUpdatePublisherNames(["CN=Feed Controlled, O=Unexpected"], null)).toEqual([
       "CN=Feed Controlled, O=Unexpected",
     ]);
@@ -58,7 +58,7 @@ describe("electronUpdaterSecurity", () => {
           Status: 0,
           Path: "C:\\Users\\test\\AppData\\Local\\Temp\\SynaraSetup.exe",
           SignerCertificate: {
-            Subject: "CN=Forkara, O=Acme Tools",
+            Subject: "CN=Synara, O=Acme Tools",
           },
         }),
         "",
@@ -66,7 +66,7 @@ describe("electronUpdaterSecurity", () => {
     });
 
     const result = await verifyWindowsUpdateCodeSignature(
-      ["CN=Forkara, O=Acme Tools"],
+      ["CN=Synara, O=Acme Tools"],
       "C:\\Users\\test\\AppData\\Local\\Temp\\SynaraSetup.exe",
       { info: vi.fn(), warn: vi.fn() },
       {
@@ -92,7 +92,7 @@ describe("electronUpdaterSecurity", () => {
   it("rejects a CN-only publisher allowlist", async () => {
     const logger = { info: vi.fn(), warn: vi.fn() };
     const result = await verifyWindowsUpdateCodeSignature(
-      ["CN=Forkara"],
+      ["CN=Synara"],
       "C:\\Temp\\SynaraSetup.exe",
       logger,
       {
@@ -103,7 +103,7 @@ describe("electronUpdaterSecurity", () => {
             JSON.stringify({
               Status: 0,
               Path: "C:\\Temp\\SynaraSetup.exe",
-              SignerCertificate: { Subject: "CN=Forkara, O=Acme Tools" },
+              SignerCertificate: { Subject: "CN=Synara, O=Acme Tools" },
             }),
             "",
           );
@@ -111,7 +111,7 @@ describe("electronUpdaterSecurity", () => {
       },
     );
 
-    expect(result).toContain("publisherNames: CN=Forkara");
+    expect(result).toContain("publisherNames: CN=Synara");
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("signed with incorrect certificate"),
     );
@@ -119,7 +119,7 @@ describe("electronUpdaterSecurity", () => {
 
   it("fails closed when PowerShell cannot verify the signature", async () => {
     const result = await verifyWindowsUpdateCodeSignature(
-      ["CN=Forkara, O=Acme Tools"],
+      ["CN=Synara, O=Acme Tools"],
       "C:\\Temp\\SynaraSetup.exe",
       { info: vi.fn(), warn: vi.fn() },
       {
@@ -136,7 +136,7 @@ describe("electronUpdaterSecurity", () => {
 
   it("fails closed when signature output is malformed", async () => {
     const result = await verifyWindowsUpdateCodeSignature(
-      ["CN=Forkara, O=Acme Tools"],
+      ["CN=Synara, O=Acme Tools"],
       "C:\\Temp\\SynaraSetup.exe",
       { info: vi.fn(), warn: vi.fn() },
       {
@@ -152,7 +152,7 @@ describe("electronUpdaterSecurity", () => {
 
   it("fails closed when signature output omits the signed file path", async () => {
     const result = await verifyWindowsUpdateCodeSignature(
-      ["CN=Forkara, O=Acme Tools"],
+      ["CN=Synara, O=Acme Tools"],
       "C:\\Temp\\SynaraSetup.exe",
       { info: vi.fn(), warn: vi.fn() },
       {
@@ -162,7 +162,7 @@ describe("electronUpdaterSecurity", () => {
             null,
             JSON.stringify({
               Status: 0,
-              SignerCertificate: { Subject: "CN=Forkara, O=Acme Tools" },
+              SignerCertificate: { Subject: "CN=Synara, O=Acme Tools" },
             }),
             "",
           );
@@ -176,7 +176,7 @@ describe("electronUpdaterSecurity", () => {
 
   it("returns a mismatch summary for an unexpected publisher", async () => {
     const result = await verifyWindowsUpdateCodeSignature(
-      ["CN=Forkara, O=Acme Tools"],
+      ["CN=Synara, O=Acme Tools"],
       "C:\\Temp\\SynaraSetup.exe",
       { info: vi.fn(), warn: vi.fn() },
       {
@@ -195,7 +195,7 @@ describe("electronUpdaterSecurity", () => {
       },
     );
 
-    expect(result).toContain("publisherNames: CN=Forkara, O=Acme Tools");
+    expect(result).toContain("publisherNames: CN=Synara, O=Acme Tools");
     expect(result).toContain("Someone Else");
   });
 

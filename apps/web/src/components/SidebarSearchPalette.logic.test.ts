@@ -26,8 +26,8 @@ const actions: SidebarSearchAction[] = [
   },
   {
     id: "feedback",
-    label: "Feedback Forkara",
-    description: "Send feedback or report an issue to the Forkara team.",
+    label: "Feedback Synara",
+    description: "Send feedback or report an issue to the Synara team.",
     keywords: ["feedback", "bug", "issue", "report", "support"],
   },
   {
@@ -167,7 +167,7 @@ describe("SidebarSearchPalette.logic", () => {
     );
   });
 
-  it("matches Feedback Forkara by feedback and issue keywords", () => {
+  it("matches Feedback Synara by feedback and issue keywords", () => {
     assert.deepEqual(
       matchSidebarSearchActions(actions, "feedback").map((action) => action.id),
       ["feedback"],

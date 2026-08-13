@@ -12,6 +12,7 @@ import type {
   GitPullRequestCheck,
   GitPullRequestComment,
   PullRequestMergeCapabilities,
+  PullRequestStack,
 } from "@synara/contracts";
 
 import { GitHubCliError } from "../Errors.ts";
@@ -54,10 +55,12 @@ export interface FakeGhScenario {
   viewerLogin?: string;
   repositoryPullRequestListJson?: string;
   pullRequestDetail?: GitHubPullRequestDetailData;
+  pullRequestStack?: PullRequestStack | null;
   pullRequestListItems?: GitHubPullRequestListItem[];
   reviewRequestedPullRequestNumbers?: number[];
   mergeCapabilities?: PullRequestMergeCapabilities;
   pullRequestDiff?: { patch: string; truncated: boolean };
+  mergeOutcome?: "merged" | "enqueued";
 }
 
 export type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -306,6 +309,12 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
               }),
             );
       },
+      getPullRequestStack: (input) => {
+        ghCalls.push(`graphql stack ${input.number} --repo ${input.repository}`);
+        return scenario.failWith
+          ? Effect.fail(scenario.failWith)
+          : Effect.succeed(scenario.pullRequestStack ?? null);
+      },
       getRepositoryMergeCapabilities: (input) => {
         ghCalls.push(`repo view ${input.repository} --json merge-capabilities`);
         return Effect.succeed(
@@ -325,7 +334,9 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         ghCalls.push(
           `pr action ${input.action} ${input.number} --repo ${input.repository}${input.mergeMethod ? ` --${input.mergeMethod}` : ""}`,
         );
-        return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
+        return scenario.failWith
+          ? Effect.fail(scenario.failWith)
+          : Effect.succeed({ mergeOutcome: scenario.mergeOutcome ?? null });
       },
       getPullRequestListItem: (input) => {
         ghCalls.push(`pr view ${input.number} --repo ${input.repository} (list-item)`);

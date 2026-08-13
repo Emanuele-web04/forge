@@ -19,7 +19,7 @@ const { browserSession, rendererWebContentsById, rendererWebContentsFromId } = v
 
 vi.mock("electron", () => ({
   app: {
-    getName: () => "Forkara",
+    getName: () => "Synara",
     getPreferredSystemLanguages: () => ["en-US"],
     userAgentFallback:
       "Mozilla/5.0 AppleWebKit/537.36 Chrome/140.0.0.0 Electron/40.0.0 Safari/537.36",

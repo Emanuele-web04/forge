@@ -59,7 +59,7 @@ const approvedAttributions: readonly ApprovedAttribution[] = [
   {
     path: "README.md",
     markdownSection: "## Origins",
-    line: "Synara began as a clone of T3Code.",
+    line: `Synara began as a clone of [${retiredFirstDisplayName}](https://github.com/pingdotgg/${retiredFirstName}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`,
   },
   {
     path: "CHANGELOG.md",
@@ -68,7 +68,7 @@ const approvedAttributions: readonly ApprovedAttribution[] = [
   },
   {
     path: "apps/web/src/whatsNew/entries.ts",
-    line: `"A review of the Forkara codebase found an analytics configuration that came from the original ${retiredFirstSpacedDisplayName} codebase when Forkara was created as a clone in March.",`,
+    line: `"A review of the Synara codebase found an analytics configuration that came from the original ${retiredFirstSpacedDisplayName} codebase when Synara was created as a clone in March.",`,
   },
 ];
 
@@ -128,7 +128,6 @@ export function findBrandIdentityViolations(
 ): BrandIdentityViolation[] {
   const violations: BrandIdentityViolation[] = [];
   for (const file of files) {
-    if (file.path === "scripts/check-brand-identity.ts") continue;
     if (containsForbiddenIdentity(file.path)) {
       violations.push({ path: file.path, line: null, text: file.path });
     }
@@ -199,7 +198,7 @@ function main(): void {
     ...findVisualBrandAssetViolations(trackedFiles),
   ];
   if (violations.length === 0) {
-    console.log("Forkara identity check passed.");
+    console.log("Synara identity check passed.");
     return;
   }
 

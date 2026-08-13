@@ -1005,7 +1005,7 @@ export class DesktopAppSnapManager {
         permissionRequiredMessage(this.#inputMonitoringPermission, this.#screenRecordingPermission),
       );
     }
-    // Benign overlap errors surface as a toast without yanking Forkara to the
+    // Benign overlap errors surface as a toast without yanking Synara to the
     // foreground while the user is still working in the captured app.
     this.#emitCaptureError(
       message.code,
@@ -1058,7 +1058,7 @@ export class DesktopAppSnapManager {
       );
       this.#emitCaptureError(
         "pending-capture-overflow",
-        `Forkara could retain only the latest ${MAX_PENDING_CAPTURES} AppSnaps while the composer was unavailable. The oldest capture was discarded.`,
+        `Synara could retain only the latest ${MAX_PENDING_CAPTURES} AppSnaps while the composer was unavailable. The oldest capture was discarded.`,
         discardedRecord.capture.capturedAt,
         false,
       );

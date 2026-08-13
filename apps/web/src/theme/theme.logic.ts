@@ -140,7 +140,7 @@ const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const THEME_SHARE_PREFIX = "codex-theme-v1:";
 const CONTRAST_CURVE_BELOW_BASELINE = 0.7;
 const CONTRAST_CURVE_ABOVE_BASELINE = 2;
-// Keep Codex's original curve anchors even though Forkara presets start at zero.
+// Keep Codex's original curve anchors even though Synara presets start at zero.
 // This makes the new default render exactly like manually moving the old slider to zero.
 const CONTRAST_CURVE_BASELINE: Record<ThemeVariant, number> = {
   dark: 60,
@@ -210,7 +210,7 @@ export const CODE_THEME_OPTIONS: readonly CodeThemeOption[] = [
   { id: "ayu", label: "Ayu", variants: ["dark"] },
   { id: "catppuccin", label: "Catppuccin", variants: ["light", "dark"] },
   { id: "codex", label: "Codex", variants: ["light", "dark"] },
-  { id: "synara", label: "Forkara", variants: ["light", "dark"] },
+  { id: "synara", label: "Synara", variants: ["light", "dark"] },
   { id: "dracula", label: "Dracula", variants: ["dark"] },
   { id: "everforest", label: "Everforest", variants: ["light", "dark"] },
   { id: "github", label: "GitHub", variants: ["light", "dark"] },
