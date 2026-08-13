@@ -18,6 +18,7 @@ import { hosts, profiles, usageModelStats, usageSkillStats } from "../db/schema"
 import { createDeviceRegistry } from "../identity/deviceRegistry";
 import { createHostGrantIssuer } from "../identity/grantIssuer";
 import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
+import { createHostSecretStore } from "../identity/hostSecretStore";
 import { clearOrgCache } from "../identity/orgProvisioning";
 import { createRevocationLog } from "../identity/revocationLog";
 import { createApiSigningService, type ApiSigningService } from "../identity/signing";
@@ -136,6 +137,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
       hostKeys: createHostKeyRegistry(db, forConfig.apiPublicUrl),
       devices: createDeviceRegistry(db, forConfig.apiPublicUrl),
       hostGrants: createHostGrantIssuer(testSigning),
+      hostSecrets: createHostSecretStore(db),
       accountBaseUrl: forConfig.baseUrl,
       relayServiceToken: forConfig.relayServiceToken,
       db,
@@ -2426,6 +2428,7 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
           hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
           devices: createDeviceRegistry(db, config.apiPublicUrl),
           hostGrants: createHostGrantIssuer(testSigning),
+          hostSecrets: createHostSecretStore(db),
           accountBaseUrl: config.baseUrl,
           relayServiceToken: config.relayServiceToken,
           db,

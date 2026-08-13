@@ -252,6 +252,22 @@ export const AccountErrorCode = Schema.Literals([
   "device_not_registered",
   "challenge_expired",
   "challenge_consumed",
+  /**
+   * A Host Secrets write whose `expectedVersion` no longer matches the stored
+   * row — a rotation and a concurrent edit raced, and this one lost. The
+   * client re-reads and re-seals; the body carries the current version so it
+   * does not have to guess. CAS makes the loss visible rather than silent
+   * (ADR 0004, spec slice E §3).
+   */
+  "host_secret_version_conflict",
+  /**
+   * No wrapped Sync Key is waiting for this device. Deliberately ONE code for
+   * every reason — never uploaded, already delivered (wraps are single
+   * delivery), expired, or addressed to a device the caller does not own — so
+   * the endpoint cannot be probed for which device ids exist or which
+   * pairings are in flight.
+   */
+  "sync_key_wrap_not_found",
   "approval_pending",
   "bad_proof",
   "handle_taken",

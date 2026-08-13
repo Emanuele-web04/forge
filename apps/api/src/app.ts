@@ -64,6 +64,7 @@ export async function createApp(
       hostKeys: identity.hostKeys,
       devices: identity.devices,
       hostGrants: identity.hostGrants,
+      hostSecrets: identity.hostSecrets,
       accountBaseUrl: config.baseUrl,
       ...(config.relayServiceToken ? { relayServiceToken: config.relayServiceToken } : {}),
       db,

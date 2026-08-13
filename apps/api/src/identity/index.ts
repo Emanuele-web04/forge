@@ -13,6 +13,7 @@ import { createDevIdentityProvider } from "./devProvider";
 import { createDeviceRegistry } from "./deviceRegistry";
 import { createHostGrantIssuer } from "./grantIssuer";
 import { createHostKeyRegistry } from "./hostKeyRegistry";
+import { createHostSecretStore } from "./hostSecretStore";
 import type { IdentityAdapters } from "./interfaces";
 import { createRevocationLog } from "./revocationLog";
 import { createApiSigningService } from "./signing";
@@ -31,6 +32,7 @@ export async function createIdentityAdapters(
   const devices = createDeviceRegistry(db, config.apiPublicUrl);
   const hostGrants = createHostGrantIssuer(signing);
   const revocations = createRevocationLog(db);
+  const hostSecrets = createHostSecretStore(db);
 
   if (config.identityProvider === "dev") {
     const { verifier, grants, close } = await createDevIdentityProvider();
@@ -42,6 +44,7 @@ export async function createIdentityAdapters(
       devices,
       hostGrants,
       revocations,
+      hostSecrets,
       close,
     };
   }
@@ -55,6 +58,7 @@ export async function createIdentityAdapters(
     devices,
     hostGrants,
     revocations,
+    hostSecrets,
     close: async () => {},
   };
 }

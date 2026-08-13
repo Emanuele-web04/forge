@@ -20,6 +20,7 @@ import { hosts, linkChallenges, revocationEvents } from "../db/schema";
 import { createDeviceRegistry } from "../identity/deviceRegistry";
 import { createHostGrantIssuer } from "../identity/grantIssuer";
 import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
+import { createHostSecretStore } from "../identity/hostSecretStore";
 import { clearOrgCache } from "../identity/orgProvisioning";
 import { createRevocationLog, REVOCATION_RETENTION_MS } from "../identity/revocationLog";
 import { createApiSigningService, type ApiSigningService } from "../identity/signing";
@@ -85,6 +86,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
         devices: createDeviceRegistry(db, config.apiPublicUrl),
         hostGrants: createHostGrantIssuer(signing),
+        hostSecrets: createHostSecretStore(db),
         accountBaseUrl: config.baseUrl,
         relayServiceToken: config.relayServiceToken,
         db,
@@ -1182,6 +1184,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
           devices: createDeviceRegistry(db, config.apiPublicUrl),
           hostGrants: createHostGrantIssuer(rotated),
+          hostSecrets: createHostSecretStore(db),
           accountBaseUrl: config.baseUrl,
           relayServiceToken: config.relayServiceToken,
           db,

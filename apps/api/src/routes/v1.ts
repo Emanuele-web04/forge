@@ -33,6 +33,13 @@ import {
   type RegisterDeviceResponse,
   GrantRequest,
   type GrantResponse,
+  type GetHostSecretResponse,
+  type GetSyncKeyWrapResponse,
+  type HostSecretConflictBody,
+  PutHostSecretRequest,
+  type PutHostSecretResponse,
+  PutSyncKeyWrapRequest,
+  type PutSyncKeyWrapResponse,
   LinkCompleteRequest,
   LinkDeviceApproveRequest,
   LinkDeviceTokenRequest,
@@ -82,12 +89,14 @@ import {
   type HostGrantIssuer,
   type HostKeyRegistry,
   type HostRecord,
+  type HostSecretStore,
   type IdentityUser,
   type OrganizationRef,
   type RevocationLog,
 } from "../identity/interfaces";
 import type { ApiSigningService } from "../identity/signing";
 import { hostRecordFromRow, isHostProofAuthorization } from "../identity/hostKeyRegistry";
+import { deleteHostSecretRows } from "../identity/hostSecretStore";
 import { writeRevocationEvents } from "../identity/revocationLog";
 import { createRateLimiter } from "../rateLimit";
 import packageJson from "../../package.json" with { type: "json" };
@@ -150,6 +159,16 @@ export const LINK_DEVICE_RATE_LIMIT_PER_MINUTE = 10;
 export const LINK_APPROVE_RATE_LIMIT_PER_MINUTE = 10;
 export const GRANT_RATE_LIMIT_PER_MINUTE = 60;
 export const DEVICE_MUTATION_RATE_LIMIT_PER_MINUTE = 10;
+
+/**
+ * Host Secret writes and pairing-wrap uploads allowed per user per minute.
+ * Config edits are rare and single-user by design (ADR 0004), and a pairing
+ * involves one wrap; the budget only bounds a client stuck in a
+ * write-conflict-retry loop, where each attempt costs a history insert and a
+ * trim. The routes are authenticated and owner-only, so this is
+ * belt-and-braces rather than a defence.
+ */
+export const HOST_SECRET_WRITE_RATE_LIMIT_PER_MINUTE = 30;
 
 /**
  * Byte cap on an uploaded avatar. Avatars render at most ~128px in every
@@ -225,6 +244,18 @@ function toAccountProfile(row: ProfileRow, avatarUrl: string | null): AccountPro
   };
 }
 
+/**
+ * Whether a path parameter can be a uuid at all. Postgres raises on a
+ * malformed uuid comparison, which surfaces as a 500 — so routes that look a
+ * row up by id check first and answer their own not-found instead, keeping a
+ * typo'd id indistinguishable from an id that simply is not the caller's.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
 function toOrganizationSummary(organization: OrganizationRef): OrganizationSummary {
   return { id: organization.orgId, name: organization.orgName };
 }
@@ -273,6 +304,12 @@ export function createV1Routes(deps: {
   hostKeys: HostKeyRegistry;
   devices: DeviceRegistry;
   hostGrants: HostGrantIssuer;
+  /**
+   * Opaque storage for E2E-encrypted Host Secrets and pairing wraps. Injected
+   * like the other adapters; the routes below never look inside what it
+   * holds, which is the point of the workstream (ADR 0004).
+   */
+  hostSecrets: HostSecretStore;
   /** Browser/app approval surface, distinct from the API JWT issuer. */
   accountBaseUrl: string;
   relayServiceToken?: string;
@@ -311,6 +348,7 @@ export function createV1Routes(deps: {
     hostKeys,
     devices,
     hostGrants,
+    hostSecrets,
     accountBaseUrl,
     db,
     avatarStorage,
@@ -424,6 +462,10 @@ export function createV1Routes(deps: {
   // from saturating the feed every other member depends on.
   const deviceMutationRateLimiter = createRateLimiter({
     limit: DEVICE_MUTATION_RATE_LIMIT_PER_MINUTE,
+    windowMs: 60_000,
+  });
+  const hostSecretWriteRateLimiter = createRateLimiter({
+    limit: HOST_SECRET_WRITE_RATE_LIMIT_PER_MINUTE,
     windowMs: 60_000,
   });
 
@@ -1536,10 +1578,222 @@ export function createV1Routes(deps: {
           subject: owned.session.userId,
         },
       ]);
+      // Explicit, because there is no foreign key doing it: the host_secrets
+      // tables mirror revocation_events precisely so deletion ORDER cannot
+      // destroy them by cascade. Same transaction as the host row, so the
+      // owner's delete either removes both or neither — the one case where
+      // the ciphertext SHOULD go is the owner saying so.
+      await deleteHostSecretRows(tx, id);
       await tx.delete(hostRows).where(eq(hostRows.id, id));
     });
 
     return c.body(null, 204);
+  });
+
+  /**
+   * The owner-only gate for Host Secrets. Deliberately NOT `requireHostOwner`:
+   * that helper answers an honest 403 for a host an org-mate can SEE (a
+   * discoverable host in their workspace), which is right for host metadata
+   * and wrong here. Host Secrets never cross user boundaries at all (ADR
+   * 0004/0013), so an org-mate must not even learn that a host has any — every
+   * non-owner gets the same 404 a stranger gets.
+   *
+   * Membership is resolved fresh on both the read and the write: these rows
+   * are the most sensitive thing the service holds, and the read-path cache's
+   * ≤60s staleness SLA is not a window worth granting over them.
+   */
+  async function requireHostSecretsOwner(
+    c: Context,
+    hostId: string,
+  ): Promise<{ session: OrgSession; hostId: string } | Response> {
+    const session = await requireOrgSession(c, { freshMembership: true });
+    if (session instanceof Response) return session;
+    if (!isUuid(hostId)) return errorResponse(c, 404, "host_not_found", "Host not found");
+    const [host] = await db
+      .select({ ownerUserId: hostRows.ownerUserId })
+      .from(hostRows)
+      .where(eq(hostRows.id, hostId))
+      .limit(1);
+    if (!host || host.ownerUserId !== session.userId) {
+      return errorResponse(c, 404, "host_not_found", "Host not found");
+    }
+    return { session, hostId };
+  }
+
+  v1.get("/hosts/:id/secrets", async (c) => {
+    const owned = await requireHostSecretsOwner(c, c.req.param("id"));
+    if (owned instanceof Response) return owned;
+    // A host with no secrets yet answers `{ secret: null }`, not 404: the
+    // caller just proved it owns the host, and "nothing stored" is the
+    // ordinary state of a freshly linked one. Collapsing the two would make a
+    // first write indistinguishable from a host that vanished.
+    const body: GetHostSecretResponse = {
+      secret: await hostSecrets.read(owned.hostId, owned.session.userId),
+    };
+    return c.json(body);
+  });
+
+  /**
+   * Compare-and-swap write of one host's sealed configuration.
+   *
+   * The service cannot read the envelope and does not try: it checks that the
+   * caller owns the host, that `expectedVersion` still matches what is
+   * stored, and that the new envelope's version is exactly one higher — then
+   * stores the bytes verbatim. A stale write is refused with 409 and the
+   * current version, so a rotation racing a config edit produces a visible
+   * loss the client can resolve rather than a silent clobber (spec §3).
+   */
+  v1.put("/hosts/:id/secrets", async (c) => {
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: PutHostSecretRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(PutHostSecretRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    // The version the client sealed under is bound into the ciphertext's AAD,
+    // so a write whose envelope version does not follow expectedVersion would
+    // store a blob that can never be opened at the version it lands on.
+    // Rejecting here is the only chance to catch it — the service cannot
+    // verify the binding itself.
+    if (parsed.envelope.version !== parsed.expectedVersion + 1) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        "Envelope version must be exactly one greater than expectedVersion",
+      );
+    }
+
+    const owned = await requireHostSecretsOwner(c, c.req.param("id"));
+    if (owned instanceof Response) return owned;
+    if (!hostSecretWriteRateLimiter.tryConsume(`user:${owned.session.userId}`)) {
+      return errorResponse(c, 429, "rate_limited", "Too many secret writes — slow down");
+    }
+
+    const result = await hostSecrets.write({
+      hostId: owned.hostId,
+      ownerUserId: owned.session.userId,
+      expectedVersion: parsed.expectedVersion,
+      envelope: parsed.envelope,
+    });
+    if (!result.ok) {
+      // The current version is disclosed on purpose: the caller owns the row,
+      // and without it the only recovery would be a blind re-read loop.
+      const body: HostSecretConflictBody = {
+        error: "host_secret_version_conflict",
+        message: "Host secrets changed since the version you read — re-read and retry",
+        currentVersion: result.currentVersion,
+      };
+      return c.json(body, 409);
+    }
+    const body: PutHostSecretResponse = { secret: result.secret };
+    return c.json(body);
+  });
+
+  /**
+   * Publishes a wrapped Sync Key to another of the caller's OWN devices — the
+   * pairing hand-off (ADR 0004). The service relays an envelope it cannot
+   * open; its only job is refusing to carry one across a user boundary.
+   *
+   * A recipient device the caller does not own is a 404, not a 403: the same
+   * opacity rule hosts follow, so the endpoint cannot be walked to discover
+   * which device ids exist.
+   */
+  v1.put("/sync-key-wraps", async (c) => {
+    const session = await requireUserSession(c);
+    if (session instanceof Response) return session;
+    if (!hostSecretWriteRateLimiter.tryConsume(`user:${session.userId}`)) {
+      return errorResponse(c, 429, "rate_limited", "Too many pairing uploads — slow down");
+    }
+    const json = await c.req.json().catch(() => null);
+    if (json === null) return errorResponse(c, 400, "validation_failed", "Invalid JSON body");
+    let parsed: PutSyncKeyWrapRequest;
+    try {
+      parsed = Schema.decodeUnknownSync(PutSyncKeyWrapRequest)(json);
+    } catch (error) {
+      return errorResponse(
+        c,
+        400,
+        "validation_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    // Scoped to the caller's own devices, and revoked ones are excluded: a
+    // wrap addressed to a device that was just removed would hand the Sync
+    // Key to exactly the credential the removal was meant to cut off — the
+    // inverse of the rotation ADR 0015 requires.
+    const [recipient] = await db
+      .select({ id: deviceRows.id })
+      .from(deviceRows)
+      .where(
+        and(
+          eq(deviceRows.id, parsed.recipientDeviceId),
+          eq(deviceRows.userId, session.userId),
+          isNull(deviceRows.revokedAt),
+        ),
+      )
+      .limit(1);
+    if (!recipient) {
+      return errorResponse(c, 404, "sync_key_wrap_not_found", "No such device");
+    }
+
+    const { expiresAt } = await hostSecrets.putWrap({
+      recipientDeviceId: recipient.id,
+      ownerUserId: session.userId,
+      wrap: parsed.wrap,
+    });
+    const body: PutSyncKeyWrapResponse = {
+      recipientDeviceId: recipient.id,
+      createdAt: new Date().toISOString(),
+      expiresAt,
+    };
+    return c.json(body, 201);
+  });
+
+  /**
+   * Collects the wrapped Sync Key waiting for one of the caller's devices.
+   *
+   * SINGLE DELIVERY: the fetch consumes the wrap, so a second call is a 404 —
+   * and so is a wrap addressed to a device the caller does not own, one that
+   * expired, and one that never existed. One answer for every case, because
+   * distinguishing them would turn the endpoint into an oracle for which
+   * pairings are in flight.
+   */
+  v1.get("/sync-key-wraps/:deviceId", async (c) => {
+    const session = await requireUserSession(c);
+    if (session instanceof Response) return session;
+    const deviceId = c.req.param("deviceId");
+    // A malformed id would otherwise reach Postgres as a uuid comparison and
+    // fail the request as a 500. It takes the SAME 404 as every other miss:
+    // answering 400 here would tell a prober that well-formed ids are the
+    // ones worth trying.
+    if (!isUuid(deviceId)) {
+      return errorResponse(
+        c,
+        404,
+        "sync_key_wrap_not_found",
+        "No wrapped sync key for this device",
+      );
+    }
+    const taken = await hostSecrets.takeWrap(deviceId, session.userId);
+    if (!taken) {
+      return errorResponse(
+        c,
+        404,
+        "sync_key_wrap_not_found",
+        "No wrapped sync key for this device",
+      );
+    }
+    const body: GetSyncKeyWrapResponse = { wrap: taken.wrap, createdAt: taken.createdAt };
+    return c.json(body);
   });
 
   /**

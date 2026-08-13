@@ -71,6 +71,13 @@
       "when": 1786646298283,
       "tag": "0009_narrow_energizer",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786657633307,
+      "tag": "0010_host_secrets_sync",
+      "breakpoints": true
     }
   ]
 }
