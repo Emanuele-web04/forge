@@ -73,6 +73,9 @@ function windowDurationMinsForRow(row: VisibleRateLimitRow): number | undefined 
   if (row.label === "Weekly") {
     return 10_080;
   }
+  if (row.label === "Daily") {
+    return 1_440;
+  }
   return undefined;
 }
 

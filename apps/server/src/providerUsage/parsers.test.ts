@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parseClaudeUsage } from "./providers/claude.ts";
 import { parseCodexUsage } from "./providers/codex.ts";
 import { parseCursorUsage } from "./providers/cursor.ts";
+import { parseDevinUsage } from "./providers/devin.ts";
 
 const NOW_MS = 1_738_000_000_000;
 
@@ -99,5 +100,122 @@ describe("parseCursorUsage", () => {
     expect(usageLine(snapshot, "On-demand")?.value).toContain("60.00");
     // remaining = (5000 - 1200) / 100 = $38.00 of $50.00
     expect(usageLine(snapshot, "Credits")?.value).toContain("38.00");
+  });
+});
+
+describe("parseDevinUsage", () => {
+  it("maps daily/weekly quota remaining plus credits and ACU", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            planInfo: { planName: "pro" },
+            daily_quota_remaining_percent: 72,
+            weekly_quota_remaining_percent: 41,
+            daily_quota_reset_at_unix: 1_738_086_400,
+            weekly_quota_reset_at_unix: 1_738_500_800,
+            used_prompt_credits: 1200,
+            available_prompt_credits: 3800,
+            used_flex_credits: 50,
+            available_flex_credits: 150,
+            acu_consumed: 3.25,
+            acu_limit: 20,
+            overage_balance_micros: 2_500_000,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.planName).toBe("Pro");
+    expect(limit(snapshot, "Daily")?.usedPercent).toBe(28);
+    expect(limit(snapshot, "Daily")?.windowDurationMins).toBe(1_440);
+    expect(limit(snapshot, "Weekly")?.usedPercent).toBe(59);
+    expect(usageLine(snapshot, "Prompt credits")?.value).toMatch(/1[,.]?200 of 5[,.]?000/u);
+    expect(usageLine(snapshot, "Flex credits")?.value).toBe("50 of 200");
+    expect(usageLine(snapshot, "ACU")?.value).toBe("3.25 of 20 ACU");
+    expect(usageLine(snapshot, "Extra usage balance")?.value).toMatch(/2[,.]50 remaining/u);
+  });
+
+  it("keeps plan-end on Current and does not invent Daily/Weekly windows", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            planInfo: { planName: "pro", planEnd: 1_738_500_800 },
+            used_prompt_credits: 10,
+            available_prompt_credits: 90,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(limit(snapshot, "Daily")).toBeUndefined();
+    expect(limit(snapshot, "Weekly")).toBeUndefined();
+    expect(limit(snapshot, "Current")?.resetsAt).toBe(new Date(1_738_500_800 * 1000).toISOString());
+    expect(usageLine(snapshot, "Prompt credits")?.value).toMatch(/10 of 100/u);
+  });
+
+  it("emits Daily from remaining quota without borrowing plan-end as the reset", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            plan_end: 1_738_500_800,
+            daily_quota_remaining_percent: 40,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(limit(snapshot, "Daily")).toEqual({
+      window: "Daily",
+      usedPercent: 60,
+      windowDurationMins: 1_440,
+    });
+    expect(limit(snapshot, "Current")).toBeUndefined();
+    expect(limit(snapshot, "Weekly")).toBeUndefined();
+  });
+
+  it("maps hidden daily quota data to Weekly and keeps Daily hidden", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            planInfo: { planName: "max", hideDailyQuota: true },
+            dailyQuotaRemainingPercent: 35,
+            dailyQuotaResetAtUnix: 1_738_086_400,
+            weeklyQuotaResetAtUnix: 1_738_500_800,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(limit(snapshot, "Daily")).toBeUndefined();
+    expect(limit(snapshot, "Weekly")).toEqual({
+      window: "Weekly",
+      usedPercent: 65,
+      resetsAt: new Date(1_738_500_800 * 1000).toISOString(),
+      windowDurationMins: 10_080,
+    });
+  });
+
+  it("keeps a zero extra usage balance visible", () => {
+    const snapshot = parseDevinUsage({
+      json: {
+        userStatus: {
+          planStatus: {
+            overageBalanceMicros: 0,
+          },
+        },
+      },
+      nowMs: NOW_MS,
+    });
+
+    expect(usageLine(snapshot, "Extra usage balance")?.value).toMatch(/\$?0[,.]00 remaining/u);
   });
 });
