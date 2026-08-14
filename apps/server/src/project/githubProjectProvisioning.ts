@@ -122,37 +122,32 @@ function isAuthRequired(detail: string): boolean {
   return FORK_GH_AUTH_REQUIRED_KEYWORDS.test(detail);
 }
 
+function isGitHubCliUnavailable(cause: unknown): boolean {
+  return cause instanceof GitHubCliError && cause.reason === "not-installed";
+}
+
 function decodeForkInfoJson(
   raw: string,
   operation: string,
 ): Effect.Effect<GitHubForkSourceInfo, GitHubCliError> {
-  return Effect.gen(function* () {
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(raw) as unknown,
-      catch: (error) =>
-        new GitHubCliError({
-          operation,
-          detail: error instanceof Error ? error.message : "Unable to parse repository JSON.",
-          reason: "other",
-        }),
-    });
-    const decoded = yield* Schema.decodeUnknownSync(RawForkInfoSchema)(parsed).pipe(
-      Effect.mapError(
-        (error) =>
-          new GitHubCliError({
-            operation,
-            detail:
-              error instanceof Error
-                ? `Invalid repository JSON response: ${error.message}`
-                : "Invalid repository JSON response.",
-            reason: "other",
-          }),
-      ),
-    );
-    return {
-      isFork: decoded.isFork,
-      parentNameWithOwner: decoded.parent?.nameWithOwner ?? null,
-    };
+  return Effect.try({
+    try: () => {
+      const parsed = JSON.parse(raw) as unknown;
+      const decoded = Schema.decodeUnknownSync(RawForkInfoSchema)(parsed);
+      return {
+        isFork: decoded.isFork,
+        parentNameWithOwner: decoded.parent?.nameWithOwner ?? null,
+      };
+    },
+    catch: (error) =>
+      new GitHubCliError({
+        operation,
+        detail:
+          error instanceof Error
+            ? `Invalid repository JSON response: ${error.message}`
+            : "Invalid repository JSON response.",
+        reason: "other",
+      }),
   });
 }
 
@@ -293,7 +288,7 @@ function ensureFork(
   return Effect.gen(function* () {
     const forked = yield* github.execute({ cwd: parent, args: commandArgs }).pipe(
       Effect.as(true),
-      Effect.catchAll((cause) => {
+      Effect.catch((cause) => {
         const detail =
           cause instanceof GitHubCliError || cause instanceof GitCommandError
             ? cause.detail
@@ -383,7 +378,7 @@ function setUpstreamRemote(
         maxOutputBytes: 64 * 1_024,
       })
       .pipe(
-        Effect.catchAll(() =>
+        Effect.catch(() =>
           git
             .execute({
               operation: "set upstream remote",
@@ -790,14 +785,14 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
         workspaceRoot,
         Effect.gen(function* () {
           const viewerLogin = yield* github.getViewerLogin({ cwd: parent }).pipe(
-            Effect.catchAll((cause) => {
+            Effect.catch((cause) => {
               const detail =
                 cause instanceof GitHubCliError
                   ? cause.detail
                   : cause instanceof Error
                     ? cause.message
                     : String(cause);
-              if (isAuthRequired(detail.toLowerCase())) {
+              if (isAuthRequired(detail.toLowerCase()) || isGitHubCliUnavailable(cause)) {
                 return Effect.succeed("");
               }
               return Effect.fail(

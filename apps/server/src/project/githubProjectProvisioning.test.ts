@@ -39,7 +39,7 @@ function unavailableGitHubCli(): GitHubCliShape {
 }
 
 describe("GitHub project provisioning", () => {
-  function makeForkAwareGitHubCliStub(): GitHubCliShape {
+  function makeForkAwareGitHubCliStub(fileSystem: FileSystem.FileSystem): GitHubCliShape {
     const isForkInfo = JSON.stringify({
       isFork: false,
       parent: null,
@@ -57,7 +57,7 @@ describe("GitHub project provisioning", () => {
           }
           if (args[0] === "repo" && args[1] === "clone") {
             const stagingPath = args[4] ?? "";
-            yield* FileSystem.FileSystem.makeDirectory(stagingPath, { recursive: true });
+            yield* fileSystem.makeDirectory(stagingPath, { recursive: true });
             return {
               code: 0,
               stdout: "",
@@ -84,7 +84,7 @@ describe("GitHub project provisioning", () => {
         const path = yield* Path.Path;
         const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-provision-" });
         const ghCalls: ReadonlyArray<string>[] = [];
-        const githubBase = makeForkAwareGitHubCliStub();
+        const githubBase = makeForkAwareGitHubCliStub(fileSystem);
         const github = {
           ...githubBase,
           execute: (input: Parameters<GitHubCliShape["execute"]>[0]) =>

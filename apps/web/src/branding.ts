@@ -1,6 +1,6 @@
 export const APP_BASE_NAME = "Forkara";
 const isCanaryDesktop =
-  typeof window !== "undefined" && window.location?.protocol === "forkara-canary:";
+  typeof window !== "undefined" && window.location?.protocol === "synara-canary:";
 export const APP_DISPLAY_NAME = isCanaryDesktop
   ? "Forkara Canary"
   : import.meta.env.DEV
