@@ -13,13 +13,17 @@ import {
   resolveCreatePrDialogRuntimeStatus,
   resolveCreatePrDialogView,
   resolveCreatePrExecution,
+  resolveCommitDialogActions,
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
+  resolvePromotedPullPresentation,
   resolvePullActionAvailability,
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
+  shouldPromotePullAction,
   shouldShowEnvironmentPanelPullRow,
+  shouldShowHeaderPullAction,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 
@@ -467,6 +471,18 @@ describe("when: branch is behind upstream", () => {
     );
   });
 
+  it("shouldShowHeaderPullAction surfaces Pull next to Hand off while behind", () => {
+    const quick = resolveQuickAction(status({ behindCount: 2 }), false);
+    assert.equal(shouldShowHeaderPullAction({ quickAction: quick, isPullRunning: false }), true);
+    assert.equal(shouldPromotePullAction({ quickAction: quick, isPullRunning: false }), true);
+    assert.deepEqual(
+      resolvePromotedPullPresentation({ quickAction: quick, isPullRunning: false }),
+      {
+        label: "Pull",
+      },
+    );
+  });
+
   it("shouldShowEnvironmentPanelPullRow keeps the Pull row visible while pulling", () => {
     const busyQuickAction = resolveQuickAction(status({ behindCount: 2 }), true);
     assert.equal(
@@ -475,6 +491,32 @@ describe("when: branch is behind upstream", () => {
         isPullRunning: true,
       }),
       true,
+    );
+    assert.equal(
+      shouldShowHeaderPullAction({
+        quickAction: busyQuickAction,
+        isPullRunning: true,
+      }),
+      true,
+    );
+    assert.deepEqual(
+      resolvePromotedPullPresentation({
+        quickAction: busyQuickAction,
+        isPullRunning: true,
+      }),
+      { label: "Pulling..." },
+    );
+  });
+
+  it("resolvePromotedPullPresentation does not use the busy Commit hint", () => {
+    const busyQuickAction = resolveQuickAction(status({ behindCount: 2 }), true);
+    assert.deepInclude(busyQuickAction, { label: "Commit", kind: "show_hint", disabled: true });
+    assert.equal(
+      resolvePromotedPullPresentation({
+        quickAction: busyQuickAction,
+        isPullRunning: false,
+      }),
+      null,
     );
   });
 
@@ -551,6 +593,11 @@ describe("when: branch is up to date", () => {
     assert.equal(
       shouldShowEnvironmentPanelPullRow({ quickAction: quick, isPullRunning: false }),
       false,
+    );
+    assert.equal(shouldShowHeaderPullAction({ quickAction: quick, isPullRunning: false }), false);
+    assert.equal(
+      resolvePromotedPullPresentation({ quickAction: quick, isPullRunning: false }),
+      null,
     );
   });
 });
@@ -1345,6 +1392,132 @@ describe("resolveCreatePrDialogExecution", () => {
   });
 });
 
+describe("resolveCommitDialogActions", () => {
+  const baseContext = {
+    isBusy: false,
+    isDefaultBranch: false,
+    hasOriginRemote: true,
+    defaultBranchName: "main",
+  };
+  const dirtyStatus = status({
+    hasWorkingTreeChanges: true,
+    workingTree: {
+      files: [{ path: "a.ts", insertions: 3, deletions: 1 }],
+      insertions: 3,
+      deletions: 1,
+    },
+  });
+  const byId = (context: Parameters<typeof resolveCommitDialogActions>[0]) =>
+    Object.fromEntries(resolveCommitDialogActions(context).map((action) => [action.id, action]));
+
+  it("offers commit, commit & push, and PR on a dirty feature branch", () => {
+    const actions = byId({
+      context: { ...baseContext, gitStatus: dirtyStatus },
+      hasFileSelection: true,
+    });
+    assert.deepInclude(actions.commit, {
+      label: "Commit",
+      action: "commit",
+      featureBranch: false,
+      disabled: false,
+    });
+    assert.deepInclude(actions.commit_new_branch, {
+      label: "Commit on new branch",
+      action: "commit",
+      featureBranch: true,
+      disabled: false,
+    });
+    assert.deepInclude(actions.commit_push, {
+      label: "Commit & push",
+      action: "commit_push",
+      disabled: false,
+    });
+    assert.deepInclude(actions.create_pr, { label: "Create PR", disabled: false });
+  });
+
+  it("blocks every commit row while all files are excluded", () => {
+    const actions = byId({
+      context: { ...baseContext, gitStatus: dirtyStatus },
+      hasFileSelection: false,
+    });
+    assert.equal(actions.commit?.disabled, true);
+    assert.equal(actions.commit?.disabledReason, "Select at least one file to commit.");
+    assert.equal(actions.commit_new_branch?.disabled, true);
+    assert.equal(actions.commit_push?.disabled, true);
+    // The PR row hands off to the Create PR dialog, so it ignores the file selection.
+    assert.equal(actions.create_pr?.disabled, false);
+  });
+
+  it("collapses the push row to a pure push on a clean branch that is ahead", () => {
+    const actions = byId({
+      context: { ...baseContext, gitStatus: status({ aheadCount: 2 }) },
+      hasFileSelection: true,
+    });
+    assert.deepInclude(actions.commit_push, {
+      label: "Push",
+      action: "push",
+      disabled: false,
+    });
+    assert.equal(actions.commit?.disabled, true);
+    assert.equal(
+      actions.commit?.disabledReason,
+      "Worktree is clean. Make changes before committing.",
+    );
+  });
+
+  it("explains why commit & push is blocked behind upstream", () => {
+    const actions = byId({
+      context: {
+        ...baseContext,
+        gitStatus: status({ hasWorkingTreeChanges: true, behindCount: 1 }),
+      },
+      hasFileSelection: true,
+    });
+    assert.equal(actions.commit?.disabled, false);
+    assert.equal(actions.commit_push?.disabled, true);
+    assert.equal(
+      actions.commit_push?.disabledReason,
+      "Branch is behind upstream. Pull/rebase before committing and pushing.",
+    );
+  });
+
+  it("uses the commit & push reason for the default-branch push menu item", () => {
+    const actions = byId({
+      context: {
+        ...baseContext,
+        isDefaultBranch: true,
+        gitStatus: status({ branch: "main", hasWorkingTreeChanges: true, behindCount: 1 }),
+      },
+      hasFileSelection: true,
+    });
+    assert.equal(actions.commit_push?.disabled, true);
+    assert.equal(
+      actions.commit_push?.disabledReason,
+      "Branch is behind upstream. Pull/rebase before committing and pushing.",
+    );
+  });
+
+  it("labels the PR row as View PR when one is already open", () => {
+    const actions = byId({
+      context: {
+        ...baseContext,
+        gitStatus: status({ hasWorkingTreeChanges: true, pr: statusPr() }),
+      },
+      hasFileSelection: true,
+    });
+    assert.deepInclude(actions.create_pr, { label: "View PR", disabled: false });
+  });
+
+  it("disables everything while a git action is running", () => {
+    const actions = resolveCommitDialogActions({
+      context: { ...baseContext, gitStatus: dirtyStatus, isBusy: true },
+      hasFileSelection: true,
+    });
+    assert.isTrue(actions.every((action) => action.disabled));
+    assert.isTrue(actions.every((action) => action.disabledReason === "Git action in progress."));
+  });
+});
+
 describe("resolveCreatePrDialogRuntimeStatus", () => {
   it("uses a newly dirty live tree instead of a clean post-push snapshot", () => {
     const postPushStatus = status({ hasWorkingTreeChanges: false, aheadCount: 0 });
@@ -1809,7 +1982,7 @@ describe("resolveAutoFeatureBranchName", () => {
 });
 
 describe("resolveDefaultCreateBranchName", () => {
-  it("uses Forkara as the default namespace", () => {
+  it("uses Synara as the default namespace", () => {
     const branch = resolveDefaultCreateBranchName(["main"], "fix toast copy");
     assert.equal(branch, "synara/fix-toast-copy");
   });
@@ -1819,12 +1992,12 @@ describe("resolveDefaultCreateBranchName", () => {
     assert.equal(branch, "synara/refine-toolbar-actions");
   });
 
-  it("preserves nested namespaces under Forkara", () => {
+  it("preserves nested namespaces under Synara", () => {
     const branch = resolveDefaultCreateBranchName(["main"], "feature/refine-toolbar-actions");
     assert.equal(branch, "synara/feature/refine-toolbar-actions");
   });
 
-  it("increments suffix when the Forkara branch already exists", () => {
+  it("increments suffix when the Synara branch already exists", () => {
     const branch = resolveDefaultCreateBranchName(
       ["main", "synara/fix-toast-copy", "synara/fix-toast-copy-2"],
       "fix toast copy",

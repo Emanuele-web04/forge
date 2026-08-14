@@ -14,10 +14,10 @@ import {
 
 describe("resolveElectronUpdaterCacheDirName", () => {
   it("matches electron-updater's cache directory fallback", () => {
-    expect(resolveElectronUpdaterCacheDirName(null, "Forkara")).toBe("Forkara");
+    expect(resolveElectronUpdaterCacheDirName(null, "Synara")).toBe("Synara");
     expect(
-      resolveElectronUpdaterCacheDirName({ updaterCacheDirName: "Forkara-updater" }, "Forkara"),
-    ).toBe("Forkara-updater");
+      resolveElectronUpdaterCacheDirName({ updaterCacheDirName: "Synara-updater" }, "Synara"),
+    ).toBe("Synara-updater");
   });
 });
 
@@ -25,55 +25,55 @@ describe("resolveElectronUpdaterPendingCacheDir", () => {
   it("matches electron-updater's pending cache path on macOS", () => {
     expect(
       resolveElectronUpdaterPendingCacheDir({
-        cacheDirName: "Forkara-updater",
+        cacheDirName: "Synara-updater",
         platform: "darwin",
         homeDir: "/Users/test",
       }),
-    ).toBe("/Users/test/Library/Caches/Forkara-updater/pending");
+    ).toBe("/Users/test/Library/Caches/Synara-updater/pending");
   });
 
   it("matches electron-updater's pending cache path on Windows", () => {
     expect(
       resolveElectronUpdaterPendingCacheDir({
-        cacheDirName: "Forkara-updater",
+        cacheDirName: "Synara-updater",
         platform: "win32",
         homeDir: "C:\\Users\\test",
         localAppData: "C:\\Users\\test\\AppData\\Local",
       }),
-    ).toBe("C:\\Users\\test\\AppData\\Local\\Forkara-updater\\pending");
+    ).toBe("C:\\Users\\test\\AppData\\Local\\Synara-updater\\pending");
   });
 
   it("falls back from an empty Windows cache env var like electron-updater", () => {
     expect(
       resolveElectronUpdaterPendingCacheDir({
-        cacheDirName: "Forkara-updater",
+        cacheDirName: "Synara-updater",
         platform: "win32",
         homeDir: "C:\\Users\\test",
         localAppData: "",
       }),
-    ).toBe("C:\\Users\\test\\AppData\\Local\\Forkara-updater\\pending");
+    ).toBe("C:\\Users\\test\\AppData\\Local\\Synara-updater\\pending");
   });
 
   it("matches electron-updater's pending cache path on Linux", () => {
     expect(
       resolveElectronUpdaterPendingCacheDir({
-        cacheDirName: "Forkara-updater",
+        cacheDirName: "Synara-updater",
         platform: "linux",
         homeDir: "/home/test",
         xdgCacheHome: "/tmp/cache",
       }),
-    ).toBe("/tmp/cache/Forkara-updater/pending");
+    ).toBe("/tmp/cache/Synara-updater/pending");
   });
 
   it("falls back from an empty Linux cache env var like electron-updater", () => {
     expect(
       resolveElectronUpdaterPendingCacheDir({
-        cacheDirName: "Forkara-updater",
+        cacheDirName: "Synara-updater",
         platform: "linux",
         homeDir: "/home/test",
         xdgCacheHome: "",
       }),
-    ).toBe("/home/test/.cache/Forkara-updater/pending");
+    ).toBe("/home/test/.cache/Synara-updater/pending");
   });
 
   it("returns null when no cache dir is configured", () => {
@@ -90,14 +90,14 @@ describe("resolveElectronUpdaterPendingCacheDir", () => {
 describe("resolveElectronUpdaterCacheDir", () => {
   it("exposes the shared cache root and legacy top-level zip path", () => {
     const args = {
-      cacheDirName: "Forkara-updater",
+      cacheDirName: "Synara-updater",
       platform: "darwin" as const,
       homeDir: "/Users/test",
     };
 
-    expect(resolveElectronUpdaterCacheDir(args)).toBe("/Users/test/Library/Caches/Forkara-updater");
+    expect(resolveElectronUpdaterCacheDir(args)).toBe("/Users/test/Library/Caches/Synara-updater");
     expect(resolveElectronUpdaterLegacyZipPath(args)).toBe(
-      "/Users/test/Library/Caches/Forkara-updater/update.zip",
+      "/Users/test/Library/Caches/Synara-updater/update.zip",
     );
   });
 });

@@ -7,6 +7,8 @@ import type {
   ProjectDiscoverScriptsResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
+  ProjectSearchContentInput,
+  ProjectSearchContentResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
@@ -20,6 +22,9 @@ export interface WorkspaceEntriesShape {
   readonly search: (
     input: ProjectSearchEntriesInput,
   ) => Effect.Effect<ProjectSearchEntriesResult, WorkspaceEntriesError>;
+  readonly searchContent: (
+    input: ProjectSearchContentInput,
+  ) => Effect.Effect<ProjectSearchContentResult, WorkspaceEntriesError>;
   readonly discoverScripts: (
     input: ProjectDiscoverScriptsInput,
   ) => Effect.Effect<ProjectDiscoverScriptsResult, WorkspaceEntriesError>;

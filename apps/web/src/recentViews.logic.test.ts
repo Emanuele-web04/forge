@@ -133,7 +133,7 @@ describe("recent view MRU logic", () => {
 
   it("prefers terminal visual identity over thread provider for display icons", () => {
     const terminalThreadId = threadId("thread-terminal");
-    const project = { id: projectId("project-1"), name: "Forkara" } as Project;
+    const project = { id: projectId("project-1"), name: "Synara" } as Project;
     const threadSummary = {
       id: terminalThreadId,
       projectId: project.id,
@@ -164,7 +164,7 @@ describe("recent view MRU logic", () => {
       icon: { kind: "terminal", iconKey: "terminal" },
       isTerminal: true,
       provider: "codex",
-      subtitle: "Forkara · Terminal",
+      subtitle: "Synara · Terminal",
       terminalVisualIdentity: {
         cliKind: null,
         iconKey: "terminal",

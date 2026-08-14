@@ -1,5 +1,5 @@
 // FILE: composerSlashCommands.ts
-// Purpose: Share Synara's built-in composer slash command names across web UI
+// Purpose: Share Forkara's built-in composer slash command names across web UI
 //          parsing and server-side profile stats backfills.
 // Layer: Shared runtime utility
 // Exports: command-name constants and normalization helpers.
@@ -9,6 +9,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "compact",
   "model",
   "plan",
+  "debug",
   "default",
   "blame-someone-else",
   "review",
@@ -18,6 +19,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "subagents",
   "fast",
   "export",
+  "goal",
   "feedback",
   "automation",
 ] as const;

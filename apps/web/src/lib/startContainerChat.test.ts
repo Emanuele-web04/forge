@@ -9,8 +9,8 @@ import {
 
 const paths = {
   homeDir: "/Users/tester",
-  chatWorkspaceRoot: "/Users/tester/Documents/Forkara/Chats",
-  studioWorkspaceRoot: "/Users/tester/Documents/Forkara/Studio",
+  chatWorkspaceRoot: "/Users/tester/Documents/Synara/Chats",
+  studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
 };
 
 function successfulHandler() {
@@ -25,7 +25,7 @@ describe("startFreshChatForActiveSurface", () => {
     await startFreshChatForActiveSurface({
       activeProject: {
         kind: "studio",
-        cwd: "/Users/tester/Documents/Forkara/Studio",
+        cwd: "/Users/tester/Documents/Synara/Studio",
       },
       isStudioRoute: false,
       paths,
@@ -71,7 +71,9 @@ describe("startFreshChatForActiveSurface", () => {
       });
 
       expect(handleNewChat).toHaveBeenCalledOnce();
-      expect(handleNewChat).toHaveBeenCalledWith({ fresh: true });
+      // Home chat reuses the stored draft thread when one exists (so an in-progress
+      // draft survives switching threads) instead of forcing a fresh thread.
+      expect(handleNewChat).toHaveBeenCalledWith();
       expect(handleNewStudioChat).not.toHaveBeenCalled();
     }
   });

@@ -88,7 +88,7 @@ export function resolveReleaseUpdatePolicy(
   }
   if (normalizedConfig.lane === "clean" && compareCoreVersions(requested.core, bridge.core) <= 0) {
     throw new Error(
-      `Forkara releases must be newer than the compatibility release v${normalizedConfig.bridgeVersion}.`,
+      `Synara releases must be newer than the compatibility release v${normalizedConfig.bridgeVersion}.`,
     );
   }
 

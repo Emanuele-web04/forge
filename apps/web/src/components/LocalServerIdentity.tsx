@@ -50,7 +50,7 @@ const IDENTITY_TONE: Record<LocalServerIdentityTone, LocalServerIdentityToneToke
 /**
  * Name + "address · folder" identity column for a detected local dev server.
  * The folder (cwd basename) disambiguates servers whose live page titles collide
- * — e.g. two apps both titled "Forkara" started from different directories.
+ * — e.g. two apps both titled "Synara" started from different directories.
  */
 export function LocalServerIdentity({
   server,

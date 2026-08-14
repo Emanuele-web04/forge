@@ -41,7 +41,6 @@
     "test": "turbo run test",
     "test:web:focused": "bun run --cwd apps/web test",
     "brand:check": "node scripts/check-brand-identity.ts",
-    "readme:truthiness": "node scripts/check-readme-truthiness.ts",
     "migrations:check": "node scripts/check-migration-lineage.ts",
     "test:desktop-smoke": "turbo run smoke-test --filter=@synara/desktop",
     "test:device": "bun scripts/device-helper-smoke.ts",
@@ -64,6 +63,8 @@
     "canary:stop": "node scripts/canary.ts stop",
     "canary:status": "node scripts/canary.ts status",
     "canary:rollback": "node scripts/canary.ts rollback",
+    "sync:upstream": "bun scripts/sync-upstream.ts",
+    "readme:truthiness": "node scripts/check-readme-truthiness.ts",
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .turbo apps/*/.turbo packages/*/.turbo"
   },
   "devDependencies": {

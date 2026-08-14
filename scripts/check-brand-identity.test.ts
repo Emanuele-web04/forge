@@ -13,8 +13,8 @@ const firstSpacedDisplayName = `${characters(84, 51)} Code`;
 const secondName = characters(100, 112, 99, 111, 100, 101);
 const companyDisplayName = `${characters(84, 51)} ${characters(84, 111, 111, 108, 115)}`;
 const legalNotice = `Copyright (c) 2026 ${companyDisplayName} Inc.`;
-const originsAttribution = `Synara began as a clone of ${firstDisplayName}.`;
-const releaseAttribution = `**A review of the Synara codebase found an analytics configuration that came from the original ${firstSpacedDisplayName} codebase when Synara was created as a clone in March. We did not add it, and we have no access to the PostHog project receiving the events.**`;
+const originsAttribution = `Forkara began as a clone of [${firstDisplayName}](https://github.com/pingdotgg/${firstName}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
+const releaseAttribution = `**A review of the Forkara codebase found an analytics configuration that came from the original ${firstSpacedDisplayName} codebase when Forkara was created as a clone in March. We did not add it, and we have no access to the PostHog project receiving the events.**`;
 const inAppReleaseAttribution = `"A review of the Forkara codebase found an analytics configuration that came from the original ${firstSpacedDisplayName} codebase when Forkara was created as a clone in March.",`;
 
 describe("brand identity guard", () => {

@@ -12,6 +12,42 @@ import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
 import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
+const FORK_SOURCE = {
+  sourceThreadId: ThreadId.makeUnsafe("source-thread"),
+  sourceTitle: "ciao (2)",
+};
+
+function makeForkImportedEntry() {
+  return {
+    id: "imported-entry",
+    kind: "message" as const,
+    createdAt: "2026-03-17T19:12:28.000Z",
+    message: {
+      id: MessageId.makeUnsafe("imported-message"),
+      role: "assistant" as const,
+      text: "Imported history",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      streaming: false,
+      source: "fork-import" as const,
+    },
+  };
+}
+
+function makeForkOwnedEntry() {
+  return {
+    id: "fork-entry",
+    kind: "message" as const,
+    createdAt: "2026-03-17T19:12:29.000Z",
+    message: {
+      id: MessageId.makeUnsafe("fork-message"),
+      role: "user" as const,
+      text: "Fork-only turn",
+      createdAt: "2026-03-17T19:12:29.000Z",
+      streaming: false,
+      source: "native" as const,
+    },
+  };
+}
 
 vi.mock("@legendapp/list/react", async () => {
   const React = await import("react");
@@ -21,6 +57,7 @@ vi.mock("@legendapp/list/react", async () => {
       data: Array<{ id: string }>;
       keyExtractor: (item: { id: string }) => string;
       renderItem: (args: { item: { id: string } }) => React.ReactNode;
+      ListFooterComponent?: React.ReactNode;
     },
     _ref: React.ForwardedRef<unknown>,
   ) {
@@ -29,6 +66,7 @@ vi.mock("@legendapp/list/react", async () => {
         {props.data.map((item) => (
           <div key={props.keyExtractor(item)}>{props.renderItem({ item })}</div>
         ))}
+        {props.ListFooterComponent}
       </div>
     );
   });
@@ -93,6 +131,11 @@ beforeAll(() => {
       classList,
       offsetHeight: 0,
     },
+    // flushStorageBeforePageHide registers visibilitychange at module load of
+    // the MessagesTimeline import chain (via composerDraftStore).
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    visibilityState: "visible",
   });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
@@ -100,7 +143,59 @@ beforeAll(() => {
   });
 });
 
+// Warm the component module once: the first dynamic import pays the whole
+// component-graph transform, which exceeds the 5s per-test timeout on slow CI
+// runners (observed >10s under a full parallel suite). beforeAll keeps that
+// cost off any single test's clock; the explicit timeout keeps it off the
+// default 10s hook clock too.
+beforeAll(async () => {
+  await import("./MessagesTimeline");
+}, 120_000);
+
 describe("MessagesTimeline", () => {
+  // The first test pays the full dynamic-import cost of the MessagesTimeline
+  // module graph, which can exceed 10s under CI thread contention.
+  it("renders an accent deep link to the immediate fork source", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        hasMessages
+        timelineEntries={[makeForkImportedEntry(), makeForkOwnedEntry()]}
+        forkSource={FORK_SOURCE}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('data-fork-source-divider="true"');
+    expect(markup).toContain('href="/source-thread"');
+    expect(markup).toContain("Continued from chat");
+    expect(markup).toContain("text-[var(--color-text-accent)]");
+    expect(markup.indexOf("Imported history")).toBeLessThan(
+      markup.indexOf('data-fork-source-divider="true"'),
+    );
+    expect(markup.indexOf('data-fork-source-divider="true"')).toBeLessThan(
+      markup.indexOf("Fork-only turn"),
+    );
+  }, 30_000);
+
+  it("keeps the divider after imported history while waiting for the first fork turn", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        hasMessages
+        timelineEntries={[makeForkImportedEntry()]}
+        forkSource={FORK_SOURCE}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup.indexOf("Imported history")).toBeLessThan(
+      markup.indexOf('data-fork-source-divider="true"'),
+    );
+  });
+
   it("keeps small transcripts on the simple non-virtualized path", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -142,11 +237,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-index="0"');
     expect(markup).not.toContain('class="relative" style="height:');
     expect(markup).toContain('data-timeline-row-kind="message"');
-    // First test in the file pays the full dynamic-import cost of the
-    // MessagesTimeline module graph, which exceeds 10s under CI thread
-    // contention (observed flaking on 4-thread runners while passing in
-    // ~2s locally).
-  }, 30_000);
+  });
 
   it("renders assistant math through the shared markdown renderer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -481,7 +572,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Copy message"');
     expect(markup).toContain('aria-label="Edit message"');
     expect(markup).toContain('aria-label="Revert to this message"');
-    expect(markup).toContain("size-[1.125em]");
+    expect(markup).toContain("size-[1.375em]");
   });
 
   it("keeps edit available and hides undo before a revert checkpoint exists", async () => {
@@ -1482,6 +1573,50 @@ describe("MessagesTimeline", () => {
       '<span data-work-entry-display-text="true">Searched 2 files found</span>',
     );
     expect(markup).not.toContain("data-work-entry-action-word");
+  });
+
+  it("renders the complete task-list progress heading", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-task-progress");
+    const timelineEntries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "tasks-live",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
+          tone: "info",
+          turnId: activeTurnId,
+          payload: {
+            tasks: [
+              { task: "Implement inline editing", status: "completed" },
+              { task: "Run verification", status: "inProgress" },
+              { task: "Ship", status: "pending" },
+            ],
+          },
+        }),
+      ],
+      activeTurnId,
+    ).map((entry) => ({
+      id: entry.id,
+      kind: "work" as const,
+      createdAt: entry.createdAt,
+      entry,
+    }));
+
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-05-09T16:31:20.000Z"
+        timelineEntries={timelineEntries}
+      />,
+    );
+
+    expect(markup).toContain(
+      '<span data-work-entry-display-text="true">1 out of 3 tasks completed Run verification</span>',
+    );
   });
 
   it("renders Claude agent task output through the shared markdown renderer", async () => {
@@ -3229,5 +3364,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
+    expect(markup.indexOf('aria-label="Copy message"')).toBeGreaterThan(
+      markup.indexOf("Edited 1 file"),
+    );
   });
 });

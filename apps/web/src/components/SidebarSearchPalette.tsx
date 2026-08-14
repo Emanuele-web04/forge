@@ -25,7 +25,7 @@ import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { readNativeApi } from "~/nativeApi";
-import { isMacPlatform } from "~/lib/utils";
+import { getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   appendBrowsePathSegment,
@@ -396,7 +396,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     return () => window.clearTimeout(timeoutId);
   }, [props.importProviders, props.open]);
 
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const platform = getNavigatorPlatform();
   const trimmedQuery = query.trim();
   const unsupportedWindowsPath = isUnsupportedWindowsProjectPath(trimmedQuery, platform);
   const isBrowsing = trimmedQuery.length > 0 && isFilesystemBrowseQuery(trimmedQuery, platform);

@@ -98,6 +98,7 @@ import { hasPendingTurnDispatch } from "../pendingTurnDispatch";
 import { canApplyThreadSnapshot, selectOrphanedThreadDetailIds } from "./-threadDetailOwnership";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
+import { useChatWidth } from "../hooks/useChatWidth";
 import { useDesktopAppIcon } from "../hooks/useDesktopAppIcon";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
@@ -105,7 +106,7 @@ import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopT
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
-import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
+import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
@@ -119,6 +120,7 @@ import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 import { useAppSettings } from "../appSettings";
+import { getNavigatorPlatform } from "../lib/utils";
 import {
   getNotifiableProviderUpdateStatuses,
   isProviderUpdateActive,
@@ -196,6 +198,7 @@ export const Route = createRootRouteWithContext<{
 function RootRouteView() {
   useAppTypography();
   useAppDensity();
+  useChatWidth();
   useDesktopAppIcon();
   usePreloadRouteChunks();
   useNativeFontSmoothing();
@@ -278,16 +281,16 @@ function RootRouteView() {
 function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) {
   const title =
     issue.action === "update-client"
-      ? "This Forkara client needs an update."
+      ? "This Synara client needs an update."
       : issue.action === "update-server"
-        ? "The Forkara server needs an update."
-        : "Forkara needs to reconnect with a matching build.";
+        ? "The Synara server needs an update."
+        : "Synara needs to reconnect with a matching build.";
   const guidance =
     issue.action === "update-client"
       ? "Update or reload this client, then reconnect."
       : issue.action === "update-server"
         ? "Update or restart the server, then reload this client."
-        : "Reload the app. If this repeats, restart Forkara so the client and server use matching builds.";
+        : "Reload the app. If this repeats, restart Synara so the client and server use matching builds.";
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
@@ -663,7 +666,7 @@ function GlobalShortcutsDialog() {
   const { focusedThreadId, activeProject } = useFocusedChatContext();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? [];
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const platform = getNavigatorPlatform();
   const activeThreadTerminalState = useTerminalStateStore((state) =>
     focusedThreadId
       ? selectThreadTerminalState(state.terminalStateByThreadId, focusedThreadId)
@@ -2101,18 +2104,15 @@ function DesktopProjectBootstrap() {
       .getShellSnapshot()
       .then((snapshot) => {
         if (!ownsAttempt()) return;
-        const needsRepair =
-          (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
-          hasLiveThreadsWithMissingProjects(snapshot);
+        const needsRepair = shouldRepairDesktopProjectSnapshot(snapshot);
         if (!needsRepair) {
           if (!ownsAttempt() || !attempt.complete()) return;
           useStore.getState().syncServerShellSnapshot(snapshot);
-          return snapshot;
+          return;
         }
         return api.orchestration.repairState().then((repairedSnapshot) => {
           if (!ownsAttempt() || !attempt.complete()) return;
           syncServerReadModel(repairedSnapshot);
-          return repairedSnapshot;
         });
       })
       .catch(() => {

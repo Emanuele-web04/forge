@@ -1,6 +1,6 @@
 # Keybindings
 
-Forkara reads keybindings from:
+Synara reads keybindings from:
 
 - `~/.synara/userdata/keybindings.json`
 

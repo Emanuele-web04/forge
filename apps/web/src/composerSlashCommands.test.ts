@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { THREAD_GOAL_MAX_CHARS } from "@synara/contracts";
 
 import {
   buildReviewPrompt,
@@ -14,6 +15,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommandArgs,
   providerSupportsTextNativeReviewCommand,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "./composerSlashCommands";
@@ -23,9 +25,10 @@ describe("composerSlashCommands", () => {
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
-    expect(isBuiltInComposerSlashCommand("blame-someone-else")).toBe(true);
     expect(isBuiltInComposerSlashCommand("export")).toBe(true);
     expect(isBuiltInComposerSlashCommand("feedback")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("debug")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("goal")).toBe(true);
     expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
   });
 
@@ -35,10 +38,8 @@ describe("composerSlashCommands", () => {
     expect(filterComposerSlashCommands("auto").map((entry) => entry.command)).toEqual([
       "automation",
     ]);
-    expect(filterComposerSlashCommands("blame").map((entry) => entry.command)).toEqual([
-      "blame-someone-else",
-    ]);
     expect(filterComposerSlashCommands("feed").map((entry) => entry.command)).toEqual(["feedback"]);
+    expect(filterComposerSlashCommands("debug").map((entry) => entry.command)).toEqual(["debug"]);
   });
 
   it("ranks slash command name matches before description-only matches", () => {
@@ -62,10 +63,6 @@ describe("composerSlashCommands", () => {
       command: "side",
       args: "is this safe?",
     });
-    expect(parseComposerSlashInvocation("/blame-someone-else src/ui/button.tsx")).toEqual({
-      command: "blame-someone-else",
-      args: "src/ui/button.tsx",
-    });
     expect(parseComposerSlashInvocation("/automation every 6h check the page")).toEqual({
       command: "automation",
       args: "every 6h check the page",
@@ -73,6 +70,14 @@ describe("composerSlashCommands", () => {
     expect(parseComposerSlashInvocation("/feedback")).toEqual({
       command: "feedback",
       args: "",
+    });
+    expect(parseComposerSlashInvocation("/debug")).toEqual({
+      command: "debug",
+      args: "",
+    });
+    expect(parseComposerSlashInvocation("/goal first line\nsecond line")).toEqual({
+      command: "goal",
+      args: "first line\nsecond line",
     });
     expect(parseComposerSlashInvocation("review")).toBeNull();
   });
@@ -114,6 +119,18 @@ describe("composerSlashCommands", () => {
     expect(parseForkSlashCommandArgs("local continue here")).toEqual({
       target: null,
       invalid: true,
+    });
+  });
+
+  it("parses /goal show, clear, set, and length-limit actions", () => {
+    expect(parseGoalSlashCommandArgs("")).toEqual({ action: "show" });
+    expect(parseGoalSlashCommandArgs("  CLEAR  ")).toEqual({ action: "clear" });
+    expect(parseGoalSlashCommandArgs("Ship the release safely")).toEqual({
+      action: "set",
+      goal: "Ship the release safely",
+    });
+    expect(parseGoalSlashCommandArgs("x".repeat(THREAD_GOAL_MAX_CHARS + 1))).toEqual({
+      action: "too-long",
     });
   });
 
@@ -297,17 +314,26 @@ describe("composerSlashCommands", () => {
   });
 
   it("only exposes Forkara-owned app commands for claude", () => {
-    expect(
-      getAvailableComposerSlashCommands({
-        provider: "claudeAgent",
-        supportsFastSlashCommand: true,
-        canOfferCompactCommand: true,
-        canOfferReviewCommand: true,
-        canOfferForkCommand: true,
-        canOfferSideCommand: true,
-        canOfferExportCommand: true,
-      }),
-    ).toEqual(["side", "export", "feedback", "blame-someone-else", "automation"]);
+    const commands = getAvailableComposerSlashCommands({
+      provider: "claudeAgent",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+      canOfferExportCommand: true,
+    });
+
+    expect(commands).toEqual([
+      "side",
+      "export",
+      "goal",
+      "debug",
+      "default",
+      "feedback",
+      "blame-someone-else",
+      "automation",
+    ]);
   });
 
   it("offers the app-level /export command on every provider", () => {
@@ -411,6 +437,7 @@ describe("composerSlashCommands", () => {
       "clear",
       "model",
       "plan",
+      "debug",
       "default",
       "review",
       "fork",
@@ -418,6 +445,7 @@ describe("composerSlashCommands", () => {
       "status",
       "subagents",
       "export",
+      "goal",
       "feedback",
       "blame-someone-else",
       "automation",

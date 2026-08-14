@@ -75,9 +75,11 @@ import { ensureNativeApi } from "~/nativeApi";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
+import { PullRequestStackPopover } from "./PullRequestStackPopover";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
+import { assessPullRequestStack, pullRequestMergeBlocker } from "./pullRequestStack.logic";
 
 type DetailTab = "summary" | "timeline" | "code";
 
@@ -131,11 +133,13 @@ export function PullRequestDetailPanel({
   input,
   initialTab: initialTabProp,
   onClose,
+  onSelectPullRequest,
   pollingEnabled: pollingEnabledProp,
 }: {
   input: PullRequestDetailInput;
   initialTab?: DetailTab;
   onClose?: () => void;
+  onSelectPullRequest?: (number: number) => void;
   pollingEnabled?: boolean;
 }) {
   const initialTab = initialTabProp ?? "summary";
@@ -197,8 +201,16 @@ export function PullRequestDetailPanel({
         action,
         ...(method ? { mergeMethod: method } : {}),
       })
-      .then(() => {
-        toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
+      .then((result) => {
+        const title =
+          action === "merge" && result.mergeOutcome === "enqueued"
+            ? detail?.stack
+              ? "Stack added to merge queue"
+              : "Pull request added to merge queue"
+            : action === "merge" && detail?.stack
+              ? "Stack merged"
+              : ACTION_SUCCESS_LABELS[action];
+        toastManager.add({ type: "success", title });
       })
       .catch((error: unknown) => {
         toastManager.add({
@@ -314,6 +326,9 @@ export function PullRequestDetailPanel({
   const pendingAction = actionMutation.isPending
     ? (actionMutation.variables?.action ?? null)
     : null;
+  const stackAssessment = detail?.stack ? assessPullRequestStack(detail.stack) : null;
+  const stackMergeTargetCount = stackAssessment?.mergeTargetCount ?? 0;
+  const mergeBlocker = detail ? pullRequestMergeBlocker(detail, stackAssessment) : null;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
@@ -344,6 +359,13 @@ export function PullRequestDetailPanel({
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {detail ? (
             <>
+              {detail.stack ? (
+                <PullRequestStackPopover
+                  stack={detail.stack}
+                  currentNumber={detail.number}
+                  {...(onSelectPullRequest ? { onSelectPullRequest } : {})}
+                />
+              ) : null}
               <IconButton
                 variant="chrome"
                 label="Open in external browser"
@@ -397,7 +419,7 @@ export function PullRequestDetailPanel({
                       "Ready for review". Hidden while conflicting — every method would fail. */}
                   {detail.state === "open" &&
                   !detail.isDraft &&
-                  detail.mergeability !== "conflicting" &&
+                  mergeBlocker === null &&
                   allowedMethods.length > 0 ? (
                     <>
                       <MenuRadioGroup
@@ -466,7 +488,7 @@ export function PullRequestDetailPanel({
                 >
                   Ready for review
                 </Button>
-              ) : detail.state === "open" && detail.mergeability === "conflicting" ? (
+              ) : detail.state === "open" && mergeBlocker !== null ? (
                 // Non-draft only (a draft's next step is "Ready for review"). The header keeps
                 // saying Merge — the action the PR is heading for — but the pill is inert until
                 // the branch is reconciled, and hovering it says why. No method chevron: there
@@ -489,9 +511,18 @@ export function PullRequestDetailPanel({
                       />
                     }
                   >
-                    Merge
+                    {detail.stack && stackAssessment ? (
+                      <>
+                        <span>Merge stack</span>
+                        <span className="rounded-full bg-primary-foreground/16 px-1.5 text-[10px] tabular-nums">
+                          {stackAssessment.mergeTargetCount}
+                        </span>
+                      </>
+                    ) : (
+                      "Merge"
+                    )}
                   </TooltipTrigger>
-                  <TooltipPopup side="bottom">Resolve merge conflicts before merging</TooltipPopup>
+                  <TooltipPopup side="bottom">{mergeBlocker}</TooltipPopup>
                 </Tooltip>
               ) : detail.state === "open" && !detail.isDraft && allowedMethods.length > 0 ? (
                 // One pill, no method chevron beside it: a split button's label can never sit
@@ -508,7 +539,14 @@ export function PullRequestDetailPanel({
                   {pendingAction === "merge" ? (
                     <>
                       <LoaderIcon className="size-3.5 animate-spin" />
-                      Merging…
+                      {detail.stack ? "Merging stack…" : "Merging…"}
+                    </>
+                  ) : detail.stack && stackAssessment ? (
+                    <>
+                      <span>Merge stack</span>
+                      <span className="rounded-full bg-primary-foreground/16 px-1.5 text-[10px] tabular-nums">
+                        {stackAssessment.mergeTargetCount}
+                      </span>
                     </>
                   ) : (
                     "Merge"
@@ -548,6 +586,11 @@ export function PullRequestDetailPanel({
           </Empty>
         ) : (
           <div className="flex h-full min-h-0 flex-col">
+            {detail.stackMetadataIncomplete === true ? (
+              <PullRequestWarningNote shape="banner" className="shrink-0" role="status">
+                Stack details could not be loaded. Refresh before merging.
+              </PullRequestWarningNote>
+            ) : null}
             {detailErrorState.backgroundError ? (
               <PullRequestWarningNote shape="banner" className="shrink-0" role="status">
                 Could not refresh pull request details. Showing saved data.
@@ -575,11 +618,21 @@ export function PullRequestDetailPanel({
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirmAction === "merge" ? "Merge pull request?" : "Close pull request?"}
+              {confirmAction === "merge"
+                ? detail?.stack
+                  ? `Merge ${stackMergeTargetCount} ${stackMergeTargetCount === 1 ? "pull request" : "pull requests"}?`
+                  : "Merge pull request?"
+                : "Close pull request?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmAction === "merge"
-                ? `This will merge #${input.number} using ${selectedMergeMethod}.`
+                ? detail?.stack
+                  ? `This will atomically merge every open pull request through #${input.number} into ${detail.stack.baseBranch} using ${selectedMergeMethod}.${
+                      detail.stack.position < detail.stack.size
+                        ? " Pull requests above it will remain open and GitHub will retarget them."
+                        : ""
+                    }`
+                  : `This will merge #${input.number} using ${selectedMergeMethod}.`
                 : `This will close #${input.number} without merging it.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -598,7 +651,7 @@ export function PullRequestDetailPanel({
                 if (action === "close") void runAction("close");
               }}
             >
-              {confirmAction === "merge" ? "Merge" : "Close"}
+              {confirmAction === "merge" ? (detail?.stack ? "Merge stack" : "Merge") : "Close"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

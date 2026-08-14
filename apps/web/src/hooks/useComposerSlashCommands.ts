@@ -1,4 +1,6 @@
 import {
+  THREAD_GOAL_MAX_CHARS,
+  type MessageId,
   type ModelSelection,
   type OrchestrationShellSnapshot,
   type ProviderInteractionMode,
@@ -23,6 +25,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommandArgs,
   type ForkSlashCommandTarget,
 } from "../composerSlashCommands";
 import { buildThreadHandoffImportedMessages } from "../lib/threadHandoff";
@@ -36,6 +39,8 @@ import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
 import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
+import { useComposerDraftStore } from "../composerDraftStore";
+import { dispatchThreadGoal, dispatchThreadGoalPaused } from "../threadGoal";
 import {
   createOrJoinSidechat,
   createSidechatThread,
@@ -83,7 +88,7 @@ export function useComposerSlashCommands(input: {
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
   navigateToThread: (threadId: ThreadId, options?: { splitViewId?: SplitViewId }) => Promise<void>;
   handleClearConversation: () => Promise<void> | void;
-  handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
+  handleInteractionModeChange: (mode: ProviderInteractionMode) => Promise<void> | void;
   openForkTargetPicker: () => void;
   openReviewTargetPicker: () => void;
   setComposerDraftProviderModelOptions: (
@@ -252,8 +257,105 @@ export function useComposerSlashCommands(input: {
     [fastModeEnabled, supportsFastSlashCommand, setFastModeFromSlashCommand],
   );
 
+  const persistThreadGoal = useCallback(
+    async (goal: string): Promise<boolean> => {
+      if (!isServerThread && activeThread) {
+        // Draft threads have no server row yet: stage the goal locally so the
+        // header shows it immediately, then the first send persists it right
+        // after `thread.create` promotes the draft.
+        const draftStore = useComposerDraftStore.getState();
+        if (draftStore.getDraftThread(activeThread.id)) {
+          draftStore.setDraftThreadContext(activeThread.id, { goal });
+          return true;
+        }
+      }
+      if (!isServerThread || !activeThread) {
+        toastManager.add({
+          type: "warning",
+          title: "Thread goal is unavailable",
+          description: "Open a thread before setting a goal.",
+        });
+        return false;
+      }
+
+      try {
+        await dispatchThreadGoal(activeThread.id, goal);
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not update thread goal",
+          description:
+            error instanceof Error ? error.message : "An error occurred while updating the goal.",
+        });
+        return false;
+      }
+    },
+    [activeThread, isServerThread],
+  );
+
+  const clearThreadGoal = useCallback(async () => {
+    if (await persistThreadGoal("")) {
+      toastManager.add({ type: "success", title: "Thread goal cleared" });
+    }
+  }, [persistThreadGoal]);
+
+  const setThreadGoalPaused = useCallback(
+    async (paused: boolean) => {
+      if (!isServerThread || !activeThread) {
+        return;
+      }
+      try {
+        await dispatchThreadGoalPaused(activeThread.id, paused);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: paused ? "Could not pause the thread goal" : "Could not resume the thread goal",
+          description:
+            error instanceof Error ? error.message : "An error occurred while updating the goal.",
+        });
+      }
+    },
+    [activeThread, isServerThread],
+  );
+
+  const runGoalSlashCommand = useCallback(
+    async (args: string) => {
+      const action = parseGoalSlashCommandArgs(args);
+      if (action.action === "show") {
+        const currentGoal = activeThread?.goal?.trim();
+        toastManager.add(
+          currentGoal
+            ? { type: "info", title: "Thread goal", description: currentGoal }
+            : { type: "info", title: "No thread goal is set" },
+        );
+        return;
+      }
+      if (action.action === "too-long") {
+        toastManager.add({
+          type: "warning",
+          title: "Thread goal is too long",
+          description: `Keep the goal within ${THREAD_GOAL_MAX_CHARS.toLocaleString()} characters.`,
+        });
+        return;
+      }
+      if (action.action === "clear") {
+        await clearThreadGoal();
+        return;
+      }
+      if (await persistThreadGoal(action.goal)) {
+        toastManager.add({ type: "success", title: "Thread goal updated" });
+      }
+    },
+    [activeThread?.goal, clearThreadGoal, persistThreadGoal],
+  );
+
   const createForkThreadFromSlashCommand = useCallback(
-    async (inputOptions?: { target?: ForkSlashCommandTarget }) => {
+    async (inputOptions?: {
+      target?: ForkSlashCommandTarget;
+      /** Fork from a specific turn: imports the transcript up to (and including) this message. */
+      throughMessageId?: MessageId | null;
+    }) => {
       const api = readNativeApi();
       if (!api || !activeProject || !activeThread || !isServerThread) {
         toastManager.add({
@@ -264,7 +366,22 @@ export function useComposerSlashCommands(input: {
         return true;
       }
 
-      const importedMessages = buildThreadHandoffImportedMessages(activeThread);
+      const importedMessages = buildThreadHandoffImportedMessages(activeThread, {
+        throughMessageId: inputOptions?.throughMessageId ?? null,
+      });
+      const throughMessage = inputOptions?.throughMessageId
+        ? (activeThread.messages.find((message) => message.id === inputOptions.throughMessageId) ??
+          null)
+        : null;
+      if (inputOptions?.throughMessageId && throughMessage === null) {
+        toastManager.add({
+          type: "warning",
+          title: "Fork source message missing",
+          description: "Could not resolve the selected message turn for fork cutoff.",
+        });
+        return true;
+      }
+      const sourceTurnId = throughMessage?.turnId ?? undefined;
 
       const nextThreadId = newThreadId();
       const createdAt = new Date().toISOString();
@@ -280,6 +397,7 @@ export function useComposerSlashCommands(input: {
         commandId: newCommandId(),
         threadId: nextThreadId,
         sourceThreadId: activeThread.id,
+        sourceTurnId,
         projectId: activeProject.id,
         title: activeThread.title,
         modelSelection: selectedModelSelection,
@@ -517,10 +635,13 @@ export function useComposerSlashCommands(input: {
     [editorActions, selectedProvider, runCodexReviewStart],
   );
 
-  const handleForkTargetSelection = useCallback(
-    async (target: ForkSlashCommandTarget) => {
+  const runForkThread = useCallback(
+    async (inputOptions: {
+      target: ForkSlashCommandTarget;
+      throughMessageId?: MessageId | null;
+    }) => {
       try {
-        await createForkThreadFromSlashCommand({ target });
+        await createForkThreadFromSlashCommand(inputOptions);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -533,6 +654,22 @@ export function useComposerSlashCommands(input: {
       }
     },
     [createForkThreadFromSlashCommand],
+  );
+
+  const handleForkTargetSelection = useCallback(
+    async (target: ForkSlashCommandTarget) => {
+      await runForkThread({ target });
+    },
+    [runForkThread],
+  );
+
+  // Footer fork action: stays in the current environment (a worktree-backed thread
+  // reuses its worktree) and carries the transcript up to the clicked turn.
+  const handleForkFromMessage = useCallback(
+    (messageId: MessageId) => {
+      void runForkThread({ target: "local", throughMessageId: messageId });
+    },
+    [runForkThread],
   );
 
   const checkClaudeFastSlashCommandAvailability = useCallback(async (): Promise<boolean> => {
@@ -597,7 +734,7 @@ export function useComposerSlashCommands(input: {
     const params = new URLSearchParams({ threadId: threadId });
     void downloadUrlAsBlob({
       url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
-      filename: `synara-thread-${threadId}.zip`,
+      filename: `forkara-thread-${threadId}.zip`,
     }).catch((error: unknown) => {
       toastManager.add({
         type: "error",
@@ -662,8 +799,12 @@ export function useComposerSlashCommands(input: {
         await compactProviderThread();
         return true;
       }
-      if (slashInvocation.command === "plan" || slashInvocation.command === "default") {
-        await handleInteractionModeChange(slashInvocation.command === "plan" ? "plan" : "default");
+      if (
+        slashInvocation.command === "plan" ||
+        slashInvocation.command === "debug" ||
+        slashInvocation.command === "default"
+      ) {
+        await handleInteractionModeChange(slashInvocation.command);
         editorActions.clearComposerSlashDraft();
         return true;
       }
@@ -680,6 +821,11 @@ export function useComposerSlashCommands(input: {
           title: "Blame transfer is unavailable",
           description: "Unable to transfer blame. Git has receipts.",
         });
+        return true;
+      }
+      if (slashInvocation.command === "goal") {
+        editorActions.clearComposerSlashDraft();
+        await runGoalSlashCommand(slashInvocation.args);
         return true;
       }
       if (slashInvocation.command === "subagents") {
@@ -808,6 +954,7 @@ export function useComposerSlashCommands(input: {
       runCodexReviewStart,
       runExportSlashCommand,
       runFastSlashCommand,
+      runGoalSlashCommand,
     ],
   );
 
@@ -818,8 +965,8 @@ export function useComposerSlashCommands(input: {
         return;
       }
 
-      if (item.command === "model") {
-        const replacement = "/model ";
+      if (item.command === "model" || item.command === "goal" || item.command === "automation") {
+        const replacement = `/${item.command} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,
@@ -833,26 +980,9 @@ export function useComposerSlashCommands(input: {
         );
         if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
-        }
-        return;
-      }
-
-      if (item.command === "automation") {
-        const replacement = "/automation ";
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = editorActions.applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (wasPromptReplacementApplied(applied)) {
-          editorActions.setComposerHighlightedItemId(null);
-          editorActions.scheduleComposerFocus();
+          if (item.command !== "model") {
+            editorActions.scheduleComposerFocus();
+          }
         }
         return;
       }
@@ -882,8 +1012,8 @@ export function useComposerSlashCommands(input: {
         return;
       }
 
-      if (item.command === "plan" || item.command === "default") {
-        void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
+      if (item.command === "plan" || item.command === "debug" || item.command === "default") {
+        void handleInteractionModeChange(item.command);
         const applied = clearSlashCommandFromComposer();
         if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
@@ -1051,11 +1181,14 @@ export function useComposerSlashCommands(input: {
   );
 
   return {
+    handleForkFromMessage,
     handleForkTargetSelection,
     handleReviewTargetSelection,
     isSlashStatusDialogOpen,
     setIsSlashStatusDialogOpen,
     handleStandaloneSlashCommand,
     handleSlashCommandSelection,
+    clearThreadGoal,
+    setThreadGoalPaused,
   };
 }

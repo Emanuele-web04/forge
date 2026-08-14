@@ -21,24 +21,20 @@ import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { splitShortcutLabel } from "~/keybindings";
 import { ArrowLeftIcon, PlusIcon } from "~/lib/icons";
-import { cn, isMacPlatform } from "~/lib/utils";
+import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 
 // Kanban-scoped "Create task" shortcut: ⌘⌥T on macOS, Ctrl+Alt+T elsewhere —
 // matching the app's mod convention (meta on mac, ctrl otherwise) and the ⌘⌥
 // "create new X" family. Matched on event.code so it survives Alt remapping the
 // produced character on some layouts.
-function getNavigatorPlatform(): string {
-  return typeof navigator === "undefined" ? "" : navigator.platform;
-}
-
-const NEW_TASK_SHORTCUT_LABEL = isMacPlatform(getNavigatorPlatform()) ? "⌥⌘T" : "Ctrl+Alt+T";
+const NEW_TASK_SHORTCUT_LABEL = isMacNavigatorPlatform() ? "⌥⌘T" : "Ctrl+Alt+T";
 const NEW_TASK_SHORTCUT_PARTS = splitShortcutLabel(NEW_TASK_SHORTCUT_LABEL);
 
 function isNewTaskShortcut(event: KeyboardEvent): boolean {
   if (event.code !== "KeyT" || event.repeat || event.shiftKey || !event.altKey) {
     return false;
   }
-  return isMacPlatform(getNavigatorPlatform())
+  return isMacNavigatorPlatform()
     ? event.metaKey && !event.ctrlKey
     : event.ctrlKey && !event.metaKey;
 }

@@ -19,6 +19,13 @@ export function normalizeCompactToolLabel(value: string): string {
     .trim();
 }
 
+// Legacy upstream naming still appears in some tool/title payloads and UI copy.
+// Keep this normalization centralized so rebrand rules can be adjusted in one place.
+const LEGACY_BRAND_PREFIX_RE = /(^|[^A-Za-z0-9_])(forkara|synara)(?=[^A-Za-z0-9_]|$)/gi;
+export function normalizeLegacyBranding(value: string): string {
+  return value.replace(LEGACY_BRAND_PREFIX_RE, (_, prefix) => `${prefix}Forkara`);
+}
+
 // Canonical form for comparing tool display strings (heading vs preview vs
 // label): ignores case, whitespace runs, and trailing status words so dedup
 // decisions behave identically in the work-log builder and the timeline rows.
@@ -277,6 +284,7 @@ function normalizeSynaraMcpIdentifier(value: string): string {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
 
@@ -285,10 +293,6 @@ const SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION = new Map<string, SynaraBrowserTo
     normalizeSynaraMcpIdentifier(BROWSER_TOOL_TITLES[toolName]),
     `synara_${toolName}`,
   ]),
-);
-
-const SYNARA_TOOL_NAME_STEMS = new Set<string>(
-  Object.keys(SYNARA_MCP_TOOL_PRESENTATIONS).map((toolName) => toolName.replace(/^synara_/, "")),
 );
 
 const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRESENTATIONS).map(
@@ -301,11 +305,12 @@ const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRES
   }),
 );
 
+function normalizeLegacySynaraMcpCandidate(value: string): string {
+  return normalizeSynaraMcpIdentifier(value.replace(/\b(forkara|synara)\b/gi, "synara"));
+}
+
 function extractSynaraMcpToolName(normalizedCandidate: string): string | null {
   if (BROWSER_TOOL_NAME_SET.has(normalizedCandidate)) {
-    return `synara_${normalizedCandidate}`;
-  }
-  if (SYNARA_TOOL_NAME_STEMS.has(normalizedCandidate)) {
     return `synara_${normalizedCandidate}`;
   }
   if (normalizedCandidate.startsWith("mcp_synara_synara_")) {
@@ -323,42 +328,19 @@ function extractSynaraMcpToolName(normalizedCandidate: string): string | null {
   return null;
 }
 
-function expandSynaraMcpCandidateInputs(
-  candidate: string | null | undefined,
-): ReadonlyArray<string> {
-  if (!candidate) {
-    return [];
-  }
-  const trimmed = candidate.trim().replace(/\s+/g, " ");
-  if (!trimmed) {
-    return [];
-  }
-  const variants = new Set<string>([trimmed]);
-  const withPrefixedRemoved = trimmed.replace(/^forkara:\s*/i, "").trim();
-  if (withPrefixedRemoved && withPrefixedRemoved !== trimmed) {
-    variants.add(withPrefixedRemoved);
-  }
-  const withRepeatedPrefixRemoved = trimmed.replace(/^forkara:\s*forkara\s+/i, "").trim();
-  if (withRepeatedPrefixRemoved) {
-    variants.add(withRepeatedPrefixRemoved);
-  }
-  return [...variants];
-}
-
 function resolveSynaraBrowserToolName(
   candidates: ReadonlyArray<string | null | undefined>,
 ): SynaraBrowserToolName | null {
   for (const candidate of candidates) {
-    for (const expandedCandidate of expandSynaraMcpCandidateInputs(candidate)) {
-      const normalizedCandidate = normalizeSynaraMcpIdentifier(expandedCandidate);
-      const extractedToolName = extractSynaraMcpToolName(normalizedCandidate);
-      const candidateToolName =
-        extractedToolName ??
-        SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION.get(normalizedCandidate) ??
-        normalizedCandidate;
-      if (candidateToolName in SYNARA_BROWSER_TOOL_PRESENTATIONS) {
-        return candidateToolName as SynaraBrowserToolName;
-      }
+    if (!candidate) continue;
+    const normalizedCandidate = normalizeLegacySynaraMcpCandidate(candidate);
+    const extractedToolName = extractSynaraMcpToolName(normalizedCandidate);
+    const candidateToolName =
+      extractedToolName ??
+      SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION.get(normalizedCandidate) ??
+      normalizedCandidate;
+    if (candidateToolName in SYNARA_BROWSER_TOOL_PRESENTATIONS) {
+      return candidateToolName as SynaraBrowserToolName;
     }
   }
   return null;
@@ -381,52 +363,53 @@ function resolveSynaraMcpToolPresentation(
   candidates: ReadonlyArray<string | null | undefined>,
 ): SynaraMcpToolPresentation | null {
   for (const candidate of candidates) {
-    for (const expandedCandidate of expandSynaraMcpCandidateInputs(candidate)) {
-      const normalizedCandidate = normalizeSynaraMcpIdentifier(expandedCandidate);
-      for (const entry of SYNARA_MCP_TOOL_PRESENTATION_ENTRIES) {
-        if (
-          normalizedCandidate === entry.normalizedRunning ||
-          normalizedCandidate === entry.normalizedCompleted ||
-          normalizedCandidate === entry.normalizedFailed
-        ) {
-          return entry.presentation;
-        }
-      }
-      const toolName = extractSynaraMcpToolName(normalizedCandidate);
-      const knownPresentation = toolName
-        ? (SYNARA_MCP_TOOL_PRESENTATIONS[toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS] as
-            | SynaraMcpToolPresentation
-            | undefined)
-        : undefined;
-      if (knownPresentation) {
-        return knownPresentation;
-      }
-      // Free-text summaries (e.g. reconciler activity lines) can begin with the
-      // word "Forkara" and normalize into a fake tool identifier; only
-      // identifier-shaped candidates may take an invented fallback presentation.
-      if (/\s/.test(expandedCandidate.trim())) {
-        continue;
-      }
-      if (normalizedCandidate.startsWith("synara_is_handling_")) {
-        return fallbackSynaraMcpToolPresentation(
-          `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
-        );
-      }
-      if (normalizedCandidate.startsWith("synara_handled_")) {
-        return fallbackSynaraMcpToolPresentation(
-          `synara_${normalizedCandidate.slice("synara_handled_".length)}`,
-        );
-      }
-      if (normalizedCandidate.startsWith("synara_couldn_t_handle_")) {
-        return fallbackSynaraMcpToolPresentation(
-          `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
-        );
-      }
-      if (!toolName) {
-        continue;
-      }
-      return fallbackSynaraMcpToolPresentation(toolName);
+    if (!candidate) {
+      continue;
     }
+    const normalizedCandidate = normalizeLegacySynaraMcpCandidate(candidate);
+    for (const entry of SYNARA_MCP_TOOL_PRESENTATION_ENTRIES) {
+      if (
+        normalizedCandidate === entry.normalizedRunning ||
+        normalizedCandidate === entry.normalizedCompleted ||
+        normalizedCandidate === entry.normalizedFailed
+      ) {
+        return entry.presentation;
+      }
+    }
+    const toolName = extractSynaraMcpToolName(normalizedCandidate);
+    const knownPresentation = toolName
+      ? (SYNARA_MCP_TOOL_PRESENTATIONS[toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS] as
+          | SynaraMcpToolPresentation
+          | undefined)
+      : undefined;
+    if (knownPresentation) {
+      return knownPresentation;
+    }
+    // Free-text summaries (e.g. reconciler activity lines) can begin with the
+    // word "Forkara" and normalize into a fake tool identifier; only
+    // identifier-shaped candidates may take an invented fallback presentation.
+    if (/\s/.test(candidate.trim())) {
+      continue;
+    }
+    if (normalizedCandidate.startsWith("synara_is_handling_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
+      );
+    }
+    if (normalizedCandidate.startsWith("synara_handled_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_handled_".length)}`,
+      );
+    }
+    if (normalizedCandidate.startsWith("synara_couldn_t_handle_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
+      );
+    }
+    if (!toolName) {
+      continue;
+    }
+    return fallbackSynaraMcpToolPresentation(toolName);
   }
   return null;
 }
@@ -458,15 +441,17 @@ export function deriveSynaraMcpToolTitle(input: SynaraMcpToolTitleInput): string
   }
   switch (input.status ?? "completed") {
     case "running":
-      return presentation.running;
+      return normalizeLegacyBranding(presentation.running);
     case "completed":
-      return presentation.completed;
+      return normalizeLegacyBranding(presentation.completed);
     case "failed":
-      return presentation.failed;
+      return normalizeLegacyBranding(presentation.failed);
     case "cancelled":
-      return presentation.running.startsWith("Forkara is ")
-        ? `Forkara stopped ${presentation.running.slice("Forkara is ".length)}`
-        : `Cancelled ${presentation.running}`;
+      return normalizeLegacyBranding(
+        presentation.running.startsWith("Forkara is ")
+          ? `Forkara stopped ${presentation.running.slice("Forkara is ".length)}`
+          : `Cancelled ${presentation.running}`,
+      );
   }
 }
 
@@ -498,32 +483,35 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   // Derive a verbal label from requestKind when the title is generic
   const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
 
+  const asBranded = (value: string | null): string | null =>
+    value ? normalizeLegacyBranding(value) : null;
+
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
-    return normalizedTitle;
+    return asBranded(normalizedTitle);
   }
 
   // Use verbal requestKind label before falling back to raw descriptors
   if (requestKindLabel) {
-    return requestKindLabel;
+    return asBranded(requestKindLabel);
   }
 
   if (commandLike && commandLabel) {
-    return commandLabel;
+    return asBranded(commandLabel);
   }
 
   const descriptor = normalizeToolDescriptor(extractToolDescriptorFromPayload(input.payload));
   if (descriptor && !isGenericToolTitle(descriptor)) {
-    return descriptor;
+    return asBranded(descriptor);
   }
 
   if (normalizedFallback.length > 0 && !isGenericToolTitle(normalizedFallback)) {
-    return normalizedFallback;
+    return asBranded(normalizedFallback);
   }
   if (normalizedTitle.length > 0) {
-    return normalizedTitle;
+    return asBranded(normalizedTitle);
   }
   if (normalizedFallback.length > 0) {
-    return normalizedFallback;
+    return asBranded(normalizedFallback);
   }
   return null;
 }

@@ -1,5 +1,5 @@
 // FILE: SynaraLogo.tsx
-// Purpose: Render the Forkara mark as an inline SVG that follows theme foreground color.
+// Purpose: Render the Synara mark as an inline SVG that follows theme foreground color.
 // Layer: Shared app branding primitive
 
 import type { SVGProps } from "react";

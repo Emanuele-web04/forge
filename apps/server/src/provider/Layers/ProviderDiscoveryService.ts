@@ -5,13 +5,15 @@ import {
   ProviderListAgentsInput,
   ProviderListCommandsInput,
   ProviderListModelsInput,
+  type ProviderListModelsResult,
   ProviderListPluginsInput,
+  ProviderModelDescriptor,
   ProviderListSkillsInput,
   type ProviderListSkillsResult,
   ProviderReadPluginInput,
   type ProviderSkillDescriptor,
 } from "@synara/contracts";
-import { Effect, Layer, Schema, SchemaIssue } from "effect";
+import { Effect, Layer, Option, Schema, SchemaIssue } from "effect";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -56,6 +58,32 @@ const disabledCapabilitiesForProvider = (
   supportsThreadCompaction: false,
   supportsThreadImport: false,
 });
+
+const decodeProviderModelDescriptorOption = Schema.decodeUnknownOption(ProviderModelDescriptor);
+
+function isolateMalformedModelDescriptors(input: {
+  readonly provider: ProviderListModelsInput["provider"];
+  readonly result: ProviderListModelsResult;
+}): Effect.Effect<ProviderListModelsResult> {
+  const models = input.result.models.flatMap((model) => {
+    const decoded = decodeProviderModelDescriptorOption(model);
+    return Option.isSome(decoded) ? [decoded.value] : [];
+  });
+  const omittedCount = input.result.models.length - models.length;
+  if (omittedCount === 0) {
+    return Effect.succeed(input.result);
+  }
+  return Effect.logWarning("provider model discovery omitted malformed descriptors", {
+    provider: input.provider,
+    source: input.result.source ?? "unknown",
+    omittedCount,
+  }).pipe(
+    Effect.as({
+      ...input.result,
+      models,
+    }),
+  );
+}
 
 const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
@@ -219,7 +247,11 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      return yield* adapter.listModels(parsed);
+      const result = yield* adapter.listModels(parsed);
+      return yield* isolateMalformedModelDescriptors({
+        provider: parsed.provider,
+        result,
+      });
     });
 
   const listAgents: ProviderDiscoveryServiceShape["listAgents"] = (input) =>

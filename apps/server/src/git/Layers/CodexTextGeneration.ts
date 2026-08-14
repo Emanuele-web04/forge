@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
+import {
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
+} from "@synara/contracts";
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
 import { resolveCodexHome } from "@synara/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
@@ -43,7 +46,6 @@ import {
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
 
-const CODEX_REASONING_EFFORT = "low";
 const CODEX_TIMEOUT_MS = 180_000;
 
 function normalizeCodexError(
@@ -332,7 +334,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           "--model",
           resolveCodexModel(model, modelSelection) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
           "--config",
-          `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
+          `model_reasoning_effort="${DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT}"`,
           "--output-schema",
           schemaPath,
           "--output-last-message",

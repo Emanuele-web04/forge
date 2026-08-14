@@ -8878,7 +8878,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("restores base permission mode on sendTurn when interactionMode is default", () => {
+  it.effect("restores base permission mode when switching from Plan to Debug", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -8914,11 +8914,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       yield* Fiber.join(turnCompletedFiber);
 
-      // Second turn back to default
+      // Debug is a normal implementation turn and must leave native Plan mode.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "now do it",
-        interactionMode: "default",
+        interactionMode: "debug",
         attachments: [],
       });
 
@@ -10078,6 +10078,226 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+});
+
+describe("ClaudeAdapterLive forkThread", () => {
+  const SOURCE_SESSION_ID = "7f9c2f60-1111-4a2b-9c3d-8e5f6a7b8c9d";
+
+  function makeForkLayer(
+    forkNativeSession: NonNullable<ClaudeAdapterLiveOptions["forkNativeSession"]>,
+  ) {
+    return makeClaudeAdapterLive({ forkNativeSession }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+  }
+
+  it.effect("forks natively from the persisted cursor and drops source uuid pins", () => {
+    const forkCalls: Array<{
+      readonly sessionId: string;
+      readonly options: { readonly dir?: string; readonly upToMessageId?: string } | undefined;
+    }> = [];
+    const layer = makeForkLayer(async (sessionId, options) => {
+      forkCalls.push({ sessionId, options });
+      return { sessionId: "forked-session-1" };
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+        sourceCwd: "/repo/source",
+        sourceResumeCursor: {
+          threadId: String(THREAD_ID),
+          resume: SOURCE_SESSION_ID,
+          resumeSessionAt: "assistant-uuid-9",
+          turnCount: 4,
+        },
+      });
+
+      assert.deepEqual(forkCalls, [
+        {
+          sessionId: SOURCE_SESSION_ID,
+          options: { dir: "/repo/source", upToMessageId: "assistant-uuid-9" },
+        },
+      ]);
+      // The SDK fork remaps message uuids, so the fork cursor must resume the
+      // new session id without inheriting `resumeSessionAt` or tracked tasks.
+      assert.deepEqual(result, {
+        threadId: RESUME_THREAD_ID,
+        resumeCursor: {
+          threadId: RESUME_THREAD_ID,
+          resume: "forked-session-1",
+          turnCount: 4,
+        },
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("refuses a native fork while the source turn is in flight", () => {
+    const query = new FakeClaudeQuery();
+    let forkCalls = 0;
+    const layer = makeClaudeAdapterLive({
+      createQuery: () => query,
+      forkNativeSession: async () => {
+        forkCalls += 1;
+        return { sessionId: "unexpected" };
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "Long-running work",
+        attachments: [],
+      });
+
+      const result = yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+        sourceResumeCursor: {
+          threadId: String(THREAD_ID),
+          resume: SOURCE_SESSION_ID,
+        },
+      }).pipe(Effect.result);
+
+      assert.equal(forkCalls, 0);
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") {
+        return;
+      }
+      assert.instanceOf(result.failure, ProviderAdapterValidationError);
+      if (result.failure instanceof ProviderAdapterValidationError) {
+        assert.include(result.failure.issue, "turn in flight");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("keeps the larger persisted turnCount over a freshly resumed live context", () => {
+    const query = new FakeClaudeQuery();
+    const layer = makeClaudeAdapterLive({
+      createQuery: () => query,
+      forkNativeSession: async () => ({ sessionId: "forked-session-2" }),
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      // A live context restarts its turn log at [] on resume; the persisted
+      // cumulative count must win.
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+        sourceResumeCursor: {
+          threadId: String(THREAD_ID),
+          resume: SOURCE_SESSION_ID,
+          turnCount: 4,
+        },
+      });
+
+      assert.deepEqual(result.resumeCursor, {
+        threadId: RESUME_THREAD_ID,
+        resume: "forked-session-2",
+        turnCount: 4,
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("fails validation when the source has no resumable native cursor", () => {
+    let forkCalls = 0;
+    const layer = makeForkLayer(async () => {
+      forkCalls += 1;
+      return { sessionId: "unexpected" };
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+      }).pipe(Effect.result);
+
+      assert.equal(forkCalls, 0);
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") {
+        return;
+      }
+      assert.deepEqual(
+        result.failure,
+        new ProviderAdapterValidationError({
+          provider: "claudeAgent",
+          operation: "forkThread",
+          issue: "The source Claude session has no resumable native cursor.",
+        }),
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
+  it.effect("maps a native fork failure to a session/fork request error", () => {
+    const layer = makeForkLayer(async () => {
+      throw new Error("session file missing");
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        runtimeMode: "full-access",
+        sourceResumeCursor: {
+          threadId: String(THREAD_ID),
+          resume: SOURCE_SESSION_ID,
+        },
+      }).pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") {
+        return;
+      }
+      assert.instanceOf(result.failure, ProviderAdapterRequestError);
+      if (result.failure instanceof ProviderAdapterRequestError) {
+        assert.equal(result.failure.method, "session/fork");
+        assert.include(result.failure.detail, "session file missing");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
     );
   });
 });

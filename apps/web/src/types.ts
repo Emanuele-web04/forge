@@ -13,6 +13,7 @@ import type {
   OrchestrationProposedPlanId,
   PinnedMessage,
   ThreadMarker,
+  ThreadGoalAchievement,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ThreadHandoff,
@@ -102,10 +103,15 @@ export type ChatAttachment =
   | ChatFileAttachment
   | ChatAssistantSelectionAttachment;
 
+export type OrchestrationMessageTextSegment =
+  import("@synara/contracts").OrchestrationMessageTextSegment;
+
 export interface ChatMessage {
   id: MessageId;
   role: "user" | "assistant" | "system";
   text: string;
+  /** Slices of streamed assistant text between row-making provider events. */
+  textSegments?: OrchestrationMessageTextSegment[];
   attachments?: ChatAttachment[];
   skills?: ProviderSkillReference[];
   mentions?: ProviderMentionReference[];
@@ -243,6 +249,10 @@ export interface Thread extends ThreadWorkspaceState {
   pinnedMessages?: PinnedMessage[];
   threadMarkers?: ThreadMarker[];
   notes?: string;
+  goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
+  goalAchievements?: ThreadGoalAchievement[];
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
   lastVisitedAt?: string | undefined;
@@ -286,6 +296,10 @@ export interface ThreadShell extends ThreadWorkspaceState {
   pinnedMessages?: PinnedMessage[];
   threadMarkers?: ThreadMarker[];
   notes?: string;
+  goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
+  goalAchievements?: ThreadGoalAchievement[];
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
   sourceThreadId?: ThreadId | null;
@@ -331,6 +345,7 @@ export interface SidebarThreadSummary {
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;

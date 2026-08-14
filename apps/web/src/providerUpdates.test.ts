@@ -82,7 +82,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
 }
 
 describe("getVisibleProviderUpdateStatuses", () => {
-  it("excludes providers hidden from Forkara so unchecked providers do not nag", () => {
+  it("excludes providers hidden from Synara so unchecked providers do not nag", () => {
     const result = getVisibleProviderUpdateStatuses({
       providers: [providerStatus("codex"), providerStatus("pi")],
       hiddenProviders: ["pi"],
@@ -314,7 +314,7 @@ describe("shouldOfferProviderUpdateAction", () => {
 });
 
 describe("shouldPromptProviderUpdate", () => {
-  // Cursor and Antigravity self-update, so Forkara has no registry to read a latest
+  // Cursor and Antigravity self-update, so Synara has no registry to read a latest
   // version from and their advisory is pinned to "unknown" forever. Prompting on that
   // left a permanent "Update" badge on a fully up-to-date CLI.
   const selfManaged = providerStatus("cursor", {
@@ -372,7 +372,7 @@ describe("shouldPromptProviderUpdate", () => {
     expect(shouldPromptProviderUpdate(legacy)).toBe(true);
   });
 
-  it("keeps prompting for providers Forkara can prove are behind", () => {
+  it("keeps prompting for providers Synara can prove are behind", () => {
     expect(shouldPromptProviderUpdate(providerStatus("codex"))).toBe(true);
   });
 });

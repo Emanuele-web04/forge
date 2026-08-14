@@ -87,7 +87,7 @@ function cleanupStaleDevApps() {
 }
 
 function listStaleComputerUsePids() {
-  // Only macOS exposes a verifiable Forkara (Dev) executable path for these
+  // Only macOS exposes a verifiable Synara (Dev) executable path for these
   // helpers. Linux process command lines do not currently carry a dev-owner
   // marker, so reaping by the generic script name could kill another install.
   if (process.platform !== "darwin") {
@@ -98,7 +98,7 @@ function listStaleComputerUsePids() {
 
   return candidatePids.filter((pid) => {
     const command = readProcessCommand(pid);
-    if (!/Forkara \(Dev\)\.app\/Contents\/MacOS\/Electron/.test(command)) {
+    if (!/Synara \(Dev\)\.app\/Contents\/MacOS\/Electron/.test(command)) {
       return false;
     }
     if (!/computerUseMcp\.mjs\s+mcp(?:\s|$)/.test(command)) {
@@ -120,7 +120,7 @@ function cleanupStaleComputerUseApps() {
   }
 
   console.error(
-    `[desktop-dev] Cleaning up ${stalePids.length} stale Forkara (Dev) Computer Use helper process${stalePids.length === 1 ? "" : "es"} from other worktrees.`,
+    `[desktop-dev] Cleaning up ${stalePids.length} stale Synara (Dev) Computer Use helper process${stalePids.length === 1 ? "" : "es"} from other worktrees.`,
   );
 
   for (const pid of stalePids) {
@@ -139,17 +139,17 @@ function warnIfAlphaAppRunning() {
     return;
   }
 
-  const pids = listPidsByExactProcessName("Forkara").filter((pid) =>
-    readProcessCommand(pid).startsWith("/Applications/Forkara.app/Contents/MacOS/Forkara"),
+  const pids = listPidsByExactProcessName("Synara").filter((pid) =>
+    readProcessCommand(pid).startsWith("/Applications/Synara.app/Contents/MacOS/Synara"),
   );
   if (pids.length === 0) {
     return;
   }
 
   console.error(
-    "[desktop-dev] Forkara is still running. Close it before testing voice in Forkara (Dev), or you may be looking at the wrong app/runtime.",
+    "[desktop-dev] Synara is still running. Close it before testing voice in Synara (Dev), or you may be looking at the wrong app/runtime.",
   );
-  console.error(`[desktop-dev] Running Forkara process IDs: ${pids.join(", ")}`);
+  console.error(`[desktop-dev] Running Synara process IDs: ${pids.join(", ")}`);
 }
 
 function startApp() {

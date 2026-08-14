@@ -28,6 +28,10 @@ import {
   ProjectFaviconResolver,
   type ProjectFaviconResolverShape,
 } from "./project/Services/ProjectFaviconResolver";
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "./orchestration/Services/OrchestrationEngine";
 import type { ServerReadiness } from "./server/readiness";
 import {
   DESKTOP_SHUTDOWN_ROUTE_PATH,
@@ -110,6 +114,18 @@ const projectFaviconResolver: ProjectFaviconResolverShape = {
   resolvePath: () => Effect.succeed(null),
 };
 
+const healthyOrchestrationEngine = {
+  getProjectionCatchUpStatus: Effect.succeed({
+    state: "healthy" as const,
+    inFlight: false,
+    retryAttempts: 0,
+    lastFailure: null,
+    highWaterSequence: 0,
+    lagByProjector: {},
+    missingProjectors: [],
+  }),
+} as unknown as OrchestrationEngineShape;
+
 type TestedRoute =
   | { readonly kind: "health"; readonly readiness: typeof readiness }
   | { readonly kind: "shutdown"; readonly controller: ServerShutdownController }
@@ -156,6 +172,7 @@ async function withEffectServer(
               Layer.succeed(ServerConfig, config),
               Layer.succeed(ServerAuth, serverAuth),
               Layer.succeed(ProjectFaviconResolver, projectFaviconResolver),
+              Layer.succeed(OrchestrationEngineService, healthyOrchestrationEngine),
               NodeHttpServer.layerHttpServices,
             ),
           ),
@@ -198,11 +215,18 @@ describe("production Effect HTTP routes", () => {
     await withEffectServer(makeConfig(), { kind: "health", readiness }, async (origin) => {
       const response = await fetch(`${origin}/health`);
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({
+      const body = (await response.json()) as {
+        readonly projection: Record<string, unknown>;
+      };
+      expect(body).toMatchObject({
         status: "ok",
         startupReady: false,
         pushBusReady: true,
+        projection: { state: "healthy", hasFailure: false },
       });
+      // /health is unauthenticated: failure detail (which can embed raw event
+      // payloads via pretty-printed decode causes) must never cross this route.
+      expect(body.projection).not.toHaveProperty("lastFailure");
     });
   });
 

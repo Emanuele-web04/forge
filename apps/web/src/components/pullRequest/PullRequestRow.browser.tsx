@@ -45,6 +45,7 @@ function makeEntry(isPinned: boolean): PullRequestListEntry {
       },
     ],
     mergeability: "unknown",
+    stack: null,
     labels: [],
   };
 }
@@ -223,6 +224,23 @@ describe("PullRequestRow pin control", () => {
 
     expect(document.body.textContent).not.toContain("Project One");
     expect(page.getByRole("button", { name: "Pin pull request #42" })).toBeVisible();
+  });
+
+  it("shows compact stack position metadata in the pull request list", async () => {
+    await render(
+      <PullRequestRow
+        entry={{
+          ...makeEntry(false),
+          stack: { number: 8, size: 3, position: 2, baseBranch: "main" },
+        }}
+        selected={false}
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+      />,
+    );
+
+    expect(page.getByText("2/3", { exact: true })).toBeVisible();
+    expect(page.getByLabelText("Stack #8, pull request 2 of 3")).toBeVisible();
   });
 
   it("renders neutral diff statistics when colors are disabled", async () => {

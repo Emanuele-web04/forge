@@ -171,4 +171,32 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.usage.usedTokens).toBe(31251);
     expect(parsed.payload.usage.usedPercent).toBe(15.6255);
   });
+
+  it("decodes item.completed with raw (untrimmed) tool output in detail", () => {
+    // Tool output legitimately carries leading/trailing whitespace; the durable
+    // journal must not reject it (previously quarantined with
+    // "Expected a string with no leading or trailing whitespace").
+    const rawOutput = "COMMAND   PID  USER   FD   TYPE\nbun.exe 33263 zachz   10u  IPv4\ndone\n";
+    const parsed = decodeRuntimeEvent({
+      type: "item.completed",
+      eventId: "event-tool-1",
+      provider: "pi",
+      sessionId: "runtime-session-4",
+      createdAt: "2026-02-28T00:00:05.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "bash",
+        detail: rawOutput,
+      },
+    });
+
+    expect(parsed.type).toBe("item.completed");
+    if (parsed.type !== "item.completed") {
+      throw new Error("expected item.completed");
+    }
+    expect(parsed.payload.detail).toBe(rawOutput);
+  });
 });

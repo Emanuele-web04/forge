@@ -48,15 +48,27 @@ export function isAgentActivityWorkEntry(entry: WorkLogEntry): boolean {
   return entry.itemType === "collab_agent_tool_call" || isReasoningUpdateWorkEntry(entry);
 }
 
+// Unmapped provider events keep their native type as the title and a safe detail as preview.
+export function isUnmappedProviderEventWorkEntry(
+  entry: Pick<WorkLogEntry, "activityKind">,
+): boolean {
+  return entry.activityKind === "provider.event.unmapped";
+}
+
 export function formatAgentActivityEntryTitle(entry: WorkLogEntry): string {
   if (isReasoningUpdateWorkEntry(entry)) {
     return "Reasoning";
   }
   const heading = normalizeCompactToolLabel(entry.toolTitle ?? entry.label).trim();
-  if (!heading) {
-    return entry.itemType === "collab_agent_tool_call" ? "Agent task" : "Activity";
+  if (heading) {
+    return capitalizePhrase(heading);
   }
-  return capitalizePhrase(heading);
+  if (isUnmappedProviderEventWorkEntry(entry) && entry.nativeEventType) {
+    // The raw native type/label is the only title the event carries; use it
+    // verbatim instead of degrading to the generic "Activity" label.
+    return capitalizePhrase(entry.nativeEventType);
+  }
+  return entry.itemType === "collab_agent_tool_call" ? "Agent task" : "Activity";
 }
 
 export function formatAgentActivityEntryPreview(entry: WorkLogEntry): string | null {
@@ -120,6 +132,7 @@ export function deriveAgentActivityTimelineState(
     const displayEntry: WorkLogEntry = {
       ...latest,
       id: groupId,
+      createdAt: first.createdAt,
       label: "Reasoning trace",
       toolTitle: "Reasoning trace",
       tone: "tool",
@@ -143,7 +156,7 @@ export function deriveAgentActivityTimelineState(
     const reasoningPreview = isReasoningUpdateWorkEntry(entry)
       ? formatAgentActivityEntryPreview(entry)
       : null;
-    // Old Forkara builds persisted a literal placeholder for every empty Codex
+    // Old Synara builds persisted a literal placeholder for every empty Codex
     // reasoning lifecycle. Match Codex history semantics and hide those rows.
     if (isReasoningUpdateWorkEntry(entry) && !reasoningPreview) {
       continue;

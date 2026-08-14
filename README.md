@@ -1,214 +1,59 @@
 # Forkara
 
-> [!IMPORTANT]
-> Forkara was built completely from the ground up.
->
-> We simply started by cloning another repository, preserving 100% of its commit history, and then rebuilt everything from scratch one commit at a time.
->
-> Totally different.
-
-Forkara is now an MCP-native **fork harness** in two directions: supported agents running inside Forkara
-automatically receive tools to coordinate upstream merges and attribution, while Codex, Claude, and
+Forkara is now an MCP-native agent harness in two directions: supported agents running inside Forkara
+automatically receive tools to coordinate Forkara tasks and automations, while Codex, Claude, and
 other local MCP clients can connect through a scoped integration to launch and follow Forkara work.
 
 To let a local MCP-capable app create and follow scoped Forkara tasks, see
 [External MCP integrations](docs/external-mcp.md).
 
-Forkara is a local-first desktop app for coding with the AI agents and repositories you already fork.
+Forkara is a local-first desktop app for coding with the AI agents and subscriptions you already use.
 
-It brings chats, terminals, browser previews, diffs, branches, commit history, provider sessions, and handoffs into one focused workspace so you can run agent work without juggling a dozen windows or pretending Git history doesn't exist.
+It brings chats, terminals, browser previews, diffs, branches, provider sessions, and handoffs into one focused workspace so you can run agent work without juggling a dozen windows.
 
-![Forkara app showing parallel forks, preserved commit history, and a healthy respect for upstream](assets/prod/readme-screenshot.jpeg)
-
----
+![Forkara app showing parallel agent threads, terminal output, and project navigation](assets/prod/readme-screenshot.jpeg)
 
 ## What it does
 
 - Use the AI accounts you already pay for: Claude Code, Codex, Antigravity, OpenCode, Cursor, Grok, Kilo Code, and Pi.
-- Run parallel work across projects, forks, and isolated Git worktrees without branches stepping on each other.
-- Keep split chats, terminals, browser previews, and upstream commits visible in the same window.
-- Hand off a thread to another provider while preserving context **and** attribution.
+- Run parallel work across projects, threads, and isolated Git worktrees without branches stepping on each other.
+- Keep split chats, terminals, browser previews, and agent output visible in the same window.
+- Hand off a thread to another provider when you want a second model to pick up with the same context.
 - Review diffs, create branches, commit, push, and open PRs from the app.
-- Keep your workspace local. Forkara stores chats, projects, history, **and history history** on your machine.
-
----
+- Keep your workspace local. Forkara stores chats, projects, and history on your machine and talks directly to the providers you choose.
 
 ## How to use
 
 > [!WARNING]
-> You need to have Git installed.
->
-> Specifically:
->
-> ```sh
-> git clone
-> ```
->
-> This is considered **building from the ground up**.
+> You need to have [Codex CLI](https://github.com/openai/codex) installed and authorized for Codex sessions to work.
 
-Install the desktop app from the Releases page, or simply fork this repository and explain on Twitter why it isn't a fork.
+Install the [desktop app from the Releases page](https://github.com/redxzeta/forkara/releases), or download it from [redxzeta/forkara](https://github.com/redxzeta/forkara).
 
 You can also run Forkara locally while the project is still early:
 
 ```sh
-git clone https://github.com/yourname/forkara
-cd forkara
-
 bun install
 bun run dev
 ```
 
----
-
 ## Privacy
 
-Forkara runs as the workspace layer on your machine.
+Forkara runs as the workspace layer on your machine. There is no Forkara cloud holding your repositories, chats, or project history.
 
-There is no Forkara cloud holding your repositories, chats, or project history.
-
-Unlike your commit history, nothing mysteriously disappears.
-
----
+The provider you choose still receives the prompts, file snippets, diffs, terminal output, or tool results needed for a session, but that traffic goes to the provider you picked rather than through a separate Forkara-hosted workspace.
 
 ## Some notes
 
-Forkara is still very early.
-
-Expect bugs, rough edges, and fast moving internals.
+Forkara is still very early. Expect bugs, rough edges, and fast-moving internals.
 
 Focused issues and PRs are welcome, especially bug fixes, reliability fixes, and small maintenance improvements.
-
-Please keep copyright notices intact.
-
-They're surprisingly lightweight.
-
----
 
 ## Contributing
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
-For downstream forks, start with [docs/rebrand-checklist.md](./docs/rebrand-checklist.md).
 
-Need support?
-
-Open a GitHub issue, fork the project, or simply declare your fork to be an entirely original invention.
-
----
-
-## About Forks
-
-Forkara proudly supports every kind of fork:
-
-- 🍴 Git forks
-- 🍽️ Dinner forks
-- 🎵 Tuning forks
-- 🔥 Pitchforks (for Twitter discourse only)
-
-## Fork Glossary
-
-- **Git fork**: A real Git hosting term for a copy of a repository under another account or organization, usually used to propose changes back upstream.
-- **Clone**: A real Git term for a local copy of a repository; Forkara strongly respects the difference while making jokes about it anyway.
-- **Dinner fork**: A parody fork used for moving food from plate to mouth, with no known pull request workflow.
-- **Tuning fork**: A parody fork that produces a pitch when struck, useful for finding the right note and not for resolving merge conflicts.
-- **Pitchfork**: A parody fork for hay, mobs, and dramatic project governance discussions.
-- **Spork**: A parody hybrid fork-spoon that Forkara lists on the roadmap because some forks refuse to pick one abstraction.
-- **Chess fork**: A real chess tactic where one piece attacks multiple targets; in Forkara terms, it is the board-game cousin of parallel worktrees.
-- **Process fork**: A real operating-system term for creating a new process from an existing one, which is much closer to copying than cutlery.
-
-Forkara treats Git forks as operationally functional and keeps non-Git fork types as parody
-scenarios for orientation, navigation, and style only.
-
----
-
-## Philosophy
-
-Forkara believes every great project deserves:
-
-- a new logo
-- a new README
-- a new color palette
-- preserved attribution
-- fewer arguments about what `git clone` means
-
----
-
-## Roadmap
-
-- [x] Fork repository
-- [x] Keep commit history
-- [x] Rename project
-- [x] Replace branding
-- [x] Add increasingly elaborate explanations of why this isn't a fork
-- [ ] Spork support
-- [ ] Dishwasher-safe releases
-- [ ] Stainless steel edition
-
----
-
-## FAQ
-
-### Is Forkara a fork?
-
-Legally: yes.
-
-Technically: yes.
-
-Culinarily: also yes.
-
-### Was Forkara built from the ground up?
-
-Absolutely.
-
-The ground just happened to contain:
-
-```sh
-git clone
-```
-
-### Why is it called Forkara?
-
-Because Cloneara sounded too honest.
-
-### How long does a fresh fork lifecycle usually take?
-
-Enough time for exactly one coffee and one suspiciously calm compile.
-
-### Why does that long-running timer mention 42 minutes?
-
-It is only a metaphor for persistence.
-
-### Can Forkara help with non-code forks?
-
-Yes. If the fork has a clear owner and a clear next step, we can still model it in our glossary.
-
-### What is the difference between a Git fork and a dinner fork?
-
-A Git fork tracks history and intent; a dinner fork tracks dinner and intent is still optional.
-
-### Do you support pitchforks?
-
-They are useful for discussions that escalate quickly, and not required for code review.
-
-### Are sporks officially supported?
-
-Not yet. Sporks are in the roadmap, and we keep promises in the issue tracker before the kitchen.
-
----
+Need support? [Open a GitHub issue](https://github.com/redxzeta/forkara/issues).
 
 ## Origins
 
-Forkara began as a fork of Synara.
-
-Synara began as an early clone of a public template, but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.
-
-Forkara began as a fork of a clone that wasn't a fork because it was a clone.
-
-Simple.
-
-Today Forkara has evolved into a substantially different fork with its own branding, packaging, release system, provider orchestration, desktop app behavior, README, and an increasingly sophisticated explanation of what **"built from the ground up"** means.
-
-Unlike disposable forks, we preserve our history.
-
----
-
-> Made with ❤️, Git, and 18/10 stainless steel.
+Forkara began as a clone of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.

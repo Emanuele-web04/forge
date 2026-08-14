@@ -64,7 +64,9 @@ const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
 const SLASH_COMMAND_CHIP_TOKEN_REGEX = /(^|\s)\/([a-zA-Z][a-zA-Z0-9_-]*)(?=\s)/i;
 
-const COMPOSER_SLASH_COMMAND_CHIP_NAMES = new Set<ComposerSlashCommand>(["automation"]);
+// Built-in commands that render as an inline chip (icon + label) instead of plain
+// text, both while typing and in the sent message. Everything else stays literal.
+const COMPOSER_SLASH_COMMAND_CHIP_NAMES = new Set<ComposerSlashCommand>(["automation", "goal"]);
 
 // While typing (composer) a URL only becomes a chip once a delimiter follows it,
 // mirroring how skills/mentions wait for a trailing boundary. For read-only
@@ -371,8 +373,11 @@ export function splitPromptIntoDisplaySegments(
   mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
 ): ComposerPromptSegment[] {
   return splitTextIntoPromptSegments(prompt, {
+    // Sent messages echo the same chips the composer showed while typing, so a
+    // `/goal`/`/automation` token keeps its icon + label instead of falling back
+    // to raw text once the turn is submitted.
     includeTrailingTokenAtEnd: true,
-    includeSlashCommandChips: false,
+    includeSlashCommandChips: true,
     mentionReferences,
   });
 }

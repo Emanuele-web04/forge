@@ -44,10 +44,8 @@ import {
   isLiveRun,
   isRowInteractiveEventTarget,
   isUnresolvedTriageResult,
-  providerOptionsForAutomationEdit,
   projectModelSelection,
   runStatusLabel,
-  updateInputFromForm,
   useAutomations,
 } from "./-automations.shared";
 
@@ -171,11 +169,35 @@ function rowSubtitle(
   if (definition.enabled) {
     const nextRun = formatNextRun(definition.nextRunAt, now);
     if (nextRun) segments.push(`Next run ${nextRun}`);
-  } else if (attention === null && automationLifecycleState(definition) === "done") {
-    segments.push("Done");
+  } else {
+    const stopped = stoppedReasonLabel(definition);
+    if (stopped) {
+      segments.push(stopped);
+      return segments.join(" · ");
+    }
+    if (attention === null && automationLifecycleState(definition) === "done") {
+      segments.push("Done");
+    }
   }
   if (attention) segments.push(attention);
   return segments.join(" · ");
+}
+
+// Why the server stopped an automation on its own. "schedule" and "user" return null:
+// the row already reads "Done" / renders dimmed as paused for those.
+function stoppedReasonLabel(definition: AutomationDefinition): string | null {
+  switch (definition.disabledReason) {
+    case "failures":
+      return definition.consecutiveFailureCount === 1
+        ? "Stopped after a failed run"
+        : `Stopped after ${definition.consecutiveFailureCount} failed runs`;
+    case "max-iterations":
+      return "Stopped at run limit";
+    case "completion":
+      return "Stop condition met";
+    default:
+      return null;
+  }
 }
 
 function AutomationsRouteView() {
@@ -186,7 +208,6 @@ function AutomationsRouteView() {
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
   const threads = useStore(selectAllThreads);
-  const [editingDefinition, setEditingDefinition] = useState<AutomationDefinition | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogWarnings, setDialogWarnings] = useState<readonly AutomationDraftWarning[]>([]);
   const [acknowledgedWarningIds, setAcknowledgedWarningIds] = useState<
@@ -204,15 +225,8 @@ function AutomationsRouteView() {
     formFromDefinition(null, fallbackProjectId, projectModelSelection(projects, fallbackProjectId)),
   );
 
-  const {
-    data,
-    isLoading,
-    refetch,
-    createMutation,
-    updateMutation,
-    deleteMutation,
-    runsByAutomationId,
-  } = useAutomations((threadId) => void navigate({ to: "/$threadId", params: { threadId } }));
+  const { data, isLoading, refetch, createMutation, deleteMutation, runsByAutomationId } =
+    useAutomations((threadId) => void navigate({ to: "/$threadId", params: { threadId } }));
   const providerOptionsForDispatch = getProviderStartOptions(settings);
 
   const updateDialogForm = (nextForm: AutomationFormState) => {
@@ -227,7 +241,6 @@ function AutomationsRouteView() {
   };
 
   const openCreateDialog = () => {
-    setEditingDefinition(null);
     const nextForm = formFromDefinition(
       null,
       fallbackProjectId,
@@ -246,22 +259,11 @@ function AutomationsRouteView() {
       dialogWarnings,
       acknowledgedWarningIds,
     );
-    const closeOnSuccess = { onSuccess: () => setDialogOpen(false) };
-    if (editingDefinition) {
-      updateMutation.mutate(
-        updateInputFromForm(
-          editingDefinition,
-          form,
-          providerOptionsForAutomationEdit(editingDefinition, form, providerOptionsForDispatch),
-          acknowledgedRisks,
-        ),
-        closeOnSuccess,
-      );
-      return;
-    }
     createMutation.mutate(
       createInputFromForm(form, providerOptionsForDispatch, acknowledgedRisks),
-      closeOnSuccess,
+      {
+        onSuccess: () => setDialogOpen(false),
+      },
     );
   };
 
@@ -406,7 +408,6 @@ function AutomationsRouteView() {
 
       <AutomationDialog
         open={dialogOpen}
-        editing={editingDefinition !== null}
         form={form}
         projects={projects}
         threads={threads}
@@ -416,7 +417,7 @@ function AutomationsRouteView() {
         onOpenChange={setDialogOpen}
         onFormChange={updateDialogForm}
         onSubmit={submitForm}
-        busy={createMutation.isPending || updateMutation.isPending}
+        busy={createMutation.isPending}
       />
     </RouteInsetSurface>
   );

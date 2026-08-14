@@ -33,6 +33,7 @@ import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolb
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { FolderClosed } from "~/components/FolderClosed";
 import GitActionsControl from "~/components/GitActionsControl";
+import { DiffStat } from "~/components/ui/diff-stat";
 import { IconButton } from "~/components/ui/icon-button";
 import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
@@ -375,14 +376,7 @@ export function EnvironmentPanel({
         <EnvironmentRow
           icon={<ChangesIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label="Changes"
-          trailing={
-            hasChanges ? (
-              <>
-                <span className="text-success">+{additions}</span>
-                <span className="text-destructive">-{deletions}</span>
-              </>
-            ) : null
-          }
+          trailing={hasChanges ? <DiffStat insertions={additions} deletions={deletions} /> : null}
           disabled={changesDisabled}
           onClick={() => {
             onToggleDiff();

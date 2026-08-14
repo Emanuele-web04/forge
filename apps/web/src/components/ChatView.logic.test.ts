@@ -54,6 +54,7 @@ import {
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
+  resolveSettledThreadBranchMismatch,
   resolveThreadDetailHydration,
   resolveThreadArtifactWorkspaceRoot,
   runWorktreeCreationFlow,
@@ -121,6 +122,49 @@ describe("thread artifact workspace root", () => {
         isStudioContainer: true,
         projectCwd: "/studio/root",
         threadWorkspaceCwd: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("settled thread branch mismatch", () => {
+  it("describes a settled local thread whose branch differs from the checkout", () => {
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: true,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
+      }),
+    ).toEqual({
+      threadBranch: "feature/finished",
+      currentBranch: "feature/current",
+    });
+  });
+
+  it("does not warn when the branch is current or the workspace is not local", () => {
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: true,
+        threadBranch: "main",
+        currentBranch: "main",
+      }),
+    ).toBeNull();
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: true,
+        isLocalWorkspace: false,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
+      }),
+    ).toBeNull();
+    expect(
+      resolveSettledThreadBranchMismatch({
+        isSettled: false,
+        isLocalWorkspace: true,
+        threadBranch: "feature/finished",
+        currentBranch: "feature/current",
       }),
     ).toBeNull();
   });

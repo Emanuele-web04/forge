@@ -1,5 +1,5 @@
 // FILE: AppIconPicker.browser.tsx
-// Purpose: Verify the visual app-icon picker exposes and applies the two supported choices.
+// Purpose: Verify the visual app-icon picker exposes and applies platform-supported choices.
 // Layer: Browser UI test
 
 import "../../index.css";
@@ -20,7 +20,9 @@ function readTopLeftAlpha(image: HTMLImageElement): number {
 
 it("uses inset transparent artwork and selects it", async () => {
   const onValueChange = vi.fn();
-  const mounted = await render(<AppIconPicker value="default" onValueChange={onValueChange} />);
+  const mounted = await render(
+    <AppIconPicker platform="MacIntel" value="default" onValueChange={onValueChange} />,
+  );
 
   await expect.element(mounted.getByRole("button", { name: "Default icon" })).toBeVisible();
   const iconButton = mounted.getByRole("button", { name: "Icon", exact: true });
@@ -39,4 +41,25 @@ it("uses inset transparent artwork and selects it", async () => {
   await iconButton.click();
 
   expect(onValueChange).toHaveBeenCalledWith("icon");
+});
+
+it("offers the dark icon on macOS", async () => {
+  const onValueChange = vi.fn();
+  const mounted = await render(
+    <AppIconPicker platform="MacIntel" value="default" onValueChange={onValueChange} />,
+  );
+
+  const darkIconButton = mounted.getByRole("button", { name: "Dark icon" });
+  await expect.element(darkIconButton).toBeVisible();
+  await darkIconButton.click();
+
+  expect(onValueChange).toHaveBeenCalledWith("dark");
+});
+
+it("hides the unsupported dark icon off macOS", async () => {
+  const mounted = await render(
+    <AppIconPicker platform="Win32" value="default" onValueChange={vi.fn()} />,
+  );
+
+  await expect.element(mounted.getByRole("button", { name: "Dark icon" })).not.toBeInTheDocument();
 });

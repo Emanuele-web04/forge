@@ -14,7 +14,7 @@ describe("desktopWsBridge", () => {
     expect(normalizeDesktopWsUrl(null)).toBeNull();
   });
 
-  it("reads only the canonical Forkara desktop URL environment value", () => {
+  it("reads only the canonical Synara desktop URL environment value", () => {
     expect(
       resolveDesktopWsUrlFromEnv({
         SYNARA_DESKTOP_WS_URL: "ws://127.0.0.1:6000/?token=synara",

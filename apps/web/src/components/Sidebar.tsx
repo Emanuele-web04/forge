@@ -101,7 +101,13 @@ import {
 } from "../appSettings";
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
-import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
+import {
+  isMacNavigatorPlatform,
+  newCommandId,
+  newProjectId,
+  newThreadId,
+  randomUUID,
+} from "../lib/utils";
 import { isOrdinarySpaceProject } from "../lib/spaces";
 import { expandProjectHomePath, joinProjectPath } from "../lib/projectPaths";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
@@ -124,6 +130,7 @@ import {
   createSidebarDisplayThreadsSelector,
   createSidebarThreadSummariesSelector,
   createSidebarTreeThreadsSelector,
+  isSidebarThreadVisible,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { useThreadPullRequests, type ThreadPullRequest } from "../hooks/useThreadPullRequests";
@@ -140,12 +147,12 @@ import {
   pullRequestQueryKeys,
   pullRequestReviewRequestCountQueryOptions,
 } from "../lib/pullRequestReactQuery";
+import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
 import {
-  prefetchProviderModelsForNewThread,
-  resolveNewThreadModelPrefetchCwd,
-  resolveNewThreadModelPrefetchProvider,
-} from "../lib/providerModelPrefetch";
-import { serverConfigQueryOptions, serverSettingsQueryOptions } from "../lib/serverReactQuery";
+  hasReconciledServerProviderStatuses,
+  serverConfigQueryOptions,
+  serverSettingsQueryOptions,
+} from "../lib/serverReactQuery";
 import {
   onNativeApiServerCapabilitiesChange,
   readNativeApi,
@@ -1219,7 +1226,7 @@ function SidebarActivityBellButton({
 }
 
 const SIDEBAR_SURFACE_PICKER_COPY: Record<SidebarView, { title: string; description: string }> = {
-  threads: { title: "Forkara", description: "Build, debug, and ship" },
+  threads: { title: "Synara", description: "Build, debug, and ship" },
   studio: { title: "Studio", description: "Open-ended agent work" },
 };
 
@@ -1405,7 +1412,7 @@ export default function Sidebar() {
     () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
-  const { settings: appSettings, updateSettings } = useAppSettings();
+  const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
   // Projects is always available; Studio and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
@@ -1532,14 +1539,14 @@ export default function Sidebar() {
   const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
   const searchShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.search") ??
-    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+    (isMacNavigatorPlatform() ? "⌘K" : "Ctrl+K");
   const activityShortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.activity");
   const importThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
-    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
+    (isMacNavigatorPlatform() ? "⌘I" : "Ctrl+I");
   const addProjectShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
-    (isMacPlatform(navigator.platform) ? "⇧⌘O" : "Ctrl+Shift+O");
+    (isMacNavigatorPlatform() ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
@@ -1635,7 +1642,11 @@ export default function Sidebar() {
   const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
-  const selectSidebarTreeThreads = useMemo(() => createSidebarTreeThreadsSelector(), []);
+  const hideAutomationRunThreads = !appSettings.showAutomationRunThreads;
+  const selectSidebarTreeThreads = useMemo(
+    () => createSidebarTreeThreadsSelector({ hideAutomationRunThreads }),
+    [hideAutomationRunThreads],
+  );
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
@@ -1654,10 +1665,20 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
       [sidebarTreeThreads, studioProjectIdSet],
     );
+  // Activity view + unread bell read the same visibility-filtered list, so the
+  // bell can never point at a row the Activity list is hiding.
+  const visibleNonStudioSidebarThreads = useMemo(
+    () =>
+      nonStudioSidebarThreads.filter((thread) =>
+        isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+      ),
+    [hideAutomationRunThreads, nonStudioSidebarThreads],
+  );
   // Drives the unread dot on the header Activity bell.
   const hasUnreadActivity = useMemo(
-    () => hasUnreadActivityOutsideActiveThread(nonStudioSidebarThreads, activeSidebarThreadId),
-    [activeSidebarThreadId, nonStudioSidebarThreads],
+    () =>
+      hasUnreadActivityOutsideActiveThread(visibleNonStudioSidebarThreads, activeSidebarThreadId),
+    [activeSidebarThreadId, visibleNonStudioSidebarThreads],
   );
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
@@ -2035,8 +2056,14 @@ export default function Sidebar() {
   }, [optimisticPinnedStateByProjectId, projects]);
   const focusMostRecentThreadForProject = useCallback(
     (projectId: ProjectId) => {
+      // Only navigate to threads the sidebar actually shows — focusing a hidden
+      // automation-run thread would select a row the user can't see.
       const latestThread = sortThreadsForSidebar(
-        sidebarThreads.filter((thread) => thread.projectId === projectId),
+        sidebarThreads.filter(
+          (thread) =>
+            thread.projectId === projectId &&
+            isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+        ),
         appSettings.sidebarThreadSortOrder,
       )[0];
       if (!latestThread) return;
@@ -2046,7 +2073,7 @@ export default function Sidebar() {
         params: { threadId: latestThread.id },
       });
     },
-    [appSettings.sidebarThreadSortOrder, navigate, sidebarThreads],
+    [appSettings.sidebarThreadSortOrder, hideAutomationRunThreads, navigate, sidebarThreads],
   );
 
   const openOrCreateProjectThreadFromSnapshot = useCallback(
@@ -2232,7 +2259,14 @@ export default function Sidebar() {
   const handleOpenProjectFromSearch = useCallback(
     (projectId: string) => {
       const typedProjectId = ProjectId.makeUnsafe(projectId);
-      const hasProjectThread = sidebarThreads.some((thread) => thread.projectId === typedProjectId);
+      // Match focusMostRecentThreadForProject's visibility filter: if a project's only
+      // threads are hidden automation runs, fall through to creating a fresh thread
+      // instead of focusing nothing.
+      const hasProjectThread = sidebarThreads.some(
+        (thread) =>
+          thread.projectId === typedProjectId &&
+          isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+      );
       if (hasProjectThread) {
         focusMostRecentThreadForProject(typedProjectId);
         return;
@@ -2248,6 +2282,7 @@ export default function Sidebar() {
       appSettings.defaultThreadEnvMode,
       focusMostRecentThreadForProject,
       handleNewThread,
+      hideAutomationRunThreads,
       sidebarThreads,
     ],
   );
@@ -2315,8 +2350,8 @@ export default function Sidebar() {
   );
 
   const resolveBackToThreadsTarget = useCallback(
-    () => resolveBackTargetForThreads(nonStudioSidebarThreads, nonStudioDraftThreadIds),
-    [nonStudioDraftThreadIds, nonStudioSidebarThreads, resolveBackTargetForThreads],
+    () => resolveBackTargetForThreads(visibleNonStudioSidebarThreads, nonStudioDraftThreadIds),
+    [nonStudioDraftThreadIds, resolveBackTargetForThreads, visibleNonStudioSidebarThreads],
   );
 
   // Navigates to a resolved settings-back / segment-switch target. Returns whether it navigated
@@ -2411,7 +2446,10 @@ export default function Sidebar() {
         return;
       }
 
-      void handleNewChat({ fresh: true });
+      // Reuse the stored home-chat draft when one exists (same as the "New chat"
+      // button) so switching back to the Chats view never destroys an in-progress
+      // draft; only mint a fresh draft when there is nothing to resume.
+      void handleNewChat();
     },
     [
       handleNewChat,
@@ -2453,7 +2491,11 @@ export default function Sidebar() {
   // Opens a fresh home-chat draft directly on the draft thread route so the first send
   // does not need a second route swap from "/" to "/$threadId".
   const handleCreateHomeChat = useCallback(async () => {
-    await handleNewChat({ fresh: true });
+    // Reuse the stored home-chat draft thread when one exists (matching the
+    // project "New thread" button), so a draft typed in a new chat survives
+    // switching to another thread and back. Only mint a fresh draft when there
+    // is no stored draft to resume.
+    await handleNewChat();
   }, [handleNewChat]);
   const handleCreateStudioChat = useCallback(async () => {
     await handleNewStudioChat({ fresh: true });
@@ -2601,37 +2643,38 @@ export default function Sidebar() {
       const draftComposer = draftThread
         ? (draftStore.draftsByThreadId[draftThread.threadId] ?? null)
         : null;
-      const provider = resolveNewThreadModelPrefetchProvider({
+      prefetchModelsForNewThread(queryClient, {
+        settings: appSettings,
+        serverSettings: serverSettings ?? null,
+        hiddenProviders: appSettings.hiddenProviders,
         draftActiveProvider: draftComposer?.activeProvider ?? null,
         stickyActiveProvider: draftStore.stickyActiveProvider,
         projectDefaultProvider: project.defaultModelSelection?.provider ?? null,
-        defaultProvider: appSettings.defaultProvider,
-      });
-      // Droid discovery spins a disposable ACP session per model — only warm it
-      // from explicit new-thread intent (hover/click), not idle project focus.
-      if (provider === "droid" && options?.includeDroid !== true) {
-        return;
-      }
-      const cwd = resolveNewThreadModelPrefetchCwd({
-        draftWorktreePath: draftThread?.worktreePath ?? null,
         projectCwd: project.cwd,
+        draftWorktreePath: draftThread?.worktreePath ?? null,
         serverCwd,
-      });
-
-      prefetchProviderModelsForNewThread(queryClient, {
-        provider,
-        settings: appSettings,
-        cwd,
+        // Hover-time warm must resolve the same envMode the click will pass so the
+        // warmed cwd keys match the thread ChatView actually mounts (local mode
+        // clears the draft worktree; worktree mode keeps it).
+        envMode: resolveSidebarNewThreadEnvMode({
+          defaultEnvMode: appSettings.defaultThreadEnvMode,
+        }),
+        providerStatuses,
+        statusesReconciled: hasReconciledServerProviderStatuses(queryClient),
+        providerOrder: appSettings.providerOrder,
+        includeDroid: options?.includeDroid === true,
       });
     },
-    [appSettings, projects, queryClient, serverCwd],
+    [appSettings, projects, providerStatuses, queryClient, serverCwd, serverSettings],
   );
 
   const prefetchModelsForPrimaryNewThread = useCallback(() => {
     if (!primaryNewThreadTarget) {
       return;
     }
-    prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
+    // Idle hover/focus must not spin Droid's expensive per-model ACP discovery;
+    // only explicit new-thread intent (the click path below) warms Droid.
+    prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId);
   }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
 
   useEffect(() => {
@@ -3330,7 +3373,6 @@ export default function Sidebar() {
                   {
                     operationId: value.operationId,
                     repository: value.repository,
-                    forkDestinationOwner: value.forkDestinationOwner,
                     destinationParent: value.destinationParent,
                     directoryName: value.directoryName,
                     commandId: newCommandId(),
@@ -3954,7 +3996,7 @@ export default function Sidebar() {
 
   const handleThreadClick = useCallback(
     (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
-      const isMac = isMacPlatform(navigator.platform);
+      const isMac = isMacNavigatorPlatform();
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const isShiftClick = event.shiftKey;
 
@@ -4107,7 +4149,7 @@ export default function Sidebar() {
   }, [activeSidebarThreadId, visibleSidebarThreadIds]);
 
   // Pinned rows share the thread-container label rule (project name, or
-  // "Forkara" for project-less chats) with the hover cards and Activity rows.
+  // "Synara" for project-less chats) with the hover cards and Activity rows.
   function resolvePinnedThreadProjectLabel(projectId: ProjectId): string {
     return resolveThreadProjectLabel(projectById.get(projectId));
   }
@@ -4687,8 +4729,8 @@ export default function Sidebar() {
       : sidebarHoverRevealHideClassName("project-header");
     const projectRun = projectRunsByProjectId[project.id] ?? null;
     const projectRunServer = projectRunServerByProjectId.get(project.id) ?? null;
-    // A project reads as "running" when Forkara tracks a run for it or when a
-    // local server (possibly started outside Forkara) is attributed by cwd.
+    // A project reads as "running" when Synara tracks a run for it or when a
+    // local server (possibly started outside Synara) is attributed by cwd.
     const isProjectRunning = projectRun !== null || projectRunServer !== null;
     const collapsedProjectStatus = project.expanded ? null : projectStatus;
     // The "open dev server" affordance now lives in the project context menu, so
@@ -4867,10 +4909,10 @@ export default function Sidebar() {
                 tooltipSide="top"
                 data-testid="new-thread-button"
                 onMouseEnter={() => {
-                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
+                  prefetchModelsForProjectNewThread(project.id);
                 }}
                 onFocus={() => {
-                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
+                  prefetchModelsForProjectNewThread(project.id);
                 }}
                 onClick={(event) => {
                   event.preventDefault();
@@ -5394,8 +5436,8 @@ export default function Sidebar() {
       },
       {
         id: "feedback",
-        label: "Feedback Forkara",
-        description: "Send feedback or report an issue to the Forkara team.",
+        label: "Feedback Synara",
+        description: "Send feedback or report an issue to the Synara team.",
         keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
       },
       {
@@ -5483,7 +5525,7 @@ export default function Sidebar() {
             toastManager.add({
               type: "info",
               title: "Preparing update",
-              description: `Forkara is preparing version ${nextState.availableVersion ?? "available"} in the background.`,
+              description: `Synara is preparing version ${nextState.availableVersion ?? "available"} in the background.`,
             });
             return;
           }
@@ -5492,7 +5534,7 @@ export default function Sidebar() {
             toastManager.add({
               type: "info",
               title: "Preparing update",
-              description: "Forkara is downloading the update in the background.",
+              description: "Synara is downloading the update in the background.",
             });
             return;
           }
@@ -5510,7 +5552,7 @@ export default function Sidebar() {
             toastManager.add({
               type: "info",
               title: "You're up to date",
-              description: `Forkara ${nextState.currentVersion} is already the newest version.`,
+              description: `Synara ${nextState.currentVersion} is already the newest version.`,
             });
             return;
           }
@@ -5662,7 +5704,7 @@ export default function Sidebar() {
   // Only macOS draws the traffic lights in the renderer's top-left, so only there
   // does the open-sidebar header need to reserve the gutter (mirrors the mac guard
   // in useDesktopTopBarTrafficLightGutterClassName used by the closed-state surfaces).
-  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+  const isMacDesktop = isMacNavigatorPlatform();
 
   // Open-sidebar (in-sidebar) and non-electron wordmark clusters share the one
   // SidebarLeadingControls primitive with the closed-state host headers, so the
@@ -5908,7 +5950,7 @@ export default function Sidebar() {
               ) : activityViewEnabled ? (
                 <SidebarGroup className="px-1.5 py-1.5">
                   <SidebarActivityView
-                    threads={nonStudioSidebarThreads}
+                    threads={visibleNonStudioSidebarThreads}
                     projectById={projectById}
                     activeThreadId={visualActiveSidebarThreadId}
                     pinnedThreadIdSet={pinnedThreadIdSet}
@@ -6675,6 +6717,8 @@ function SidebarSearchPaletteController(props: {
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
+  // Search is deliberately unfiltered: typing a query is intent-driven retrieval, and
+  // search is the durable escape hatch for automation-run threads hidden elsewhere.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
     queries: (["codex", "claudeAgent", "cursor", "kilo", "opencode"] as const).map((provider) =>

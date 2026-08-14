@@ -13,6 +13,7 @@ import {
   type AppSettings,
   type FollowUpBehavior,
   DEFAULT_UI_DENSITY,
+  DEFAULT_CHAT_WIDTH,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
@@ -52,12 +53,12 @@ import {
   SettingsSegmentedControl,
   SettingsSelectControl,
 } from "../components/settings/SettingControls";
+import { ForkTypeLorePanel } from "~/components/settings/ForkTypeLorePanel";
 import {
   SettingsRow,
   SettingsSection,
   SettingsSectionShell,
 } from "../components/settings/SettingsPanelPrimitives";
-import { ForkTypeLorePanel } from "~/components/settings/ForkTypeLorePanel";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
 import { ThemeModePicker } from "../components/settings/ThemeModePicker";
 import { ThemePackEditor } from "../components/ThemePackEditor";
@@ -86,9 +87,10 @@ import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavi
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
+import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
 import { isElectron } from "../env";
 import { RotateCcwIcon } from "../lib/icons";
-import { cn, isMacPlatform } from "../lib/utils";
+import { cn, getNavigatorPlatform, isMacPlatform } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import { sameProviderOrder } from "../providerOrdering";
 import {
@@ -119,6 +121,28 @@ const UI_DENSITY_OPTIONS = [
   },
 ] as const satisfies ReadonlyArray<{
   value: UiDensity;
+  label: string;
+  description: string;
+}>;
+
+const CHAT_WIDTH_OPTIONS = [
+  {
+    value: "standard",
+    label: "Standard",
+    description: "Keeps the chat column at the default reading width (46rem).",
+  },
+  {
+    value: "wide",
+    label: "Wide",
+    description: "Gives tables and wide content more room (72rem).",
+  },
+  {
+    value: "full",
+    label: "Full",
+    description: "Lets the chat column use the full window width.",
+  },
+] as const satisfies ReadonlyArray<{
+  value: ChatWidthMode;
   label: string;
   description: string;
 }>;
@@ -182,9 +206,8 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
-  const shouldShowFontSmoothing = isMacPlatform(
-    typeof navigator === "undefined" ? "" : navigator.platform,
-  );
+  const platform = getNavigatorPlatform();
+  const shouldShowFontSmoothing = isMacPlatform(platform);
   const visibleTerminalFontFamilySuggestions = useMemo(() => {
     const query = settings.terminalFontFamily.trim().toLowerCase();
     if (!query) return TERMINAL_FONT_FAMILY_SUGGESTIONS;
@@ -222,7 +245,11 @@ function SettingsRouteView() {
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
+    ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
+      ? ["Automation runs"]
+      : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
+    ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
     ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
@@ -516,7 +543,17 @@ function SettingsRouteView() {
           resetLabel: "studio section",
           ariaLabel: "Show the Studio section in the sidebar",
         })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showAutomationRunThreads",
+          title: "Automation runs",
+          description:
+            "Show the thread each standalone automation run creates. Runs stay listed on the automation's page either way; threads owned by dedicated or heartbeat automations always stay visible.",
+          resetLabel: "automation runs",
+          ariaLabel: "Show automation run threads in the sidebar",
+        })}
       </SettingsSection>
+
       <SettingsSectionShell title="Fork type lore">
         <ForkTypeLorePanel />
       </SettingsSectionShell>
@@ -673,6 +710,7 @@ function SettingsRouteView() {
             }
             control={
               <AppIconPicker
+                platform={platform}
                 value={settings.desktopAppIcon}
                 onValueChange={(desktopAppIcon) => updateSettings({ desktopAppIcon })}
               />
@@ -725,6 +763,36 @@ function SettingsRouteView() {
               }}
               ariaLabel="UI density"
               options={UI_DENSITY_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Chat width"
+          description="Control how wide the chat column grows. Wide and Full give tables and wide content more room."
+          resetAction={
+            settings.chatWidth !== defaults.chatWidth ? (
+              <SettingResetButton
+                label="chat width"
+                onClick={() =>
+                  updateSettings({
+                    chatWidth: DEFAULT_CHAT_WIDTH,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.chatWidth}
+              onValueChange={(value) => {
+                if (!isChatWidthMode(value)) {
+                  return;
+                }
+                updateSettings({ chatWidth: value });
+              }}
+              ariaLabel="Chat width"
+              options={CHAT_WIDTH_OPTIONS}
             />
           }
         />

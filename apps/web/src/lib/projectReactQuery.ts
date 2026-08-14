@@ -5,6 +5,7 @@ import type {
   ProjectReadFileResult,
   ProjectResolveOutOfRootFileReferenceResult,
   ProjectDiscoverScriptsResult,
+  ProjectSearchContentResult,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesResult,
 } from "@synara/contracts";
@@ -31,6 +32,8 @@ export const projectQueryKeys = {
   ) => ["projects", "search-entries", cwd, query, limit, kind] as const,
   searchLocalEntries: (rootPath: string | null, query: string, limit: number) =>
     ["projects", "search-local-entries", rootPath, query, limit] as const,
+  searchContent: (cwd: string | null, query: string, limit: number) =>
+    ["projects", "search-content", cwd, query, limit] as const,
 };
 
 // Scope live file-change invalidations to one workspace so unrelated
@@ -59,6 +62,9 @@ const DEFAULT_DISCOVER_SCRIPTS_DEPTH = 2;
 const DEFAULT_DISCOVER_SCRIPTS_STALE_TIME = 30_000;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_LIMIT = 50;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME = 10_000;
+const DEFAULT_SEARCH_CONTENT_LIMIT = 50;
+const DEFAULT_SEARCH_CONTENT_STALE_TIME = 10_000;
+const SEARCH_CONTENT_MIN_QUERY_LENGTH = 2;
 const DEFAULT_READ_FILE_STALE_TIME = 5_000;
 const LOCAL_PREVIEW_GRANT_REFRESH_SAFETY_MS = 15_000;
 const LOCAL_PREVIEW_GRANT_MIN_REFETCH_INTERVAL_MS = 1_000;
@@ -72,6 +78,10 @@ const EMPTY_DISCOVER_SCRIPTS_RESULT: ProjectDiscoverScriptsResult = {
 };
 const EMPTY_SEARCH_LOCAL_ENTRIES_RESULT: ProjectSearchLocalEntriesResult = {
   entries: [],
+  truncated: false,
+};
+const EMPTY_SEARCH_CONTENT_RESULT: ProjectSearchContentResult = {
+  matches: [],
   truncated: false,
 };
 const ABSOLUTE_LOCAL_READ_CWD = "/";
@@ -292,5 +302,36 @@ export function projectSearchLocalEntriesQueryOptions(input: {
     enabled: (input.enabled ?? true) && input.rootPath !== null && trimmedQuery.length >= 2,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_LOCAL_ENTRIES_RESULT,
+  });
+}
+
+export function projectSearchContentQueryOptions(input: {
+  cwd: string | null;
+  query: string;
+  enabled?: boolean;
+  limit?: number;
+  staleTime?: number;
+}) {
+  const limit = input.limit ?? DEFAULT_SEARCH_CONTENT_LIMIT;
+  const trimmedQuery = input.query.trim();
+  return queryOptions({
+    queryKey: projectQueryKeys.searchContent(input.cwd, trimmedQuery, limit),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd) {
+        throw new Error("Workspace content search is unavailable.");
+      }
+      return api.projects.searchContent({
+        cwd: input.cwd,
+        query: trimmedQuery,
+        limit,
+      });
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      input.cwd !== null &&
+      trimmedQuery.length >= SEARCH_CONTENT_MIN_QUERY_LENGTH,
+    staleTime: input.staleTime ?? DEFAULT_SEARCH_CONTENT_STALE_TIME,
+    placeholderData: (previous) => previous ?? EMPTY_SEARCH_CONTENT_RESULT,
   });
 }

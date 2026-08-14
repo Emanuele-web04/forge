@@ -3,6 +3,8 @@ import {
   CLAUDE_API_EFFORT_OPTIONS,
   CLAUDE_CODE_MODE_OPTIONS,
   CLAUDE_PROMPT_MODE_OPTIONS,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_OPTIONS,
@@ -40,6 +42,13 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
 } from "./model";
+
+describe("Git text generation defaults", () => {
+  it("uses GPT-5.6 Luna with high reasoning", () => {
+    expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe("gpt-5.6-luna");
+    expect(DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT).toBe("high");
+  });
+});
 
 describe("parseCursorCliReasoningEffort", () => {
   it.each([

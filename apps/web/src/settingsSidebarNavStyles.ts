@@ -16,7 +16,7 @@ import { SETTINGS_SECTION_LABEL_CLASS_NAME } from "./settingsPanelStyles";
 /** Wrapper for each settings group — break before the next header matches the project list rhythm. */
 export const SETTINGS_SIDEBAR_SECTION_CLASS_NAME = "flex flex-col not-first:mt-3";
 
-/** Section labels ("App", "Forkara") — shared with the settings content panel. */
+/** Section labels ("App", "Synara") — shared with the settings content panel. */
 export const SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME = SETTINGS_SECTION_LABEL_CLASS_NAME;
 
 /** Nav row — same chrome as project/chat sidebar header rows. */

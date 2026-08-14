@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added editable Explorer previews with dirty-state tracking, guarded saves, path validation, and clearer file breadcrumbs for focused code and text edits inside Synara.
+- Added editable Explorer previews with dirty-state tracking, guarded saves, path validation, and clearer file breadcrumbs for focused code and text edits inside Forkara.
 - Added a complete commit-push-create-PR workflow with draft or ready-for-review actions, progress-aware controls, safer upstream handling, and post-action refresh that cannot hold the successful Git action open.
 - Added live thread Git metadata propagation so branch, worktree, push, and pull-request changes made during a turn update task state without waiting for a later manual refresh.
 - Added worktree setup progress, cancellation before dispatch, and a local-checkout action, while restoring automatic branch creation and attachment for worktree tasks.
@@ -29,7 +29,7 @@
 - Improved project-picker search focus, shared picker composition, conditional keybinding edits, terminal exit shortcuts, and shortcut Settings layout.
 - Refined translucent sidebar and floating-composer surfaces, strengthened production backdrop-filter preservation and fallbacks, and aligned icon and theme preview presentation.
 - Changed the shared toast default to 10 seconds while retaining explicit persistent notices, and moved thread errors from inline banners to the common error-toast path.
-- Bumped Synara release package versions to `0.7.1` across server, desktop, web, and contracts packages and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.7.1` across server, desktop, web, and contracts packages and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
@@ -61,9 +61,9 @@
 
 ## 0.7.0 - 2026-08-05
 
-**A review of the Synara codebase found an analytics configuration that came from the original T3 Code codebase when Synara was created as a clone in March. We did not add it, and we have no access to the PostHog project receiving the events.**
+**A review of the Forkara codebase found an analytics configuration that came from the original T3 Code codebase when Forkara was created as a clone in March. We did not add it, and we have no access to the PostHog project receiving the events.**
 
-**The configuration has been removed. Synara no longer sends remote product analytics. The events did not include prompts, source code, filenames, or file contents.**
+**The configuration has been removed. Forkara no longer sends remote product analytics. The events did not include prompts, source code, filenames, or file contents.**
 
 **We're sorry this wasn't caught earlier**
 
@@ -82,14 +82,14 @@
 - Reduced background transcript work by narrowing thread-detail subscriptions and snapshot queries to the conversations that need live detail while retaining visible and docked task state through refresh races.
 - Improved terminal lifecycle handling so a natural shell exit clears activity and closes only the exited tab without a destructive-close confirmation, placeholder cleanup, or duplicate fallback exit command.
 - Gave temporary-thread user messages a distinct dashed outline while preserving the final message-bubble geometry.
-- Bumped Synara release package versions to `0.6.7` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.6.7` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
 - Fixed unreplayable runtime commands being reconsidered after restart; terminal or otherwise non-replayable work is now quarantined and reconciled explicitly.
 - Fixed side-chat creation races that could duplicate the seed prompt, lose retained detail, activate the wrong route, or leave dock state out of sync with the created task.
 - Fixed terminal Add to chat actions routing to the wrong composer and naturally exited terminals retaining activity, showing destructive-close prompts, or issuing a second exit command.
-- Fixed foreground completion notifications appearing while Synara or its native browser pane already had the user's attention, and aligned toast visibility with side-chat split and dock routes.
+- Fixed foreground completion notifications appearing while Forkara or its native browser pane already had the user's attention, and aligned toast visibility with side-chat split and dock routes.
 - Fixed stale provider update notices by retrying refreshes on focus, strengthening refresh scheduling, and preserving verified provider availability while checks overlap.
 - Fixed delayed runtime and pending-interaction events settling the wrong request, overwriting newer lifecycle state, or leaving task projections inconsistent after recovery.
 
@@ -117,7 +117,7 @@
 - Improved provider model discovery and selection by normalizing Pi extension metadata without losing resolvable identities, distinguishing favourite models by provider, and preserving accessible model-cost context.
 - Bounded deferred chat mounting and changed sent-message anchoring from a teleport or asymptotic chase into a tested fixed-duration glide using one monotonic clock.
 - Refreshed recent activity, browser-opening workflows, desktop chrome/zoom behavior, and sidebar state projection so application surfaces converge more predictably after delayed runtime updates.
-- Bumped Synara release package versions to `0.6.6` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.6.6` across the server, desktop, web, and contracts packages.
 
 ### Fixed
 
@@ -149,7 +149,7 @@
 - Refined Activity rows into a denser two-line presentation, renamed settled work to Done, kept urgent state visible on completed rows, and made new-chat creation use the latest project relevant to the current Activity scope.
 - Improved session orchestration, runtime activity attribution, workspace-root resolution, and worktree handoff metadata so conversation and cwd-bound surfaces converge sooner after delayed lifecycle events or repository changes.
 - Improved browser tool presentation, sidebar surface-picker styling, thread hover-card active states, and accessible Search targeting.
-- Bumped Synara release package versions to `0.6.5` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.6.5` across the server, desktop, web, and contracts packages.
 
 ### Fixed
 
@@ -172,7 +172,7 @@
 
 ### Added
 
-- Added provider-agnostic browser automation backed by Synara's shared visible Electron WebView. Supported agents can inspect bounded semantic snapshots, capture screenshots and diagnostics, navigate tabs, click, hover, drag, type, select, press keys, scroll, wait for page conditions, evaluate bounded expressions, handle dialogs, upload workspace-relative files, and observe explicit popup, download, timeout, and host-boundary states without creating a hidden browser.
+- Added provider-agnostic browser automation backed by Forkara's shared visible Electron WebView. Supported agents can inspect bounded semantic snapshots, capture screenshots and diagnostics, navigate tabs, click, hover, drag, type, select, press keys, scroll, wait for page conditions, evaluate bounded expressions, handle dialogs, upload workspace-relative files, and observe explicit popup, download, timeout, and host-boundary states without creating a hidden browser.
 - Added DOM annotations for the visible browser so users can select one or more page elements, attach optional comments, and send precise, compact context through the composer. Annotation transport is versioned, count- and field-bounded, keeps exact-page affinity local, and strips document-only metadata before provider injection.
 - Added provider-aware runtime modes and Auto/auto-approval support across the orchestration, automation, gateway, Codex, Claude, and ACP paths. Approval-required, Auto, and Full access selections now carry capability checks, privilege limits, and explicit pending-approval state.
 - Added a right-dock launcher for opening Review, Terminal, Browser, Files, Side chat, and Source control panes from one place, with keep-mounted live panes and project/repository-aware availability.
@@ -187,7 +187,7 @@
 - Improved runtime-mode and model pickers with capability-aware options, clearer effort labels, Claude model discovery on cold starts, and thread hover-card details for the active provider and model.
 - Changed Environment and Git action presentation so branches behind upstream surface Pull before commit, push, or PR actions, using one consistent working-tree and upstream state model.
 - Recovered missed draft promotions during event routing and capped stacked composer panels so large agent fleets cannot hide the composer.
-- Bumped Synara release package versions to `0.6.4` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.6.4` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
@@ -225,7 +225,7 @@
 - Improved thread snapshot projection, visible-detail retention, store normalization, and refresh re-arming across lease, subscription, eviction, and reconnect races.
 - Improved provider runtime activity attribution so late or replayed terminal events settle the intended turn without duplicating work-log output.
 - Changed grouped file-change undo to revert every represented turn newest-first and stop on the first failure rather than silently leaving the card partially applied.
-- Bumped Synara release package versions to `0.6.3` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.6.3` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
@@ -276,7 +276,7 @@
 - Reorganized Settings by user intent and consolidated shared settings cards, empty states, elevated surfaces, and hover styles.
 - Improved completion notifications so bounded Markdown summaries preserve fenced and nested code, technical context, references, delimiters, and turn-scoped copy while remaining safe to render.
 - Improved composer command-menu loading and empty states, shared picker styling, and React Compiler-friendly code paths.
-- Bumped Synara release package versions to `0.6.2` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.6.2` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
@@ -285,7 +285,7 @@
 - Fixed provider status disappearing or being replaced by stale data while a reconnect refresh was in flight.
 - Fixed unowned thread details surviving lease, reconnect, and snapshot races.
 - Fixed permanently quarantined threads that previously exposed the delivery blocker but offered no client recovery path.
-- Fixed desktop renderer crashes that could leave Synara blank instead of recovering within a bounded retry policy.
+- Fixed desktop renderer crashes that could leave Forkara blank instead of recovering within a bounded retry policy.
 - Fixed competing SQLite access that could proceed without proving exclusive database ownership.
 - Fixed startup overhead from repeated shell probes, eagerly loaded provider SDKs and diff parsers, redundant orchestration reads, and over-frequent process-tree inspection.
 - Fixed orphaned or interrupted migration artifacts not being reclaimed under the expanded retention policy.
@@ -322,7 +322,7 @@
 - Refactored desktop backend supervision, shutdown, and process-tree teardown so replacement and restart only proceed after the previous runtime is proven stopped.
 - Reduced redundant projection, thread-detail subscription, terminal-state, and sidebar work during active conversations.
 - Aligned Pi model discovery with the current ModelRuntime SDK and tightened Claude, OpenCode, Codex, Cursor, Droid, Grok, and Antigravity session lifecycle handling.
-- Bumped Synara release package versions to `0.6.1` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.6.1` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
@@ -347,28 +347,28 @@
 
 ### Added
 
-- Added the Synara Agent Gateway, a built-in MCP app-control surface automatically available to supported provider sessions so agents can understand and operate Synara itself.
-- Added 23 internal Synara MCP tools for discovering context and capabilities; listing projects and tasks; reading transcripts; waiting for one or many tasks; creating one task or an exact parallel batch; continuing, steering, queuing, or interrupting work; renaming and archiving tasks; and inspecting activity, orchestration events, provider runtime events, and synthesized diagnostics.
+- Added the Forkara Agent Gateway, a built-in MCP app-control surface automatically available to supported provider sessions so agents can understand and operate Forkara itself.
+- Added 23 internal Forkara MCP tools for discovering context and capabilities; listing projects and tasks; reading transcripts; waiting for one or many tasks; creating one task or an exact parallel batch; continuing, steering, queuing, or interrupting work; renaming and archiving tasks; and inspecting activity, orchestration events, provider runtime events, and synthesized diagnostics.
 - Added durable, idempotent multi-task creation across providers and models, with isolated worktrees, explicit target selection, privilege caps, crash recovery, operation ownership, compensation, result waiting, and visible provenance for agent-created work.
-- Added agent-facing MCP tools for creating, suggesting, listing, viewing, replacing, pausing, deleting, remembering, and reporting results from Synara automations.
+- Added agent-facing MCP tools for creating, suggesting, listing, viewing, replacing, pausing, deleting, remembering, and reporting results from Forkara automations.
 - Added guided External MCP integrations for Codex, Claude Code, and other agentic MCP clients, plus copy-ready manual configuration for Claude Desktop and clients that cannot complete the setup prompt.
-- Added a one-prompt external setup flow for agentic clients with resumable pairing, automatic local stdio configuration, connection verification, and the exact executable and Synara data directory from the running installation.
+- Added a one-prompt external setup flow for agentic clients with resumable pairing, automatic local stdio configuration, connection verification, and the exact executable and Forkara data directory from the running installation.
 - Added External MCP tools for one-call workspace overview, allowed-project discovery, provider/model capability discovery, idempotent task creation, bounded task waiting, and paginated task reading.
 - Added all-or-selected project authorization, expiring and revocable credentials, capability-filtered tool catalogs, per-minute and active-task limits, durable request replay, and explicit advanced permissions for project-wide task reading, local-checkout execution, and full-access execution.
 - Added Project Spaces with names, curated icons, persisted ordering, project assignment, drag-and-drop movement, bulk moves, activity indicators, and a Void view for unassigned projects.
 - Added `Cmd/Ctrl+Alt+1–9` Space switching, shortcut labels in tooltips and the shortcuts sheet, and inline Space creation while adding a project.
 - Added first-class Claude Task subagents as navigable child tasks with live status, recent tool traces, usage, model and effort information, steering, stop-all, and foreground/background controls.
 - Added live workflow run cards with phases, agent metrics, saved run identity, pause and resume, optional phase filtering, and explicit background-state notices.
-- Added cross-task composer mentions that attach bounded recent transcript context from another Synara task with its project and provider identity.
+- Added cross-task composer mentions that attach bounded recent transcript context from another Forkara task with its project and provider identity.
 - Added a global Commit and Push shortcut that follows the active task's available Git action.
 - Added configurable AppSnap global shortcuts with validation, persistence, and conflict detection.
-- Added an isolated Synara Canary workflow for clean-checkout desktop testing and attachment uploads.
+- Added an isolated Forkara Canary workflow for clean-checkout desktop testing and attachment uploads.
 - Added a Studio folder row that opens the selected folder in the platform file manager.
 
 ### Changed
 
-- Agents now receive explicit Synara operating guidance: when to delegate parallel work, wait for every requested result, prefer Synara diagnostics over raw database inspection, respect worktree and full-access boundaries, and suggest rather than silently enable automations.
-- Agent-created and externally created work remains ordinary standalone Synara tasks with visible origin, independent lifecycle, and results that users and other agents can follow.
+- Agents now receive explicit Forkara operating guidance: when to delegate parallel work, wait for every requested result, prefer Forkara diagnostics over raw database inspection, respect worktree and full-access boundaries, and suggest rather than silently enable automations.
+- Agent-created and externally created work remains ordinary standalone Forkara tasks with visible origin, independent lifecycle, and results that users and other agents can follow.
 - External MCP setup defaults new work to managed worktrees and approval-required execution; higher-impact runtime modes remain separate explicit grants.
 - External MCP credentials use a dedicated audience and never appear in client configuration. Pairing uses a short-lived code, stores the resulting credential privately, and verifies the live loopback runtime before forwarding authority.
 - Automations now support standalone and heartbeat modes, persistent memory, heartbeat cooldowns, notification and completion policies, maximum runs, proposal review, run envelopes, and runtime reconciliation after interruptions or restarts.
@@ -376,7 +376,7 @@
 - Manual turns preserve their selected runtime and environment modes when they supersede automation work, and superseded heartbeat runs settle as interrupted.
 - Project creation now uses a dedicated searchable dialog and shared picker surfaces across project, model, provider, and settings controls.
 - Studio shows Git controls only when its selected folder is a repository; ordinary folders no longer imply that Git must be initialized.
-- Live and attention-needing tasks receive clearer sidebar priority, while cross-task attribution is simplified to a single Synara label.
+- Live and attention-needing tasks receive clearer sidebar priority, while cross-task attribution is simplified to a single Forkara label.
 - Workflow and subagent chrome now uses one calmer stacked surface with state-driven color, compact phase pills, aligned rows, hover actions, and concise model labels.
 - Chat Markdown headings now have visible hierarchy instead of rendering like body text.
 - Provider and model picker popups retain a stable width and use more consistent spacing.
@@ -392,13 +392,13 @@
 - Provider updates install into the same npm prefix as the detected executable, preventing a successful update from landing in a different Node installation.
 - The CLI publish flow now builds an isolated package stage and includes the migration-backup restore executable.
 - The running-task spinner is slimmer and slower, dialog and input chrome is more consistent, composer picker rows are easier to scan, sidebar branding is quieter, and the retired World Cup playground has been removed.
-- Bumped Synara release package versions to `0.6.0` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.6.0` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
-- Fixed Synara browser-control discovery and desktop browser RPC negotiation, session ownership, teardown, reconnect, and fixture readiness.
+- Fixed Forkara browser-control discovery and desktop browser RPC negotiation, session ownership, teardown, reconnect, and fixture readiness.
 - Fixed blank provider `PATH` defaults being rejected or replaced incorrectly.
-- Fixed MCP `serve` and `pair` ignoring `--home-dir`, which could connect an integration to the wrong Synara data directory.
+- Fixed MCP `serve` and `pair` ignoring `--home-dir`, which could connect an integration to the wrong Forkara data directory.
 - Fixed External MCP trust and lifecycle boundaries around credential selection, pairing retries, restart discovery, concurrent waits, cancellation, capacity compensation, revoked or expired credential checks, and loopback-only enforcement.
 - Fixed External MCP documentation omitting the primary `synara_overview` discovery tool and describing a superseded client-picker setup flow.
 - Fixed Agent Gateway privilege-escalation paths so approval-required or worktree-isolated callers cannot create or control higher-privilege tasks by proxy.
@@ -412,12 +412,12 @@
 - Fixed Claude reroute pinning, excessive transcript replay, thinking and effort restarts, stale resume behavior, rate-limit blowups, and background-task process shutdown.
 - Fixed Claude subagent stops being resurrected by late messages, parent interrupts being cleared by child events, background actions targeting already-backgrounded work, and final workflow snapshots being overwritten.
 - Fixed OpenCode quiet-completion detection following stale rather than latest activity.
-- Fixed OpenCode `/review` being forwarded as plain text instead of opening Synara's review flow.
+- Fixed OpenCode `/review` being forwarded as plain text instead of opening Forkara's review flow.
 - Fixed unmapped Codex child events contaminating the owning task.
 - Fixed the Claude context meter ignoring `autoCompactWindow`, failing to refresh after live changes, or carrying stale values through handoffs.
 - Fixed Pi discovery omitting authenticated Claude Fable 5 and Opus 4.8 models.
 - Fixed namespaced Cursor and Grok ACP model identifiers and ACP permission-mode handling across Cursor, Droid, Grok, and OpenCode.
-- Fixed Antigravity's global capture hook launching the Synara GUI outside active sessions.
+- Fixed Antigravity's global capture hook launching the Forkara GUI outside active sessions.
 - Fixed provider update success messages when a second Node or npm installation remained selected.
 - Fixed file-icon lookup keys such as `constructor` or `__proto__` crashing a conversation.
 - Fixed duplicate composer clearance and preserved transcript scroll position when stacked panels change.
@@ -427,7 +427,7 @@
 - Fixed durable secret writes and thread-deletion cleanup so interruption or restart cannot leave empty credentials, resurrect queued turns, or repeatedly retry deleted work.
 - Fixed pull-request review badges briefly showing incomplete counts.
 - Fixed macOS `Cmd+K` search while leaving native `Ctrl+K` line editing available.
-- Fixed missing project directories being reported as "Codex not installed"; Synara now identifies the missing working directory and offers relocation guidance.
+- Fixed missing project directories being reported as "Codex not installed"; Forkara now identifies the missing working directory and offers relocation guidance.
 - Fixed automation heartbeat cooldown incorrectly throttling an automation's own next run.
 - Fixed automation memory writes requiring redundant IDs or content fields when the active automation context already identifies the target.
 
@@ -454,10 +454,10 @@
 - Reworked live-turn settlement to follow the owning provider session, preventing transcript chrome from remaining active after a turn has already completed.
 - Optimized chat reconciliation and event projection to reduce repeated scans and redundant updates during active conversations and sidebar-driven state changes.
 - Coalesced pull-request entries through shared list logic and unified picker popup interactions across the workspace.
-- Replaced Pierre-branded side-panel diff headers with Synara's shared visual chrome.
+- Replaced Pierre-branded side-panel diff headers with Forkara's shared visual chrome.
 - Retired the legacy Gemini keybinding and updated provider documentation for Antigravity.
 - Reset bundled theme seeds consistently so shipped theme changes apply predictably without disturbing user-created themes.
-- Bumped Synara release package versions to `0.5.5` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.5.5` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
@@ -590,7 +590,7 @@
 
 ### Changed
 
-- Completed the Synara identity cutover across desktop packaging, the renderer origin, workspace packages, the public CLI, runtime variables, storage, Git metadata, assets, documentation, and release automation.
+- Completed the Forkara identity cutover across desktop packaging, the renderer origin, workspace packages, the public CLI, runtime variables, storage, Git metadata, assets, documentation, and release automation.
 - Set the production bundle ID and Windows AUMID to `com.emanueledipietro.synara`, with `.dev` used only for development.
 - Published the CLI identity as `@synara/cli` with the `synara` executable and moved all first-party workspaces to `@synara/*`.
 - Kept persisted renderer state available through the 0.4.2 origin bridge and retained brand-neutral structural access to existing checkpoint refs and migration lineage.
@@ -614,13 +614,13 @@
 
 ### Upgrade note
 
-- Launch Synara 0.4.2 once before upgrading so renderer-local UI state is exported before 0.5.0 adopts the canonical `synara://app` origin.
+- Launch Forkara 0.4.2 once before upgrading so renderer-local UI state is exported before 0.5.0 adopts the canonical `synara://app` origin.
 
 ## 0.4.2 - 2026-07-09
 
 ### Added
 
-- Added the Synara identity bridge that exports canonical renderer storage before the packaged origin changes.
+- Added the Forkara identity bridge that exports canonical renderer storage before the packaged origin changes.
 - Added per-thread 1M-token context window tracking for Claude sessions, with automatic compaction handling and context-usage warnings near the window limit.
 - Added fallback model pinning for Claude after a safeguard reroute, cleared when the user explicitly selects a different model.
 - Added a durable desktop update install marker that verifies installs across restarts, plus an install watchdog with recovery and macOS ShipIt/launchctl update diagnostics.
@@ -631,8 +631,8 @@
 
 - Claude model and context-window switches now happen in-session instead of forcing a full session restart, sharply reducing restarts and runaway token usage.
 - Canonicalized migration and checkpoint metadata while keeping existing persisted refs readable.
-- Enforced the staged Synara update feed end to end, with fail-closed preflight checks in the release pipeline.
-- Made Windows code signing optional in the release pipeline and finalized Synara license attribution.
+- Enforced the staged Forkara update feed end to end, with fail-closed preflight checks in the release pipeline.
+- Made Windows code signing optional in the release pipeline and finalized Forkara license attribution.
 
 ### Fixed
 
@@ -648,7 +648,7 @@
 
 ### Upgrade note
 
-- Launch Synara 0.4.2 at least once before installing the next release. This preserves drafts, pins, theme, browser state, and other local UI state through the identity cutover.
+- Launch Forkara 0.4.2 at least once before installing the next release. This preserves drafts, pins, theme, browser state, and other local UI state through the identity cutover.
 - Earlier command and environment aliases are accepted by 0.4.2 only and are removed by the following release.
 
 ## 0.4.1 - 2026-07-09
@@ -665,7 +665,7 @@
 - Refined chat and Studio creation, routing, and restore flows to use canonical containers, wait for hydration when needed, and avoid overlapping fresh-chat creation.
 - Refined session orchestration and transcript rendering so active work, sidebar visibility, and worktree setup remain predictable across streaming, reconnects, and segment switches.
 - Refined Studio scaffolding and project ownership rules to preserve clear workspace boundaries during retries, restores, and partial creation states.
-- Bumped Synara release package versions to `0.4.1` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.4.1` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 
 ### Fixed
 
@@ -694,7 +694,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.4.0` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.4.0` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 - Refined prompt history navigation so stale navigation state resets cleanly and optimistic prompt-history entries do not duplicate after sends.
 - Refined PR snapshot loading to dedupe GitHub field lists, format merge-head details more consistently, and keep long review previews readable.
 - Refined provider usage type handling around Claude summaries and rate-limit responses.
@@ -731,7 +731,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.9` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.3.9` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 - Refined `/export` to stream archive entries incrementally, deflate large entries without buffering the whole ZIP, and avoid offering export while a turn is running or still streaming.
 - Refined thread purge behavior so archived profile aggregates continue contributing to profile queries after thread rows are removed.
 - Refined terminal shutdown so disposal waits for kill escalation instead of returning while stubborn process trees may still be alive.
@@ -769,7 +769,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.8` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.3.8` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 - Refined ACP session runtime and Grok adapter handling around resume replay, compaction, JSON-RPC ordering, provider runtime ingestion, and provider service session state.
 - Refined worktree setup timeline rendering so setup rows expose active/failed/done state more predictably and failed local dispatches clear on the next send.
 - Reworked pending approval UI around the shared `ComposerChoiceRow` structure, trimming duplicate action styling and aligning it with pending input panels.
@@ -810,7 +810,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.7` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Bumped Forkara release package versions to `0.3.7` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
 - Moved the sidebar Chats section into the scrollable sidebar content, added an accessible disclosure state, and reused the shared disclosure chevron.
 - Refined the desktop update action styling to use the info color while active downloads show a compact percent pill.
 - Refined Claude provider health to retry structured `loggedIn:false` false negatives once, read verified local credential metadata, and preserve subscription/auth labels more reliably.
@@ -848,7 +848,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.6` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.3.6` across the server, desktop, web, and contracts packages.
 - Refined Cursor agent command resolution so fallback launchers prefer known-safe agent paths and reject unsafe editor fallbacks.
 - Refined checkpoint and transcript handling around turn completion, live trail rendering, and message timeline integration.
 - Refined Sonnet 5 model variant metadata, sidebar status icons, command-row branding, tool-call labels, chat bubble padding, and model effort picker copy.
@@ -883,7 +883,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.5` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace package versions.
+- Bumped Forkara release package versions to `0.3.5` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace package versions.
 - Reworked temporary chat promotion so draft/temporary threads move into durable chat flow more predictably across ChatView, sidebar state, session logic, and route activation.
 - Replaced archive confirmation friction with immediate archive plus undo toast, including sidebar row actions, settings primitives, and shared error messaging polish.
 - Refined pending user-input panels, queued composer state, work rows, tool details, markdown spacing, composer picker styling, model/traits pickers, and chat timeline presentation.
@@ -919,7 +919,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.4` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.3.4` across the server, desktop, web, and contracts packages.
 - Refined transcript streaming and session-state handling so live assistant output, tool rows, and bottom-stick behavior stay separated more predictably.
 - Made Claude provider health prefer usable local CLI credentials before inheriting direct credential env keys into subprocesses.
 - Made Cursor provider probing use a safer headless environment for ACP commands.
@@ -948,7 +948,7 @@
 
 ### Added
 
-- Added Windows packaged-app editor discovery so VS Code and VS Code Insiders installed from the Microsoft Store can be launched from Synara.
+- Added Windows packaged-app editor discovery so VS Code and VS Code Insiders installed from the Microsoft Store can be launched from Forkara.
 - Added Windows editor URI fallback handling when the normal editor command is unavailable or unsuitable.
 - Added a provider update-check preference across server settings, web app settings, settings search, provider health, and update notification filtering.
 - Added shared workspace explorer keyboard navigation coverage and a dedicated keyboard shortcuts settings panel.
@@ -956,8 +956,8 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.3` across the server, desktop, web, and contracts packages.
-- Refreshed Synara icon and logo assets across desktop resources, marketing assets, web favicons, app icons, and shared brand assets.
+- Bumped Forkara release package versions to `0.3.3` across the server, desktop, web, and contracts packages.
+- Refreshed Forkara icon and logo assets across desktop resources, marketing assets, web favicons, app icons, and shared brand assets.
 - Corrected macOS app icon packaging after the Ventura rounded-icon pass and removed the temporary literal Dock icon workaround.
 - Unified workspace explorer presentation, file row styling, diff stat labels, DockExplorerPane behavior, and shortcut settings navigation.
 - Reduced idle local server polling by giving server React Query a calmer idle refresh cadence while preserving active-session refresh behavior.
@@ -992,7 +992,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.2` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.3.2` across the server, desktop, web, and contracts packages.
 - Refactored transcript scrolling and session-state handling so ChatView owns less browser-specific behavior directly and live transcript/layout state has clearer boundaries.
 - Refactored composer chrome measurement, right-dock metadata, workspace preview headers, and the workspace explorer into reusable pieces.
 - Made project and home-chat container selection more explicit by sharing project creation/recovery, draft-thread mapping, and chat-container selection helpers across sidebar and toolbar entrypoints.
@@ -1028,7 +1028,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.1` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.3.1` across the server, desktop, web, and contracts packages.
 - Refined session orchestration and transcript handling so assistant messages, tool/work rows, collapsed turns, runtime activity, and sidechat state stay separated more predictably.
 - Improved chat header, recent-view, sidebar, split-chat, and hover-card navigation for multi-pane workflows.
 - Tightened keyboard shortcut defaults and persisted keybinding migrations for chat creation, terminal creation, navigation, and duplicate/stale binding rows.
@@ -1062,7 +1062,7 @@
 
 ### Added
 
-- Added first-class Automations as a real Synara workspace surface, including contracts, persistence, scheduler leases, run tracking, RPC methods, sidebar navigation, list/detail routes, Current/Paused views, inline detail editing, previous-run history, and triage actions.
+- Added first-class Automations as a real Forkara workspace surface, including contracts, persistence, scheduler leases, run tracking, RPC methods, sidebar navigation, list/detail routes, Current/Paused views, inline detail editing, previous-run history, and triage actions.
 - Added automation scheduler and composer flows so saved prompts can run manually, once, on intervals, daily, on weekdays, weekly, or from cron-like schedules.
 - Added heartbeat automations that continue an existing target thread on each scheduled wake while preserving the normal provider/session/approval/worktree pipeline.
 - Added AI-evaluated heartbeat stop clauses through completion policies, natural-language stop conditions, completion-evaluation results, and visible stop reasons in run history.
@@ -1072,13 +1072,13 @@
 - Added DST and long-downtime scheduler coverage for spring-forward gaps, fall-back duplicate hours, and coalesced missed interval runs.
 - Added generic chat file attachments alongside image attachments, with shared contracts, upload storage, composer paste/drop support, provider prompt projection, optimistic timeline rendering, Kanban dispatch, recap/bootstrap support, and reusable file attachment cards/chips.
 - Added automation cards in the chat transcript after automation creation, and added thread automation summaries in the Environment panel.
-- Added blob-based browser download handling for local image/generated markdown image downloads so failed local-image responses stay inside Synara instead of navigating the app window to an API error page.
+- Added blob-based browser download handling for local image/generated markdown image downloads so failed local-image responses stay inside Forkara instead of navigating the app window to an API error page.
 - Added OpenCode CLI-only model discovery fallback so the model picker can still discover available models when the managed server or inventory path fails.
 - Added profile skill usage counting coverage for retention-hidden threads and repeated slash/dollar skill invocations.
 
 ### Changed
 
-- Bumped Synara release package versions to `0.3.0` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.3.0` across the server, desktop, web, and contracts packages.
 - Reworked automation UI toward a Codex-style surface, including the sidebar badge, Current/Paused list, centered detail layout, inline rail editing, schedule editing, target-thread display, max-iteration controls, stop-on-error handling, and previous-run actions.
 - Expanded automation composer parsing and review so explicit/generated prompts, schedule phrases, stop clauses, bounded fast loops, restored plan source metadata, queued plan follow-ups, and inline composer editing are handled consistently.
 - Made generated automation intents require confirmation before creation, while preserving deterministic local auto-submit behavior for explicitly parsed bounded fast loops.
@@ -1130,7 +1130,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.2.41` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.2.41` across the server, desktop, web, and contracts packages.
 - Kept the shared project-action dialog path mounted while hiding the visible inline project script runner from the chat header.
 - Improved header handoff failure handling by checking provider send availability before creating a handoff and showing a toast when the target is unavailable.
 
@@ -1162,7 +1162,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.2.4` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.2.4` across the server, desktop, web, and contracts packages.
 - Improved remembered chat route restore so stale empty startup snapshots do not immediately send users to the empty chat route.
 - Removed the old handoff shortcut from the chat header to keep primary conversation controls quieter.
 
@@ -1193,7 +1193,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.2.3` across the server, desktop, web, and contracts packages.
+- Bumped Forkara release package versions to `0.2.3` across the server, desktop, web, and contracts packages.
 - Improved profile skill usage counting by combining structured skill references, mentions, agent references, and legacy text-token backfill while filtering obvious non-skill slash/dollar tokens.
 - Kept large pasted prompt content out of the visible composer body by storing it as structured prompt context, making long prompts easier to scan and refine.
 
@@ -1252,7 +1252,7 @@
 ### Added
 
 - Added inline file comments from composer and preview surfaces, including line comment boxes, comment summary chips, draft persistence, reference attachment support, chat timeline rendering, and file-comment parsing helpers.
-- Added startup turn reconciliation for provider restarts so Synara can recover unfinished turns from persisted runtime state instead of leaving stale active work behind.
+- Added startup turn reconciliation for provider restarts so Forkara can recover unfinished turns from persisted runtime state instead of leaving stale active work behind.
 - Added an ACP idle watchdog used by ACP-backed providers so quiet turns can complete or fail more predictably when runtime events stop flowing.
 - Added partial workspace reference lookup helpers and tests so shortened file references can resolve to the intended workspace entry.
 
@@ -1390,7 +1390,7 @@
 
 - Refined the chat header, chat view, composer controls, model/trait/open-in pickers, inline chips, transcript selection actions, and code-selection flows so references and controls stay easier to scan during active work.
 - Reworked the diff panel toolbar, file list, and patch viewport behavior to make large diffs easier to navigate from both repository and turn contexts.
-- Reworked provider skill discovery so provider-native skill lists can merge with Synara's catalog and fall back cleanly when a provider cannot answer.
+- Reworked provider skill discovery so provider-native skill lists can merge with Forkara's catalog and fall back cleanly when a provider cannot answer.
 - Reconciled legacy migration trackers before running migrations and tightened older sidechat/pinned-thread migration paths.
 - Updated desktop stage dependency overrides to keep `@pierre/diffs` pinned to `1.2.8`.
 - Tightened terminal environment propagation, terminal manager behavior, workspace path containment, and provider command/runtime plumbing around recent server contracts.
@@ -1516,7 +1516,7 @@
 
 ### Changed
 
-- Refreshed README/release messaging and Synara desktop update flow documentation around the current app positioning.
+- Refreshed README/release messaging and Forkara desktop update flow documentation around the current app positioning.
 - Reworked the diff panel around explicit repo-vs-turn state, searchable file filtering, and smaller view components.
 - Unified composer stacked panels above the input so plan activity, queued follow-ups, and live file-change rows share width, border, radius, and dark-mode opacity.
 - Refined chat markdown spacing, composer command menu selection, provider/plugin discovery normalization, and file/plugin icon rendering in sent messages.

@@ -222,7 +222,7 @@ describe("providerModelOptionProvenanceLabel", () => {
     ).toBe("OpenCode Go");
   });
 
-  it("falls back to a humanized slug provider, then the Forkara provider", () => {
+  it("falls back to a humanized slug provider, then the Synara provider", () => {
     expect(
       providerModelOptionProvenanceLabel({
         provider: "opencode",

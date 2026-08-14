@@ -624,7 +624,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       removeSplitView(activeSplitView.id);
       const fallbackThreadId = onlyThreadId ?? props.routeThreadId;
       if (!fallbackThreadId) {
-        void handleNewChat({ fresh: true });
+        void handleNewChat();
         return;
       }
       void navigate({
@@ -782,7 +782,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     }
 
     removeSplitView(activeSplitView.id);
-    void handleNewChat({ fresh: true });
+    void handleNewChat();
   };
 
   const closePaneThread = (paneId: PaneId) => {
@@ -860,7 +860,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       return;
     }
 
-    void handleNewChat({ fresh: true });
+    void handleNewChat();
   };
 
   const handleSetRatio = (nodeId: PaneId, ratio: number) => {

@@ -93,37 +93,6 @@ describe("ComposerPendingApprovalPanel", () => {
     }
   });
 
-  it("renders license-changer parody copy for permission requests", async () => {
-    const mounted = await mountApprovalPanel({
-      approval: makeApproval({
-        requestKind: "permissions",
-        detail: "Request to adjust LICENSE terms",
-        permissionProfile: {
-          license: { file: "LICENSE", readable: true },
-          copyrightOwner: "forkara-team",
-        },
-      }),
-    });
-
-    try {
-      await expect
-        .element(page.getByText("License Changer check: confirm legal ownership before proceeding"))
-        .toBeInTheDocument();
-      await expect
-        .element(page.getByRole("link", { name: /Read current LICENSE/u }))
-        .toBeInTheDocument();
-      await expect
-        .element(
-          page.getByText(
-            "Changing license terms is not a cosmetic toggle. Verify ownership and repository policy before allowing",
-          ),
-        )
-        .toBeInTheDocument();
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
   it("hides session approval when the provider cannot persist it", async () => {
     const mounted = await mountApprovalPanel({
       approval: makeApproval({ sessionApprovalAvailable: false }),

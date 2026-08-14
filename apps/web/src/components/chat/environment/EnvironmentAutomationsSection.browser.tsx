@@ -27,7 +27,10 @@ const baseAutomation = (overrides: Partial<AutomationDefinition> = {}): Automati
   mode: "heartbeat",
   targetThreadId: ThreadId.makeUnsafe("thread-pr-220"),
   maxIterations: null,
-  stopOnError: false,
+  stopAfterConsecutiveFailures: null,
+  consecutiveFailureCount: 0,
+  disabledReason: null,
+  disabledAt: null,
   completionPolicy: { type: "none" },
   completionPolicyVersion: 1,
   completionPolicyUpdatedAt: "2026-06-21T14:00:00.000Z",
@@ -63,7 +66,7 @@ describe("EnvironmentAutomationsSection", () => {
     expect(page.getByText("Every 3m")).toBeInTheDocument();
 
     await page
-      .getByRole("button", { name: "Edit automation Monitor PR #220 Codex review" })
+      .getByRole("button", { name: "Open automation Monitor PR #220 Codex review" })
       .click();
 
     expect(onOpenAutomation).toHaveBeenCalledWith(definition);

@@ -683,7 +683,7 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.createBranchFlowCompleted).toBe(true);
   });
 
-  it("surfaces pinnedMessages and notes from a live thread.meta-updated event", () => {
+  it("surfaces thread annotations from a live thread.meta-updated event", () => {
     const initialState = makeState(makeThread());
     const messageId = MessageId.makeUnsafe("assistant-pin-2");
     const pinnedMessages = [
@@ -700,12 +700,14 @@ describe("store event reducer", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         pinnedMessages,
         notes: "scratch",
+        goal: "Ship the whole feature",
         updatedAt: "2026-02-27T00:02:00.000Z",
       }),
     ]);
 
     expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
     expect(threadsOf(next)[0]?.notes).toBe("scratch");
+    expect(threadsOf(next)[0]?.goal).toBe("Ship the whole feature");
   });
 
   it("applies live pinned-message operation events without replacing the whole list", () => {

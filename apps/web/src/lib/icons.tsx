@@ -250,6 +250,14 @@ export const PinIcon: LucideIcon = centralIconWrapper("pin");
 export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
 export const PauseIcon: LucideIcon = centralIconWrapper("pause", "fill");
 export const PlayIcon: LucideIcon = centralIconWrapper("play", "fill");
+// Outline transport glyphs (Central "reversed" set) for surfaces that read as a
+// row of neutral actions rather than playback state — e.g. the composer goal strip.
+export const PauseOutlineIcon: LucideIcon = centralIconWrapper("pause");
+export const PlayOutlineIcon: LucideIcon = centralIconWrapper("play");
+/** Outline trash can from the Central set (Trash2 is the legacy Tabler glyph). */
+export const TrashCanIcon: LucideIcon = centralIconWrapper("trash-can");
+// Persistent thread goal ("Pursuing goal" strip, /goal surfaces).
+export const GoalIcon: LucideIcon = centralIconWrapper("target-arrow");
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);
 export const RefreshCwIcon = adaptIcon(IconRefresh);

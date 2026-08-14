@@ -40,7 +40,7 @@ function thread(input: {
 
 describe("buildThreadMentionComposerItems", () => {
   const projects = [
-    project("project", "project", "Forkara"),
+    project("project", "project", "Synara"),
     project("chats", "chat", "Home"),
     project("studio", "studio", "Studio workspace"),
   ];
@@ -52,7 +52,7 @@ describe("buildThreadMentionComposerItems", () => {
       query: "release",
       threads: [
         thread({ id: "current", projectId: "project", title: "Release current" }),
-        thread({ id: "project-thread", projectId: "project", title: "Release Forkara" }),
+        thread({ id: "project-thread", projectId: "project", title: "Release Synara" }),
         thread({ id: "chat-thread", projectId: "chats", title: "Release notes" }),
         thread({
           id: "studio-thread",
@@ -71,7 +71,7 @@ describe("buildThreadMentionComposerItems", () => {
     ]);
     expect(Object.fromEntries(items.map((item) => [item.id, item.description]))).toEqual({
       "thread:chat-thread": "Chats",
-      "thread:project-thread": "Forkara",
+      "thread:project-thread": "Synara",
       "thread:studio-thread": "Studio",
     });
     expect(items.find((item) => item.id === "thread:studio-thread")).toMatchObject({
@@ -132,7 +132,7 @@ describe("buildThreadMentionComposerItems", () => {
     const mentionNamesById = Object.fromEntries(
       items.map((item) => [item.id, item.type === "thread" ? item.mention.name : null]),
     );
-    expect(mentionNamesById["thread:in-project"]).toBe("Planning (Forkara)");
+    expect(mentionNamesById["thread:in-project"]).toBe("Planning (Synara)");
     expect(mentionNamesById["thread:in-chats"]).toBe("Planning (Chats)");
     expect(mentionNamesById["thread:unique"]).toBe("Planning extras");
     expect(items.every((item) => item.label.startsWith("Planning"))).toBe(true);
@@ -150,7 +150,7 @@ describe("buildThreadMentionComposerItems", () => {
     });
 
     const names = items.map((item) => (item.type === "thread" ? item.mention.name : "")).toSorted();
-    expect(names).toEqual(["Planning (Forkara, aaa111)", "Planning (Forkara, bbb222)"]);
+    expect(names).toEqual(["Planning (Synara, aaa111)", "Planning (Synara, bbb222)"]);
   });
 
   it("keeps generated names unique when a qualified name matches another real title", () => {
@@ -164,15 +164,15 @@ describe("buildThreadMentionComposerItems", () => {
         thread({
           id: "thread-333333",
           projectId: "project",
-          title: "Planning (Forkara)",
+          title: "Planning (Synara)",
         }),
       ],
     });
 
     const names = items.map((item) => (item.type === "thread" ? item.mention.name : ""));
     expect(new Set(names.map((name) => name.toLowerCase())).size).toBe(names.length);
-    expect(names).toContain("Planning (Forkara) (111111)");
-    expect(names).toContain("Planning (Forkara) (333333)");
+    expect(names).toContain("Planning (Synara) (111111)");
+    expect(names).toContain("Planning (Synara) (333333)");
   });
 
   it("treats casing-only title differences as the same mention token", () => {

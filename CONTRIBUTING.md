@@ -4,9 +4,7 @@
 
 We are accepting focused contributions, especially small bug fixes, reliability fixes, performance improvements, and maintenance work.
 
-If you are preparing a downstream fork, use the [rebrand checklist](./docs/rebrand-checklist.md) before making identity-related edits.
-
-You can open an issue or PR, but please do so knowing that Forkara is still early and we are keeping scope, quality, and direction tight.
+You can open an issue or PR, but please do so knowing that Synara is still early and we are keeping scope, quality, and direction tight.
 
 Large, unfocused, or direction-changing PRs may still be closed quickly.
 
@@ -51,6 +49,9 @@ If the PR makes anything resembling a UI change, include clear before/after imag
 If the change depends on motion, timing, transitions, or interaction details, include a short video.
 
 If we have to guess what changed, we are much less likely to review it.
+
+For required upstream refresh PRs, follow [Upstream sync playbook](./docs/upstream-sync-playbook.md)
+and target `built-from-scratch`.
 
 ## Issues First
 

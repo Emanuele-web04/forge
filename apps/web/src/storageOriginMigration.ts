@@ -1,5 +1,5 @@
 // FILE: storageOriginMigration.ts
-// Purpose: Imports Forkara browser state before renderer stores hydrate after a desktop origin move.
+// Purpose: Imports Synara browser state before renderer stores hydrate after a desktop origin move.
 
 import type { SynaraStorageSnapshot } from "@synara/contracts";
 

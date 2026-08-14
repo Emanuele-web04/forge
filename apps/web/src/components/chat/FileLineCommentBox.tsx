@@ -1,6 +1,6 @@
 // FILE: FileLineCommentBox.tsx
 // Purpose: Inline "Local comment" editor anchored under a file line in the
-//          read-only preview. Mirrors Codex's per-line comment box: a Forkara
+//          read-only preview. Mirrors Codex's per-line comment box: a Synara
 //          badge header, the target line label, a borderless request field, and
 //          Cancel/Comment actions (Comment stays disabled until non-empty text).
 // Layer: Chat file-preview interaction UI
