@@ -27,7 +27,7 @@ It brings chats, terminals, browser previews, diffs, branches, provider sessions
 > [!WARNING]
 > You need to have [Codex CLI](https://github.com/openai/codex) installed and authorized for Codex sessions to work.
 
-Install the [desktop app from the Releases page](https://github.com/Emanuele-web04/Forkara/releases), or download it from [trysynara.com](https://www.trysynara.com/).
+Install the [desktop app from the Releases page](https://github.com/redxzeta/forkara/releases), or download it from [redxzeta/forkara](https://github.com/redxzeta/forkara).
 
 You can also run Forkara locally while the project is still early:
 
