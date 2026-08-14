@@ -13,7 +13,6 @@ interface ParsedOptions {
   upstream: string;
   remote: string;
   branch: string | undefined;
-  skipFixes: boolean;
 }
 
 function normalizeRemoteUrl(raw: string): string {
@@ -56,7 +55,6 @@ function parseArgs(argv: string[]): ParsedOptions {
     upstream: valueFor("upstream") ?? "main",
     remote: valueFor("remote") ?? "upstream",
     branch: valueFor("branch"),
-    skipFixes: argv.includes("--skip-fixes"),
   };
 }
 
@@ -232,19 +230,30 @@ function parseDivergence(base: string, upstreamRef: string): { left: number; rig
   return { left, right };
 }
 
+function syncStateRepresentsUpstream(
+  state: UpstreamSyncState | null,
+  upstreamHead: string,
+): boolean {
+  return state?.upstreamHead === upstreamHead;
+}
+
 function normalizeAttributionLine(line: string): string {
   const trimmed = line.trim();
   if (trimmed === APPROVED_ORIGIN_ATTRIBUTION) return line;
   if (
-    !trimmed.startsWith("Forkara began as a fork of") &&
-    !trimmed.startsWith("Forkara began as a clone of")
+    !trimmed.includes("t3code") &&
+    !trimmed.includes("T3Code") &&
+    !trimmed.toLowerCase().includes("pingdotgg/t3code") &&
+    !trimmed.toLowerCase().includes("github.com/pingdotgg/t3code") &&
+    !trimmed.startsWith("Forkara began as a clone of") &&
+    !trimmed.startsWith("Forkara began as a fork of")
   ) {
     return line;
   }
   return `${line.slice(0, line.indexOf(trimmed))}${APPROVED_ORIGIN_ATTRIBUTION}`;
 }
 
-function applyForkFixes(options: ParsedOptions): string[] {
+function applyForkFixes(): string[] {
   const changedFiles: string[] = [];
   const rewrite = (path: string, transform: (contents: string) => string): void => {
     const original = readFileSync(path, "utf8");
@@ -342,26 +351,20 @@ function main(): void {
 
   const upstreamHead = getRemoteCommit(upstreamRef);
   const baseState = tryReadSyncState(options.base, options.base, upstreamRef);
-  const baseHasSyncedState = baseState?.upstreamHead === upstreamHead;
+  const baseHasSyncedState = syncStateRepresentsUpstream(baseState, upstreamHead);
 
   const hasLocalSyncBranch = branchExists(syncBranch);
   const hasRemoteSyncBranch = remoteBranchExists("origin", syncBranch);
   const hasSyncBranch = hasLocalSyncBranch || hasRemoteSyncBranch;
 
-  const syncBranchHasSyncedState = hasSyncBranch
-    ? (hasLocalSyncBranch
-        ? tryReadSyncState(syncBranch, options.base, upstreamRef)
-        : tryReadSyncState(`origin/${syncBranch}`, options.base, upstreamRef)
-      )?.upstreamHead === upstreamHead
-    : false;
-
-  const hasUpstreamDelta =
-    !baseHasSyncedState && !syncBranchHasSyncedState
-      ? parseDivergence(options.base, upstreamRef).right > 0
-      : false;
-
-  if (baseHasSyncedState) {
+  const hasUpstreamDeltaOnBase = parseDivergence(options.base, upstreamRef).right > 0;
+  if (!hasUpstreamDeltaOnBase && baseHasSyncedState) {
     console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+    if (hasSyncBranch) {
+      console.log(`Using existing checkpoint branch ${syncBranch}.`);
+    } else {
+      console.log(`Base branch ${options.base} already tracks ${upstreamRef}.`);
+    }
     return;
   }
 
@@ -374,25 +377,23 @@ function main(): void {
     } else {
       runGit("switch", ["-c", syncBranch, `origin/${syncBranch}`]);
     }
-
-    if (hasUpstreamDelta) {
-      const { left, right } = parseDivergence(options.base, upstreamRef);
-      console.log(`Upstream commit delta: ${left}/${right} from ${options.base}..${upstreamRef}.`);
-    } else {
-      console.log(`Using already-synced state for ${upstreamRef}.`);
-    }
     console.log(`Reusing existing sync branch ${syncBranch}.`);
   } else {
     runGit("switch", ["-c", syncBranch, options.base]);
     console.log(`Created sync branch ${syncBranch} from ${options.base}.`);
   }
 
-  if (!hasUpstreamDelta) {
-    const syncStateMatchesUpstream =
-      tryReadSyncState(currentBranchName(), options.base, upstreamRef)?.upstreamHead ===
-      upstreamHead;
+  const syncState = tryReadSyncState(currentBranchName(), options.base, upstreamRef);
+  const syncBranchHasSyncedState = syncStateRepresentsUpstream(syncState, upstreamHead);
+  const hasUpstreamDelta = !syncBranchHasSyncedState
+    ? parseDivergence(options.base, upstreamRef).right > 0
+    : false;
 
-    if (!syncStateMatchesUpstream) {
+  if (!hasUpstreamDelta) {
+    const syncStateMatchesUpstream = syncStateRepresentsUpstream(syncState, upstreamHead);
+    const baseStateMatchesUpstream = syncStateRepresentsUpstream(baseState, upstreamHead);
+
+    if (!syncStateMatchesUpstream || !baseHasSyncedState) {
       writeSyncState(options.base, upstreamRef, upstreamHead);
       runGit("add", [UPSTREAM_SYNC_STATE_PATH]);
     }
@@ -402,8 +403,24 @@ function main(): void {
       return;
     }
 
-    runGit("commit", ["-m", "chore: persist upstream sync checkpoint"]);
-    console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+    const stagedFiles = runGit("diff", ["--cached", "--name-only"], {
+      capture: true,
+      allowFailure: true,
+    });
+
+    if (stagedFiles.stdout.trim().length > 0) {
+      runGit("commit", ["-m", "chore: persist upstream sync checkpoint"]);
+      console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+      console.log(`Sync branch ready: ${syncBranch}`);
+    } else {
+      console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+      if (baseStateMatchesUpstream) {
+        console.log(`Base branch ${options.base} already tracks ${upstreamRef}.`);
+      }
+      if (!hasSyncBranch) {
+        console.log(`No checkpoint was needed for ${syncBranch}.`);
+      }
+    }
     return;
   }
 
@@ -415,7 +432,7 @@ function main(): void {
     console.log(`No upstream deltas detected for ${upstreamRef} on ${syncBranch}.`);
   }
 
-  const changedFiles = applyForkFixes(options);
+  const changedFiles = applyForkFixes();
   writeSyncState(options.base, upstreamRef, upstreamHead);
   commitForkFixes([...changedFiles, UPSTREAM_SYNC_STATE_PATH]);
 

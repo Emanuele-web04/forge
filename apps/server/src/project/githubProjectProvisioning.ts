@@ -10,7 +10,7 @@ import {
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
 } from "@synara/shared/githubRepository";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
-import { Effect, FileSystem, Path, PlatformError, Schema, Semaphore } from "effect";
+import { Effect, FileSystem, Path, Schema, Semaphore } from "effect";
 
 import { GitCommandError, GitHubCliError } from "../git/Errors";
 import type { GitCoreShape } from "../git/Services/GitCore";
@@ -114,6 +114,42 @@ function isValidGitHubOwner(input: string): boolean {
   return GITHUB_OWNER_NAME_PATTERN.test(input.trim());
 }
 
+function hasTag(
+  value: unknown,
+  tag: string,
+): value is { readonly _tag: string; readonly [key: string]: unknown } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "_tag" in value &&
+    (value as { readonly _tag?: unknown })._tag === tag
+  );
+}
+
+function isGitHubProjectProvisioningError(
+  cause: unknown,
+): cause is GitHubProjectProvisioningError {
+  return hasTag(cause, "GitHubProjectProvisioningError");
+}
+
+function isGitHubCliError(cause: unknown): cause is GitHubCliError {
+  return hasTag(cause, "GitHubCliError");
+}
+
+function isGitCommandError(cause: unknown): cause is GitCommandError {
+  return hasTag(cause, "GitCommandError");
+}
+
+function extractErrorDetail(cause: unknown): string {
+  if (isGitHubCliError(cause) || isGitCommandError(cause)) {
+    return cause.detail;
+  }
+  if (cause instanceof Error) {
+    return cause.message;
+  }
+  return String(cause);
+}
+
 function isForkAlreadyExistsError(detail: string): boolean {
   return FORK_ALREADY_EXISTS_PATTERN.test(detail);
 }
@@ -123,7 +159,17 @@ function isAuthRequired(detail: string): boolean {
 }
 
 function isGitHubCliUnavailable(cause: unknown): boolean {
-  return cause instanceof GitHubCliError && cause.reason === "not-installed";
+  return isGitHubCliError(cause) && cause.reason === "not-installed";
+}
+
+function getPlatformErrorReasonTag(cause: unknown): string | null {
+  if (!hasTag(cause, "SystemError")) {
+    return null;
+  }
+  if (typeof cause.reason !== "object" || cause.reason === null || !("_tag" in cause.reason)) {
+    return null;
+  }
+  return (cause.reason as { _tag: string })._tag ?? null;
 }
 
 function decodeForkInfoJson(
@@ -156,14 +202,9 @@ function classifyGitHubFailure(
   operationLabel: string,
   repository: string,
 ): GitHubProjectProvisioningError {
-  if (cause instanceof GitHubProjectProvisioningError) return cause;
+  if (isGitHubProjectProvisioningError(cause)) return cause;
 
-  const detail =
-    cause instanceof GitHubCliError || cause instanceof GitCommandError
-      ? cause.detail
-      : cause instanceof Error
-        ? cause.message
-        : String(cause);
+  const detail = extractErrorDetail(cause);
   const lower = detail.toLowerCase();
 
   if (isAuthRequired(lower)) {
@@ -258,6 +299,7 @@ function resolveForkSourceInfo(
 function ensureFork(
   sourceRepository: string,
   forkSource: GitHubForkSourceInfo,
+  forkDestinationOwnerInput: string | undefined,
   viewerLogin: string,
   parent: string,
   reporter: GitHubProjectProvisioningProgressReporter,
@@ -271,7 +313,7 @@ function ensureFork(
     });
   }
 
-  const forkDestinationOwner = viewerLogin.trim();
+  const forkDestinationOwner = (forkDestinationOwnerInput ?? viewerLogin).trim();
   if (!isValidGitHubOwner(forkDestinationOwner)) {
     return Effect.fail(
       provisioningError(
@@ -283,18 +325,20 @@ function ensureFork(
   }
 
   const forkRepository = `${forkDestinationOwner}/${repositoryNameFromOwnerAndName(sourceRepository)}`;
-  const commandArgs = ["repo", "fork", sourceRepository, "--clone=false"];
+  const commandArgs = [
+    "repo",
+    "fork",
+    sourceRepository,
+    "--clone=false",
+    "--org",
+    forkDestinationOwner,
+  ];
 
   return Effect.gen(function* () {
     const forked = yield* github.execute({ cwd: parent, args: commandArgs }).pipe(
       Effect.as(true),
       Effect.catch((cause) => {
-        const detail =
-          cause instanceof GitHubCliError || cause instanceof GitCommandError
-            ? cause.detail
-            : cause instanceof Error
-              ? cause.message
-              : String(cause);
+        const detail = extractErrorDetail(cause);
         if (isForkAlreadyExistsError(detail)) {
           return Effect.succeed(false);
         }
@@ -378,17 +422,16 @@ function setUpstreamRemote(
         maxOutputBytes: 64 * 1_024,
       })
       .pipe(
-        Effect.catch(() =>
-          git
-            .execute({
-              operation: "set upstream remote",
-              cwd: workspaceRoot,
-              args: ["remote", "set-url", "upstream", upstreamUrl],
-              timeoutMs: 15_000,
-              maxOutputBytes: 64 * 1_024,
-            })
-            .pipe(Effect.mapError((cause) => classifyCloneFailure(cause))),
+        Effect.catchAll(() =>
+          git.execute({
+            operation: "set upstream remote",
+            cwd: workspaceRoot,
+            args: ["remote", "set-url", "upstream", upstreamUrl],
+            timeoutMs: 15_000,
+            maxOutputBytes: 64 * 1_024,
+          }),
         ),
+        Effect.mapError((cause) => classifyCloneFailure(cause)),
       );
 
     yield* publishPhase(
@@ -439,21 +482,18 @@ function createCloneProgressChunkHandler(
 }
 
 function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
-  if (cause instanceof GitHubProjectProvisioningError) return cause;
+  if (isGitHubProjectProvisioningError(cause)) return cause;
 
-  const detail =
-    cause instanceof GitHubCliError || cause instanceof GitCommandError
-      ? cause.detail
-      : cause instanceof Error
-        ? cause.message
-        : String(cause);
+  const detail = extractErrorDetail(cause);
   const lower = detail.toLowerCase();
+  const isGitHubCliFailure = isGitHubCliError(cause);
+  const isGitCommandFailure = isGitCommandError(cause);
 
   const exceededConfiguredCloneTimeout =
-    (cause instanceof GitCommandError &&
+    (isGitCommandFailure &&
       cause.operation === "clone public GitHub project" &&
       lower.endsWith(" timed out.")) ||
-    (cause instanceof GitHubCliError &&
+    (isGitHubCliFailure &&
       lower.includes("gh repo clone") &&
       lower.includes(" timed out."));
   if (exceededConfiguredCloneTimeout) {
@@ -537,11 +577,7 @@ function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
 }
 
 function classifyPromotionFailure(cause: unknown): GitHubProjectProvisioningError {
-  const reason =
-    cause instanceof PlatformError.PlatformError &&
-    cause.reason instanceof PlatformError.SystemError
-      ? cause.reason._tag
-      : null;
+  const reason = getPlatformErrorReasonTag(cause);
   if (reason === "AlreadyExists") {
     return provisioningError(
       "DESTINATION_CONFLICT",
@@ -786,12 +822,7 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
         Effect.gen(function* () {
           const viewerLogin = yield* github.getViewerLogin({ cwd: parent }).pipe(
             Effect.catch((cause) => {
-              const detail =
-                cause instanceof GitHubCliError
-                  ? cause.detail
-                  : cause instanceof Error
-                    ? cause.message
-                    : String(cause);
+              const detail = isGitHubCliError(cause) ? cause.detail : extractErrorDetail(cause);
               if (isAuthRequired(detail.toLowerCase()) || isGitHubCliUnavailable(cause)) {
                 return Effect.succeed("");
               }
@@ -811,6 +842,7 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
                   isFork: false,
                   parentNameWithOwner: null,
                 },
+                input.forkDestinationOwner,
                 viewerLogin,
                 parent,
                 reporter,

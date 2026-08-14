@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
 import { logoutCurrentBrowserSession } from "~/authLogout";
+import { FORK_ASCII_ART } from "~/forkEasterEgg";
 import { APP_VERSION } from "~/branding";
 import { resolveAndPersistPreferredEditor } from "~/editorPreferences";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
@@ -40,6 +41,7 @@ export function AdvancedSettingsPanel(props: {
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showRecoveryTools, setShowRecoveryTools] = useState(false);
+  const [versionClicks, setVersionClicks] = useState(0);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
 
   useSettingsRestoreSignal(props.resetEpoch, () => {
@@ -140,7 +142,7 @@ export function AdvancedSettingsPanel(props: {
         <SettingsSection title="Session">
           <SettingsRow
             title="This browser"
-            description="Revoke this browser session and close every live Synara connection it owns. A fresh pairing link is required to reconnect."
+            description="Revoke this browser session and close every live Forkara connection it owns. A fresh pairing link is required to reconnect."
             status={`Authenticated as ${authSessionQuery.data.role ?? "client"}.`}
             control={
               <Button
@@ -237,8 +239,25 @@ export function AdvancedSettingsPanel(props: {
       <SettingsSection title="About">
         <SettingsRow
           title="Version"
-          description="Current application version."
-          control={<code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>}
+          description="Current application version. Click 5 times for a culinary surprise."
+          control={
+            <div className="space-y-2 text-left">
+              <code
+                className="cursor-pointer select-none rounded bg-muted/40 px-1.5 py-0.5 text-xs font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground active:scale-95 transition-all"
+                onClick={() => setVersionClicks((count) => count + 1)}
+              >
+                {APP_VERSION}
+              </code>
+              {versionClicks >= 5 ? (
+                <div className="space-y-1 text-left">
+                  <p className="text-xs font-semibold text-muted-foreground">Premium Dinner Fork</p>
+                  <pre className="overflow-x-auto rounded border border-muted bg-muted/30 px-2 py-1.5 font-mono text-[11px] text-muted-foreground">
+                    {FORK_ASCII_ART}
+                  </pre>
+                </div>
+              ) : null}
+            </div>
+          }
         />
         <SettingsRow
           title="Release history"
