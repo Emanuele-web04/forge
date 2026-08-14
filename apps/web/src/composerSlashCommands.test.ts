@@ -297,7 +297,7 @@ describe("composerSlashCommands", () => {
     expect(shouldHideProviderNativeCommandFromComposerMenu("antigravity", "automation")).toBe(true);
   });
 
-  it("keeps Feedback Synara ahead of provider-native /feedback", () => {
+  it("keeps Feedback Forkara ahead of provider-native /feedback", () => {
     const availableCommands = getAvailableComposerSlashCommands({
       provider: "claudeAgent",
       supportsFastSlashCommand: true,
@@ -313,7 +313,7 @@ describe("composerSlashCommands", () => {
     expect(shouldHideProviderNativeCommandFromComposerMenu("claudeAgent", "feedback")).toBe(true);
   });
 
-  it("only exposes Synara-owned app commands for claude", () => {
+  it("only exposes Forkara-owned app commands for claude", () => {
     const commands = getAvailableComposerSlashCommands({
       provider: "claudeAgent",
       supportsFastSlashCommand: true,
@@ -331,6 +331,7 @@ describe("composerSlashCommands", () => {
       "debug",
       "default",
       "feedback",
+      "blame-someone-else",
       "automation",
     ]);
   });
@@ -446,6 +447,7 @@ describe("composerSlashCommands", () => {
       "export",
       "goal",
       "feedback",
+      "blame-someone-else",
       "automation",
     ]);
   });
