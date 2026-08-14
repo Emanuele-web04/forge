@@ -46,7 +46,8 @@ const LEGACY_ORIGIN_OWNER = characters(112, 105, 110, 103, 100, 111, 116, 103, 1
 const LEGACY_ORIGIN_REPO = `${characters(116, 51, 99, 111, 100, 101)}`;
 const LEGACY_ORIGIN_HOST = `${characters(103, 105, 116, 104, 117, 98, 46, 99, 111, 109)}`;
 const LEGACY_ORIGIN_PATH = `${LEGACY_ORIGIN_OWNER}/${LEGACY_ORIGIN_REPO}`;
-const LEGACY_ORIGIN_REFERENCE = `${characters(71, 105, 116, 72, 117, 98)}/${LEGACY_ORIGIN_OWNER}/${LEGACY_ORIGIN_REPO}`.toLowerCase();
+const LEGACY_ORIGIN_REFERENCE =
+  `${characters(71, 105, 116, 72, 117, 98)}/${LEGACY_ORIGIN_OWNER}/${LEGACY_ORIGIN_REPO}`.toLowerCase();
 
 function parseArgs(argv: string[]): ParsedOptions {
   const valueFor = (name: string): string | undefined => {
@@ -394,16 +395,16 @@ function main(): void {
     : false;
 
   if (!hasUpstreamDelta) {
-    const syncStateMatchesUpstream = syncStateRepresentsUpstream(syncState, upstreamHead);
-    const baseStateMatchesUpstream = syncStateRepresentsUpstream(baseState, upstreamHead);
-
-    if (!syncStateMatchesUpstream || !baseHasSyncedState) {
+    if (!syncBranchHasSyncedState) {
       writeSyncState(options.base, upstreamRef, upstreamHead);
       runGit("add", [UPSTREAM_SYNC_STATE_PATH]);
     }
 
     if (runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status === 0) {
       console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+      if (baseHasSyncedState) {
+        console.log(`Base branch ${options.base} already tracks ${upstreamRef}.`);
+      }
       return;
     }
 
@@ -418,9 +419,6 @@ function main(): void {
       console.log(`Sync branch ready: ${syncBranch}`);
     } else {
       console.log(`No new upstream commits to merge from ${upstreamRef}.`);
-      if (baseStateMatchesUpstream) {
-        console.log(`Base branch ${options.base} already tracks ${upstreamRef}.`);
-      }
       if (!hasSyncBranch) {
         console.log(`No checkpoint was needed for ${syncBranch}.`);
       }

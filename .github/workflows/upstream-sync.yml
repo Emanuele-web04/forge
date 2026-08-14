@@ -92,20 +92,35 @@ jobs:
 
           BODY="Automated upstream synchronization from \`${{ github.repository_owner }}/${{ github.repository }}\` via workflow run #${{ github.run_id }}."
           PR_TITLE="chore: sync upstream/${UPSTREAM_BRANCH} ($(date -u +%Y-%m-%d))"
-          PR_URL=$(gh pr list --repo "${{ github.repository }}" --base "${BASE_BRANCH}" --head "$BRANCH" --json number,url --state open --jq '.[0].url' || true)
+          OPEN_PR_URL=$(gh pr list --repo "${{ github.repository }}" --base "${BASE_BRANCH}" --head "$BRANCH" --json number,url --state open --jq '.[0].url' || true)
 
-          if [ -n "$PR_URL" ]; then
-            gh pr edit "$PR_URL" \
+          if [ -n "$OPEN_PR_URL" ]; then
+            gh pr edit "$OPEN_PR_URL" \
               --repo "${{ github.repository }}" \
               --title "$PR_TITLE" \
               --body "$BODY"
-            echo "Reused existing PR for $BRANCH: $PR_URL"
+            echo "Reused existing PR for $BRANCH: $OPEN_PR_URL"
             exit 0
           fi
 
-          gh pr create \
+          if gh pr create \
             --repo "${{ github.repository }}" \
             --title "$PR_TITLE" \
             --body "$BODY" \
             --base "${BASE_BRANCH}" \
-            --head "$BRANCH"
+            --head "$BRANCH"; then
+            echo "Created PR for $BRANCH"
+          else
+            ANY_PR_URL=$(gh pr list --repo "${{ github.repository }}" --base "${BASE_BRANCH}" --head "$BRANCH" --json number,url --state all --jq '.[0].url' || true)
+            if [ -n "$ANY_PR_URL" ]; then
+              gh pr edit "$ANY_PR_URL" \
+                --repo "${{ github.repository }}" \
+                --title "$PR_TITLE" \
+                --body "$BODY"
+              echo "Found existing PR for $BRANCH after create attempt: $ANY_PR_URL"
+              exit 0
+            fi
+
+            echo "Unable to create or reuse pull request for $BRANCH"
+            exit 1
+          fi
