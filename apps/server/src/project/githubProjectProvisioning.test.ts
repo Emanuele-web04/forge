@@ -183,7 +183,7 @@ describe("GitHub project provisioning", () => {
             {
               ...makeInput(parent),
               forkDestinationOwner: "example-org",
-            },
+            } as unknown as GitHubProjectProvisionInput,
             {
               publish: () => Effect.void,
             },
