@@ -42,6 +42,11 @@ const UPSTREAM_SYNC_STATE_PATH = ".github/upstream-sync-state.json";
 const CHAT_TEST_PATH = "apps/web/src/components/ChatView.browser.tsx";
 const README_PATH = "README.md";
 const APPROVED_ORIGIN_ATTRIBUTION = `Forkara began as a clone of [${characters(84, 51, 67, 111, 100, 101)}](https://github.com/pingdotgg/${characters(116, 51, 99, 111, 100, 101)}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
+const LEGACY_ORIGIN_OWNER = characters(112, 105, 110, 103, 100, 111, 116, 103, 103);
+const LEGACY_ORIGIN_REPO = `${characters(116, 51, 99, 111, 100, 101)}`;
+const LEGACY_ORIGIN_HOST = `${characters(103, 105, 116, 104, 117, 98, 46, 99, 111, 109)}`;
+const LEGACY_ORIGIN_PATH = `${LEGACY_ORIGIN_OWNER}/${LEGACY_ORIGIN_REPO}`;
+const LEGACY_ORIGIN_REFERENCE = `${characters(71, 105, 116, 72, 117, 98)}/${LEGACY_ORIGIN_OWNER}/${LEGACY_ORIGIN_REPO}`.toLowerCase();
 
 function parseArgs(argv: string[]): ParsedOptions {
   const valueFor = (name: string): string | undefined => {
@@ -241,12 +246,11 @@ function normalizeAttributionLine(line: string): string {
   const trimmed = line.trim();
   if (trimmed === APPROVED_ORIGIN_ATTRIBUTION) return line;
   if (
-    !trimmed.includes("t3code") &&
-    !trimmed.includes("T3Code") &&
-    !trimmed.toLowerCase().includes("pingdotgg/t3code") &&
-    !trimmed.toLowerCase().includes("github.com/pingdotgg/t3code") &&
+    !trimmed.toLowerCase().includes(LEGACY_ORIGIN_REPO) &&
+    !trimmed.toLowerCase().includes(LEGACY_ORIGIN_PATH) &&
     !trimmed.startsWith("Forkara began as a clone of") &&
-    !trimmed.startsWith("Forkara began as a fork of")
+    !trimmed.startsWith("Forkara began as a fork of") &&
+    !trimmed.toLowerCase().includes(LEGACY_ORIGIN_REFERENCE)
   ) {
     return line;
   }
