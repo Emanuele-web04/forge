@@ -22,7 +22,7 @@ import {
 } from "~/components/sidebarContextMenuStyles";
 import { SidebarMenuButton } from "~/components/ui/sidebar";
 import { ProfileAvatar } from "@synara/profile-ui/avatar";
-import { ChevronUpIcon, ExternalLinkIcon, GlobeIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronUpIcon, ExternalLinkIcon, GlobeIcon, ServerIcon, SettingsIcon } from "~/lib/icons";
 import { openExternalLink } from "~/lib/linkChips";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { useAccount } from "~/hooks/useAccount";
@@ -148,6 +148,16 @@ function SignedInFooter() {
               <span>Finish setting up</span>
             </MenuItem>
           )}
+          {/* Hosts are an account concept (ADR 0002 — they follow the owner),
+              so the account menu is where they belong; the signed-out menu
+              deliberately has no equivalent. */}
+          <MenuItem
+            className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+            onClick={() => void navigate({ to: "/settings", search: { section: "connections" } })}
+          >
+            <SidebarContextMenuIcon icon={ServerIcon} />
+            <span>Hosts &amp; devices</span>
+          </MenuItem>
           <MenuItem
             className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
             onClick={() => void navigate({ to: "/settings" })}
@@ -159,6 +169,8 @@ function SignedInFooter() {
         </MenuGroup>
         <MenuSeparator />
         <MenuGroup>
+          {/* Sign-out also unlinks this machine's host (ADR 0015): its key
+              leaves the directory and other devices' sessions to it end. */}
           <MenuItem variant="destructive" onClick={() => void handleSignOut()}>
             <span>Sign out</span>
           </MenuItem>

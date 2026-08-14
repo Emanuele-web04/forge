@@ -18,6 +18,7 @@ export const SETTINGS_SECTION_IDS = [
   "skills",
   "usage",
   "integrations",
+  "connections",
   "advanced",
 ] as const;
 
@@ -127,6 +128,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Give Codex, Claude, and other local agents scoped access to Synara tasks.",
     icon: "plugin-1",
     eyebrow: "External agents",
+  },
+  {
+    id: "connections",
+    group: "integrations",
+    label: "Hosts & devices",
+    description: "Machines you can reach from this account, and the devices signed in to it.",
+    icon: "server",
+    eyebrow: "Remote access",
   },
   {
     id: "providers",

@@ -400,6 +400,37 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords:
       "Pair Codex Claude and other local MCP clients with scoped project access. revoke credential task create wait read worktree approval",
   },
+  // ── Hosts & devices ───────────────────────────────────────────────────────
+  {
+    id: "connections:hosts",
+    section: "connections",
+    title: "Hosts",
+    keywords:
+      "Machines you can reach from this account. remote host server laptop reachable discoverable share workspace",
+    target: null,
+  },
+  {
+    id: "connections:this-machine",
+    section: "connections",
+    title: "This machine",
+    keywords: "Unlink this machine from your account. host unlink sign out remove key local",
+    target: null,
+  },
+  {
+    id: "connections:device-code",
+    section: "connections",
+    title: "Device code",
+    keywords: "Link a headless machine with a short code. link approve vps ssh cli browserless",
+    target: null,
+  },
+  {
+    id: "connections:devices",
+    section: "connections",
+    title: "Devices",
+    keywords:
+      "Devices signed in to your account, and revoking one. revoke sign out lost stolen last used",
+    target: null,
+  },
   {
     id: "advanced:version",
     section: "advanced",

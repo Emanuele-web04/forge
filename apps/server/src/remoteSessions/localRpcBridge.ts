@@ -12,6 +12,14 @@ export interface LocalRpcBridgeOptions {
   readonly sessions: SessionCredentialServiceShape;
 }
 
+/** Reconstructs the original WebSocket frame kind without changing its bytes. */
+export function normalizeRelayFrame(data: RawData, binary: boolean): string | Buffer {
+  if (!binary) return data.toString();
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+}
+
 /**
  * A close code safe to hand to `ws.close()`. The reserved codes a peer never
  * sends on the wire but the library REPORTS locally — 1005 (no status), 1006
@@ -50,24 +58,28 @@ export async function bridgeRemoteSocketToLocalRpc(
     `ws://127.0.0.1:${options.listeningPort}${WS_FEATURE_PATH}?${search.toString()}`,
     { perMessageDeflate: true },
   );
-  const pending: RawData[] = [];
   let opened = false;
-  const forwardExternal = (data: RawData) => {
-    if (!opened) pending.push(data);
-    else if (internal.readyState === WebSocket.OPEN) internal.send(data);
+  const pending: Array<{ data: RawData; binary: boolean }> = [];
+  const forwardExternal = (data: RawData, binary: boolean) => {
+    if (!opened) pending.push({ data, binary });
+    else if (internal.readyState === WebSocket.OPEN) {
+      internal.send(normalizeRelayFrame(data, binary), { binary });
+    }
   };
   external.on("message", forwardExternal);
 
   await new Promise<void>((resolve, reject) => {
     internal.once("open", () => {
       opened = true;
-      for (const data of pending.splice(0)) internal.send(data);
+      for (const frame of pending.splice(0)) {
+        internal.send(normalizeRelayFrame(frame.data, frame.binary), { binary: frame.binary });
+      }
       resolve();
     });
     internal.once("error", reject);
   });
-  internal.on("message", (data) => {
-    if (external.readyState === WebSocket.OPEN) external.send(data as Uint8Array);
+  internal.on("message", (data, binary) => {
+    if (external.readyState === WebSocket.OPEN) external.send(normalizeRelayFrame(data, binary));
   });
   internal.on("close", (code, reason) =>
     external.close(forwardableCloseCode(code), reason.toString()),

@@ -16,6 +16,7 @@ vi.mock("./tailscaleEndpoint", () => ({
 }));
 
 import {
+  accountApiIssuer,
   accountCredentialsPath,
   readAccountCredentials,
   readAccountFile,
@@ -34,6 +35,14 @@ import {
   WorkspaceAccessChangedError,
   writeAccountCredentials,
 } from "./accountAuth.ts";
+
+describe("accountApiIssuer", () => {
+  it("derives the Slice A JWT issuer from the account client origin", () => {
+    expect(accountApiIssuer("https://accounts.example.test///")).toBe(
+      "https://accounts.example.test/api/v1",
+    );
+  });
+});
 
 const temporaryDirectories: string[] = [];
 

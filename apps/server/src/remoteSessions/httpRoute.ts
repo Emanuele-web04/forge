@@ -61,10 +61,18 @@ export const hostRemoteWebSocketRouteLayer = HttpRouter.add(
     const socket = yield* request.upgrade;
     const writer = yield* socket.writer;
     const adapter = new EffectSocketAdapter(writer);
-    yield* Effect.tryPromise(() => acceptor(adapter));
-    yield* socket
-      .runRaw((message) => adapter.receive(message))
-      .pipe(Effect.ensuring(Effect.sync(() => adapter.closed())));
+    // Calling the acceptor attaches the gateway's message listener
+    // synchronously, but its Promise may settle on a later microtask. Start
+    // the underlying read pump without awaiting that settlement: a peer may
+    // send its first handshake frame as soon as the upgrade opens.
+    const accepting = yield* Effect.try({
+      try: () => acceptor(adapter),
+      catch: (cause) => cause,
+    });
+    yield* Effect.raceFirst(
+      socket.runRaw((message) => adapter.receive(message)),
+      Effect.tryPromise(() => accepting).pipe(Effect.andThen(Effect.never)),
+    ).pipe(Effect.ensuring(Effect.sync(() => adapter.closed())));
     return HttpServerResponse.empty();
   }).pipe(Effect.catch(() => Effect.succeed(HttpServerResponse.empty()))),
 );

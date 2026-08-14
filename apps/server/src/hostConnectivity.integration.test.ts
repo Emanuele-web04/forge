@@ -268,6 +268,28 @@ describe("host connectivity integration", () => {
     data.receive("rpc-traffic");
     await vi.waitFor(() => expect(traffic).toEqual(["rpc-traffic"]));
 
+    // ADR 0013: a credential minted on the relay must open a NEW direct
+    // transport without replaying the already-spent grant or minting again.
+    const direct = new FakeRelaySocket();
+    await gateway.accept(direct, undefined, "direct");
+    const directDpop = await new SignJWT({
+      htu: "synara://remote/session",
+      htm: "CONNECT",
+      ath: createHash("sha256").update(credentialFrame.credential).digest("base64url"),
+    })
+      .setProtectedHeader({ alg: "EdDSA", typ: DPOP_JWT_TYP, jwk: devicePublic })
+      .setIssuedAt()
+      .setJti(randomUUID())
+      .sign(device.privateKey);
+    direct.receive({
+      v: 1,
+      type: "session_authorize",
+      credential: credentialFrame.credential,
+      dpop: directDpop,
+    });
+    await vi.waitFor(() => expect(registry.size).toBe(2));
+    expect(direct.closes).toEqual([]);
+
     control.receive({
       v: 1,
       type: "revocation",

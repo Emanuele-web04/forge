@@ -52,6 +52,11 @@ export { ACCOUNT_URL_ENV_NAME };
 
 const CREDENTIALS_FILE_NAME = "account-credentials.json";
 
+/** Exact Slice A issuer/audience derived from the root URL used by AccountClient. */
+export function accountApiIssuer(accountUrl: string): string {
+  return `${accountUrl.replace(/\/+$/, "")}/api/v1`;
+}
+
 /** What the user sees when a rotated refresh token can no longer be redeemed. */
 export const SESSION_EXPIRED_MESSAGE = "Session expired — sign in again from the Synara app.";
 
@@ -666,7 +671,7 @@ async function linkThisHost(
     const identity = await generateAndPersistHostIdentity(hostIdentityPath);
     const proof = await mintHostLinkProof({
       identity,
-      apiIssuer: options.accountUrl.replace(/\/+$/, ""),
+      apiIssuer: accountApiIssuer(options.accountUrl),
       environmentId,
       challengeId: challenge.challengeId,
       nonce: challenge.nonce,
@@ -710,7 +715,7 @@ async function linkThisHost(
       if (identity) {
         const hostProof = await mintHostProof({
           identity,
-          apiIssuer: options.accountUrl.replace(/\/+$/, ""),
+          apiIssuer: accountApiIssuer(options.accountUrl),
           environmentId,
           hostId: linked.host.id,
           keyGeneration: linked.host.keyGeneration,
@@ -830,7 +835,7 @@ export async function runDeviceCodeHostLink(options: AccountFlowOptions): Promis
   const identity = await generateAndPersistHostIdentity(hostIdentityPath);
   const proof = await mintHostLinkProof({
     identity,
-    apiIssuer: options.accountUrl.replace(/\/+$/, ""),
+    apiIssuer: accountApiIssuer(options.accountUrl),
     environmentId,
     challengeId: challenge.challengeId,
     nonce: challenge.nonce,
@@ -965,7 +970,7 @@ export async function refreshHostRegistration(
     if (!identity) return;
     const hostProof = await mintHostProof({
       identity,
-      apiIssuer: credentials.accountUrl.replace(/\/+$/, ""),
+      apiIssuer: accountApiIssuer(credentials.accountUrl),
       environmentId,
       hostId: credentials.hostId,
       keyGeneration: credentials.hostKeyGeneration,
@@ -1034,7 +1039,7 @@ export async function runAuthLogout(options: LogoutOptions): Promise<void> {
         if (identity) {
           const hostProof = await mintHostProof({
             identity,
-            apiIssuer: credentials.accountUrl.replace(/\/+$/, ""),
+            apiIssuer: accountApiIssuer(credentials.accountUrl),
             environmentId,
             hostId: credentials.hostId,
             keyGeneration: credentials.hostKeyGeneration,

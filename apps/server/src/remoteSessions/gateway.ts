@@ -62,14 +62,12 @@ export class RemoteConnectionGateway {
         if (state === "bridged") return;
         try {
           const frame = parseFrame(raw);
-          if (state === "mint") {
-            if (
-              frame.v !== 1 ||
-              frame.type !== "mint_request" ||
-              typeof frame.request !== "string"
-            ) {
-              throw new Error("expected mint_request frame");
-            }
+          if (
+            state === "mint" &&
+            frame.v === 1 &&
+            frame.type === "mint_request" &&
+            typeof frame.request === "string"
+          ) {
             const minted = await this.options.mintService.mint(frame.request);
             if (
               expected &&
@@ -94,7 +92,11 @@ export class RemoteConnectionGateway {
             typeof frame.credential !== "string" ||
             typeof frame.dpop !== "string"
           ) {
-            throw new Error("expected session_authorize frame");
+            throw new Error(
+              state === "mint"
+                ? "expected mint_request or session_authorize frame"
+                : "expected session_authorize frame",
+            );
           }
           const peer = await verifySessionCredential({
             credential: frame.credential,

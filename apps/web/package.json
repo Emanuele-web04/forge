@@ -30,6 +30,7 @@
     "@pierre/diffs": "^1.2.12",
     "@synara/contracts": "workspace:*",
     "@synara/profile-ui": "workspace:*",
+    "@synara/relay-protocol": "workspace:*",
     "@synara/shared": "workspace:*",
     "@tabler/icons-react": "^3.44.0",
     "@tanstack/react-pacer": "^0.19.4",

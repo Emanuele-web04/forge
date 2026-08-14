@@ -27,6 +27,52 @@ class FakeSocket extends EventEmitter implements RelaySocket {
 }
 
 describe("RelayDialSupervisor", () => {
+  it("admits a splice before the first frame can follow its open event", async () => {
+    const sockets: FakeSocket[] = [];
+    const received: string[] = [];
+    const controller = new AbortController();
+    const supervisor = new RelayDialSupervisor({
+      relayUrl: "https://relay.example.test/base",
+      hostId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+      requestTicket: async () => "ticket",
+      reverifySessions: async () => {},
+      acceptSplice: async (socket) => {
+        socket.on("message", (message) => received.push(message.toString()));
+      },
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        if (sockets.length === 1) queueMicrotask(() => socket.open());
+        else {
+          queueMicrotask(() => {
+            socket.open();
+            socket.emit("message", Buffer.from("first-frame"), false);
+          });
+        }
+        return socket;
+      },
+      sleep: async () => controller.abort(),
+    });
+    const running = supervisor.run(controller.signal);
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+    sockets[0]?.message({
+      v: 1,
+      type: "splice_request",
+      spliceId: "a".repeat(43),
+      hostId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+      userId: "member",
+      deviceJkt: "device-jkt",
+      expiresAtMs: Date.now() + 30_000,
+    });
+
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    await vi.waitFor(() => expect(received).toEqual(["first-frame"]));
+    controller.abort();
+    sockets[0]?.close();
+    await running;
+  });
+
   it("reconnects with capped jitter, reverifies, and handles control traffic", async () => {
     const sockets: FakeSocket[] = [];
     const urls: string[] = [];

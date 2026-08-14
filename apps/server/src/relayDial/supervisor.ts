@@ -7,7 +7,7 @@ export interface RelaySocket {
   send(data: string | Uint8Array): void;
   close(code?: number, reason?: string): void;
   on(event: "open", listener: () => void): this;
-  on(event: "message", listener: (data: RawData) => void): this;
+  on(event: "message", listener: (data: RawData, binary: boolean) => void): this;
   on(event: "close", listener: (code: number, reason: Buffer) => void): this;
   on(event: "error", listener: (error: Error) => void): this;
   removeAllListeners(event?: "open" | "message" | "close" | "error"): this;
@@ -56,18 +56,40 @@ function defaultSleep(milliseconds: number, signal: AbortSignal): Promise<void> 
   });
 }
 
-function openSocket(socket: RelaySocket, signal: AbortSignal): Promise<void> {
+function openSocket(
+  socket: RelaySocket,
+  signal: AbortSignal,
+  onOpen?: () => void | Promise<void>,
+): Promise<void> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     const abort = () => {
+      if (settled) return;
+      settled = true;
       socket.close();
       reject(signal.reason ?? new Error("aborted"));
     };
     signal.addEventListener("abort", abort, { once: true });
     socket.on("open", () => {
+      if (settled) return;
       signal.removeEventListener("abort", abort);
-      resolve();
+      try {
+        const opened = onOpen?.();
+        Promise.resolve(opened).then(() => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        }, fail);
+      } catch (error) {
+        fail(error);
+      }
     });
-    socket.on("error", reject);
+    socket.on("error", fail);
   });
 }
 
@@ -154,7 +176,16 @@ export class RelayDialSupervisor {
     const dials = this.#spliceDials;
     const data = this.#socketFactory(this.dataUrl(message.spliceId));
     try {
-      await openSocket(data, dials.signal);
+      await openSocket(data, dials.signal, () => {
+        // `ws` can deliver the first data frame immediately after its `open`
+        // listeners return. Admit synchronously from that event so the
+        // gateway's message listener exists before the peer can speak.
+        if (dials.signal.aborted) {
+          data.close(1001, "control socket closed during splice dial");
+          return;
+        }
+        return this.options.acceptSplice(data, message);
+      });
     } catch (error) {
       data.close(1001, "splice dial aborted");
       throw error;
@@ -165,7 +196,6 @@ export class RelayDialSupervisor {
       data.close(1001, "control socket closed during splice dial");
       return;
     }
-    await this.options.acceptSplice(data, message);
   }
 
   async run(signal: AbortSignal): Promise<void> {

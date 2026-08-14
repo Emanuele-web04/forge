@@ -217,6 +217,27 @@ describe("relay state machine", () => {
       expect(relay.pairCount).toBe(0);
     });
 
+    it("closes control, pending clients, and established pairs with 1001 on shutdown", async () => {
+      const host = await connectHost(hostA);
+      const paired = await pendingFor(hostA, host);
+      const data = new FakeSocket();
+      relay.admitHostData(data, paired.spliceId);
+      const pending = await pendingFor(hostA, host);
+
+      relay.stop();
+
+      expect(host.closes.at(-1)).toEqual({ code: 1001, reason: "relay is shutting down" });
+      expect(paired.client.closes.at(-1)).toEqual({
+        code: 1001,
+        reason: "relay is shutting down",
+      });
+      expect(data.closes.at(-1)).toEqual({ code: 1001, reason: "relay is shutting down" });
+      expect(pending.client.closes.at(-1)).toEqual({
+        code: 1001,
+        reason: "relay is shutting down",
+      });
+    });
+
     it("times out a pending client with 4404", async () => {
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
       relay.stop();

@@ -1,0 +1,31 @@
+{
+  "name": "@synara/e2e",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo 'no build step'",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --maxWorkers=1 --no-file-parallelism"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@hono/node-server": "^1.14.0",
+    "@synara/contracts": "workspace:*",
+    "@synara/relay-protocol": "workspace:*",
+    "@synara/shared": "workspace:*",
+    "effect": "catalog:",
+    "hono": "^4.7.0",
+    "jose": "^6.1.0",
+    "pg": "^8.16.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "@types/pg": "^8.15.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

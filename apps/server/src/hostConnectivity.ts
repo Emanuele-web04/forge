@@ -3,7 +3,12 @@ import http from "node:http";
 import { createAccountClient } from "@synara/shared/account";
 import { WebSocketServer } from "ws";
 
-import { readAccountFile, refreshHostRegistration, resolveEnvironmentId } from "./accountAuth";
+import {
+  accountApiIssuer,
+  readAccountFile,
+  refreshHostRegistration,
+  resolveEnvironmentId,
+} from "./accountAuth";
 import type { SessionCredentialServiceShape } from "./auth/Services/SessionCredentialService";
 import type { ServerConfigShape } from "./config";
 import { startEndpointReporter } from "./endpointReporter";
@@ -40,7 +45,7 @@ export async function startHostConnectivity(options: HostConnectivityOptions): P
   const hostProof = () =>
     mintHostProof({
       identity,
-      apiIssuer: credentials.accountUrl.replace(/\/+$/, ""),
+      apiIssuer: accountApiIssuer(credentials.accountUrl),
       environmentId,
       hostId: credentials.hostId!,
       keyGeneration: credentials.hostKeyGeneration!,
@@ -59,7 +64,7 @@ export async function startHostConnectivity(options: HostConnectivityOptions): P
   const apiJwks = new ApiJwksCache(() => client.getApiJwks());
   const mintService = new HostMintService({
     identity,
-    apiIssuer: credentials.accountUrl.replace(/\/+$/, ""),
+    apiIssuer: accountApiIssuer(credentials.accountUrl),
     environmentId,
     hostId: credentials.hostId,
     keyGeneration: credentials.hostKeyGeneration,

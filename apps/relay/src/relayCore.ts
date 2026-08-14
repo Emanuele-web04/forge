@@ -342,14 +342,17 @@ export class RelayCore {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    for (const host of this.hosts.values()) {
-      this.disconnectControl(host, 1001, "relay is shutting down");
-    }
-    for (const pending of this.pending.values()) {
+    // Shutdown is a relay outage, not a host-unavailable admission failure.
+    // Close data-plane state first so disconnecting each control socket cannot
+    // rewrite its clients to 4404 through the ordinary host-loss path.
+    for (const pending of [...this.pending.values()]) {
       this.removePending(pending.id);
       pending.client.close(1001, "relay is shutting down");
     }
-    for (const pair of this.pairs.values()) pair.close(1001, "relay is shutting down");
+    for (const pair of [...this.pairs.values()]) pair.close(1001, "relay is shutting down");
+    for (const host of [...this.hosts.values()]) {
+      this.disconnectControl(host, 1001, "relay is shutting down");
+    }
     this.hosts.clear();
     this.pending.clear();
     this.pairs.clear();

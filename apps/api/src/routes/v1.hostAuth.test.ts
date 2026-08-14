@@ -1061,7 +1061,11 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         };
         expect(firstBody.events.map((event) => event.id)).toContain(higherId);
         expect(firstBody.events.map((event) => event.id)).not.toContain(lowerId);
-        expect(firstBody.watermark).toBe(baseline);
+        // The watermark must not pass the uncommitted lower id. Asserting a
+        // bound rather than equality keeps this honest when another suite
+        // shares the database and writes its own events concurrently.
+        expect(firstBody.watermark).toBeLessThan(lowerId);
+        expect(firstBody.watermark).toBeGreaterThanOrEqual(baseline);
 
         await lowerTransaction.query("COMMIT");
         committed = true;
