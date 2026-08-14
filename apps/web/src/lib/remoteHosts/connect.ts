@@ -12,6 +12,9 @@ import {
   RELAY_CLOSE_OVERLOADED,
   RELAY_CLOSE_SPLICE_CLAIMED,
   RELAY_CLOSE_SUPERSEDED,
+  HOST_SESSION_CLOSE_AUTH_FAILED,
+  HOST_SESSION_CLOSE_PROTOCOL_ERROR,
+  HOST_SESSION_CLOSE_REVOKED,
 } from "@synara/relay-protocol";
 import {
   raceTransports,
@@ -62,6 +65,15 @@ export function relayRetryPlan(code: number): RelayRetryPlan {
       return { action: "stop", reason: "This session was taken over by another connection." };
     case RELAY_CLOSE_KEEPALIVE_LOST:
       return { action: "reconnect", reason: "The connection timed out." };
+    // Host-session codes travel verbatim through the splice, so they must be
+    // classified here too — a revoked session is NOT a bad grant, and
+    // re-granting would only produce a 403 from the API.
+    case HOST_SESSION_CLOSE_REVOKED:
+      return { action: "stop", reason: "Your access to this host was revoked." };
+    case HOST_SESSION_CLOSE_AUTH_FAILED:
+      return { action: "re-grant", reason: "The host refused this session credential." };
+    case HOST_SESSION_CLOSE_PROTOCOL_ERROR:
+      return { action: "stop", reason: "The host rejected the connection handshake." };
     default:
       return { action: "reconnect", reason: "The connection closed." };
   }

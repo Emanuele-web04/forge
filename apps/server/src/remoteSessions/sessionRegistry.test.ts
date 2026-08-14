@@ -1,3 +1,4 @@
+import { HOST_SESSION_CLOSE_REVOKED } from "@synara/relay-protocol";
 import type { HostAuthorizationSnapshot } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -70,6 +71,6 @@ describe("RemoteSessionRegistry", () => {
       close,
     });
     await registry.reverify(authorization(), { kind: "host_unlinked", subject: null });
-    expect(close).toHaveBeenCalledWith(4403, "host unlinked");
+    expect(close).toHaveBeenCalledWith(HOST_SESSION_CLOSE_REVOKED, "host unlinked");
   });
 });

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  HOST_SESSION_CLOSE_AUTH_FAILED,
+  HOST_SESSION_CLOSE_PROTOCOL_ERROR,
+} from "@synara/relay-protocol";
 import type { RawData } from "ws";
 
 import type { HostMintService } from "../hostAuth";
@@ -8,8 +12,8 @@ import type { HostIdentity } from "../hostIdentity";
 import type { RelaySocket } from "../relayDial";
 import { RemoteSessionRegistry } from "./sessionRegistry";
 
-const REMOTE_PROTOCOL_ERROR = 4400;
-const REMOTE_AUTH_ERROR = 4401;
+const REMOTE_PROTOCOL_ERROR = HOST_SESSION_CLOSE_PROTOCOL_ERROR;
+const REMOTE_AUTH_ERROR = HOST_SESSION_CLOSE_AUTH_FAILED;
 
 type ExpectedPeer = { readonly userId: string; readonly deviceJkt: string };
 

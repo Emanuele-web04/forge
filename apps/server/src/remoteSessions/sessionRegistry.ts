@@ -1,3 +1,4 @@
+import { HOST_SESSION_CLOSE_REVOKED } from "@synara/relay-protocol";
 import type { HostAuthorizationSnapshot, RevocationEvent } from "@synara/contracts";
 
 export interface RemoteSession {
@@ -9,7 +10,7 @@ export interface RemoteSession {
   readonly close: (code: number, reason: string) => void;
 }
 
-export const REMOTE_SESSION_REVOKED_CLOSE_CODE = 4403;
+export const REMOTE_SESSION_REVOKED_CLOSE_CODE = HOST_SESSION_CLOSE_REVOKED;
 
 export class RemoteSessionRegistry {
   readonly #sessions = new Map<string, RemoteSession>();

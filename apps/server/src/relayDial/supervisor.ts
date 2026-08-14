@@ -28,6 +28,8 @@ export interface RelayDialSupervisorOptions {
   readonly sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   readonly random?: () => number;
   readonly nowMs?: () => number;
+  /** Observability hook: session reverification failed but the socket lives. */
+  readonly onReverifyFailed?: (error: unknown) => void;
   readonly baseBackoffMs?: number;
   readonly maximumBackoffMs?: number;
 }
@@ -137,11 +139,19 @@ export class RelayDialSupervisor {
     if (signal.aborted) return;
     const control = this.#socketFactory(this.controlUrl(ticket));
     await openSocket(control, signal);
-    // Reaching a live, ready control socket is what "healthy" means; the
-    // caller resets backoff on this signal so a host stable for days does not
-    // still carry a saturated cap from an old blip.
+    try {
+      // Best-effort: reverification needs the account API, which needs the
+      // identity provider. Letting it throw here would abandon a control
+      // socket that is otherwise fine — and because it throws AFTER the
+      // connection is established, every attempt would look healthy, reset
+      // the backoff, and turn a provider outage into a fleet-wide dial storm.
+      await this.options.reverifySessions();
+    } catch (error) {
+      this.options.onReverifyFailed?.(error);
+    }
+    // Only now is the connection genuinely healthy: socket open and the
+    // supervisor committed to running it. Backoff resets on this signal.
     this.#connected = true;
-    await this.options.reverifySessions();
     control.send(JSON.stringify({ v: 1, type: "ready" }));
     control.on("message", (raw) => {
       void this.handleControlMessage(control, raw).catch(() => {

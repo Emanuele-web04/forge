@@ -52,6 +52,16 @@ export const RELAY_CLOSE_SUPERSEDED = 4409 as const;
 export const RELAY_CLOSE_SPLICE_CLAIMED = 4413 as const;
 export const RELAY_CLOSE_OVERLOADED = 1013 as const;
 
+/**
+ * Host-session close codes. Deliberately a separate 45xx range: these travel
+ * verbatim through a splice, so a code reused from the relay's 44xx range
+ * would reach the client indistinguishable from the relay's own meaning — a
+ * revoked session read as a replayed grant, and the wrong recovery taken.
+ */
+export const HOST_SESSION_CLOSE_PROTOCOL_ERROR = 4500 as const;
+export const HOST_SESSION_CLOSE_AUTH_FAILED = 4501 as const;
+export const HOST_SESSION_CLOSE_REVOKED = 4503 as const;
+
 export const RELAY_CLOSE_CODES = {
   BAD_TOKEN: RELAY_CLOSE_BAD_TOKEN,
   GRANT_REPLAY: RELAY_CLOSE_GRANT_REPLAY,
