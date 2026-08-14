@@ -461,7 +461,7 @@ describe("GitHub project provisioning", () => {
     expect(failure.message).toContain("30-minute limit");
   });
 
-  it("reports a destination conflict when the target appears during promotion", async () => {
+  it("reports a clone failure when the target appears during promotion", async () => {
     const failure = await Effect.runPromise(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -492,7 +492,7 @@ describe("GitHub project provisioning", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
 
-    expect(failure.code).toBe("DESTINATION_CONFLICT");
+    expect(failure.code).toBe("CLONE_FAILED");
     expect(failure.retryable).toBe(false);
   });
 
