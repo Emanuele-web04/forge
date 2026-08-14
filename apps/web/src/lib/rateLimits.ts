@@ -41,11 +41,12 @@ export const ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
 
 const WINDOW_ORDER = new Map([
   ["5h", 0],
-  ["Weekly", 1],
-  ["Weekly (overage)", 2],
-  ["Sonnet", 3],
-  ["Opus", 4],
-  ["Current", 5],
+  ["Daily", 1],
+  ["Weekly", 2],
+  ["Weekly (overage)", 3],
+  ["Sonnet", 4],
+  ["Opus", 5],
+  ["Current", 6],
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
