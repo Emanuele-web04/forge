@@ -217,31 +217,32 @@ const runBoundedProviderCall = <E, R>(input: {
         }),
       ),
       Effect.exit,
-      Effect.flatMap((exit): Effect.Effect<BoundedProviderCallResult<E>, E> =>
-        Exit.isSuccess(exit)
-          ? Effect.succeed(
-              timedOut
-                ? {
-                    _tag: "timeout",
-                    detail: `${input.label} did not respond within ${Duration.toMillis(input.timeout)}ms.`,
-                  }
-                : { _tag: "ok" },
-            )
-          : Cause.hasInterruptsOnly(exit.cause)
-            ? Effect.failCause(exit.cause)
-            : Effect.sync((): BoundedProviderCallResult<E> => {
-                const outcome = classifyProviderAttemptOutcome(exit);
-                return {
-                  _tag: "failed",
-                  // classify only reports "accepted" for success exits, which
-                  // cannot reach this branch; normalize to keep the type honest.
-                  outcome:
-                    outcome._tag === "accepted"
-                      ? { _tag: "uncertain", detail: Cause.pretty(exit.cause) }
-                      : outcome,
-                  cause: exit.cause,
-                };
-              }),
+      Effect.flatMap(
+        (exit): Effect.Effect<BoundedProviderCallResult<E>, E> =>
+          Exit.isSuccess(exit)
+            ? Effect.succeed(
+                timedOut
+                  ? {
+                      _tag: "timeout",
+                      detail: `${input.label} did not respond within ${Duration.toMillis(input.timeout)}ms.`,
+                    }
+                  : { _tag: "ok" },
+              )
+            : Cause.hasInterruptsOnly(exit.cause)
+              ? Effect.failCause(exit.cause)
+              : Effect.sync((): BoundedProviderCallResult<E> => {
+                  const outcome = classifyProviderAttemptOutcome(exit);
+                  return {
+                    _tag: "failed",
+                    // classify only reports "accepted" for success exits, which
+                    // cannot reach this branch; normalize to keep the type honest.
+                    outcome:
+                      outcome._tag === "accepted"
+                        ? { _tag: "uncertain", detail: Cause.pretty(exit.cause) }
+                        : outcome,
+                    cause: exit.cause,
+                  };
+                }),
       ),
     );
   });
