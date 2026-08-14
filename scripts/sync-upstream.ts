@@ -16,6 +16,17 @@ interface ParsedOptions {
   skipFixes: boolean;
 }
 
+function normalizeRemoteUrl(raw: string): string {
+  const trimmed = raw.trim();
+  const cleaned = trimmed.replace(/\s+/g, "").replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
+  const sshMatch = cleaned.match(/^git@([^:]+):([^/]+)\/([^/]+)$/);
+  if (sshMatch) {
+    const [, host, owner, repo] = sshMatch;
+    return `https://${host}/${owner}/${repo}`;
+  }
+  return cleaned;
+}
+
 interface UpstreamSyncState {
   base: string;
   upstreamRef: string;
@@ -73,9 +84,27 @@ function requireCleanWorkingTree(): void {
 function ensureRemote(remoteName: string, remoteUrl: string): void {
   const remotes = spawnCommand("git", ["remote"], { capture: true });
   const exists = remotes.stdout.split("\n").some((line) => line.trim() === remoteName);
-  if (exists) return;
+  if (!exists) {
+    spawnCommand("git", ["remote", "add", remoteName, remoteUrl]);
+    return;
+  }
 
-  spawnCommand("git", ["remote", "add", remoteName, remoteUrl]);
+  const actual = spawnCommand("git", ["remote", "get-url", remoteName], {
+    capture: true,
+    allowFailure: true,
+  });
+  if (actual.status !== 0) {
+    throw new Error(`Unable to read URL for remote '${remoteName}'.`);
+  }
+
+  const normalizedActual = normalizeRemoteUrl(actual.stdout);
+  const normalizedExpected = normalizeRemoteUrl(remoteUrl);
+  if (normalizedActual !== normalizedExpected) {
+    throw new Error(
+      `Remote '${remoteName}' is configured as '${actual.stdout.trim()}', expected '${remoteUrl}'. ` +
+        `Update that remote or choose a different --remote target before re-running sync.`,
+    );
+  }
 }
 
 function runGit(
@@ -310,6 +339,7 @@ function main(): void {
   const upstreamHead = getRemoteCommit(upstreamRef);
   const baseState = tryReadSyncState(options.base, options.base, upstreamRef);
   const baseHasSyncedState = baseState?.upstreamHead === upstreamHead;
+
   const hasLocalSyncBranch = branchExists(syncBranch);
   const hasRemoteSyncBranch = remoteBranchExists("origin", syncBranch);
   const hasSyncBranch = hasLocalSyncBranch || hasRemoteSyncBranch;
@@ -325,6 +355,11 @@ function main(): void {
     !baseHasSyncedState && !syncBranchHasSyncedState
       ? parseDivergence(options.base, upstreamRef).right > 0
       : false;
+
+  if (baseHasSyncedState) {
+    console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+    return;
+  }
 
   if (hasSyncBranch) {
     if (hasLocalSyncBranch) {
@@ -344,19 +379,29 @@ function main(): void {
     }
     console.log(`Reusing existing sync branch ${syncBranch}.`);
   } else {
-    if (!hasUpstreamDelta) {
-      runGit("switch", ["-c", syncBranch, options.base]);
+    runGit("switch", ["-c", syncBranch, options.base]);
+    console.log(`Created sync branch ${syncBranch} from ${options.base}.`);
+  }
+
+  if (!hasUpstreamDelta) {
+    const syncStateMatchesUpstream =
+      tryReadSyncState(currentBranchName(), options.base, upstreamRef)?.upstreamHead === upstreamHead;
+
+    if (!syncStateMatchesUpstream) {
       writeSyncState(options.base, upstreamRef, upstreamHead);
       runGit("add", [UPSTREAM_SYNC_STATE_PATH]);
-      if (runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status !== 0) {
-        runGit("commit", ["-m", "chore: persist upstream sync checkpoint"]);
-      }
+    }
+
+    if (
+      runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status === 0
+    ) {
       console.log(`No new upstream commits to merge from ${upstreamRef}.`);
       return;
     }
 
-    runGit("switch", ["-c", syncBranch, options.base]);
-    console.log(`Created sync branch ${syncBranch} from ${options.base}.`);
+    runGit("commit", ["-m", "chore: persist upstream sync checkpoint"]);
+    console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+    return;
   }
 
   if (hasUpstreamDelta) {
