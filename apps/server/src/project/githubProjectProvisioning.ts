@@ -126,9 +126,7 @@ function hasTag(
   );
 }
 
-function isGitHubProjectProvisioningError(
-  cause: unknown,
-): cause is GitHubProjectProvisioningError {
+function isGitHubProjectProvisioningError(cause: unknown): cause is GitHubProjectProvisioningError {
   return hasTag(cause, "GitHubProjectProvisioningError");
 }
 
@@ -493,9 +491,7 @@ function classifyCloneFailure(cause: unknown): GitHubProjectProvisioningError {
     (isGitCommandFailure &&
       cause.operation === "clone public GitHub project" &&
       lower.endsWith(" timed out.")) ||
-    (isGitHubCliFailure &&
-      lower.includes("gh repo clone") &&
-      lower.includes(" timed out."));
+    (isGitHubCliFailure && lower.includes("gh repo clone") && lower.includes(" timed out."));
   if (exceededConfiguredCloneTimeout) {
     return provisioningError(
       "CLONE_TIMEOUT",
