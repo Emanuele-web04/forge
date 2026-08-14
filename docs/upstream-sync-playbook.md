@@ -29,7 +29,7 @@ bun scripts/sync-upstream.ts \
 - `--upstream`: upstream branch to merge (defaults to `main`)
 - `--base`: local target branch to sync from (defaults to `built-from-scratch`)
 - `--branch`: explicit sync branch name (defaults to `sync/upstream-main-<date>` )
-- `--skip-fixes`: skip automated conflict-prevention edits for known hotspots
+- `--skip-fixes`: compatibility flag; downstream normalization still runs for safety-critical edits
 
 ## Default workflow
 
@@ -38,8 +38,9 @@ bun scripts/sync-upstream.ts \
 3. Run `bun scripts/sync-upstream.ts`.
 4. If merge conflicts occur, resolve manually:
    1. Fix conflicts and continue with normal `git merge --continue`.
-   2. Re-run `bun scripts/sync-upstream.ts --branch <your-branch> --skip-fixes` to apply
-      the standard fix checks and final state checks before opening the PR.
+   2. Re-run `bun scripts/sync-upstream.ts --branch <your-branch>` to apply
+      the standard fix checks, reuse the existing sync branch, and finalize the branch
+      from the persisted imported-upstream state.
 5. Push the sync branch and open/update the PR.
 6. Run branch-level CI only once on the final branch.
 

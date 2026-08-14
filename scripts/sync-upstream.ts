@@ -16,6 +16,19 @@ interface ParsedOptions {
   skipFixes: boolean;
 }
 
+interface UpstreamSyncState {
+  base: string;
+  upstreamRef: string;
+  upstreamHead: string;
+  syncedAt: string;
+}
+
+const UPSTREAM_SYNC_STATE_PATH = ".github/upstream-sync-state.json";
+const CHAT_TEST_PATH = "apps/web/src/components/ChatView.browser.tsx";
+const README_PATH = "README.md";
+const APPROVED_ORIGIN_ATTRIBUTION =
+  "Forkara began as a fork of [T3Code](https://github.com/pingdotgg/t3code), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.";
+
 function parseArgs(argv: string[]): ParsedOptions {
   const valueFor = (name: string): string | undefined => {
     const index = argv.indexOf(`--${name}`);
@@ -121,6 +134,136 @@ function currentBranchName(): string {
   return runGit("branch", ["--show-current"], { capture: true }).stdout.trim();
 }
 
+function getRemoteCommit(remoteRef: string): string {
+  const result = runGit("rev-parse", [remoteRef], { capture: true });
+  const sha = result.stdout.trim();
+  if (!sha) {
+    throw new Error(`Unable to read commit for ${remoteRef}.`);
+  }
+  return sha;
+}
+
+function tryReadSyncState(ref: string, expectedBase: string, upstreamRef: string): UpstreamSyncState | null {
+  const result = runGit("show", [`${ref}:${UPSTREAM_SYNC_STATE_PATH}`], {
+    capture: true,
+    allowFailure: true,
+  });
+  if (result.status !== 0) return null;
+
+  try {
+    const parsed = JSON.parse(result.stdout);
+    if (
+      parsed &&
+      parsed.base === expectedBase &&
+      parsed.upstreamRef === upstreamRef &&
+      typeof parsed.upstreamHead === "string"
+    ) {
+      return {
+        base: parsed.base,
+        upstreamRef: parsed.upstreamRef,
+        upstreamHead: parsed.upstreamHead,
+        syncedAt: typeof parsed.syncedAt === "string" ? parsed.syncedAt : new Date().toISOString(),
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function parseDivergence(base: string, upstreamRef: string): { left: number; right: number } {
+  const [leftText, rightText] = runGit(
+    "rev-list",
+    ["--left-right", "--count", `${base}...${upstreamRef}`],
+    { capture: true },
+  )
+    .stdout.trim()
+    .split(/\s+/);
+  const left = Number(leftText);
+  const right = Number(rightText);
+
+  if (leftText === undefined || rightText === undefined || Number.isNaN(left) || Number.isNaN(right)) {
+    throw new Error("Unable to compute upstream divergence.");
+  }
+
+  return { left, right };
+}
+
+function normalizeAttributionLine(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed === APPROVED_ORIGIN_ATTRIBUTION) return line;
+  if (!trimmed.startsWith("Forkara began as a fork of")) return line;
+  return `${line.slice(0, line.indexOf(trimmed))}${APPROVED_ORIGIN_ATTRIBUTION}`;
+}
+
+function applyForkFixes(options: ParsedOptions): string[] {
+  const changedFiles: string[] = [];
+  const rewrite = (path: string, transform: (contents: string) => string): void => {
+    const original = readFileSync(path, "utf8");
+    const updated = transform(original);
+    if (updated === original) return;
+    writeFileSync(path, updated);
+    changedFiles.push(path);
+  };
+
+  rewrite(CHAT_TEST_PATH, (chatTest) => {
+    let chatNext = chatTest;
+    chatNext = chatNext.replace(
+      'await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();',
+      'await expect.element(page.getByRole("button", { name: /Cancel/i })).toBeDisabled();',
+    );
+    chatNext = chatNext.replace(
+      'expect(document.body.textContent).not.toContain("Cancelling...");',
+      'expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);',
+    );
+    chatNext = chatNext.replace(
+      'expect(document.body.textContent).not.toContain("Canceling...");',
+      'expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);',
+    );
+    return chatNext;
+  });
+
+  rewrite(README_PATH, (readme) => {
+    return readme
+      .split(/\r?\n/)
+      .map((line) => normalizeAttributionLine(line))
+      .join("\n");
+  });
+
+  return changedFiles;
+}
+
+function commitForkFixes(changedFiles: string[]): void {
+  if (changedFiles.length === 0) {
+    return;
+  }
+
+  runGit("add", changedFiles);
+
+  const hasStagedChanges =
+    runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status !== 0;
+  if (!hasStagedChanges) {
+    return;
+  }
+
+  runGit("commit", [
+    "-m",
+    "chore: apply upstream sync normalization after merge",
+  ]);
+  console.log("Committed fork-specific follow-up fixes.");
+}
+
+function writeSyncState(base: string, upstreamRef: string, upstreamHead: string): void {
+  const state: UpstreamSyncState = {
+    base,
+    upstreamRef,
+    upstreamHead,
+    syncedAt: new Date().toISOString(),
+  };
+  writeFileSync(UPSTREAM_SYNC_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
+}
+
 function tryMergeWithUpstream(remote: string, upstream: string): void {
   const ref = `${remote}/${upstream}`;
   const result = spawnCommand("git", ["merge", "--no-ff", "--no-edit", ref], {
@@ -134,36 +277,8 @@ function tryMergeWithUpstream(remote: string, upstream: string): void {
     throw new Error(
       `Merge conflict detected while merging ${ref}. Resolve conflicts, run:\n` +
         "  git merge --continue\n" +
-        "  then re-run this script with --skip-fixes to re-run normalization checks.",
+        "  then rerun this script to apply fork-specific normalization checks.",
     );
-  }
-}
-
-function applyForkFixes(skipFixes: boolean): void {
-  if (skipFixes) {
-    console.log("Skipping fork-specific follow-up fixes.");
-    return;
-  }
-
-  const CHAT_TEST_PATH = "apps/web/src/components/ChatView.browser.tsx";
-  const chatTest = readFileSync(CHAT_TEST_PATH, "utf8");
-  let chatNext = chatTest;
-  chatNext = chatNext.replace(
-    'await expect.element(page.getByRole("button", { name: "Cancelling..." })).toBeDisabled();',
-    'await expect.element(page.getByRole("button", { name: /Cancel/i })).toBeDisabled();',
-  );
-  chatNext = chatNext.replace(
-    'expect(document.body.textContent).not.toContain("Cancelling...");',
-    "expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);",
-  );
-  chatNext = chatNext.replace(
-    'expect(document.body.textContent).not.toContain("Canceling...");',
-    "expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);",
-  );
-
-  if (chatNext !== chatTest) {
-    writeFileSync(CHAT_TEST_PATH, chatNext);
-    console.log("Applied browser test normalization in ChatView.browser.tsx.");
   }
 }
 
@@ -171,7 +286,6 @@ function main(): void {
   const options = parseArgs(process.argv.slice(2));
   const upstreamUrl = "https://github.com/Emanuele-web04/synara.git";
   const syncBranch = options.branch ?? defaultBranchName();
-
   const upstreamRef = `${options.remote}/${options.upstream}`;
 
   requireCleanWorkingTree();
@@ -179,53 +293,83 @@ function main(): void {
   runGit("fetch", [options.remote, options.upstream]);
 
   assertUpstreamBranchExists(options.remote, options.upstream);
+  runGit("fetch", ["origin", syncBranch], { allowFailure: true });
   checkoutBase(options.base);
-  const [leftText, rightText] = spawnCommand(
-    "git",
-    ["rev-list", "--left-right", "--count", `${options.base}...${upstreamRef}`],
-    { capture: true },
-  )
-    .stdout.trim()
-    .split(/\s+/);
-  const left = Number(leftText);
-  const right = Number(rightText);
 
-  if (
-    leftText === undefined ||
-    rightText === undefined ||
-    Number.isNaN(left) ||
-    Number.isNaN(right)
-  ) {
-    throw new Error("Unable to compute upstream divergence.");
-  }
+  const upstreamHead = getRemoteCommit(upstreamRef);
+  const baseState = tryReadSyncState(options.base, options.base, upstreamRef);
+  const baseHasSyncedState = baseState?.upstreamHead === upstreamHead;
+  const hasLocalSyncBranch = branchExists(syncBranch);
+  const hasRemoteSyncBranch = remoteBranchExists("origin", syncBranch);
+  const hasSyncBranch = hasLocalSyncBranch || hasRemoteSyncBranch;
 
-  const hasUpstreamDelta = right > 0;
-  const branchAlreadyExists = branchExists(syncBranch);
-  const currentBranch = currentBranchName();
+  const syncBranchHasSyncedState = hasSyncBranch
+    ? (
+        hasLocalSyncBranch
+          ? tryReadSyncState(syncBranch, options.base, upstreamRef)
+          : tryReadSyncState(`origin/${syncBranch}`, options.base, upstreamRef)
+      )?.upstreamHead === upstreamHead
+    : false;
 
-  if (branchAlreadyExists) {
-    if (currentBranch !== syncBranch) {
-      runGit("switch", [syncBranch]);
+  const hasUpstreamDelta = !baseHasSyncedState && !syncBranchHasSyncedState
+    ? parseDivergence(options.base, upstreamRef).right > 0
+    : false;
+
+  if (hasSyncBranch) {
+    if (hasLocalSyncBranch) {
+      const currentBranch = currentBranchName();
+      if (currentBranch !== syncBranch) {
+        runGit("switch", [syncBranch]);
+      }
+    } else {
+      runGit("switch", ["-c", syncBranch, `origin/${syncBranch}`]);
+    }
+
+    if (hasUpstreamDelta) {
+      const { left, right } = parseDivergence(options.base, upstreamRef);
+      console.log(`Upstream commit delta: ${left}/${right} from ${options.base}..${upstreamRef}.`);
+    } else {
+      console.log(`Using already-synced state for ${upstreamRef}.`);
     }
     console.log(`Reusing existing sync branch ${syncBranch}.`);
   } else {
     if (!hasUpstreamDelta) {
-      console.log(`${options.base} is already synced with ${upstreamRef}.`);
+      writeSyncState(options.base, upstreamRef, upstreamHead);
+      runGit("add", [UPSTREAM_SYNC_STATE_PATH]);
+      if (
+        runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status !== 0
+      ) {
+        runGit("commit", [
+          "-m",
+          "chore: persist upstream sync checkpoint",
+        ]);
+      }
+      console.log(`No new upstream commits to merge from ${upstreamRef}.`);
       return;
     }
+
     runGit("switch", ["-c", syncBranch, options.base]);
     console.log(`Created sync branch ${syncBranch} from ${options.base}.`);
   }
 
-  console.log(`Upstream commit delta: ${left}/${right} from ${options.base}..${upstreamRef}.`);
-
   if (hasUpstreamDelta) {
+    const { left, right } = parseDivergence(options.base, upstreamRef);
+    console.log(`Upstream commit delta: ${left}/${right} from ${options.base}..${upstreamRef}.`);
     tryMergeWithUpstream(options.remote, options.upstream);
   } else {
-    console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+    console.log(`No upstream deltas detected for ${upstreamRef} on ${syncBranch}.`);
   }
 
-  applyForkFixes(options.skipFixes);
+  const changedFiles = applyForkFixes(options);
+  writeSyncState(options.base, upstreamRef, upstreamHead);
+  commitForkFixes([...changedFiles, UPSTREAM_SYNC_STATE_PATH]);
+
+  if (changedFiles.length > 0) {
+    console.log("Applied upstream sync normalization checks.");
+  } else {
+    console.log("No additional upstream sync normalization changes were required.");
+  }
+
   console.log(`Sync branch ready: ${syncBranch}`);
 }
 
