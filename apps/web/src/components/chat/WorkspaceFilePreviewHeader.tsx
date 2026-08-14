@@ -11,7 +11,7 @@
 //          `header-actions` inline-size query container so the "Open" control
 //          sheds its text label for an icon as the pane narrows.
 // Layer: Chat/editor file-preview UI
-// Exports: WorkspaceFilePreviewHeader
+// Exports: WorkspaceFilePreviewHeader, RenderedPreviewKind
 
 import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@synara/shared/path";
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
@@ -30,14 +30,16 @@ import {
   type CollapsedBreadcrumbLayout,
 } from "./workspaceFilePreviewBreadcrumb";
 
+export type RenderedPreviewKind = "markdown" | "html";
+
 interface WorkspaceFilePreviewHeaderProps {
   workspaceRoot: string | null;
   filePath: string;
-  /** Markdown files get an inline Source/Preview segmented switcher. */
-  isMarkdown: boolean;
+  /** Markdown and HTML files get an inline Source/Preview segmented switcher. */
+  renderedPreviewKind?: RenderedPreviewKind | null;
   /** True while the rendered preview is shown; false for the source view. */
-  markdownPreviewEnabled: boolean;
-  onMarkdownPreviewChange: (rendered: boolean) => void;
+  renderedPreviewEnabled: boolean;
+  onRenderedPreviewChange: (rendered: boolean) => void;
   /** Whole-file chat actions, surfaced in the overflow menu when wired. */
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
@@ -56,10 +58,10 @@ interface WorkspaceFilePreviewHeaderProps {
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
-// reference) vs. Preview (rendered markdown, read-only — browse + task lists).
+// reference) vs. Preview (rendered markdown/HTML, read-only for selection).
 // Ordered Source-first so the interactive mode reads as the primary surface.
 // Icon-only by design: the title tooltip + sr-only text carry the labels.
-const MARKDOWN_VIEW_SEGMENTS = [
+const PREVIEW_VIEW_SEGMENTS = [
   {
     rendered: false,
     label: "Source",
@@ -69,10 +71,32 @@ const MARKDOWN_VIEW_SEGMENTS = [
   {
     rendered: true,
     label: "Preview",
-    title: "Rendered preview — browse and toggle task lists",
+    title: "Rendered preview",
     Icon: EyeOpenIcon,
   },
 ] as const;
+
+function renderedPreviewToggleCopy(kind: RenderedPreviewKind): {
+  ariaLabel: string;
+  previewTitle: string;
+} {
+  switch (kind) {
+    case "markdown":
+      return {
+        ariaLabel: "Markdown view",
+        previewTitle: "Rendered preview — browse and toggle task lists",
+      };
+    case "html":
+      return {
+        ariaLabel: "HTML view",
+        previewTitle: "Rendered preview — view the page",
+      };
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
 
 interface BreadcrumbSegment {
   name: string;
@@ -263,6 +287,9 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
 
   const canCopyContents = contentsForCopy != null;
   const hasOverflowMenu = canCopyContents || Boolean(onReferenceInChat || onAskWhyInChat);
+  const renderedPreviewKind = props.renderedPreviewKind ?? null;
+  const renderedPreviewCopy =
+    renderedPreviewKind === null ? null : renderedPreviewToggleCopy(renderedPreviewKind);
 
   return (
     <div
@@ -292,28 +319,29 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
       ) : null}
 
       <div className="flex shrink-0 items-center gap-1.5">
-        {props.isMarkdown ? (
+        {renderedPreviewCopy ? (
           <div
             role="radiogroup"
-            aria-label="Markdown view"
+            aria-label={renderedPreviewCopy.ariaLabel}
             className="flex h-7 shrink-0 items-center rounded-lg bg-[var(--color-background-elevated-secondary)] p-0.5"
           >
-            {MARKDOWN_VIEW_SEGMENTS.map((segment) => {
-              const selected = segment.rendered === props.markdownPreviewEnabled;
+            {PREVIEW_VIEW_SEGMENTS.map((segment) => {
+              const selected = segment.rendered === props.renderedPreviewEnabled;
+              const title = segment.rendered ? renderedPreviewCopy.previewTitle : segment.title;
               return (
                 <button
                   key={segment.label}
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  title={segment.title}
+                  title={title}
                   className={cn(
                     "flex h-6 w-7 cursor-pointer items-center justify-center rounded-md transition-colors",
                     selected
                       ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
                       : "text-muted-foreground hover:text-foreground",
                   )}
-                  onClick={() => props.onMarkdownPreviewChange(segment.rendered)}
+                  onClick={() => props.onRenderedPreviewChange(segment.rendered)}
                 >
                   <segment.Icon className="size-3.5 shrink-0" />
                   <span className="sr-only">{segment.label}</span>

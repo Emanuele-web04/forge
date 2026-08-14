@@ -1,9 +1,9 @@
 // FILE: WorkspaceFilePreview.tsx
 // Purpose: Shared single-file preview (code with syntax highlighting, parsed
-//          markdown, images, PDFs) for workspace files plus absolute local
-//          file references reused by editor and right-dock panes.
+//          markdown, rendered HTML, images, PDFs) for workspace files plus
+//          absolute local file references reused by editor and right-dock panes.
 // Layer: Web chat presentation component
-// Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
+// Exports: WorkspaceFilePreview, isMarkdownPreviewablePath, isHtmlPreviewablePath
 
 import type {
   ProjectFileEncoding,
@@ -66,15 +66,22 @@ import { useFileLineCommenting } from "./chat/useFileLineCommenting";
 import { WorkspaceFilePreviewHeader } from "./chat/WorkspaceFilePreviewHeader";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
+import { HtmlFilePreview } from "./HtmlFilePreview";
 import { LocalImagePreview } from "./LocalImagePreview";
 import { PdfFilePreview } from "./PdfFilePreview";
 import { Skeleton } from "./ui/skeleton";
 
 const MARKDOWN_PREVIEW_EXTENSIONS = new Set([".markdown", ".md", ".mdx"]);
+const HTML_PREVIEW_EXTENSIONS = new Set([".html", ".htm"]);
 
 export function isMarkdownPreviewablePath(filePath: string): boolean {
   const extension = lowerCaseExtensionOf(filePath);
   return extension !== null && MARKDOWN_PREVIEW_EXTENSIONS.has(extension);
+}
+
+export function isHtmlPreviewablePath(filePath: string): boolean {
+  const extension = lowerCaseExtensionOf(filePath);
+  return extension !== null && HTML_PREVIEW_EXTENSIONS.has(extension);
 }
 
 function parentDirectoryFromPath(path: string): string | null {
@@ -296,8 +303,8 @@ export interface WorkspaceFilePreviewProps {
   filePath: string | null;
   /**
    * Initial markdown render mode per file: the dock opens markdown already
-   * parsed, the editor surface stays source-first. The header toggle still
-   * lets the user flip either way.
+   * parsed, the editor surface stays source-first. HTML always opens rendered.
+   * The header toggle still lets the user flip either way.
    */
   markdownPreviewDefault?: boolean;
   /** Enables guarded editing for complete, supported files inside the workspace. */
@@ -396,18 +403,22 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const fileNeedsLocalPreviewGrant =
     filePath !== null && fileIsLocalAbsolute && !fileIsScratchBinaryPreview;
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
-  // Per-file override of the markdown-preview default. Deriving (instead of
+  const fileIsHtml = filePath !== null && isHtmlPreviewablePath(filePath);
+  // HTML is a page, so it opens rendered. Markdown stays source-first in the
+  // editor (the dock opts into parsed markdown via markdownPreviewDefault).
+  const renderedPreviewDefault = fileIsHtml ? true : markdownPreviewDefault;
+  // Per-file override of the rendered-preview default. Deriving (instead of
   // syncing state in an effect) means switching files applies the default in
   // the same render, with no stale-value flash, and the override dies with its
   // file automatically.
-  const [markdownPreviewOverride, setMarkdownPreviewOverride] = useState<{
+  const [renderedPreviewOverride, setRenderedPreviewOverride] = useState<{
     filePath: string | null;
     rendered: boolean;
   } | null>(null);
-  const markdownPreviewEnabled =
-    markdownPreviewOverride !== null && markdownPreviewOverride.filePath === filePath
-      ? markdownPreviewOverride.rendered
-      : markdownPreviewDefault;
+  const renderedPreviewEnabled =
+    renderedPreviewOverride !== null && renderedPreviewOverride.filePath === filePath
+      ? renderedPreviewOverride.rendered
+      : renderedPreviewDefault;
   const localPreviewGrantQuery = useQuery(
     projectLocalPreviewGrantQueryOptions({
       path: filePath,
@@ -486,7 +497,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   }, [relocationRequestKey]);
 
   const fileContents = fileQuery.data?.contents ?? "";
-  const showMarkdownPreview = fileIsMarkdown && markdownPreviewEnabled;
+  const showMarkdownPreview = fileIsMarkdown && renderedPreviewEnabled;
+  const showHtmlPreview = fileIsHtml && renderedPreviewEnabled;
+  const showRenderedPreview = showMarkdownPreview || showHtmlPreview;
+  const renderedPreviewKind = fileIsHtml ? "html" : fileIsMarkdown ? "markdown" : null;
   const editableDocument: EditableFileDocument | null =
     props.editable &&
     workspaceRoot !== null &&
@@ -516,7 +530,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const lineCount =
     displayedFileContents.length === 0 ? 0 : displayedFileContents.split("\n").length;
   const readOnlyReason =
-    !props.editable || showMarkdownPreview || fileQuery.data === undefined
+    !props.editable || showRenderedPreview || fileQuery.data === undefined
       ? null
       : !fileIsWorkspaceRelative
         ? "Only files inside the project can be edited."
@@ -624,14 +638,14 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   // stays read-only for references (browsing + task-list toggles only); use the
   // Source toggle in the header to get a precise selection reference.
   const readPreviewSelection = (container: HTMLElement): Omit<ChatFileReference, "path"> | null =>
-    showMarkdownPreview ? null : getSelectionWithin(container);
+    showRenderedPreview ? null : getSelectionWithin(container);
   const commitPreviewSelection = (selection: Omit<ChatFileReference, "path">) => {
     if (filePath) {
       onReferenceInChat?.({ path: filePath, ...selection });
     }
   };
   const previewSelectionAction = useCodeSelectionAction({
-    enabled: Boolean(onReferenceInChat && filePath) && !showMarkdownPreview && !editableDocument,
+    enabled: Boolean(onReferenceInChat && filePath) && !showRenderedPreview && !editableDocument,
     readSelection: readPreviewSelection,
     onCommit: commitPreviewSelection,
   });
@@ -640,7 +654,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   // `.line` resolves to an exact line number (the rendered-markdown view
   // restructures the source and cannot map a row back to a file line).
   const lineCommentingEnabled =
-    Boolean(onCommentInChat && filePath) && !showMarkdownPreview && !editableDocument;
+    Boolean(onCommentInChat && filePath) && !showRenderedPreview && !editableDocument;
   const lineCommenting = useFileLineCommenting({
     enabled: lineCommentingEnabled,
     resetKey: filePath,
@@ -749,8 +763,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       });
     void taskWriteQueueRef.current;
   };
-  const handleMarkdownPreviewChange = (rendered: boolean) => {
-    setMarkdownPreviewOverride({ filePath, rendered });
+  const handleRenderedPreviewChange = (rendered: boolean) => {
+    setRenderedPreviewOverride({ filePath, rendered });
   };
   // Toggling a task rewrites the file, so only enable it when the preview
   // holds the complete contents (writing a truncated read would corrupt it).
@@ -829,9 +843,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       <WorkspaceFilePreviewHeader
         workspaceRoot={props.workspaceRoot}
         filePath={filePath}
-        isMarkdown={fileIsMarkdown}
-        markdownPreviewEnabled={showMarkdownPreview}
-        onMarkdownPreviewChange={handleMarkdownPreviewChange}
+        renderedPreviewKind={renderedPreviewKind}
+        renderedPreviewEnabled={showRenderedPreview}
+        onRenderedPreviewChange={handleRenderedPreviewChange}
         onReferenceInChat={onReferenceInChat}
         onAskWhyInChat={onAskWhyInChat}
         contentsForCopy={fileIsImage || fileQuery.data === undefined ? null : displayedFileContents}
@@ -881,7 +895,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             {fileQuery.error instanceof Error ? fileQuery.error.message : "Could not read file."}
           </p>
         </PanelStateMessage>
-      ) : activeEditBuffer && editableDocument && !showMarkdownPreview ? (
+      ) : activeEditBuffer && editableDocument && !showRenderedPreview ? (
         <textarea
           className="editor-file-editor"
           aria-label={`Edit ${filePath}`}
@@ -905,13 +919,16 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           className={cn(
             "editor-file-viewer min-h-0 flex-1 overflow-auto",
             showMarkdownPreview && "editor-file-viewer--markdown-preview",
+            showHtmlPreview && "editor-file-viewer--html-preview",
           )}
           onContextMenu={handleContentsContextMenu}
           onMouseUp={previewSelectionAction.onContainerMouseUp}
           onMouseMove={lineCommenting.onContainerMouseMove}
           onMouseLeave={lineCommenting.onContainerMouseLeave}
         >
-          {showMarkdownPreview ? (
+          {showHtmlPreview ? (
+            <HtmlFilePreview contents={displayedFileContents} title={basenameOfPath(filePath)} />
+          ) : showMarkdownPreview ? (
             <div className="editor-markdown-preview">
               <ChatMarkdown
                 text={displayedFileContents}
@@ -924,7 +941,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           ) : (
             <FileContentsView path={filePath} contents={fileContents} themeName={diffThemeName} />
           )}
-          {!showMarkdownPreview && lineCount > 0 ? (
+          {!showRenderedPreview && lineCount > 0 ? (
             <span className="sr-only">{lineCount} lines</span>
           ) : null}
           {previewSelectionAction.pendingAction ? (

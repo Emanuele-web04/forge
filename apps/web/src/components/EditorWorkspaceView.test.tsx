@@ -372,6 +372,78 @@ describe("EditorWorkspaceView", () => {
     expect(markup).toContain('aria-label="Editor options"');
   });
 
+  it("shows the HTML source/preview toggle when an HTML file is selected", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot="/Users/tester/project"
+          projectName="project"
+          selectedFilePath="decks/finance_deck.html"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('aria-label="File path"');
+    expect(markup).toContain("finance_deck.html");
+    expect(markup).toContain('aria-label="HTML view"');
+    expect(markup).not.toContain('aria-label="Markdown view"');
+  });
+
+  it("renders HTML files as a page preview instead of source", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(
+      projectQueryKeys.readFile("/Users/tester/project", "decks/finance_deck.html"),
+      {
+        relativePath: "decks/finance_deck.html",
+        contents: "<html><body><h1>Quarterly review</h1></body></html>",
+        truncated: false,
+        version: "1",
+        encoding: "utf8",
+        lineEnding: "lf",
+      },
+    );
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot="/Users/tester/project"
+          projectName="project"
+          selectedFilePath="decks/finance_deck.html"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("<iframe");
+    expect(markup).toContain('sandbox="allow-scripts"');
+    expect(markup).toContain("Quarterly review");
+    expect(markup).toContain("editor-html-preview");
+    expect(markup).not.toContain("editor-file-viewer__plain");
+    expect(markup).not.toContain("editor-file-viewer__highlight");
+    expect(markup).not.toContain('aria-label="Edit decks/finance_deck.html"');
+  });
+
   it("renders a search item in the activity bar below files and diff", () => {
     const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
