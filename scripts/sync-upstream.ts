@@ -405,33 +405,11 @@ function main(): void {
     : false;
 
   if (!hasUpstreamDelta) {
-    if (!syncBranchHasSyncedState) {
-      writeSyncState(options.base, upstreamRef, upstreamHead);
-      runGit("add", [UPSTREAM_SYNC_STATE_PATH]);
-    }
-
-    if (runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status === 0) {
-      console.log(`No new upstream commits to merge from ${upstreamRef}.`);
-      if (baseHasSyncedState) {
-        console.log(`Base branch ${options.base} already tracks ${upstreamRef}.`);
-      }
-      return;
-    }
-
-    const stagedFiles = runGit("diff", ["--cached", "--name-only"], {
-      capture: true,
-      allowFailure: true,
-    });
-
-    if (stagedFiles.stdout.trim().length > 0) {
-      runGit("commit", ["-m", "chore: persist upstream sync checkpoint"]);
-      console.log(`No new upstream commits to merge from ${upstreamRef}.`);
-      console.log(`Sync branch ready: ${syncBranch}`);
+    console.log(`No new upstream commits to merge from ${upstreamRef}.`);
+    if (baseHasSyncedState || syncBranchHasSyncedState) {
+      console.log(`Base branch ${options.base} already tracks ${upstreamRef}.`);
     } else {
-      console.log(`No new upstream commits to merge from ${upstreamRef}.`);
-      if (!hasSyncBranch) {
-        console.log(`No checkpoint was needed for ${syncBranch}.`);
-      }
+      console.log(`Skipping checkpoint update for ${syncBranch}; upstream is already current.`);
     }
     return;
   }

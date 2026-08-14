@@ -373,6 +373,14 @@ export function useComposerSlashCommands(input: {
         ? (activeThread.messages.find((message) => message.id === inputOptions.throughMessageId) ??
           null)
         : null;
+      if (inputOptions?.throughMessageId && throughMessage === null) {
+        toastManager.add({
+          type: "warning",
+          title: "Fork source message missing",
+          description: "Could not resolve the selected message turn for fork cutoff.",
+        });
+        return true;
+      }
       const sourceTurnId = throughMessage?.turnId ?? undefined;
 
       const nextThreadId = newThreadId();
