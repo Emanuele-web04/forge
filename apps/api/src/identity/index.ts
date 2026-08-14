@@ -12,6 +12,7 @@ import type * as schema from "../db/schema";
 import { createDevIdentityProvider } from "./devProvider";
 import { createDeviceRegistry } from "./deviceRegistry";
 import { createHostGrantIssuer } from "./grantIssuer";
+import type { EnvironmentGrantIssuer } from "./interfaces";
 import { createHostKeyRegistry } from "./hostKeyRegistry";
 import { createHostSecretStore } from "./hostSecretStore";
 import type { IdentityAdapters } from "./interfaces";
@@ -28,7 +29,14 @@ export async function createIdentityAdapters(
     seed: config.apiSigningKey,
     ...(config.apiSigningKeyPrevious ? { previousSeed: config.apiSigningKeyPrevious } : {}),
   });
-  const hostKeys = createHostKeyRegistry(db, config.apiPublicUrl);
+  // The membership probe is late-bound: the registry is constructed before
+  // the identity provider exists, but only *uses* the probe when a link
+  // arrives, long after wiring completes.
+  let grantIssuer: EnvironmentGrantIssuer | undefined;
+  const hostKeys = createHostKeyRegistry(db, config.apiPublicUrl, async (orgId) => {
+    if (!grantIssuer) throw new Error("identity provider is not wired yet");
+    return (await grantIssuer.countOrganizationMembers(orgId, 2)) > 1;
+  });
   const devices = createDeviceRegistry(db, config.apiPublicUrl);
   const hostGrants = createHostGrantIssuer(signing);
   const revocations = createRevocationLog(db);
@@ -36,6 +44,7 @@ export async function createIdentityAdapters(
 
   if (config.identityProvider === "dev") {
     const { verifier, grants, close } = await createDevIdentityProvider();
+    grantIssuer = grants;
     return {
       verifier,
       grants,
@@ -50,6 +59,7 @@ export async function createIdentityAdapters(
   }
 
   const { verifier, grants } = createWorkosIdentityProvider(config);
+  grantIssuer = grants;
   return {
     verifier,
     grants,

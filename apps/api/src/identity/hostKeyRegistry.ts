@@ -119,7 +119,25 @@ async function unlinkHostRows(
 export function createHostKeyRegistry(
   db: NodePgDatabase<typeof schema>,
   apiIssuer: string,
+  /**
+   * Whether the org has more than one member. ADR 0002 requires consent
+   * BEFORE a machine is reachable by a team, so a host linked into a shared
+   * workspace starts private and the owner opts in; a personal workspace —
+   * the overwhelmingly common case — stays frictionless. Absent or failing,
+   * we fail closed (start private): the recoverable outcome is a toggle, the
+   * unrecoverable one is silent org-wide code execution.
+   */
+  isSharedWorkspace?: (orgId: string) => Promise<boolean>,
 ): HostKeyRegistry {
+  async function initialDiscoverability(orgId: string): Promise<boolean> {
+    if (!isSharedWorkspace) return true;
+    try {
+      return !(await isSharedWorkspace(orgId));
+    } catch {
+      return false;
+    }
+  }
+
   type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
   async function withAuthenticatedHost<T>(
@@ -238,7 +256,7 @@ export function createHostKeyRegistry(
                 platform: request.platform,
                 kind: request.kind,
                 endpoints: [],
-                discoverable: true,
+                discoverable: await initialDiscoverability(owner.orgId),
                 publicKeyJwk: null,
                 keyGeneration: 0,
               })
@@ -375,7 +393,7 @@ export function createHostKeyRegistry(
               platform: claims.platform,
               kind: "local",
               endpoints: [],
-              discoverable: true,
+              discoverable: await initialDiscoverability(challenge.ownerOrgId),
               keyGeneration: 0,
             })
             .returning();

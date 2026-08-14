@@ -45,6 +45,7 @@ import {
   LinkDeviceTokenRequest,
   LinkStartRequest,
   type HostAuthorizationSnapshot,
+  SESSION_CREDENTIAL_MAX_AGE_SECONDS,
   type RelayTicketResponse,
   type RevocationEventsResponse,
   RefreshTokenRequest,
@@ -53,7 +54,7 @@ import {
   UpdateOrganizationRequest,
   UpdateProfileRequest,
 } from "@synara/contracts";
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Schema } from "effect";
 import { Hono } from "hono";
@@ -159,6 +160,12 @@ export const LINK_DEVICE_RATE_LIMIT_PER_MINUTE = 10;
 export const LINK_APPROVE_RATE_LIMIT_PER_MINUTE = 10;
 export const GRANT_RATE_LIMIT_PER_MINUTE = 60;
 export const DEVICE_MUTATION_RATE_LIMIT_PER_MINUTE = 10;
+/**
+ * Ceiling on revoked thumbprints carried in an authorization snapshot. The
+ * list is a recovery aid for missed push events, not the primary channel, so
+ * a bound keeps a burst of revocations from bloating every host's poll.
+ */
+const REVOKED_DEVICE_SNAPSHOT_LIMIT = 100;
 
 /**
  * Host Secret writes and pairing-wrap uploads allowed per user per minute.
@@ -1075,6 +1082,22 @@ export function createV1Routes(deps: {
     return c.json(await accountMe(user, toOrganizationSummary(renamed)));
   });
 
+  v1.get("/organization/member-count", async (c) => {
+    const session = await requireOrgSession(c);
+    if (session instanceof Response) return session;
+
+    try {
+      // Enrollment only asks whether this is a personal workspace. Capping at
+      // two keeps a large team to one bounded provider request while still
+      // returning every value the consent decision can distinguish.
+      const organizationMemberCount = await grants.countOrganizationMembers(session.orgId, 2);
+      return c.json({ organizationMemberCount });
+    } catch (error) {
+      console.error("[api] organization member count failed:", error);
+      return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+    }
+  });
+
   v1.get("/keys/jwks", (c) => c.json(signing.jwks));
 
   v1.post("/hosts/link/start", async (c) => {
@@ -1380,7 +1403,17 @@ export function createV1Routes(deps: {
         console.error("[api] host authorization membership lookup failed:", error);
         return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
       }
+      // Device thumbprints revoked within the session-credential lifetime:
+      // any older revocation cannot still have a live session to kill, and a
+      // host that missed the push event recovers from this list on reconnect.
+      const revokedSince = new Date(Date.now() - SESSION_CREDENTIAL_MAX_AGE_SECONDS * 1_000);
+      const revokedDevices = await db
+        .select({ jkt: deviceRows.jkt })
+        .from(deviceRows)
+        .where(and(isNotNull(deviceRows.revokedAt), gte(deviceRows.revokedAt, revokedSince)))
+        .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT);
       const body: HostAuthorizationSnapshot = {
+        revokedDeviceJkts: revokedDevices.map((device) => device.jkt),
         discoverable: host.discoverable,
         ownerUserId: host.ownerUserId,
         orgId: host.ownerOrgId,

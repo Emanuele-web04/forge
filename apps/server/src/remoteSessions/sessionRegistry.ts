@@ -43,6 +43,13 @@ export class RemoteSessionRegistry {
     if (event?.kind === "device_revoked" && event.subject) {
       this.dropWhere((session) => session.deviceJkt === event.subject, "device revoked");
     }
+    // Eventless recovery: on reconnect (or any refresh) the snapshot carries
+    // the recently revoked thumbprints, so a session whose revocation event
+    // we never received still dies here rather than living out its TTL.
+    if (authorization.revokedDeviceJkts.length > 0) {
+      const revoked = new Set(authorization.revokedDeviceJkts);
+      this.dropWhere((session) => revoked.has(session.deviceJkt), "device revoked");
+    }
     if (!authorization.discoverable || !authorization.ownerInOrg) {
       this.dropWhere(
         (session) => session.userId !== authorization.ownerUserId,

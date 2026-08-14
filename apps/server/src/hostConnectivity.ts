@@ -3,6 +3,7 @@ import http from "node:http";
 import { createAccountClient } from "@synara/shared/account";
 import { WebSocketServer } from "ws";
 
+import type { HostAuthorizationSnapshot } from "@synara/contracts";
 import {
   accountApiIssuer,
   readAccountFile,
@@ -50,11 +51,15 @@ export async function startHostConnectivity(options: HostConnectivityOptions): P
       hostId: credentials.hostId!,
       keyGeneration: credentials.hostKeyGeneration!,
     });
-  let authorization = {
+  // Fail-closed placeholder until the first successful refresh: nobody but
+  // the link-time owner (checked separately, without this snapshot) gets in
+  // on a host that has not yet heard from the account API.
+  let authorization: HostAuthorizationSnapshot = {
     discoverable: false,
     ownerUserId: credentials.hostOwnerUserId,
     orgId: credentials.organizationId ?? "unknown",
     ownerInOrg: false,
+    revokedDeviceJkts: [],
   };
   const refreshAuthorization = async () => {
     authorization = await client.getHostAuthorization(await hostProof(), credentials.hostId!);
@@ -68,6 +73,7 @@ export async function startHostConnectivity(options: HostConnectivityOptions): P
     environmentId,
     hostId: credentials.hostId,
     keyGeneration: credentials.hostKeyGeneration,
+    ownerUserId: credentials.hostOwnerUserId,
     getApiJwks: () => apiJwks.get(),
     refreshApiJwksForUnknownKid: () => apiJwks.refreshForUnknownKid(),
     getAuthorization: refreshAuthorization,
@@ -120,6 +126,19 @@ export async function startHostConnectivity(options: HostConnectivityOptions): P
         gateway.accept(socket, { userId: splice.userId, deviceJkt: splice.deviceJkt }, "relay"),
     });
     void supervisor.run(controller.signal);
+  }
+
+  if (!options.config.relayUrl) {
+    // A linked host with no relay still accepts direct and ssh-forward
+    // sessions, but has no control socket — so it never receives a revocation
+    // signal, and every kind (discoverability-off, org departure, device
+    // revoke, unlink) degrades silently to the credential TTL. That is a
+    // misconfiguration, not a mode: say so where an operator will see it.
+    console.warn(
+      "[synara] This host is linked to an account but SYNARA_RELAY_URL is not set. " +
+        "Remote sessions will still be accepted, but revocations cannot be delivered " +
+        "and will only take effect when session credentials expire.",
+    );
   }
 
   if (options.config.sshForwardPort !== undefined) {

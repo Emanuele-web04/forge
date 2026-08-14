@@ -2354,6 +2354,24 @@ describe.skipIf(!TEST_DATABASE_URL)("createV1Routes", () => {
   });
 
   describe("organization rename", () => {
+    it("reports the bounded organization member count", async () => {
+      const { app } = buildApp();
+      const { token, orgId } = await signIn();
+      const teammate = workos.addUser({ first_name: "Team", last_name: "Mate" });
+      workos.addMembership(orgId, teammate.id);
+      // The membership cache is process-wide and other suites now warm it
+      // (host linking consults member count for ADR 0002 consent), so a
+      // count taken before this teammate existed could still be cached.
+      clearOrgCache();
+
+      const res = await app.request("/api/v1/organization/member-count", {
+        headers: authHeaders(token),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ organizationMemberCount: 2 });
+    });
+
     it("renames the workspace and reports the new name", async () => {
       const { app } = buildApp();
       const { token, orgId } = await signIn();

@@ -83,7 +83,11 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
         verifier,
         grants,
         signing,
-        hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
+        hostKeys: createHostKeyRegistry(
+          db,
+          config.apiPublicUrl,
+          async (orgId) => (await grants.countOrganizationMembers(orgId, 2)) > 1,
+        ),
         devices: createDeviceRegistry(db, config.apiPublicUrl),
         hostGrants: createHostGrantIssuer(signing),
         hostSecrets: createHostSecretStore(db),
@@ -196,6 +200,27 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       host: { id: string; environmentId: string; keyGeneration: number; linked: boolean };
     };
     return { ...body.host, key, challenge };
+  }
+
+  /**
+   * Links a host and then opts it into org visibility, the way an owner does
+   * via the consent prompt. Shared-workspace links now start PRIVATE (ADR
+   * 0002), so any test about org-visible behavior must say so explicitly
+   * rather than inheriting it.
+   */
+  async function linkSharedHost(
+    app: Hono,
+    owner: Session,
+    options: { environmentId?: string; key?: HostKeyPair } = {},
+  ) {
+    const host = await linkHost(app, owner, options);
+    const response = await app.request(`/api/v1/hosts/${host.id}`, {
+      method: "PATCH",
+      headers: authHeaders(owner.token),
+      body: JSON.stringify({ discoverable: true }),
+    });
+    expect(response.status).toBe(200);
+    return host;
   }
 
   async function deviceProof(
@@ -714,8 +739,8 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       const { app, db } = buildApp();
       const owner = await signIn();
       const mate = await teammate(owner);
-      const ownHost = await linkHost(app, owner, { environmentId: randomUUID() });
-      const mateHost = await linkHost(app, mate, { environmentId: randomUUID() });
+      const ownHost = await linkSharedHost(app, owner, { environmentId: randomUUID() });
+      const mateHost = await linkSharedHost(app, mate, { environmentId: randomUUID() });
       const device = await registerDevice(app, owner);
       await app.request(`/api/v1/devices/${device.id}`, {
         method: "DELETE",
@@ -741,7 +766,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       const { app } = buildApp();
       const owner = await signIn();
       const member = await teammate(owner);
-      const host = await linkHost(app, owner, { environmentId: randomUUID() });
+      const host = await linkSharedHost(app, owner, { environmentId: randomUUID() });
       for (const session of [owner, member]) {
         const device = await registerDevice(app, session);
         const response = await app.request(`/api/v1/hosts/${host.id}/grant`, {
@@ -851,7 +876,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       const { app, db } = buildApp();
       const owner = await signIn();
       const member = await teammate(owner);
-      const host = await linkHost(app, owner, { environmentId: randomUUID() });
+      const host = await linkSharedHost(app, owner, { environmentId: randomUUID() });
       const device = await registerDevice(app, member);
       workos.removeMembership(owner.orgId, owner.userId);
       clearOrgCache();
@@ -922,7 +947,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       const owner = await signIn();
       const member = await teammate(owner);
       const outsider = await signIn();
-      const host = await linkHost(app, owner, { environmentId: randomUUID() });
+      const host = await linkSharedHost(app, owner, { environmentId: randomUUID() });
       const otherOrg = workos.addOrganization({ name: "Owner's other workspace" });
       workos.addMembership(otherOrg.id, owner.userId);
       const ownerOtherOrgToken = await workos.signAccessToken({
@@ -1185,7 +1210,11 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           verifier,
           grants,
           signing: rotated,
-          hostKeys: createHostKeyRegistry(db, config.apiPublicUrl),
+          hostKeys: createHostKeyRegistry(
+            db,
+            config.apiPublicUrl,
+            async (orgId) => (await grants.countOrganizationMembers(orgId, 2)) > 1,
+          ),
           devices: createDeviceRegistry(db, config.apiPublicUrl),
           hostGrants: createHostGrantIssuer(rotated),
           hostSecrets: createHostSecretStore(db),
@@ -1234,7 +1263,7 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       const owner = await signIn();
       const member = await teammate(owner);
       const environmentId = randomUUID();
-      const host = await linkHost(app, owner, { environmentId });
+      const host = await linkSharedHost(app, owner, { environmentId });
       const takeover = await app.request("/api/v1/hosts/link/start", {
         method: "POST",
         headers: authHeaders(member.token),
@@ -1254,6 +1283,30 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
           })
         ).status,
       ).toBe(403);
+    });
+  });
+
+  describe("10. consent before discoverability (ADR 0002)", () => {
+    it("starts a host PRIVATE when the workspace has other members", async () => {
+      // ADR 0002 wants consent BEFORE a machine is reachable by a team.
+      // Starting discoverable and asking afterwards is a race the user can
+      // lose — and loses silently, since the window grants code execution.
+      const { app, db } = buildApp();
+      const owner = await signIn();
+      await teammate(owner);
+      clearOrgCache();
+      const host = await linkHost(app, owner, { environmentId: randomUUID() });
+      const [row] = await db.select().from(hosts).where(eq(hosts.id, host.id));
+      expect(row?.discoverable).toBe(false);
+    });
+
+    it("keeps a solo workspace frictionless", async () => {
+      const { app, db } = buildApp();
+      const owner = await signIn();
+      clearOrgCache();
+      const host = await linkHost(app, owner, { environmentId: randomUUID() });
+      const [row] = await db.select().from(hosts).where(eq(hosts.id, host.id));
+      expect(row?.discoverable).toBe(true);
     });
   });
 });

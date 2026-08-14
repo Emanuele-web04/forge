@@ -117,11 +117,15 @@ describe("HostMintService", () => {
       environmentId: ENVIRONMENT_ID,
       hostId: HOST_ID,
       keyGeneration: 4,
+      // The default fixture is the ORG-MEMBER path: the connecting user is
+      // not the link-time owner, so the live authorization call still runs.
+      ownerUserId: "owner_1",
       getApiJwks: async () => jwks,
       getAuthorization: async () => ({
         discoverable: true,
         ownerUserId: "owner_1",
         orgId: "org_1",
+        revokedDeviceJkts: [],
         ownerInOrg: true,
       }),
       nowSeconds: () => NOW,
@@ -177,5 +181,34 @@ describe("HostMintService", () => {
         nowSeconds: NOW,
       }),
     ).resolves.toEqual({ userId: USER_ID, deviceJkt, expiresAtSeconds: NOW + 3600 });
+  });
+
+  it("mints for the link-time owner without consulting the account API", async () => {
+    // ADR 0011: the owner's own access must survive an API outage, and a
+    // compromised API must not be able to nominate itself as owner. Both
+    // follow from deciding the owner path off the link-time record.
+    let authorizationCalls = 0;
+    const minted = await service({
+      ownerUserId: USER_ID,
+      getAuthorization: async () => {
+        authorizationCalls += 1;
+        throw new Error("account API is unreachable");
+      },
+    }).mint(await mintRequest(await grant()));
+    expect(minted.userId).toBe(USER_ID);
+    expect(authorizationCalls).toBe(0);
+  });
+
+  it("still refuses a non-owner when the account API is unreachable", async () => {
+    // The org-member path is cloud-governed policy, so it must fail CLOSED
+    // rather than inherit the owner's offline tolerance.
+    await expect(
+      service({
+        ownerUserId: "someone_else",
+        getAuthorization: async () => {
+          throw new Error("account API is unreachable");
+        },
+      }).mint(await mintRequest(await grant())),
+    ).rejects.toThrow();
   });
 });

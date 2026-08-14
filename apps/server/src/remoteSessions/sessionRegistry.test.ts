@@ -8,6 +8,7 @@ const authorization = (overrides: Partial<HostAuthorizationSnapshot> = {}) => ({
   discoverable: true,
   ownerUserId: "owner",
   orgId: "org",
+  revokedDeviceJkts: [],
   ownerInOrg: true,
   ...overrides,
 });
@@ -72,5 +73,31 @@ describe("RemoteSessionRegistry", () => {
     });
     await registry.reverify(authorization(), { kind: "host_unlinked", subject: null });
     expect(close).toHaveBeenCalledWith(HOST_SESSION_CLOSE_REVOKED, "host unlinked");
+  });
+
+  it("drops a revoked device's session from the snapshot alone, with no event", async () => {
+    // The recovery path that matters: a host that missed the push event —
+    // relay restarted, host was offline, fan-out cap elided it — must still
+    // kill the stolen device's session on its next reverify rather than
+    // waiting out the credential TTL.
+    const registry = new RemoteSessionRegistry();
+    const close = vi.fn();
+    registry.add({
+      id: "s1",
+      userId: "owner_1",
+      deviceJkt: "stolen-device",
+      expiresAtSeconds: Math.floor(Date.now() / 1_000) + 3_600,
+      via: "relay",
+      close,
+    });
+    await registry.reverify({
+      discoverable: true,
+      ownerUserId: "owner_1",
+      orgId: "org_1",
+      ownerInOrg: true,
+      revokedDeviceJkts: ["stolen-device"],
+    });
+    expect(close).toHaveBeenCalledWith(HOST_SESSION_CLOSE_REVOKED, "device revoked");
+    expect(registry.size).toBe(0);
   });
 });

@@ -1,3 +1,4 @@
+import { HOST_SESSION_CLOSE_REVOKED } from "@synara/relay-protocol";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -164,11 +165,13 @@ describe("host connectivity integration", () => {
       environmentId,
       hostId: host.id,
       keyGeneration: 1,
+      ownerUserId: "owner_1",
       getApiJwks: async () => jwks,
       getAuthorization: async () => ({
         discoverable: true,
         ownerUserId: "owner",
         orgId: "org",
+        revokedDeviceJkts: [],
         ownerInOrg: true,
       }),
     });
@@ -205,7 +208,13 @@ describe("host connectivity integration", () => {
       requestTicket: async () => "relay-ticket",
       reverifySessions: (event) =>
         registry.reverify(
-          { discoverable: true, ownerUserId: "owner", orgId: "org", ownerInOrg: true },
+          {
+            discoverable: true,
+            ownerUserId: "owner",
+            orgId: "org",
+            revokedDeviceJkts: [],
+            ownerInOrg: true,
+          },
           event,
         ),
       acceptSplice: (socket, splice) =>
@@ -303,7 +312,9 @@ describe("host connectivity integration", () => {
         },
       ],
     });
-    await vi.waitFor(() => expect(data.closes[0]).toMatchObject({ code: 4403 }));
+    await vi.waitFor(() =>
+      expect(data.closes[0]).toMatchObject({ code: HOST_SESSION_CLOSE_REVOKED }),
+    );
     controller.abort();
     control.close();
     await running;

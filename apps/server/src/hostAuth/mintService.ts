@@ -88,6 +88,12 @@ export interface HostMintServiceOptions {
   readonly environmentId: string;
   readonly hostId: string;
   readonly keyGeneration: number;
+  /**
+   * The owner recorded when this host was linked. Authoritative for the
+   * owner path: it changes only through a re-link, which requires this
+   * host's key, so no cloud-side compromise or outage can alter it.
+   */
+  readonly ownerUserId: string;
   readonly getApiJwks: () => Promise<ApiJwks>;
   /** Forced refetch when a grant names a kid we do not hold (key rotation). */
   readonly refreshApiJwksForUnknownKid?: () => Promise<ApiJwks | undefined>;
@@ -174,10 +180,18 @@ export class HostMintService {
         throw new Error("grant is not bound to this host, user, and device key");
       }
 
-      const authorization = await this.options.getAuthorization();
-      const owner = grant.sub === authorization.ownerUserId;
-      if (!owner && (!authorization.discoverable || !authorization.ownerInOrg)) {
-        throw new HostMintError("not_authorized", "user is no longer authorized for this host");
+      // The owner is decided from the LINK-TIME record, not from a live API
+      // answer (ADR 0011). Two things follow, both deliberate: the owner's own
+      // access survives an account-API outage, and a compromised API cannot
+      // nominate itself as owner — it would have to also hold this host's key
+      // to change the linked record. Only the org-member path, which is
+      // genuinely cloud-governed policy, needs the round trip.
+      if (grant.sub !== this.options.ownerUserId) {
+        const authorization = await this.options.getAuthorization();
+        const owner = grant.sub === authorization.ownerUserId;
+        if (!owner && (!authorization.discoverable || !authorization.ownerInOrg)) {
+          throw new HostMintError("not_authorized", "user is no longer authorized for this host");
+        }
       }
 
       this.#replays.consume(

@@ -279,6 +279,18 @@ export const HostAuthorizationSnapshot = Schema.Struct({
   ownerUserId: TrimmedNonEmptyString,
   orgId: TrimmedNonEmptyString,
   ownerInOrg: Schema.Boolean,
+  /**
+   * Device thumbprints revoked recently enough that a live session could
+   * still be holding one (the credential TTL plus slack).
+   *
+   * Without this the snapshot cannot express device revocation at all, so a
+   * host that MISSED the push event — relay restarted, host was offline, or
+   * the fan-out cap elided it — could never drop that session on reconnect,
+   * and the stolen-device kill silently degraded to waiting out the ~1h
+   * credential TTL. Reverification is the recovery path for every other
+   * revocation kind; this makes it cover the most security-critical one.
+   */
+  revokedDeviceJkts: Schema.Array(TrimmedNonEmptyString),
 });
 export type HostAuthorizationSnapshot = typeof HostAuthorizationSnapshot.Type;
 
