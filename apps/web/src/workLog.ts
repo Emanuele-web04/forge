@@ -23,6 +23,7 @@ import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
+  normalizeLegacyBranding,
   isGenericToolTitle,
   normalizeCompactToolLabel,
   normalizeToolTextForComparison,
@@ -633,11 +634,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       payload,
       isRunning: activity.kind !== "tool.completed",
     });
+  const brandedReadableTitle = readableTitle ? normalizeLegacyBranding(readableTitle) : null;
   // Task-list rows derive their own progress heading above. The generic
   // activity summary ("Tasks updated") would otherwise become toolTitle and
   // take precedence over that progress label in TimelineWorkEntryRow.
-  if (readableTitle && activity.kind !== "turn.tasks.updated") {
-    entry.toolTitle = readableTitle;
+  if (brandedReadableTitle && activity.kind !== "turn.tasks.updated") {
+    entry.toolTitle = brandedReadableTitle;
   }
   const liveActivity = deriveWorkLogLiveActivity(activity, payload, entry);
   if (liveActivity) {
@@ -2184,14 +2186,12 @@ function compareActivityLifecycleRank(kind: string): number {
 }
 
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
-  if (
-    "sequence" in left &&
-    "sequence" in right &&
-    left.sequence !== undefined &&
-    right.sequence !== undefined &&
-    left.sequence !== right.sequence
-  ) {
-    return left.sequence - right.sequence;
+  if (left.createdAt === right.createdAt) {
+    const leftSequence = "sequence" in left ? left.sequence : undefined;
+    const rightSequence = "sequence" in right ? right.sequence : undefined;
+    if (leftSequence !== undefined || rightSequence !== undefined) {
+      return (leftSequence ?? Number.POSITIVE_INFINITY) - (rightSequence ?? Number.POSITIVE_INFINITY);
+    }
   }
   return left.createdAt.localeCompare(right.createdAt);
 }
@@ -2278,12 +2278,24 @@ export function deriveTimelineEntries(
       textSegments !== undefined &&
       textSegments.length > 1
     ) {
+      const segmentRows = textSegments.map((segment, segmentIndex) => ({
+        sequence: typeof segment.sequence === "number" ? segment.sequence : segmentIndex,
+        segment,
+      }));
+      const terminalMessageSequence = segmentRows.reduce<number | undefined>((max, row) => {
+        const rawSequence = row.sequence;
+        return max === undefined ? rawSequence : Math.max(max, rawSequence);
+      }, undefined);
+      const terminalSequence =
+        terminalMessageSequence === undefined
+          ? Number.MAX_SAFE_INTEGER
+          : terminalMessageSequence + 1_000_000_000;
       return [
-        ...textSegments.slice(0, textSegments.length - 1).map((segment, segmentIndex) => ({
+        ...segmentRows.map(({ segment, sequence }, segmentIndex) => ({
           id: `${displayMessage.id}#seg:${segmentIndex}`,
           kind: "message-segment" as const,
-          createdAt: segment.startedAt,
-          sequence: segment.sequence,
+          createdAt: segment.startedAt ?? displayMessage.createdAt,
+          sequence,
           message: displayMessage,
           segmentIndex,
         })),
@@ -2291,6 +2303,7 @@ export function deriveTimelineEntries(
           id: displayMessage.id,
           kind: "message" as const,
           createdAt: displayMessage.createdAt,
+          ...(terminalSequence === undefined ? {} : { sequence: terminalSequence }),
           message: displayMessage,
         },
       ];

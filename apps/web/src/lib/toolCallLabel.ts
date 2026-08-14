@@ -19,6 +19,13 @@ export function normalizeCompactToolLabel(value: string): string {
     .trim();
 }
 
+// Legacy upstream naming still appears in some tool/title payloads and UI copy.
+// Keep this normalization centralized so rebrand rules can be adjusted in one place.
+const LEGACY_BRAND_PREFIX_RE = /(^|[^A-Za-z0-9_])(forkara|synara)(?=[^A-Za-z0-9_]|$)/gi;
+export function normalizeLegacyBranding(value: string): string {
+  return value.replace(LEGACY_BRAND_PREFIX_RE, (_, prefix) => `${prefix}Forkara`);
+}
+
 // Canonical form for comparing tool display strings (heading vs preview vs
 // label): ignores case, whitespace runs, and trailing status words so dedup
 // decisions behave identically in the work-log builder and the timeline rows.
@@ -131,144 +138,144 @@ const SYNARA_BROWSER_TOOL_PRESENTATIONS = Object.fromEntries(
 
 const SYNARA_MCP_TOOL_PRESENTATIONS = {
   synara_context: {
-    running: "Synara is checking its context",
-    completed: "Synara checked its context",
-    failed: "Synara couldn't check its context",
+    running: "Forkara is checking its context",
+    completed: "Forkara checked its context",
+    failed: "Forkara couldn't check its context",
   },
   synara_capabilities: {
-    running: "Synara is checking available agents",
-    completed: "Synara checked available agents",
-    failed: "Synara couldn't check available agents",
+    running: "Forkara is checking available agents",
+    completed: "Forkara checked available agents",
+    failed: "Forkara couldn't check available agents",
   },
   synara_overview: {
-    running: "Synara is gathering an overview",
-    completed: "Synara gathered an overview",
-    failed: "Synara couldn't gather an overview",
+    running: "Forkara is gathering an overview",
+    completed: "Forkara gathered an overview",
+    failed: "Forkara couldn't gather an overview",
   },
   synara_list_allowed_projects: {
-    running: "Synara is listing allowed projects",
-    completed: "Synara listed allowed projects",
-    failed: "Synara couldn't list allowed projects",
+    running: "Forkara is listing allowed projects",
+    completed: "Forkara listed allowed projects",
+    failed: "Forkara couldn't list allowed projects",
   },
   synara_create_task: {
-    running: "Synara is creating a task",
-    completed: "Synara created a task",
-    failed: "Synara couldn't create a task",
+    running: "Forkara is creating a task",
+    completed: "Forkara created a task",
+    failed: "Forkara couldn't create a task",
   },
   synara_wait_for_task: {
-    running: "Synara is waiting for a task",
-    completed: "Synara finished waiting for a task",
-    failed: "Synara couldn't wait for a task",
+    running: "Forkara is waiting for a task",
+    completed: "Forkara finished waiting for a task",
+    failed: "Forkara couldn't wait for a task",
   },
   synara_read_task: {
-    running: "Synara is reading a task",
-    completed: "Synara read a task",
-    failed: "Synara couldn't read a task",
+    running: "Forkara is reading a task",
+    completed: "Forkara read a task",
+    failed: "Forkara couldn't read a task",
   },
   synara_list_projects: {
-    running: "Synara is listing projects",
-    completed: "Synara listed projects",
-    failed: "Synara couldn't list projects",
+    running: "Forkara is listing projects",
+    completed: "Forkara listed projects",
+    failed: "Forkara couldn't list projects",
   },
   synara_list_threads: {
-    running: "Synara is listing threads",
-    completed: "Synara listed threads",
-    failed: "Synara couldn't list threads",
+    running: "Forkara is listing threads",
+    completed: "Forkara listed threads",
+    failed: "Forkara couldn't list threads",
   },
   synara_read_thread: {
-    running: "Synara is reading a thread",
-    completed: "Synara read a thread",
-    failed: "Synara couldn't read a thread",
+    running: "Forkara is reading a thread",
+    completed: "Forkara read a thread",
+    failed: "Forkara couldn't read a thread",
   },
   synara_read_thread_activity: {
-    running: "Synara is reading thread activity",
-    completed: "Synara read thread activity",
-    failed: "Synara couldn't read thread activity",
+    running: "Forkara is reading thread activity",
+    completed: "Forkara read thread activity",
+    failed: "Forkara couldn't read thread activity",
   },
   synara_read_thread_events: {
-    running: "Synara is reading thread events",
-    completed: "Synara read thread events",
-    failed: "Synara couldn't read thread events",
+    running: "Forkara is reading thread events",
+    completed: "Forkara read thread events",
+    failed: "Forkara couldn't read thread events",
   },
   synara_read_thread_runtime_events: {
-    running: "Synara is reading thread runtime events",
-    completed: "Synara read thread runtime events",
-    failed: "Synara couldn't read thread runtime events",
+    running: "Forkara is reading thread runtime events",
+    completed: "Forkara read thread runtime events",
+    failed: "Forkara couldn't read thread runtime events",
   },
   synara_diagnose_thread: {
-    running: "Synara is diagnosing a thread",
-    completed: "Synara diagnosed a thread",
-    failed: "Synara couldn't diagnose a thread",
+    running: "Forkara is diagnosing a thread",
+    completed: "Forkara diagnosed a thread",
+    failed: "Forkara couldn't diagnose a thread",
   },
   synara_create_thread: {
-    running: "Synara is creating a thread",
-    completed: "Synara created a thread",
-    failed: "Synara couldn't create a thread",
+    running: "Forkara is creating a thread",
+    completed: "Forkara created a thread",
+    failed: "Forkara couldn't create a thread",
   },
   synara_create_threads: {
-    running: "Synara is creating threads",
-    completed: "Synara created threads",
-    failed: "Synara couldn't create threads",
+    running: "Forkara is creating threads",
+    completed: "Forkara created threads",
+    failed: "Forkara couldn't create threads",
   },
   synara_wait_for_threads: {
-    running: "Synara is waiting for threads",
-    completed: "Synara finished waiting for threads",
-    failed: "Synara couldn't wait for threads",
+    running: "Forkara is waiting for threads",
+    completed: "Forkara finished waiting for threads",
+    failed: "Forkara couldn't wait for threads",
   },
   synara_send_message: {
-    running: "Synara is sending a message",
-    completed: "Synara sent a message",
-    failed: "Synara couldn't send a message",
+    running: "Forkara is sending a message",
+    completed: "Forkara sent a message",
+    failed: "Forkara couldn't send a message",
   },
   synara_interrupt_thread: {
-    running: "Synara is interrupting a thread",
-    completed: "Synara interrupted a thread",
-    failed: "Synara couldn't interrupt a thread",
+    running: "Forkara is interrupting a thread",
+    completed: "Forkara interrupted a thread",
+    failed: "Forkara couldn't interrupt a thread",
   },
   synara_set_thread_title: {
-    running: "Synara is renaming a thread",
-    completed: "Synara renamed a thread",
-    failed: "Synara couldn't rename a thread",
+    running: "Forkara is renaming a thread",
+    completed: "Forkara renamed a thread",
+    failed: "Forkara couldn't rename a thread",
   },
   synara_set_thread_archived: {
-    running: "Synara is updating a thread",
-    completed: "Synara updated a thread",
-    failed: "Synara couldn't update a thread",
+    running: "Forkara is updating a thread",
+    completed: "Forkara updated a thread",
+    failed: "Forkara couldn't update a thread",
   },
   synara_create_automation: {
-    running: "Synara is creating an automation",
-    completed: "Synara created an automation",
-    failed: "Synara couldn't create an automation",
+    running: "Forkara is creating an automation",
+    completed: "Forkara created an automation",
+    failed: "Forkara couldn't create an automation",
   },
   synara_list_automations: {
-    running: "Synara is listing automations",
-    completed: "Synara listed automations",
-    failed: "Synara couldn't list automations",
+    running: "Forkara is listing automations",
+    completed: "Forkara listed automations",
+    failed: "Forkara couldn't list automations",
   },
   synara_view_automation: {
-    running: "Synara is viewing an automation",
-    completed: "Synara viewed an automation",
-    failed: "Synara couldn't view an automation",
+    running: "Forkara is viewing an automation",
+    completed: "Forkara viewed an automation",
+    failed: "Forkara couldn't view an automation",
   },
   synara_update_automation: {
-    running: "Synara is updating an automation",
-    completed: "Synara updated an automation",
-    failed: "Synara couldn't update an automation",
+    running: "Forkara is updating an automation",
+    completed: "Forkara updated an automation",
+    failed: "Forkara couldn't update an automation",
   },
   synara_update_automation_memory: {
-    running: "Synara is updating automation memory",
-    completed: "Synara updated automation memory",
-    failed: "Synara couldn't update automation memory",
+    running: "Forkara is updating automation memory",
+    completed: "Forkara updated automation memory",
+    failed: "Forkara couldn't update automation memory",
   },
   synara_report_automation_result: {
-    running: "Synara is reporting an automation result",
-    completed: "Synara reported an automation result",
-    failed: "Synara couldn't report an automation result",
+    running: "Forkara is reporting an automation result",
+    completed: "Forkara reported an automation result",
+    failed: "Forkara couldn't report an automation result",
   },
   synara_cancel_automation: {
-    running: "Synara is stopping an automation",
-    completed: "Synara stopped an automation",
-    failed: "Synara couldn't stop an automation",
+    running: "Forkara is stopping an automation",
+    completed: "Forkara stopped an automation",
+    failed: "Forkara couldn't stop an automation",
   },
   ...SYNARA_BROWSER_TOOL_PRESENTATIONS,
 } as const satisfies Record<string, SynaraMcpToolPresentation>;
@@ -277,6 +284,7 @@ function normalizeSynaraMcpIdentifier(value: string): string {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
 
@@ -341,9 +349,9 @@ function fallbackSynaraMcpToolPresentation(toolName: string): SynaraMcpToolPrese
       .replace(/_+/g, " ")
       .trim() || "an action";
   return {
-    running: `Synara is handling ${action}`,
-    completed: `Synara handled ${action}`,
-    failed: `Synara couldn't handle ${action}`,
+    running: `Forkara is handling ${action}`,
+    completed: `Forkara handled ${action}`,
+    failed: `Forkara couldn't handle ${action}`,
   };
 }
 
@@ -374,7 +382,7 @@ function resolveSynaraMcpToolPresentation(
       return knownPresentation;
     }
     // Free-text summaries (e.g. reconciler activity lines) can begin with the
-    // word "Synara" and normalize into a fake tool identifier; only
+    // word "Forkara" and normalize into a fake tool identifier; only
     // identifier-shaped candidates may take an invented fallback presentation.
     if (/\s/.test(candidate.trim())) {
       continue;
@@ -415,7 +423,7 @@ export function isSynaraBrowserToolCall(input: SynaraMcpToolTitleInput): boolean
   return resolveSynaraBrowserToolName([input.toolName, input.title, input.fallbackLabel]) !== null;
 }
 
-// Every provider exposes Synara's MCP tools differently: MCP, dynamic, and even
+// Every provider exposes Forkara's MCP tools differently: MCP, dynamic, and even
 // file-change rows can all represent the same gateway action. Normalize by tool
 // identity instead of provider item type so transport details never reach the UI.
 export function deriveSynaraMcpToolTitle(input: SynaraMcpToolTitleInput): string | null {
@@ -429,15 +437,17 @@ export function deriveSynaraMcpToolTitle(input: SynaraMcpToolTitleInput): string
   }
   switch (input.status ?? "completed") {
     case "running":
-      return presentation.running;
+      return normalizeLegacyBranding(presentation.running);
     case "completed":
-      return presentation.completed;
+      return normalizeLegacyBranding(presentation.completed);
     case "failed":
-      return presentation.failed;
+      return normalizeLegacyBranding(presentation.failed);
     case "cancelled":
-      return presentation.running.startsWith("Synara is ")
-        ? `Synara stopped ${presentation.running.slice("Synara is ".length)}`
-        : `Cancelled ${presentation.running}`;
+      return normalizeLegacyBranding(
+        presentation.running.startsWith("Forkara is ")
+          ? `Forkara stopped ${presentation.running.slice("Forkara is ".length)}`
+          : `Cancelled ${presentation.running}`,
+      );
   }
 }
 
@@ -469,32 +479,35 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   // Derive a verbal label from requestKind when the title is generic
   const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
 
+  const asBranded = (value: string | null): string | null =>
+    value ? normalizeLegacyBranding(value) : null;
+
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
-    return normalizedTitle;
+    return asBranded(normalizedTitle);
   }
 
   // Use verbal requestKind label before falling back to raw descriptors
   if (requestKindLabel) {
-    return requestKindLabel;
+    return asBranded(requestKindLabel);
   }
 
   if (commandLike && commandLabel) {
-    return commandLabel;
+    return asBranded(commandLabel);
   }
 
   const descriptor = normalizeToolDescriptor(extractToolDescriptorFromPayload(input.payload));
   if (descriptor && !isGenericToolTitle(descriptor)) {
-    return descriptor;
+    return asBranded(descriptor);
   }
 
   if (normalizedFallback.length > 0 && !isGenericToolTitle(normalizedFallback)) {
-    return normalizedFallback;
+    return asBranded(normalizedFallback);
   }
   if (normalizedTitle.length > 0) {
-    return normalizedTitle;
+    return asBranded(normalizedTitle);
   }
   if (normalizedFallback.length > 0) {
-    return normalizedFallback;
+    return asBranded(normalizedFallback);
   }
   return null;
 }
