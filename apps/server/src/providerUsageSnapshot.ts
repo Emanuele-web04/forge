@@ -1,9 +1,10 @@
 // FILE: providerUsageSnapshot.ts
 // Purpose: Read provider-specific local usage archives for recent usage snapshots.
 
-import type { Dirent, Stats } from "node:fs";
+import { createReadStream, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
+import readline from "node:readline";
 
 import type {
   ProviderKind,
@@ -515,48 +516,62 @@ async function listRecentClaudeTranscriptFiles(
   return listRecentFiles(candidates, maxFiles);
 }
 
-async function readClaudeUsageSamples(path: string): Promise<ReadonlyArray<ClaudeUsageSample>> {
-  let fileContents: string;
-  try {
-    fileContents = await fs.readFile(path, "utf8");
-  } catch {
-    return [];
-  }
-
+/**
+ * Claude transcripts are unbounded: a long-running session writes hundreds of megabytes
+ * into one file, and a snapshot reads PROVIDER_USAGE_FILE_READ_CONCURRENCY of them at
+ * once. Reading one into a string costs its full size in the heap plus a second copy for
+ * the line split, so a few large transcripts are enough to exhaust old space and abort the
+ * backend. Streaming holds one line at a time instead.
+ */
+export async function readClaudeUsageSamples(
+  path: string,
+): Promise<ReadonlyArray<ClaudeUsageSample>> {
   const samples: ClaudeUsageSample[] = [];
   const seenKeys = new Set<string>();
-  const lines = fileContents.split(/\r?\n/u);
+  const stream = createReadStream(path, { encoding: "utf8" });
+  // Counts every line including blank ones, so a record's fallback key stays tied to its
+  // position in the file rather than to how many records preceded it.
+  let index = -1;
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line || !line.trim()) {
-      continue;
-    }
+  try {
+    const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
+    for await (const line of lines) {
+      index += 1;
+      if (!line.trim()) {
+        continue;
+      }
 
-    const record = asRecord(parsed);
-    if (!record) {
-      continue;
-    }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
 
-    const fallbackKey = `${path}:${index}`;
-    const assistantSample = readClaudeAssistantSample({ record, fallbackKey });
-    if (assistantSample && !seenKeys.has(assistantSample.dedupeKey)) {
-      seenKeys.add(assistantSample.dedupeKey);
-      samples.push(assistantSample.sample);
-    }
+      const record = asRecord(parsed);
+      if (!record) {
+        continue;
+      }
 
-    const toolResultSample = readClaudeToolResultSample({ record, fallbackKey });
-    if (toolResultSample && !seenKeys.has(toolResultSample.dedupeKey)) {
-      seenKeys.add(toolResultSample.dedupeKey);
-      samples.push(toolResultSample.sample);
+      const fallbackKey = `${path}:${index}`;
+      const assistantSample = readClaudeAssistantSample({ record, fallbackKey });
+      if (assistantSample && !seenKeys.has(assistantSample.dedupeKey)) {
+        seenKeys.add(assistantSample.dedupeKey);
+        samples.push(assistantSample.sample);
+      }
+
+      const toolResultSample = readClaudeToolResultSample({ record, fallbackKey });
+      if (toolResultSample && !seenKeys.has(toolResultSample.dedupeKey)) {
+        seenKeys.add(toolResultSample.dedupeKey);
+        samples.push(toolResultSample.sample);
+      }
     }
+  } catch {
+    // A transcript that vanishes or fails partway through yields what was read by then,
+    // which is the same outcome as a truncated archive.
+  } finally {
+    stream.destroy();
   }
 
   return samples;
