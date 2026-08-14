@@ -493,7 +493,7 @@ describe("GitHub project provisioning", () => {
     );
 
     expect(failure.code).toBe("CLONE_FAILED");
-    expect(failure.retryable).toBe(false);
+    expect(failure.retryable).toBe(true);
   });
 
   it("removes its staging directory when an in-flight clone is cancelled", async () => {
