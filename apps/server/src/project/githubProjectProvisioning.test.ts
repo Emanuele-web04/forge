@@ -77,7 +77,77 @@ describe("GitHub project provisioning", () => {
     } as unknown as GitHubCliShape;
   }
 
+  function makeGitCoreStub(
+    fileSystem: FileSystem.FileSystem,
+    verifyOrigin = "openai/codex",
+  ): GitCoreShape {
+    return {
+      execute: (input: Parameters<GitCoreShape["execute"]>[0]) =>
+        Effect.gen(function* () {
+          if (input.operation === "clone public GitHub project") {
+            yield* fileSystem.makeDirectory(input.args.at(-1) ?? "", { recursive: true });
+            return { code: 0, stdout: "", stderr: "" };
+          }
+
+          if (input.operation === "verify GitHub project clone") {
+            return { code: 0, stdout: `https://github.com/${verifyOrigin}.git\n`, stderr: "" };
+          }
+
+          return { code: 0, stdout: "https://github.com/openai/codex.git\n", stderr: "" };
+        }),
+    } as unknown as GitCoreShape;
+  }
+
   it("uses authenticated GitHub CLI cloning without forcing SSH or HTTPS", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-provision-" });
+        const ghCalls: ReadonlyArray<string>[] = [];
+        const githubBase = makeForkAwareGitHubCliStub(fileSystem);
+        const github = {
+          ...githubBase,
+          execute: (input: Parameters<GitHubCliShape["execute"]>[0]) =>
+            Effect.gen(function* () {
+              ghCalls.push(input.args);
+              return yield* githubBase.execute(input);
+            }),
+        } as unknown as GitHubCliShape;
+        const git = makeGitCoreStub(fileSystem, "octocat/codex");
+        const provisioner = yield* makeGitHubProjectProvisioner({
+          homeDir: parent,
+          fileSystem,
+          path,
+          git,
+          github,
+        });
+        return {
+          provisioned: yield* provisioner.provisionCheckout(makeInput(parent), {
+            publish: () => Effect.void,
+          }),
+          ghCalls,
+        };
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    expect(result.provisioned.checkout).toBe("created");
+    expect(result.ghCalls).toEqual([
+      ["repo", "view", "openai/codex", "--json", "isFork,parent"],
+      ["repo", "fork", "openai/codex", "--clone=false", "--org", "octocat"],
+      [
+        "repo",
+        "clone",
+        "--no-upstream",
+        "octocat/codex",
+        expect.stringContaining(".forkara-clone-"),
+        "--",
+        "--progress",
+      ],
+    ]);
+  });
+
+  it("creates the fork under a configured destination owner", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -109,27 +179,28 @@ describe("GitHub project provisioning", () => {
           github,
         });
         return {
-          provisioned: yield* provisioner.provisionCheckout(makeInput(parent), {
-            publish: () => Effect.void,
-          }),
+          provisioned: yield* provisioner.provisionCheckout(
+            {
+              ...makeInput(parent),
+              forkDestinationOwner: "example-org",
+            },
+            {
+              publish: () => Effect.void,
+            },
+          ),
           ghCalls,
         };
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
 
     expect(result.provisioned.checkout).toBe("created");
-    expect(result.ghCalls).toEqual([
-      ["repo", "view", "openai/codex", "--json", "isFork,parent"],
-      ["repo", "fork", "openai/codex", "--clone=false"],
-      [
-        "repo",
-        "clone",
-        "--no-upstream",
-        "octocat/codex",
-        expect.stringContaining(".forkara-clone-"),
-        "--",
-        "--progress",
-      ],
+    expect(result.ghCalls).toContainEqual([
+      "repo",
+      "fork",
+      "openai/codex",
+      "--clone=false",
+      "--org",
+      "example-org",
     ]);
   });
 
@@ -397,20 +468,7 @@ describe("GitHub project provisioning", () => {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-provision-" });
-        const git = {
-          execute: (input: Parameters<GitCoreShape["execute"]>[0]) =>
-            Effect.gen(function* () {
-              if (input.operation === "clone public GitHub project") {
-                yield* fileSystem.makeDirectory(input.args.at(-1) ?? "", { recursive: true });
-                return { code: 0, stdout: "", stderr: "" };
-              }
-              return {
-                code: 0,
-                stdout: "https://github.com/openai/codex.git\n",
-                stderr: "",
-              };
-            }),
-        } as unknown as GitCoreShape;
+        const git = makeGitCoreStub(fileSystem, "openai/codex");
         const fileSystemWithPromotionRace = {
           ...fileSystem,
           rename: () =>
