@@ -143,4 +143,8 @@ _session_ genuinely is remote.
 
 ## What remains
 
-Items 3–5 above. They are independent additions.
+Nothing. Items 1, 2, 4 and 5 shipped; item 3 (mDNS) is closed as won't-do with
+its research recorded above so the decision can be reopened without redoing
+the work. Every gap the epic-wide review raised is either fixed or explicitly
+declined, and the two features that shipped last — Sync-Key pairing and
+session visibility — are covered end to end by `apps/e2e` scenarios 9 and 10.
