@@ -6,7 +6,7 @@ import {
   RELAY_CLOSE_SPLICE_CLAIMED,
   RELAY_CLOSE_SUPERSEDED,
 } from "@synara/relay-protocol";
-import type { RevocationEvent } from "@synara/contracts";
+import { RELAY_TICKET_MAX_AGE_SECONDS, type RevocationEvent } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiJwtVerifier } from "./jwtVerifier";
@@ -123,6 +123,36 @@ describe("relay state machine", () => {
   });
 
   describe("grant security and host identity", () => {
+    it("closes a client whose admission overlaps relay shutdown", async () => {
+      const grant = await api.signGrant({ hostId: hostA });
+      const claims = await verifier.verifyGrant(grant);
+      let markVerificationStarted: (() => void) | undefined;
+      const verificationStarted = new Promise<void>((resolve) => {
+        markVerificationStarted = resolve;
+      });
+      let releaseVerification: (() => void) | undefined;
+      const verificationGate = new Promise<void>((resolve) => {
+        releaseVerification = resolve;
+      });
+      vi.spyOn(verifier, "verifyGrant").mockImplementation(async () => {
+        markVerificationStarted?.();
+        await verificationGate;
+        return claims;
+      });
+      const client = new FakeSocket();
+
+      const admission = relay.admitClient(client, grant);
+      await verificationStarted;
+      relay.stop();
+      releaseVerification?.();
+      await admission;
+
+      expect(client.closes.at(-1)).toEqual({
+        code: 1001,
+        reason: "relay is shutting down",
+      });
+    });
+
     it("enforces grant jti single-use with 4403", async () => {
       const host = await connectHost(hostA);
       const grant = await api.signGrant({ hostId: hostA });
@@ -159,6 +189,39 @@ describe("relay state machine", () => {
         }),
       );
       expect(expired.closes.at(-1)?.code).toBe(RELAY_CLOSE_BAD_TOKEN);
+    });
+
+    it("reports per-host readiness across the whole control lifecycle", async () => {
+      // The positive branch of isHostReady was never asserted, so `return false`
+      // (every host permanently unreachable) and `hosts.has(hostId)` (the ADR
+      // 0010 bug: connected-but-not-ready reads as reachable) both survived.
+      const control = new FakeSocket();
+      expect(relay.isHostReady(hostA)).toBe(false);
+      await relay.admitHost(control, await api.signTicket({ hostId: hostA }));
+      // Connected but not ready: the distinction the aggregate counts cannot make.
+      expect(relay.isHostReady(hostA)).toBe(false);
+      control.emitJson({ v: 1, type: "ready" });
+      expect(relay.isHostReady(hostA)).toBe(true);
+      // A different host id must not inherit this one's readiness.
+      expect(relay.isHostReady(hostB)).toBe(false);
+
+      control.emitClose(1006, "reset");
+      expect(relay.isHostReady(hostA)).toBe(false);
+    });
+
+    it("does not treat a keepalive pong as a readiness announcement", async () => {
+      // A pong answers the relay's own ping and carries no readiness semantics.
+      // Collapsing the control-frame branch would splice clients into a host
+      // that never finished initializing.
+      const control = new FakeSocket();
+      await relay.admitHost(control, await api.signTicket({ hostId: hostA }));
+      control.emitJson({ v: 1, type: "pong" });
+
+      expect(relay.isHostReady(hostA)).toBe(false);
+      const client = new FakeSocket();
+      await relay.admitClient(client, await api.signGrant({ hostId: hostA }));
+      expect(client.closes.at(-1)).toEqual({ code: 4404, reason: "host is not connected" });
+      expect(relay.pendingCount).toBe(0);
     });
 
     it("never signals a connected host for a grant carrying another hostId", async () => {
@@ -268,6 +331,82 @@ describe("relay state machine", () => {
           .sentJson()
           .filter((message) => (message as { type?: string }).type === "splice_request"),
       ).toHaveLength(1);
+    });
+
+    it("leaves an overloaded client's grant unburnt so its retry is admitted", async () => {
+      // Consuming the grant BEFORE the capacity check destroys a legitimate
+      // grant on overload, turning a retryable 1013 into a 4403 replay refusal
+      // on the retry — every overloaded client permanently locked out of its
+      // own session instead of backing off.
+      relay.stop();
+      relay = new RelayCore({ verifier, maxPairs: 1, highWaterBytes: 1024 });
+      const host = await connectHost(hostA);
+      const occupant = await pendingFor(hostA, host);
+
+      const grant = await api.signGrant({ hostId: hostA });
+      const overloaded = new FakeSocket();
+      await relay.admitClient(overloaded, grant);
+      expect(overloaded.closes.at(-1)?.code).toBe(1013);
+
+      // The slot frees, and the SAME still-valid grant is retried.
+      occupant.client.emitClose(1000, "");
+      expect(relay.pendingCount).toBe(0);
+      const retry = new FakeSocket();
+      await relay.admitClient(retry, grant);
+
+      expect(retry.closes).toHaveLength(0);
+      expect(relay.pendingCount).toBe(1);
+    });
+
+    it("reserves nothing for a client whose socket dies mid-verification", async () => {
+      // The socket is already dead, so its onClose can never fire to release
+      // the reservation: each such client would permanently consume one of
+      // maxPairs — a slow capacity leak ending in relay-wide 1013s.
+      const host = await connectHost(hostA);
+      const grant = await api.signGrant({ hostId: hostA });
+      const claims = await verifier.verifyGrant(grant);
+      let releaseVerification: (() => void) | undefined;
+      const verificationGate = new Promise<void>((resolve) => {
+        releaseVerification = resolve;
+      });
+      vi.spyOn(verifier, "verifyGrant").mockImplementation(async () => {
+        await verificationGate;
+        return claims;
+      });
+      const client = new FakeSocket();
+
+      const admission = relay.admitClient(client, grant);
+      client.emitClose(1006, "died mid-verify");
+      releaseVerification?.();
+      await admission;
+
+      expect(relay.pendingCount).toBe(0);
+      expect(host.sentJson()).not.toContainEqual(
+        expect.objectContaining({ type: "splice_request" }),
+      );
+    });
+
+    it("refuses a spliceId reused after its pair was torn down", async () => {
+      // claimedSplices is the tombstone that stops a consumed spliceId being
+      // re-claimed once its pair is gone. Without it a late host-data socket
+      // gets the 4404 an UNKNOWN id would get, proving the guard never ran.
+      const host = await connectHost(hostA);
+      const { client, spliceId } = await pendingFor(hostA, host);
+      const data = new FakeSocket();
+      relay.admitHostData(data, spliceId);
+      expect(relay.pairCount).toBe(1);
+
+      client.emitClose(1000, "");
+      expect(relay.pairCount).toBe(0);
+
+      const late = new FakeSocket();
+      relay.admitHostData(late, spliceId);
+      expect(late.closes.at(-1)).toEqual({ code: 4413, reason: "splice already claimed" });
+
+      // An id that was never issued is a different answer entirely.
+      const unknown = new FakeSocket();
+      relay.admitHostData(unknown, "B".repeat(43));
+      expect(unknown.closes.at(-1)).toEqual({ code: 4404, reason: "splice is unavailable" });
     });
   });
 

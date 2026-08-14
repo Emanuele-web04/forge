@@ -183,7 +183,14 @@ export class RelayDialSupervisor {
     if (message.type === "revocation") {
       for (const event of message.events) {
         if (event.hostId !== this.options.hostId) continue;
-        await this.options.reverifySessions({ kind: event.kind, subject: event.subject });
+        try {
+          await this.options.reverifySessions({ kind: event.kind, subject: event.subject });
+        } catch (error) {
+          // The frame was valid; only the cloud refresh behind reverification
+          // failed. Keep the splice-signalling socket alive and report the
+          // transient failure instead of misclassifying it as protocol error.
+          this.options.onReverifyFailed?.(error);
+        }
       }
       return;
     }

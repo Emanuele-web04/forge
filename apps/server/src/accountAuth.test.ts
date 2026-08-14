@@ -6,10 +6,11 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { type AccountHost, EnvironmentId } from "@synara/contracts";
+import { decodeJwt } from "jose";
 
 import type { AccountClient } from "@synara/shared/account";
 import { AccountApiError, OrganizationRequiredError } from "@synara/shared/account";
-import { generateAndPersistHostIdentity } from "./hostIdentity";
+import { generateAndPersistHostIdentity, readHostIdentity } from "./hostIdentity";
 
 vi.mock("./tailscaleEndpoint", () => ({
   resolveTailscaleEndpoint: vi.fn(async () => undefined),
@@ -18,6 +19,7 @@ vi.mock("./tailscaleEndpoint", () => ({
 import {
   accountApiIssuer,
   accountCredentialsPath,
+  ensureLocalAccountHostLinked,
   readAccountCredentials,
   readAccountFile,
   refreshHostRegistration,
@@ -1065,6 +1067,69 @@ describe("runAuthLogin", () => {
         hostId: "host_1",
       }),
     );
+  });
+});
+
+describe("ensureLocalAccountHostLinked", () => {
+  it("keeps the stored generation matched to the persisted key when two links overlap", async () => {
+    const baseDir = makeBaseDir();
+    const stateDir = path.join(baseDir, "userdata");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(stateDir, "environment-id"), "concurrent-environment\n", "utf8");
+    await writeAccountCredentials(baseDir, credentials());
+
+    let markSlowCompleteStarted: (() => void) | undefined;
+    const slowCompleteStarted = new Promise<void>((resolve) => {
+      markSlowCompleteStarted = resolve;
+    });
+    let releaseSlowComplete: (() => void) | undefined;
+    const slowCompleteGate = new Promise<void>((resolve) => {
+      releaseSlowComplete = resolve;
+    });
+    let slowPublicKey: unknown;
+    let fastPublicKey: unknown;
+    const challenge = {
+      challengeId: "2f1f9dd7-56a5-45cf-b847-12e6658f3720",
+      nonce: "bm9uY2U",
+      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    };
+    const slowClient = makeClient({
+      startHostLink: async () => challenge,
+      completeHostLink: async ({ proof }) => {
+        slowPublicKey = decodeJwt(proof).publicKeyJwk;
+        markSlowCompleteStarted?.();
+        await slowCompleteGate;
+        return { host: { ...host, keyGeneration: 1 } };
+      },
+    });
+    const fastClient = makeClient({
+      startHostLink: async () => challenge,
+      completeHostLink: async ({ proof }) => {
+        fastPublicKey = decodeJwt(proof).publicKeyJwk;
+        return { host: { ...host, keyGeneration: 2 } };
+      },
+    });
+    const flowOptions = {
+      accountUrl: "https://accounts.example.com",
+      baseDir,
+      platform: "darwin",
+      hostname: "workstation",
+      stdout: () => {},
+    };
+
+    const slow = ensureLocalAccountHostLinked({ ...flowOptions, client: slowClient });
+    await slowCompleteStarted;
+    await ensureLocalAccountHostLinked({ ...flowOptions, client: fastClient });
+    releaseSlowComplete?.();
+    await slow;
+
+    const stored = await readAccountFile(baseDir);
+    const persistedIdentity = await readHostIdentity(
+      path.join(baseDir, "userdata", "secrets", "host-identity.json"),
+    );
+    expect(slowPublicKey).not.toEqual(fastPublicKey);
+    expect(stored?.hostKeyGeneration).toBe(2);
+    expect(persistedIdentity?.publicKeyJwk).toEqual(fastPublicKey);
   });
 });
 

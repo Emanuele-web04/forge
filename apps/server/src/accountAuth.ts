@@ -525,6 +525,11 @@ export function withLockedAccountFile<A>(baseDir: string, fn: () => Promise<A>):
   return withCredentialFileLock(accountCredentialsPath(baseDir), fn);
 }
 
+/** Every host-link key writer shares the credential lock with the final CAS. */
+function generateHostIdentityForLink(baseDir: string, hostIdentityPath: string) {
+  return withLockedAccountFile(baseDir, () => generateAndPersistHostIdentity(hostIdentityPath));
+}
+
 /**
  * Drops the session half of the stored file, keeping the host registration —
  * but only if the on-disk refresh token is still `consumedRefreshToken`.
@@ -744,8 +749,12 @@ async function linkThisHost(
   const environmentId = await resolveEnvironmentId(options.baseDir, options.devUrl);
   const name = options.hostname ?? OS.hostname();
   const appVersion = options.appVersion ?? serverPackageJson.version;
+  const { hostIdentityPath } = await runWithPath(
+    deriveServerPaths(options.baseDir, options.devUrl),
+  );
 
   let linked;
+  let linkedPublicKeyPem: string | undefined;
   try {
     const challenge = await withFreshAccessToken(
       { baseDir: options.baseDir, client },
@@ -757,12 +766,10 @@ async function linkThisHost(
           kind: "local",
         }),
     );
-    const { hostIdentityPath } = await runWithPath(
-      deriveServerPaths(options.baseDir, options.devUrl),
-    );
     // Every link attempt is a key rotation. Persist before completing so the
     // account can never accept a public key this process did not durably keep.
-    const identity = await generateAndPersistHostIdentity(hostIdentityPath);
+    const identity = await generateHostIdentityForLink(options.baseDir, hostIdentityPath);
+    linkedPublicKeyPem = identity.publicKeyPem;
     const proof = await mintHostLinkProof({
       identity,
       apiIssuer: accountApiIssuer(options.accountUrl),
@@ -784,18 +791,28 @@ async function linkThisHost(
   const endpoints = await resolveLanEndpoints(options.baseDir, options.devUrl);
   const saved = await withLockedAccountFile(options.baseDir, async () => {
     const current = await readAccountFile(options.baseDir);
-    if (!current) return false;
+    if (!current) return "missing" as const;
+    const persistedIdentity = await readHostIdentity(hostIdentityPath);
+    if (!persistedIdentity || persistedIdentity.publicKeyPem !== linkedPublicKeyPem) {
+      return "superseded" as const;
+    }
     await writeAccountCredentials(options.baseDir, {
       ...current,
       hostId: linked.host.id,
       hostOwnerUserId: linked.host.ownerUserId,
       hostKeyGeneration: linked.host.keyGeneration,
     });
-    return true;
+    return "saved" as const;
   });
-  if (!saved) {
+  if (saved === "missing") {
     stdout(
       `Linked this host as "${linked.host.name}" (${linked.host.id}), but the local credentials file disappeared before the link could be saved.\nRun \`synara auth\` again; unlink the stale host if it lingers.\n`,
+    );
+    return;
+  }
+  if (saved === "superseded") {
+    stdout(
+      "Another host link completed with a newer local key, so this link result was not stored.\n",
     );
     return;
   }
@@ -953,7 +970,7 @@ export async function runDeviceCodeHostLink(options: AccountFlowOptions): Promis
   const { hostIdentityPath } = await runWithPath(
     deriveServerPaths(options.baseDir, options.devUrl),
   );
-  const identity = await generateAndPersistHostIdentity(hostIdentityPath);
+  const identity = await generateHostIdentityForLink(options.baseDir, hostIdentityPath);
   const proof = await mintHostLinkProof({
     identity,
     apiIssuer: accountApiIssuer(options.accountUrl),
@@ -967,6 +984,10 @@ export async function runDeviceCodeHostLink(options: AccountFlowOptions): Promis
   const linked = await client.completeHostLink({ challengeId: challenge.challengeId, proof });
   const instance = await client.instance();
   await withLockedAccountFile(options.baseDir, async () => {
+    const persistedIdentity = await readHostIdentity(hostIdentityPath);
+    if (!persistedIdentity || persistedIdentity.publicKeyPem !== identity.publicKeyPem) {
+      throw new Error("Another host link superseded this device-code link with a newer local key");
+    }
     const previous = await readAccountFile(options.baseDir);
     await writeAccountCredentials(options.baseDir, {
       ...(previous?.accountUrl === options.accountUrl ? previous : {}),

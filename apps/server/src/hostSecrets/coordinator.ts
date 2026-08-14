@@ -13,8 +13,10 @@ import type {
 import {
   generatePairingKeyPair,
   generateSyncKey,
+  openHostSecret,
   pairingVerificationCode,
   rotateHostSecrets,
+  sealHostSecret,
   unwrapSyncKey,
   wrapSyncKey,
   type HostSecretEntry,
@@ -248,20 +250,51 @@ export class HostSecretsCoordinator {
       if (!entry) break;
       const current = (await this.options.api.getHostSecret(entry.hostId)).secret;
       if (!current) {
-        throw new Error(`Host Secret disappeared during rotation for ${entry.hostId}`);
+        // Host deletion wins. Keeping an entry that can never be uploaded
+        // would wedge this journal forever and block every later device
+        // revocation on the surviving device.
+        pending = { ...pending, entries: remaining };
+        await this.#writePendingRotation(oldSyncKey, pending);
+        continue;
       }
       const alreadyUploaded =
         current.version === entry.envelope.version &&
         current.ciphertext === entry.envelope.ciphertext &&
         current.iv === entry.envelope.iv;
       if (!alreadyUploaded) {
-        const expectedVersion = entry.envelope.version - 1;
+        let expectedVersion = entry.envelope.version - 1;
+        let uploadEntry = entry;
         if (current.version !== expectedVersion) {
-          throw new Error(`Host Secret changed during rotation for ${entry.hostId}`);
+          // Another surviving owner device edited this host while the rotation
+          // was paused. Rebase the pending write onto that latest old-key
+          // ciphertext instead of pinning the journal to an obsolete version.
+          const secret = await openHostSecret({
+            syncKey: oldSyncKey,
+            hostId: entry.hostId,
+            ownerUserId: entry.ownerUserId,
+            version: current.version,
+            envelope: current,
+          });
+          uploadEntry = {
+            ...entry,
+            envelope: await sealHostSecret({
+              syncKey: pending.nextSyncKey,
+              hostId: entry.hostId,
+              ownerUserId: entry.ownerUserId,
+              version: current.version + 1,
+              secret,
+            }),
+          };
+          expectedVersion = current.version;
+          // Persist the exact randomized envelope before uploading it. A crash
+          // after the CAS can then recognize the completed write byte-for-byte
+          // instead of trying to decrypt new-key ciphertext with the old key.
+          pending = { ...pending, entries: [uploadEntry, ...remaining] };
+          await this.#writePendingRotation(oldSyncKey, pending);
         }
-        await this.options.api.putHostSecret(entry.hostId, {
+        await this.options.api.putHostSecret(uploadEntry.hostId, {
           expectedVersion,
-          envelope: entry.envelope,
+          envelope: uploadEntry.envelope,
         });
       }
       pending = { ...pending, entries: remaining };
@@ -279,21 +312,20 @@ export class HostSecretsCoordinator {
     if (deviceId === this.options.deviceId) {
       throw new Error("Revoke this device from another device that is paired so it can rotate");
     }
-    const oldSyncKey = await this.#readSyncKey();
+    let oldSyncKey = await this.#readSyncKey();
     const unfinished = await readHostSecretsPendingRotation({
       filePath: this.options.syncKeyFilePath,
       accountUrl: this.options.accountUrl,
       userId: this.options.userId,
     });
     if (unfinished) {
-      if (unfinished.deviceId !== deviceId) {
-        throw new Error(
-          `Finish rotating after device ${unfinished.deviceId} before another revoke`,
-        );
-      }
       if (!oldSyncKey) throw new Error("The Host Secrets rotation journal has no current key");
       await this.#continueRotation(oldSyncKey, unfinished);
-      return;
+      if (unfinished.deviceId === deviceId) return;
+      // The completed rotation adopted its next key. A different revocation
+      // starts from that newly persisted key instead of the stale handle that
+      // opened the journal.
+      oldSyncKey = await this.#readSyncKey();
     }
 
     const entries = await this.#ownedHostSecretEntries();

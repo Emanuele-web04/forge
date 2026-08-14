@@ -209,6 +209,7 @@ export class RelayCore {
     }
     if (socketClosed || this.stopped) {
       removeEarlyClose();
+      if (!socketClosed) client.close(1001, "relay is shutting down");
       return;
     }
 

@@ -87,6 +87,8 @@ export function requiresFreshGrant(code: number): boolean {
 export interface ConnectToHostInput {
   readonly hostId: string;
   readonly candidates: readonly TransportCandidate[];
+  /** A caller-validated, unexpired host credential reusable on direct paths. */
+  readonly existingCredential?: string;
   /** `POST /hosts/:id/grant` — device-bound and short-lived (60s). */
   readonly requestGrant: (hostId: string) => Promise<string>;
   /** Cheap liveness check; the shell supplies it (fetch here, TCP on desktop). */
@@ -131,6 +133,24 @@ export type ConnectToHostResult =
  * loop in here would hide the re-grant boundary that 4401/4403 depend on.
  */
 export async function connectToHost(input: ConnectToHostInput): Promise<ConnectToHostResult> {
+  if (input.existingCredential) {
+    // A relay still needs a fresh cloud grant to create its splice. Direct
+    // transports do not: they present the already-minted host credential, so
+    // try them without touching the account API (ADR 0013 outage behavior).
+    const directCandidates = input.candidates.filter((candidate) => candidate.kind !== "relay");
+    const directRace = await raceTransports(directCandidates, input.probe, input.raceOptions ?? {});
+    if (directRace.outcome === "reachable") {
+      return {
+        outcome: "connected",
+        candidate: directRace.candidate,
+        credential: input.existingCredential,
+        race: directRace,
+      };
+    }
+    if (!input.candidates.some((candidate) => candidate.kind === "relay")) {
+      return { outcome: "unreachable", race: directRace };
+    }
+  }
   const grant = await input.requestGrant(input.hostId);
   const race = await raceTransports(input.candidates, input.probe, input.raceOptions ?? {});
   if (race.outcome !== "reachable") {

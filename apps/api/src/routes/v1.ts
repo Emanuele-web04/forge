@@ -54,7 +54,7 @@ import {
   UpdateOrganizationRequest,
   UpdateProfileRequest,
 } from "@synara/contracts";
-import { and, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Schema } from "effect";
 import { Hono } from "hono";
@@ -73,6 +73,7 @@ import {
   devices as deviceRows,
   hosts as hostRows,
   profiles,
+  revocationEvents,
   usageModelStats,
   usageSkillStats,
 } from "../db/schema";
@@ -608,6 +609,7 @@ export function createV1Routes(deps: {
   ): Promise<{ session: OrgSession; host: typeof hostRows.$inferSelect } | Response> {
     const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
+    if (!isUuid(hostId)) return errorResponse(c, 404, "host_not_found", "Host not found");
     const [host] = await db.select().from(hostRows).where(eq(hostRows.id, hostId)).limit(1);
     if (!host) return errorResponse(c, 404, "host_not_found", "Host not found");
     if (host.ownerUserId !== session.userId) {
@@ -1407,13 +1409,66 @@ export function createV1Routes(deps: {
       // any older revocation cannot still have a live session to kill, and a
       // host that missed the push event recovers from this list on reconnect.
       const revokedSince = new Date(Date.now() - SESSION_CREDENTIAL_MAX_AGE_SECONDS * 1_000);
-      const revokedDevices = await db
-        .select({ jkt: deviceRows.jkt })
-        .from(deviceRows)
-        .where(and(isNotNull(deviceRows.revokedAt), gte(deviceRows.revokedAt, revokedSince)))
-        .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT);
+      // The owner can always have reached their own host, including when an
+      // identity-provider outage prevented revocation fan-out. For org members,
+      // the host-scoped event is the safe evidence that this device could have
+      // reached THIS host. Combining only those two sources prevents unrelated
+      // tenants' churn from leaking or consuming the bounded snapshot.
+      const [revokedOwnerDevices, revokedMemberDevices] = await Promise.all([
+        db
+          .select({ jkt: deviceRows.jkt, revokedAt: deviceRows.revokedAt })
+          .from(deviceRows)
+          .where(
+            and(
+              eq(deviceRows.userId, host.ownerUserId),
+              isNotNull(deviceRows.revokedAt),
+              gte(deviceRows.revokedAt, revokedSince),
+            ),
+          )
+          .orderBy(desc(deviceRows.revokedAt))
+          .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT),
+        db
+          .select({
+            jkt: revocationEvents.subject,
+            revokedAt: sql<Date>`max(${revocationEvents.createdAt})`,
+          })
+          .from(revocationEvents)
+          .where(
+            and(
+              eq(revocationEvents.hostId, host.id),
+              eq(revocationEvents.kind, "device_revoked"),
+              isNotNull(revocationEvents.subject),
+              gte(revocationEvents.createdAt, revokedSince),
+            ),
+          )
+          .groupBy(revocationEvents.subject)
+          .orderBy(desc(sql`max(${revocationEvents.createdAt})`))
+          .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT),
+      ]);
+      const revokedDeviceJkts: string[] = [];
+      const seenRevokedDevices = new Set<string>();
+      // The two branches disagree on shape: drizzle hydrates the column read
+      // into a Date, while `max(...)` comes back as whatever pg's driver
+      // yields for the aggregate. Normalize before comparing rather than
+      // assuming a Date — calling .getTime() on the aggregate 500s the route.
+      const revokedAtMs = (value: unknown): number => {
+        if (value instanceof Date) return value.getTime();
+        if (typeof value === "string" || typeof value === "number") {
+          const parsed = new Date(value).getTime();
+          return Number.isNaN(parsed) ? 0 : parsed;
+        }
+        return 0;
+      };
+      for (const revoked of [...revokedOwnerDevices, ...revokedMemberDevices].toSorted(
+        (left, right) => revokedAtMs(right.revokedAt) - revokedAtMs(left.revokedAt),
+      )) {
+        if (revoked.jkt === null || seenRevokedDevices.has(revoked.jkt)) continue;
+        seenRevokedDevices.add(revoked.jkt);
+        revokedDeviceJkts.push(revoked.jkt);
+        if (revokedDeviceJkts.length >= REVOKED_DEVICE_SNAPSHOT_LIMIT) break;
+      }
       const body: HostAuthorizationSnapshot = {
-        revokedDeviceJkts: revokedDevices.map((device) => device.jkt),
+        revokedDeviceJkts,
         discoverable: host.discoverable,
         ownerUserId: host.ownerUserId,
         orgId: host.ownerOrgId,
@@ -1453,6 +1508,8 @@ export function createV1Routes(deps: {
         error instanceof Error ? error.message : String(error),
       );
     }
+    const hostId = c.req.param("id");
+    if (!isUuid(hostId)) return errorResponse(c, 404, "host_not_found", "Host not found");
     // The owner-membership decision needs a WorkOS round trip, which must not
     // run while holding row locks — so the host is read once here, the
     // provider consulted, and everything is re-verified under FOR UPDATE
@@ -1460,7 +1517,7 @@ export function createV1Routes(deps: {
     const [candidateHost] = await db
       .select()
       .from(hostRows)
-      .where(eq(hostRows.id, c.req.param("id")))
+      .where(eq(hostRows.id, hostId))
       .limit(1);
     // A host the caller cannot see is indistinguishable from one that does
     // not exist — same rule as requireHostOwner, applied BEFORE the linked

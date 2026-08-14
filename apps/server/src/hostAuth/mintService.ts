@@ -61,9 +61,16 @@ function assertBoundedLifetime(
   claims: { iat: number; exp: number },
   maximumSeconds: number,
   label: string,
+  nowSeconds: number,
 ): void {
   if (claims.exp <= claims.iat || claims.exp - claims.iat > maximumSeconds) {
     throw new Error(`${label} lifetime exceeds ${maximumSeconds}s`);
+  }
+  if (claims.iat > nowSeconds + JWT_CLOCK_TOLERANCE_SECONDS) {
+    throw new Error(`${label} iat is too far in the future`);
+  }
+  if (claims.exp < nowSeconds) {
+    throw new Error(`${label} has expired`);
   }
 }
 
@@ -117,6 +124,7 @@ export class HostMintService {
   }
 
   async mint(mintRequestJwt: string): Promise<MintedSessionCredential> {
+    const now = this.options.nowSeconds?.() ?? Math.floor(Date.now() / 1_000);
     let grant: GrantClaimsType;
     let grantJwt: string;
     let deviceJkt: string;
@@ -141,7 +149,7 @@ export class HostMintService {
       );
       assertDeviceHeader(mintVerified.protectedHeader, publicKeyJwk);
       const mint = Schema.decodeUnknownSync(MintRequestClaims)(mintVerified.payload);
-      assertBoundedLifetime(mint, MINT_REQUEST_MAX_AGE_SECONDS, "mint request");
+      assertBoundedLifetime(mint, MINT_REQUEST_MAX_AGE_SECONDS, "mint request", now);
       grantJwt = mint.grant;
       deviceJkt = await calculateJwkThumbprint(publicKeyJwk as JWK, "sha256");
 
@@ -170,7 +178,7 @@ export class HostMintService {
         grantVerified = await verifyGrant(rotated);
       }
       grant = Schema.decodeUnknownSync(GrantClaims)(grantVerified.payload);
-      assertBoundedLifetime(grant, GRANT_MAX_AGE_SECONDS, "grant");
+      assertBoundedLifetime(grant, GRANT_MAX_AGE_SECONDS, "grant", now);
       if (
         grant.hostId !== this.options.hostId ||
         grant.environmentId !== this.options.environmentId ||
@@ -188,17 +196,16 @@ export class HostMintService {
       // genuinely cloud-governed policy, needs the round trip.
       if (grant.sub !== this.options.ownerUserId) {
         const authorization = await this.options.getAuthorization();
+        if (authorization.revokedDeviceJkts.includes(deviceJkt)) {
+          throw new HostMintError("not_authorized", "device is revoked");
+        }
         const owner = grant.sub === authorization.ownerUserId;
         if (!owner && (!authorization.discoverable || !authorization.ownerInOrg)) {
           throw new HostMintError("not_authorized", "user is no longer authorized for this host");
         }
       }
 
-      this.#replays.consume(
-        grant.jti,
-        grant.exp,
-        this.options.nowSeconds?.() ?? Math.floor(Date.now() / 1_000),
-      );
+      this.#replays.consume(grant.jti, grant.exp, now);
     } catch (cause) {
       if (cause instanceof HostMintError) throw cause;
       const message = cause instanceof Error ? cause.message : "invalid mint request";
@@ -209,7 +216,6 @@ export class HostMintService {
       throw new HostMintError(code, message, { cause });
     }
 
-    const now = this.options.nowSeconds?.() ?? Math.floor(Date.now() / 1_000);
     const expiresAtSeconds = now + SESSION_CREDENTIAL_MAX_AGE_SECONDS;
     const credential = await new SignJWT({
       cnf: { jkt: deviceJkt },

@@ -4,7 +4,7 @@ import {
   HOST_SESSION_CLOSE_AUTH_FAILED,
   HOST_SESSION_CLOSE_PROTOCOL_ERROR,
 } from "@synara/relay-protocol";
-import type { RawData } from "ws";
+import WebSocket, { type RawData } from "ws";
 
 import type { HostMintService } from "../hostAuth";
 import { JwtReplayCache, verifySessionCredential } from "../hostAuth";
@@ -53,6 +53,16 @@ export class RemoteConnectionGateway {
     via: "direct" | "relay" | "ssh-forward" = "direct",
   ): Promise<void> {
     let state: "mint" | "authorize" | "bridged" = "mint";
+    let removeSession: (() => void) | undefined;
+    let socketClosed = socket.readyState !== WebSocket.OPEN;
+    // A terminal close is not replayed to listeners attached after credential
+    // verification. Observe it before the first handshake await, and make the
+    // same listener own any registry entry created later.
+    socket.on("close", () => {
+      socketClosed = true;
+      removeSession?.();
+      removeSession = undefined;
+    });
     // Handshake frames are processed STRICTLY SERIALLY. `ws` delivers every
     // frame in a TCP segment synchronously, so an async-per-frame handler
     // would let two `session_authorize` frames both observe state ===
@@ -125,22 +135,29 @@ export class RemoteConnectionGateway {
           if (this.options.sessions.isDeviceRevoked(peer.deviceJkt)) {
             throw new Error("this device's access was revoked");
           }
+          if (socketClosed || socket.readyState !== WebSocket.OPEN) return;
           state = "bridged";
           const id = randomUUID();
-          const remove = this.options.sessions.add({
+          removeSession = this.options.sessions.add({
             id,
             ...peer,
             startedAt: new Date().toISOString(),
             via,
             close: (code, reason) => socket.close(code, reason),
           });
-          socket.on("close", remove);
           await this.options.bridgeToLocal(socket, peer);
+          if (socketClosed || socket.readyState !== WebSocket.OPEN) {
+            removeSession?.();
+            removeSession = undefined;
+            return;
+          }
           // Do not invite application traffic until the ordinary local WS path is
           // ready to receive it. Otherwise a fast peer can race the async token
           // issuance/local connection setup and lose its first RPC frame.
           socket.send(JSON.stringify({ v: 1, type: "session_ready" }));
         } catch (error) {
+          removeSession?.();
+          removeSession = undefined;
           socket.close(
             state === "mint" || state === "authorize" ? REMOTE_AUTH_ERROR : REMOTE_PROTOCOL_ERROR,
             error instanceof Error ? error.message.slice(0, 120) : "remote authentication failed",

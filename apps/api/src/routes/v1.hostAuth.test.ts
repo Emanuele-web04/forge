@@ -16,7 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { WorkosApiConfig } from "../config";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
-import { hosts, linkChallenges, revocationEvents } from "../db/schema";
+import { devices, hosts, linkChallenges, revocationEvents } from "../db/schema";
 import { createDeviceRegistry } from "../identity/deviceRegistry";
 import { createHostGrantIssuer } from "../identity/grantIssuer";
 import { createHostKeyRegistry } from "../identity/hostKeyRegistry";
@@ -555,6 +555,40 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
   });
 
   describe("3. HostProof", () => {
+    it("returns revoked device thumbprints only for users who could reach this host", async () => {
+      const { app, db } = buildApp();
+      const owner = await signIn();
+      const member = await teammate(owner);
+      const host = await linkSharedHost(app, owner, { environmentId: randomUUID() });
+      const ownerDevice = await registerDevice(app, owner);
+      // Simulate the fail-open notification side of a membership-provider
+      // outage: the durable device revocation exists, but no host event could
+      // be fanned out. The owner's own host must still recover it directly.
+      await db.update(devices).set({ revokedAt: new Date() }).where(eq(devices.id, ownerDevice.id));
+      const memberDevice = await registerDevice(app, member);
+      await app.request(`/api/v1/devices/${memberDevice.id}`, {
+        method: "DELETE",
+        headers: authHeaders(member.token),
+      });
+
+      const unrelatedOwner = await signIn();
+      await linkSharedHost(app, unrelatedOwner, { environmentId: randomUUID() });
+      const unrelatedDevice = await registerDevice(app, unrelatedOwner);
+      await app.request(`/api/v1/devices/${unrelatedDevice.id}`, {
+        method: "DELETE",
+        headers: authHeaders(unrelatedOwner.token),
+      });
+
+      const response = await app.request(`/api/v1/hosts/${host.id}/authorization`, {
+        headers: { authorization: `HostProof ${await hostProof(host.key, host)}` },
+      });
+      expect(response.status).toBe(200);
+      const snapshot = (await response.json()) as { revokedDeviceJkts: string[] };
+      expect(snapshot.revokedDeviceJkts).toContain(ownerDevice.jkt);
+      expect(snapshot.revokedDeviceJkts).toContain(memberDevice.jkt);
+      expect(snapshot.revokedDeviceJkts).not.toContain(unrelatedDevice.jkt);
+    });
+
     it("accepts valid proof and rejects stale expiry, audience, generation, and unlink", async () => {
       const { app, db } = buildApp();
       const owner = await signIn();
@@ -942,6 +976,38 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
   });
 
   describe("6. host management", () => {
+    it("returns host_not_found instead of a database error for malformed host ids", async () => {
+      const { app } = buildApp();
+      const owner = await signIn();
+      const device = await registerDevice(app, owner);
+      const malformedHostUrl = "/api/v1/hosts/not-a-uuid";
+      const responses = await Promise.all([
+        app.request(malformedHostUrl, {
+          method: "PATCH",
+          headers: authHeaders(owner.token),
+          body: JSON.stringify({ name: "Typo" }),
+        }),
+        app.request(malformedHostUrl, {
+          method: "DELETE",
+          headers: authHeaders(owner.token),
+        }),
+        app.request(`${malformedHostUrl}/unlink`, {
+          method: "POST",
+          headers: authHeaders(owner.token),
+        }),
+        app.request(`${malformedHostUrl}/grant`, {
+          method: "POST",
+          headers: authHeaders(owner.token),
+          body: JSON.stringify({ deviceJkt: device.jkt }),
+        }),
+      ]);
+
+      expect(responses.map((response) => response.status)).toEqual([404, 404, 404, 404]);
+      for (const response of responses) {
+        await expect(response.json()).resolves.toMatchObject({ error: "host_not_found" });
+      }
+    });
+
     it("enforces visibility/owner writes and emits durable management events", async () => {
       const { app, db } = buildApp();
       const owner = await signIn();

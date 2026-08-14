@@ -8,11 +8,13 @@ import { RelayDialSupervisor } from "./supervisor";
 class FakeSocket extends EventEmitter implements RelaySocket {
   readyState = 1;
   readonly sent: string[] = [];
+  readonly closes: Array<{ code: number; reason: string }> = [];
   send(data: string | Uint8Array): void {
     this.sent.push(data.toString());
   }
   close(code = 1000, reason = ""): void {
     this.readyState = 3;
+    this.closes.push({ code, reason });
     this.emit("close", code, Buffer.from(reason));
   }
   open(): void {
@@ -27,6 +29,61 @@ class FakeSocket extends EventEmitter implements RelaySocket {
 }
 
 describe("RelayDialSupervisor", () => {
+  it("keeps a valid revocation control socket open when reverification is unavailable", async () => {
+    const hostId = "2f1f9dd7-56a5-45cf-b847-12e6658f3720";
+    const sockets: FakeSocket[] = [];
+    const controller = new AbortController();
+    const failure = new Error("account API returned 503");
+    let reverifyCalls = 0;
+    const onReverifyFailed = vi.fn();
+    const supervisor = new RelayDialSupervisor({
+      relayUrl: "https://relay.example.test",
+      hostId,
+      requestTicket: async () => "ticket",
+      reverifySessions: async () => {
+        reverifyCalls += 1;
+        if (reverifyCalls > 1) throw failure;
+      },
+      acceptSplice: vi.fn(async () => {}),
+      socketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        queueMicrotask(() => socket.open());
+        return socket;
+      },
+      sleep: async () => controller.abort(),
+      onReverifyFailed,
+    });
+    const running = supervisor.run(controller.signal);
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const control = sockets[0];
+    if (!control) throw new Error("control socket was not created");
+
+    control.message({
+      v: 1,
+      type: "revocation",
+      events: [
+        {
+          id: 1,
+          hostId,
+          kind: "org_departure",
+          subject: "departed-user",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    });
+    await vi.waitFor(() => expect(reverifyCalls).toBe(2));
+    await vi.waitFor(() =>
+      expect(control.closes.length + onReverifyFailed.mock.calls.length).toBeGreaterThan(0),
+    );
+
+    expect(control.closes).toEqual([]);
+    expect(onReverifyFailed).toHaveBeenCalledWith(failure);
+    controller.abort();
+    control.close();
+    await running;
+  });
+
   it("admits a splice before the first frame can follow its open event", async () => {
     const sockets: FakeSocket[] = [];
     const received: string[] = [];

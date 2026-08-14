@@ -4,6 +4,9 @@
 // Layer: Web remote-access feature tests.
 
 import {
+  HOST_SESSION_CLOSE_AUTH_FAILED,
+  HOST_SESSION_CLOSE_PROTOCOL_ERROR,
+  HOST_SESSION_CLOSE_REVOKED,
   RELAY_CLOSE_BAD_TOKEN,
   RELAY_CLOSE_GRANT_REPLAY,
   RELAY_CLOSE_HOST_UNAVAILABLE,
@@ -155,6 +158,27 @@ describe("connectToHost", () => {
     ).rejects.toThrow("host_not_linked");
     expect(probe).not.toHaveBeenCalled();
   });
+
+  it("reaches a direct host with an existing credential while the account API is down", async () => {
+    const requestGrant = vi.fn(() => Promise.reject(new Error("account API returned 503")));
+    const mint = vi.fn();
+
+    const result = await connectToHost({
+      hostId: "host_1",
+      candidates: [LAN, RELAY],
+      existingCredential: "still-valid-session-credential",
+      requestGrant,
+      probe: probeReaching(["lan"]),
+      mint,
+    });
+
+    expect(result.outcome).toBe("connected");
+    if (result.outcome !== "connected") throw new Error("expected a connection");
+    expect(result.candidate).toEqual(LAN);
+    expect(result.credential).toBe("still-valid-session-credential");
+    expect(requestGrant).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+  });
 });
 
 describe("relayRetryPlan", () => {
@@ -199,9 +223,45 @@ describe("relayRetryPlan", () => {
       RELAY_CLOSE_OVERLOADED,
       RELAY_CLOSE_SUPERSEDED,
       RELAY_CLOSE_KEEPALIVE_LOST,
+      HOST_SESSION_CLOSE_REVOKED,
+      HOST_SESSION_CLOSE_AUTH_FAILED,
+      HOST_SESSION_CLOSE_PROTOCOL_ERROR,
       1006,
     ]) {
       expect(relayRetryPlan(code).reason.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// Host-session codes (45xx) travel verbatim through the splice, so they need
+// the same scrutiny as the relay's own codes — and specifically the 4503
+// case: a revoked session is NOT a bad grant, and re-granting it would only
+// produce a 403 from the account API instead of telling the user access was
+// revoked.
+describe("relayRetryPlan — host-session codes (45xx)", () => {
+  it.each([
+    { code: HOST_SESSION_CLOSE_REVOKED, action: "stop", freshGrant: false },
+    { code: HOST_SESSION_CLOSE_AUTH_FAILED, action: "re-grant", freshGrant: true },
+    { code: HOST_SESSION_CLOSE_PROTOCOL_ERROR, action: "stop", freshGrant: false },
+  ] as const)(
+    "code $code -> $action (requiresFreshGrant: $freshGrant)",
+    ({ code, action, freshGrant }) => {
+      expect(relayRetryPlan(code).action).toBe(action);
+      expect(requiresFreshGrant(code)).toBe(freshGrant);
+    },
+  );
+
+  // The test and the product read the SAME constant, so a symbol-only
+  // assertion would stay green even if the constant's VALUE drifted. Pin the
+  // literals, then re-check the mapping with the raw number so the branch
+  // stays reachable even if the export above it changes.
+  it("pins the numeric close codes and re-checks the mapping by raw number", () => {
+    expect(HOST_SESSION_CLOSE_REVOKED).toBe(4503);
+    expect(HOST_SESSION_CLOSE_AUTH_FAILED).toBe(4501);
+    expect(HOST_SESSION_CLOSE_PROTOCOL_ERROR).toBe(4500);
+
+    expect(relayRetryPlan(4503).action).toBe("stop");
+    expect(relayRetryPlan(4501).action).toBe("re-grant");
+    expect(relayRetryPlan(4500).action).toBe("stop");
   });
 });
