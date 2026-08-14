@@ -39,6 +39,44 @@ function unavailableGitHubCli(): GitHubCliShape {
 }
 
 describe("GitHub project provisioning", () => {
+  function makeForkAwareGitHubCliStub(): GitHubCliShape {
+    const isForkInfo = JSON.stringify({
+      isFork: false,
+      parent: null,
+    });
+    return {
+      getViewerLogin: () => Effect.succeed("octocat"),
+      execute: (input: Parameters<GitHubCliShape["execute"]>[0]) =>
+        Effect.gen(function* () {
+          const args = input.args;
+          if (args[0] === "repo" && args[1] === "view") {
+            return { code: 0, stdout: isForkInfo, stderr: "", signal: null, timedOut: false };
+          }
+          if (args[0] === "repo" && args[1] === "fork") {
+            return { code: 0, stdout: "", stderr: "", signal: null, timedOut: false };
+          }
+          if (args[0] === "repo" && args[1] === "clone") {
+            const stagingPath = args[4] ?? "";
+            yield* FileSystem.FileSystem.makeDirectory(stagingPath, { recursive: true });
+            return {
+              code: 0,
+              stdout: "",
+              stderr: "",
+              signal: null,
+              timedOut: false,
+            };
+          }
+          return yield* Effect.fail(
+            new GitHubCliError({
+              operation: `gh ${args.join(" ")}`,
+              detail: "Unexpected GitHub CLI command in test",
+              reason: "other",
+            }),
+          );
+        }),
+    } as unknown as GitHubCliShape;
+  }
+
   it("uses authenticated GitHub CLI cloning without forcing SSH or HTTPS", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -46,19 +84,13 @@ describe("GitHub project provisioning", () => {
         const path = yield* Path.Path;
         const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-provision-" });
         const ghCalls: ReadonlyArray<string>[] = [];
+        const githubBase = makeForkAwareGitHubCliStub();
         const github = {
-          getViewerLogin: () => Effect.succeed("octocat"),
+          ...githubBase,
           execute: (input: Parameters<GitHubCliShape["execute"]>[0]) =>
             Effect.gen(function* () {
               ghCalls.push(input.args);
-              yield* fileSystem.makeDirectory(input.args[4] ?? "", { recursive: true });
-              return {
-                code: 0,
-                stdout: "",
-                stderr: "",
-                signal: null,
-                timedOut: false,
-              };
+              return yield* githubBase.execute(input);
             }),
         } as unknown as GitHubCliShape;
         const git = {
@@ -87,12 +119,14 @@ describe("GitHub project provisioning", () => {
 
     expect(result.provisioned.checkout).toBe("created");
     expect(result.ghCalls).toEqual([
+      ["repo", "view", "openai/codex", "--json", "isFork,parent"],
+      ["repo", "fork", "openai/codex", "--clone=false"],
       [
         "repo",
         "clone",
         "--no-upstream",
-        "openai/codex",
-        expect.stringContaining(".synara-clone-"),
+        "octocat/codex",
+        expect.stringContaining(".forkara-clone-"),
         "--",
         "--progress",
       ],
