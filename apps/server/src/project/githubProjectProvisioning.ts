@@ -328,8 +328,7 @@ function ensureFork(
     "fork",
     sourceRepository,
     "--clone=false",
-    "--org",
-    forkDestinationOwner,
+    ...(forkDestinationOwner === viewerLogin ? [] : ["--org", forkDestinationOwner]),
   ];
 
   return Effect.gen(function* () {
