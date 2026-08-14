@@ -13,6 +13,7 @@ import {
   reachabilityFromRace,
   reachabilityLabel,
   reachabilityToneClassName,
+  relayHostHealthUrl,
   relaySessionUrl,
 } from "./reachability";
 
@@ -105,6 +106,48 @@ describe("relaySessionUrl", () => {
   // The grant is a bearer credential and this URL is rendered in diagnostics.
   it("carries no credential", () => {
     expect(relaySessionUrl("wss://relay.example", "host_1")).not.toContain("grant");
+  });
+});
+
+describe("relayHostHealthUrl", () => {
+  // This is the per-HOST probe, not the relay's own liveness check: probing
+  // the relay itself only ever proves the relay is up, which is the
+  // regression the docstring warns about (every host reads "Reachable" until
+  // a 4404 shows up later at session open).
+  it("addresses the per-host healthz route, not the relay-wide one", () => {
+    expect(relayHostHealthUrl("wss://relay.example", "host_1")).toBe(
+      "https://relay.example/healthz/host/host_1",
+    );
+  });
+
+  it("does not merely end in /healthz", () => {
+    expect(relayHostHealthUrl("wss://relay.example", "host_1")).not.toMatch(/\/healthz$/);
+  });
+
+  // The relay base is a ws(s):// URL, which `fetch` cannot use directly — the
+  // scheme rewrite is not cosmetic, it is what makes the probe fetchable.
+  it("rewrites ws: to http:", () => {
+    expect(relayHostHealthUrl("ws://relay.example", "host_1")).toBe(
+      "http://relay.example/healthz/host/host_1",
+    );
+  });
+
+  it("tolerates a trailing slash on the relay base", () => {
+    expect(relayHostHealthUrl("wss://relay.example/", "host_1")).toBe(
+      "https://relay.example/healthz/host/host_1",
+    );
+  });
+
+  it("encodes a hostId containing a path separator", () => {
+    expect(relayHostHealthUrl("wss://relay.example", "host/1")).toBe(
+      "https://relay.example/healthz/host/host%2F1",
+    );
+  });
+
+  it("encodes a hostId containing query and fragment characters", () => {
+    expect(relayHostHealthUrl("wss://relay.example", "host?1#2")).toBe(
+      "https://relay.example/healthz/host/host%3F1%232",
+    );
   });
 });
 

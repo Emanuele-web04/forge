@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { decodeProtectedHeader, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 
-import { HOST_PROOF_JWT_TYP } from "@synara/contracts";
+import { GRANT_JWT_TYP, HOST_PROOF_JWT_TYP } from "@synara/contracts";
 import { createApiSigningService, verifyBoundedJwt, verifyJwtWithEmbeddedJwk } from "./signing";
 
 const seed = (byte: number) => Buffer.alloc(32, byte).toString("base64url");
@@ -111,6 +111,87 @@ describe("API signing", () => {
     ).rejects.toThrow(/lifetime/i);
   });
 
+  it("rejects a host proof stamped with the wrong typ", async () => {
+    // typ is the only thing distinguishing a grant from a host proof from a
+    // device registration once they all share one signing key — see the
+    // ApiSigningService doc comment.
+    const { privateKey, publicKey } = await generateKeyPair("EdDSA");
+    const now = Math.floor(Date.now() / 1000);
+    const token = await new SignJWT({ keyGeneration: 1 })
+      .setProtectedHeader({ alg: "EdDSA", typ: GRANT_JWT_TYP })
+      .setIssuer("synara-host:env-1")
+      .setSubject(randomUUID())
+      .setAudience("https://api.example")
+      .setJti(randomUUID())
+      .setIssuedAt(now)
+      .setExpirationTime(now + 60)
+      .sign(privateKey);
+
+    await expect(
+      verifyBoundedJwt(token, publicKey, {
+        typ: HOST_PROOF_JWT_TYP,
+        audience: "https://api.example",
+        algorithms: ["EdDSA"],
+        maxAgeSeconds: 60,
+      }),
+    ).rejects.toThrow(`JWT typ must be ${HOST_PROOF_JWT_TYP}`);
+    // Both sides of the wire read this constant; pin the literal too.
+    expect(HOST_PROOF_JWT_TYP).toBe("synara-host-proof+jwt");
+  });
+
+  it("rejects a host proof forged without iat or exp claims", async () => {
+    // No lifetime claims at all makes the proof immortal: the subsequent
+    // expiresAt/issuedAt arithmetic on undefined is NaN, so every bound and
+    // expiry comparison silently fails open.
+    const keys = await generateKeyPair("EdDSA", { extractable: true });
+    const jwk = await exportJWK(keys.publicKey);
+    const publicKeyJwk = { kty: "OKP", crv: "Ed25519", x: jwk.x as string } as const;
+    const token = await new SignJWT({ keyGeneration: 1 })
+      .setProtectedHeader({ alg: "EdDSA", typ: HOST_PROOF_JWT_TYP })
+      .setIssuer("synara-host:env-1")
+      .setSubject("host-1")
+      .setAudience("https://api.example")
+      .sign(keys.privateKey);
+
+    await expect(
+      verifyJwtWithEmbeddedJwk(token, {
+        typ: HOST_PROOF_JWT_TYP,
+        audience: "https://api.example",
+        issuer: "synara-host:env-1",
+        algorithms: ["EdDSA"],
+        maxAgeSeconds: 60,
+        publicKeyJwk,
+      }),
+    ).rejects.toThrow(/integer iat and exp/);
+  });
+
+  it("rejects a host proof with fractional iat/exp claims", async () => {
+    // Number.isInteger rejects fractional seconds too, not just missing claims.
+    const keys = await generateKeyPair("EdDSA", { extractable: true });
+    const jwk = await exportJWK(keys.publicKey);
+    const publicKeyJwk = { kty: "OKP", crv: "Ed25519", x: jwk.x as string } as const;
+    const now = Math.floor(Date.now() / 1000);
+    const token = await new SignJWT({ keyGeneration: 1 })
+      .setProtectedHeader({ alg: "EdDSA", typ: HOST_PROOF_JWT_TYP })
+      .setIssuer("synara-host:env-1")
+      .setSubject("host-1")
+      .setAudience("https://api.example")
+      .setIssuedAt(now + 0.5)
+      .setExpirationTime(now + 10_000.5)
+      .sign(keys.privateKey);
+
+    await expect(
+      verifyJwtWithEmbeddedJwk(token, {
+        typ: HOST_PROOF_JWT_TYP,
+        audience: "https://api.example",
+        issuer: "synara-host:env-1",
+        algorithms: ["EdDSA"],
+        maxAgeSeconds: 60,
+        publicKeyJwk,
+      }),
+    ).rejects.toThrow(/integer iat and exp/);
+  });
+
   it("refuses a token minted by a different deployment sharing the seed", async () => {
     // Two deployments can share a signing seed (staging clone, key reuse).
     // verify() pins its own issuer and does not accept a caller override, so
@@ -130,6 +211,17 @@ describe("API signing", () => {
         maxAgeSeconds: 60,
       }),
     ).rejects.toThrow();
+    // Issuer is deliberately not a caller option (see the ApiSigningService
+    // doc comment): even a call site that passes B's issuer explicitly must
+    // not make verify() trust it over A's own pinned issuer.
+    await expect(
+      a.verify(token, {
+        typ: "synara-grant+jwt",
+        audience: "synara-relay",
+        maxAgeSeconds: 60,
+        issuer: "https://b.example",
+      } as Parameters<typeof a.verify>[1]),
+    ).rejects.toThrow(/"iss"/);
   });
 
   it("stops honoring a proof the moment it expires, despite clock tolerance", async () => {
@@ -165,5 +257,14 @@ describe("API signing", () => {
     await expect(
       verifyJwtWithEmbeddedJwk(await sign(now - 90, now - 30), options),
     ).rejects.toThrow();
+    // Forward-stamped 1s past the 60s clock tolerance: an attacker who
+    // obtains one proof must not be able to hold it for a future window.
+    await expect(
+      verifyJwtWithEmbeddedJwk(await sign(now + 61, now + 121), options),
+    ).rejects.toThrow(/iat is too far in the future/);
+    // Exactly at the tolerance boundary: still accepted.
+    await expect(
+      verifyJwtWithEmbeddedJwk(await sign(now + 60, now + 120), options),
+    ).resolves.toBeDefined();
   });
 });

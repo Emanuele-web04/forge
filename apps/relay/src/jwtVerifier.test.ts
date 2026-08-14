@@ -133,6 +133,52 @@ describe("API JWT verifier", () => {
     ).resolves.toMatchObject({ exp: now });
   });
 
+  it.each([
+    [
+      "scope",
+      {
+        claims: {
+          hostId,
+          environmentId: "shared-environment",
+          cnf: { jkt: "d" },
+          scope: [RELAY_CONTROL_SCOPE],
+        },
+      },
+    ],
+    [
+      "cnf",
+      { claims: { hostId, environmentId: "shared-environment", scope: [HOST_CONNECT_SCOPE] } },
+    ],
+  ])(
+    "rejects a grant with a bad %s rather than handing the state machine junk",
+    async (_label, overrides) => {
+      // relayCore reads claims.cnf.jkt and claims.hostId straight off this
+      // payload: an unvalidated grant would throw a TypeError deep in the state
+      // machine instead of failing auth cleanly, and a relay:control-scoped
+      // grant would no longer be refused. The ticket side has this coverage;
+      // the grant side did not.
+      await expect(verifier.verifyGrant(await grant(overrides))).rejects.toThrow();
+    },
+  );
+
+  it("holds a grant to its own 60-second bound, not the ticket's five minutes", async () => {
+    // GRANT_MAX_AGE_SECONDS is 60 by design — a grant is a single-use ticket
+    // to reach one machine. A copy-paste slip to RELAY_TICKET_MAX_AGE_SECONDS
+    // (or wider) survived because the maxAge bound was only ever exercised
+    // through verifyRelayTicket. Spans are literal so widening the constant
+    // is caught too.
+    const now = Math.floor(Date.now() / 1000);
+    await expect(
+      verifier.verifyGrant(await grant({ issuedAt: now, expiresAt: now + 61 })),
+    ).rejects.toThrow("JWT lifetime exceeds its allowed bound");
+    await expect(
+      verifier.verifyGrant(await grant({ issuedAt: now, expiresAt: now + 300 })),
+    ).rejects.toThrow("JWT lifetime exceeds its allowed bound");
+    await expect(
+      verifier.verifyGrant(await grant({ issuedAt: now, expiresAt: now + 60 })),
+    ).resolves.toMatchObject({ exp: now + 60 });
+  });
+
   it("refreshes once for a newly published kid and rate-limits unknown-kid fetches", async () => {
     const rotated = await api.rotate();
     await expect(verifier.verifyRelayTicket(await ticket({ key: rotated }))).resolves.toMatchObject(

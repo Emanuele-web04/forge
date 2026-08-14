@@ -50,6 +50,76 @@ function tamper(value: string, index: number): string {
   return encodeBase64Url(bytes);
 }
 
+/**
+ * The AAD layout, spelled out here rather than imported. A test that rebuilt
+ * the additional data by calling the module's own encoder could not notice the
+ * domain string or the field order changing — and both are wire format that
+ * ciphertext already in the account service's columns depends on.
+ */
+const SEAL_AAD_DOMAIN = "synara.hostSecret.aad.v1";
+
+function hostSecretAad(
+  hostId: string,
+  ownerUserId: string,
+  version: number,
+): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(
+    JSON.stringify([SEAL_AAD_DOMAIN, hostId, ownerUserId, version]),
+  ) as Uint8Array<ArrayBuffer>;
+}
+
+/** Imports raw bytes as a Sync Key, so a checked-in key can be replayed. */
+async function importSyncKey(rawBase64Url: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    decodeBase64Url(rawBase64Url),
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+}
+
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/**
+ * Re-spells a 32-byte coordinate without changing it. 43 base64url characters
+ * carry 258 bits for 256 bits of data, so the final character's low two bits
+ * are ignored on decode: flipping them yields a genuinely different string for
+ * byte-identical key material. This is the case normalization exists for.
+ */
+function respellCoordinate(coordinate: string): string {
+  const last = coordinate.at(-1);
+  if (last === undefined) throw new Error("empty coordinate");
+  const index = BASE64URL_ALPHABET.indexOf(last);
+  if (index < 0) throw new Error("coordinate is not base64url");
+  const flipped = BASE64URL_ALPHABET[index ^ 0b11];
+  if (flipped === undefined) throw new Error("unreachable");
+  return coordinate.slice(0, -1) + flipped;
+}
+
+/** p = 2^256 - 2^224 + 2^192 + 2^96 - 1, the P-256 field prime. */
+const P256_FIELD_PRIME = 2n ** 256n - 2n ** 224n + 2n ** 192n + 2n ** 96n - 1n;
+
+/**
+ * y -> p - y: the negation of a curve point, which shares the original's x.
+ * An attacker who can substitute -P for P is the reason the verification code
+ * has to commit to both coordinates.
+ */
+function negateCoordinate(coordinate: string): string {
+  const source = decodeBase64Url(coordinate);
+  let value = 0n;
+  for (const byte of source) {
+    value = (value << 8n) | BigInt(byte);
+  }
+  let rest = P256_FIELD_PRIME - value;
+  const bytes = new Uint8Array(32);
+  for (let index = 31; index >= 0; index -= 1) {
+    bytes[index] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return encodeBase64Url(bytes);
+}
+
 async function sealForHostA(syncKey: CryptoKey, secret: unknown = SSH_HOST_SECRET) {
   return sealHostSecret({
     syncKey,
@@ -126,7 +196,22 @@ describe("sealHostSecret / openHostSecret", () => {
     // AES-GCM loses confidentiality outright on IV reuse, and host config is
     // rewritten with byte-identical contents often.
     const syncKey = await generateSyncKey();
-    const seals = await Promise.all(Array.from({ length: 64 }, () => sealForHostA(syncKey)));
+    const seals = await Promise.all(Array.from({ length: 512 }, () => sealForHostA(syncKey)));
+
+    // Checked before uniqueness because it is the deterministic half. Distinct
+    // IVs are only evidence of entropy somewhere; a nonce with two random bytes
+    // and ten fixed ones still usually draws 512 distinct values while carrying
+    // 16 bits instead of 96. Requiring every position to move cannot be passed
+    // by any partially-fixed nonce, at any sample size.
+    const ivs = seals.map((seal) => decodeBase64Url(seal.iv));
+    for (const iv of ivs) {
+      expect(iv).toHaveLength(12);
+    }
+    for (let position = 0; position < 12; position += 1) {
+      const distinct = new Set(ivs.map((iv) => iv[position]));
+      // 512 uniform draws collapsing to one value has probability 256^-511.
+      expect(distinct.size, `IV byte ${position} never varied`).toBeGreaterThan(1);
+    }
 
     expect(new Set(seals.map((seal) => seal.iv)).size).toBe(seals.length);
     expect(new Set(seals.map((seal) => seal.ciphertext)).size).toBe(seals.length);
@@ -215,6 +300,58 @@ describe("AAD binding", () => {
     );
   });
 
+  it("builds the AAD from the caller's version, never the envelope's claim", async () => {
+    // The half the AEAD cannot cover. `envelope.version` here agrees with the
+    // ciphertext, so an implementation that fed the envelope's claim into the
+    // AAD would decrypt this happily — the disagreement with the caller's
+    // expected version is the only thing wrong, and only the guard sees it.
+    const syncKey = await generateSyncKey();
+    const envelope = await sealHostSecret({
+      syncKey,
+      hostId: HOST_A,
+      ownerUserId: OWNER,
+      version: 3,
+      secret: SSH_HOST_SECRET,
+    });
+
+    // Control: at the version the caller actually did compare-and-swap on, it opens.
+    await expect(
+      openHostSecret({ syncKey, hostId: HOST_A, ownerUserId: OWNER, version: 3, envelope }),
+    ).resolves.toEqual(SSH_HOST_SECRET);
+
+    await expectOpenRejection(
+      openHostSecret({ syncKey, hostId: HOST_A, ownerUserId: OWNER, version: 9, envelope }),
+    );
+  });
+
+  it("refuses a mismatch the AAD alone would also catch, so the guard cannot be dropped", async () => {
+    // Mirror of the above: here the ciphertext matches the caller's version and
+    // the envelope's column is the lie. Dropping the guard while still binding
+    // the caller's version would open this.
+    const syncKey = await generateSyncKey();
+    const envelope = await sealHostSecret({
+      syncKey,
+      hostId: HOST_A,
+      ownerUserId: OWNER,
+      version: 9,
+      secret: SSH_HOST_SECRET,
+    });
+
+    await expect(
+      openHostSecret({ syncKey, hostId: HOST_A, ownerUserId: OWNER, version: 9, envelope }),
+    ).resolves.toEqual(SSH_HOST_SECRET);
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: 9,
+        envelope: { ...envelope, version: 3 },
+      }),
+    );
+  });
+
   it("does not let a crafted hostId forge another pair's binding", async () => {
     // A delimiter-joined AAD would let ("a", "b|c") collide with ("a|b", "c").
     const syncKey = await generateSyncKey();
@@ -299,6 +436,54 @@ describe("tampering", () => {
     );
   });
 
+  it("rejects a 16-byte IV even when the ciphertext genuinely authenticates under it", async () => {
+    // WebCrypto happily accepts a 16-byte AES-GCM nonce, so the previous test's
+    // rejection comes from the tag, not the length check. This envelope is
+    // correctly sealed under a 16-byte IV with the exact AAD `openHostSecret`
+    // will rebuild: nothing but the explicit length guard can refuse it. A
+    // nonce width that varies by writer is how two devices end up reusing one.
+    const syncKey = await generateSyncKey();
+    const iv = crypto.getRandomValues(new Uint8Array(16));
+    const ciphertext = await crypto.subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv,
+        additionalData: hostSecretAad(HOST_A, OWNER, HOST_SECRET_INITIAL_VERSION),
+        tagLength: 128,
+      },
+      syncKey,
+      new TextEncoder().encode(JSON.stringify(SSH_HOST_SECRET)),
+    );
+
+    // Proof the vector is well-formed: WebCrypto itself opens it.
+    await expect(
+      crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv,
+          additionalData: hostSecretAad(HOST_A, OWNER, HOST_SECRET_INITIAL_VERSION),
+          tagLength: 128,
+        },
+        syncKey,
+        ciphertext,
+      ),
+    ).resolves.toBeDefined();
+
+    await expectOpenRejection(
+      openHostSecret({
+        syncKey,
+        hostId: HOST_A,
+        ownerUserId: OWNER,
+        version: HOST_SECRET_INITIAL_VERSION,
+        envelope: {
+          ciphertext: encodeBase64Url(new Uint8Array(ciphertext)),
+          iv: encodeBase64Url(iv),
+          version: HOST_SECRET_INITIAL_VERSION,
+        },
+      }),
+    );
+  });
+
   it("rejects a truncated ciphertext", async () => {
     const syncKey = await generateSyncKey();
     const envelope = await sealForHostA(syncKey);
@@ -312,6 +497,115 @@ describe("tampering", () => {
         version: HOST_SECRET_INITIAL_VERSION,
         envelope: { ...envelope, ciphertext: encodeBase64Url(bytes.slice(0, bytes.length - 1)) },
       }),
+    );
+  });
+});
+
+describe("wire format", () => {
+  // Everything in this block is a number or string the account service's stored
+  // bytes already depend on. Asserting them against the module's own constants
+  // would compare the product to itself, so every expectation here is a
+  // literal: changing one of these is a migration, not a refactor.
+
+  it("pins the envelope's byte widths as literals", async () => {
+    const syncKey = await generateSyncKey();
+    const envelope = await sealForHostA(syncKey);
+
+    expect(HOST_SECRET_IV_BYTES).toBe(12);
+    expect(decodeBase64Url(envelope.iv)).toHaveLength(12);
+    expect(PAIRING_VERIFICATION_CODE_LENGTH).toBe(6);
+    // Plaintext plus exactly a 128-bit tag. A shorter tag would still round-trip
+    // in-process while quietly weakening the AEAD and orphaning stored rows.
+    expect(decodeBase64Url(envelope.ciphertext)).toHaveLength(
+      JSON.stringify(SSH_HOST_SECRET).length + 16,
+    );
+  });
+
+  it("opens a host secret sealed by an earlier build of this module", async () => {
+    // Frozen vector. The AAD domain string and its field layout, the IV width,
+    // and the tag length are all baked into these bytes; if any of them drifts,
+    // every host secret in the account service's bytea columns becomes
+    // permanently unopenable, with no error until a user opens one.
+    const syncKey = await importSyncKey("YfnnsYRL4gx8Sf55vkFon06TfxZiec2Vec_1EU4RiEE");
+
+    await expect(
+      openHostSecret({
+        syncKey,
+        hostId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        ownerUserId: "11111111-1111-4111-8111-111111111111",
+        version: 1,
+        envelope: {
+          ciphertext:
+            "5_ro5fyz9UKqUrafkM-FBAJs9IPYTf7ktquYqa8283SB2LPXXrwBkykhKyFgmVsT6qi31xb0119frr98jnmOjfNLfR-PYXZlHSGkX4QDzxGvY7QHbtxAuENxKHxV4x7M5bUCOW1Z-MBqHzc2M6JmyQ3VyS1oBi1OUFYxliVK7ahFlctM5Wjbt2Xf7xcQ_0sHjTg7XzpyVsGI-dGHRZ98y8p77j80KPyF3pk3L0LDHnWjzO-REJEz4m7W7L8-O-pbnkZE1G1a3fHTWEZW6tysgLvGgb--n1lwzRfcdy6wiMqgiHY7MYP2gMohLG9f-jX7ESMhKp7uywVLhibui5V9e1mn-D5YZPL_S0qhjIQikOX0L7YCxAJD93Db8AtUQli4RNRvi1f7fEW61JuJHPZlKLyGRNjmxTfMlqZv501oZpSkYvVQNCkg-27xUmXV9PTeygjshR-eplRytImEuvYEC651hc7extIS2SqFh2hx7X5Q31JBoKLD5R1blLcjdv5eKtE",
+          iv: "6kNCE-NYRVXRppaS",
+          version: 1,
+        },
+      }),
+    ).resolves.toEqual(SSH_HOST_SECRET);
+  });
+
+  it("derives the same verification code an earlier build showed the user", async () => {
+    // Frozen vector over the pairing-code domain separator and the transcript
+    // layout. A drift here does not fail loudly — it shows two honest devices
+    // different codes, and the user is told to treat that as an attack.
+    await expect(
+      pairingVerificationCode({
+        senderPublicJwk: {
+          kty: "EC",
+          crv: "P-256",
+          x: "VOOEi6C7xQvXl-eEMEEhE1TqzFdwAmQBG4vomSF5pBo",
+          y: "h2h26MkWj79W3dWdXsIXX6-dmArujOvvv5ncTmgoUkg",
+        },
+        recipientPublicJwk: {
+          kty: "EC",
+          crv: "P-256",
+          x: "XkV4AX4m570E3XFDIoygc7Oj6cllA9cRufIrjGSyLLM",
+          y: "jAn4bvfPkYck14Lob8yHi9CNlk4iyHDOHlvOUXCWsTs",
+        },
+      }),
+    ).resolves.toBe("BDZP79");
+  });
+
+  it("unwraps a sync key wrapped by an earlier build of this module", async () => {
+    // Frozen vector over the pairing KDF domain separator, its salt, and the
+    // transcript layout. Pairing blobs are short-lived, but a device mid-pairing
+    // across an upgrade would fail with nothing to point at.
+    const recipientPrivateKey = await crypto.subtle.importKey(
+      "jwk",
+      {
+        kty: "EC",
+        crv: "P-256",
+        d: "xVOLb_4-mAz0-x8nNO4qXsmJAZ22_TVasIx6IcrqghI",
+        x: "mcG5atO191PJ9PeoMxCmOHNequFwKpjEBngsItQPKCo",
+        y: "X8jYM2TDxAKhvPtZZgpDXxAsgSdOBpUREBMQFTI0yns",
+      },
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      ["deriveBits"],
+    );
+
+    const received = await unwrapSyncKey({
+      wrapped: {
+        ephemeralPublicJwk: {
+          kty: "EC",
+          crv: "P-256",
+          x: "yr3auFIGzKwrULQwOJhPv0Ibdl980sFW18ptxv0y0xU",
+          y: "ltHmwiwcO9JQ2hjGApllM3-w2VSi81vVofUo-7UqUxQ",
+        },
+        recipientPublicJwk: {
+          kty: "EC",
+          crv: "P-256",
+          x: "mcG5atO191PJ9PeoMxCmOHNequFwKpjEBngsItQPKCo",
+          y: "X8jYM2TDxAKhvPtZZgpDXxAsgSdOBpUREBMQFTI0yns",
+        },
+        wrapped: "3oYNOh1ODlBrHGvp8vpSbwjBriL84HEnxp4anNSMtEqiv_2gxJI4Bw",
+      },
+      recipientPrivateKey,
+    });
+
+    // It really is the Sync Key from the envelope vector above.
+    expect(encodeBase64Url(new Uint8Array(await crypto.subtle.exportKey("raw", received)))).toBe(
+      "YfnnsYRL4gx8Sf55vkFon06TfxZiec2Vec_1EU4RiEE",
     );
   });
 });
@@ -532,16 +826,74 @@ describe("pairingVerificationCode", () => {
     expect(new Set(pairs.map((code) => code.at(-1))).size).toBeGreaterThan(1);
   });
 
-  it("ignores base64url padding differences in an otherwise identical key", async () => {
-    // Same point, differently spelled, must not read as a different peer.
+  it("changes when only the y coordinate is substituted", async () => {
+    // The attack a code committing to x alone would miss entirely: on P-256, P
+    // and -P share an x, so an attacker who negates the honest key produces the
+    // same six characters on both devices and the user confirms a MITM. The
+    // negated key is a real point on the curve, so this is not a malformed
+    // input the validator would catch.
     const alice = await generatePairingKeyPair();
     const bob = await generatePairingKeyPair();
-    const paddedBob = { ...bob.publicJwk, x: `${bob.publicJwk.x}=`.slice(0, -1) };
+    const negatedBob = { ...bob.publicJwk, y: negateCoordinate(bob.publicJwk.y) };
+
+    expect(negatedBob.y).not.toBe(bob.publicJwk.y);
+    expect(negatedBob.x).toBe(bob.publicJwk.x);
+
+    const honest = await pairingVerificationCode({
+      senderPublicJwk: alice.publicJwk,
+      recipientPublicJwk: bob.publicJwk,
+    });
+    await expect(
+      pairingVerificationCode({
+        senderPublicJwk: alice.publicJwk,
+        recipientPublicJwk: negatedBob,
+      }),
+    ).resolves.not.toBe(honest);
+  });
+
+  it("changes when only the x coordinate is substituted", async () => {
+    // The mirror: a code built from y alone would collide here.
+    const alice = await generatePairingKeyPair();
+    const bob = await generatePairingKeyPair();
+    const other = await generatePairingKeyPair();
+    const splicedBob = { ...bob.publicJwk, x: other.publicJwk.x };
+
+    expect(splicedBob.x).not.toBe(bob.publicJwk.x);
+    expect(splicedBob.y).toBe(bob.publicJwk.y);
+
+    const honest = await pairingVerificationCode({
+      senderPublicJwk: alice.publicJwk,
+      recipientPublicJwk: bob.publicJwk,
+    });
+    await expect(
+      pairingVerificationCode({
+        senderPublicJwk: alice.publicJwk,
+        recipientPublicJwk: splicedBob,
+      }),
+    ).resolves.not.toBe(honest);
+  });
+
+  it("ignores base64url spelling differences in an otherwise identical key", async () => {
+    // Same point, differently spelled, must not read as a different peer.
+    // A 32-byte coordinate leaves two unused bits in its final base64url
+    // character, so the same bytes have four legal spellings — a peer that
+    // emitted a different one would otherwise look like an attacker.
+    const alice = await generatePairingKeyPair();
+    const bob = await generatePairingKeyPair();
+    const respelledX = respellCoordinate(bob.publicJwk.x);
+    const respelledBob = { ...bob.publicJwk, x: respelledX };
+
+    // Without this the test proves nothing: the strings must genuinely differ
+    // while decoding to identical bytes.
+    expect(respelledX).not.toBe(bob.publicJwk.x);
+    expect(Array.from(decodeBase64Url(respelledX))).toEqual(
+      Array.from(decodeBase64Url(bob.publicJwk.x)),
+    );
 
     await expect(
       pairingVerificationCode({
         senderPublicJwk: alice.publicJwk,
-        recipientPublicJwk: paddedBob,
+        recipientPublicJwk: respelledBob,
       }),
     ).resolves.toBe(
       await pairingVerificationCode({

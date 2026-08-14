@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRelayApp, type RelayApplication } from "./app";
 import type { RelayConfig } from "./config";
 import { FakeApi } from "./test/fakeApi";
+import { FakeSocket } from "./test/fakeSocket";
 
 describe("relay HTTP surface", () => {
   let api: FakeApi;
@@ -46,5 +47,27 @@ describe("relay HTTP surface", () => {
     const absent = await relay.app.request("/healthz/host/00000000-0000-4000-8000-00000000dead");
     expect(absent.status).toBe(200);
     expect(await absent.json()).toEqual({ ready: false });
+
+    // Only the LIVE case proves the probe answers the question the row asks.
+    // With only the absent case covered, `ready: false` for every host (full
+    // outage) and "connected counts as ready" (the ADR 0010 bug, where the
+    // truth surfaces late as a 4404 at session open) both read as correct.
+    const hostId = "00000000-0000-4000-8000-000000000001";
+    const control = new FakeSocket();
+    await relay.core.admitHost(control, await api.signTicket({ hostId }));
+    const connectedNotReady = await relay.app.request(`/healthz/host/${hostId}`);
+    expect(await connectedNotReady.json()).toEqual({ ready: false });
+
+    control.emitJson({ v: 1, type: "ready" });
+    const live = await relay.app.request(`/healthz/host/${hostId}`);
+    expect(live.status).toBe(200);
+    expect(await live.json()).toEqual({ ready: true });
+
+    // And the aggregate view stays a different question entirely.
+    expect(await (await relay.app.request("/healthz")).json()).toEqual({
+      status: "ok",
+      hosts: 1,
+      pairs: 0,
+    });
   });
 });

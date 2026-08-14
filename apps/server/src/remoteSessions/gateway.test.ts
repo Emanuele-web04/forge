@@ -38,7 +38,7 @@ const API_ISSUER = "https://accounts.example.test";
 const HOST_ID = "2f1f9dd7-56a5-45cf-b847-12e6658f3720";
 
 class TestSocket extends EventEmitter implements RelaySocket {
-  readyState = WebSocket.OPEN;
+  readyState: number = WebSocket.OPEN;
   readonly sent: string[] = [];
   readonly closes: Array<{ code: number; reason: string }> = [];
 

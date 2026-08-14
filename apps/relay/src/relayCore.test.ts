@@ -438,6 +438,46 @@ describe("relay state machine", () => {
       expect(relay.pairCount).toBe(0);
     });
 
+    it("still unlinks when the poll batch mixes an unlink with other events", async () => {
+      // The poller batches a whole poll window and RelayCore groups by hostId,
+      // so a batch carrying BOTH a device_revoked and the host_unlinked for one
+      // host is ordinary. A some/every slip would silently ignore the unlink:
+      // control stays open, pairs keep splicing, and the host reconnects freely.
+      const host = await connectHost(hostA);
+      const paired = await pendingFor(hostA, host);
+      const data = new FakeSocket();
+      relay.admitHostData(data, paired.spliceId);
+      expect(relay.pairCount).toBe(1);
+
+      relay.deliverRevocations([
+        {
+          id: 10,
+          hostId: hostA,
+          kind: "device_revoked",
+          subject: "device_1",
+          createdAt: "2026-08-13T00:00:00.000Z",
+        },
+        {
+          id: 11,
+          hostId: hostA,
+          kind: "host_unlinked",
+          subject: null,
+          createdAt: "2026-08-13T00:00:00.000Z",
+        },
+      ]);
+
+      expect(host.closes.at(-1)).toEqual({ code: 4401, reason: "host was unlinked" });
+      expect(data.closes.at(-1)).toEqual({ code: 4401, reason: "host was unlinked" });
+      expect(relay.pairCount).toBe(0);
+      expect(relay.hostCount).toBe(0);
+
+      // The tombstone must be written too, or the host reconnects immediately.
+      const reconnect = new FakeSocket();
+      await relay.admitHost(reconnect, await api.signTicket({ hostId: hostA }));
+      expect(reconnect.closes.at(-1)).toEqual({ code: 4401, reason: "host was unlinked" });
+      expect(relay.hostCount).toBe(0);
+    });
+
     it("refuses the unlinked host's still-valid ticket on reconnect", async () => {
       // Closing the socket is not revocation: the ticket the host already
       // holds stays syntactically valid for its full 5 minutes, so without a
@@ -464,18 +504,77 @@ describe("relay state machine", () => {
       expect(relay.hostCount).toBe(0);
     });
 
-    it("tears down orphan pairs when unlink arrives with no control connected", async () => {
+    it("outlasts the ticket a host held when it was unlinked", async () => {
+      // The tombstone's DURATION is the property, not its existence: a ticket
+      // minted just before the unlink stays syntactically valid for its full
+      // 5 minutes, so a tombstone shorter than that lets the host wait it out
+      // and reconnect with the pre-unlink ticket.
+      let now = Date.UTC(2026, 7, 13);
+      relay.stop();
+      relay = new RelayCore({
+        verifier,
+        maxPairs: 10,
+        highWaterBytes: 1024,
+        now: () => now,
+        logger: { error: vi.fn(), warn: vi.fn() },
+      });
+      const host = await connectHost(hostA);
+      relay.deliverRevocations([
+        {
+          id: 12,
+          hostId: hostA,
+          kind: "host_unlinked",
+          subject: null,
+          createdAt: "2026-08-13T00:00:00.000Z",
+        },
+      ]);
+      expect(host.closes.at(-1)?.code).toBe(4401);
+
+      // A full ticket lifetime later, a pre-unlink ticket could still verify.
+      now += RELAY_TICKET_MAX_AGE_SECONDS * 1_000;
+      const waited = new FakeSocket();
+      await relay.admitHost(waited, await api.signTicket({ hostId: hostA }));
+      expect(waited.closes.at(-1)).toEqual({ code: 4401, reason: "host was unlinked" });
+      expect(relay.hostCount).toBe(0);
+
+      // Only past the ticket lifetime plus clock tolerance does it lift, by
+      // which point every pre-unlink ticket has certainly expired.
+      now += 121 * 1_000;
+      const relinked = new FakeSocket();
+      await relay.admitHost(relinked, await api.signTicket({ hostId: hostA }));
+      expect(relinked.closes).toHaveLength(0);
+      expect(relay.hostCount).toBe(1);
+    });
+
+    it("attributes a lost control's teardown to the disconnect, not to a later unlink", async () => {
+      // This replaces a test that claimed to cover the orphan-pair path but
+      // could not: onControlClosed already closes every pair and pending for
+      // the host, so `pairCount === 0` was satisfied BEFORE deliverRevocations
+      // ran. The close REASON is what tells the two paths apart, so assert it.
+      //
+      // Every route that removes a control (close, supersede, keepalive
+      // teardown) also closes its pairs, so `hosts` empty while pairs survive
+      // is not reachable — the revocation's no-control branch is defensive
+      // only, and no test can currently distinguish it. What IS worth pinning
+      // is that the disconnect did the work and a later unlink cannot rewrite
+      // an already-delivered close.
       const host = await connectHost(hostA);
       const paired = await pendingFor(hostA, host);
       const data = new FakeSocket();
       relay.admitHostData(data, paired.spliceId);
+      const pending = await pendingFor(hostA, host);
       expect(relay.pairCount).toBe(1);
 
-      // The control socket drops (TCP reset, process restart) but the spliced
-      // data sockets are still live. A revocation must still reach them.
       host.emitClose(1006, "reset");
       expect(relay.hostCount).toBe(0);
+      expect(relay.pairCount).toBe(0);
+      expect(relay.pendingCount).toBe(0);
+      // 4404 'host disconnected' — NOT 4401 'host was unlinked'.
+      expect(data.closes.at(-1)).toEqual({ code: 4404, reason: "host disconnected" });
+      expect(paired.client.closes.at(-1)).toEqual({ code: 4404, reason: "host disconnected" });
+      expect(pending.client.closes.at(-1)).toEqual({ code: 4404, reason: "host disconnected" });
 
+      const closesBefore = data.closes.length;
       relay.deliverRevocations([
         {
           id: 9,
@@ -485,7 +584,13 @@ describe("relay state machine", () => {
           createdAt: "2026-08-13T00:00:00.000Z",
         },
       ]);
-      expect(relay.pairCount).toBe(0);
+
+      // Nothing left to tear down, and no second close on an already-closed
+      // socket. The unlink's only remaining job is the reconnect tombstone.
+      expect(data.closes).toHaveLength(closesBefore);
+      const reconnect = new FakeSocket();
+      await relay.admitHost(reconnect, await api.signTicket({ hostId: hostA }));
+      expect(reconnect.closes.at(-1)).toEqual({ code: 4401, reason: "host was unlinked" });
     });
 
     it("closes established pairs when the control socket disconnects", async () => {
