@@ -48,6 +48,8 @@ const LEGACY_ORIGIN_HOST = `${characters(103, 105, 116, 104, 117, 98, 46, 99, 11
 const LEGACY_ORIGIN_PATH = `${LEGACY_ORIGIN_OWNER}/${LEGACY_ORIGIN_REPO}`;
 const LEGACY_ORIGIN_REFERENCE =
   `${characters(71, 105, 116, 72, 117, 98)}/${LEGACY_ORIGIN_OWNER}/${LEGACY_ORIGIN_REPO}`.toLowerCase();
+const LEGACY_ORIGIN_REFERENCE_LOWER = LEGACY_ORIGIN_REFERENCE;
+const LEGACY_ORIGIN_PATH_LOWER = LEGACY_ORIGIN_PATH.toLowerCase();
 
 function parseArgs(argv: string[]): ParsedOptions {
   const valueFor = (name: string): string | undefined => {
@@ -250,7 +252,10 @@ const ORIGIN_ATTRIBUTION_PREFIXES: RegExp[] = [
 ];
 
 function isLegacyOriginAttributionLine(trimmed: string): boolean {
-  if (!trimmed.includes("t3code") && !trimmed.includes(LEGACY_ORIGIN_REFERENCE) && !trimmed.includes(LEGACY_ORIGIN_PATH)) {
+  if (
+    !trimmed.includes(LEGACY_ORIGIN_REFERENCE_LOWER) &&
+    !trimmed.includes(LEGACY_ORIGIN_PATH_LOWER)
+  ) {
     return false;
   }
 
