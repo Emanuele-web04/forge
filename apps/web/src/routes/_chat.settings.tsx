@@ -53,6 +53,7 @@ import {
   SettingsSegmentedControl,
   SettingsSelectControl,
 } from "../components/settings/SettingControls";
+import { ForkTypeLorePanel } from "~/components/settings/ForkTypeLorePanel";
 import {
   SettingsRow,
   SettingsSection,
@@ -276,6 +277,9 @@ function SettingsRouteView() {
     ...(settings.appSnapPlaySound !== defaults.appSnapPlaySound ? ["AppSnap capture sound"] : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
+      : []),
+    ...(settings.hideUpstreamRepositoryInfo !== defaults.hideUpstreamRepositoryInfo
+      ? ["Upstream information visibility"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
@@ -550,6 +554,10 @@ function SettingsRouteView() {
         })}
       </SettingsSection>
 
+      <SettingsSectionShell title="Fork type lore">
+        <ForkTypeLorePanel />
+      </SettingsSectionShell>
+
       <div id={SETTINGS_TARGETS.environmentPanel} className="space-y-6">
         <SettingsSection title="Environment panel">
           {renderBooleanSettingRow({
@@ -578,6 +586,15 @@ function SettingsRouteView() {
               "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
             resetLabel: "repository section",
             ariaLabel: "Show the Repository section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "hideUpstreamRepositoryInfo",
+            title: "Hide upstream information",
+            description:
+              "Hide upstream repository identity in the chat Environment panel while keeping Git behavior unchanged.",
+            resetLabel: "upstream information visibility",
+            ariaLabel: "Hide upstream repository information in the Environment panel",
           })}
 
           {renderBooleanSettingRow({
@@ -682,7 +699,7 @@ function SettingsRouteView() {
         <SettingsSection title="App">
           <SettingsRow
             title="App icon"
-            description="Choose the icon Synara uses in the dock or taskbar."
+            description="Choose the icon Forkara uses in the dock or taskbar."
             resetAction={
               settings.desktopAppIcon !== defaults.desktopAppIcon ? (
                 <SettingResetButton
