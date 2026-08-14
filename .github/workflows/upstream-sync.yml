@@ -69,9 +69,16 @@ jobs:
             exit 0
           fi
 
-          if ! git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-            echo "Sync branch not available on filesystem: $BRANCH"
+          if ! git show-ref --verify --quiet "refs/heads/$BRANCH" &&
+            ! git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+            echo "Sync branch not available on filesystem or origin: $BRANCH"
             exit 0
+          fi
+
+          if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+            git switch "$BRANCH"
+          else
+            git switch -c "$BRANCH" "origin/$BRANCH"
           fi
 
           if [ -z "$(git status --porcelain=v1)" ]; then
@@ -83,9 +90,22 @@ jobs:
 
           git push --set-upstream origin "$BRANCH"
 
+          BODY="Automated upstream synchronization from \`${{ github.repository_owner }}/${{ github.repository }}\` via workflow run #${{ github.run_id }}."
+          PR_TITLE="chore: sync upstream/${UPSTREAM_BRANCH} ($(date -u +%Y-%m-%d))"
+          PR_URL=$(gh pr list --repo "${{ github.repository }}" --base "${BASE_BRANCH}" --head "$BRANCH" --json number,url --state open --jq '.[0].url' || true)
+
+          if [ -n "$PR_URL" ]; then
+            gh pr edit "$PR_URL" \
+              --repo "${{ github.repository }}" \
+              --title "$PR_TITLE" \
+              --body "$BODY"
+            echo "Reused existing PR for $BRANCH: $PR_URL"
+            exit 0
+          fi
+
           gh pr create \
             --repo "${{ github.repository }}" \
-            --title "chore: sync upstream/${UPSTREAM_BRANCH} ($(date -u +%Y-%m-%d))" \
-            --body "Automated upstream synchronization from \`${{ github.repository_owner }}/${{ github.repository }}\` via workflow run #${{ github.run_id }}." \
+            --title "$PR_TITLE" \
+            --body "$BODY" \
             --base "${BASE_BRANCH}" \
             --head "$BRANCH"

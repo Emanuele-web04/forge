@@ -21,6 +21,7 @@ import type {
   ThreadMarkerId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { type ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
@@ -74,6 +75,33 @@ export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
 const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
   "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3";
+export const UPSTREAM_AMNESIA_LABEL = "Upstream information hidden";
+export const UPSTREAM_AMNESIA_HINT = "Upstream successfully forgotten. Git remembers.";
+
+export function getRepositoryLabel(input: {
+  githubRepository: {
+    readonly nameWithOwner: string;
+    readonly url: string;
+  } | null;
+  hideUpstreamRepositoryInfo: boolean;
+}): ReactNode {
+  if (!input.hideUpstreamRepositoryInfo) {
+    return (
+      <span className="truncate">
+        {input.githubRepository?.nameWithOwner ?? "Unknown repository"}
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <span className="truncate text-muted-foreground">{UPSTREAM_AMNESIA_LABEL}</span>
+      <span className="truncate text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/80">
+        {UPSTREAM_AMNESIA_HINT}
+      </span>
+    </span>
+  );
+}
 
 export interface EnvironmentPanelProps {
   /** Drives the slide-in/out transition; the panel stays mounted so CSS can interpolate. */
@@ -381,12 +409,26 @@ export function EnvironmentPanel({
         <EnvironmentLabeledSection label="Repository">
           <EnvironmentRow
             icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-            label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
-            trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-            onClick={() => {
-              onOpenGithubRepository(githubRepository.url);
-              onClose();
-            }}
+            label={getRepositoryLabel({
+              githubRepository,
+              hideUpstreamRepositoryInfo: settings.hideUpstreamRepositoryInfo,
+            })}
+            trailing={
+              !settings.hideUpstreamRepositoryInfo ? (
+                <ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />
+              ) : null
+            }
+            {...(!settings.hideUpstreamRepositoryInfo
+              ? {
+                  onClick: () => {
+                    onOpenGithubRepository(githubRepository.url);
+                    onClose();
+                  },
+                }
+              : {
+                  "aria-label": "Upstream repository identity is hidden",
+                  title: "Upstream repository identity is hidden",
+                })}
           />
         </EnvironmentLabeledSection>
       ) : null}
