@@ -87,7 +87,7 @@ jobs:
           fi
 
           if [ -z "$(git status --porcelain=v1)" ]; then
-            echo "No file edits were produced on $BRANCH; proceeding with branch sync commit only."
+            echo "No file edits were produced on $BRANCH; pushing the branch as-is."
           else
             git add -A
             git commit -m "chore: sync fork with upstream ${UPSTREAM_BRANCH}"

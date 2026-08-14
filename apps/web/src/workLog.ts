@@ -2278,14 +2278,22 @@ export function deriveTimelineEntries(
       textSegments !== undefined &&
       textSegments.length > 1
     ) {
-      return textSegments.map((segment, segmentIndex) => ({
-        id: `${displayMessage.id}#seg:${segmentIndex}`,
-        kind: "message-segment" as const,
-        createdAt: segment.startedAt,
-        sequence: segment.sequence,
-        message: displayMessage,
-        segmentIndex,
-      }));
+      return [
+        ...textSegments.slice(0, textSegments.length - 1).map((segment, segmentIndex) => ({
+          id: `${displayMessage.id}#seg:${segmentIndex}`,
+          kind: "message-segment" as const,
+          createdAt: segment.startedAt,
+          sequence: segment.sequence,
+          message: displayMessage,
+          segmentIndex,
+        })),
+        {
+          id: displayMessage.id,
+          kind: "message" as const,
+          createdAt: displayMessage.createdAt,
+          message: displayMessage,
+        },
+      ];
     }
     return [
       {
