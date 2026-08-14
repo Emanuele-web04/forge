@@ -140,7 +140,7 @@ Existing patterns (real Postgres via `TEST_DATABASE_URL`, fakeWorkos). Matrix:
 
 ## 9. JWT shapes
 
-Conventions (t3code-derived): jose; header pins `typ`; issuers/audiences exact-matched; `clockTolerance: 60`; bounded lifetime = `exp > iat ∧ exp − iat ≤ cap ∧ iat ≤ now + 60s`; UUIDv4 `jti`. **Host and API keys: Ed25519 (EdDSA). Device keys: ES256 (P-256, Secure Enclave) or EdDSA** (F23). API issuer string = `API_PUBLIC_URL`.
+Conventions (upstream-derived): jose; header pins `typ`; issuers/audiences exact-matched; `clockTolerance: 60`; bounded lifetime = `exp > iat ∧ exp − iat ≤ cap ∧ iat ≤ now + 60s`; UUIDv4 `jti`. **Host and API keys: Ed25519 (EdDSA). Device keys: ES256 (P-256, Secure Enclave) or EdDSA** (F23). API issuer string = `API_PUBLIC_URL`.
 
 | typ                             | signer            | aud                                 | cap | purpose                                                                                                                                                                                                                                                                                             |
 | ------------------------------- | ----------------- | ----------------------------------- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -1,6 +1,6 @@
 # Hosts as First-Class Account Entities
 
-**Status: agreed direction (grilling session 2026-08-13, revised same day after comparing against t3code's production architecture).** Supersedes `2026-08-03-account-backend-design.md` where they conflict. The _why_ behind each decision lives in `docs/adr/0001`–`0009`; vocabulary in `/CONTEXT.md`. This document is the _what_: the model, the services, and the build order.
+**Status: agreed direction (grilling session 2026-08-13, revised same day after comparing against the upstream project's production architecture).** Supersedes `2026-08-03-account-backend-design.md` where they conflict. The _why_ behind each decision lives in `docs/adr/0001`–`0009`; vocabulary in `/CONTEXT.md`. This document is the _what_: the model, the services, and the build order.
 
 ## Summary
 
@@ -29,7 +29,7 @@ Invariant preserved with one sharpening: loopback/same-machine is local trust an
 
 ## Relay (ADR 0006, 0008, 0010, 0011)
 
-Separate stateless Railway service (`relay.*`), sharing token/schema code via a monorepo package. We keep the data plane on our own infrastructure — a control-plane-only relay provisioning Cloudflare Tunnels (t3code's model) was considered and rejected (ADR 0008).
+Separate stateless Railway service (`relay.*`), sharing token/schema code via a monorepo package. We keep the data plane on our own infrastructure — a control-plane-only relay provisioning Cloudflare Tunnels (the upstream model) was considered and rejected (ADR 0008).
 
 - **Splice authorization**: client fetches a **Relay Grant** from the API — short-lived (~60s), single-use, host-scoped, signed. API applies the rule (owner, or discoverable + same org); relay verifies signature/host/expiry statelessly, no DB.
 - **Session credential**: minted by the **host**, not the cloud (ADR 0011). On splice, the relay forwards a short-lived client-bound mint request; the host verifies it against directory keys and mints the credential the client actually uses.
@@ -57,6 +57,8 @@ Thin vertical slice first — prove the riskiest path (client → relay → host
 
 Multi-env-per-machine; per-user access grants; org-owned hosts or ownership transfer; multiple/regional relays; relay opt-out; stored/pushed presence and live online dots (attempt-based only, ADR 0010); org-shared SSH secrets; session multiplexing over one relay socket; Cloudflare-Tunnel-style provisioned data plane.
 
-## Borrowed from t3code (reference: github.com/pingdotgg/t3code, clone at /tmp/t3code-research)
+## Borrowed from upstream
+
+Reference: the project Synara was forked from, linked in README "Origins".
 
 Host-minted credentials with signed link challenges (`infra/relay/src/environments/EnvironmentLinker.ts`, `EnvironmentConnector.ts`) and attempt-based reachability (`packages/client-runtime/src/connection/supervisor.ts`) are adopted. Worth stealing during implementation: capability-scoped session tokens via RFC 8693-style exchange (`docs/internals/environment-auth.md`), pairing tokens carried in the URL hash so the hosted origin never sees them, DPoP-bound relay sessions, and account-side deregister that revokes links for dead hosts.

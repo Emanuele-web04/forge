@@ -52,6 +52,22 @@ function pairingMismatch(remainingAttempts: number): Error & {
   });
 }
 
+/**
+ * Delivers `text` the way a paste does — the whole string at once, past the
+ * field's `maxLength` — instead of the per-character path `fill()` simulates.
+ * React tracks the DOM value internally, so setting `.value` directly is
+ * skipped by its onChange dedupe; the native setter is what makes the event
+ * carry the pasted text.
+ */
+async function userPaste(element: HTMLInputElement, text: string): Promise<void> {
+  const setValue = Object.getOwnPropertyDescriptor(
+    globalThis.HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setValue?.call(element, text);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 async function reachNewDeviceConfirmation() {
   harness.beginSyncKeyPairing.mockResolvedValue(request);
   harness.receiveSyncKey.mockResolvedValue({ verificationCode: "ABC234" });
@@ -89,9 +105,16 @@ describe("SyncKeyPairingPanel", () => {
     harness.confirmSyncKey.mockResolvedValue(undefined);
     const mounted = await reachNewDeviceConfirmation();
     const input = mounted.getByLabelText("Code shown on your other device");
+    const element = input.element() as HTMLInputElement;
 
-    await input.fill("a-bi0c1d2e3");
-    expect((input.element() as HTMLInputElement).value).toBe("ABC-D2E");
+    // A real paste, not `fill()`. The field caps typing at maxLength (7 = six
+    // code characters plus one separator), so `fill()` would truncate this to
+    // "a-bi0c1" BEFORE the component ever saw it and the assertion below would
+    // be measuring Playwright rather than the normalizer. A paste delivers the
+    // whole string, which is the case that matters: someone copies a code with
+    // lowercase, a separator, and the ambiguous 0/1/I that the alphabet drops.
+    await userPaste(element, "a-bi0c1d2e3");
+    expect(element.value).toBe("ABC-D2E");
     await mounted.getByRole("button", { name: "Confirm codes" }).click();
 
     await vi.waitFor(() =>

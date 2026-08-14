@@ -1,6 +1,6 @@
 # Reachability is attempt-based; no presence store, no client push channel
 
-Supersedes ADR 0005 and ADR 0009 after comparing against t3code, which shipped remote access in production with no presence infrastructure at all.
+Supersedes ADR 0005 and ADR 0009 after comparing against the upstream project Synara was forked from (see README "Origins"), which shipped remote access in production with no presence infrastructure at all.
 
 There is no stored or pushed online/offline state. Clients learn whether a host is reachable by attempting — the transport probe-race (ADR 0007) _is_ the reachability check — plus an on-demand health call for explicit status. Host lists show reachability as-of-last-fetch/probe, not live dots. Clients hold no relay control socket; the client's only relay interaction is presenting a grant to open a session.
 

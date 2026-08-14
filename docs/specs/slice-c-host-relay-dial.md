@@ -4,7 +4,7 @@
 
 ## 1. Host identity & keys
 
-- Ed25519 keypair generated on first link, stored in the server state dir as a JSON secret (PKCS8/SPKI PEM), `0o600`, atomic temp+rename — mirroring the t3code `environmentKeys` pattern. New module `apps/server/src/hostIdentity/`.
+- Ed25519 keypair generated on first link, stored in the server state dir as a JSON secret (PKCS8/SPKI PEM), `0o600`, atomic temp+rename — mirroring the upstream `environmentKeys` pattern. New module `apps/server/src/hostIdentity/`.
 - Link flow (client-initiated via Desktop/device-code, Slice A §4): host receives `{challengeJwt}`, generates keypair if absent, signs `synara-host-link+jwt`, POSTs to API `link/complete`. Re-link generates a **fresh keypair** (ADR 0015: sign-out unlink → new keypair on next sign-in).
 - HostProof minting helper (`synara-host-proof+jwt`, ≤60s) for all API calls; replaces any `synhost_` bearer usage.
 

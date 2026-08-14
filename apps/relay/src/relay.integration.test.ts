@@ -62,12 +62,12 @@ async function openAndClose(path: string): Promise<CloseResult> {
   return closeOf(socket);
 }
 
-function nextMessage(socket: WebSocket): Promise<MessageResult> {
+function nextMessage(socket: WebSocket, timeoutMs = 2_000): Promise<MessageResult> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("timed out waiting for WebSocket message"));
-    }, 2_000);
+    }, timeoutMs);
     function cleanup() {
       clearTimeout(timeout);
       socket.off("message", onMessage);
@@ -431,45 +431,131 @@ describe("8. End-to-end integration", () => {
 });
 
 describe("9. Load smoke", () => {
-  it("echoes 100 concurrent pairs without reordering or cross-talk", async (context) => {
-    if (skipWithoutLoopback(context)) return;
-    const id = hostId(70);
-    const control = await connectHost(id);
-    const dataSockets: WebSocket[] = [];
-    control.on("message", (raw, binary) => {
-      if (binary) return;
-      let message: { type?: string; spliceId?: string };
-      try {
-        message = JSON.parse(rawBuffer(raw).toString("utf8")) as typeof message;
-      } catch {
-        return;
-      }
-      if (message.type !== "splice_request" || !message.spliceId) return;
-      void openSocket(`/host/data?splice=${message.spliceId}`).then((data) => {
-        dataSockets.push(data);
-        data.on("message", (payload, isBinary) => data.send(payload, { binary: isBinary }));
-      });
-    });
+  // The shared relay pins pendingTimeoutMs to 100ms so the expiry tests in
+  // section 3 finish fast. That budget is per splice but the load here creates
+  // 100 at once, so on a busy runner the host cannot dial all of them back
+  // inside 100ms and the relay correctly expires every one — 4404 "splice timed
+  // out", zero pairs, and a failure that reads like cross-talk but is the
+  // fixture starving itself. This scenario gets its own relay at the production
+  // default (10s) because it is measuring routing, not the expiry deadline.
+  let loadRelay: RelayApplication | undefined;
+  let loadServer: ServerType | undefined;
+  let loadOrigin = "";
 
-    const clients = await Promise.all(
-      Array.from({ length: 100 }, async (_, index) => {
-        const grant = await (api as FakeApi).signGrant({
-          hostId: id,
-          userId: `user_${index}`,
-          deviceJkt: `device_${index}`,
-        });
-        return openSocket(`/client/session?grant=${encodeURIComponent(grant)}`);
-      }),
+  beforeAll(async () => {
+    if (networkUnavailable || !api) return;
+    const activeApi = api;
+    loadRelay = await createRelayApp(
+      {
+        port: 0,
+        apiBaseUrl: activeApi.origin,
+        apiIssuer: activeApi.issuer,
+        relayServiceToken: activeApi.serviceToken,
+        maxPairs: 256,
+        highWaterBytes: 64 * 1024,
+      },
+      {
+        keepaliveIntervalMs: 5_000,
+        revocationPollIntervalMs: 1_000,
+        logger: { error: vi.fn(), warn: vi.fn() },
+      },
     );
-    await vi.waitFor(() => expect(dataSockets).toHaveLength(100), { timeout: 10_000 });
-    const replies = clients.map((client, index) => {
-      const reply = nextMessage(client);
-      client.send(`pair-${index}`);
-      return reply;
+    const activeRelay = loadRelay;
+    await new Promise<void>((resolve, reject) => {
+      const activeServer = serve(
+        { fetch: activeRelay.app.fetch, port: 0, hostname: "127.0.0.1" },
+        (info) => {
+          loadOrigin = `ws://127.0.0.1:${info.port}`;
+          resolve();
+        },
+      );
+      activeServer.on("upgrade", activeRelay.handleUpgrade as RelayApplication["handleUpgrade"]);
+      activeServer.once("error", reject);
+      loadServer = activeServer;
     });
-    const messages = await Promise.all(replies);
-    expect(messages.map(({ data }) => data.toString("utf8"))).toEqual(
-      Array.from({ length: 100 }, (_, index) => `pair-${index}`),
-    );
   });
+
+  afterAll(async () => {
+    loadRelay?.close();
+    if (loadServer) await new Promise<void>((resolve) => loadServer?.close(() => resolve()));
+  });
+
+  function openLoadSocket(path: string): Promise<WebSocket> {
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(`${loadOrigin}${path}`);
+      sockets.add(socket);
+      socket.once("open", () => resolve(socket));
+      socket.once("error", reject);
+      socket.once("close", () => sockets.delete(socket));
+    });
+  }
+
+  // Raised over the 15s default: this is the only scenario that opens 201
+  // sockets, and it shares a CI runner with twelve other packages' suites.
+  it(
+    "echoes 100 concurrent pairs without reordering or cross-talk",
+    { timeout: 60_000 },
+    async (context) => {
+      if (skipWithoutLoopback(context)) return;
+      const id = hostId(70);
+      const ticket = await (api as FakeApi).signTicket({
+        hostId: id,
+        environmentId: "environment-1",
+      });
+      const control = await openLoadSocket(`/host/control?ticket=${encodeURIComponent(ticket)}`);
+      control.on("message", (data, binary) => {
+        if (binary) return;
+        try {
+          const parsed = JSON.parse(rawBuffer(data).toString("utf8")) as { type?: string };
+          if (parsed.type === "ping" && control.readyState === WebSocket.OPEN) {
+            control.send(JSON.stringify({ v: 1, type: "pong" }));
+          }
+        } catch {
+          // Not a control frame this helper handles.
+        }
+      });
+      control.send(JSON.stringify({ v: 1, type: "ready" }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const dataSockets: WebSocket[] = [];
+      control.on("message", (raw, binary) => {
+        if (binary) return;
+        let message: { type?: string; spliceId?: string };
+        try {
+          message = JSON.parse(rawBuffer(raw).toString("utf8")) as typeof message;
+        } catch {
+          return;
+        }
+        if (message.type !== "splice_request" || !message.spliceId) return;
+        void openLoadSocket(`/host/data?splice=${message.spliceId}`).then((data) => {
+          dataSockets.push(data);
+          data.on("message", (payload, isBinary) => data.send(payload, { binary: isBinary }));
+        });
+      });
+
+      const clients = await Promise.all(
+        Array.from({ length: 100 }, async (_, index) => {
+          const grant = await (api as FakeApi).signGrant({
+            hostId: id,
+            userId: `user_${index}`,
+            deviceJkt: `device_${index}`,
+          });
+          return openLoadSocket(`/client/session?grant=${encodeURIComponent(grant)}`);
+        }),
+      );
+      await vi.waitFor(() => expect(dataSockets).toHaveLength(100), { timeout: 30_000 });
+      // All 100 deadlines start in the same tick, so the default per-message 2s
+      // would mean "all 100 round trips finish within 2s" — a latency claim this
+      // scenario does not make. What it asserts is below: every reply reaches the
+      // client that sent it, in order, with no cross-talk.
+      const replies = clients.map((client, index) => {
+        const reply = nextMessage(client, 30_000);
+        client.send(`pair-${index}`);
+        return reply;
+      });
+      const messages = await Promise.all(replies);
+      expect(messages.map(({ data }) => data.toString("utf8"))).toEqual(
+        Array.from({ length: 100 }, (_, index) => `pair-${index}`),
+      );
+    },
+  );
 });
