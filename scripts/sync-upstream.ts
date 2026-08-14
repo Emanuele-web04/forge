@@ -28,7 +28,7 @@ const UPSTREAM_SYNC_STATE_PATH = ".github/upstream-sync-state.json";
 const CHAT_TEST_PATH = "apps/web/src/components/ChatView.browser.tsx";
 const README_PATH = "README.md";
 const APPROVED_ORIGIN_ATTRIBUTION =
-  `Forkara began as a fork of [${characters(84, 51, 67, 111, 100, 101)}](https://github.com/pingdotgg/${characters(116, 51, 99, 111, 100, 101)}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
+  `Forkara began as a clone of [${characters(84, 51, 67, 111, 100, 101)}](https://github.com/pingdotgg/${characters(116, 51, 99, 111, 100, 101)}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
 
 function parseArgs(argv: string[]): ParsedOptions {
   const valueFor = (name: string): string | undefined => {
@@ -194,7 +194,12 @@ function parseDivergence(base: string, upstreamRef: string): { left: number; rig
 function normalizeAttributionLine(line: string): string {
   const trimmed = line.trim();
   if (trimmed === APPROVED_ORIGIN_ATTRIBUTION) return line;
-  if (!trimmed.startsWith("Forkara began as a fork of")) return line;
+  if (
+    !trimmed.startsWith("Forkara began as a fork of") &&
+    !trimmed.startsWith("Forkara began as a clone of")
+  ) {
+    return line;
+  }
   return `${line.slice(0, line.indexOf(trimmed))}${APPROVED_ORIGIN_ATTRIBUTION}`;
 }
 
