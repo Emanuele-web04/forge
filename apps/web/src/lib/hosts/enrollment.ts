@@ -6,7 +6,7 @@
 
 import { DEVICE_USER_CODE_ALPHABET } from "@synara/contracts";
 
-import type { RemoteHostEnrollment } from "./api";
+import type { HostEnrollment } from "./api";
 
 /**
  * Why the discoverability prompt is or is not showing. The reason travels with
@@ -40,7 +40,7 @@ export type DiscoverabilityPromptDecision =
  * successful enrollment read asks properly.
  */
 export function shouldPromptForDiscoverability(
-  enrollment: RemoteHostEnrollment | null | undefined,
+  enrollment: HostEnrollment | null | undefined,
 ): DiscoverabilityPromptDecision {
   if (!enrollment?.host) return { prompt: false, reason: "no-host" };
   if (enrollment.discoverabilityAcknowledged) {

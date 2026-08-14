@@ -39,4 +39,12 @@ describe("relay HTTP surface", () => {
     expect((await relay.app.request("/client/session?grant=secret")).status).toBe(426);
     expect((await relay.app.request("/host/data?splice=id")).status).toBe(426);
   });
+
+  it("answers per-host readiness, not just service health", async () => {
+    // The aggregate /healthz cannot say whether a PARTICULAR host is
+    // reachable, so a client probing it learned only that the relay was up.
+    const absent = await relay.app.request("/healthz/host/00000000-0000-4000-8000-00000000dead");
+    expect(absent.status).toBe(200);
+    expect(await absent.json()).toEqual({ ready: false });
+  });
 });

@@ -2,7 +2,7 @@
 // Purpose: The remote-host surface the web app consumes — hosts, devices, the
 //          device-code approval, and the grant that opens a session.
 // Layer: Web remote-access feature port.
-// Exports: RemoteHostsApi and the capability probe that produces one.
+// Exports: HostsApi and the capability probe that produces one.
 
 import type { AccountDevice, AccountHost, AccountHostPlatform } from "@synara/contracts";
 
@@ -18,7 +18,7 @@ import type { HostReachability } from "./reachability";
  * identity provider and a provider outage must not be allowed to answer the
  * question — see `shouldPromptForDiscoverability`, which fails closed.
  */
-export interface RemoteHostEnrollment {
+export interface HostEnrollment {
   /** The locally-bundled host's account row, or null when this shell has none. */
   readonly host: AccountHost | null;
   /** Members of the workspace the host was registered into; null when unknown. */
@@ -39,7 +39,7 @@ export interface RemoteHostEnrollment {
  * `NativeApi` shape rather than the HTTP routes. Nothing here talks to the
  * account service directly.
  */
-export interface RemoteHostsApi {
+export interface HostsApi {
   /** Owner rows plus discoverable rows of the active workspace. */
   listHosts: () => Promise<{ readonly hosts: readonly AccountHost[] }>;
   /** Owner-only. Rejects for a host the caller does not own. */
@@ -57,7 +57,7 @@ export interface RemoteHostsApi {
   approveDeviceLink: (input: { readonly userCode: string }) => Promise<void>;
   /** A short-lived, device-bound grant this client presents to the host. */
   requestGrant: (input: { readonly hostId: string }) => Promise<{ readonly grant: string }>;
-  enrollment: () => Promise<RemoteHostEnrollment>;
+  enrollment: () => Promise<HostEnrollment>;
   /** Sign-out's counterpart: removes this machine's key from the directory. */
   unlinkLocalHost: () => Promise<void>;
   /**
@@ -80,11 +80,11 @@ export interface RemoteHostsApi {
  * telling the user their server is too old. Every consumer treats `null` as a
  * first-class state.
  */
-function readHostsNamespace(api: unknown): RemoteHostsApi | null {
+function readHostsNamespace(api: unknown): HostsApi | null {
   if (typeof api !== "object" || api === null) return null;
   const candidate = (api as { hosts?: unknown }).hosts;
   if (typeof candidate !== "object" || candidate === null) return null;
-  const required: readonly (keyof RemoteHostsApi)[] = [
+  const required: readonly (keyof HostsApi)[] = [
     "listHosts",
     "updateHost",
     "deleteHost",
@@ -99,11 +99,11 @@ function readHostsNamespace(api: unknown): RemoteHostsApi | null {
   for (const method of required) {
     if (typeof namespace[method] !== "function") return null;
   }
-  return candidate as RemoteHostsApi;
+  return candidate as HostsApi;
 }
 
 /** The remote-host API, or null when this server/shell does not expose one. */
-export function readRemoteHostsApi(): RemoteHostsApi | null {
+export function readHostsApi(): HostsApi | null {
   return readHostsNamespace(readNativeApi());
 }
 
@@ -111,10 +111,10 @@ export function readRemoteHostsApi(): RemoteHostsApi | null {
  * The remote-host API, or a rejection naming the reason. Used by mutations,
  * where a silent no-op would look like a successful toggle.
  */
-export function ensureRemoteHostsApi(): RemoteHostsApi {
+export function ensureHostsApi(): HostsApi {
   const hosts = readHostsNamespace(ensureNativeApi());
   if (!hosts) {
-    throw new Error("This Synara server does not support remote hosts yet.");
+    throw new Error("This Synara server does not support hosts yet.");
   }
   return hosts;
 }

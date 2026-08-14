@@ -406,7 +406,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "connections",
     title: "Hosts",
     keywords:
-      "Machines you can reach from this account. remote host server laptop reachable discoverable share workspace",
+      "Machines you can reach from this account. host server laptop reachable discoverable share workspace",
     target: null,
   },
   {

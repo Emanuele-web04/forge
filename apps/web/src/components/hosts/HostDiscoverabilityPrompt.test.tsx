@@ -17,8 +17,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { accountQueryKeys } from "~/lib/accountReactQuery";
-import { remoteHostQueryKeys } from "~/lib/remoteHosts/queries";
-import type { RemoteHostEnrollment } from "~/lib/remoteHosts/api";
+import { remoteHostQueryKeys } from "~/lib/hosts/queries";
+import type { HostEnrollment } from "~/lib/hosts/api";
 
 const hostsApiMock = {
   listHosts: vi.fn(),
@@ -89,10 +89,10 @@ function makeMe(organizationName: string): AccountMe {
   };
 }
 
-function renderPrompt(input: {
-  enrollment: RemoteHostEnrollment | null;
-  organizationName?: string;
-}): { html: string; open: boolean | undefined } {
+function renderPrompt(input: { enrollment: HostEnrollment | null; organizationName?: string }): {
+  html: string;
+  open: boolean | undefined;
+} {
   const queryClient = new QueryClient();
   queryClient.setQueryData<AccountStatus>(accountQueryKeys.status(), {
     state: "signed-in",

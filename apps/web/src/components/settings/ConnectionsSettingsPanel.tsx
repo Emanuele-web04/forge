@@ -13,20 +13,20 @@ import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { useAccount } from "~/hooks/useAccount";
-import { useRemoteDevices, useRemoteHosts } from "~/hooks/useRemoteHosts";
+import { useDevices, useHosts } from "~/hooks/useHosts";
 import { accountErrorMessage } from "~/lib/accountLogic";
 import {
   canManageHost,
   hostOwnerBadgeLabel,
   hostPlatformLabel,
-  readRemoteHostsApi,
-} from "~/lib/remoteHosts/api";
+  readHostsApi,
+} from "~/lib/hosts/api";
 import {
   reachabilityLabel,
   reachabilityToneClassName,
   type HostReachability,
-} from "~/lib/remoteHosts/reachability";
-import { RemoteHostsUnsupportedError } from "~/lib/remoteHosts/queries";
+} from "~/lib/hosts/reachability";
+import { HostsUnsupportedError } from "~/lib/hosts/queries";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
 import { SettingsEmptyState, SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
@@ -54,8 +54,8 @@ function relativeTimeLabel(iso: string | null, now: number): string {
 export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
   const account = useAccount();
   const signedIn = account.me !== null;
-  const remote = useRemoteHosts({ enabled: active && signedIn });
-  const devices = useRemoteDevices({ enabled: active && signedIn });
+  const remote = useHosts({ enabled: active && signedIn });
+  const devices = useDevices({ enabled: active && signedIn });
   const navigate = useNavigate();
   // Reachability is attempt-based (ADR 0010): the map holds what the LAST
   // probe said, per host, and a host nobody probed simply is not in it.
@@ -63,7 +63,7 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
 
   const probeHost = useCallback(async (host: AccountHost) => {
     setReachability((current) => ({ ...current, [host.id]: { state: "probing" } }));
-    const check = readRemoteHostsApi()?.checkReachability;
+    const check = readHostsApi()?.checkReachability;
     if (!check) {
       // No probe available on this shell: say so rather than reporting the
       // host down, which is the failure mode ADR 0010 exists to prevent.
@@ -171,7 +171,7 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
   }
 
   const hostsError = remote.hostsQuery.error;
-  const unsupported = hostsError instanceof RemoteHostsUnsupportedError;
+  const unsupported = hostsError instanceof HostsUnsupportedError;
 
   return (
     <div className="space-y-6">
@@ -182,7 +182,7 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
           <div className="p-3">
             <SettingsEmptyState layout="status" tone="destructive">
               {unsupported
-                ? "This Synara server is too old to manage remote hosts. Update the server and try again."
+                ? "This Synara server is too old to manage hosts. Update the server and try again."
                 : accountErrorMessage(hostsError, "Could not load your hosts.")}
             </SettingsEmptyState>
           </div>

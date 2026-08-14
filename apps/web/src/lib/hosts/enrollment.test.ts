@@ -7,7 +7,7 @@
 import type { AccountHost, EnvironmentId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import type { RemoteHostEnrollment } from "./api";
+import type { HostEnrollment } from "./api";
 import {
   DEVICE_USER_CODE_LENGTH,
   formatDeviceUserCode,
@@ -35,7 +35,7 @@ function makeHost(overrides: Partial<AccountHost> = {}): AccountHost {
   };
 }
 
-function makeEnrollment(overrides: Partial<RemoteHostEnrollment> = {}): RemoteHostEnrollment {
+function makeEnrollment(overrides: Partial<HostEnrollment> = {}): HostEnrollment {
   return {
     host: makeHost(),
     organizationMemberCount: 1,

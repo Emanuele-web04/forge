@@ -17,9 +17,9 @@ import {
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { useAccount } from "~/hooks/useAccount";
-import { useRemoteHosts } from "~/hooks/useRemoteHosts";
+import { useHosts } from "~/hooks/useHosts";
 import { accountErrorMessage } from "~/lib/accountLogic";
-import { shouldPromptForDiscoverability } from "~/lib/remoteHosts/enrollment";
+import { shouldPromptForDiscoverability } from "~/lib/hosts/enrollment";
 
 /**
  * Asks once, on first sign-in into a shared workspace, whether this machine
@@ -37,7 +37,7 @@ import { shouldPromptForDiscoverability } from "~/lib/remoteHosts/enrollment";
  */
 export function HostDiscoverabilityPrompt() {
   const account = useAccount();
-  const remote = useRemoteHosts({ enabled: account.me !== null });
+  const remote = useHosts({ enabled: account.me !== null });
   const [dismissed, setDismissed] = useState(false);
 
   const decision = shouldPromptForDiscoverability(remote.enrollment);

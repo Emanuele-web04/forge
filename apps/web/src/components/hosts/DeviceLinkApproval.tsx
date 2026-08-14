@@ -12,13 +12,13 @@ import { Input } from "~/components/ui/input";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { useAccount } from "~/hooks/useAccount";
 import { accountErrorMessage } from "~/lib/accountLogic";
-import { ensureRemoteHostsApi } from "~/lib/remoteHosts/api";
+import { ensureHostsApi } from "~/lib/hosts/api";
 import {
   DEVICE_USER_CODE_LENGTH,
   formatDeviceUserCode,
   isCompleteDeviceUserCode,
   normalizeDeviceUserCode,
-} from "~/lib/remoteHosts/enrollment";
+} from "~/lib/hosts/enrollment";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
@@ -105,7 +105,7 @@ export function DeviceLinkApproval() {
     if (!isCompleteDeviceUserCode(code)) return;
     setState({ status: "submitting" });
     try {
-      const hosts = ensureRemoteHostsApi();
+      const hosts = ensureHostsApi();
       await hosts.approveDeviceLink({ userCode: code });
       setState({ status: "approved" });
       setCode("");

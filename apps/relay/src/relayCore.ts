@@ -88,6 +88,19 @@ export class RelayCore {
     this.replayCache = new GrantReplayCache(this.now);
   }
 
+  /**
+   * Whether this exact host is connected AND ready to be spliced.
+   *
+   * The aggregate counts cannot answer "can I reach THIS machine" — a client
+   * probing the relay learned only that the relay was up, so every host in a
+   * relay-configured deployment read as reachable and the truth surfaced late
+   * as a 4404 at session open. Exposed as a boolean and nothing else: it says
+   * no more than the client is entitled to know (ADR 0010).
+   */
+  isHostReady(hostId: string): boolean {
+    return this.hosts.get(hostId)?.ready === true;
+  }
+
   get hostCount(): number {
     return this.hosts.size;
   }

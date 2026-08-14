@@ -1,19 +1,19 @@
-// FILE: useRemoteHosts.ts
+// FILE: useHosts.ts
 // Purpose: Hosts and devices as the web app consumes them — the directory
 //          query plus the owner-only mutations, each settling its cache.
 // Layer: Web remote-access feature hook.
-// Exports: useRemoteHosts, useRemoteDevices
+// Exports: useHosts, useDevices
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { canManageHost, ensureRemoteHostsApi } from "~/lib/remoteHosts/api";
+import { canManageHost, ensureHostsApi } from "~/lib/hosts/api";
 import {
   invalidateRemoteDevices,
   invalidateRemoteHosts,
-  remoteDevicesQueryOptions,
+  devicesQueryOptions,
   remoteHostEnrollmentQueryOptions,
-  remoteHostsQueryOptions,
-} from "~/lib/remoteHosts/queries";
+  hostsQueryOptions,
+} from "~/lib/hosts/queries";
 
 /**
  * The host directory and the owner's controls over it.
@@ -21,11 +21,11 @@ import {
  * `enabled` is the signed-in gate: every route behind this needs an account
  * token the server holds, so a signed-out app must not fire the queries at all
  * (they would fail with an auth error and render as a broken pane rather than
- * the honest "sign in to use remote hosts").
+ * the honest "sign in to use hosts").
  */
-export function useRemoteHosts(input: { enabled: boolean }) {
+export function useHosts(input: { enabled: boolean }) {
   const queryClient = useQueryClient();
-  const hostsQuery = useQuery(remoteHostsQueryOptions({ enabled: input.enabled }));
+  const hostsQuery = useQuery(hostsQueryOptions({ enabled: input.enabled }));
   const enrollmentQuery = useQuery(remoteHostEnrollmentQueryOptions({ enabled: input.enabled }));
 
   /**
@@ -37,7 +37,7 @@ export function useRemoteHosts(input: { enabled: boolean }) {
    */
   const setDiscoverable = useMutation({
     mutationFn: async (variables: { hostId: string; discoverable: boolean }) => {
-      const hosts = ensureRemoteHostsApi();
+      const hosts = ensureHostsApi();
       return hosts.updateHost({ hostId: variables.hostId, discoverable: variables.discoverable });
     },
     onSettled: () => invalidateRemoteHosts(queryClient),
@@ -45,7 +45,7 @@ export function useRemoteHosts(input: { enabled: boolean }) {
 
   const renameHost = useMutation({
     mutationFn: async (variables: { hostId: string; name: string }) => {
-      const hosts = ensureRemoteHostsApi();
+      const hosts = ensureHostsApi();
       return hosts.updateHost({ hostId: variables.hostId, name: variables.name });
     },
     onSettled: () => invalidateRemoteHosts(queryClient),
@@ -54,7 +54,7 @@ export function useRemoteHosts(input: { enabled: boolean }) {
   /** Irreversible: the row and the host's stored secrets both go. */
   const deleteHost = useMutation({
     mutationFn: async (variables: { hostId: string }) => {
-      const hosts = ensureRemoteHostsApi();
+      const hosts = ensureHostsApi();
       await hosts.deleteHost({ hostId: variables.hostId });
     },
     onSettled: () => invalidateRemoteHosts(queryClient),
@@ -67,7 +67,7 @@ export function useRemoteHosts(input: { enabled: boolean }) {
    */
   const unlinkLocalHost = useMutation({
     mutationFn: async () => {
-      const hosts = ensureRemoteHostsApi();
+      const hosts = ensureHostsApi();
       await hosts.unlinkLocalHost();
     },
     onSettled: () => invalidateRemoteHosts(queryClient),
@@ -80,7 +80,7 @@ export function useRemoteHosts(input: { enabled: boolean }) {
    */
   const answerDiscoverabilityPrompt = useMutation({
     mutationFn: async (variables: { hostId: string; discoverable: boolean }) => {
-      const hosts = ensureRemoteHostsApi();
+      const hosts = ensureHostsApi();
       return hosts.updateHost({ hostId: variables.hostId, discoverable: variables.discoverable });
     },
     onSettled: () => invalidateRemoteHosts(queryClient),
@@ -101,9 +101,9 @@ export function useRemoteHosts(input: { enabled: boolean }) {
 }
 
 /** The user's registered devices and the one destructive thing you do to one. */
-export function useRemoteDevices(input: { enabled: boolean }) {
+export function useDevices(input: { enabled: boolean }) {
   const queryClient = useQueryClient();
-  const devicesQuery = useQuery(remoteDevicesQueryOptions({ enabled: input.enabled }));
+  const devicesQuery = useQuery(devicesQueryOptions({ enabled: input.enabled }));
 
   /**
    * Revocation is account-wide by construction: the API refuses the device key
@@ -113,7 +113,7 @@ export function useRemoteDevices(input: { enabled: boolean }) {
    */
   const revokeDevice = useMutation({
     mutationFn: async (variables: { deviceId: string }) => {
-      const hosts = ensureRemoteHostsApi();
+      const hosts = ensureHostsApi();
       await hosts.revokeDevice({ deviceId: variables.deviceId });
     },
     onSettled: () => invalidateRemoteDevices(queryClient),

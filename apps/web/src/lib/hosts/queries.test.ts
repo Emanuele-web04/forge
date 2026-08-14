@@ -12,11 +12,11 @@ vi.mock("~/nativeApi", () => ({
 }));
 
 const {
-  RemoteHostsUnsupportedError,
-  remoteDevicesQueryOptions,
+  HostsUnsupportedError,
+  devicesQueryOptions,
   remoteHostEnrollmentQueryOptions,
   remoteHostQueryKeys,
-  remoteHostsQueryOptions,
+  hostsQueryOptions,
 } = await import("./queries");
 
 describe("remoteHostQueryKeys", () => {
@@ -43,21 +43,21 @@ describe("remoteHostQueryKeys", () => {
 
 describe("query options", () => {
   it("is disabled when the caller says so (signed out)", () => {
-    expect(remoteHostsQueryOptions({ enabled: false }).enabled).toBe(false);
-    expect(remoteDevicesQueryOptions({ enabled: false }).enabled).toBe(false);
+    expect(hostsQueryOptions({ enabled: false }).enabled).toBe(false);
+    expect(devicesQueryOptions({ enabled: false }).enabled).toBe(false);
     expect(remoteHostEnrollmentQueryOptions({ enabled: false }).enabled).toBe(false);
   });
 
   it("is enabled by default", () => {
-    expect(remoteHostsQueryOptions().enabled).toBe(true);
+    expect(hostsQueryOptions().enabled).toBe(true);
   });
 
   // ADR 0010: there is no live state to poll for. A refetch interval here
   // would be a presence system built by accident.
   it("does not poll", () => {
     for (const options of [
-      remoteHostsQueryOptions(),
-      remoteDevicesQueryOptions(),
+      hostsQueryOptions(),
+      devicesQueryOptions(),
       remoteHostEnrollmentQueryOptions(),
     ]) {
       expect(options).not.toHaveProperty("refetchInterval");
@@ -69,12 +69,12 @@ describe("query options", () => {
     nativeApiMock.current = { account: {} };
 
     for (const options of [
-      remoteHostsQueryOptions(),
-      remoteDevicesQueryOptions(),
+      hostsQueryOptions(),
+      devicesQueryOptions(),
       remoteHostEnrollmentQueryOptions(),
     ]) {
       await expect((options.queryFn as () => Promise<unknown>)()).rejects.toBeInstanceOf(
-        RemoteHostsUnsupportedError,
+        HostsUnsupportedError,
       );
     }
   });
@@ -101,12 +101,10 @@ describe("query options", () => {
       },
     };
 
-    await expect((remoteHostsQueryOptions().queryFn as () => Promise<unknown>)()).resolves.toEqual(
-      hosts,
+    await expect((hostsQueryOptions().queryFn as () => Promise<unknown>)()).resolves.toEqual(hosts);
+    await expect((devicesQueryOptions().queryFn as () => Promise<unknown>)()).resolves.toEqual(
+      devices,
     );
-    await expect(
-      (remoteDevicesQueryOptions().queryFn as () => Promise<unknown>)(),
-    ).resolves.toEqual(devices);
     await expect(
       (remoteHostEnrollmentQueryOptions().queryFn as () => Promise<unknown>)(),
     ).resolves.toEqual(enrollment);
@@ -117,8 +115,8 @@ describe("query options", () => {
   it("treats an incomplete hosts namespace as unsupported", async () => {
     nativeApiMock.current = { hosts: { listHosts: vi.fn() } };
 
-    await expect(
-      (remoteHostsQueryOptions().queryFn as () => Promise<unknown>)(),
-    ).rejects.toBeInstanceOf(RemoteHostsUnsupportedError);
+    await expect((hostsQueryOptions().queryFn as () => Promise<unknown>)()).rejects.toBeInstanceOf(
+      HostsUnsupportedError,
+    );
   });
 });

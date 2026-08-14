@@ -6,7 +6,7 @@
 import type { AccountDevice, AccountHost } from "@synara/contracts";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
-import { readRemoteHostsApi, type RemoteHostEnrollment } from "./api";
+import { readHostsApi, type HostEnrollment } from "./api";
 
 export const remoteHostQueryKeys = {
   all: ["remoteHosts"] as const,
@@ -20,10 +20,10 @@ export const remoteHostQueryKeys = {
  * panes can render "your server is too old" instead of a generic failure —
  * the difference between an actionable message and a red box.
  */
-export class RemoteHostsUnsupportedError extends Error {
+export class HostsUnsupportedError extends Error {
   constructor() {
-    super("This Synara server does not support remote hosts yet.");
-    this.name = "RemoteHostsUnsupportedError";
+    super("This Synara server does not support hosts yet.");
+    this.name = "HostsUnsupportedError";
   }
 }
 
@@ -35,7 +35,7 @@ export class RemoteHostsUnsupportedError extends Error {
  * to poll FOR. The list is metadata as of the last read; reachability comes
  * from probing, on demand.
  */
-export function remoteHostsQueryOptions(input: { enabled?: boolean } = {}) {
+export function hostsQueryOptions(input: { enabled?: boolean } = {}) {
   return queryOptions({
     queryKey: remoteHostQueryKeys.hosts(),
     enabled: input.enabled ?? true,
@@ -43,15 +43,15 @@ export function remoteHostsQueryOptions(input: { enabled?: boolean } = {}) {
     refetchOnWindowFocus: true,
     retry: 1,
     queryFn: async (): Promise<readonly AccountHost[]> => {
-      const hosts = readRemoteHostsApi();
-      if (!hosts) throw new RemoteHostsUnsupportedError();
+      const hosts = readHostsApi();
+      if (!hosts) throw new HostsUnsupportedError();
       return (await hosts.listHosts()).hosts;
     },
   });
 }
 
 /** The signed-in user's registered devices, newest activity first. */
-export function remoteDevicesQueryOptions(input: { enabled?: boolean } = {}) {
+export function devicesQueryOptions(input: { enabled?: boolean } = {}) {
   return queryOptions({
     queryKey: remoteHostQueryKeys.devices(),
     enabled: input.enabled ?? true,
@@ -59,8 +59,8 @@ export function remoteDevicesQueryOptions(input: { enabled?: boolean } = {}) {
     refetchOnWindowFocus: true,
     retry: 1,
     queryFn: async (): Promise<readonly AccountDevice[]> => {
-      const hosts = readRemoteHostsApi();
-      if (!hosts) throw new RemoteHostsUnsupportedError();
+      const hosts = readHostsApi();
+      if (!hosts) throw new HostsUnsupportedError();
       return (await hosts.listDevices()).devices;
     },
   });
@@ -79,9 +79,9 @@ export function remoteHostEnrollmentQueryOptions(input: { enabled?: boolean } = 
     staleTime: 30_000,
     refetchOnWindowFocus: true,
     retry: 1,
-    queryFn: async (): Promise<RemoteHostEnrollment> => {
-      const hosts = readRemoteHostsApi();
-      if (!hosts) throw new RemoteHostsUnsupportedError();
+    queryFn: async (): Promise<HostEnrollment> => {
+      const hosts = readHostsApi();
+      if (!hosts) throw new HostsUnsupportedError();
       return hosts.enrollment();
     },
   });

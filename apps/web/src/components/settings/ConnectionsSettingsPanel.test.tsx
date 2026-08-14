@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { DeviceRow, HostRow } from "./ConnectionsSettingsPanel";
-import type { HostReachability } from "~/lib/remoteHosts/reachability";
+import type { HostReachability } from "~/lib/hosts/reachability";
 
 function makeHost(overrides: Partial<AccountHost> = {}): AccountHost {
   return {

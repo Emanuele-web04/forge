@@ -100,6 +100,12 @@ export async function createRelayApp(
   revocations.start();
 
   const app = new Hono();
+  // Per-host readiness. Unauthenticated like /healthz and deliberately
+  // boolean: a host id is already unguessable, and the answer reveals only
+  // what a session attempt would reveal a moment later.
+  app.get("/healthz/host/:hostId", (context) =>
+    context.json({ ready: core.isHostReady(context.req.param("hostId")) }),
+  );
   app.get("/healthz", (context) =>
     context.json({ status: "ok", hosts: core.hostCount, pairs: core.pairCount }),
   );

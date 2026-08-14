@@ -646,6 +646,39 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverGetEnvironment);
   });
 
+  it("exposes and forwards the complete hosts namespace", async () => {
+    requestMock.mockResolvedValue(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi() as ReturnType<typeof createWsNativeApi> & {
+      hosts: Record<string, (input?: unknown) => Promise<unknown>>;
+    };
+    const calls = [
+      ["listHosts", WS_METHODS.hostsList, undefined],
+      ["updateHost", WS_METHODS.hostsUpdate, { hostId: "host_1", discoverable: false }],
+      ["deleteHost", WS_METHODS.hostsDelete, { hostId: "host_1" }],
+      ["listDevices", WS_METHODS.hostsListDevices, undefined],
+      [
+        "revokeDevice",
+        WS_METHODS.hostsRevokeDevice,
+        { deviceId: "00000000-0000-4000-8000-000000000001" },
+      ],
+      ["approveDeviceLink", WS_METHODS.hostsApproveDeviceLink, { userCode: "ABCDEFGH" }],
+      ["requestGrant", WS_METHODS.hostsRequestGrant, { hostId: "host_1" }],
+      ["enrollment", WS_METHODS.hostsEnrollment, undefined],
+      ["unlinkLocalHost", WS_METHODS.hostsUnlinkLocalHost, undefined],
+    ] as const;
+
+    for (const [method, wsMethod, input] of calls) {
+      await api.hosts[method]?.(input);
+      expect(requestMock).toHaveBeenLastCalledWith(
+        wsMethod,
+        ...(input === undefined ? [] : [input]),
+      );
+    }
+    expect(api.hosts).not.toHaveProperty("checkReachability");
+  });
+
   it("uses websocket RPC for external MCP management in packaged and browser builds", async () => {
     requestMock
       .mockResolvedValueOnce([])

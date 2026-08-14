@@ -57,6 +57,7 @@ import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+import type { HostsApi } from "./lib/hosts/api";
 
 export type { WsThreadStreamFailure } from "./wsTransport";
 
@@ -482,7 +483,7 @@ export function createWsNativeApi(): NativeApi {
   transport.onThreadStreamFailure((failure) => {
     threadStreamFailureListeners.emit(failure);
   });
-  const api: NativeApi = {
+  const api: NativeApi & { hosts: HostsApi } = {
     dialogs: {
       pickFolder: async () => {
         if (!window.desktopBridge) return null;
@@ -816,6 +817,17 @@ export function createWsNativeApi(): NativeApi {
       signOut: () => transport.request(WS_METHODS.accountSignOut),
       openVerificationUrl: (input) =>
         transport.request(WS_METHODS.accountOpenVerificationUrl, input),
+    },
+    hosts: {
+      listHosts: () => transport.request(WS_METHODS.hostsList),
+      updateHost: (input) => transport.request(WS_METHODS.hostsUpdate, input),
+      deleteHost: (input) => transport.request(WS_METHODS.hostsDelete, input),
+      listDevices: () => transport.request(WS_METHODS.hostsListDevices),
+      revokeDevice: (input) => transport.request(WS_METHODS.hostsRevokeDevice, input),
+      approveDeviceLink: (input) => transport.request(WS_METHODS.hostsApproveDeviceLink, input),
+      requestGrant: (input) => transport.request(WS_METHODS.hostsRequestGrant, input),
+      enrollment: () => transport.request(WS_METHODS.hostsEnrollment),
+      unlinkLocalHost: () => transport.request(WS_METHODS.hostsUnlinkLocalHost),
     },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),

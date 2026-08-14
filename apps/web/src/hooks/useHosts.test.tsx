@@ -1,4 +1,4 @@
-// FILE: useRemoteHosts.test.tsx
+// FILE: useHosts.test.tsx
 // Purpose: The mutations reach the right endpoint with the right arguments,
 //          ownership gates the ones the API would refuse, and a device revoke
 //          is account-wide.
@@ -10,8 +10,8 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { remoteHostQueryKeys } from "~/lib/remoteHosts/queries";
-import { useRemoteDevices, useRemoteHosts } from "./useRemoteHosts";
+import { remoteHostQueryKeys } from "~/lib/hosts/queries";
+import { useDevices, useHosts } from "./useHosts";
 
 const hostsApiMock = {
   listHosts: vi.fn(),
@@ -81,19 +81,19 @@ function renderHook<T>(queryClient: QueryClient, use: () => T): T {
   return captured;
 }
 
-describe("useRemoteHosts", () => {
+describe("useHosts", () => {
   it("projects the cached host directory", () => {
     const queryClient = new QueryClient();
     const hosts = [makeHost(), makeHost({ id: "other", mine: false })];
     queryClient.setQueryData(remoteHostQueryKeys.hosts(), hosts);
 
-    const remote = renderHook(queryClient, () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(queryClient, () => useHosts({ enabled: true }));
 
     expect(remote.hosts).toEqual(hosts);
   });
 
   it("reports an empty directory rather than undefined", () => {
-    const remote = renderHook(new QueryClient(), () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(new QueryClient(), () => useHosts({ enabled: true }));
 
     expect(remote.hosts).toEqual([]);
     expect(remote.enrollment).toBeNull();
@@ -104,7 +104,7 @@ describe("useRemoteHosts", () => {
     const queryClient = new QueryClient();
     hostsApiMock.updateHost.mockResolvedValue(makeHost({ discoverable: true }));
 
-    const remote = renderHook(queryClient, () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(queryClient, () => useHosts({ enabled: true }));
     await remote.setDiscoverable.mutateAsync({ hostId: "host_1", discoverable: true });
 
     expect(hostsApiMock.updateHost).toHaveBeenCalledWith({
@@ -117,7 +117,7 @@ describe("useRemoteHosts", () => {
     const queryClient = new QueryClient();
     hostsApiMock.updateHost.mockResolvedValue(makeHost({ discoverable: false }));
 
-    const remote = renderHook(queryClient, () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(queryClient, () => useHosts({ enabled: true }));
     await remote.setDiscoverable.mutateAsync({ hostId: "host_1", discoverable: false });
 
     expect(hostsApiMock.updateHost).toHaveBeenCalledWith({
@@ -131,7 +131,7 @@ describe("useRemoteHosts", () => {
     const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
     hostsApiMock.updateHost.mockResolvedValue(makeHost());
 
-    const remote = renderHook(queryClient, () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(queryClient, () => useHosts({ enabled: true }));
     await remote.setDiscoverable.mutateAsync({ hostId: "host_1", discoverable: true });
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: remoteHostQueryKeys.hosts() });
@@ -143,7 +143,7 @@ describe("useRemoteHosts", () => {
   // Only the owner may flip the switch; the API answers 403 to anyone else,
   // so the control must not be offered in the first place.
   it("reports the discoverability switch as owner-only", () => {
-    const remote = renderHook(new QueryClient(), () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(new QueryClient(), () => useHosts({ enabled: true }));
 
     expect(remote.canManageHost(makeHost({ mine: true }))).toBe(true);
     expect(remote.canManageHost(makeHost({ mine: false }))).toBe(false);
@@ -153,7 +153,7 @@ describe("useRemoteHosts", () => {
     const queryClient = new QueryClient();
     hostsApiMock.updateHost.mockRejectedValue(new Error("host_not_found"));
 
-    const remote = renderHook(queryClient, () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(queryClient, () => useHosts({ enabled: true }));
 
     await expect(
       remote.setDiscoverable.mutateAsync({ hostId: "host_1", discoverable: true }),
@@ -164,7 +164,7 @@ describe("useRemoteHosts", () => {
     const queryClient = new QueryClient();
     hostsApiMock.updateHost.mockResolvedValue(makeHost({ discoverable: false }));
 
-    const remote = renderHook(queryClient, () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(queryClient, () => useHosts({ enabled: true }));
     await remote.answerDiscoverabilityPrompt.mutateAsync({
       hostId: "host_1",
       discoverable: false,
@@ -180,7 +180,7 @@ describe("useRemoteHosts", () => {
     const queryClient = new QueryClient();
     hostsApiMock.unlinkLocalHost.mockResolvedValue(undefined);
 
-    const remote = renderHook(queryClient, () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(queryClient, () => useHosts({ enabled: true }));
     await remote.unlinkLocalHost.mutateAsync();
 
     expect(hostsApiMock.unlinkLocalHost).toHaveBeenCalledTimes(1);
@@ -190,26 +190,26 @@ describe("useRemoteHosts", () => {
     const queryClient = new QueryClient();
     hostsApiMock.deleteHost.mockResolvedValue(undefined);
 
-    const remote = renderHook(queryClient, () => useRemoteHosts({ enabled: true }));
+    const remote = renderHook(queryClient, () => useHosts({ enabled: true }));
     await remote.deleteHost.mutateAsync({ hostId: "host_1" });
 
     expect(hostsApiMock.deleteHost).toHaveBeenCalledWith({ hostId: "host_1" });
   });
 });
 
-describe("useRemoteDevices", () => {
+describe("useDevices", () => {
   it("projects the cached device list", () => {
     const queryClient = new QueryClient();
     const devices = [makeDevice()];
     queryClient.setQueryData(remoteHostQueryKeys.devices(), devices);
 
-    const remote = renderHook(queryClient, () => useRemoteDevices({ enabled: true }));
+    const remote = renderHook(queryClient, () => useDevices({ enabled: true }));
 
     expect(remote.devices).toEqual(devices);
   });
 
   it("reports an empty list rather than undefined", () => {
-    const remote = renderHook(new QueryClient(), () => useRemoteDevices({ enabled: true }));
+    const remote = renderHook(new QueryClient(), () => useDevices({ enabled: true }));
 
     expect(remote.devices).toEqual([]);
   });
@@ -218,7 +218,7 @@ describe("useRemoteDevices", () => {
     const queryClient = new QueryClient();
     hostsApiMock.revokeDevice.mockResolvedValue(undefined);
 
-    const remote = renderHook(queryClient, () => useRemoteDevices({ enabled: true }));
+    const remote = renderHook(queryClient, () => useDevices({ enabled: true }));
     await remote.revokeDevice.mutateAsync({ deviceId: "device_1" });
 
     expect(hostsApiMock.revokeDevice).toHaveBeenCalledWith({ deviceId: "device_1" });
@@ -229,7 +229,7 @@ describe("useRemoteDevices", () => {
     const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
     hostsApiMock.revokeDevice.mockResolvedValue(undefined);
 
-    const remote = renderHook(queryClient, () => useRemoteDevices({ enabled: true }));
+    const remote = renderHook(queryClient, () => useDevices({ enabled: true }));
     await remote.revokeDevice.mutateAsync({ deviceId: "device_1" });
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: remoteHostQueryKeys.devices() });
@@ -239,7 +239,7 @@ describe("useRemoteDevices", () => {
     const queryClient = new QueryClient();
     hostsApiMock.revokeDevice.mockRejectedValue(new Error("device_not_registered"));
 
-    const remote = renderHook(queryClient, () => useRemoteDevices({ enabled: true }));
+    const remote = renderHook(queryClient, () => useDevices({ enabled: true }));
 
     await expect(remote.revokeDevice.mutateAsync({ deviceId: "device_1" })).rejects.toThrow(
       "device_not_registered",

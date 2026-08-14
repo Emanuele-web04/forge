@@ -131,6 +131,20 @@ export function relaySessionUrl(relayUrl: string, hostId: string): string {
   return `${base}/client/session?host=${encodeURIComponent(hostId)}`;
 }
 
+/**
+ * The relay's per-host readiness probe.
+ *
+ * A probe of the relay itself only ever proved the RELAY was up, so every
+ * host in a relay-configured deployment read as "Reachable over relay" and
+ * the host's actual absence surfaced later as a 4404 at session open. This
+ * asks the question the row is claiming to answer: is THIS host's control
+ * socket connected and ready?
+ */
+export function relayHostHealthUrl(relayUrl: string, hostId: string): string {
+  const base = relayUrl.replace(/\/+$/, "").replace(/^ws(s?):/, "http$1:");
+  return `${base}/healthz/host/${encodeURIComponent(hostId)}`;
+}
+
 /** Projects a finished race into the row's status line. */
 export function reachabilityFromRace(result: TransportRaceResult, at: number): HostReachability {
   switch (result.outcome) {
