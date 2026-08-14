@@ -1,7 +1,7 @@
 import http from "node:http";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { NonNegativeInt } from "@synara/contracts";
+import { NonNegativeInt, WS_METHODS, type HostSession } from "@synara/contracts";
 import { Effect, Exit, Layer, Schema, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -22,10 +22,13 @@ import { SqlitePersistenceMemory } from "../../../server/src/persistence/Layers/
 import { hostRemoteWebSocketRouteLayer } from "../../../server/src/remoteSessions";
 import { RemoteSessionRegistry } from "../../../server/src/remoteSessions/sessionRegistry";
 import { makeWebsocketRpcRouteLayer } from "../../../server/src/wsRpc";
+import { makeHostsRpcHandlers } from "../../../server/src/wsHostsRpc";
 import {
   makeWsConnectionSessions,
+  provideWsConnectionSession,
   WsConnectionSessions,
 } from "../../../server/src/wsConnectionSessions";
+import type { HostsAccountSession } from "../../../server/src/accountSession";
 
 const EchoRpc = Rpc.make("e2e.echo", {
   payload: Schema.Struct({ sequence: NonNegativeInt, payload: Schema.String }),
@@ -36,7 +39,15 @@ const EchoRpcGroup = RpcGroup.make(EchoRpc);
 export interface RunningHost extends AsyncDisposable {
   readonly config: ServerConfigShape;
   readonly directUrl: string;
+  listSessions(): Promise<{ readonly sessions: readonly HostSession[] }>;
+  endSession(sessionId: string): Promise<void>;
+  dropExpiredSessions(nowSeconds?: number): void;
 }
+
+const OWNER_RPC_SESSION = {
+  role: "owner" as const,
+  attachmentPrincipal: { ownerKind: "session" as const, ownerId: "e2e-host-owner" },
+};
 
 /** Test-only JSON RPC serialization that makes the echo server preserve frame kind. */
 export function makeFrameKindEchoRpcSerialization() {
@@ -212,11 +223,20 @@ export async function startRealHost(input: {
     );
     const address = (nodeServer as http.Server | null)?.address();
     if (!address || typeof address !== "object") throw new Error("real host did not bind TCP");
+    const remoteSessions = new RemoteSessionRegistry();
     stopConnectivity = await startHostConnectivity({
       config: started.config,
       listeningPort: address.port,
       localSessions: started.sessions,
-      remoteSessions: new RemoteSessionRegistry(),
+      remoteSessions,
+    });
+    // The compact E2E host intentionally mounts only the echo RPC group. Drive
+    // the production owner-guarded handlers directly so session visibility
+    // exercises the same authorization boundary without pulling the complete
+    // application RPC graph (and all of its unrelated services) into this host.
+    const sessionHandlers = makeHostsRpcHandlers({
+      accountSession: {} as HostsAccountSession,
+      remoteSessions,
     });
     // The relay dial is asynchronous: startHostConnectivity returns before the
     // control socket has connected and sent `ready`. A client that grants and
@@ -227,6 +247,21 @@ export async function startRealHost(input: {
     return {
       config: started.config,
       directUrl: `ws://127.0.0.1:${address.port}/ws/host`,
+      listSessions: () =>
+        Effect.runPromise(
+          provideWsConnectionSession(
+            sessionHandlers[WS_METHODS.hostsListSessions](),
+            OWNER_RPC_SESSION,
+          ),
+        ),
+      endSession: (sessionId) =>
+        Effect.runPromise(
+          provideWsConnectionSession(
+            sessionHandlers[WS_METHODS.hostsEndSession]({ sessionId }),
+            OWNER_RPC_SESSION,
+          ),
+        ),
+      dropExpiredSessions: (nowSeconds) => remoteSessions.dropExpired(nowSeconds),
       async [Symbol.asyncDispose]() {
         if (closed) return;
         closed = true;

@@ -26,6 +26,11 @@ import {
   readHostIdentity,
   type HostIdentity,
 } from "../../../server/src/hostIdentity";
+import {
+  HostSecretsCoordinator,
+  type HostSecretsCoordinatorApi,
+} from "../../../server/src/hostSecrets/coordinator";
+import { hostSecretsSyncKeyPath } from "../../../server/src/hostSecrets/syncKeyStore";
 import { bindEphemeralHttpServer, type EphemeralHttpServer } from "./network";
 import { startRealHost, type RunningHost } from "./host";
 
@@ -49,6 +54,11 @@ export type LinkedHost = {
 
 export type DeviceCodeLinkedHost = LinkedHost & { readonly stored: StoredAccountFile };
 
+export type HostSecretsCoordinatorFixture = {
+  readonly coordinator: HostSecretsCoordinator;
+  readonly syncKeyFilePath: string;
+};
+
 export interface E2eFixture extends AsyncDisposable {
   readonly apiOrigin: string;
   readonly relayOrigin: string;
@@ -61,6 +71,7 @@ export interface E2eFixture extends AsyncDisposable {
   startHost(): Promise<RunningHost>;
   createMember(): Promise<TestSession>;
   createClient(session?: TestSession): Promise<HeadlessClient>;
+  createHostSecretsCoordinator(deviceId: string): HostSecretsCoordinatorFixture;
   setDiscoverable(hostId: string, discoverable: boolean): Promise<void>;
   stopRelay(): Promise<void>;
   stopApi(): Promise<void>;
@@ -163,7 +174,16 @@ export async function createE2eFixture(databaseUrl: string): Promise<E2eFixture>
         await api.pool
           .query("DELETE FROM revocation_events WHERE host_id = ANY($1::uuid[])", [hostIds])
           .catch(() => undefined);
+        await api.pool
+          .query("DELETE FROM host_secret_versions WHERE host_id = ANY($1::uuid[])", [hostIds])
+          .catch(() => undefined);
+        await api.pool
+          .query("DELETE FROM host_secrets WHERE host_id = ANY($1::uuid[])", [hostIds])
+          .catch(() => undefined);
       }
+      await api.pool
+        .query("DELETE FROM sync_key_wraps WHERE owner_user_id = ANY($1::text[])", [[...userIds]])
+        .catch(() => undefined);
       await api.pool
         .query("DELETE FROM link_challenges WHERE owner_user_id = ANY($1::text[])", [[...userIds]])
         .catch(() => undefined);
@@ -244,6 +264,17 @@ export async function createE2eFixture(databaseUrl: string): Promise<E2eFixture>
   const activeWorkos = workos;
   const activeRelayHttp = relayHttp;
   const account = createAccountClient({ baseUrl: apiHttp.origin });
+  const hostSecretsApi = {
+    listHosts: () => account.listHosts(activeOwner.accessToken),
+    listDevices: () => account.listDevices(activeOwner.accessToken),
+    getHostSecret: (hostId: string) => account.getHostSecret(activeOwner.accessToken, hostId),
+    putHostSecret: (hostId, request) =>
+      account.putHostSecret(activeOwner.accessToken, hostId, request),
+    putSyncKeyWrap: (request) => account.putSyncKeyWrap(activeOwner.accessToken, request),
+    takeSyncKeyWrap: (deviceId: string) =>
+      account.takeSyncKeyWrap(activeOwner.accessToken, deviceId),
+    revokeDevice: (deviceId: string) => account.revokeDevice(activeOwner.accessToken, deviceId),
+  } satisfies HostSecretsCoordinatorApi;
 
   async function linkedHost(): Promise<LinkedHost> {
     const row = await readHostRow(activeApi.pool, activeOwner.userId);
@@ -364,6 +395,21 @@ export async function createE2eFixture(databaseUrl: string): Promise<E2eFixture>
       });
       clients.add(client);
       return client;
+    },
+    createHostSecretsCoordinator(deviceId) {
+      const syncKeyFilePath = hostSecretsSyncKeyPath(
+        path.join(baseDir, "host-secrets", randomUUID()),
+      );
+      return {
+        coordinator: new HostSecretsCoordinator({
+          accountUrl: apiHttp.origin,
+          userId: activeOwner.userId,
+          deviceId,
+          syncKeyFilePath,
+          api: hostSecretsApi,
+        }),
+        syncKeyFilePath,
+      };
     },
     async setDiscoverable(hostId, discoverable) {
       await account.updateHost(activeOwner.accessToken, hostId, { discoverable });
