@@ -46,6 +46,12 @@ describe("GitHub project provisioning", () => {
     });
     return {
       getViewerLogin: () => Effect.succeed("octocat"),
+      getRepositoryCloneUrls: (input: Parameters<GitHubCliShape["getRepositoryCloneUrls"]>[0]) =>
+        Effect.succeed({
+          nameWithOwner: input.repository,
+          url: `https://github.com/${input.repository}.git`,
+          sshUrl: `git@github.com:${input.repository}.git`,
+        }),
       execute: (input: Parameters<GitHubCliShape["execute"]>[0]) =>
         Effect.gen(function* () {
           const args = input.args;
@@ -163,14 +169,7 @@ describe("GitHub project provisioning", () => {
               return yield* githubBase.execute(input);
             }),
         } as unknown as GitHubCliShape;
-        const git = {
-          execute: () =>
-            Effect.succeed({
-              code: 0,
-              stdout: "https://github.com/openai/codex.git\n",
-              stderr: "",
-            }),
-        } as unknown as GitCoreShape;
+        const git = makeGitCoreStub(fileSystem, "example-org/codex");
         const provisioner = yield* makeGitHubProjectProvisioner({
           homeDir: parent,
           fileSystem,

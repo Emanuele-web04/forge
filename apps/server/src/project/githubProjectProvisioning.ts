@@ -161,6 +161,30 @@ function isGitHubCliUnavailable(cause: unknown): boolean {
 }
 
 function getPlatformErrorReasonTag(cause: unknown): string | null {
+  if (hasTag(cause, "AlreadyExists")) {
+    return "AlreadyExists";
+  }
+  if (hasTag(cause, "PermissionDenied")) {
+    return "PermissionDenied";
+  }
+
+  const errorCode = (() => {
+    if (typeof cause !== "object" || cause === null) {
+      return null;
+    }
+    const code = (cause as { readonly code?: unknown }).code;
+    if (typeof code === "string") {
+      return code;
+    }
+    return null;
+  })();
+  if (errorCode === "EEXIST") {
+    return "AlreadyExists";
+  }
+  if (errorCode === "EACCES") {
+    return "PermissionDenied";
+  }
+
   if (!hasTag(cause, "SystemError")) {
     return null;
   }
