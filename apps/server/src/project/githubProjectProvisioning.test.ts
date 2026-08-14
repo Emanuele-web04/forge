@@ -140,7 +140,7 @@ describe("GitHub project provisioning", () => {
     expect(result.provisioned.checkout).toBe("created");
     expect(result.ghCalls).toEqual([
       ["repo", "view", "openai/codex", "--json", "isFork,parent"],
-      ["repo", "fork", "openai/codex", "--clone=false", "--org", "octocat"],
+      ["repo", "fork", "openai/codex", "--clone=false"],
       [
         "repo",
         "clone",

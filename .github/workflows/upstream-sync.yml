@@ -81,6 +81,11 @@ jobs:
             git switch -c "$BRANCH" "origin/$BRANCH"
           fi
 
+          if git diff --quiet "${BASE_BRANCH}...$BRANCH"; then
+            echo "No changes relative to ${BASE_BRANCH}; skipping sync commit/PR creation for $BRANCH."
+            exit 0
+          fi
+
           if [ -z "$(git status --porcelain=v1)" ]; then
             echo "No file edits were produced on $BRANCH; proceeding with branch sync commit only."
           else

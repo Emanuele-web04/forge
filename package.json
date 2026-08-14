@@ -64,6 +64,7 @@
     "canary:status": "node scripts/canary.ts status",
     "canary:rollback": "node scripts/canary.ts rollback",
     "sync:upstream": "bun scripts/sync-upstream.ts",
+    "readme:truthiness": "node scripts/check-readme-truthiness.ts",
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .turbo apps/*/.turbo packages/*/.turbo"
   },
   "devDependencies": {
