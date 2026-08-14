@@ -305,6 +305,10 @@ const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRES
   }),
 );
 
+function normalizeLegacySynaraMcpCandidate(value: string): string {
+  return normalizeSynaraMcpIdentifier(value.replace(/\b(forkara|synara)\b/gi, "synara"));
+}
+
 function extractSynaraMcpToolName(normalizedCandidate: string): string | null {
   if (BROWSER_TOOL_NAME_SET.has(normalizedCandidate)) {
     return `synara_${normalizedCandidate}`;
@@ -329,7 +333,7 @@ function resolveSynaraBrowserToolName(
 ): SynaraBrowserToolName | null {
   for (const candidate of candidates) {
     if (!candidate) continue;
-    const normalizedCandidate = normalizeSynaraMcpIdentifier(candidate);
+    const normalizedCandidate = normalizeLegacySynaraMcpCandidate(candidate);
     const extractedToolName = extractSynaraMcpToolName(normalizedCandidate);
     const candidateToolName =
       extractedToolName ??
@@ -362,7 +366,7 @@ function resolveSynaraMcpToolPresentation(
     if (!candidate) {
       continue;
     }
-    const normalizedCandidate = normalizeSynaraMcpIdentifier(candidate);
+    const normalizedCandidate = normalizeLegacySynaraMcpCandidate(candidate);
     for (const entry of SYNARA_MCP_TOOL_PRESENTATION_ENTRIES) {
       if (
         normalizedCandidate === entry.normalizedRunning ||
