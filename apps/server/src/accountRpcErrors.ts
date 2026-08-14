@@ -10,6 +10,8 @@ import { WsRpcError } from "@synara/contracts";
 import { AccountApiError } from "@synara/shared/account";
 import { Cause, Schema } from "effect";
 
+import { PairingVerificationError } from "./hostSecrets/coordinator";
+
 /** The original rejection from an `Effect.tryPromise`d account-session call. */
 export function unwrapTryPromiseError(cause: unknown): unknown {
   return Cause.isUnknownError(cause) && cause.cause !== undefined ? cause.cause : cause;
@@ -56,4 +58,24 @@ export function toSensitiveWsRpcError(rawCause: unknown, fallbackMessage: string
     });
   }
   return new WsRpcError({ message: fallbackMessage });
+}
+
+/**
+ * The Sync-Key confirmation request contains a short credential, so it keeps
+ * the sensitive mapper's no-cause rule. Its coordinator error has one extra
+ * safe field the UI needs: the server-owned number of attempts still allowed.
+ */
+export function toPairingVerificationWsRpcError(
+  rawCause: unknown,
+  fallbackMessage: string,
+): WsRpcError {
+  const cause = unwrapTryPromiseError(rawCause);
+  if (cause instanceof PairingVerificationError) {
+    return new WsRpcError({
+      message: cause.message.length > 0 ? cause.message : fallbackMessage,
+      code: "sync_key_verification_failed",
+      remainingAttempts: cause.remainingAttempts,
+    });
+  }
+  return toSensitiveWsRpcError(cause, fallbackMessage);
 }

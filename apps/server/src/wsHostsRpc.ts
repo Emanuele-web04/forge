@@ -12,7 +12,11 @@
 import { WS_METHODS } from "@synara/contracts";
 import { Effect } from "effect";
 
-import { toAccountWsRpcError, toSensitiveWsRpcError } from "./accountRpcErrors";
+import {
+  toAccountWsRpcError,
+  toPairingVerificationWsRpcError,
+  toSensitiveWsRpcError,
+} from "./accountRpcErrors";
 import type { HostsAccountSession } from "./accountSession";
 import { requireOwnerRole } from "./wsOwnerOnly";
 import type { RemoteSessionRegistry } from "./remoteSessions/sessionRegistry";
@@ -118,9 +122,14 @@ export function makeHostsRpcHandlers({ accountSession, remoteSessions }: HostsRp
     [WS_METHODS.hostsConfirmSyncKey]: (
       input: Parameters<HostsAccountSession["confirmSyncKey"]>[0],
     ) =>
-      ownerSensitiveHostsRpc(
-        () => Effect.tryPromise(() => accountSession.confirmSyncKey(input)),
-        "Failed to confirm Sync-Key pairing",
+      requireOwnerRole.pipe(
+        Effect.flatMap(() =>
+          Effect.tryPromise(() => accountSession.confirmSyncKey(input)).pipe(
+            Effect.mapError((cause) =>
+              toPairingVerificationWsRpcError(cause, "Failed to confirm Sync-Key pairing"),
+            ),
+          ),
+        ),
       ),
   };
 }

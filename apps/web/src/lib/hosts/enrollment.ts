@@ -62,6 +62,17 @@ export const DEVICE_USER_CODE_GROUP_SIZE = 4;
 
 const ALPHABET = new Set(DEVICE_USER_CODE_ALPHABET);
 
+/** Shared input rule for every human-compared code using Synara's alphabet. */
+export function normalizeUnambiguousCode(raw: string, maxLength: number): string {
+  let normalized = "";
+  for (const character of raw.toUpperCase()) {
+    if (!ALPHABET.has(character)) continue;
+    normalized += character;
+    if (normalized.length === maxLength) break;
+  }
+  return normalized;
+}
+
 /**
  * What the approval field keeps from a keystroke or a paste.
  *
@@ -75,19 +86,21 @@ const ALPHABET = new Set(DEVICE_USER_CODE_ALPHABET);
  * Separators are dropped too, so pasting the displayed `ABCD-EFGH` works.
  */
 export function normalizeDeviceUserCode(raw: string): string {
-  let normalized = "";
-  for (const character of raw.toUpperCase()) {
-    if (!ALPHABET.has(character)) continue;
-    normalized += character;
-    if (normalized.length === DEVICE_USER_CODE_LENGTH) break;
+  return normalizeUnambiguousCode(raw, DEVICE_USER_CODE_LENGTH);
+}
+
+/** Groups a normalized code for character-by-character comparison. */
+export function formatUnambiguousCode(normalized: string, groupSize: number): string {
+  const groups: string[] = [];
+  for (let index = 0; index < normalized.length; index += groupSize) {
+    groups.push(normalized.slice(index, index + groupSize));
   }
-  return normalized;
+  return groups.join("-");
 }
 
 /** `ABCDEFGH` → `ABCD-EFGH`; partial input groups as far as it goes. */
 export function formatDeviceUserCode(normalized: string): string {
-  if (normalized.length <= DEVICE_USER_CODE_GROUP_SIZE) return normalized;
-  return `${normalized.slice(0, DEVICE_USER_CODE_GROUP_SIZE)}-${normalized.slice(DEVICE_USER_CODE_GROUP_SIZE)}`;
+  return formatUnambiguousCode(normalized, DEVICE_USER_CODE_GROUP_SIZE);
 }
 
 /** Whether a normalized code is complete enough to submit. */

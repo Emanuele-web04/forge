@@ -30,6 +30,7 @@ import { HostsUnsupportedError } from "~/lib/hosts/queries";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
 import { SettingsEmptyState, SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { SyncKeyPairingPanel } from "./SyncKeyPairingPanel";
 
 /**
  * Relative "last used" copy. Absolute timestamps read as precision this data
@@ -277,6 +278,10 @@ export function ConnectionsSettingsPanel({ active }: { active: boolean }) {
             </Button>
           }
         />
+      </SettingsSection>
+
+      <SettingsSection title="Sync host secrets">
+        <SyncKeyPairingPanel />
       </SettingsSection>
 
       <SettingsSection title="Devices">

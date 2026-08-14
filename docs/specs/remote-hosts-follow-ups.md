@@ -68,8 +68,14 @@ These are implemented and unit-tested but have no path a user can reach:
    triggers surviving-device rotation, using CAS writes plus a durable journal
    so a partial upload or a process restart recovers safely; self-revocation is
    refused because a revoked device cannot be the surviving rotator.
-   **Presentation decided 2026-08-14** (grilling session), now the only work
-   left on this item:
+   **Presentation SHIPPED 2026-08-14.** A "Sync host secrets" section in the
+   Connections pane runs both halves of the flow; the pairing request travels
+   as a versioned `synara-sync-v1:` base64url blob (device id + public JWK,
+   no secret material) so the whole exchange is two copy/pastes and needs no
+   route, dependency or extra RPC. The attempt cap is enforced in
+   `HostSecretsCoordinator`, not the UI — a client-side cap is not a cap —
+   and `remainingAttempts` is carried through the WS error boundary, which
+   the sensitive-error mapper had been stripping. As decided:
    - **Paste a short code**, mirroring the `/link` device-code flow already
      built for headless linking — same alphabet, same input handling, no new
      dependency and no new API surface.

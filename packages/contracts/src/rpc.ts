@@ -272,6 +272,8 @@ export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcErro
   code: Schema.optional(Schema.String),
   retryable: Schema.optional(Schema.Boolean),
   retryAfterMs: Schema.optional(Schema.Number),
+  /** Present only for the capped Sync-Key verification flow. */
+  remainingAttempts: Schema.optional(Schema.Number),
 }) {}
 
 export const WsBootstrapNegotiateRpc = Rpc.make(WS_BOOTSTRAP_METHOD, {

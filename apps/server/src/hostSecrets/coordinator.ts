@@ -45,7 +45,33 @@ interface PendingRecipientPairing {
   received?: {
     readonly wrapped: WrappedSyncKey;
     readonly verificationCode: string;
+    remainingAttempts: number;
   };
+}
+
+/**
+ * Confirmations allowed before the pairing is destroyed.
+ *
+ * A mismatch has two causes and they deserve different treatment: a typo,
+ * which is common and harmless, and a code that genuinely differs — which
+ * means the wrap being confirmed came from a device other than the one in
+ * front of the user, the exact interception this code exists to catch.
+ * Retries forgive the first; a cap denies the second an unlimited supply of
+ * guesses and, more importantly, forces the user back to a fresh exchange
+ * instead of grinding at a suspicious one. Enforced here rather than in the
+ * UI: a client-side cap is not a cap.
+ */
+const MAX_PAIRING_CONFIRMATION_ATTEMPTS = 3;
+
+/** Distinguishes "try again" from "start over" for the caller and the UI. */
+export class PairingVerificationError extends Error {
+  constructor(
+    readonly remainingAttempts: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PairingVerificationError";
+  }
 }
 
 export class HostSecretsCoordinator {
@@ -135,7 +161,11 @@ export class HostSecretsCoordinator {
       senderPublicJwk: wrap.ephemeralPublicJwk,
       recipientPublicJwk: wrap.recipientPublicJwk,
     });
-    pending.received = { wrapped: wrap, verificationCode };
+    pending.received = {
+      wrapped: wrap,
+      verificationCode,
+      remainingAttempts: MAX_PAIRING_CONFIRMATION_ATTEMPTS,
+    };
     return { verificationCode };
   }
 
@@ -145,7 +175,24 @@ export class HostSecretsCoordinator {
     const keys = this.#pendingRecipient?.keys;
     if (!pending || !keys) throw new Error("Receive a Sync-Key wrap before confirming pairing");
     if (input.verificationCode !== pending.verificationCode) {
-      throw new Error("The pairing verification codes do not match");
+      pending.remainingAttempts -= 1;
+      if (pending.remainingAttempts <= 0) {
+        // Burn the whole pairing, not just the attempt: the wrap was already
+        // single-delivery, so there is nothing safe to retry against, and a
+        // fresh exchange is the only way back.
+        this.#pendingRecipient = undefined;
+        throw new PairingVerificationError(
+          0,
+          "Too many incorrect codes. Pairing was cancelled — start again on both devices. " +
+            "If the codes kept differing, the request may not have come from the device you expect.",
+        );
+      }
+      throw new PairingVerificationError(
+        pending.remainingAttempts,
+        `That code does not match. ${pending.remainingAttempts} ${
+          pending.remainingAttempts === 1 ? "attempt" : "attempts"
+        } left before pairing is cancelled.`,
+      );
     }
     const syncKey = await unwrapSyncKey({
       wrapped: pending.wrapped,

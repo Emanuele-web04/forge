@@ -97,7 +97,7 @@ describe("HostSecretsCoordinator pairing", () => {
     ).resolves.toBeUndefined();
 
     await expect(recipient.confirmSyncKey({ verificationCode: "AAAAAA" })).rejects.toThrow(
-      /do not match/i,
+      /does not match/i,
     );
     await recipient.confirmSyncKey({ verificationCode: offered.verificationCode });
 
@@ -373,5 +373,45 @@ describe("HostSecretsCoordinator revocation rotation", () => {
       /another device/i,
     );
     expect(api.revokeDevice).not.toHaveBeenCalled();
+  });
+
+  it("burns the pairing after three wrong codes rather than allowing endless guesses", async () => {
+    // A typo deserves forgiveness; a code that genuinely differs means the
+    // wrap came from a device other than the one in front of the user. The
+    // cap forgives the first and denies the second an unlimited supply of
+    // attempts — and forces a fresh exchange instead of grinding at a
+    // suspicious one.
+    const mailbox = new Map<string, PutSyncKeyWrapRequest["wrap"]>();
+    const existing = new HostSecretsCoordinator({
+      accountUrl: "https://accounts.example.com",
+      userId: "user-1",
+      deviceId: "00000000-0000-4000-8000-00000000000a",
+      syncKeyFilePath: await makeSyncKeyPath("burn-existing"),
+      api: pairingApi(mailbox),
+    });
+    const recipient = new HostSecretsCoordinator({
+      accountUrl: "https://accounts.example.com",
+      userId: "user-1",
+      deviceId: "00000000-0000-4000-8000-00000000000b",
+      syncKeyFilePath: await makeSyncKeyPath("burn-recipient"),
+      api: pairingApi(mailbox),
+    });
+
+    const request = await recipient.beginPairing();
+    await existing.offerSyncKey(request);
+    await recipient.receiveSyncKey();
+
+    for (const expected of [2, 1]) {
+      await expect(recipient.confirmSyncKey({ verificationCode: "ZZZZZZ" })).rejects.toMatchObject({
+        remainingAttempts: expected,
+      });
+    }
+    await expect(recipient.confirmSyncKey({ verificationCode: "ZZZZZZ" })).rejects.toMatchObject({
+      remainingAttempts: 0,
+    });
+    // The pairing is gone: even the CORRECT code no longer works.
+    await expect(recipient.confirmSyncKey({ verificationCode: "ZZZZZZ" })).rejects.toThrow(
+      /Receive a Sync-Key wrap before confirming/i,
+    );
   });
 });

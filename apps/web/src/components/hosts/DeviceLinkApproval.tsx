@@ -7,18 +7,13 @@
 import { useCallback, useId, useState } from "react";
 
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
+import { ShortCodeField } from "~/components/hosts/ShortCodeField";
 import { Button } from "~/components/ui/button";
-import { Input } from "~/components/ui/input";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { useAccount } from "~/hooks/useAccount";
 import { accountErrorMessage } from "~/lib/accountLogic";
 import { ensureHostsApi } from "~/lib/hosts/api";
-import {
-  DEVICE_USER_CODE_LENGTH,
-  formatDeviceUserCode,
-  isCompleteDeviceUserCode,
-  normalizeDeviceUserCode,
-} from "~/lib/hosts/enrollment";
+import { DEVICE_USER_CODE_LENGTH, isCompleteDeviceUserCode } from "~/lib/hosts/enrollment";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
@@ -55,41 +50,18 @@ export function DeviceCodeField({
   onSubmit: () => void;
   describedBy?: string;
 }) {
-  const inputId = useId();
   return (
-    <div className="space-y-2">
-      <label
-        htmlFor={inputId}
-        className="block text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-foreground"
-      >
-        Device code
-      </label>
-      <Input
-        id={inputId}
-        value={formatDeviceUserCode(value)}
-        disabled={disabled}
-        placeholder="ABCD-EFGH"
-        // Autocorrect and autocapitalize both fight the field: the value is
-        // already normalized on every change, and a keyboard "helpfully"
-        // capitalizing or completing would only race that.
-        autoCapitalize="characters"
-        autoCorrect="off"
-        autoComplete="off"
-        spellCheck={false}
-        aria-describedby={describedBy}
-        // Grouping adds a hyphen, so the visible field is one longer than the
-        // code itself; the normalizer caps the real value regardless.
-        maxLength={DEVICE_USER_CODE_LENGTH + 1}
-        className="w-full font-mono tracking-[0.25em] sm:w-64"
-        onChange={(event) => onValueChange(normalizeDeviceUserCode(event.target.value))}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            onSubmit();
-          }
-        }}
-      />
-    </div>
+    <ShortCodeField
+      label="Device code"
+      value={value}
+      codeLength={DEVICE_USER_CODE_LENGTH}
+      groupSize={4}
+      placeholder="ABCD-EFGH"
+      disabled={disabled}
+      {...(describedBy ? { describedBy } : {})}
+      onValueChange={onValueChange}
+      onSubmit={onSubmit}
+    />
   );
 }
 
