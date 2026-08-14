@@ -87,7 +87,7 @@ describe("brand identity guard", () => {
 
   it("requires user-facing raster assets to match a visually approved digest", () => {
     const approvedContents = new TextEncoder().encode("approved Forkara screenshot");
-    const approvedDigest = "a553296ca5a2d3ad7b64a6bc1b36c2834da750eae6611642177482b99ba85bd8";
+    const approvedDigest = "dd5d676b4f8080aad3165f20358091565af170e9847ce721256b6bb33ef7759f";
     const approvedDigests = new Map([["screenshot.jpeg", approvedDigest]]);
 
     expect(
