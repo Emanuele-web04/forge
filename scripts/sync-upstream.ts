@@ -243,16 +243,24 @@ function syncStateRepresentsUpstream(
   return state?.upstreamHead === upstreamHead;
 }
 
+const ORIGIN_ATTRIBUTION_PREFIXES: RegExp[] = [
+  /^(?:\*)?\s*Forkara\s+began\s+as\s+(?:a\s+)?(?:clone|fork)\s+of\b/i,
+  /^(?:\*)?\s*Forkara\s+started\s+as\s+(?:a\s+)?(?:clone|fork)\s+of\b/i,
+  /^(?:\*)?\s*Forkara\s+is\s+(?:a\s+)?(?:fork|clone)\s+of\b/i,
+];
+
+function isLegacyOriginAttributionLine(trimmed: string): boolean {
+  if (!trimmed.includes("t3code") && !trimmed.includes(LEGACY_ORIGIN_REFERENCE) && !trimmed.includes(LEGACY_ORIGIN_PATH)) {
+    return false;
+  }
+
+  return ORIGIN_ATTRIBUTION_PREFIXES.some((pattern) => pattern.test(trimmed));
+}
+
 function normalizeAttributionLine(line: string): string {
   const trimmed = line.trim();
   if (trimmed === APPROVED_ORIGIN_ATTRIBUTION) return line;
-  if (
-    !trimmed.toLowerCase().includes(LEGACY_ORIGIN_REPO) &&
-    !trimmed.toLowerCase().includes(LEGACY_ORIGIN_PATH) &&
-    !trimmed.startsWith("Forkara began as a clone of") &&
-    !trimmed.startsWith("Forkara began as a fork of") &&
-    !trimmed.toLowerCase().includes(LEGACY_ORIGIN_REFERENCE)
-  ) {
+  if (!isLegacyOriginAttributionLine(trimmed.toLowerCase())) {
     return line;
   }
   return `${line.slice(0, line.indexOf(trimmed))}${APPROVED_ORIGIN_ATTRIBUTION}`;
