@@ -18,7 +18,11 @@ interface ParsedOptions {
 
 function normalizeRemoteUrl(raw: string): string {
   const trimmed = raw.trim();
-  const cleaned = trimmed.replace(/\s+/g, "").replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
+  const cleaned = trimmed
+    .replace(/\s+/g, "")
+    .replace(/\.git$/, "")
+    .replace(/\/$/, "")
+    .toLowerCase();
   const sshMatch = cleaned.match(/^git@([^:]+):([^/]+)\/([^/]+)$/);
   if (sshMatch) {
     const [, host, owner, repo] = sshMatch;
@@ -385,16 +389,15 @@ function main(): void {
 
   if (!hasUpstreamDelta) {
     const syncStateMatchesUpstream =
-      tryReadSyncState(currentBranchName(), options.base, upstreamRef)?.upstreamHead === upstreamHead;
+      tryReadSyncState(currentBranchName(), options.base, upstreamRef)?.upstreamHead ===
+      upstreamHead;
 
     if (!syncStateMatchesUpstream) {
       writeSyncState(options.base, upstreamRef, upstreamHead);
       runGit("add", [UPSTREAM_SYNC_STATE_PATH]);
     }
 
-    if (
-      runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status === 0
-    ) {
+    if (runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status === 0) {
       console.log(`No new upstream commits to merge from ${upstreamRef}.`);
       return;
     }
