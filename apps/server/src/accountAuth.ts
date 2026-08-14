@@ -87,9 +87,19 @@ export interface StoredAccountFile {
   readonly userId?: string;
   readonly accessToken?: string;
   readonly refreshToken?: string;
+  /** The active account row for this shell's device signing key. */
+  readonly deviceId?: string;
+  /** RFC 7638 thumbprint of the device key retained in the private secrets directory. */
+  readonly deviceJkt?: string;
   readonly hostId?: string;
   readonly hostOwnerUserId?: string;
   readonly hostKeyGeneration?: number;
+  /**
+   * Owner answers to the discoverability consent prompt, keyed by host id.
+   * This is machine-local for now; a future slice may move it to the account
+   * service so another owner device knows the question was already answered.
+   */
+  readonly discoverabilityAcknowledgedByHostId?: Readonly<Record<string, true>>;
 }
 
 /** A {@link StoredAccountFile} that carries a usable user session. */
@@ -146,6 +156,17 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
       typeof record.hostOwnerUserId === "string" &&
       Number.isSafeInteger(record.hostKeyGeneration) &&
       Number(record.hostKeyGeneration) >= 0;
+    const hasRegisteredDevice =
+      typeof record.deviceId === "string" && typeof record.deviceJkt === "string";
+    const discoverabilityAcknowledgedByHostId =
+      typeof record.discoverabilityAcknowledgedByHostId === "object" &&
+      record.discoverabilityAcknowledgedByHostId !== null
+        ? Object.fromEntries(
+            Object.entries(record.discoverabilityAcknowledgedByHostId).filter(
+              ([hostId, acknowledged]) => hostId.trim().length > 0 && acknowledged === true,
+            ),
+          )
+        : undefined;
     return {
       accountUrl: record.accountUrl,
       workosClientId: record.workosClientId,
@@ -156,12 +177,19 @@ export async function readAccountFile(baseDir: string): Promise<StoredAccountFil
       ...(typeof record.userId === "string" ? { userId: record.userId } : {}),
       ...(typeof record.accessToken === "string" ? { accessToken: record.accessToken } : {}),
       ...(typeof record.refreshToken === "string" ? { refreshToken: record.refreshToken } : {}),
+      ...(hasRegisteredDevice
+        ? { deviceId: record.deviceId as string, deviceJkt: record.deviceJkt as string }
+        : {}),
       ...(hasLinkedHost
         ? {
             hostId: record.hostId as string,
             hostOwnerUserId: record.hostOwnerUserId as string,
             hostKeyGeneration: record.hostKeyGeneration as number,
           }
+        : {}),
+      ...(discoverabilityAcknowledgedByHostId &&
+      Object.keys(discoverabilityAcknowledgedByHostId).length > 0
+        ? { discoverabilityAcknowledgedByHostId }
         : {}),
     };
   } catch {
@@ -207,6 +235,60 @@ export async function writeAccountCredentials(
 
 export async function deleteAccountCredentials(baseDir: string): Promise<void> {
   await fs.rm(accountCredentialsPath(baseDir), { force: true });
+}
+
+export interface UnlinkLocalAccountHostOptions {
+  readonly baseDir: string;
+  readonly client?: AccountClient;
+}
+
+/**
+ * Unlinks only this machine's host key while preserving the signed-in user
+ * session. The remote mutation and local credential rewrite share the same
+ * lock so a concurrent refresh or re-link cannot restore the old host fields.
+ */
+export async function unlinkLocalAccountHost(
+  options: UnlinkLocalAccountHostOptions,
+): Promise<void> {
+  await withLockedAccountFile(options.baseDir, async () => {
+    const stored = await readAccountFile(options.baseDir);
+    if (!stored?.hostId || stored.hostKeyGeneration === undefined) return;
+
+    const { hostIdentityPath } = await runWithPath(deriveServerPaths(options.baseDir, undefined));
+    const identity = await readHostIdentity(hostIdentityPath);
+    if (!identity) {
+      throw new Error("The local host identity is missing, so this machine cannot prove unlinking");
+    }
+    const environmentId = await resolveEnvironmentId(options.baseDir);
+    const hostProof = await mintHostProof({
+      identity,
+      apiIssuer: accountApiIssuer(stored.accountUrl),
+      environmentId,
+      hostId: stored.hostId,
+      keyGeneration: stored.hostKeyGeneration,
+    });
+    await clientFor(stored.accountUrl, options.client).unlinkHost(hostProof, stored.hostId);
+
+    const {
+      hostId: _hostId,
+      hostOwnerUserId: _hostOwnerUserId,
+      hostKeyGeneration: _hostKeyGeneration,
+      discoverabilityAcknowledgedByHostId,
+      ...session
+    } = stored;
+    const remainingAcknowledgements = Object.fromEntries(
+      Object.entries(discoverabilityAcknowledgedByHostId ?? {}).filter(
+        ([acknowledgedHostId]) => acknowledgedHostId !== stored.hostId,
+      ),
+    ) as Record<string, true>;
+    await writeAccountCredentials(options.baseDir, {
+      ...session,
+      ...(Object.keys(remainingAcknowledgements).length > 0
+        ? { discoverabilityAcknowledgedByHostId: remainingAcknowledgements }
+        : {}),
+    });
+    await deleteHostIdentity(hostIdentityPath);
+  });
 }
 
 /** Deletes the credentials file, reporting whether there was one to delete. */
@@ -412,6 +494,13 @@ export interface WithFreshAccessTokenOptions {
   readonly client: AccountClient;
   /** Delay before the one transient-refresh retry; injectable for tests. */
   readonly refreshRetryDelayMs?: number;
+  /**
+   * Lets a caller preserve domain-specific 401/403 answers. Most account
+   * routes use those statuses for authentication, but a host grant also uses
+   * 403 for a revoked device key, which must repair the device registration
+   * instead of rotating an unrelated WorkOS token.
+   */
+  readonly shouldRefreshAccessToken?: (error: unknown) => boolean;
 }
 
 /** Strips the session half of a stored file, keeping the host registration. */
@@ -586,7 +675,12 @@ export async function withFreshAccessToken<A>(
       await clearStoredSessionIfCurrent(baseDir, credentials.refreshToken);
       throw new WorkspaceAccessChangedError();
     }
-    if (!isUnauthorized(error)) throw error;
+    if (
+      !isUnauthorized(error) ||
+      (options.shouldRefreshAccessToken && !options.shouldRefreshAccessToken(error))
+    ) {
+      throw error;
+    }
 
     const renewal = await renewSession(
       baseDir,
@@ -737,6 +831,33 @@ async function linkThisHost(
         : `Advertising ${endpoints.map((endpoint) => endpoint.url).join(", ")}.`,
       "",
     ].join("\n"),
+  );
+}
+
+/**
+ * ADR 0015's primary Desktop path: link the bundled local host when the
+ * signed-in session does not already have a complete, usable local link.
+ * `linkThisHost` deliberately leaves sign-in usable when the account service
+ * is unavailable; a later status read retries this idempotent guard.
+ */
+export async function ensureLocalAccountHostLinked(options: AccountFlowOptions): Promise<void> {
+  const existing = await readAccountCredentials(options.baseDir);
+  if (!existing) return;
+  const { hostIdentityPath } = await runWithPath(
+    deriveServerPaths(options.baseDir, options.devUrl),
+  );
+  if (
+    existing.hostId &&
+    existing.hostOwnerUserId &&
+    existing.hostKeyGeneration !== undefined &&
+    (await readHostIdentity(hostIdentityPath))
+  ) {
+    return;
+  }
+  await linkThisHost(
+    options,
+    clientFor(existing.accountUrl, options.client),
+    options.stdout ?? (() => {}),
   );
 }
 

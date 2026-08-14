@@ -20,9 +20,12 @@
  * @module accountSession
  */
 import { randomUUID } from "node:crypto";
+import OS from "node:os";
 
 import type {
   AccountAuthenticateOtpInput,
+  AccountDevice,
+  AccountHost,
   AccountUsageSummaryInput,
   AccountBeginSsoInput,
   AccountBeginSsoResult,
@@ -34,6 +37,7 @@ import type {
   AccountUpdateProfileInput,
   AccountUploadAvatarInput,
   InstanceInfo,
+  HostsEnrollmentResult,
   UsageSummary,
 } from "@synara/contracts";
 import {
@@ -45,6 +49,7 @@ import {
 } from "@synara/shared/account";
 
 import {
+  ensureLocalAccountHostLinked,
   readAccountCredentials,
   readAccountFile,
   runAuthLogout,
@@ -55,7 +60,13 @@ import {
   withLockedAccountFile,
   WorkspaceAccessChangedError,
   writeAccountCredentials,
+  unlinkLocalAccountHost,
+  toAccountHostPlatform,
 } from "./accountAuth";
+import {
+  ensureAccountDeviceRegistration,
+  type RegisteredAccountDeviceIdentity,
+} from "./accountDeviceRegistration";
 import {
   createPkcePair,
   createSsoState,
@@ -117,6 +128,11 @@ export interface AccountSessionOptions {
   readonly accountUrl?: string | undefined;
   /** Injectable for tests; production builds one per call from `accountUrl`. */
   readonly client?: AccountClient;
+  /** Local-shell facts are injectable so enrollment tests do not depend on the runner. */
+  readonly platform?: NodeJS.Platform | string;
+  readonly hostname?: string;
+  readonly appVersion?: string;
+  readonly devUrl?: URL;
 }
 
 export interface AccountSession {
@@ -172,6 +188,23 @@ export interface AccountSession {
   isVerificationUrlAllowed(url: string): Promise<boolean>;
 }
 
+/** The host-management half of the same machine-owned account session. */
+export interface HostsAccountSession {
+  listHosts(): Promise<{ readonly hosts: readonly AccountHost[] }>;
+  updateHost(input: {
+    readonly hostId: string;
+    readonly discoverable?: boolean | undefined;
+    readonly name?: string | undefined;
+  }): Promise<AccountHost>;
+  deleteHost(input: { readonly hostId: string }): Promise<void>;
+  listDevices(): Promise<{ readonly devices: readonly AccountDevice[] }>;
+  revokeDevice(input: { readonly deviceId: string }): Promise<void>;
+  approveDeviceLink(input: { readonly userCode: string }): Promise<void>;
+  requestGrant(input: { readonly hostId: string }): Promise<{ readonly grant: string }>;
+  enrollment(): Promise<HostsEnrollmentResult>;
+  unlinkLocalHost(): Promise<void>;
+}
+
 /**
  * Whether an error means "there is no usable session" rather than "something
  * went wrong". Both are states the UI renders as signed out, and neither is
@@ -183,9 +216,17 @@ function isSignedOut(error: unknown): boolean {
   return error instanceof SessionExpiredError || error instanceof WorkspaceAccessChangedError;
 }
 
-export function createAccountSession(options: AccountSessionOptions): AccountSession {
+export function createAccountSession(
+  options: AccountSessionOptions,
+): AccountSession & HostsAccountSession {
   const { baseDir } = options;
   const configuredUrl = options.accountUrl ?? resolveAccountUrl();
+  let deviceRegistrationAttempt:
+    | {
+        readonly sessionKey: string;
+        readonly promise: Promise<RegisteredAccountDeviceIdentity>;
+      }
+    | undefined;
 
   /**
    * Loopback PKCE attempts this process has started, keyed by the opaque
@@ -250,6 +291,74 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     const accountUrl = await accountUrlForStoredSession();
     const client = clientFor(accountUrl);
     return withFreshAccessToken({ baseDir, client }, (accessToken) => fn(accessToken, client));
+  }
+
+  async function ensureShellDevice(
+    knownUserId?: string,
+    force = false,
+  ): Promise<RegisteredAccountDeviceIdentity> {
+    const stored = await readAccountCredentials(baseDir);
+    if (!stored) throw new SessionExpiredError();
+    const userId =
+      knownUserId ??
+      stored.userId ??
+      (await withSession((accessToken, client) => client.me(accessToken))).id;
+    const sessionKey = `${stored.accountUrl}\0${stored.organizationId}\0${userId}`;
+    if (
+      !force &&
+      stored.deviceId &&
+      stored.deviceJkt &&
+      deviceRegistrationAttempt?.sessionKey === sessionKey
+    ) {
+      return deviceRegistrationAttempt.promise;
+    }
+
+    const platform = toAccountHostPlatform(options.platform ?? process.platform);
+    if (!platform) {
+      throw new Error(
+        `Unsupported device platform: ${String(options.platform ?? process.platform)}`,
+      );
+    }
+    const promise = ensureAccountDeviceRegistration({
+      baseDir,
+      accountUrl: stored.accountUrl,
+      client: clientFor(stored.accountUrl),
+      displayName: (options.hostname ?? OS.hostname()).slice(0, 200),
+      platform,
+      userId,
+      ...(options.devUrl ? { devUrl: options.devUrl } : {}),
+    });
+    deviceRegistrationAttempt = { sessionKey, promise };
+    try {
+      return await promise;
+    } catch (error) {
+      if (deviceRegistrationAttempt?.promise === promise) deviceRegistrationAttempt = undefined;
+      throw error;
+    }
+  }
+
+  /** Enrollment is additive to sign-in: local use survives an account outage. */
+  async function ensureDesktopEnrollment(knownUserId: string): Promise<void> {
+    try {
+      await ensureShellDevice(knownUserId);
+    } catch {
+      // A later status read retries; the durable user session remains valid.
+    }
+    try {
+      const stored = await readAccountCredentials(baseDir);
+      if (!stored) return;
+      await ensureLocalAccountHostLinked({
+        accountUrl: stored.accountUrl,
+        baseDir,
+        client: clientFor(stored.accountUrl),
+        ...(options.devUrl ? { devUrl: options.devUrl } : {}),
+        ...(options.platform ? { platform: options.platform } : {}),
+        ...(options.hostname ? { hostname: options.hostname } : {}),
+        ...(options.appVersion ? { appVersion: options.appVersion } : {}),
+      });
+    } catch {
+      // Host linking has the same retry-on-status semantics as registration.
+    }
   }
 
   async function signedInStatus(me: AccountMe): Promise<AccountStatus> {
@@ -322,6 +431,11 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
         ...(sameAccountAndWorkspace && previous?.hostKeyGeneration !== undefined
           ? { hostKeyGeneration: previous.hostKeyGeneration }
           : {}),
+        ...(sameAccountAndWorkspace && previous?.discoverabilityAcknowledgedByHostId
+          ? {
+              discoverabilityAcknowledgedByHostId: previous.discoverabilityAcknowledgedByHostId,
+            }
+          : {}),
       });
     });
 
@@ -329,6 +443,8 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     // this line — the status `/me` below included — can fail without losing
     // the sign-in; `status()` recovers it from the file.
     context.onPersisted?.();
+
+    await ensureDesktopEnrollment(scoped.userId);
 
     // A fresh session means the machine's EXISTING local history can sync:
     // the reporter's first flush has no watermark and backfills everything.
@@ -349,7 +465,9 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
     if (!credentials) return SIGNED_OUT;
 
     try {
-      return await signedInStatus(await withSession((token, client) => client.me(token)));
+      const me = await withSession((token, client) => client.me(token));
+      await ensureDesktopEnrollment(me.id);
+      return await signedInStatus(me);
     } catch (error) {
       if (isSignedOut(error)) return SIGNED_OUT;
       // A rejected token that survived the refresh attempt is a dead session
@@ -573,8 +691,112 @@ export function createAccountSession(options: AccountSessionOptions): AccountSes
       return withSession((token, client) => client.getUsageSummary(token, input.utcOffsetMinutes));
     },
 
+    listHosts() {
+      return withSession((token, client) => client.listHosts(token));
+    },
+
+    async updateHost(input) {
+      const { hostId, ...update } = input;
+      const host = await withSession((token, client) => client.updateHost(token, hostId, update));
+      if (input.discoverable !== undefined) {
+        await withLockedAccountFile(baseDir, async () => {
+          const stored = await readAccountFile(baseDir);
+          if (!stored) return;
+          // Local persistence is intentionally keyed per host. A future slice
+          // may move this answer to the account service so a second owner
+          // device does not re-ask; until then it must survive local restarts.
+          await writeAccountCredentials(baseDir, {
+            ...stored,
+            discoverabilityAcknowledgedByHostId: {
+              ...stored.discoverabilityAcknowledgedByHostId,
+              [hostId]: true,
+            },
+          });
+        });
+      }
+      return host;
+    },
+
+    deleteHost(input) {
+      return withSession((token, client) => client.deleteHost(token, input.hostId));
+    },
+
+    listDevices() {
+      return withSession((token, client) => client.listDevices(token));
+    },
+
+    async revokeDevice(input) {
+      await withSession((token, client) => client.revokeDevice(token, input.deviceId));
+      await withLockedAccountFile(baseDir, async () => {
+        const stored = await readAccountFile(baseDir);
+        if (!stored || stored.deviceId !== input.deviceId) return;
+        const { deviceId: _deviceId, deviceJkt: _deviceJkt, ...remaining } = stored;
+        await writeAccountCredentials(baseDir, remaining);
+        deviceRegistrationAttempt = undefined;
+      });
+    },
+
+    approveDeviceLink(input) {
+      return withSession((token, client) => client.approveDeviceHostLink(token, input));
+    },
+
+    async requestGrant(input) {
+      let registration = await ensureShellDevice();
+      const request = async () => {
+        const accountUrl = await accountUrlForStoredSession();
+        const client = clientFor(accountUrl);
+        return withFreshAccessToken(
+          {
+            baseDir,
+            client,
+            shouldRefreshAccessToken: (error) =>
+              !(error instanceof AccountApiError && error.code === "device_not_registered"),
+          },
+          (token) => client.requestGrant(token, input.hostId, registration.jkt),
+        );
+      };
+      try {
+        return await request();
+      } catch (error) {
+        if (!(error instanceof AccountApiError) || error.code !== "device_not_registered") {
+          throw error;
+        }
+        // The API's active-row partial index makes this a fresh row when the
+        // former one was revoked, and an idempotent update otherwise.
+        registration = await ensureShellDevice(undefined, true);
+        return request();
+      }
+    },
+
+    async enrollment() {
+      const stored = await readAccountFile(baseDir);
+      const { hosts, organizationMemberCount } = await withSession(async (token, client) => {
+        const [listed, memberCount] = await Promise.all([
+          client.listHosts(token),
+          client.countOrganizationMembers(token).catch(() => null),
+        ]);
+        return { hosts: listed.hosts, organizationMemberCount: memberCount };
+      });
+      const host = stored?.hostId
+        ? (hosts.find((candidate) => candidate.id === stored.hostId) ?? null)
+        : null;
+      return {
+        host,
+        organizationMemberCount,
+        discoverabilityAcknowledged:
+          (stored?.hostId !== undefined &&
+            stored.discoverabilityAcknowledgedByHostId?.[stored.hostId] === true) ||
+          false,
+      };
+    },
+
+    unlinkLocalHost() {
+      return unlinkLocalAccountHost({ baseDir, client: clientFor(configuredUrl) });
+    },
+
     async signOut() {
       await runAuthLogout({ baseDir, client: clientFor(configuredUrl), stdout: () => {} });
+      deviceRegistrationAttempt = undefined;
     },
 
     isVerificationUrlAllowed(url) {

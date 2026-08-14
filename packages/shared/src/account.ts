@@ -17,6 +17,8 @@ import {
   type ListHostsResponse,
   ListHostsResponse as ListHostsResponseSchema,
   OrganizationRequiredBody,
+  type OrganizationMemberCountResponse,
+  OrganizationMemberCountResponse as OrganizationMemberCountResponseSchema,
   type OrganizationSummary,
   type OtpAuthenticateRequest,
   type OtpSendRequest,
@@ -34,6 +36,10 @@ import {
   ApiJwks as ApiJwksSchema,
   type HostAuthorizationSnapshot,
   HostAuthorizationSnapshot as HostAuthorizationSnapshotSchema,
+  type GrantResponse,
+  GrantResponse as GrantResponseSchema,
+  type ListDevicesResponse,
+  ListDevicesResponse as ListDevicesResponseSchema,
   type LinkCompleteRequest,
   type LinkCompleteResponse,
   LinkCompleteResponse as LinkCompleteResponseSchema,
@@ -48,6 +54,8 @@ import {
   LinkStartResponse as LinkStartResponseSchema,
   type RelayTicketResponse,
   RelayTicketResponse as RelayTicketResponseSchema,
+  type RegisterDeviceResponse,
+  RegisterDeviceResponse as RegisterDeviceResponseSchema,
   type UpdateHostRequest,
   type UpdateOrganizationRequest,
   type UpdateProfileRequest,
@@ -221,7 +229,12 @@ export interface AccountClient {
   deleteAvatar(token: string): Promise<AccountMe>;
   /** Renames the workspace — the WorkOS organization the token is scoped to. */
   updateOrganization(token: string, request: UpdateOrganizationRequest): Promise<AccountMe>;
+  /** Bounded at two: callers only distinguish personal from multi-member workspaces. */
+  countOrganizationMembers(token: string): Promise<number>;
   listHosts(token: string): Promise<ListHostsResponse>;
+  registerDevice(token: string, proof: string): Promise<RegisterDeviceResponse>;
+  listDevices(token: string): Promise<ListDevicesResponse>;
+  revokeDevice(token: string, deviceId: string): Promise<void>;
   startHostLink(token: string, request: LinkStartRequest): Promise<LinkStartResponse>;
   completeHostLink(request: LinkCompleteRequest): Promise<LinkCompleteResponse>;
   startDeviceHostLink(): Promise<LinkDeviceStartResponse>;
@@ -238,6 +251,7 @@ export interface AccountClient {
   unlinkHost(hostProof: string, hostId: string): Promise<AccountHost>;
   updateHost(token: string, hostId: string, request: UpdateHostRequest): Promise<AccountHost>;
   deleteHost(token: string, hostId: string): Promise<void>;
+  requestGrant(token: string, hostId: string, deviceJkt: string): Promise<GrantResponse>;
   /**
    * Pushes a batch of per-minute usage buckets. Buckets carry ABSOLUTE
    * values and the service upserts, so re-pushing a bucket — a retry, or the
@@ -505,12 +519,48 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       );
     },
 
+    async countOrganizationMembers(token) {
+      const response: OrganizationMemberCountResponse = await requestJson(
+        "/api/v1/organization/member-count",
+        { method: "GET", headers: authHeaders(token) },
+        OrganizationMemberCountResponseSchema,
+      );
+      return response.organizationMemberCount;
+    },
+
     async listHosts(token) {
       return requestJson(
         "/api/v1/hosts",
         { method: "GET", headers: authHeaders(token) },
         ListHostsResponseSchema,
       );
+    },
+
+    async registerDevice(token, proof) {
+      return requestJson(
+        "/api/v1/devices",
+        {
+          method: "POST",
+          headers: { ...authHeaders(token), "content-type": "application/json" },
+          body: JSON.stringify({ proof }),
+        },
+        RegisterDeviceResponseSchema,
+      );
+    },
+
+    async listDevices(token) {
+      return requestJson(
+        "/api/v1/devices",
+        { method: "GET", headers: authHeaders(token) },
+        ListDevicesResponseSchema,
+      );
+    },
+
+    async revokeDevice(token, deviceId) {
+      await requestEmpty(`/api/v1/devices/${encodeURIComponent(deviceId)}`, {
+        method: "DELETE",
+        headers: authHeaders(token),
+      });
     },
 
     async startHostLink(token, request) {
@@ -625,6 +675,18 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
         method: "DELETE",
         headers: authHeaders(token),
       });
+    },
+
+    async requestGrant(token, hostId, deviceJkt) {
+      return requestJson(
+        `/api/v1/hosts/${encodeURIComponent(hostId)}/grant`,
+        {
+          method: "POST",
+          headers: { ...authHeaders(token), "content-type": "application/json" },
+          body: JSON.stringify({ deviceJkt }),
+        },
+        GrantResponseSchema,
+      );
     },
 
     async pushUsage(token, request) {

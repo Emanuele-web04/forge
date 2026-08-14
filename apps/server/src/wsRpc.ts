@@ -138,6 +138,7 @@ import {
   type WsConnectionSession,
 } from "./wsConnectionSessions";
 import { makeAccountRpcHandlers } from "./wsAccountRpc";
+import { makeHostsRpcHandlers } from "./wsHostsRpc";
 import { isOwnerRole, requireOwnerRole } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
@@ -830,6 +831,7 @@ const makeWsRpcHandlersLayer = () =>
         accountSession,
         openBrowser: (url) => open.openBrowser(url),
       });
+      const hostsRpcHandlers = makeHostsRpcHandlers({ accountSession });
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
@@ -1947,6 +1949,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.providerListAgents]: (input) =>
           rpcEffect(providerDiscoveryService.listAgents(input), "Failed to list agents"),
         ...accountRpcHandlers,
+        ...hostsRpcHandlers,
         [WS_METHODS.automationList]: (input) =>
           rpcEffect(automationService.list(input), "Failed to list automations"),
         [WS_METHODS.automationGetMemory]: ({ automationId }) =>

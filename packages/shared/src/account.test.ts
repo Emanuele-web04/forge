@@ -31,6 +31,77 @@ function refreshedResponse(): Response {
 }
 
 describe("createAccountClient", () => {
+  describe("remote hosts", () => {
+    it("registers, lists, and revokes devices, requests a device-bound grant, and reads member count", async () => {
+      const device = {
+        id: "00000000-0000-4000-8000-000000000001",
+        publicKeyJwk: { kty: "EC", crv: "P-256", x: "eA", y: "eQ" },
+        jkt: "device-thumbprint",
+        displayName: "Ada's Mac",
+        platform: "darwin",
+        createdAt: "2026-08-14T12:00:00.000Z",
+        lastUsedAt: null,
+        revokedAt: null,
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ device }, { status: 201 }))
+        .mockResolvedValueOnce(jsonResponse({ devices: [] }))
+        .mockResolvedValueOnce(emptyResponse(204))
+        .mockResolvedValueOnce(jsonResponse({ grant: "grant-token" }))
+        .mockResolvedValueOnce(jsonResponse({ organizationMemberCount: 2 }));
+      const client = createAccountClient({ baseUrl: BASE_URL, fetch: fetchMock });
+
+      await expect(client.registerDevice("access-token", "signed-device-proof")).resolves.toEqual({
+        device,
+      });
+      await expect(client.listDevices("access-token")).resolves.toEqual({ devices: [] });
+      await expect(
+        client.revokeDevice("access-token", "00000000-0000-4000-8000-000000000001"),
+      ).resolves.toBeUndefined();
+      await expect(
+        client.requestGrant("access-token", "host_1", "device-thumbprint"),
+      ).resolves.toEqual({ grant: "grant-token" });
+      await expect(client.countOrganizationMembers("access-token")).resolves.toBe(2);
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        `${BASE_URL}/api/v1/devices`,
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            authorization: "Bearer access-token",
+            "content-type": "application/json",
+          }),
+          body: JSON.stringify({ proof: "signed-device-proof" }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        `${BASE_URL}/api/v1/devices`,
+        expect.objectContaining({
+          method: "GET",
+          headers: expect.objectContaining({ authorization: "Bearer access-token" }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        3,
+        `${BASE_URL}/api/v1/devices/00000000-0000-4000-8000-000000000001`,
+        expect.objectContaining({ method: "DELETE" }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        4,
+        `${BASE_URL}/api/v1/hosts/host_1/grant`,
+        expect.objectContaining({ body: JSON.stringify({ deviceJkt: "device-thumbprint" }) }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        5,
+        `${BASE_URL}/api/v1/organization/member-count`,
+        expect.objectContaining({ method: "GET" }),
+      );
+    });
+  });
+
   describe("instance", () => {
     it("decodes a valid instance info response", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
@@ -397,6 +468,7 @@ describe("createAccountClient", () => {
             ownerUserId: "user_1",
             orgId: "org_1",
             ownerInOrg: true,
+            revokedDeviceJkts: [],
           }),
         )
         .mockResolvedValueOnce(jsonResponse({ host }));

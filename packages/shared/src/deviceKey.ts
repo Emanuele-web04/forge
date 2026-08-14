@@ -61,17 +61,29 @@ function publicKeyOf(key: CryptoKey | CryptoKeyPair): CryptoKey {
 /**
  * Generate the device keypair.
  *
- * `extractable: false` applies to the private key only — WebCrypto always
+ * By default, `extractable: false` applies to the private key only — WebCrypto always
  * leaves the public half exportable, which is what {@link exportPublicJwk}
  * needs. A non-extractable private key cannot be read back out of the browser
  * or copied to another device, which is the whole point: possession of the key
  * *is* the device's identity.
  */
-export async function generateDeviceKey(): Promise<CryptoKeyPair> {
-  return (await globalThis.crypto.subtle.generateKey(DEVICE_KEY_ALGORITHM, false, [
-    "sign",
-    "verify",
-  ])) as CryptoKeyPair;
+export interface GenerateDeviceKeyOptions {
+  /**
+   * Private-key extractability is opt-in. A file-backed platform keystore may
+   * export once into its owner-only durable format, then re-import the runtime
+   * handle as non-extractable; browser callers keep the secure default.
+   */
+  readonly extractable?: boolean;
+}
+
+export async function generateDeviceKey(
+  options: GenerateDeviceKeyOptions = {},
+): Promise<CryptoKeyPair> {
+  return (await globalThis.crypto.subtle.generateKey(
+    DEVICE_KEY_ALGORITHM,
+    options.extractable ?? false,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
 }
 
 /**

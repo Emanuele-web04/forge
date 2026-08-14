@@ -13,6 +13,7 @@ import {
   WsRpcGroup,
 } from "./rpc";
 import { ORCHESTRATION_WS_METHODS } from "./orchestration";
+import { WS_METHODS } from "./ws";
 
 describe("WS RPC contracts", () => {
   it("exports the additive Effect RPC group", () => {
@@ -41,6 +42,14 @@ describe("WS RPC contracts", () => {
     expect(WsAutomationCreateRpc).toBeDefined();
     expect(WsAutomationGetMemoryRpc).toBeDefined();
     expect(WsAutomationResolveProposalRpc).toBeDefined();
+  });
+
+  it("exports every hosts namespace RPC", () => {
+    const hostsMethods = Object.values(WS_METHODS).filter((method) => method.startsWith("hosts."));
+    expect(hostsMethods).toHaveLength(9);
+    for (const method of hostsMethods) {
+      expect(WsFeatureRpcGroup.requests.has(method)).toBe(true);
+    }
   });
 
   it("exports the count-only pull request review RPC", () => {

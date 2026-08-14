@@ -203,6 +203,16 @@ export const UpdateOrganizationRequest = Schema.Struct({
 });
 export type UpdateOrganizationRequest = typeof UpdateOrganizationRequest.Type;
 
+/**
+ * The bounded count used by the host-enrollment consent decision. The account
+ * API may stop at two because clients only distinguish a personal workspace
+ * from a workspace with more than one member.
+ */
+export const OrganizationMemberCountResponse = Schema.Struct({
+  organizationMemberCount: NonNegativeInt,
+});
+export type OrganizationMemberCountResponse = typeof OrganizationMemberCountResponse.Type;
+
 export const UpdateHostRequest = Schema.Struct({
   name: Schema.optional(AccountNameString),
   discoverable: Schema.optional(Schema.Boolean),
