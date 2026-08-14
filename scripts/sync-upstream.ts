@@ -27,8 +27,7 @@ const characters = (...codes: number[]): string => String.fromCharCode(...codes)
 const UPSTREAM_SYNC_STATE_PATH = ".github/upstream-sync-state.json";
 const CHAT_TEST_PATH = "apps/web/src/components/ChatView.browser.tsx";
 const README_PATH = "README.md";
-const APPROVED_ORIGIN_ATTRIBUTION =
-  `Forkara began as a clone of [${characters(84, 51, 67, 111, 100, 101)}](https://github.com/pingdotgg/${characters(116, 51, 99, 111, 100, 101)}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
+const APPROVED_ORIGIN_ATTRIBUTION = `Forkara began as a clone of [${characters(84, 51, 67, 111, 100, 101)}](https://github.com/pingdotgg/${characters(116, 51, 99, 111, 100, 101)}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
 
 function parseArgs(argv: string[]): ParsedOptions {
   const valueFor = (name: string): string | undefined => {
@@ -144,7 +143,11 @@ function getRemoteCommit(remoteRef: string): string {
   return sha;
 }
 
-function tryReadSyncState(ref: string, expectedBase: string, upstreamRef: string): UpstreamSyncState | null {
+function tryReadSyncState(
+  ref: string,
+  expectedBase: string,
+  upstreamRef: string,
+): UpstreamSyncState | null {
   const result = runGit("show", [`${ref}:${UPSTREAM_SYNC_STATE_PATH}`], {
     capture: true,
     allowFailure: true,
@@ -184,7 +187,12 @@ function parseDivergence(base: string, upstreamRef: string): { left: number; rig
   const left = Number(leftText);
   const right = Number(rightText);
 
-  if (leftText === undefined || rightText === undefined || Number.isNaN(left) || Number.isNaN(right)) {
+  if (
+    leftText === undefined ||
+    rightText === undefined ||
+    Number.isNaN(left) ||
+    Number.isNaN(right)
+  ) {
     throw new Error("Unable to compute upstream divergence.");
   }
 
@@ -221,11 +229,11 @@ function applyForkFixes(options: ParsedOptions): string[] {
     );
     chatNext = chatNext.replace(
       'expect(document.body.textContent).not.toContain("Cancelling...");',
-      'expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);',
+      "expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);",
     );
     chatNext = chatNext.replace(
       'expect(document.body.textContent).not.toContain("Canceling...");',
-      'expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);',
+      "expect(document.body.textContent).not.toMatch(/Cancel(?:l?ing)?(?:…|\\.\\.\\.)/);",
     );
     return chatNext;
   });
@@ -253,10 +261,7 @@ function commitForkFixes(changedFiles: string[]): void {
     return;
   }
 
-  runGit("commit", [
-    "-m",
-    "chore: apply upstream sync normalization after merge",
-  ]);
+  runGit("commit", ["-m", "chore: apply upstream sync normalization after merge"]);
   console.log("Committed fork-specific follow-up fixes.");
 }
 
@@ -310,16 +315,16 @@ function main(): void {
   const hasSyncBranch = hasLocalSyncBranch || hasRemoteSyncBranch;
 
   const syncBranchHasSyncedState = hasSyncBranch
-    ? (
-        hasLocalSyncBranch
-          ? tryReadSyncState(syncBranch, options.base, upstreamRef)
-          : tryReadSyncState(`origin/${syncBranch}`, options.base, upstreamRef)
+    ? (hasLocalSyncBranch
+        ? tryReadSyncState(syncBranch, options.base, upstreamRef)
+        : tryReadSyncState(`origin/${syncBranch}`, options.base, upstreamRef)
       )?.upstreamHead === upstreamHead
     : false;
 
-  const hasUpstreamDelta = !baseHasSyncedState && !syncBranchHasSyncedState
-    ? parseDivergence(options.base, upstreamRef).right > 0
-    : false;
+  const hasUpstreamDelta =
+    !baseHasSyncedState && !syncBranchHasSyncedState
+      ? parseDivergence(options.base, upstreamRef).right > 0
+      : false;
 
   if (hasSyncBranch) {
     if (hasLocalSyncBranch) {
@@ -340,15 +345,11 @@ function main(): void {
     console.log(`Reusing existing sync branch ${syncBranch}.`);
   } else {
     if (!hasUpstreamDelta) {
+      runGit("switch", ["-c", syncBranch, options.base]);
       writeSyncState(options.base, upstreamRef, upstreamHead);
       runGit("add", [UPSTREAM_SYNC_STATE_PATH]);
-      if (
-        runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status !== 0
-      ) {
-        runGit("commit", [
-          "-m",
-          "chore: persist upstream sync checkpoint",
-        ]);
+      if (runGit("diff", ["--cached", "--quiet"], { allowFailure: true }).status !== 0) {
+        runGit("commit", ["-m", "chore: persist upstream sync checkpoint"]);
       }
       console.log(`No new upstream commits to merge from ${upstreamRef}.`);
       return;

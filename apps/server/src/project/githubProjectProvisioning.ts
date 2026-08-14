@@ -137,15 +137,16 @@ function decodeForkInfoJson(
         }),
     });
     const decoded = yield* Schema.decodeUnknownSync(RawForkInfoSchema)(parsed).pipe(
-      Effect.mapError((error) =>
-        new GitHubCliError({
-          operation,
-          detail:
-            error instanceof Error
-              ? `Invalid repository JSON response: ${error.message}`
-              : "Invalid repository JSON response.",
-          reason: "other",
-        }),
+      Effect.mapError(
+        (error) =>
+          new GitHubCliError({
+            operation,
+            detail:
+              error instanceof Error
+                ? `Invalid repository JSON response: ${error.message}`
+                : "Invalid repository JSON response.",
+            reason: "other",
+          }),
       ),
     );
     return {
@@ -278,17 +279,16 @@ function ensureFork(
   const forkDestinationOwner = viewerLogin.trim();
   if (!isValidGitHubOwner(forkDestinationOwner)) {
     return Effect.fail(
-      provisioningError("INVALID_DESTINATION", "Choose a valid destination account or organization.", false),
+      provisioningError(
+        "INVALID_DESTINATION",
+        "Choose a valid destination account or organization.",
+        false,
+      ),
     );
   }
 
   const forkRepository = `${forkDestinationOwner}/${repositoryNameFromOwnerAndName(sourceRepository)}`;
-  const commandArgs = [
-    "repo",
-    "fork",
-    sourceRepository,
-    "--clone=false",
-  ];
+  const commandArgs = ["repo", "fork", sourceRepository, "--clone=false"];
 
   return Effect.gen(function* () {
     const forked = yield* github.execute({ cwd: parent, args: commandArgs }).pipe(
@@ -789,13 +789,22 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
       return yield* withDestinationLock(
         workspaceRoot,
         Effect.gen(function* () {
-          const viewerLogin = yield* github
-            .getViewerLogin({ cwd: parent })
-            .pipe(
-              Effect.mapError((cause) =>
+          const viewerLogin = yield* github.getViewerLogin({ cwd: parent }).pipe(
+            Effect.catchAll((cause) => {
+              const detail =
+                cause instanceof GitHubCliError
+                  ? cause.detail
+                  : cause instanceof Error
+                    ? cause.message
+                    : String(cause);
+              if (isAuthRequired(detail.toLowerCase())) {
+                return Effect.succeed("");
+              }
+              return Effect.fail(
                 classifyGitHubFailure(cause, "Authenticate with GitHub", repository),
-              ),
-            );
+              );
+            }),
+          );
           const useGitHubCli = viewerLogin.trim().length > 0;
           const forkSource = useGitHubCli
             ? yield* resolveForkSourceInfo(repository, parent, reporter, input.operationId, github)
@@ -814,7 +823,10 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
                 github,
               )
             : { cloneRepository: repository, upstreamRepository: null };
-          const existing = yield* inspectExistingDestination(workspaceRoot, forkPlan.cloneRepository);
+          const existing = yield* inspectExistingDestination(
+            workspaceRoot,
+            forkPlan.cloneRepository,
+          );
           if (existing) {
             return { ...existing, operationId: input.operationId };
           }

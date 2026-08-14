@@ -73,7 +73,7 @@ jobs:
         if: runner.os == 'Linux'
         run: node scripts/node-pty-smoke.mjs
 
-      - name: Verify Synara identity
+      - name: Verify Forkara identity
         run: bun run brand:check
 
       - name: Format
