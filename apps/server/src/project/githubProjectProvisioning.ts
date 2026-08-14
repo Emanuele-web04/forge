@@ -391,7 +391,10 @@ function setUpstreamRemote(
         timeoutMs: 15_000,
         maxOutputBytes: 64 * 1_024,
       })
-      .pipe(Effect.map((result) => result.stdout.trim()));
+      .pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.mapError((cause) => classifyCloneFailure(cause)),
+      );
 
     if (existingUpstream.length > 0 && existingUpstream === upstreamUrl) {
       return;
@@ -419,7 +422,7 @@ function setUpstreamRemote(
         maxOutputBytes: 64 * 1_024,
       })
       .pipe(
-        Effect.catchAll(() =>
+        Effect.catch((_: unknown) =>
           git.execute({
             operation: "set upstream remote",
             cwd: workspaceRoot,
@@ -837,7 +840,7 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
                   isFork: false,
                   parentNameWithOwner: null,
                 },
-                input.forkDestinationOwner,
+                (input as { forkDestinationOwner?: string | undefined }).forkDestinationOwner,
                 viewerLogin,
                 parent,
                 reporter,

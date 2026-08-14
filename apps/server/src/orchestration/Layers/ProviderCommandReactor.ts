@@ -1351,11 +1351,12 @@ const make = Effect.gen(function* () {
       };
     }
 
-    const sourceThread =
-      thread.forkSourceThreadId !== null ? yield* resolveThread(thread.forkSourceThreadId) : null;
+    const hasSourceThreadId = thread.forkSourceThreadId != null;
+    const sourceThread = hasSourceThreadId ? yield* resolveThread(thread.forkSourceThreadId) : null;
     const shouldBootstrapFromImportsOnly =
-      thread.forkSourceThreadId !== null &&
+      hasSourceThreadId &&
       sourceThread !== null &&
+      sourceThread !== undefined &&
       shouldBootstrapFromImportedMessages({ thread, sourceThread });
 
     if (
