@@ -47,12 +47,30 @@ jobs:
           GH_EVENT_BRANCH_PREFIX: ${{ github.event.inputs.branch_prefix || 'sync/upstream-main-auto' }}
           GH_EVENT_BASE_BRANCH: ${{ github.event.inputs.base_branch || 'built-from-scratch' }}
           GH_EVENT_UPSTREAM_BRANCH: ${{ github.event.inputs.upstream_branch || 'main' }}
-          TIMESTAMP: ${{ github.run_id }}
         run: |
-          SYNC_BRANCH="${GH_EVENT_BRANCH_PREFIX}-${TIMESTAMP}"
+          BASE_BRANCH="${GH_EVENT_BASE_BRANCH:-built-from-scratch}"
+          UPSTREAM_BRANCH="${GH_EVENT_UPSTREAM_BRANCH:-main}"
+          BASE_SAFE="${BASE_BRANCH//\//-}"
+          UPSTREAM_SAFE="${UPSTREAM_BRANCH//\//-}"
+          STABLE_BRANCH="${GH_EVENT_BRANCH_PREFIX}-${BASE_SAFE}-${UPSTREAM_SAFE}"
+
+          OPEN_PR_HEAD=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --base "$BASE_BRANCH" \
+            --state open \
+            --search "chore: sync upstream/${UPSTREAM_BRANCH}" \
+            --json headRefName \
+            --jq '.[0]?.headRefName // ""')
+
+          if [ -n "$OPEN_PR_HEAD" ]; then
+            SYNC_BRANCH="$OPEN_PR_HEAD"
+          else
+            SYNC_BRANCH="$STABLE_BRANCH"
+          fi
+
           bun run sync:upstream \
-            --base "${GH_EVENT_BASE_BRANCH}" \
-            --upstream "${GH_EVENT_UPSTREAM_BRANCH}" \
+            --base "$BASE_BRANCH" \
+            --upstream "$UPSTREAM_BRANCH" \
             --branch "${SYNC_BRANCH}"
           echo "branch=${SYNC_BRANCH}" >> "$GITHUB_OUTPUT"
       - name: Push and open PR if changes

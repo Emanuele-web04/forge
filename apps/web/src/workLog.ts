@@ -2190,7 +2190,9 @@ function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): numb
     const leftSequence = "sequence" in left ? left.sequence : undefined;
     const rightSequence = "sequence" in right ? right.sequence : undefined;
     if (leftSequence !== undefined || rightSequence !== undefined) {
-      return (leftSequence ?? Number.POSITIVE_INFINITY) - (rightSequence ?? Number.POSITIVE_INFINITY);
+      return (
+        (leftSequence ?? Number.POSITIVE_INFINITY) - (rightSequence ?? Number.POSITIVE_INFINITY)
+      );
     }
   }
   return left.createdAt.localeCompare(right.createdAt);
