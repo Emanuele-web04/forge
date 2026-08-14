@@ -1,6 +1,7 @@
 import {
   THREAD_GOAL_MAX_CHARS,
   type MessageId,
+  TurnId,
   type ModelSelection,
   type OrchestrationShellSnapshot,
   type ProviderInteractionMode,
@@ -384,6 +385,9 @@ export function useComposerSlashCommands(input: {
         commandId: newCommandId(),
         threadId: nextThreadId,
         sourceThreadId: activeThread.id,
+        sourceTurnId: inputOptions?.throughMessageId
+          ? TurnId.makeUnsafe(inputOptions.throughMessageId)
+          : undefined,
         projectId: activeProject.id,
         title: activeThread.title,
         modelSelection: selectedModelSelection,

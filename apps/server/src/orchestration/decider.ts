@@ -962,7 +962,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       // Provider-native threads mirror subagents the provider already runs;
-      // Synara never starts a session for them, so the Auto-mode capability
+      // Forkara never starts a session for them, so the Auto-mode capability
       // check can only reject the projection (and durably poison the runtime
       // journal replaying it), never prevent an unverified Auto session.
       if (command.creationSource !== "provider_native") {
@@ -1170,6 +1170,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentNickname: null,
           subagentRole: null,
           forkSourceThreadId: command.sourceThreadId,
+          sourceTurnId: command.sourceTurnId ?? null,
           sidechatSourceThreadId: command.sidechatSourceThreadId,
           handoff: null,
           createdAt: command.createdAt,

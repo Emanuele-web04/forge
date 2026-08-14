@@ -313,6 +313,33 @@ const GATEWAY_OPERATION_COMPLETION_WAIT_TIMEOUT = Duration.seconds(120);
 const PROVIDER_INPUT_SAFETY_MARGIN_CHARS = 1_000;
 const THREAD_MENTION_CONTEXT_SUFFIX_PREFIX_CHARS = 2;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+
+const isImportableThreadMessage = (message: OrchestrationThread["messages"][number]): boolean => {
+  return (message.role === "user" || message.role === "assistant") && message.streaming === false;
+};
+
+const importableThreadMessageCount = (
+  thread: Pick<OrchestrationThread, "messages">,
+): number => thread.messages.filter(isImportableThreadMessage).length;
+
+const shouldBootstrapFromImportedMessages = ({
+  thread,
+  sourceThread,
+}: {
+  thread: Pick<OrchestrationThread, "messages" | "sourceTurnId" | "sidechatSourceThreadId">;
+  sourceThread: OrchestrationThread;
+}): boolean => {
+  if (thread.sidechatSourceThreadId !== null) {
+    return false;
+  }
+  if (thread.sourceTurnId !== null) {
+    return true;
+  }
+  const importedMessageCount = listImportedForkMessages(thread).length;
+  const sourceMessageCount = importableThreadMessageCount(sourceThread);
+  return importedMessageCount < sourceMessageCount;
+};
+
 const SIDECHAT_BOUNDARY_INSTRUCTION =
   "You are in a sidechat. Treat all prior conversation as reference-only context. Do not continue any prior task automatically. Do not mutate files, git, or the workspace and do not run workspace-changing commands unless the latest user message explicitly asks you to do so after this boundary. Use this sidechat for focused explanation, safety checks, summaries, and alternatives.";
 
@@ -384,7 +411,7 @@ function withProviderThreadStatePrompts(input: {
 function providerPromptOverflowIssue(goalPromptOverheadChars: number): string {
   return goalPromptOverheadChars > 0
     ? "The latest message is too long to include the persistent thread goal. Shorten the message and retry."
-    : "The latest message is too long to include Synara Debug mode instructions. Shorten the message and retry.";
+    : "The latest message is too long to include Forkara Debug mode instructions. Shorten the message and retry.";
 }
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
@@ -1325,7 +1352,14 @@ const make = Effect.gen(function* () {
       };
     }
 
-    if (providerService.forkThread && thread.forkSourceThreadId) {
+    const sourceThread =
+      thread.forkSourceThreadId !== null ? yield* resolveThread(thread.forkSourceThreadId) : null;
+    const shouldBootstrapFromImportsOnly =
+      thread.forkSourceThreadId !== null &&
+      sourceThread !== null &&
+      shouldBootstrapFromImportedMessages({ thread, sourceThread });
+
+    if (providerService.forkThread && thread.forkSourceThreadId && !shouldBootstrapFromImportsOnly) {
       const forked = yield* providerService.forkThread({
         ...providerSessionOptions,
         sourceThreadId: thread.forkSourceThreadId,
@@ -1825,7 +1859,7 @@ const make = Effect.gen(function* () {
       ) =>
         Effect.gen(function* () {
           // Claude cannot continue from a missing native session; clear the
-          // dead cursor and replay once with Synara transcript context.
+          // dead cursor and replay once with Forkara transcript context.
           yield* clearStaleProviderResumeState({
             threadId: input.threadId,
             cause,
@@ -4164,7 +4198,7 @@ const make = Effect.gen(function* () {
                 threadId: blocker.threadId,
                 kind: "provider.turn.start.failed",
                 summary: "Previous messages were not sent",
-                detail: `Synara recovered an earlier provider failure, but ${skippedPromptCount} ${noun} skipped while the thread was blocked. Resend ${skippedPromptCount === 1 ? "it" : "them"} to continue.`,
+                detail: `Forkara recovered an earlier provider failure, but ${skippedPromptCount} ${noun} skipped while the thread was blocked. Resend ${skippedPromptCount === 1 ? "it" : "them"} to continue.`,
                 turnId: null,
                 createdAt,
               });

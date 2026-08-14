@@ -361,9 +361,18 @@ function main(): void {
   const hasLocalSyncBranch = branchExists(syncBranch);
   const hasRemoteSyncBranch = remoteBranchExists("origin", syncBranch);
   const hasSyncBranch = hasLocalSyncBranch || hasRemoteSyncBranch;
+  const syncBranchStateRef = hasLocalSyncBranch
+    ? syncBranch
+    : hasRemoteSyncBranch
+      ? `origin/${syncBranch}`
+      : null;
+  const syncBranchState = syncBranchStateRef
+    ? tryReadSyncState(syncBranchStateRef, options.base, upstreamRef)
+    : null;
+  const hasAnySyncedState = baseHasSyncedState || syncStateRepresentsUpstream(syncBranchState, upstreamHead);
 
   const hasUpstreamDeltaOnBase = parseDivergence(options.base, upstreamRef).right > 0;
-  if (!hasUpstreamDeltaOnBase && baseHasSyncedState) {
+  if (!hasUpstreamDeltaOnBase && hasAnySyncedState) {
     console.log(`No new upstream commits to merge from ${upstreamRef}.`);
     if (hasSyncBranch) {
       console.log(`Using existing checkpoint branch ${syncBranch}.`);
