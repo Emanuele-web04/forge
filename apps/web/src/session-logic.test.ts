@@ -869,6 +869,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "droid", label: "Droid", available: true },
       { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
+      { value: "minimax", label: "MiniMax", available: false },
       { value: "pi", label: "Pi", available: true },
     ]);
     expect(claude).toEqual({
